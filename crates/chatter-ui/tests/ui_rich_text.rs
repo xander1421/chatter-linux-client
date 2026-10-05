@@ -313,8 +313,15 @@ fn mixed_styles_flow_in_one_wrapped_paragraph_and_keep_the_bubble_gestures() {
     menu.borrow_mut().clear();
 
     press(&w, link, PointerEventButton::Left);
+    // Flickable delays forwarding Down by 100 ms. Before that delay a
+    // horizontal move can be ignored while the original Down remains queued:
+    // it cannot exercise StyledText's grabbed movement cancellation.
+    pump(&w, 160);
     w.window().dispatch_event(WindowEvent::PointerMoved {
         position: LogicalPosition::new(link.x + link.w / 2.0 + 12.0, link.y + link.h / 2.0),
+    });
+    w.window().dispatch_event(WindowEvent::PointerMoved {
+        position: LogicalPosition::new(link.x + link.w / 2.0, link.y + link.h / 2.0),
     });
     pump(&w, 800);
     release(&w, link, PointerEventButton::Left);
@@ -335,8 +342,27 @@ fn mixed_styles_flow_in_one_wrapped_paragraph_and_keep_the_bubble_gestures() {
         "unmatched release launched a browser"
     );
 
+    // Also return and release within the 500 ms tap window: an expired hold
+    // alone cannot prove that movement revoked the pending URL.
+    press(&w, link, PointerEventButton::Left);
+    pump(&w, 160);
+    w.window().dispatch_event(WindowEvent::PointerMoved {
+        position: LogicalPosition::new(link.x + link.w / 2.0 + 12.0, link.y + link.h / 2.0),
+    });
+    w.window().dispatch_event(WindowEvent::PointerMoved {
+        position: LogicalPosition::new(link.x + link.w / 2.0, link.y + link.h / 2.0),
+    });
+    release(&w, link, PointerEventButton::Left);
+    assert_eq!(
+        *links.borrow(),
+        [target],
+        "short drag returning to its origin opened a URL"
+    );
+    assert!(menu.borrow().is_empty(), "short drag opened a message menu");
+
     // Loss of the pointer cancels both owners, including an unreleased press.
     press(&w, link, PointerEventButton::Left);
+    pump(&w, 160);
     w.window().dispatch_event(WindowEvent::PointerExited);
     pump(&w, 800);
     release(&w, link, PointerEventButton::Left);
@@ -348,6 +374,28 @@ fn mixed_styles_flow_in_one_wrapped_paragraph_and_keep_the_bubble_gestures() {
         *links.borrow(),
         [target],
         "cancelled link press opened a URL"
+    );
+
+    // Leaving the grabbed item is cancellation too, without a window Exit.
+    // Return before release so URL suppression depends on the movement stream.
+    press(&w, link, PointerEventButton::Left);
+    pump(&w, 160);
+    w.window().dispatch_event(WindowEvent::PointerMoved {
+        position: LogicalPosition::new(link.x + link.w + 2.0, link.y + link.h / 2.0),
+    });
+    w.window().dispatch_event(WindowEvent::PointerMoved {
+        position: LogicalPosition::new(link.x + link.w / 2.0, link.y + link.h / 2.0),
+    });
+    pump(&w, 800);
+    release(&w, link, PointerEventButton::Left);
+    assert!(
+        menu.borrow().is_empty(),
+        "leaving the link item kept its hold timer running"
+    );
+    assert_eq!(
+        *links.borrow(),
+        [target],
+        "leaving and returning to the link opened a URL"
     );
 
     w.set_is_mobile_platform(false);

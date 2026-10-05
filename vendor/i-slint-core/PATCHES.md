@@ -46,3 +46,11 @@ Drag/cancel revoke the pending URL and stop the message timer. Right-click and
 non-link presses remain bubble-owned. Selection-mode taps toggle once through
 the link callback, guarded against an already-fired hold. Coverage is added to
 `crates/chatter-ui/tests/ui_rich_text.rs`; no vendor version upgrade.
+
+Link drag correction (2026-10-06): grabbed movement now also cancels when
+the pointer leaves the item bounds or the pressed URL, even inside the 8 px
+movement slop. Cancellation takes the pending press before notifying the
+message's existing Cancel callback, so returning before release cannot revive
+the URL or its hold timer. The rich-text movement/exit regressions wait for
+Flickable's 100 ms delayed Down delivery before exercising the link grab;
+the drag and item-exit cases explicitly move back before release.

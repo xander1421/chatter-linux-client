@@ -7,6 +7,10 @@
 //! Each `#[test]` runs on its own cargo test thread; `init_no_event_loop()`
 //! installs a per-thread testing platform, so tests do not collide.
 
+// The real GIF/send route now includes durable admission and session guards;
+// compiling its generic test future needs more than the default query depth.
+#![recursion_limit = "256"]
+
 use chatter_ui::MainWindow;
 use i_slint_backend_testing as testing;
 // DROPPED-P1s: feature-mirror globals asserted by the anon-mode / AI-template tests.
@@ -3086,7 +3090,9 @@ fn foldered_conversations_are_excluded_from_the_loose_lists() {
     let idx = core
         .find("pub fn sidebar_channels")
         .expect("sidebar_channels present");
-    let body = &core[idx..idx + 2000];
+    let (body, _) = core[idx..]
+        .split_once("\n    }\n")
+        .expect("sidebar_channels closing brace present");
     assert!(
         body.contains("all_sectioned_conversation_ids"),
         "sidebar_channels must drop conversations that live in a folder"
@@ -3100,7 +3106,9 @@ fn foldered_conversations_are_excluded_from_the_loose_lists() {
     let dm_idx = messaging
         .find("fn finish_dm_sidebar")
         .expect("finish_dm_sidebar present");
-    let dm_body = &messaging[dm_idx..dm_idx + 1200];
+    let (dm_body, _) = messaging[dm_idx..]
+        .split_once("\n    }\n")
+        .expect("finish_dm_sidebar closing brace present");
     assert!(
         dm_body.contains("all_sectioned_conversation_ids") && dm_body.contains("is_pinned"),
         "the DM sidebar must apply the same folder exclusion and pin order"
@@ -6141,6 +6149,13 @@ impl GifHarness {
             .data_dir(tmp.path().to_string_lossy().to_string())
             .build()
             .expect("offline ChatterClient::build");
+        // Durable send admission keys attempts by the authenticated user.
+        // This is in-memory fixture identity only; no login or connection occurs.
+        client.auth_state().set_logged_in(
+            chatter_core::domain::ids::UserId::new(),
+            1,
+            "GIF fixture".into(),
+        );
         chatter_ui::bin_ui::features::composer::wire_text_format(&w);
         let h = Self {
             _tmp: tmp,
@@ -6179,11 +6194,14 @@ impl GifHarness {
     }
 
     fn stage(&self, name: &str) {
-        self.client.chat_state().add_pending_attachment(
+        let chat = self.client.chat_state();
+        chat.add_pending_attachment_for(
+            chat.active_conversation(),
+            chat.get().attachment_revision,
             chatter_core::state::PendingAttachment::new(
                 chatter_core::domain::ids::AttachmentId::new(),
                 name.into(),
-                Default::default(),
+                self._tmp.path().join("missing-staged-file").join(name),
                 1,
                 "image/png".into(),
             ),
@@ -6231,8 +6249,9 @@ impl GifHarness {
         upload: Result<chatter_core::state::PendingAttachment, String>,
     ) {
         tx.send(upload).unwrap();
-        // Offline and signed out, core cannot send: every completion here is
-        // the failure path, which is the one that must not touch live state.
+        // Successful fake uploads carry a nonexistent local file. The real
+        // attachment service refuses its metadata before any network submission;
+        // upload errors return the frozen send directly. Both exercise recovery.
         let failed = test_rt()
             .block_on(task)
             .unwrap()
@@ -6517,6 +6536,21 @@ fn a_gif_picked_mid_switch_is_refused() {
         .chat_state()
         .set_active_conversation(chatter_core::state::ActiveConversation::Channel(h.b));
     assert!(chatter_ui::bin_ui::features::composer::gif::begin_gif_send(&h.w, &h.client).is_none());
+    assert_eq!(
+        h.w.get_toast_message().as_str(),
+        "The conversation is changing. Nothing was sent.",
+        "refusal must come from composer ownership, not failed admission"
+    );
+    assert_eq!(h.w.get_composer_text().as_str(), "for A");
+    assert!(h.staged().is_empty(), "B must not inherit A's tray");
+    // The core switch already parked A's file; refusal must leave it intact.
+    chatter_ui::bin_ui::features::composer::switch_composer_draft(
+        &h.w,
+        &h.client,
+        &h.a.to_string(),
+        &h.b.to_string(),
+    );
+    h.open(h.a);
     assert_eq!(h.w.get_composer_text().as_str(), "for A");
     assert_eq!(h.staged(), ["a.png"]);
 }
@@ -6579,6 +6613,12 @@ fn sending_mid_composition_sends_the_word_at_the_caret() {
 #[test]
 fn a_failed_gif_does_not_overwrite_a_new_uncommitted_word() {
     let (_tmp, client, w) = composer_with_caret("", 0);
+    // Admit the frozen send before exercising the newer IME preedit guard.
+    client.auth_state().set_logged_in(
+        chatter_core::domain::ids::UserId::new(),
+        1,
+        "IME fixture".into(),
+    );
     let channel = chatter_core::domain::ids::ChannelId::new();
     client
         .chat_state()

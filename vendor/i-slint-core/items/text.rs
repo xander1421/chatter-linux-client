@@ -365,8 +365,16 @@ impl Item for StyledTextItem {
             }
             #[cfg(feature = "shared-parley")]
             MouseEvent::Moved { position, touch_finger_id } => {
-                let cancel = self.link_press.borrow().as_ref().is_some_and(|(_, origin, _, finger)| {
-                    finger != touch_finger_id || (*position - *origin).square_length() > 64.0
+                let hovered_link = find_link(position);
+                // A grab keeps delivering movement outside this item's geometry;
+                // leaving the pressed link must revoke the gesture even within slop.
+                let outside = position.x < 0.0 || position.y < 0.0
+                    || position.x_length() >= self.width()
+                    || position.y_length() >= self.height();
+                let cancel = self.link_press.borrow().as_ref().is_some_and(|(link, origin, _, finger)| {
+                    finger != touch_finger_id || outside
+                        || hovered_link.as_ref() != Some(link)
+                        || (*position - *origin).square_length() > 64.0
                 });
                 if cancel {
                     self.link_press.borrow_mut().take();
@@ -374,7 +382,7 @@ impl Item for StyledTextItem {
                 } else if self.link_press.borrow().is_some() {
                     notify(PointerEventKind::Move, PointerEventButton::Other, *position, *touch_finger_id);
                 }
-                if find_link(position).is_some() { *cursor = super::MouseCursor::Pointer; }
+                if hovered_link.is_some() && !outside { *cursor = super::MouseCursor::Pointer; }
                 if self.link_press.borrow().is_some() || cancel {
                     InputEventResult::GrabMouse
                 } else {
