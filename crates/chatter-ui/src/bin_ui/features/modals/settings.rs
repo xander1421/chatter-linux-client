@@ -762,6 +762,7 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             w.set_settings_delete_loading(false);
+                            crate::bin_ui::features::composer::reset_session(&w, &ui_ctx);
                             w.set_settings_delete_password("".into());
                             w.set_settings_delete_error("".into());
                             w.set_is_signed_in(false);

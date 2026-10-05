@@ -13,6 +13,8 @@ use crate::state::store::Store;
 /// and any pending login operations.
 #[derive(Clone, Debug, Default)]
 pub struct AuthStateData {
+    /// Changes whenever a login or sign-out invalidates pending UI work.
+    pub session_revision: u64,
     /// Currently logged in user ID, if any.
     pub current_user_id: Option<UserId>,
     /// Current device ID (1 = primary, 2-127 = linked devices).
@@ -91,6 +93,7 @@ impl AuthState {
     /// Clears any login errors and sets the user identity.
     pub fn set_logged_in(&self, user_id: UserId, device_id: u32, display_name: String) {
         self.store.update(|state| {
+            state.session_revision = state.session_revision.wrapping_add(1);
             state.current_user_id = Some(user_id);
             state.device_id = Some(device_id);
             state.display_name = Some(display_name);
@@ -110,11 +113,19 @@ impl AuthState {
     /// Clears all user identity information.
     pub fn set_logged_out(&self) {
         self.store.update(|state| {
+            state.session_revision = state.session_revision.wrapping_add(1);
             state.current_user_id = None;
             state.device_id = None;
             state.display_name = None;
             state.is_logging_in = false;
             state.login_error = None;
+        });
+    }
+
+    /// Invalidate pending work before asynchronous sign-out teardown begins.
+    pub fn invalidate_session(&self) {
+        self.store.update(|state| {
+            state.session_revision = state.session_revision.wrapping_add(1);
         });
     }
 

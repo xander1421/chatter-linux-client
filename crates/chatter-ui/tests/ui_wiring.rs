@@ -5593,3 +5593,80 @@ fn sending_mid_composition_sends_the_word_at_the_caret() {
     w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed { text: slint::platform::Key::Return.into() });
     assert_eq!(sent.borrow().as_deref(), Some("abc"));
 }
+
+#[test]
+fn a_failed_gif_does_not_overwrite_a_new_uncommitted_word() {
+    let (_tmp, client, w) = composer_with_caret("", 0);
+    let channel = chatter_core::domain::ids::ChannelId::new();
+    client.chat_state().set_active_conversation(chatter_core::state::ActiveConversation::Channel(channel));
+    chatter_ui::bin_ui::features::composer::switch_composer_draft(&w, &client, "", &channel.to_string());
+    w.set_composer_text("old caption".into());
+    let send = chatter_ui::bin_ui::features::composer::gif::begin_gif_send(&w, &client).unwrap();
+    ime(&w, "new", false);
+    assert!(w.invoke_composer_has_preedit(), "precondition: the new word is still composing");
+    assert!(w.get_composer_text().is_empty());
+    chatter_ui::bin_ui::features::composer::gif::recover_gif_send(&w, &client, send);
+    assert!(w.get_composer_text().is_empty(), "the old caption overwrote a composing word");
+    ime(&w, "new", true);
+    assert_eq!(w.get_composer_text().as_str(), "new");
+    assert!(client.take_parked_send(false).is_none());
+    assert_eq!(client.take_parked_send(true).unwrap().text, "old caption");
+}
+
+#[test]
+fn a_gif_finishing_after_an_account_change_is_discarded() {
+    let h = GifHarness::new();
+    h.client.auth_state().set_logged_in(chatter_core::domain::ids::UserId::new(), 1, "A".into());
+    h.w.set_composer_text("A's caption".into());
+    let (tx, task) = h.pick();
+    h.client.auth_state().set_logged_out();
+    h.client.auth_state().set_logged_in(chatter_core::domain::ids::UserId::new(), 1, "B".into());
+    h.w.set_composer_text("B's draft".into());
+    h.stage("b.png");
+    tx.send(Ok(gif_attachment())).unwrap();
+    assert!(test_rt().block_on(task).unwrap().is_none(), "A's send survived into B's session");
+    assert_eq!(h.w.get_composer_text().as_str(), "B's draft");
+    assert_eq!(h.staged(), ["b.png"]);
+    h.client.chat_state().clear_pending_attachments();
+    assert!(h.client.take_parked_send(true).is_none());
+}
+
+#[test]
+fn sign_out_invalidates_recovery_before_resetting_the_visible_composer() {
+    let h = GifHarness::new();
+    h.client.auth_state().set_logged_in(chatter_core::domain::ids::UserId::new(), 1, "A".into());
+    h.w.set_composer_text("A's caption".into());
+    let old = chatter_ui::bin_ui::features::composer::gif::begin_gif_send(&h.w, &h.client).unwrap();
+    h.w.set_composer_text("A's later draft".into());
+    h.stage("private.png");
+    chatter_ui::bin_ui::features::composer::reset_session(&h.w, &h.client);
+    assert!(!h.client.composer_session_is_current(old.session_revision));
+    assert!(h.w.get_composer_text().is_empty());
+    assert!(h.staged().is_empty());
+    // A completion queued behind the reset must not repopulate the old UI.
+    chatter_ui::bin_ui::features::composer::gif::recover_gif_send(&h.w, &h.client, old);
+    assert!(h.w.get_composer_text().is_empty());
+    h.client.auth_state().set_logged_out();
+    h.client.auth_state().set_logged_in(chatter_core::domain::ids::UserId::new(), 1, "B".into());
+    h.client.chat_state().set_active_conversation(chatter_core::state::ActiveConversation::Channel(h.a));
+    chatter_ui::bin_ui::features::composer::switch_composer_draft(&h.w, &h.client, "", &h.a.to_string());
+    assert!(h.w.get_composer_text().is_empty(), "A's draft restored under B");
+    assert!(h.client.take_parked_send(true).is_none());
+}
+
+#[test]
+fn a_gif_upload_error_after_account_change_cannot_restore_or_show_a_toast() {
+    let h = GifHarness::new();
+    h.client.auth_state().set_logged_in(chatter_core::domain::ids::UserId::new(), 1, "A".into());
+    h.w.set_composer_text("A's caption".into());
+    let (tx, task) = h.pick();
+    h.client.auth_state().set_logged_out();
+    h.client.auth_state().set_logged_in(chatter_core::domain::ids::UserId::new(), 1, "B".into());
+    h.w.set_composer_text("B's draft".into());
+    tx.send(Err("download failed".into())).unwrap();
+    let expired = test_rt().block_on(task).unwrap().unwrap();
+    chatter_ui::bin_ui::features::composer::gif::recover_gif_send(&h.w, &h.client, expired);
+    assert_eq!(h.w.get_composer_text().as_str(), "B's draft");
+    assert!(!h.w.get_toast_visible(), "old-session failure appeared in B's UI");
+    assert!(h.client.take_parked_send(true).is_none());
+}

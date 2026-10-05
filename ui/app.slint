@@ -1250,6 +1250,9 @@ export component MainWindow inherits Window {
     // a TextInput that dies with its component.
     property <bool> composer-composing: false;
     property <string> composer-composed-text;
+    public function composer-has-preedit() -> bool {
+        return root.composer-composing;
+    }
     // Fold the composition into `composer-text` and end it. The text is
     // computed BEFORE focus moves and assigned after, as the composer's
     // suspend-input does: a FocusOut that commits the preedit itself (core's

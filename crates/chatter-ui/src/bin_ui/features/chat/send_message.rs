@@ -39,11 +39,12 @@ use crate::{MainWindow, PendingAttachmentData};
 /// optimistic bubble: a bubble that might still fail is a claim we cannot make
 /// yet, and this app has an explicit rule against saying a thing arrived before
 /// it has.
-fn set_send_status(weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<ChatterClient>, conversation: ActiveConversation, status: &str) {
+fn set_send_status(weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<ChatterClient>, session_revision: u64, conversation: ActiveConversation, status: &str) {
     let weak = weak.clone();
     let ui_ctx = ui_ctx.clone();
     let status = status.to_string();
     let _ = slint::invoke_from_event_loop(move || {
+        if !ui_ctx.composer_session_is_current(session_revision) { return; }
         if let Some(w) = weak.upgrade() {
             show_send_status(&w, &ui_ctx, conversation, &status);
         }
@@ -61,12 +62,14 @@ fn show_send_status(w: &MainWindow, ui_ctx: &ChatterClient, conversation: Active
 fn report_send_failure(
     weak: &slint::Weak<MainWindow>,
     ui_ctx: &Arc<ChatterClient>,
+    session_revision: u64,
     conversation: ActiveConversation,
     message: String,
 ) {
     let weak = weak.clone();
     let ui_ctx = ui_ctx.clone();
     let _ = slint::invoke_from_event_loop(move || {
+        if !ui_ctx.composer_session_is_current(session_revision) { return; }
         let Some(w) = weak.upgrade() else { return };
         show_send_status(&w, &ui_ctx, conversation, "");
         w.set_toast_message(message.into());
@@ -261,7 +264,8 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             });
         }
 
-        let send = ComposerSend { conversation, text, reply, attachments: pending_attachments };
+        let session_revision = ui_ctx.auth_state().get().session_revision;
+        let send = ComposerSend { session_revision, conversation, text, reply, attachments: pending_attachments };
         tokio::spawn(async move {
             deliver(weak, ui_ctx, send, send_started).await;
         });
@@ -280,7 +284,7 @@ pub fn composer_reply(w: &MainWindow) -> Option<ComposerReply> {
     (!reply.sender_id.is_empty() && !reply.timestamp.is_empty()).then_some(reply)
 }
 
-fn clear_reply(w: &MainWindow) {
+pub(crate) fn clear_reply(w: &MainWindow) {
     w.set_composer_is_replying(false);
     w.set_composer_reply_to_sender("".into());
     w.set_composer_reply_to_sender_name("".into());
@@ -296,6 +300,7 @@ fn clear_reply(w: &MainWindow) {
 pub fn composer_is_empty(w: &MainWindow) -> bool {
     let voice = w.global::<crate::VoiceRecording>();
     w.get_composer_text().is_empty()
+        && !w.invoke_composer_has_preedit()
         && !w.get_composer_is_replying()
         && !w.get_composer_is_editing()
         && !voice.get_active()
@@ -341,7 +346,9 @@ pub async fn deliver(
     send: ComposerSend,
     send_started: std::time::Instant,
 ) -> bool {
-    let ComposerSend { conversation, text, reply, attachments: pending_attachments } = send;
+    if !ui_ctx.composer_session_is_current(send.session_revision) { return false; }
+    let send_for_delivery = send.clone();
+    let ComposerSend { session_revision, conversation, text, reply, attachments: pending_attachments } = send;
     let auth_state = ui_ctx.auth_state();
     if !auth_state.is_logged_in() { return false; }
     let current_user_id = auth_state.get().current_user_id.map(|id| id.to_string()).unwrap_or_default();
@@ -384,6 +391,7 @@ pub async fn deliver(
     set_send_status(
         &weak,
         &ui_ctx,
+        session_revision,
         conversation,
         &match pending_attachments.len() {
             0 => "Sending\u{2026}".to_string(),
@@ -393,21 +401,24 @@ pub async fn deliver(
     );
 
     tracing::info!(?conversation, text_len = text.len(), "[UI_SEND] entering send_message_ui");
-    let ui_result = match tokio::time::timeout(
+    let outcome = tokio::time::timeout(
         send_timeout,
-        ui_ctx.send_message_ui(conversation, &text, &pending_attachments, quote, None),
-    ).await {
-        Ok(Ok(r)) => {
+        ui_ctx.send_composer_message(&send_for_delivery, quote),
+    ).await;
+    if !ui_ctx.composer_session_is_current(session_revision) { return false; }
+    let ui_result = match outcome {
+        Ok(None) => return false,
+        Ok(Some(Ok(r))) => {
             tracing::info!(msg_id = %r.message_id_effective, sent_at = r.sent_at, "[UI_SEND] send_message_ui returned Ok");
             r
         }
-        Ok(Err(e)) => {
+        Ok(Some(Err(e))) => {
             tracing::error!(error = %e, "[UI_SEND] send_message_ui returned Err");
             // `format_send_error` exists to produce exactly this string
             // and its return value used to be dropped on the floor, so a
             // send against a dead server cleared the composer and
             // reported nothing at all.
-            report_send_failure(&weak, &ui_ctx, conversation, ui_ctx.format_send_error(&e, "send"));
+            report_send_failure(&weak, &ui_ctx, session_revision, conversation, ui_ctx.format_send_error(&e, "send"));
             // A refusal means we are muted or were removed, and no
             // event told us: re-read the roster and swap the composer
             // for the notice.
@@ -426,6 +437,7 @@ pub async fn deliver(
             report_send_failure(
                 &weak,
                 &ui_ctx,
+                session_revision,
                 conversation,
                 "The server did not answer, so the message was not sent.".to_string(),
             );
@@ -461,6 +473,7 @@ pub async fn deliver(
 
     tracing::info!(msg_id = %msg_id, "[UI_SEND] scheduling invoke_from_event_loop for append");
     let _ = slint::invoke_from_event_loop(move || {
+        if !ui_ctx.composer_session_is_current(session_revision) { return; }
         let Some(w) = weak.upgrade() else {
             tracing::error!("[UI_SEND] weak.upgrade() returned None; own bubble dropped");
             return;

@@ -543,7 +543,8 @@ impl ChatState {
 
     /// Take the staged attachments for a send to `conversation`, in one
     /// update: `None`, with nothing taken, when another conversation has
-    /// become active, so a send never mixes two chats' files.
+    /// become active. The staging tray is shared across conversation switches;
+    /// this prevents a concurrent take from clearing files staged after it.
     pub fn take_pending_attachments_for(&self, conversation: ActiveConversation) -> Option<Vec<PendingAttachment>> {
         let mut taken = None;
         self.store.update(|state| {

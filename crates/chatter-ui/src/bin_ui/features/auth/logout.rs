@@ -16,6 +16,10 @@ pub fn wire_logout(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let ui_ctx = ui_ctx.clone();
         let weak = weak_window.clone();
 
+        if let Some(w) = weak.upgrade() {
+            crate::bin_ui::features::composer::reset_session(&w, &ui_ctx);
+        }
+
         tokio::spawn(async move {
             // Local sign-out and teardown happen even if the server call fails.
             if let Err(e) = ui_ctx.logout().await {

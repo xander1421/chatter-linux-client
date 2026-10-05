@@ -126,6 +126,11 @@ pub async fn finish_gif_send(
             return Some(send);
         }
     }
+    // A logout/login may complete while the upload is in flight. An old
+    // account's content must neither be sent nor restored in the new session.
+    if !ui_ctx.composer_session_is_current(send.session_revision) {
+        return None;
+    }
     let started = std::time::Instant::now();
     if crate::bin_ui::features::chat::send_message::deliver(weak, ui_ctx, send.clone(), started).await {
         return None;
@@ -136,6 +141,7 @@ pub async fn finish_gif_send(
 /// A GIF send that did not go: back into its own composer if that is open
 /// and empty, otherwise kept by core until it is (never over newer input).
 pub fn recover_gif_send(w: &MainWindow, ui_ctx: &ChatterClient, send: ComposerSend) {
+    if !ui_ctx.composer_session_is_current(send.session_revision) { return; }
     use crate::bin_ui::features::chat::send_message::{composer_is_empty, restore_composer};
     match ui_ctx.recover_composer_send(send, composer_is_empty(w)) {
         Some(send) => {

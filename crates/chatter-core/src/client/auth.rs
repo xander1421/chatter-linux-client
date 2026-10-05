@@ -836,6 +836,7 @@ impl ChatterClient {
     /// background loop. The teardown runs even if the first step fails, so a
     /// signed-out client never keeps syncing and a later login can `start()`.
     pub async fn logout(&self) -> Result<(), ClientError> {
+        self.clear_composer_session();
         let result = self.auth().do_logout().await;
         self.shutdown().await;
         self.auth_state().set_logged_out();

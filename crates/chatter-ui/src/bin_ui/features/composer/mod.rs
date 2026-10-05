@@ -41,6 +41,25 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     wire_per_conversation_drafts(window, ui_ctx);
 }
 
+/// Clear only composer presentation when its account is being signed out.
+/// Core clears the matching drafts, files and pending send intents.
+pub fn reset_session(window: &MainWindow, ui_ctx: &ChatterClient) {
+    use slint::ComponentHandle;
+    // Invalidate old completions synchronously, before clearing presentation.
+    // This also removes any draft a queued navigation callback re-parked.
+    ui_ctx.clear_composer_session();
+    window.global::<crate::VoiceRecording>().invoke_cancel();
+    window.set_composer_emoji_picker_visible(false);
+    window.set_composer_gif_picker_visible(false);
+    window.invoke_release_text_focus();
+    window.invoke_settle_composer();
+    crate::bin_ui::features::chat::edit::end_edit(window);
+    window.set_composer_text("".into());
+    crate::bin_ui::features::chat::send_message::clear_reply(window);
+    window.set_composer_send_status("".into());
+    render_attachments(window, &[]);
+}
+
 /// Wire the pure text operations independently of network/client callbacks.
 pub fn wire_text_format(window: &MainWindow) {
     format_text::wire_format_text(window);

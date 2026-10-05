@@ -21,6 +21,7 @@ pub struct ComposerReply {
 /// Everything one send commits to: where it goes and what it carries.
 #[derive(Clone, Debug)]
 pub struct ComposerSend {
+    pub session_revision: u64,
     pub conversation: ActiveConversation,
     pub text: String,
     pub reply: Option<ComposerReply>,
@@ -38,6 +39,7 @@ impl ChatterClient {
         text: String,
         reply: Option<ComposerReply>,
     ) -> Result<ComposerSend, String> {
+        let session_revision = self.auth_state().get().session_revision;
         let conversation = self.chat_state().active_conversation();
         if let ActiveConversation::None = conversation {
             return Err("This can't be sent here.".into());
@@ -68,7 +70,33 @@ impl ChatterClient {
             .chat_state()
             .take_pending_attachments_for(conversation)
             .ok_or_else(|| "The conversation changed. Nothing was sent.".to_string())?;
-        Ok(ComposerSend { conversation, text, reply, attachments })
+        Ok(ComposerSend { session_revision, conversation, text, reply, attachments })
+    }
+
+    pub fn composer_session_is_current(&self, revision: u64) -> bool {
+        self.auth_state().get().session_revision == revision
+    }
+
+    /// Reject an expired intent before entering the authenticated send path.
+    pub async fn send_composer_message(
+        &self,
+        send: &ComposerSend,
+        quote: Option<crate::services::gateway::QuoteIntent>,
+    ) -> Option<Result<super::messaging::SendMessageUiResult, crate::services::gateway::SendError>> {
+        if !self.composer_session_is_current(send.session_revision) {
+            return None;
+        }
+        Some(self.send_message_ui(send.conversation, &send.text, &send.attachments, quote, None).await)
+    }
+
+    /// Account-local drafts and failed sends never survive sign-out.
+    pub fn clear_composer_session(&self) {
+        self.auth_state().invalidate_session();
+        self.parked_sends.lock().clear();
+        self.composer_drafts.lock().clear();
+        self.composer_owner.lock().clear();
+        self.chat_state().clear_pending_attachments();
+        self.chat_state().set_active_conversation(ActiveConversation::None);
     }
 
     /// Hand a failed send back. `Some`: restore it now — its conversation is
@@ -76,6 +104,9 @@ impl ChatterClient {
     /// with nothing staged. Otherwise it is kept, never written over newer
     /// input, until [`Self::take_parked_send`] finds room for it.
     pub fn recover_composer_send(&self, send: ComposerSend, composer_empty: bool) -> Option<ComposerSend> {
+        if !self.composer_session_is_current(send.session_revision) {
+            return None;
+        }
         if self.composer_has_room(send.conversation, composer_empty) {
             return Some(send);
         }
@@ -91,6 +122,8 @@ impl ChatterClient {
             return None;
         }
         let mut parked = self.parked_sends.lock();
+        let revision = self.auth_state().get().session_revision;
+        parked.retain(|send| send.session_revision == revision);
         let at = parked.iter().position(|s| s.conversation == active)?;
         Some(parked.remove(at))
     }
@@ -164,6 +197,46 @@ mod tests {
         client.chat_state().add_pending_attachment(staged("later.png"));
         assert_eq!(send.conversation, ActiveConversation::Channel(a));
         assert_eq!(send.attachments[0].filename, "cat.png");
+    }
+
+    #[tokio::test]
+    async fn an_expired_session_cannot_send_restore_or_recover_its_caption() {
+        let (client, _dir) = client();
+        let user = crate::domain::ids::UserId::new();
+        client.auth_state().set_logged_in(user, 1, "A".into());
+        let channel = ChannelId::new();
+        open(&client, channel);
+        let send = client.begin_composer_send("private caption".into(), None).unwrap();
+        assert!(client.recover_composer_send(send.clone(), false).is_none());
+
+        client.auth_state().set_logged_out();
+        // Even another login of the same account is a new session.
+        client.auth_state().set_logged_in(user, 1, "A again".into());
+        assert!(!client.composer_session_is_current(send.session_revision));
+        assert!(client.send_composer_message(&send, None).await.is_none(), "expired intent entered the send path");
+        assert!(client.recover_composer_send(send, true).is_none());
+        assert!(client.take_parked_send(true).is_none(), "old caption restored in a new session");
+    }
+
+    #[tokio::test]
+    async fn sign_out_clears_account_local_composer_state() {
+        let (client, _dir) = client();
+        let channel = ChannelId::new();
+        open(&client, channel);
+        let send = client.begin_composer_send("failed caption".into(), None).unwrap();
+        assert!(client.recover_composer_send(send.clone(), false).is_none());
+        client.chat_state().add_pending_attachment(staged("private.png"));
+        client.swap_composer_draft(&channel.to_string(), "private draft".into(), "elsewhere");
+
+        client.clear_composer_session();
+        assert_eq!(client.chat_state().active_conversation(), ActiveConversation::None);
+        assert!(client.chat_state().get_pending_attachments().is_empty());
+        assert!(!client.composer_session_is_current(send.session_revision));
+        client.swap_composer_draft(&channel.to_string(), "late old UI draft".into(), "");
+        client.auth_state().set_logged_in(crate::domain::ids::UserId::new(), 1, "B".into());
+        open(&client, channel);
+        assert!(client.swap_composer_draft("", String::new(), &channel.to_string()).is_empty());
+        assert!(client.take_parked_send(true).is_none());
     }
 
     #[tokio::test]

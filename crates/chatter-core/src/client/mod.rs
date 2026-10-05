@@ -180,6 +180,7 @@ impl ClientBuilder {
             server_monitor_started: AtomicBool::new(false),
             server_contact_deferred: AtomicBool::new(false),
             composer_drafts: Mutex::new(std::collections::HashMap::new()),
+            composer_draft_revision: Mutex::new(0),
             parked_sends: Mutex::new(Vec::new()),
             composer_owner: Mutex::new(String::new()),
             expired_messages: tokio::sync::broadcast::channel(16).0,
@@ -373,6 +374,7 @@ pub struct ChatterClient {
     /// conversation it was typed in. See `swap_composer_draft`.
     // in-memory, lost on restart.
     composer_drafts: Mutex<std::collections::HashMap<String, String>>,
+    composer_draft_revision: Mutex<u64>,
     /// Failed composed sends kept until their composer has room for them.
     /// See `recover_composer_send`. In memory, like the drafts.
     parked_sends: Mutex<Vec<ComposerSend>>,
@@ -2902,7 +2904,16 @@ impl ChatterClient {
     /// parked under `entering` (empty if none). Empty text clears the slot.
     pub fn swap_composer_draft(&self, leaving: &str, text: String, entering: &str) -> String {
         let mut drafts = self.composer_drafts.lock();
-        if !leaving.is_empty() {
+        let revision = self.auth_state().get().session_revision;
+        let mut draft_revision = self.composer_draft_revision.lock();
+        let changed_session = *draft_revision != revision;
+        if changed_session {
+            // A queued navigation callback can arrive after sign-out cleared
+            // the store but before the old UI text was cleared. Discard it.
+            drafts.clear();
+            *draft_revision = revision;
+        }
+        if !changed_session && !leaving.is_empty() {
             if text.is_empty() {
                 drafts.remove(leaving);
             } else {
@@ -3380,7 +3391,9 @@ impl ChatterClient {
             auth.settings_repo.clone(),
             auth.auth_interceptor.clone(),
         );
-        account.delete_acct(password).await
+        account.delete_acct(password).await?;
+        self.clear_composer_session();
+        Ok(())
     }
 
     /// Get a user's display name.
