@@ -340,7 +340,7 @@ impl ChatterClient {
                     &call_worker, call.id, &channel_id, pending.sender, *pending.key, pending.epoch, false,
                 ).await;
             }
-            spawn_group_key_wait(call_worker.clone(), self.call_signaling().clone(), user_id, call.id, channel_id, 0, KEY_REQUEST_AFTER);
+            spawn_group_key_wait(self.device_inbox_provider().get().cloned(), call_worker.clone(), self.call_signaling().clone(), user_id, call.id, channel_id, 0, KEY_REQUEST_AFTER);
         } else {
             // Publish microphone immediately: the key is ours, and we are alone.
             if let Err(e) = call_worker.publish_microphone(None).await {
@@ -897,7 +897,7 @@ impl ChatterClient {
                     tracing::debug!(%sender_id, call_id, "Group call key request not ours to answer; ignored");
                     return false;
                 }
-                if self.call_signaling().recently_keyed(&call_id, &sender_id, KEY_REQUEST_AFTER) {
+                if self.call_signaling().recently_keyed(&call_id, &sender_id, KEY_IN_FLIGHT_WINDOW) {
                     tracing::debug!(%sender_id, call_id, "Group call key request crossed its key in flight; not re-rotating");
                     return false;
                 }
@@ -915,6 +915,7 @@ impl ChatterClient {
         let Some(worker) = self.call_service().get().cloned() else { return };
         let Some(me) = self.sessions().current_user_id() else { return };
         let signaling = self.call_signaling().clone();
+        let inbox = self.device_inbox_provider().get().cloned();
         tokio::spawn(async move {
             use crate::services::call_worker::OrchestratedCallKind;
             // Channel group calls only: a 1:1 or anonymous call has no key
@@ -925,7 +926,7 @@ impl ChatterClient {
             let Some(status) = worker.group_key_status().await else { return };
             let Some(call) = worker.active_call().await.filter(|c| c.id == status.call_id) else { return };
             tracing::info!(call_id = %call.id, "Group call signals may have been lost; requesting a fresh key");
-            spawn_group_key_wait(worker, signaling, me, call.id, call.channel_id, status.anchor, std::time::Duration::ZERO);
+            spawn_group_key_wait(inbox, worker, signaling, me, call.id, call.channel_id, status.anchor, std::time::Duration::ZERO);
         });
     }
 
@@ -1079,7 +1080,7 @@ impl ChatterClient {
                 worker, call, &joined.channel_id, pending.sender, *pending.key, pending.epoch, false,
             ).await;
         }
-        spawn_group_key_wait(worker.clone(), self.call_signaling().clone(), user_id, call, joined.channel_id, 0, KEY_REQUEST_AFTER);
+        spawn_group_key_wait(self.device_inbox_provider().get().cloned(), worker.clone(), self.call_signaling().clone(), user_id, call, joined.channel_id, 0, KEY_REQUEST_AFTER);
 
         Ok(crate::domain::call::CallSetupResult {
             call_id: call,
@@ -1616,6 +1617,7 @@ fn key_wait_step(
 /// [`KEY_REQUEST_ATTEMPTS`] times. One wait per call runs at a time.
 #[cfg(feature = "media")]
 fn spawn_group_key_wait(
+    inbox: Option<std::sync::Arc<crate::inbox::DeviceInboxProvider>>,
     worker: CallWorkerHandle,
     signaling: crate::services::call_signaling::CallSignalingService,
     me: crate::domain::ids::UserId,
@@ -1628,6 +1630,7 @@ fn spawn_group_key_wait(
     let Some(guard) = signaling.begin_group_key_wait(&call_id) else { return };
     tokio::spawn(async move {
         let _guard = guard;
+        let _poll_guard = inbox.as_ref().map(|provider| provider.responsive_polling());
         let mut delay = first_delay;
         for _ in 0..KEY_REQUEST_ATTEMPTS {
             tokio::time::sleep(delay).await;
@@ -1695,6 +1698,12 @@ const KEY_AUTHORITY_RECHECK: std::time::Duration = std::time::Duration::from_mil
 /// well inside this on a working link; the request is the fallback.
 #[cfg(feature = "media")]
 pub(crate) const KEY_REQUEST_AFTER: std::time::Duration = std::time::Duration::from_secs(2);
+
+// A request itself crosses the peer's inbox and membership check. Allow two
+// maximum idle polling gaps for the already-sent key before rotating again.
+// Actual join/leave rotations do not consult this request-only suppression.
+#[cfg(feature = "media")]
+const KEY_IN_FLIGHT_WINDOW: std::time::Duration = std::time::Duration::from_secs(10);
 
 /// Key requests per wait before giving up (about a minute at [`KEY_REQUEST_AFTER`]).
 #[cfg(feature = "media")]

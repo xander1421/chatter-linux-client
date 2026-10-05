@@ -33,6 +33,72 @@ use super::streaming::spawn_user_events_stream;
 /// Increased from 64 to 256 to handle message bursts without lagging.
 const EVENT_CHANNEL_CAPACITY: usize = 256;
 
+/// Coalesced local hints affect pacing only on direct transport. Every cycle
+/// still polls and validates through the normal privacy-preserving pipeline.
+#[derive(Default)]
+struct PollHints {
+    wake: tokio::sync::Notify,
+    leases: parking_lot::Mutex<Vec<(u64, std::time::Instant)>>,
+    next_id: std::sync::atomic::AtomicU64,
+}
+
+pub(crate) struct ResponsivePollGuard {
+    hints: Arc<PollHints>,
+    id: u64,
+}
+
+impl Drop for ResponsivePollGuard {
+    fn drop(&mut self) {
+        self.hints.leases.lock().retain(|(id, _)| *id != self.id);
+    }
+}
+
+impl PollHints {
+    fn begin(self: &Arc<Self>) -> ResponsivePollGuard {
+        let id = self.next_id.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        self.leases.lock().push((id, std::time::Instant::now() + std::time::Duration::from_secs(65)));
+        self.wake.notify_one();
+        ResponsivePollGuard { hints: self.clone(), id }
+    }
+
+    fn interval(&self, base: std::time::Duration, direct: bool) -> std::time::Duration {
+        let now = std::time::Instant::now();
+        let mut leases = self.leases.lock();
+        leases.retain(|(_, deadline)| *deadline > now);
+        if direct && !leases.is_empty() {
+            base.min(std::time::Duration::from_millis(250))
+        } else {
+            base
+        }
+    }
+
+    /// Return false on shutdown. Restore the original deadline if transport
+    /// changes to Shield, including after a wake shortened the sleep.
+    async fn wait(&self, base: std::time::Duration, shutdown: &mut watch::Receiver<bool>, direct: impl Fn() -> bool) -> bool {
+        let original = tokio::time::Instant::now() + base;
+        let mut target = tokio::time::Instant::now() + self.interval(base, direct());
+        loop {
+            tokio::select! {
+                _ = shutdown.changed() => {
+                    if *shutdown.borrow() { return false; }
+                }
+                _ = self.wake.notified(), if direct() => {
+                    // Burst hints never postpone or repeatedly shorten an
+                    // already scheduled responsive cycle.
+                    target = target.min(tokio::time::Instant::now() + std::time::Duration::from_millis(250));
+                }
+                _ = tokio::time::sleep_until(target) => {
+                    if !direct() && tokio::time::Instant::now() < original {
+                        target = original;
+                    } else {
+                        return true;
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Maximum number of decoy mailboxes to maintain.
 const MAX_DECOY_MAILBOXES: usize = 10;
 
@@ -133,6 +199,7 @@ async fn perform_dummy_poll(
 /// ```
 pub struct DeviceInboxProvider {
     config: InboxConfig,
+    poll_hints: Arc<PollHints>,
     poller: Arc<InboxPoller>,
     pipeline: Arc<MessageValidationPipeline>,
     event_tx: broadcast::Sender<InboxEvent>,
@@ -231,6 +298,7 @@ impl DeviceInboxProvider {
         let timing = TimingObfuscation::new(TimingConfig::default());
 
         Self {
+            poll_hints: Arc::new(PollHints::default()),
             config,
             poller,
             pipeline,
@@ -286,6 +354,7 @@ impl DeviceInboxProvider {
             }
         }
 
+        let poll_hints = self.poll_hints.clone();
         let poller = self.poller.clone();
         let pipeline = self.pipeline.clone();
         let event_tx = self.event_tx.clone();
@@ -318,6 +387,7 @@ impl DeviceInboxProvider {
         let handle = tokio::spawn(async move {
             tracing::info!("Inbox provider task started...");
             Self::run_loop(
+                poll_hints,
                 poller,
                 pipeline,
                 event_tx,
@@ -402,6 +472,7 @@ impl DeviceInboxProvider {
     /// Main polling loop.
     #[allow(clippy::too_many_arguments)]
     async fn run_loop(
+        poll_hints: Arc<PollHints>,
         poller: Arc<InboxPoller>,
         pipeline: Arc<MessageValidationPipeline>,
         event_tx: broadcast::Sender<InboxEvent>,
@@ -773,16 +844,22 @@ impl DeviceInboxProvider {
             // actually paces the loop. Honour shutdown during the wait.
             let base = poller.current_interval();
             let wait = timing.jitter_interval(base).min(base);
-            tokio::select! {
-                _ = shutdown_rx.changed() => {
-                    if *shutdown_rx.borrow() {
-                        tracing::info!(cycle = poll_cycle, "Inbox run_loop: shutdown during inter-poll wait");
-                        break;
-                    }
-                }
-                _ = tokio::time::sleep(wait) => {}
+            if !poll_hints.wait(wait, &mut shutdown_rx, || {
+                grpc_pool.transport_mode() == crate::network::grpc::client_pool::TransportMode::Direct
+            }).await {
+                break;
             }
         }
+    }
+
+    /// Wake the normal cycle; ignored for pacing while on Shield transport.
+    pub fn wake(&self) {
+        self.poll_hints.wake.notify_one();
+    }
+
+    /// Bound responsive polling to a key wait and a hard 65-second deadline.
+    pub(crate) fn responsive_polling(&self) -> ResponsivePollGuard {
+        self.poll_hints.begin()
     }
 
     /// Subscribe to inbox events.
@@ -810,5 +887,83 @@ impl DeviceInboxProvider {
     /// Get a reference to the configuration.
     pub fn config(&self) -> &InboxConfig {
         &self.config
+    }
+}
+
+#[cfg(test)]
+mod responsive_poll_tests {
+    use super::*;
+    use std::time::{Duration, Instant};
+
+    #[tokio::test]
+    async fn key_wait_wakes_and_restores_normal_cadence_on_drop() {
+        let hints = Arc::new(PollHints::default());
+        let base = Duration::from_secs(5);
+        assert_eq!(hints.interval(base, true), base);
+        let guard = hints.begin();
+        tokio::time::timeout(Duration::from_millis(50), hints.wake.notified()).await.unwrap();
+        assert_eq!(hints.interval(base, true), Duration::from_millis(250));
+        assert_eq!(hints.interval(base, false), base, "Shield cadence stays unchanged");
+        let other = hints.begin();
+        drop(guard);
+        assert_eq!(hints.interval(base, true), Duration::from_millis(250));
+        drop(other);
+        assert_eq!(hints.interval(base, true), base);
+    }
+
+    #[test]
+    fn abandoned_lease_expires_and_never_slows_a_shorter_base() {
+        let hints = Arc::new(PollHints::default());
+        let _guard = hints.begin();
+        assert_eq!(hints.interval(Duration::from_millis(100), true), Duration::from_millis(100));
+        hints.leases.lock()[0].1 = Instant::now() - Duration::from_secs(1);
+        assert_eq!(hints.interval(Duration::from_secs(5), true), Duration::from_secs(5));
+    }
+
+    #[tokio::test]
+    async fn wake_interrupts_existing_sleep_and_shield_transition_restores_it() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        for (shield, responsive) in [(false, false), (true, false), (false, true), (true, true)] {
+            let hints = Arc::new(PollHints::default());
+            let _guard = responsive.then(|| hints.begin());
+            let direct = Arc::new(AtomicBool::new(true));
+            let (_tx, mut rx) = watch::channel(false);
+            let task_hints = hints.clone();
+            let task_direct = direct.clone();
+            let start = tokio::time::Instant::now();
+            let task = tokio::spawn(async move {
+                task_hints.wait(Duration::from_millis(600), &mut rx, || task_direct.load(Ordering::Relaxed)).await
+            });
+            tokio::time::sleep(Duration::from_millis(20)).await;
+            hints.wake.notify_one();
+            if shield {
+                tokio::time::sleep(Duration::from_millis(20)).await;
+                direct.store(false, Ordering::Relaxed);
+            }
+            assert!(task.await.unwrap());
+            if shield {
+                assert!(start.elapsed() >= Duration::from_millis(600));
+            } else {
+                assert!(start.elapsed() < Duration::from_millis(550));
+                assert!(start.elapsed() >= Duration::from_millis(250));
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn shutdown_interrupts_responsive_sleep() {
+        let hints = Arc::new(PollHints::default());
+        let _guard = hints.begin();
+        let (tx, mut rx) = watch::channel(false);
+        tx.send(true).unwrap();
+        assert!(!hints.wait(Duration::from_secs(5), &mut rx, || true).await);
+    }
+
+    #[tokio::test]
+    async fn push_bursts_coalesce_to_one_pending_wake() {
+        let hints = PollHints::default();
+        for _ in 0..100 { hints.wake.notify_one(); }
+        tokio::time::timeout(Duration::from_millis(50), hints.wake.notified()).await.unwrap();
+        assert!(tokio::time::timeout(Duration::from_millis(20), hints.wake.notified()).await.is_err());
     }
 }

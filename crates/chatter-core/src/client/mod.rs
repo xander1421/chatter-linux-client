@@ -4005,12 +4005,12 @@ impl ChatterClient {
                             },
                         );
 
-                        // (2) Trigger a one-shot mailbox sync. The inbox
-                        // provider is self-started and idempotent — calling
-                        // it when already running is a cheap no-op; when it
-                        // was torn down (e.g. Android backgrounded) this
-                        // restarts the poller so new messages get pulled.
+                        // Resume a stopped provider, then coalesce a wake for
+                        // its normal polling cycle (including all validation).
                         let _ = ui.start_inbox_provider().await;
+                        if let Some(provider) = ui.device_inbox_provider.get() {
+                            provider.wake();
+                        }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
                         tracing::warn!(

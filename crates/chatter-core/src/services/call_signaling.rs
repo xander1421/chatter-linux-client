@@ -1605,6 +1605,20 @@ mod rotation_recipient_tests {
         assert!(!sent_recently(Some(&k), "other", &b, t0, w), "another call");
         assert!(!sent_recently(None, "call", &b, t0, w));
     }
+    #[test]
+    fn delayed_request_is_suppressed_only_until_in_flight_window_expires() {
+        let peer = UserId::new();
+        let other = UserId::new();
+        let sent = std::time::Instant::now();
+        let key = KeySent { call_id: "call".into(), at: sent, to: vec![peer] };
+        let window = std::time::Duration::from_secs(10);
+        let delayed = sent + std::time::Duration::from_millis(3131);
+        assert!(sent_recently(Some(&key), "call", &peer, delayed, window));
+        assert!(!sent_recently(Some(&key), "call", &peer, sent + window, window));
+        assert!(!sent_recently(Some(&key), "call", &other, delayed, window));
+        assert!(!sent_recently(Some(&key), "rejoin", &peer, delayed, window));
+    }
+
     use crate::domain::channel::{MemberRole, Membership, NotificationPreference};
 
     fn member(channel_id: &ChannelId, user_id: &UserId) -> Membership {
