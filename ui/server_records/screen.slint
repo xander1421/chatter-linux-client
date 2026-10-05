@@ -54,14 +54,21 @@ export component ServerRecordsScreen inherits Rectangle {
             if !ServerRecordsGlobal.loading && ServerRecordsGlobal.error == "" && ServerRecordsGlobal.rows.length == 0: Text {
                 text: "No records yet"; color: Colors.text-secondary;
             }
-            ScrollView {
+            list := ScrollView {
                 vertical-stretch: 1;
-                VerticalLayout {
+                // The record texts take the list's width. Without it a
+                // repeated word-wrap Text was measured at ~0 width (one glyph
+                // per line), the viewport came out thousands of px tall and
+                // the rows were stretched over it: records spread apart with
+                // a gap between, and the list never moved to the next one.
+                viewport-height: records.preferred-height;
+                records := VerticalLayout {
+                    alignment: start;
                     spacing: Spacing.md;
                     for row in ServerRecordsGlobal.rows: VerticalLayout {
                         spacing: Spacing.xs;
-                        Text { text: row.title; wrap: word-wrap; color: Colors.text-primary; font-size: Typography.base; }
-                        Text { text: row.body; wrap: word-wrap; color: Colors.text-secondary; font-size: Typography.sm; }
+                        Text { width: list.visible-width; text: row.title; wrap: word-wrap; color: Colors.text-primary; font-size: Typography.base; }
+                        Text { width: list.visible-width; text: row.body; wrap: word-wrap; color: Colors.text-secondary; font-size: Typography.sm; }
                         HorizontalLayout {
                             spacing: Spacing.sm;
                             if row.primary != "": Button {
