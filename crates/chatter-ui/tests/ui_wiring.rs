@@ -4905,7 +4905,7 @@ fn polish_shared_controls_and_rc28_regressions() {
 #[test]
 fn call_duration_uses_core_connection_time() {
     let timers = include_str!("../src/bin_ui/features/calls/timers.rs");
-    assert!(timers.contains("ui_ctx.call_active_call().await"));
+    assert!(timers.contains("ui_ctx.call_room_snapshot().await"));
     assert!(timers.contains("call.duration_seconds()"));
     assert!(!timers.contains("SystemTime") && !timers.contains("started_at_ns"));
     assert!(timers.contains("stop.load(Ordering::Relaxed)"), "a late snapshot must not restart a stopped timer");
