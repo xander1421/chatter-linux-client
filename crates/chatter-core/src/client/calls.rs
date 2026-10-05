@@ -38,6 +38,28 @@ pub enum AcceptedIncomingCall {
     },
 }
 
+/// Presentation snapshot: membership comes from the live room, never Call::participants.
+#[cfg(feature = "media")]
+#[derive(Clone, Debug)]
+pub struct CallRoomSnapshot {
+    pub call: crate::domain::call::Call,
+    /// None while ringing/disconnected: keep the pre-rendered peer presentation.
+    pub remotes: Option<Vec<(String, crate::ui::chat_data::CallParticipantInfo)>>,
+}
+
+/// Screen presentations survive only while their owner is in the real roster.
+#[cfg(feature = "media")]
+pub fn room_roster_keeps_screen(
+    tile_id: &str,
+    tile_name: &str,
+    remotes: &[(String, crate::ui::chat_data::CallParticipantInfo)],
+    local: Option<&str>,
+) -> bool {
+    tile_name == crate::calls::tiles::LOCAL_SCREEN_TILE_NAME
+        || remotes.iter().map(|(id, _)| id.as_str()).chain(local)
+            .any(|id| crate::calls::screen_share_frame_id(id, true) == tile_id)
+}
+
 impl ChatterClient {
     // ── DM Call Orchestration ──────────────────────────────────────────
 
@@ -664,6 +686,33 @@ impl ChatterClient {
             Some(worker) => worker.active_call().await,
             None => None,
         }
+    }
+
+    /// Read live membership bracketed by call identity checks. A leave/rejoin
+    /// during the read must not attach the previous room's roster to a new call.
+    #[cfg(feature = "media")]
+    pub async fn call_room_snapshot(&self) -> Option<CallRoomSnapshot> {
+        let worker = self.call_service().get()?.clone();
+        let call = worker.active_call().await?;
+        let connected = matches!(worker.room_state().await, crate::calls::RoomState::Connected { .. });
+        let remotes = if connected && call.connected_at.is_some() {
+            let mut identities = worker.remote_participant_identities().await;
+            identities.sort();
+            identities.dedup();
+            Some(identities.into_iter().map(|id| {
+                let info = self.resolve_call_participant(&id);
+                (id, info)
+            }).collect())
+        } else {
+            None
+        };
+        let current = worker.active_call().await?;
+        if current.id != call.id || current.channel_id != call.channel_id
+            || current.connected_at != call.connected_at
+        {
+            return None;
+        }
+        Some(CallRoomSnapshot { call: current, remotes })
     }
 
     /// Locally mute/unmute a remote participant's audio. The LiveKit
