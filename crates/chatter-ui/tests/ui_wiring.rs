@@ -4852,7 +4852,8 @@ fn polish_shared_controls_and_rc28_regressions() {
     let settings = source("settings/settings_screen.slint");
     assert!(settings.contains("if tabs.viewport-x < 0px: Rectangle"));
     assert!(settings.contains("if tabs.viewport-width + tabs.viewport-x > tabs.width: Rectangle"));
-    assert!(settings.contains("variant: root.active-section == item.id ? \"primary\" : \"ghost\";"));
+    // The open tab is the neutral pill every tab bar uses, not the action fill.
+    assert!(settings.contains("variant: root.active-section == item.id ? \"secondary\" : \"ghost\";"));
 }
 
 /// D10: every call entry point delegates duration to the core connected clock.
