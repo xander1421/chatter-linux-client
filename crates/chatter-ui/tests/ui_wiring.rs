@@ -25,12 +25,37 @@ fn headless_dialogs() {
     unsafe { std::env::set_var("CHATTER_HEADLESS", "1") };
 }
 
+///
+/// `CHATTER_DB_PASSPHRASE` covers only the database passphrase. With the
+/// `mesh` feature `ChatterClient::build` also opens the mesh seal key
+/// (`app/services.rs` -> `mesh_store::sealed_store` -> `MeshSealer::from_keyring`),
+/// which asked Secret Service directly and popped a desktop unlock prompt on
+/// every `--features mesh` run. `CHATTER_NO_KEYRING` is the opt-out both
+/// honour (`system::keyring::keyring_disabled`).
 fn no_keyring() {
     headless_dialogs();
     static ONCE: std::sync::Once = std::sync::Once::new();
     ONCE.call_once(|| unsafe {
+        std::env::set_var("CHATTER_NO_KEYRING", "1");
         std::env::set_var("CHATTER_DB_PASSPHRASE", "ui-wiring-harness-passphrase");
     });
+}
+
+/// Guard: the harness keeps every keyring reader off the OS keyring — the
+/// database passphrase and the mesh seal key alike — whatever directory a
+/// test's client is built in.
+#[test]
+fn harness_never_reaches_the_os_keyring() {
+    no_keyring();
+    let db = std::path::Path::new("/nonexistent-ui-wiring/chatter.db");
+    assert!(
+        chatter_core::system::keyring::keyring_disabled(db),
+        "a client built by this harness would ask Secret Service for its mesh seal key"
+    );
+    assert_eq!(
+        chatter_core::system::keyring::Keyring::new(db.to_path_buf()).passphrase_source(),
+        "CHATTER_DB_PASSPHRASE"
+    );
 }
 
 /// Install the headless backend for the current test thread. Safe to call once
