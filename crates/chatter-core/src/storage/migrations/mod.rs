@@ -84,6 +84,7 @@ mod v083_mesh_sender_names;
 mod v084_scoped_reactions;
 mod v085_reaction_receive_journal;
 mod v086_channel_message_clocks;
+mod v087_single_reaction;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -171,6 +172,7 @@ pub use v083_mesh_sender_names::V083MeshSenderNames;
 pub use v084_scoped_reactions::V084ScopedReactions;
 pub use v085_reaction_receive_journal::V085ReactionReceiveJournal;
 pub use v086_channel_message_clocks::V086ChannelMessageClocks;
+pub use v087_single_reaction::V087SingleReaction;
 
 /// Trait for database migrations.
 ///
@@ -188,6 +190,12 @@ pub trait Migration {
     ///
     /// Can contain multiple statements separated by semicolons.
     fn up(&self) -> &'static str;
+
+    /// Apply SQL and any serialized-data updates in the runner's transaction.
+    fn apply(&self, conn: &Connection) -> Result<(), StorageError> {
+        conn.execute_batch(self.up())?;
+        Ok(())
+    }
 
     /// SQL to revert this migration (optional).
     ///
@@ -267,7 +275,7 @@ impl MigrationRunner {
                 let tx = conn.unchecked_transaction()?;
 
                 // Execute the up SQL
-                tx.execute_batch(migration.up())?;
+                migration.apply(&tx)?;
 
                 // Record migration in schema_version
                 let now = Utc::now().to_rfc3339();
@@ -383,4 +391,5 @@ pub fn default_migrations() -> MigrationRunner {
         .register(V084ScopedReactions)
         .register(V085ReactionReceiveJournal)
         .register(V086ChannelMessageClocks)
+        .register(V087SingleReaction)
 }

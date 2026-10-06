@@ -2670,6 +2670,140 @@ mod tests {
     }
 
     #[test]
+    fn single_reaction_replaces_and_rejects_delayed_events_in_every_scope() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(Database::open(&dir.path().join("one-reaction.db"), "testpass").unwrap());
+        db.run_migrations().unwrap();
+        let repo = UnifiedMessageRepository::new(db);
+        let actor = UserId::new();
+        let peer = UserId::new();
+        let author = UserId::new();
+        for kind in [
+            ConversationType::ServerDm,
+            ConversationType::Channel,
+            ConversationType::AnonDm,
+            ConversationType::AnonGroup,
+        ] {
+            let msg = Message::new_text(ChannelId::new(), kind, Some(author), "keep".into(), 100);
+            repo.insert(&msg).unwrap();
+            let scope = ReactionScope::of(&msg);
+            assert!(
+                repo.add_reaction_at(&scope, &author, msg.sent_at, &actor, &actor, "👍", 10)
+                    .unwrap()
+            );
+            assert!(
+                repo.add_reaction_at(&scope, &author, msg.sent_at, &peer, &actor, "👍", 11)
+                    .unwrap()
+            );
+            assert!(
+                repo.add_reaction_at(&scope, &author, msg.sent_at, &actor, &actor, "❤️", 20)
+                    .unwrap()
+            );
+            let saved = repo
+                .get_by_reaction_scope(&scope, &author, msg.sent_at)
+                .unwrap()
+                .unwrap();
+            assert_eq!(saved.current_user_reactions, vec!["❤️"]);
+            assert_eq!(
+                saved.reaction_counts.iter().map(|r| r.count).sum::<u32>(),
+                2
+            );
+            assert!(
+                !repo
+                    .add_reaction_at(&scope, &author, msg.sent_at, &actor, &actor, "👍", 15)
+                    .unwrap()
+            );
+            assert!(
+                !repo
+                    .remove_reaction_at(&scope, &author, msg.sent_at, &actor, &actor, "👍", 21)
+                    .unwrap()
+            );
+            assert_eq!(
+                repo.get_by_reaction_scope(&scope, &author, msg.sent_at)
+                    .unwrap()
+                    .unwrap()
+                    .current_user_reactions,
+                vec!["❤️"]
+            );
+            assert!(
+                repo.remove_reaction_at(&scope, &author, msg.sent_at, &actor, &actor, "❤️", 30)
+                    .unwrap()
+            );
+            assert!(
+                !repo
+                    .add_reaction_at(&scope, &author, msg.sent_at, &actor, &actor, "😂", 15)
+                    .unwrap()
+            );
+            assert!(
+                repo.add_reaction_at(&scope, &author, msg.sent_at, &actor, &actor, "😂", 40)
+                    .unwrap()
+            );
+            let saved = repo
+                .get_by_reaction_scope(&scope, &author, msg.sent_at)
+                .unwrap()
+                .unwrap();
+            assert_eq!(saved.current_user_reactions, vec!["😂"]);
+            assert_eq!(
+                saved.reaction_counts.iter().map(|r| r.count).sum::<u32>(),
+                2
+            );
+        }
+    }
+
+    #[test]
+    fn single_reaction_delayed_remove_of_previous_emoji_preserves_new_selection() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(Database::open(&dir.path().join("reordered.db"), "testpass").unwrap());
+        db.run_migrations().unwrap();
+        let repo = UnifiedMessageRepository::new(db);
+        let actor = UserId::new();
+        for remove_first in [true, false] {
+            let msg = Message::new_text(
+                ChannelId::new(),
+                ConversationType::ServerDm,
+                Some(actor),
+                "order".into(),
+                100,
+            );
+            repo.insert(&msg).unwrap();
+            let scope = ReactionScope::of(&msg);
+            repo.add_reaction_at(&scope, &actor, msg.sent_at, &actor, &actor, "👍", 10)
+                .unwrap();
+            if remove_first {
+                repo.remove_reaction_at(&scope, &actor, msg.sent_at, &actor, &actor, "👍", 30)
+                    .unwrap();
+            }
+            assert!(
+                repo.add_reaction_at(&scope, &actor, msg.sent_at, &actor, &actor, "❤️", 20)
+                    .unwrap()
+            );
+            if !remove_first {
+                repo.remove_reaction_at(&scope, &actor, msg.sent_at, &actor, &actor, "👍", 30)
+                    .unwrap();
+            }
+            assert_eq!(
+                repo.get_by_reaction_scope(&scope, &actor, msg.sent_at)
+                    .unwrap()
+                    .unwrap()
+                    .current_user_reactions,
+                vec!["❤️"]
+            );
+            repo.remove_reaction_at(&scope, &actor, msg.sent_at, &actor, &actor, "❤️", 40)
+                .unwrap();
+            assert!(
+                !repo
+                    .add_reaction_at(&scope, &actor, msg.sent_at, &actor, &actor, "❤️", 35)
+                    .unwrap()
+            );
+            assert!(
+                !repo
+                    .add_reaction_at(&scope, &actor, msg.sent_at, &actor, &actor, "👍", 15)
+                    .unwrap()
+            );
+        }
+    }
+
+    #[test]
     fn test_like_pattern_escaping() {
         // LIKE special chars are escaped so they match literally
         let query = "100% done_now";
@@ -2693,7 +2827,25 @@ fn accept_reaction_action(
             "Invalid reaction action clock".into(),
         ));
     }
-    Ok(conn.execute("INSERT INTO reaction_action_versions(conversation_id,conversation_type,author_id,target_sent_at,actor_id,emoji,action_ts,remove) VALUES(?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(conversation_type,conversation_id,author_id,target_sent_at,actor_id,emoji) DO UPDATE SET action_ts=excluded.action_ts,remove=excluded.remove WHERE excluded.action_ts>reaction_action_versions.action_ts",params![scope.id.to_string(),scope.kind.as_str(),author.to_string(),target as i64,actor.to_string(),emoji,action as i64,remove])?>0)
+    // Adds replace the actor's selection across emojis, not just this emoji's
+    // ledger entry. Ignore delayed adds after a newer selection; a
+    // deterministic emoji tie-break makes equal-clock concurrent devices agree.
+    if !remove {
+        let newer: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM reaction_actor_selections WHERE conversation_id=?1 AND conversation_type=?2 AND author_id=?3 AND target_sent_at=?4 AND actor_id=?5 AND (action_ts>?6 OR (action_ts=?6 AND emoji>=?7)))",
+            params![scope.id.to_string(),scope.kind.as_str(),author.to_string(),target as i64,actor.to_string(),action as i64,emoji],
+            |r| r.get(0),
+        )?;
+        if newer {
+            return Ok(false);
+        }
+    }
+    let accepted = conn.execute("INSERT INTO reaction_action_versions(conversation_id,conversation_type,author_id,target_sent_at,actor_id,emoji,action_ts,remove) VALUES(?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(conversation_type,conversation_id,author_id,target_sent_at,actor_id,emoji) DO UPDATE SET action_ts=excluded.action_ts,remove=excluded.remove WHERE excluded.action_ts>reaction_action_versions.action_ts",params![scope.id.to_string(),scope.kind.as_str(),author.to_string(),target as i64,actor.to_string(),emoji,action as i64,remove])?>0;
+    if accepted && !remove {
+        conn.execute("INSERT INTO reaction_actor_selections(conversation_id,conversation_type,author_id,target_sent_at,actor_id,emoji,action_ts) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(conversation_type,conversation_id,author_id,target_sent_at,actor_id) DO UPDATE SET emoji=excluded.emoji,action_ts=excluded.action_ts", params![scope.id.to_string(),scope.kind.as_str(),author.to_string(),target as i64,actor.to_string(),emoji,action as i64])?;
+        conn.execute("DELETE FROM unified_reactions WHERE conversation_id=?1 AND conversation_type=?2 AND sender_id=?3 AND sent_at_ns=?4 AND user_id=?5 AND emoji<>?6", params![scope.id.to_string(),scope.kind.as_str(),author.to_string(),target as i64,actor.to_string(),emoji])?;
+    }
+    Ok(accepted)
 }
 
 fn reaction_receive_binding(conn: &rusqlite::Connection) -> Result<(String, u32), StorageError> {

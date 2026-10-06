@@ -78,6 +78,7 @@ pub const BACKUP_TABLES: &[&str] = &[
     "reaction_legacy_pending",
     "pending_scoped_reactions",
     "reaction_action_versions",
+    "reaction_actor_selections",
 ];
 
 /// Own-profile settings rows included in the backup (see module doc — no
@@ -267,7 +268,7 @@ pub fn dump_frames(conn: &Connection, user_id: &str) -> Result<(Vec<u8>, usize),
                 "EXISTS (SELECT 1 FROM messages m WHERE m.conversation_type IN {MESSAGE_CONVERSATION_TYPES}
                  AND m.conversation_type={table}.conversation_type AND m.conversation_id={table}.conversation_id
                  AND m.sender_id={table}.sender_id AND m.sent_at={table}.sent_at_ns)")),
-            "pending_scoped_reactions" | "reaction_action_versions" => Some(format!(
+            "pending_scoped_reactions" | "reaction_action_versions" | "reaction_actor_selections" => Some(format!(
                 "EXISTS (SELECT 1 FROM messages m WHERE m.conversation_type IN {MESSAGE_CONVERSATION_TYPES}
                  AND m.conversation_type={table}.conversation_type AND m.conversation_id={table}.conversation_id
                  AND m.sender_id={table}.author_id AND m.sent_at={table}.target_sent_at)")),
@@ -594,6 +595,12 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
     // newer removal, and imported tombstones are present before votes are admitted.
     for (sql, values, key) in scoped_votes {
         if local_versions.contains(&key) {
+            continue;
+        }
+        // An old backup may contain several emojis for this actor. A retained
+        // or restored single-selection ledger owns which one may be admitted.
+        let replaced: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM reaction_actor_selections WHERE conversation_id=?1 AND conversation_type=?2 AND author_id=?3 AND target_sent_at=?4 AND actor_id=?5 AND emoji<>?6)",rusqlite::params![key.0,key.1,key.2,key.3,key.4,key.5],|r|r.get(0))?;
+        if replaced {
             continue;
         }
         let removed:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM reaction_action_versions WHERE conversation_id=?1 AND conversation_type=?2 AND author_id=?3 AND target_sent_at=?4 AND actor_id=?5 AND emoji=?6 AND remove=1)",rusqlite::params![key.0,key.1,key.2,key.3,key.4,key.5],|r|r.get(0))?;
