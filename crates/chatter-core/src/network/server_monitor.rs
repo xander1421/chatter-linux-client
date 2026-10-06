@@ -56,11 +56,20 @@ const TICK: Duration = Duration::from_secs(5);
 /// is registered with the client's task list and aborted by
 /// `ChatterClient::shutdown`, which is why there is no exit condition here.
 pub async fn run(pool: Arc<GrpcClientPool>, offline_state: OfflineState) {
+    run_with_timing(pool, offline_state, PROBE_INTERVAL, TICK).await;
+}
+
+pub(crate) async fn run_with_timing(
+    pool: Arc<GrpcClientPool>,
+    offline_state: OfflineState,
+    probe_interval: Duration,
+    tick_interval: Duration,
+) {
     // Mirror whatever is already known before the first tick, so a UI that
     // subscribes at startup is not left reading a default.
     let mut status_rx = crate::network::connection::subscribe_server_status();
     mirror(&offline_state);
-    let mut tick = tokio::time::interval(TICK);
+    let mut tick = tokio::time::interval(tick_interval);
     tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
     tick.tick().await;
 
@@ -74,7 +83,7 @@ pub async fn run(pool: Arc<GrpcClientPool>, offline_state: OfflineState) {
             _ = tick.tick() => {}
         }
 
-        let stale = server_status_age().is_none_or(|age| age >= PROBE_INTERVAL);
+        let stale = server_status_age().is_none_or(|age| age >= probe_interval);
         if stale && probe_is_worth_it(&pool) {
             // The result is recorded by `probe` itself; the error is only worth
             // a debug line, because "the server is down" is an ordinary and
@@ -119,7 +128,7 @@ fn probe_is_worth_it(pool: &GrpcClientPool) -> bool {
 /// `Unknown` deliberately does not write anything: the store's own default is
 /// `Disconnected`, and turning "we have not looked yet" into "offline" would be
 /// the one guess this whole module exists to avoid.
-fn mirror(offline_state: &OfflineState) {
+pub(crate) fn mirror(offline_state: &OfflineState) {
     let next = match server_status() {
         ServerStatus::Reachable => ConnectionState::Connected,
         ServerStatus::Unreachable => ConnectionState::Disconnected,

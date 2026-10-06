@@ -693,27 +693,24 @@ impl ChatterClient {
             tracing::info!("signed out: no server contact until a sign-in action");
             return false;
         }
-        let connected = match tokio::time::timeout(budget, self.connect()).await {
-            Ok(Ok(())) => true,
+        let fence = self.services.grpc_pool.connect_fence();
+        match tokio::time::timeout(budget, self.connect()).await {
+            Ok(Ok(())) => {}
             Ok(Err(e)) => {
                 tracing::warn!("Could not connect to server: {} (offline mode)", e);
-                false
             }
             Err(_) => {
                 tracing::warn!(
                     budget_s = budget.as_secs(),
                     "Server did not answer within the startup budget (offline mode)"
                 );
-                // Nothing wrote the outcome, because nothing finished. Record
-                // it, or the UI would render the default until the first probe.
-                self.offline_state().set_connection_state(
-                    crate::network::connection::ConnectionState::Disconnected,
-                );
-                false
+                self.services.grpc_pool.note_connect_timeout(fence);
+                crate::network::server_monitor::mirror(self.offline_state());
             }
         };
         self.start_server_monitor();
-        connected
+        crate::network::connection::server_status()
+            == crate::network::connection::ServerStatus::Reachable
     }
 
     /// Whether the sign-in screens should say the server is unreachable. Not
@@ -2298,32 +2295,19 @@ impl ChatterClient {
     /// This forces an immediate connection attempt to verify reachability.
     /// Optional — RPCs will auto-connect on first use if skipped.
     ///
-    /// Side effect: updates `offline_state` so the rest of the SDK observes
-    /// `Connected` / `Disconnected` consistently. Without this, callers
-    /// would have to flip the state themselves after every `connect()` —
-    /// which is what `ensure_connected_for_auth()` used to do.
+    /// Mirrors authoritative reachability into `offline_state`, including newer
+    /// RPC evidence that superseded this dial. Dial errors remain caller errors;
+    /// a rejected stale outcome never independently changes the displayed state.
     pub async fn connect(&self) -> Result<(), ClientError> {
-        use crate::network::connection::ConnectionState;
         // First contact after a signed-out start: the user has acted, on the
         // transport they chose, so the reachability monitor may run now (it
         // never probes while the pool is on onion).
         if self.server_contact_deferred.swap(false, Ordering::SeqCst) {
             self.start_server_monitor();
         }
-        match self.services.grpc_pool.connect_with_evidence().await {
-            Ok(fresh) => {
-                if fresh {
-                    self.offline_state()
-                        .set_connection_state(ConnectionState::Connected);
-                }
-                Ok(())
-            }
-            Err(e) => {
-                self.offline_state()
-                    .set_connection_state(ConnectionState::Disconnected);
-                Err(e.into())
-            }
-        }
+        let result = self.services.grpc_pool.connect().await;
+        crate::network::server_monitor::mirror(self.offline_state());
+        result.map_err(Into::into)
     }
 
     /// Start all background services after authentication.
@@ -4940,6 +4924,263 @@ mod transport_switch_tests {
             "use captured failure, not a second state read"
         );
         assert!(!client.server_unreachable());
+    }
+
+    // Serialize these regressions because reachability is process-global.
+    static AUTHORITY_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+    fn pending_dial(
+        pool: &crate::network::grpc::GrpcClientPool,
+    ) -> (
+        tokio::sync::oneshot::Receiver<()>,
+        tokio::sync::oneshot::Sender<Result<bool, NetworkError>>,
+    ) {
+        let (started_tx, started) = tokio::sync::oneshot::channel();
+        let (complete, completion) = tokio::sync::oneshot::channel();
+        let channel = tonic::transport::Endpoint::from_static("https://localhost:1").connect_lazy();
+        pool.control_next_dial(Box::pin(async move {
+            let _ = started_tx.send(());
+            let fresh = completion.await.expect("controlled dial released")?;
+            Ok((channel.into(), fresh))
+        }));
+        (started, complete)
+    }
+
+    #[tokio::test]
+    async fn connect_uses_new_rpc_evidence_when_pending_dial_finishes() {
+        use crate::network::connection::{
+            ConnectionState, ServerStatus, server_status, set_server_status,
+        };
+        use crate::network::grpc::transport::outcome_tests::authoritative_inbox;
+        let _serial = AUTHORITY_TEST_LOCK.lock().await;
+        // Both dial outcomes against both RPC outcomes. Application rejection
+        // is a real response and must still count as reachable.
+        for rpc_reachable in [true, false] {
+            for dial_success in [true, false] {
+                let (client, _dir) = build_test_client();
+                set_server_status(ServerStatus::Unknown);
+                let (started, complete) = pending_dial(&client.services.grpc_pool);
+                let connecting = {
+                    let client = client.clone();
+                    tokio::spawn(async move { client.connect().await })
+                };
+                started.await.unwrap();
+                let rpc = authoritative_inbox(Some(tonic::Code::Unavailable), !rpc_reachable).await;
+                assert!(rpc.is_err());
+                let expected = if rpc_reachable {
+                    ServerStatus::Reachable
+                } else {
+                    ServerStatus::Unreachable
+                };
+                assert_eq!(server_status(), expected);
+                complete
+                    .send(if dial_success {
+                        Ok(true)
+                    } else {
+                        Err(NetworkError::ConnectionFailed(
+                            "controlled dial failure".into(),
+                        ))
+                    })
+                    .unwrap();
+                let result = connecting.await.unwrap();
+                assert_eq!(result.is_ok(), dial_success && rpc_reachable);
+                assert_eq!(
+                    server_status(),
+                    expected,
+                    "stale dial replaced newer RPC evidence"
+                );
+                assert_eq!(
+                    client.offline_state().connection_state(),
+                    if rpc_reachable {
+                        ConnectionState::Connected
+                    } else {
+                        ConnectionState::Disconnected
+                    }
+                );
+                client.shutdown().await;
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn connection_generation_swap_never_installs_or_publishes_old_dial() {
+        use crate::network::connection::{
+            ConnectionState, ServerStatus, server_status, set_server_status,
+        };
+        use crate::network::grpc::transport::outcome_tests::authoritative_inbox;
+        let _serial = AUTHORITY_TEST_LOCK.lock().await;
+        for dial_success in [true, false] {
+            let (client, _dir) = build_test_client();
+            set_server_status(ServerStatus::Unknown);
+            let (started, complete) = pending_dial(&client.services.grpc_pool);
+            let connecting = {
+                let client = client.clone();
+                tokio::spawn(async move { client.connect().await })
+            };
+            started.await.unwrap();
+            client.set_server_url("https://new-server.invalid").unwrap();
+            authoritative_inbox(None, false).await.unwrap();
+            complete
+                .send(if dial_success {
+                    Ok(true)
+                } else {
+                    Err(NetworkError::ConnectionFailed(
+                        "old transport failed".into(),
+                    ))
+                })
+                .unwrap();
+            assert!(connecting.await.unwrap().is_err());
+            assert!(!client.services.grpc_pool.is_connected());
+            assert_eq!(server_status(), ServerStatus::Reachable);
+            assert_eq!(
+                client.offline_state().connection_state(),
+                ConnectionState::Connected
+            );
+            client.shutdown().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn cached_channel_connect_returns_only_confirmed_authority() {
+        use crate::network::connection::{
+            ServerStatus, server_evidence_revision, server_status, set_server_status,
+        };
+        let _serial = AUTHORITY_TEST_LOCK.lock().await;
+        let (client, _dir) = build_test_client();
+        for status in [
+            ServerStatus::Unknown,
+            ServerStatus::Unreachable,
+            ServerStatus::Reachable,
+        ] {
+            set_server_status(status);
+            let revision = server_evidence_revision();
+            let (started, complete) = pending_dial(&client.services.grpc_pool);
+            complete.send(Ok(false)).unwrap();
+            assert_eq!(
+                client.connect().await.is_ok(),
+                status == ServerStatus::Reachable
+            );
+            started.await.unwrap();
+            assert_eq!(server_status(), status);
+            assert_eq!(
+                server_evidence_revision(),
+                revision,
+                "local construction fabricated evidence"
+            );
+        }
+        client.shutdown().await;
+    }
+
+    #[tokio::test]
+    async fn startup_timeout_is_bounded_and_fenced_by_rpc_and_generation() {
+        use crate::network::connection::{
+            ConnectionState, ServerStatus, server_status, set_server_status,
+        };
+        use crate::network::grpc::transport::outcome_tests::authoritative_inbox;
+        let _serial = AUTHORITY_TEST_LOCK.lock().await;
+        for scenario in 0..3 {
+            let (client, _dir) = build_test_client();
+            client
+                .auth_state()
+                .set_logged_in(crate::domain::ids::UserId::new(), 1, "Me".into());
+            set_server_status(ServerStatus::Unknown);
+            let (started, complete) = pending_dial(&client.services.grpc_pool);
+            let boot = {
+                let client = client.clone();
+                tokio::spawn(async move {
+                    client
+                        .startup_connect(std::time::Duration::from_millis(50))
+                        .await
+                })
+            };
+            started.await.unwrap();
+            if scenario == 1 {
+                authoritative_inbox(None, false).await.unwrap();
+            }
+            if scenario == 2 {
+                client.set_server_url("https://new-server.invalid").unwrap();
+            }
+            assert_eq!(
+                tokio::time::timeout(std::time::Duration::from_secs(2), boot)
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                scenario == 1
+            );
+            assert!(
+                complete.send(Ok(true)).is_err(),
+                "timed-out dial was not cancelled"
+            );
+            assert!(!client.services.grpc_pool.is_connected());
+            let expected = match scenario {
+                0 => ServerStatus::Unreachable,
+                1 => ServerStatus::Reachable,
+                _ => ServerStatus::Unknown,
+            };
+            assert_eq!(server_status(), expected);
+            if scenario == 1 {
+                assert_eq!(
+                    client.offline_state().connection_state(),
+                    ConnectionState::Connected
+                );
+            }
+            client.shutdown().await;
+        }
+    }
+
+    #[tokio::test]
+    async fn monitor_mirrors_rpc_edges_while_production_probe_is_pending() {
+        use crate::network::connection::{
+            ConnectionState, ServerStatus, server_status, set_server_status,
+        };
+        use crate::network::grpc::transport::outcome_tests::authoritative_inbox;
+        let _serial = AUTHORITY_TEST_LOCK.lock().await;
+        let (client, _dir) = build_test_client();
+        set_server_status(ServerStatus::Unknown);
+        let (started, complete) = pending_dial(&client.services.grpc_pool);
+        let monitor = tokio::spawn(crate::network::server_monitor::run_with_timing(
+            client.services.grpc_pool.clone(),
+            client.offline_state().clone(),
+            std::time::Duration::ZERO,
+            std::time::Duration::from_millis(1),
+        ));
+        started.await.unwrap();
+        for reachable in [true, false, true] {
+            let _ = authoritative_inbox(None, !reachable).await;
+            let expected = if reachable {
+                ConnectionState::Connected
+            } else {
+                ConnectionState::Disconnected
+            };
+            tokio::time::timeout(std::time::Duration::from_secs(1), async {
+                while client.offline_state().connection_state() != expected {
+                    tokio::task::yield_now().await;
+                }
+            })
+            .await
+            .expect("monitor blocked behind pending probe");
+            assert!(
+                !complete.is_closed(),
+                "probe settled before RPC edge was mirrored"
+            );
+        }
+        let (second_started, second_complete) = pending_dial(&client.services.grpc_pool);
+        complete
+            .send(Err(NetworkError::ConnectionFailed(
+                "stale probe failed".into(),
+            )))
+            .unwrap();
+        // A second controlled probe can start only after the first has returned
+        // through generation/revision validation and the monitor mirrored it.
+        tokio::time::timeout(std::time::Duration::from_secs(1), second_started)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(server_status(), ServerStatus::Reachable);
+        monitor.abort();
+        let _ = monitor.await;
+        assert!(second_complete.is_closed());
+        client.shutdown().await;
     }
 
     /// Signed-out startup contacts nothing: no boot connect, no reachability

@@ -295,7 +295,7 @@ mod quic_enabled {
 }
 
 #[cfg(test)]
-mod outcome_tests {
+pub(crate) mod outcome_tests {
     use super::*;
     use crate::network::grpc::interceptors::AuthInterceptor;
     use crate::proto::chat_v1::{
@@ -384,6 +384,30 @@ mod outcome_tests {
             .await;
         let observed = evidence.lock().unwrap().clone();
         (result, observed)
+    }
+
+    /// Controlled peer used by authority regressions: generated production RPC,
+    /// interceptor and recording service, with only the wire reply substituted.
+    pub(crate) async fn authoritative_inbox(
+        code: Option<tonic::Code>,
+        transport_failure: bool,
+    ) -> Result<(), tonic::Status> {
+        let transport = RecordingTransport {
+            inner: Reply {
+                code,
+                transport_failure,
+                body_failure: false,
+            },
+            record: set_server_status as fn(ServerStatus),
+        };
+        let mut client = MessageServiceClient::with_interceptor(transport, AuthInterceptor::new());
+        client
+            .get_device_messages(GetDeviceMessagesRequest {
+                after_id: 0,
+                limit: 1,
+            })
+            .await
+            .map(|_| ())
     }
 
     #[tokio::test]
