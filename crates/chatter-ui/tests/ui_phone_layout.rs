@@ -207,8 +207,10 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     // outer controls and field share the top/bottom inset. The leading
     // emoji toggle owns the left edge; the field follows it by one inset.
     let spacing = include_str!("../../../ui/theme/spacing.slint");
-    assert!(spacing
-        .contains("out property <length> radius-chrome-inner: radius-chrome - chrome-inset;"));
+    assert!(
+        spacing
+            .contains("out property <length> radius-chrome-inner: radius-chrome - chrome-inset;")
+    );
     assert!(spacing.contains("out property <length> chrome-inset: xs;"));
     assert!(spacing.contains("out property <length> xs: 4px;"));
     let inset = 4.0_f32;
@@ -545,22 +547,26 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
         search.absolute_position().x + 10.0,
         search.absolute_position().y + 10.0,
     );
-    assert!(!composer_native_item(&w)
-        .downcast::<i_slint_core::items::TextInput>()
-        .unwrap()
-        .as_pin_ref()
-        .has_focus());
+    assert!(
+        !composer_native_item(&w)
+            .downcast::<i_slint_core::items::TextInput>()
+            .unwrap()
+            .as_pin_ref()
+            .has_focus()
+    );
     let field = one(&w, "Message input");
     click_at(
         &w,
         field.absolute_position().x + 20.0,
         field.absolute_position().y + 20.0,
     );
-    assert!(composer_native_item(&w)
-        .downcast::<i_slint_core::items::TextInput>()
-        .unwrap()
-        .as_pin_ref()
-        .has_focus());
+    assert!(
+        composer_native_item(&w)
+            .downcast::<i_slint_core::items::TextInput>()
+            .unwrap()
+            .as_pin_ref()
+            .has_focus()
+    );
     key(&w, "abc".into());
     key(&w, slint::platform::Key::LeftArrow.into());
     key(&w, "X".into());
@@ -724,6 +730,9 @@ fn assert_composer_caps(w: &MainWindow, drawer: bool, accessories: f32) {
         };
     // The accepted 48px floor is explicit for unusually short panes/accessories.
     let cap = 48.0_f32.max((line_height * 6.0 + 8.0).min(available * 0.4 - accessories - 8.0));
-    assert!(shell.size().height <= cap + accessories + 8.5,
-        "composer {:?} exceeds six-line/actual-pane cap {cap}, pane={available}, accessories={accessories}", shell.size());
+    assert!(
+        shell.size().height <= cap + accessories + 8.5,
+        "composer {:?} exceeds six-line/actual-pane cap {cap}, pane={available}, accessories={accessories}",
+        shell.size()
+    );
 }

@@ -11107,8 +11107,7 @@ async fn v46_reactions_edits_pins_roundtrip_in_dm() {
         panic!("POSITIVE CONTROL FAILED: B never received A's reaction target");
     };
     assert_eq!(
-        target.sent_at,
-        r_ts,
+        target.sent_at, r_ts,
         "B must react to the exact original target clock"
     );
     assert!(
