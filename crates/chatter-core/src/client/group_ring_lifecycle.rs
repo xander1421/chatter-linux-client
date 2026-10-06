@@ -20,9 +20,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn rapid_start_end_and_lost_event_are_repaired_by_snapshot() {
-        // Initial lookup found the call. It ends before the subscription is
-        // live, or while disconnected: the post-subscribe snapshot withdraws it.
+    fn snapshot_predicate_rejects_absent_or_replaced_call() {
+        // Policy comparisons only; this does not schedule the async watcher.
         assert!(!snapshot_ends_ring("first", Some("first")));
         assert!(snapshot_ends_ring("first", None));
         // A new call in the same channel cannot keep the old ring alive.

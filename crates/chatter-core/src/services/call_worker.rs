@@ -501,6 +501,7 @@ enum CallCommand {
     OrchWithdrawIncoming {
         call: CallHandle,
         reason: CallEndReason,
+        response: Option<oneshot::Sender<()>>,
     },
     /// Register an outgoing call that was just dialed.
     OrchRegisterOutgoing { outgoing: PendingOutgoing },
@@ -530,6 +531,18 @@ enum CallCommand {
     /// the pending incoming so the UI can drive the accept flow.
     OrchAcceptIncomingReplacingActive {
         call: CallHandle,
+        response: oneshot::Sender<Result<PendingIncoming, CallError>>,
+    },
+    #[cfg(test)]
+    TestPause {
+        entered: oneshot::Sender<()>,
+        resume: oneshot::Receiver<()>,
+    },
+    /// Actor acceptance and signaling ownership transfer share the invite lock.
+    OrchAcceptPresented {
+        call: CallHandle,
+        replaces_active: bool,
+        invites: Arc<super::call_signaling::GroupCallInvites>,
         response: oneshot::Sender<Result<PendingIncoming, CallError>>,
     },
     /// UI asks the orchestrator to decline a presented incoming call. The
@@ -700,9 +713,50 @@ impl CallWorkerHandle {
 
     /// Withdraw a previously presented incoming call.
     pub fn orch_withdraw_incoming(&self, call: CallHandle, reason: CallEndReason) {
-        let _ = self
-            .cmd_tx
-            .try_send(CallCommand::OrchWithdrawIncoming { call, reason });
+        let _ = self.cmd_tx.try_send(CallCommand::OrchWithdrawIncoming {
+            call,
+            reason,
+            response: None,
+        });
+    }
+
+    /// Wait for queue space and actor completion; shutdown is reported.
+    pub async fn orch_withdraw_incoming_reliably(
+        &self,
+        call: CallHandle,
+        reason: CallEndReason,
+    ) -> Result<(), CallError> {
+        let (tx, rx) = oneshot::channel();
+        self.cmd_tx
+            .send(CallCommand::OrchWithdrawIncoming {
+                call,
+                reason,
+                response: Some(tx),
+            })
+            .await
+            .map_err(|_| CallError::WorkerShutdown)?;
+        rx.await.map_err(|_| CallError::WorkerShutdown)
+    }
+
+    pub(crate) async fn orch_accept_presented(
+        &self,
+        call: CallHandle,
+        replaces_active: bool,
+        invites: Arc<super::call_signaling::GroupCallInvites>,
+    ) -> Result<PendingIncomingSnapshot, CallError> {
+        let (tx, rx) = oneshot::channel();
+        self.cmd_tx
+            .send(CallCommand::OrchAcceptPresented {
+                call,
+                replaces_active,
+                invites,
+                response: tx,
+            })
+            .await
+            .map_err(|_| CallError::WorkerShutdown)?;
+        rx.await
+            .map_err(|_| CallError::WorkerShutdown)?
+            .map(PendingIncomingSnapshot::from)
     }
 
     /// Register an outgoing call that was just dialed.
@@ -1806,7 +1860,7 @@ fn run_call_worker(
                     });
                 }
 
-                CallCommand::OrchWithdrawIncoming { call, reason } => {
+                CallCommand::OrchWithdrawIncoming { call, reason, response } => {
                     if orchestrator.incoming.remove(&call).is_some() {
                         let _ = call_events_tx.send(CallOrchestratorEvent::IncomingWithdrawn {
                             call,
@@ -1817,6 +1871,9 @@ fn run_call_worker(
                             call = %call.as_str(),
                             "OrchWithdrawIncoming: no matching pending incoming"
                         );
+                    }
+                    if let Some(response) = response {
+                        let _ = response.send(());
                     }
                 }
 
@@ -1892,6 +1949,38 @@ fn run_call_worker(
                             reason,
                         });
                     }
+                }
+
+                #[cfg(test)]
+                CallCommand::TestPause { entered, resume } => {
+                    let _ = entered.send(());
+                    let _ = resume.await;
+                }
+                CallCommand::OrchAcceptPresented { call, replaces_active, invites, response } => {
+                    let mut invites = invites.lock();
+                    let is_group = orchestrator.incoming.get(&call)
+                        .is_some_and(|p| p.kind == OrchestratedCallKind::GroupChannel);
+                    let result = if is_group && !invites.get(call.as_str()).is_some_and(|i| !i.accepted) {
+                        Err(CallError::NotInCall)
+                    } else if !replaces_active && orchestrator.active.is_some() {
+                        Err(CallError::AlreadyInCall)
+                    } else if let Some(p) = orchestrator.incoming.remove(&call) {
+                        // No await or reply can expose worker success before key ownership.
+                        if is_group {
+                            invites.get_mut(call.as_str()).unwrap().accepted = true;
+                        }
+                        if replaces_active {
+                            if let Some(prev) = orchestrator.active.take() {
+                                let _ = call_events_tx.send(CallOrchestratorEvent::ActiveEnded {
+                                    call: prev.call, reason: CallEndReason::ReplacedByIncoming,
+                                });
+                            }
+                        }
+                        Ok(p)
+                    } else {
+                        Err(CallError::NotInCall)
+                    };
+                    let _ = response.send(result);
                 }
 
                 CallCommand::OrchAcceptIncoming { call, response } => {
@@ -4763,8 +4852,289 @@ mod verification_snapshot_tests {
 mod group_ring_cancel_tests {
     use super::*;
 
+    #[derive(Default)]
+    struct NotificationLog(parking_lot::Mutex<Vec<String>>);
+
+    impl crate::system::notification_sink::NotificationSink for NotificationLog {
+        fn show(
+            &self,
+            _: &str,
+            _: &str,
+            _: crate::domain::notification::NotificationPriority,
+        ) -> Result<(), crate::error::SystemError> {
+            Ok(())
+        }
+        fn show_incoming_call(
+            &self,
+            call: &str,
+            _: &str,
+            _: &str,
+        ) -> Result<(), crate::error::SystemError> {
+            self.0.lock().push(format!("show {call}"));
+            Ok(())
+        }
+        fn cancel_incoming_call(&self, call: &str) -> Result<(), crate::error::SystemError> {
+            self.0.lock().push(format!("cancel {call}"));
+            Ok(())
+        }
+    }
+
+    fn worker() -> CallWorkerHandle {
+        let channel = tonic::transport::Endpoint::from_static("http://127.0.0.1:9").connect_lazy();
+        CallWorkerHandle::spawn(crate::network::grpc::CallClient::new(
+            channel.into(),
+            crate::network::grpc::interceptors::AuthInterceptor::new(),
+        ))
+    }
+
+    async fn present(worker: &CallWorkerHandle, call: &CallHandle) {
+        let mut events = worker.subscribe_call_events();
+        worker.orch_present_incoming(
+            call.clone(),
+            OrchestratedCallKind::GroupChannel,
+            UserId::new(),
+            "Caller".into(),
+            false,
+            false,
+            String::new(),
+            None,
+            Some("Room".into()),
+            "channel".into(),
+        );
+        assert!(matches!(
+            events.recv().await.unwrap(),
+            CallOrchestratorEvent::IncomingPresented { .. }
+        ));
+    }
+
     #[tokio::test]
-    async fn cancellation_withdraws_only_matching_pending_and_preserves_accepted_call() {
+    async fn saturated_queue_withdrawal_waits_then_completes_once() {
+        let worker = worker();
+        let log = Arc::new(NotificationLog::default());
+        let bridge = super::super::call_notification_bridge::spawn_call_notification_bridge(
+            worker.subscribe_call_events(),
+            Arc::new(super::super::notification_service::NotificationService::new(log.clone())),
+        );
+        worker.orch_mark_connected(
+            CallHandle::from("unrelated-active"),
+            OrchestratedCallKind::DmStandard,
+            UserId::new(),
+            false,
+        );
+        assert_eq!(
+            worker.orch_active_kind().await,
+            Some(OrchestratedCallKind::DmStandard)
+        );
+        let first = CallHandle::from("old-ring");
+        let next = CallHandle::from("new-ring");
+        present(&worker, &first).await;
+        present(&worker, &next).await;
+        let mut events = worker.subscribe_call_events();
+        let (entered_tx, entered_rx) = oneshot::channel();
+        let (resume_tx, resume_rx) = oneshot::channel();
+        worker
+            .cmd_tx
+            .send(CallCommand::TestPause {
+                entered: entered_tx,
+                resume: resume_rx,
+            })
+            .await
+            .unwrap();
+        entered_rx.await.unwrap();
+        for _ in 0..256 {
+            let (response, _) = oneshot::channel();
+            worker
+                .cmd_tx
+                .try_send(CallCommand::OrchActiveKind { response })
+                .unwrap();
+        }
+        assert_eq!(worker.cmd_tx.capacity(), 0);
+        let withdrawal =
+            worker.orch_withdraw_incoming_reliably(first.clone(), CallEndReason::RemoteHangup);
+        tokio::pin!(withdrawal);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(20), &mut withdrawal)
+                .await
+                .is_err()
+        );
+        resume_tx.send(()).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), &mut withdrawal)
+            .await
+            .unwrap()
+            .unwrap();
+        assert!(
+            matches!(events.recv().await.unwrap(), CallOrchestratorEvent::IncomingWithdrawn { call, .. } if call == first)
+        );
+        worker
+            .orch_withdraw_incoming_reliably(first, CallEndReason::NoAnswer)
+            .await
+            .unwrap();
+        assert!(events.try_recv().is_err());
+        assert_eq!(
+            worker.orch_active_kind().await,
+            Some(OrchestratedCallKind::DmStandard)
+        );
+        worker
+            .orch_accept_incoming_replacing_active(next)
+            .await
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            loop {
+                if log.0.lock().iter().any(|event| event == "cancel old-ring") {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            *log.0.lock(),
+            ["show old-ring", "show new-ring", "cancel old-ring"]
+        );
+        bridge.abort();
+    }
+
+    #[tokio::test]
+    async fn shared_invite_accept_cancel_orders_preserve_newest_keys_before_join_or_replace() {
+        use super::super::call_signaling::GroupCallInvites;
+        for replaces_active in [false, true] {
+            for cancel_first in [false, true] {
+                let worker = worker();
+                let call = CallHandle::from("ring");
+                present(&worker, &call).await;
+                let unrelated = CallHandle::from("unrelated-active");
+                if replaces_active {
+                    worker.orch_mark_connected(
+                        unrelated,
+                        OrchestratedCallKind::DmStandard,
+                        UserId::new(),
+                        false,
+                    );
+                    assert_eq!(
+                        worker.orch_active_kind().await,
+                        Some(OrchestratedCallKind::DmStandard)
+                    );
+                }
+                let sender = UserId::new();
+                let invites = Arc::new(GroupCallInvites::default());
+                invites.store_group_call_invite(call.as_str());
+                assert!(invites.buffer_group_call_key(call.as_str(), sender, [8; 32], 8));
+                assert!(invites.buffer_group_call_key(call.as_str(), sender, [9; 32], 9));
+                assert!(invites.buffer_group_call_key(call.as_str(), sender, [7; 32], 7));
+                if cancel_first {
+                    let (entered_tx, entered_rx) = oneshot::channel();
+                    let (resume_tx, resume_rx) = oneshot::channel();
+                    worker
+                        .cmd_tx
+                        .send(CallCommand::TestPause {
+                            entered: entered_tx,
+                            resume: resume_rx,
+                        })
+                        .await
+                        .unwrap();
+                    entered_rx.await.unwrap();
+                    let accept = worker.orch_accept_presented(
+                        call.clone(),
+                        replaces_active,
+                        invites.clone(),
+                    );
+                    tokio::pin!(accept);
+                    assert!(
+                        tokio::time::timeout(std::time::Duration::from_millis(20), &mut accept)
+                            .await
+                            .is_err()
+                    );
+                    // Accept is enqueued, but cancellation wins the shared lock
+                    // before the blocked actor commits it. Withdrawal is not yet queued.
+                    invites.drop_ringing_group_call_invite(call.as_str());
+                    resume_tx.send(()).unwrap();
+                    assert!(matches!(accept.await, Err(CallError::NotInCall)));
+                    assert_eq!(
+                        worker.orch_active_kind().await,
+                        replaces_active.then_some(OrchestratedCallKind::DmStandard)
+                    );
+                    worker
+                        .orch_withdraw_incoming_reliably(call.clone(), CallEndReason::RemoteHangup)
+                        .await
+                        .unwrap();
+                    assert!(invites.lock().is_empty());
+                } else {
+                    let (accepted_tx, accepted_rx) = oneshot::channel();
+                    let (continue_tx, continue_rx) = oneshot::channel();
+                    let accepting_worker = worker.clone();
+                    let accepting_invites = invites.clone();
+                    let accepting_call = call.clone();
+                    let accept = tokio::spawn(async move {
+                        let snapshot = accepting_worker
+                            .orch_accept_presented(
+                                accepting_call,
+                                replaces_active,
+                                accepting_invites,
+                            )
+                            .await
+                            .unwrap();
+                        accepted_tx.send(()).unwrap();
+                        // Pause the actual production acceptance boundary. The
+                        // client cannot enter end_call/join until this reply.
+                        continue_rx.await.unwrap();
+                        snapshot
+                    });
+                    accepted_rx.await.unwrap();
+                    invites.drop_ringing_group_call_invite(call.as_str());
+                    worker
+                        .orch_withdraw_incoming_reliably(call.clone(), CallEndReason::NoAnswer)
+                        .await
+                        .unwrap();
+                    continue_tx.send(()).unwrap();
+                    let snapshot = accept.await.unwrap();
+                    assert_eq!(snapshot.kind, OrchestratedCallKind::GroupChannel);
+                    assert!(!invites.is_ringing_group_call_invite(call.as_str()));
+                    let keys = invites.take_group_call_invite(call.as_str());
+                    assert_eq!(keys.len(), 1);
+                    assert_eq!(keys[0].sender, sender);
+                    assert_eq!(keys[0].epoch, 9);
+                    assert_eq!(*keys[0].key, [9; 32]);
+                }
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn failed_actor_accept_does_not_mark_signaling_accepted() {
+        use super::super::call_signaling::GroupCallInvites;
+        let worker = worker();
+        let call = CallHandle::from("pending");
+        present(&worker, &call).await;
+        worker.orch_mark_connected(
+            CallHandle::from("active"),
+            OrchestratedCallKind::DmStandard,
+            UserId::new(),
+            false,
+        );
+        let invites = Arc::new(GroupCallInvites::default());
+        invites.store_group_call_invite(call.as_str());
+        assert!(matches!(
+            worker
+                .orch_accept_presented(call.clone(), false, invites.clone())
+                .await,
+            Err(CallError::AlreadyInCall)
+        ));
+        assert!(invites.is_ringing_group_call_invite(call.as_str()));
+        invites.drop_ringing_group_call_invite(call.as_str());
+        worker
+            .orch_withdraw_incoming_reliably(call, CallEndReason::NoAnswer)
+            .await
+            .unwrap();
+        assert!(invites.lock().is_empty());
+        assert_eq!(
+            worker.orch_active_kind().await,
+            Some(OrchestratedCallKind::DmStandard)
+        );
+    }
+
+    #[tokio::test]
+    async fn cancellation_withdraws_matching_pending_and_preserves_active_orchestration() {
         let channel = tonic::transport::Endpoint::from_static("http://127.0.0.1:9").connect_lazy();
         let worker = CallWorkerHandle::spawn(crate::network::grpc::CallClient::new(
             channel.into(),
@@ -4822,7 +5192,7 @@ mod group_ring_cancel_tests {
         );
         assert!(
             events.try_recv().is_err(),
-            "no terminal event or media teardown after accepting"
+            "no terminal orchestrator event after accepting"
         );
     }
 }

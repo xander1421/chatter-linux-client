@@ -138,7 +138,7 @@ mod tests {
         assert_eq!(*log.0.lock(), ["show c1", "cancel c1"]);
     }
     #[tokio::test]
-    async fn ended_group_ring_cancels_native_notification_without_canceling_new_call() {
+    async fn ended_group_ring_forwards_matching_cancel_to_fake_sink() {
         let log = Arc::new(Log::default());
         let (tx, rx) = broadcast::channel(8);
         let task =

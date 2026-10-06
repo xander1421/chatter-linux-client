@@ -527,14 +527,14 @@ impl ChatterClient {
             .clone();
 
         let handle = CallHandle::from(call_id);
-        let snapshot = if replaces_active {
-            worker
-                .orch_accept_incoming_replacing_active(handle.clone())
-                .await
-        } else {
-            worker.orch_accept_incoming(handle.clone()).await
-        }
-        .map_err(|e| ClientError::Inbox(e.to_string()))?;
+        let snapshot = worker
+            .orch_accept_presented(
+                handle.clone(),
+                replaces_active,
+                self.call_signaling().group_call_invites.clone(),
+            )
+            .await
+            .map_err(|e| ClientError::Inbox(e.to_string()))?;
         // The call has left the ringing set, so its ring notification goes —
         // whether the answer came from the in-app modal or the notification's
         // own Accept, and whether or not the connect below succeeds.
@@ -1319,7 +1319,9 @@ impl ChatterClient {
             signaling.drop_ringing_group_call_invite(handle.as_str());
             // Only removes the incoming slot. A racing accept or an unrelated
             // active call must never be disconnected by ring cancellation.
-            worker.orch_withdraw_incoming(handle, reason);
+            if let Err(error) = worker.orch_withdraw_incoming_reliably(handle, reason).await {
+                tracing::debug!(%error, "Group ring withdrawal worker unavailable");
+            }
         });
     }
 
