@@ -426,7 +426,7 @@ export component MessageItem inherits Rectangle {
                 // Wrapper for bubble + absolutely positioned reactions
                 Rectangle {
                     width: bubble.width;
-                    height: bubble.height + (root.has-reactions ? 30px : 0);
+                    height: bubble.height + (root.has-reactions ? 24px : 0);
 
                 bubble := Rectangle {
                     y: 0px;
@@ -1293,7 +1293,7 @@ export component MessageItem inherits Rectangle {
                     border-color: Elevation.raised-rim;
 
                     x: root.is-own ? 8px : max(8px, bubble.width - self.width - 8px);
-                    y: bubble.height + 4px;
+                    y: bubble.height - 2px;
                     accessible-role: button;
                     accessible-label: "Reactions: " + root.reaction-summary;
 
