@@ -262,6 +262,8 @@ lto = "thin"
 # panel's top refresh rate only while the UI moves.
 # See vendor/i-slint-backend-android-activity/PATCHES.md.
 [patch.crates-io]
+# Locked LiveKit media sender key-index lifecycle patch; see vendor/livekit/PATCHES.md.
+livekit = { path = "vendor/livekit" }
 i-slint-backend-android-activity = { path = "vendor/i-slint-backend-android-activity" }
 
 # Slint 1.17.1 Backdrop builtin and Skia backdrop image filters.

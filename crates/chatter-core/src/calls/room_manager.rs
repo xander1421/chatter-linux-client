@@ -1164,8 +1164,10 @@ impl RoomManager {
     /// directions of small timing skew are absorbed without LiveKit's own
     /// ratchet (which we disabled): a peer slightly *ahead* is covered by the
     /// pre-installed `epoch + 1`; a peer slightly *behind* by the 16-slot key
-    /// ring still holding older epochs. `epoch` is installed LAST so it becomes
-    /// the `latest_key_index` we encrypt with.
+    /// ring still holding older epochs. The SDK manager installs and selects
+    /// the current sending epoch before preinstalling the future receive key,
+    /// serialized with new sender creation. Receive preinstallation does not
+    /// change the selected media or data sending key.
     pub fn set_ratcheted_shared_key(
         &self,
         epoch: u32,
@@ -1173,16 +1175,30 @@ impl RoomManager {
         key_next: Vec<u8>,
     ) -> bool {
         let mut e2ee = self.e2ee.write();
-        let provider = match e2ee.provider.clone() {
-            Some(p) => p,
+        match e2ee.provider.as_ref() {
+            Some(_) => {}
             None => {
                 tracing::warn!("Cannot ratchet key: no key provider");
                 return false;
             }
         };
-        provider.set_shared_key(key_next, key_ring_index(epoch.wrapping_add(1)));
-        provider.set_shared_key(key_cur, key_ring_index(epoch));
+        let room = self.room.read();
+        let Some(room) = room.as_ref() else {
+            return false;
+        };
+        if !room.e2ee_manager().install_shared_media_key(
+            key_ring_index(epoch),
+            key_cur,
+            Some((key_ring_index(epoch.wrapping_add(1)), key_next)),
+        ) {
+            return false;
+        }
         e2ee.epoch = epoch;
+        tracing::info!(
+            epoch,
+            sender_index = key_ring_index(epoch),
+            "Media encryption epoch selected"
+        );
         true
     }
 
@@ -1195,15 +1211,26 @@ impl RoomManager {
     /// ratchet then advances them in lockstep.
     pub fn reset_shared_key(&self, key: Vec<u8>) -> bool {
         let mut e2ee = self.e2ee.write();
-        let provider = match e2ee.provider.clone() {
-            Some(p) => p,
+        match e2ee.provider.as_ref() {
+            Some(_) => {}
             None => {
                 tracing::warn!("Cannot reset key: no key provider");
                 return false;
             }
         };
-        provider.set_shared_key(key, 0);
+        let room = self.room.read();
+        let Some(room) = room.as_ref() else {
+            return false;
+        };
+        if !room.e2ee_manager().install_shared_media_key(0, key, None) {
+            return false;
+        }
         e2ee.epoch = 0;
+        tracing::info!(
+            epoch = 0u32,
+            sender_index = 0i32,
+            "Media encryption epoch selected"
+        );
         tracing::info!("E2EE key re-rooted at index 0 (real DM key)");
         true
     }

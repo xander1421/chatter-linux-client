@@ -1705,39 +1705,12 @@ fn run_call_worker(
                 }
 
                 CallCommand::RotateKey { new_key, response } => {
-                    let rotated = active_call.borrow_mut().as_mut().map(|state| {
-                        state.key_state.rotate(new_key).map(|_| chain_install(&state.key_state))
-                    });
-                    let result = match rotated {
-                        Some(Ok((epoch, key_cur, key_next))) => {
-                            room_manager.set_ratcheted_shared_key(epoch, key_cur, key_next);
-                            tracing::info!(epoch, "Call key rotated after a membership change");
-                            // We decided this key, so we hold the current one.
-                            open_publish_gate(&active_call, &room_manager);
-                            Ok(epoch)
-                        }
-                        Some(Err(e)) => Err(CallError::CryptoError(e.to_string())),
-                        None => Err(CallError::NotInCall),
-                    };
+                    let result = rotate_group_media_key(&active_call, &room_manager, new_key);
                     let _ = response.send(result);
                 }
 
                 CallCommand::InstallGroupKey { call_id, key, epoch, response } => {
-                    let adopted = adopt_into_call(active_call.borrow_mut().as_mut(), call_id, key, epoch);
-                    let result = adopted.map(|adopted| match adopted {
-                        Some((epoch, key_cur, key_next)) => {
-                            // Key first, then media: the deferred publishes
-                            // start under the key just installed.
-                            room_manager.set_ratcheted_shared_key(epoch, key_cur, key_next);
-                            tracing::info!(epoch, "Installed group call key from participant");
-                            open_publish_gate(&active_call, &room_manager);
-                            true
-                        }
-                        None => {
-                            tracing::debug!(epoch, "Group call key is not newer, or too far ahead; ignored");
-                            false
-                        }
-                    });
+                    let result = install_group_media_key(&active_call, &room_manager, call_id, key, epoch);
                     let _ = response.send(result);
                 }
 
@@ -2145,7 +2118,70 @@ fn open_publish_gate(
     });
 }
 
+// These are the command actor's production installation paths. A zeroizing
+// candidate is committed only after native media key selection succeeds, so a
+// rejected install neither opens publication nor makes the authority epoch stale.
+fn rotate_group_media_key(
+    active_call: &Rc<RefCell<Option<ActiveCallState>>>,
+    room_manager: &Arc<RoomManager>,
+    new_key: [u8; 32],
+) -> Result<u32, CallError> {
+    let mut guard = active_call.borrow_mut();
+    let state = guard.as_mut().ok_or(CallError::NotInCall)?;
+    let mut candidate = state.key_state.clone();
+    candidate
+        .rotate(new_key)
+        .map_err(|e| CallError::CryptoError(e.to_string()))?;
+    let (epoch, current, next) = chain_install(&candidate);
+    if !room_manager.set_ratcheted_shared_key(epoch, current, next) {
+        return Err(CallError::CryptoError(
+            "Media key installation failed".into(),
+        ));
+    }
+    state.key_state = candidate;
+    drop(guard);
+    tracing::info!(epoch, "Call key rotated after a membership change");
+    open_publish_gate(active_call, room_manager);
+    Ok(epoch)
+}
+
+fn install_group_media_key(
+    active_call: &Rc<RefCell<Option<ActiveCallState>>>,
+    room_manager: &Arc<RoomManager>,
+    call_id: CallId,
+    key: [u8; 32],
+    epoch: u32,
+) -> Result<bool, CallError> {
+    let mut guard = active_call.borrow_mut();
+    let state = guard
+        .as_mut()
+        .filter(|s| s.call.id == call_id)
+        .ok_or(CallError::NotInCall)?;
+    let mut candidate = state.key_state.clone();
+    let Some((selected_epoch, current, next)) = adopt_group_key(&mut candidate, key, epoch) else {
+        tracing::debug!(
+            epoch,
+            "Group call key is not newer, or too far ahead; ignored"
+        );
+        return Ok(false);
+    };
+    if !room_manager.set_ratcheted_shared_key(selected_epoch, current, next) {
+        return Err(CallError::CryptoError(
+            "Media key installation failed".into(),
+        ));
+    }
+    state.key_state = candidate;
+    drop(guard);
+    tracing::info!(
+        epoch = selected_epoch,
+        "Installed group call key from participant"
+    );
+    open_publish_gate(active_call, room_manager);
+    Ok(true)
+}
+
 /// [`adopt_group_key`] into the active call, which must be `call_id`.
+#[cfg(test)]
 fn adopt_into_call(
     active: Option<&mut ActiveCallState>,
     call_id: CallId,
@@ -2718,13 +2754,18 @@ fn start_key_ratchet_timer(
                     Some(start) => wall_clock_epoch(start),
                     None => state.key_state.epoch().saturating_add(1),
                 };
-                ratchet_to(&mut state.key_state, target)
+                let mut candidate = state.key_state.clone();
+                ratchet_to(&mut candidate, target).map(|install| (candidate, install))
             };
-            if let Some((epoch, key_cur, key_next)) = ratcheted {
-                tracing::info!(epoch, "Coordinated key ratchet completed");
+            if let Some((candidate, (epoch, key_cur, key_next))) = ratcheted {
                 if !room_manager.set_ratcheted_shared_key(epoch, key_cur, key_next) {
-                    tracing::warn!("Failed to push ratcheted key to LiveKit");
+                    tracing::warn!("Failed to push ratcheted key to LiveKit; timer stopping");
+                    return false;
                 }
+                if let Some(state) = active_call.borrow_mut().as_mut() {
+                    state.key_state = candidate;
+                }
+                tracing::info!(epoch, "Coordinated key ratchet completed");
             }
             true
         };
@@ -2739,13 +2780,19 @@ fn start_key_ratchet_timer(
 
                 // Fast-forward to the wall-clock epoch (a peer that joined after
                 // one or more boundaries already passed).
-                let ratcheted = active_call
-                    .borrow_mut()
-                    .as_mut()
-                    .and_then(|state| ratchet_to(&mut state.key_state, epoch_now));
-                if let Some((epoch, key_cur, key_next)) = ratcheted {
+                let ratcheted = active_call.borrow_mut().as_mut().and_then(|state| {
+                    let mut candidate = state.key_state.clone();
+                    ratchet_to(&mut candidate, epoch_now).map(|install| (candidate, install))
+                });
+                if let Some((candidate, (epoch, key_cur, key_next))) = ratcheted {
+                    if !room_manager.set_ratcheted_shared_key(epoch, key_cur, key_next) {
+                        tracing::warn!("Failed to install join catch-up media key; timer stopping");
+                        return;
+                    }
+                    if let Some(state) = active_call.borrow_mut().as_mut() {
+                        state.key_state = candidate;
+                    }
                     tracing::info!(epoch, "Fast-forwarded key to wall-clock epoch on join");
-                    room_manager.set_ratcheted_shared_key(epoch, key_cur, key_next);
                 }
                 delay
             }
@@ -3874,5 +3921,82 @@ mod group_key_install_tests {
         ));
         assert_eq!(*state.key_state.current_key(), before);
         assert_eq!(state.key_state.epoch(), 0);
+    }
+}
+
+#[cfg(test)]
+mod media_key_install_failure_tests {
+    use super::*;
+
+    fn awaiting_call() -> Rc<RefCell<Option<ActiveCallState>>> {
+        let mut call = Call::new(ChannelId::new(), UserId::new(), CallType::Voice);
+        call.id = "11111111-2222-4333-8444-555555555555".parse().unwrap();
+        let key_state = CallKeyState::new(&[1; 32], &call.id.to_string()).unwrap();
+        Rc::new(RefCell::new(Some(ActiveCallState {
+            call,
+            key_state,
+            room_name: String::new(),
+            livekit_url: String::new(),
+            publish_gate: PublishGate::awaiting_key(false),
+        })))
+    }
+
+    #[test]
+    fn failed_native_install_does_not_open_gate_or_consume_authority_epoch() {
+        let active = awaiting_call();
+        // Actual RoomManager rejects installation without an active room/provider.
+        // No fabricated setter result or duplicated installation algorithm.
+        let (room, _events) = RoomManager::new();
+        let room = Arc::new(room);
+        let call_id = active.borrow().as_ref().unwrap().call.id;
+        let original = zeroize::Zeroizing::new(
+            active
+                .borrow()
+                .as_ref()
+                .unwrap()
+                .key_state
+                .current_key_vec(),
+        );
+        for _ in 0..2 {
+            // Both attempts must return the real installation error. If the
+            // first consumed epoch 2, the retry would incorrectly be Ok(false).
+            assert!(matches!(
+                install_group_media_key(&active, &room, call_id, [9; 32], 2),
+                Err(CallError::CryptoError(_))
+            ));
+            let guard = active.borrow();
+            let state = guard.as_ref().unwrap();
+            assert_eq!(state.key_state.epoch(), 0);
+            assert_eq!(state.key_state.anchor(), 0);
+            assert!(state.key_state.current_key_vec() == *original);
+            assert!(state.publish_gate.is_closed());
+            assert!(state.publish_gate.mic.is_some());
+        }
+        assert!(matches!(
+            install_group_media_key(&active, &room, CallId::new(), [9; 32], 2),
+            Err(CallError::NotInCall)
+        ));
+        assert!(!room.is_connected());
+        assert_eq!(room.key_epoch(), 0);
+    }
+
+    #[test]
+    fn failed_rotation_keeps_the_current_chain_and_deferred_media() {
+        let active = awaiting_call();
+        let (room, _events) = RoomManager::new();
+        let room = Arc::new(room);
+        for _ in 0..2 {
+            assert!(matches!(
+                rotate_group_media_key(&active, &room, [7; 32]),
+                Err(CallError::CryptoError(_))
+            ));
+            let guard = active.borrow();
+            let state = guard.as_ref().unwrap();
+            assert_eq!(state.key_state.epoch(), 0);
+            assert_eq!(state.key_state.anchor(), 0);
+            assert!(state.publish_gate.is_closed());
+            assert!(state.publish_gate.mic.is_some());
+        }
+        assert!(!room.is_connected());
     }
 }

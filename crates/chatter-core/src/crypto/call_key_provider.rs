@@ -264,7 +264,8 @@ pub fn generate_group_call_key() -> [u8; 32] {
 ///
 /// Automatically zeroizes the encryption key when dropped to prevent
 /// key material from lingering in memory after the call ends.
-#[derive(ZeroizeOnDrop)]
+// Staged media installation candidates retain the same zeroizing drop behavior.
+#[derive(Clone, ZeroizeOnDrop)]
 pub struct CallKeyState {
     /// Current encryption key (zeroized on drop).
     #[zeroize(drop)]
