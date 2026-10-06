@@ -16,6 +16,8 @@ import android.widget.FrameLayout
 import android.widget.MediaController
 import android.widget.Toast
 import java.io.IOException
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicReference
 
 /** Private decoder surface. Plaintext is read from Rust memory/authenticated ranges,
  * never a URL, public file, temporary plaintext file, or an external player. */
@@ -23,12 +25,19 @@ class VideoPlaybackActivity : Activity(), SurfaceHolder.Callback, MediaControlle
     // Only fixed labels are logged: never source identifiers or exception contents.
     private enum class FailureStage {
         SOURCE_VALIDATION, PLAYER_CREATE, AUDIO_ATTRIBUTES, DISPLAY, DATA_SOURCE,
-        VIDEO_SCALING, LISTENERS, PREPARE_ASYNC, PLAYER_ERROR, PAUSE, AUDIO_FOCUS, START, SEEK
+        VIDEO_SCALING, LISTENERS, PREPARE_ASYNC, PLAYER_ERROR, PLAYER_IO_PREPARE,
+        PLAYER_IO_PLAYBACK, PAUSE, AUDIO_FOCUS, START, SEEK
     }
+    private enum class SourceFailure { NONE, INVALID_READ, SIZE_UNAVAILABLE, READ_UNAVAILABLE }
+    // MediaDataSource callbacks run on framework threads, independently of the UI.
+    private val sourceFailure = AtomicReference(SourceFailure.NONE)
+    private val sourceRead = AtomicBoolean(false)
+    private val sourceEof = AtomicBoolean(false)
+    private val sourceClosed = AtomicBoolean(false)
     private var token = 0L
     private var player: MediaPlayer? = null
     private var prepared = false
-    private var released = false
+    @Volatile private var released = false
     private var foreground = false
     private lateinit var controller: MediaController
     private lateinit var frame: FrameLayout
@@ -102,18 +111,38 @@ class VideoPlaybackActivity : Activity(), SurfaceHolder.Callback, MediaControlle
             media.setDisplay(holder)
             stage = FailureStage.DATA_SOURCE
             media.setDataSource(object : MediaDataSource() {
-                override fun getSize(): Long = nativeVideoSize(token)
+                override fun getSize(): Long {
+                    val length = nativeVideoSize(token)
+                    if (length < 0) sourceFailure.compareAndSet(SourceFailure.NONE, SourceFailure.SIZE_UNAVAILABLE)
+                    return length
+                }
                 override fun readAt(position: Long, buffer: ByteArray, offset: Int, size: Int): Int {
-                    if (position < 0 || offset < 0 || size < 0 || offset > buffer.size || size > buffer.size - offset) throw IOException("Invalid video read")
+                    if (position < 0 || offset < 0 || size < 0 || offset > buffer.size || size > buffer.size - offset) {
+                        sourceFailure.compareAndSet(SourceFailure.NONE, SourceFailure.INVALID_READ)
+                        throw IOException("Invalid video read")
+                    }
                     if (size == 0) return 0
                     val result = nativeReadVideo(token, position, buffer, offset, size)
                     if (result < 0) {
                         val length = nativeVideoSize(token)
-                        if (length < 0 || position < length) throw IOException("Video source unavailable")
+                        if (length < 0 || position < length) {
+                            sourceFailure.compareAndSet(SourceFailure.NONE, SourceFailure.READ_UNAVAILABLE)
+                            throw IOException("Video source unavailable")
+                        }
+                        if (sourceEof.compareAndSet(false, true))
+                            Log.i("ChatterVideo", "Video source event=EOF_OBSERVED")
+                    } else if (result > 0 && sourceRead.compareAndSet(false, true)) {
+                        Log.i("ChatterVideo", "Video source event=READ_ACCEPTED")
                     }
                     return result
                 }
-                override fun close() { nativeReleaseVideo(token) }
+                override fun close() {
+                    if (sourceClosed.compareAndSet(false, true)) {
+                        val event = if (released) "CLOSE_DURING_ACTIVITY_RELEASE" else "CLOSE_BEFORE_ACTIVITY_RELEASE"
+                        Log.i("ChatterVideo", "Video source event=$event")
+                    }
+                    nativeReleaseVideo(token)
+                }
             })
             // SDK contract: scaling requires a data source (Initialized), not Idle.
             stage = FailureStage.VIDEO_SCALING
@@ -126,7 +155,13 @@ class VideoPlaybackActivity : Activity(), SurfaceHolder.Callback, MediaControlle
                 if (!released) { prepared = true; start(); controller.show() }
             }
             media.setOnCompletionListener { if (!released) { pause(); controller.show(0) } }
-            media.setOnErrorListener { _, _, _ -> fail(FailureStage.PLAYER_ERROR); true }
+            media.setOnErrorListener { _, _, extra ->
+                val failure = if (extra == MediaPlayer.MEDIA_ERROR_IO) {
+                    if (prepared) FailureStage.PLAYER_IO_PLAYBACK else FailureStage.PLAYER_IO_PREPARE
+                } else FailureStage.PLAYER_ERROR
+                fail(failure)
+                true
+            }
             stage = FailureStage.PREPARE_ASYNC
             media.prepareAsync()
         } catch (_: Exception) { fail(stage) }
@@ -147,7 +182,8 @@ class VideoPlaybackActivity : Activity(), SurfaceHolder.Callback, MediaControlle
     }
     private fun fail(stage: FailureStage) {
         if (released) return
-        Log.e("ChatterVideo", "Playback failure stage=${stage.name}")
+        Log.e("ChatterVideo", "Playback failure stage=${stage.name} source_failure=${sourceFailure.get().name}" +
+            " source_read=${sourceRead.get()} source_eof=${sourceEof.get()} source_closed=${sourceClosed.get()}")
         Toast.makeText(this, "Unable to play this video", Toast.LENGTH_LONG).show()
         release(); finish()
     }

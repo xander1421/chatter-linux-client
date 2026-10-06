@@ -412,12 +412,14 @@ fn read_up_to(r: &mut impl Read, buf: &mut [u8]) -> std::io::Result<usize> {
     Ok(filled)
 }
 
-/// Drop privacy metadata children from a top-level `moov` box: `udta` (Apple
+/// Erase privacy metadata children from a top-level `moov` box: `udta` (Apple
 /// ©xyz GPS, iTunes ilst under udta.meta) and `meta`. mp4san normalizes
 /// layout and validates structure but deliberately PRESERVES these boxes —
 /// proven by the real-sample harness (exiftool-tagged GPSCoordinates
 /// survived) — so we strip them ourselves. Presentation is unaffected: both
-/// are non-presentation by definition.
+/// are non-presentation by definition. Replace them with equally sized,
+/// zero-filled `free` boxes: shrinking moov would move mdat without updating
+/// the absolute stco/co64 offsets already calculated by mp4san.
 ///
 /// `data` is a whole MP4 (small enough to hold: callers pass either full
 /// bytes or the mp4san metadata buffer, never a multi-GB mdat). Returns
@@ -453,7 +455,7 @@ fn strip_mp4_privacy_boxes(data: &[u8]) -> Result<Option<Vec<u8>>, AttachmentErr
             if hdr == 16 {
                 return Err(bad("moov with 64-bit size unsupported"));
             }
-            // Walk moov children, dropping udta/meta.
+            // Walk moov children, erasing udta/meta without moving sample data.
             let mut kept: Vec<u8> = Vec::with_capacity(size as usize);
             let mut j = i + 8;
             while j < end {
@@ -481,6 +483,10 @@ fn strip_mp4_privacy_boxes(data: &[u8]) -> Result<Option<Vec<u8>>, AttachmentErr
                 }
                 if cty == b"udta" || cty == b"meta" {
                     dropped = true;
+                    let start = kept.len();
+                    kept.extend_from_slice(&data[j..j + chdr as usize]);
+                    kept[start + 4..start + 8].copy_from_slice(b"free");
+                    kept.resize(start + csize as usize, 0);
                 } else {
                     kept.extend_from_slice(&data[j..j + csize as usize]);
                 }
@@ -616,6 +622,84 @@ mod tests {
         let input = [ftyp(), moov(), mdat()].concat();
         let outcome = sanitize_media(&input).expect("clean mp4 must pass");
         assert_eq!(outcome, SanitizeOutcome::Unchanged);
+    }
+
+    #[test]
+    fn privacy_erasure_preserves_absolute_media_chunk_offsets() {
+        fn atom(kind: &[u8; 4], payload: &[u8]) -> Vec<u8> {
+            [
+                ((8 + payload.len()) as u32).to_be_bytes().as_slice(),
+                kind,
+                payload,
+            ]
+            .concat()
+        }
+        let sample = b"synthetic media sample";
+        for wide in [false, true] {
+            for trailing_moov in [false, true] {
+                // Both privacy box header forms must retain their full extent.
+                let private = [
+                    atom(b"udta", b"private-location"),
+                    [
+                        1u32.to_be_bytes().as_slice(),
+                        b"meta",
+                        &32u64.to_be_bytes(),
+                        b"private-metadata",
+                    ]
+                    .concat(),
+                ]
+                .concat();
+                let make_moov = |offset: u64| {
+                    let entry = if wide {
+                        offset.to_be_bytes().to_vec()
+                    } else {
+                        (offset as u32).to_be_bytes().to_vec()
+                    };
+                    let table = atom(
+                        if wide { b"co64" } else { b"stco" },
+                        &[vec![0; 4], 1u32.to_be_bytes().to_vec(), entry].concat(),
+                    );
+                    let track = atom(
+                        b"trak",
+                        &atom(b"mdia", &atom(b"minf", &atom(b"stbl", &table))),
+                    );
+                    atom(b"moov", &[track, private.clone()].concat())
+                };
+                let head = ftyp();
+                let sample_offset =
+                    head.len() + 8 + if trailing_moov { 0 } else { make_moov(0).len() };
+                let movie = make_moov(sample_offset as u64);
+                let media = atom(b"mdat", sample);
+                let input = if trailing_moov {
+                    [head, media, movie].concat()
+                } else {
+                    [head, movie, media].concat()
+                };
+                let memory = strip_mp4_privacy_boxes(&input).unwrap().unwrap();
+                let mut file = tempfile::NamedTempFile::new().unwrap();
+                std::io::Write::write_all(&mut file, &input).unwrap();
+                let stripped_file = strip_mp4_file_privacy_boxes(file.as_file_mut())
+                    .unwrap()
+                    .unwrap();
+                let streamed = std::fs::read(stripped_file.path()).unwrap();
+                for output in [&memory, &streamed] {
+                    // Follow the actual chunk table, not a rewritten-length expectation.
+                    let kind = if wide { b"co64" } else { b"stco" };
+                    let table = output.windows(4).position(|w| w == kind).unwrap();
+                    let entry = table + 12;
+                    let offset = if wide {
+                        u64::from_be_bytes(output[entry..entry + 8].try_into().unwrap()) as usize
+                    } else {
+                        u32::from_be_bytes(output[entry..entry + 4].try_into().unwrap()) as usize
+                    };
+                    assert_eq!(offset, sample_offset);
+                    assert_eq!(&output[offset..offset + sample.len()], sample);
+                    assert_eq!(output.len(), input.len());
+                    assert!(!output.windows(8).any(|w| w == b"private-"));
+                    assert!(!output.windows(4).any(|w| w == b"udta" || w == b"meta"));
+                }
+            }
+        }
     }
 
     #[test]
@@ -845,7 +929,9 @@ mod tests {
                 SanitizeOutcome::Rewritten(bytes) => bytes,
                 SanitizeOutcome::Unchanged => panic!("{ext}: GPS fixture was not stripped"),
             };
-            assert!(out.len() < input.len(), "{ext}: metadata must be removed");
+            if ext != "mp4" {
+                assert!(out.len() < input.len(), "{ext}: metadata must be removed");
+            }
             assert!(
                 validate_media(&out).is_ok(),
                 "{ext}: sanitized media must remain valid"
