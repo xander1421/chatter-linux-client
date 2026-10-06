@@ -85,9 +85,10 @@ async fn delayed_dispatch_keeps_wire_clock_and_converges_for_every_scope_kind() 
             },
             |same_clock| {
                 assert_eq!(same_clock, a.timestamp);
-                repo1
-                    .add_reaction_at(&scope, &author, 100, &actor, &actor, "A", same_clock)
-                    .map_err(ConversationError::Storage)
+                crate::services::message::MessageService::record_reaction_completion_with_repo(
+                    &repo1, &actor, &scope, &author, 100, &actor, "A", false, same_clock,
+                )
+                .map_err(ConversationError::Message)
             },
         );
         let interleave = async {
@@ -184,4 +185,112 @@ fn concurrent_device_equal_versions_converge_with_removal_winning() {
         assert!(stored.current_user_reactions.is_empty());
         assert!(stored.reaction_counts.is_empty());
     }
+}
+
+#[tokio::test]
+async fn own_completion_accepts_same_emoji_advancement_and_identical_echoes() {
+    for kind in [
+        ConversationType::ServerDm,
+        ConversationType::Channel,
+        ConversationType::AnonDm,
+        ConversationType::AnonGroup,
+    ] {
+        for remove in [false, true] {
+            for echo in [false, true] {
+                let actor = UserId::new();
+                let author = UserId::new();
+                let message = Message::new_text(
+                    ChannelId::new(),
+                    kind.clone(),
+                    Some(author),
+                    "target".into(),
+                    100,
+                );
+                let scope = ReactionScope::of(&message);
+                let (_dir, repo) = fixture(&message);
+                assert!(
+                    repo.add_reaction_at(&scope, &author, 100, &actor, &actor, "A", 10)
+                        .unwrap()
+                );
+                if echo {
+                    if remove {
+                        assert!(
+                            repo.remove_reaction_at(&scope, &author, 100, &actor, &actor, "A", 20)
+                                .unwrap()
+                        );
+                    } else {
+                        // A newer same-emoji action advances evidence without INSERT.
+                        assert!(
+                            !repo
+                                .add_reaction_at(&scope, &author, 100, &actor, &actor, "A", 20)
+                                .unwrap()
+                        );
+                    }
+                }
+                complete_reaction_dispatch(20, async { Ok(()) }, |clock| {
+                    crate::services::message::MessageService::record_reaction_completion_with_repo(
+                        &repo, &actor, &scope, &author, 100, &actor, "A", remove, clock,
+                    )
+                    .map_err(ConversationError::Message)
+                })
+                .await
+                .unwrap();
+                let votes = repo.get_reactions(&scope, &author, 100).unwrap();
+                assert_eq!(votes.len(), usize::from(!remove));
+                // General repository bool remains a visible row-change contract.
+                let changed = if remove {
+                    repo.remove_reaction_at(&scope, &author, 100, &actor, &actor, "A", 20)
+                } else {
+                    repo.add_reaction_at(&scope, &author, 100, &actor, &actor, "A", 20)
+                }
+                .unwrap();
+                assert!(!changed);
+            }
+        }
+    }
+}
+
+#[tokio::test]
+async fn own_completion_rejects_newer_evidence_and_failed_send_never_records() {
+    let actor = UserId::new();
+    let author = UserId::new();
+    let message = Message::new_text(
+        ChannelId::new(),
+        ConversationType::ServerDm,
+        Some(author),
+        "target".into(),
+        100,
+    );
+    let scope = ReactionScope::of(&message);
+    let (_dir, repo) = fixture(&message);
+    let record = |emoji: &str, remove: bool, clock| {
+        crate::services::message::MessageService::record_reaction_completion_with_repo(
+            &repo, &actor, &scope, &author, 100, &actor, emoji, remove, clock,
+        )
+        .map_err(ConversationError::Message)
+    };
+    assert!(
+        complete_reaction_dispatch(
+            10,
+            async { Err(ConversationError::Other("transport failed".into())) },
+            |clock| record("A", false, clock)
+        )
+        .await
+        .is_err()
+    );
+    assert!(repo.get_reactions(&scope, &author, 100).unwrap().is_empty());
+    // The failed dispatch did not retain a tombstone either.
+    assert!(record("A", false, 9).unwrap());
+    assert!(record("B", false, 30).unwrap());
+    for remove in [false, true] {
+        assert!(
+            complete_reaction_dispatch(20, async { Ok(()) }, |clock| record("A", remove, clock))
+                .await
+                .is_err()
+        );
+    }
+    assert!(!record("B", false, 29).unwrap());
+    assert!(record("B", true, 40).unwrap());
+    assert!(!record("B", false, 40).unwrap(), "equal-clock removal wins");
+    assert!(repo.get_reactions(&scope, &author, 100).unwrap().is_empty());
 }

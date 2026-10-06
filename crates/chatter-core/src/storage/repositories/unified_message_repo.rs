@@ -29,6 +29,12 @@ pub struct UnifiedMessageRepository {
     db: Arc<Database>,
 }
 
+/// Visible projection changes and exact outgoing completion are separate contracts.
+pub(crate) struct ReactionWriteOutcome {
+    pub changed: bool,
+    pub completed: bool,
+}
+
 /// Add a freshly-inserted message's attachments and links to the
 /// shared-content index (the profile screen's media drawer).
 ///
@@ -1368,6 +1374,28 @@ impl UnifiedMessageRepository {
         emoji: &str,
         action_ts: u64,
     ) -> Result<bool, StorageError> {
+        self.add_reaction_outcome_at(
+            scope,
+            sender_id,
+            sent_at_ns,
+            reactor_id,
+            current_user_id,
+            emoji,
+            action_ts,
+        )
+        .map(|outcome| outcome.changed)
+    }
+
+    pub(crate) fn add_reaction_outcome_at(
+        &self,
+        scope: &ReactionScope,
+        sender_id: &UserId,
+        sent_at_ns: u64,
+        reactor_id: &UserId,
+        current_user_id: &UserId,
+        emoji: &str,
+        action_ts: u64,
+    ) -> Result<ReactionWriteOutcome, StorageError> {
         let sent_at_ns = self.resolve_channel_reaction_clock(scope, sender_id, sent_at_ns)?;
         let mut conn = self.db.connection()?;
         let tx = conn.transaction()?;
@@ -1389,8 +1417,14 @@ impl UnifiedMessageRepository {
                 sent_at_ns,
                 current_user_id,
             )?;
+            let completed = reaction_action_completed(
+                conn, scope, sender_id, sent_at_ns, reactor_id, emoji, action_ts, false,
+            )?;
             tx.commit()?;
-            return Ok(false);
+            return Ok(ReactionWriteOutcome {
+                changed: false,
+                completed,
+            });
         }
         let reaction_id = ReactionId::new();
         let now = Utc::now().to_rfc3339();
@@ -1410,8 +1444,14 @@ impl UnifiedMessageRepository {
         )?;
 
         self.rebuild_reaction_blobs_with_conn(conn, scope, sender_id, sent_at_ns, current_user_id)?;
+        let completed = reaction_action_completed(
+            conn, scope, sender_id, sent_at_ns, reactor_id, emoji, action_ts, false,
+        )?;
         tx.commit()?;
-        Ok(inserted > 0)
+        Ok(ReactionWriteOutcome {
+            changed: inserted > 0,
+            completed,
+        })
     }
 
     /// Remove a reaction by (sender_id, sent_at_ns, reactor_id, emoji).
@@ -1448,6 +1488,28 @@ impl UnifiedMessageRepository {
         emoji: &str,
         action_ts: u64,
     ) -> Result<bool, StorageError> {
+        self.remove_reaction_outcome_at(
+            scope,
+            sender_id,
+            sent_at_ns,
+            reactor_id,
+            current_user_id,
+            emoji,
+            action_ts,
+        )
+        .map(|outcome| outcome.changed)
+    }
+
+    pub(crate) fn remove_reaction_outcome_at(
+        &self,
+        scope: &ReactionScope,
+        sender_id: &UserId,
+        sent_at_ns: u64,
+        reactor_id: &UserId,
+        current_user_id: &UserId,
+        emoji: &str,
+        action_ts: u64,
+    ) -> Result<ReactionWriteOutcome, StorageError> {
         let sent_at_ns = self.resolve_channel_reaction_clock(scope, sender_id, sent_at_ns)?;
         let mut conn = self.db.connection()?;
         let tx = conn.transaction()?;
@@ -1469,8 +1531,14 @@ impl UnifiedMessageRepository {
                 sent_at_ns,
                 current_user_id,
             )?;
+            let completed = reaction_action_completed(
+                conn, scope, sender_id, sent_at_ns, reactor_id, emoji, action_ts, true,
+            )?;
             tx.commit()?;
-            return Ok(false);
+            return Ok(ReactionWriteOutcome {
+                changed: false,
+                completed,
+            });
         }
         let deleted = conn.execute(
             "DELETE FROM unified_reactions
@@ -1484,8 +1552,14 @@ impl UnifiedMessageRepository {
         )?;
 
         self.rebuild_reaction_blobs_with_conn(conn, scope, sender_id, sent_at_ns, current_user_id)?;
+        let completed = reaction_action_completed(
+            conn, scope, sender_id, sent_at_ns, reactor_id, emoji, action_ts, true,
+        )?;
         tx.commit()?;
-        Ok(deleted > 0)
+        Ok(ReactionWriteOutcome {
+            changed: deleted > 0,
+            completed,
+        })
     }
 
     /// Check whether the current user has reacted with a given emoji on a message.
@@ -2892,4 +2966,41 @@ fn reaction_receive_binding(conn: &rusqlite::Connection) -> Result<(String, u32)
         serde_json::from_str(&device)
             .map_err(|_| StorageError::InvalidData("Invalid receive device".into()))?,
     ))
+}
+
+/// Exact retained evidence, read in the writer transaction: a replay is complete,
+/// but a newer clock or a different winning selection cannot complete this action.
+fn reaction_action_completed(
+    conn: &rusqlite::Connection,
+    scope: &ReactionScope,
+    author: &UserId,
+    target: u64,
+    actor: &UserId,
+    emoji: &str,
+    action: u64,
+    remove: bool,
+) -> Result<bool, StorageError> {
+    Ok(conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM reaction_action_versions v
+         WHERE v.conversation_id=?1 AND v.conversation_type=?2 AND v.author_id=?3
+         AND v.target_sent_at=?4 AND v.actor_id=?5 AND v.emoji=?6
+         AND v.action_ts=?7 AND v.remove=?8)
+         AND CASE WHEN ?8 THEN NOT EXISTS(SELECT 1 FROM reaction_actor_selections s
+             WHERE s.conversation_id=?1 AND s.conversation_type=?2 AND s.author_id=?3
+             AND s.target_sent_at=?4 AND s.actor_id=?5 AND s.action_ts>?7)
+         ELSE EXISTS(SELECT 1 FROM reaction_actor_selections s
+             WHERE s.conversation_id=?1 AND s.conversation_type=?2 AND s.author_id=?3
+             AND s.target_sent_at=?4 AND s.actor_id=?5 AND s.emoji=?6 AND s.action_ts=?7) END",
+        params![
+            scope.id.to_string(),
+            scope.kind.as_str(),
+            author.to_string(),
+            target as i64,
+            actor.to_string(),
+            emoji,
+            action as i64,
+            remove
+        ],
+        |row| row.get(0),
+    )?)
 }

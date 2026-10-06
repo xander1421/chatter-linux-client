@@ -372,7 +372,7 @@ impl ConversationHandle {
 
             self.client
                 .messages()
-                .record_reaction_at(
+                .record_reaction_completion_at(
                     &scope,
                     target_author,
                     target_sent_timestamp,

@@ -1199,7 +1199,13 @@ impl MessageService {
     ) -> Result<bool, MessageError> {
         let action_ts = self.message_repo.allocate_reaction_clock(reactor)?;
         self.record_reaction_at(
-            scope, target_sender, target_sent_at_ns, reactor, emoji, remove, action_ts,
+            scope,
+            target_sender,
+            target_sent_at_ns,
+            reactor,
+            emoji,
+            remove,
+            action_ts,
         )
     }
 
@@ -1239,6 +1245,67 @@ impl MessageService {
                 )
                 .map_err(MessageError::from)
         }
+    }
+
+    /// Outgoing completion requires action evidence, not a visible INSERT/DELETE.
+    pub(crate) fn record_reaction_completion_at(
+        &self,
+        scope: &crate::domain::reaction::ReactionScope,
+        target_sender: &UserId,
+        target_sent_at_ns: u64,
+        reactor: &UserId,
+        emoji: &str,
+        remove: bool,
+        action_ts: u64,
+    ) -> Result<bool, MessageError> {
+        let current = self.current_user_id()?;
+        Self::record_reaction_completion_with_repo(
+            &self.message_repo,
+            &current,
+            scope,
+            target_sender,
+            target_sent_at_ns,
+            reactor,
+            emoji,
+            remove,
+            action_ts,
+        )
+    }
+
+    // Shared with credential-free completion regression fixtures.
+    pub(crate) fn record_reaction_completion_with_repo(
+        repo: &MessageRepository,
+        current: &UserId,
+        scope: &crate::domain::reaction::ReactionScope,
+        target_sender: &UserId,
+        target_sent_at_ns: u64,
+        reactor: &UserId,
+        emoji: &str,
+        remove: bool,
+        action_ts: u64,
+    ) -> Result<bool, MessageError> {
+        let outcome = if remove {
+            repo.remove_reaction_outcome_at(
+                scope,
+                target_sender,
+                target_sent_at_ns,
+                reactor,
+                current,
+                emoji,
+                action_ts,
+            )
+        } else {
+            repo.add_reaction_outcome_at(
+                scope,
+                target_sender,
+                target_sent_at_ns,
+                reactor,
+                current,
+                emoji,
+                action_ts,
+            )
+        }?;
+        Ok(outcome.completed)
     }
 
     /// Resolve the target of an inbound peer reaction or pin, or `None` when
