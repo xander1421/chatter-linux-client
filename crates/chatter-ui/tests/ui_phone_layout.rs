@@ -1213,7 +1213,7 @@ fn attachment_and_keyboard_handover_boundaries(w: &MainWindow) {
                 if height - ime >= 380.0 {
                     assert!(
                         dy < emoji_top - 1.0,
-                        "GIF search must move HIGHER than Emoji"
+                        "GIF search must move HIGHER than Emoji at {width}x{height}/{ime}: emoji top={emoji_top}, height={emoji_height}; GIF top={dy}, height={dh}"
                     );
                 }
             }

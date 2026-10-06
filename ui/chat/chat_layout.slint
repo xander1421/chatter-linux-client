@@ -125,7 +125,7 @@ export component ChatLayout inherits Rectangle {
     property <length> drawer-space: root.drawer-search-with-ime
         ? min(root.drawer-search-room, root.gif-picker-visible
             ? min(480px, root.height * 0.82)
-            : min(root.drawer-height, root.height * 0.6))
+            : min(root.drawer-search-room * 0.8, min(root.drawer-height, root.height * 0.6)))
         : max(0px, root.drawer-height - root.keyboard-inset);
     in property <string> inserted-emoji;
     in property <int> insert-serial;
