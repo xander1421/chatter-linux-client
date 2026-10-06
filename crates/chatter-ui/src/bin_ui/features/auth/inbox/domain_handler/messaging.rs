@@ -25,11 +25,13 @@ pub(super) fn handle_message_received(
     let timestamp = message.sent_at;
     let conv_type = message.conversation_type.clone();
 
+    // Call end events may be sent by someone other than the caller.
+    let display_sender = crate::bin_ui::converters::call_display_sender(&message);
     // Sender name resolution (conversation-scoped) lives in core.
-    let sender_name = ui_ctx.message_sender_display_name(&message);
+    let sender_name = ui_ctx.message_sender_display_name(&display_sender);
 
     // Sender avatar resolution (conversation-scoped) lives in core.
-    let sender_avatar = ui_ctx.message_sender_avatar(&message);
+    let sender_avatar = ui_ctx.message_sender_avatar(&display_sender);
 
     // Resolve attachments from attachment service
     let resolved_attachments: Vec<_> = message

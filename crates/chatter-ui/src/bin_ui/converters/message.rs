@@ -7,8 +7,8 @@ use chatter_core::domain::message::{Message, MessageContent};
 
 use crate::{MessageItemData, RichTextBlock};
 
-use super::attachment::{AttachmentDisplayData, attachment_to_display_data};
-use super::markdown::{MarkdownBlock, parse_blocks, strip_markdown};
+use super::attachment::{attachment_to_display_data, AttachmentDisplayData};
+use super::markdown::{parse_blocks, strip_markdown, MarkdownBlock};
 use super::utils::{format_count, reaction_counts_to_entries};
 
 /// A message body as a row renders it: `rich_content` is the blocks the
@@ -377,7 +377,11 @@ pub fn message_to_display_data_with_replies(
 
     MessageDisplayData {
         message_id: msg.id.to_string(),
-        sender_id: msg.sender_id.map(|id| id.to_string()).unwrap_or_default(),
+        sender_id: if is_call {
+            call_initiator_id.clone()
+        } else {
+            msg.sender_id.map(|id| id.to_string()).unwrap_or_default()
+        },
         sender_name: sender_name.to_string(),
         sender_initials: chatter_core::ui::initials_from_name(sender_name),
         content,
@@ -505,6 +509,19 @@ pub fn apply_reply_counts(
     }
 }
 
+/// Resolve call identity from the recorded initiator, including end events sent
+/// by another participant. Borrow ordinary messages without changing their source.
+pub fn call_display_sender(msg: &Message) -> std::borrow::Cow<'_, Message> {
+    if let MessageContent::Call(call) = &msg.content {
+        if msg.sender_id != Some(call.initiator_id) {
+            let mut display = msg.clone();
+            display.sender_id = Some(call.initiator_id);
+            return std::borrow::Cow::Owned(display);
+        }
+    }
+    std::borrow::Cow::Borrowed(msg)
+}
+
 pub fn messages_to_display_batch(
     messages: &[Message],
     sender_names: impl FnOnce(&[Message]) -> Vec<String>,
@@ -516,7 +533,16 @@ pub fn messages_to_display_batch(
 ) -> Vec<MessageDisplayData> {
     let mut display_messages = Vec::with_capacity(messages.len());
     // The whole page's names in one call (core batches the lookup).
-    let names = sender_names(messages);
+    let display_senders: Vec<_> = messages.iter().map(call_display_sender).collect();
+    let names = if display_senders
+        .iter()
+        .any(|m| matches!(m, std::borrow::Cow::Owned(_)))
+    {
+        let lookup: Vec<_> = display_senders.iter().map(|m| m.as_ref().clone()).collect();
+        sender_names(&lookup)
+    } else {
+        sender_names(messages)
+    };
     // One avatar per sender, decoded once at row size and shared by all of
     // that sender's rows (`decode_cache::avatar`). Decoding the full 512 px
     // avatar again for every row was most of a conversation open.
@@ -526,11 +552,12 @@ pub fn messages_to_display_batch(
     > = std::collections::HashMap::new();
 
     for (i, msg) in messages.iter().enumerate() {
+        let identity = display_senders[i].as_ref();
         let sender = names.get(i).cloned().unwrap_or_default();
         let (avatar_bytes, avatar_pixels) = avatars
-            .entry(msg.sender_id)
+            .entry(identity.sender_id)
             .or_insert_with(|| {
-                let bytes = sender_avatar(msg);
+                let bytes = sender_avatar(identity);
                 let pixels = bytes
                     .as_deref()
                     .and_then(crate::bin_ui::decode_cache::avatar);
@@ -570,6 +597,41 @@ mod tests {
     use slint::Model;
 
     use super::*;
+
+    #[test]
+    fn call_display_identity_tracks_initiator_instead_of_end_event_sender() {
+        use chatter_core::domain::ids::{ChannelId, UserId};
+        use chatter_core::domain::message::{CallMessage, ConversationType};
+        let caller = UserId::new();
+        let end_sender = UserId::new();
+        let mut msg = Message::new_text(
+            ChannelId::new(),
+            ConversationType::Channel,
+            Some(end_sender),
+            String::new(),
+            1,
+        );
+        assert!(matches!(
+            call_display_sender(&msg),
+            std::borrow::Cow::Borrowed(_)
+        ));
+        msg.content = MessageContent::Call(CallMessage::started(
+            "call-fixture".into(),
+            caller,
+            String::new(),
+        ));
+        let identity = call_display_sender(&msg);
+        assert_eq!(identity.sender_id, Some(caller));
+        assert_eq!(
+            msg.sender_id,
+            Some(end_sender),
+            "domain source stays intact"
+        );
+        let display = message_to_display_data(&msg, "Caller", &[], None);
+        assert_eq!(display.sender_id, caller.to_string());
+        assert_eq!(display.sender_initials, "C");
+        assert!(!display.to_slint_with_user(&end_sender.to_string()).is_own);
+    }
 
     #[test]
     fn apply_edit_replaces_the_blocks_the_bubble_draws() {

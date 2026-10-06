@@ -285,6 +285,12 @@ export component MessageItem inherits Rectangle {
             spacing: Spacing.sm;
             alignment: root.is-own ? end : start;
 
+            if !root.is-own && !root.is-dm && root.show-sender && !root.is-continuation: Avatar {
+                size: Spacing.avatar-sm;
+                source: root.sender-avatar-source;
+                fallback-text: root.sender-initials;
+            }
+
             Rectangle {
                 property <bool> is-missed: root.call-type == "missed";
                 // Direction is who PLACED the call — `is-own` is exactly that
@@ -295,7 +301,7 @@ export component MessageItem inherits Rectangle {
 
                 // call-content carries its own padding; adding more here left
                 // slack that the fixed-size icon did not share.
-                width: call-content.preferred-width;
+                width: min(call-content.preferred-width, root.width * 0.7);
                 height: call-content.preferred-height + Elevation.contact-offset;
                 // Contact-shadow plate; the fill below is contact-offset shorter, so a
                 // crescent of it shows along the bottom edge (same as text bubbles).
@@ -317,67 +323,90 @@ export component MessageItem inherits Rectangle {
                     border-color: Elevation.raised-rim;
                 }
 
-                call-content := HorizontalLayout {
+                call-content := VerticalLayout {
                     y: 0;
                     height: self.preferred-height;
                     padding: Spacing.md;
-                    spacing: Spacing.md;
-                    alignment: center;
+                    spacing: Spacing.xs;
+                    alignment: start;
 
-                    VerticalLayout {
-                        alignment: center;
-                        spacing: Spacing.xxs;
+                    if !root.is-own && !root.is-dm && root.show-sender && !root.is-continuation: Text {
+                        text: root.sender-name;
+                        wrap: word-wrap;
+                        color: Colors.primary;
+                        font-size: Typography.sm;
+                        font-weight: Typography.medium;
+                    }
 
-                        HorizontalLayout {
-                            spacing: Spacing.xs;
-                            alignment: start;
+                    HorizontalLayout {
+                        spacing: Spacing.md;
 
-                            Text {
-                                property <string> arrow: is-outgoing ? "\u{2197}" : "\u{2199}";
-                                text: arrow;
-                                color: is-missed ? Colors.error : (is-outgoing ? Colors.success : Colors.primary);
-                                font-size: Typography.sm;
-                                vertical-alignment: center;
+                        VerticalLayout {
+                            alignment: center;
+                            spacing: Spacing.xxs;
+
+                            HorizontalLayout {
+                                spacing: Spacing.xs;
+                                alignment: start;
+
+                                Text {
+                                    property <string> arrow: is-outgoing ? "\u{2197}" : "\u{2199}";
+                                    text: arrow;
+                                    color: is-missed ? Colors.error : (is-outgoing ? Colors.success : Colors.primary);
+                                    font-size: Typography.sm;
+                                    vertical-alignment: center;
+                                }
+
+                                Text {
+                                    text: is-missed ? "Missed call"
+                                        : root.call-type == "declined" ? "Declined call"
+                                        : is-outgoing ? "Outgoing call" : "Incoming call";
+                                    color: is-missed ? Colors.error : Colors.text-primary;
+                                    font-size: Typography.sm;
+                                    font-weight: Typography.medium;
+                                }
                             }
 
-                            Text {
-                                text: is-missed ? "Missed call"
-                                    : root.call-type == "declined" ? "Declined call"
-                                    : is-outgoing ? "Outgoing call" : "Incoming call";
-                                color: is-missed ? Colors.error : Colors.text-primary;
-                                font-size: Typography.sm;
-                                font-weight: Typography.medium;
+                            // Duration belongs to the call status, not the footer clock.
+                            if root.call-duration != "": Text {
+                                text: root.call-duration;
+                                color: Colors.text-muted;
+                                font-size: Typography.xs;
                             }
                         }
 
-                        // One Text: two laid out side by side put the layout
-                        // spacing before the separator ("01:36 , 17s").
-                        Text {
-                            text: root.call-duration != "" ? root.timestamp + " · " + root.call-duration : root.timestamp;
-                            color: Colors.text-muted;
-                            font-size: Typography.xs;
+                        // A fixed-size child of a HorizontalLayout sits at the
+                        // row's top; centre the icon on the text block's axis.
+                        VerticalLayout {
+                            alignment: center;
+
+                            Rectangle {
+                                accessible-role: image;
+                                accessible-label: "Call icon";
+                                width: 40px;
+                                height: 40px;
+                                border-radius: 20px;
+                                background: is-missed ? Colors.error.transparentize(0.8) : Colors.primary.transparentize(0.85);
+
+                                Image {
+                                    width: 20px;
+                                    height: 20px;
+                                    source: Icons.phone;
+                                    colorize: is-missed ? Colors.error : Colors.primary;
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
+                                }
+                            }
                         }
                     }
 
-                    // A fixed-size child of a HorizontalLayout sits at the
-                    // row's top; centre the icon on the text block's axis.
-                    VerticalLayout {
-                        alignment: center;
-
-                        Rectangle {
-                            width: 40px;
-                            height: 40px;
-                            border-radius: 20px;
-                            background: is-missed ? Colors.error.transparentize(0.8) : Colors.primary.transparentize(0.85);
-
-                            Image {
-                                width: 20px;
-                                height: 20px;
-                                source: Icons.phone;
-                                colorize: is-missed ? Colors.error : Colors.primary;
-                                x: (parent.width - self.width) / 2;
-                                y: (parent.height - self.height) / 2;
-                            }
+                    // Clock is a separate bottom/right footer, like normal bubbles.
+                    HorizontalLayout {
+                        alignment: end;
+                        Text {
+                            text: root.timestamp;
+                            color: Colors.text-muted;
+                            font-size: Typography.xs;
                         }
                     }
                 }
