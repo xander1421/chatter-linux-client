@@ -1996,15 +1996,16 @@ mod shield_mode_tests {
         drop(readers);
     }
 
-    /// Reproduce the old fixture's deleted-path failure with the real pool.
+    /// Existing pooled descriptors may survive unlinking; a fresh path-based
+    /// reader must fail. Membership SQL-error coverage below checks routing.
     #[tokio::test]
-    async fn deleted_fixture_directory_prevents_new_repository_reader() {
+    async fn deleted_fixture_directory_prevents_fresh_reader() {
         let (dir, client) = build_test_client();
         let db = client.messages().database();
-        let readers: Vec<_> = (0..3).map(|_| db.read_connection().unwrap()).collect();
+        assert!(db.open_reader_connection().is_ok());
         dir.close().expect("remove fixture directory");
-        assert!(client.anon_groups().list_groups().is_err());
-        drop(readers);
+        assert!(!db.path().exists());
+        assert!(db.open_reader_connection().is_err());
     }
 
     /// Break actual SQL reads at each repository boundary, rather than mocking
