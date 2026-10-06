@@ -31,8 +31,8 @@
 //! a cursor has fallen out of it (or replaying would exceed the server's
 //! budget) the server says so with a `ResyncRequired` event instead of
 //! replaying a partial history. That event means "what you missed is not
-//! coming on this stream": we take the cursor it hands us and run the durable
-//! sync again (OPEN-ITEMS §40/§56).
+//! coming on this stream": we hold our old cursor until the durable
+//! mutation snapshots have been fully applied, while continuing live delivery (OPEN-ITEMS §40/§56).
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -124,12 +124,85 @@ fn validate_global_cursor(raw: &str) -> Result<(), crate::error::NetworkError> {
         .map_err(|e| crate::error::NetworkError::DataLoss(e.to_string()))
 }
 
-fn require_ingested(outcome: Ingested) -> Result<(), crate::error::NetworkError> {
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Applied {
+    Complete,
+    Pending,
+}
+
+fn require_ingested(outcome: Ingested) -> Applied {
     match outcome {
-        Ingested::Stored | Ingested::OwnMessage | Ingested::Dropped => Ok(()),
-        Ingested::RetryableFailure | Ingested::DeferredPendingSenderKey => Err(
-            crate::error::NetworkError::DataLoss("channel event not durably applied".into()),
-        ),
+        Ingested::Stored | Ingested::OwnMessage | Ingested::Dropped => Applied::Complete,
+        Ingested::RetryableFailure | Ingested::DeferredPendingSenderKey => Applied::Pending,
+    }
+}
+
+const RECOVERY_BUDGET: Duration = Duration::from_secs(2);
+const RECOVERY_INTERVAL: Duration = Duration::from_secs(5);
+
+/// Session-local gaps hold the entire checkpoint, including unrelated positions.
+/// Reconnecting loses only this retry plan; the durable old checkpoint replays it.
+#[derive(Default)]
+struct RecoveryState {
+    channels: std::collections::VecDeque<String>,
+    candidate: Option<String>,
+    progress: std::collections::BTreeMap<String, RecoveryProgress>,
+}
+
+#[derive(Default)]
+struct RecoveryProgress {
+    page_token: Option<String>,
+    seen_tokens: std::collections::BTreeSet<String>,
+    incomplete: bool,
+}
+
+impl RecoveryProgress {
+    fn finish_page(
+        &mut self,
+        next_page_token: String,
+    ) -> Result<Applied, crate::error::NetworkError> {
+        if next_page_token.is_empty() {
+            let applied = if self.incomplete {
+                Applied::Pending
+            } else {
+                Applied::Complete
+            };
+            // Restart incomplete truth on the next traversal. Never remember a
+            // failed row as applied, even after later pages succeeded.
+            *self = Self::default();
+            return Ok(applied);
+        }
+        if !self.seen_tokens.insert(next_page_token.clone()) {
+            return Err(crate::error::NetworkError::DataLoss(
+                "repeated resync page token".into(),
+            ));
+        }
+        self.page_token = Some(next_page_token);
+        Ok(Applied::Pending)
+    }
+}
+
+impl RecoveryState {
+    fn defer(&mut self, channel: &str) -> Result<(), crate::error::NetworkError> {
+        if !self.channels.iter().any(|existing| existing == channel) {
+            if self.channels.len() >= 500 {
+                return Err(crate::error::NetworkError::DataLoss(
+                    "too many recovery channels".into(),
+                ));
+            }
+            self.channels.push_back(channel.to_owned());
+        }
+        self.progress
+            .insert(channel.to_owned(), RecoveryProgress::default());
+        Ok(())
+    }
+
+    fn acknowledgeable(&self) -> Option<&str> {
+        if self.channels.is_empty() {
+            self.candidate.as_deref()
+        } else {
+            None
+        }
     }
 }
 
@@ -314,16 +387,32 @@ impl ChannelStreamService {
         self.catch_up_now().await;
 
         tokio::pin!(stream);
+        let mut recovery = RecoveryState::default();
+        let mut retry = tokio::time::interval(RECOVERY_INTERVAL);
+        retry.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut last_stream_item = tokio::time::Instant::now();
         loop {
             tokio::select! {
-                item = heartbeat::next_or_silent(&mut stream, heartbeat::STREAM_SILENCE_LIMIT) => match item {
-                    Next::Item(result) => self.handle_event(result?).await?,
+                item = heartbeat::next_or_silent(&mut stream, heartbeat::STREAM_SILENCE_LIMIT.saturating_sub(last_stream_item.elapsed())) => match item {
+                    Next::Item(result) => {
+                        last_stream_item = tokio::time::Instant::now();
+                        tokio::select! {
+                            result = self.handle_event(result?, &mut recovery) => result?,
+                            _ = self.resubscribe.notified() => return Ok(()),
+                        }
+                    },
                     Next::Ended => return Ok(()),
                     Next::Silent => {
                         tracing::warn!("Channel message stream missed its heartbeats; reconnecting");
                         return Err(crate::error::NetworkError::Timeout);
                     }
                 },
+                _ = retry.tick(), if !recovery.channels.is_empty() => {
+                    tokio::select! {
+                        result = self.retry_recovery(&mut recovery) => result?,
+                        _ = self.resubscribe.notified() => return Ok(()),
+                    }
+                }
                 _ = self.resubscribe.notified() => {
                     tracing::info!("Channel membership changed; resubscribing global stream");
                     return Ok(());
@@ -386,6 +475,7 @@ impl ChannelStreamService {
         &self,
         new_cursor: &str,
         resync: &chat_v1::ResyncRequired,
+        recovery: &mut RecoveryState,
     ) -> Result<(), crate::error::NetworkError> {
         validate_global_cursor(new_cursor)?;
         if resync.channel_ids.len() > 500 {
@@ -398,14 +488,79 @@ impl ChannelStreamService {
             new_cursor,
             "Server could not replay from our cursor; resyncing from the durable store"
         );
-        // Complete recovery before adopting the replacement cursor. On failure
-        // the stream reconnects from the old cursor and requests resync again.
-        self.catch_up_now().await;
+        // Validate the whole plan before applying anything. A recoverable gap
+        // holds the old checkpoint, but must not end an otherwise healthy stream.
         for channel in &resync.channel_ids {
-            self.recover_channel_changes(channel).await?;
+            let canonical = channel
+                .parse::<uuid::Uuid>()
+                .map_err(|_| crate::error::NetworkError::DataLoss("invalid resync channel".into()))?
+                .to_string();
+            if canonical != *channel {
+                return Err(crate::error::NetworkError::DataLoss(
+                    "noncanonical resync channel".into(),
+                ));
+            }
         }
-        self.store_cursor(new_cursor)?;
+        for channel in &resync.channel_ids {
+            recovery.defer(channel)?;
+        }
+        recovery.candidate = Some(new_cursor.to_owned());
+        // Ancillary channel/member sync is useful, but mutation snapshots below
+        // are the authority for message application and checkpoint completion.
+        let _ = tokio::time::timeout(RECOVERY_BUDGET, self.catch_up_now()).await;
+        self.acknowledge_recovery(recovery)
+    }
+
+    fn acknowledge_recovery(
+        &self,
+        recovery: &RecoveryState,
+    ) -> Result<(), crate::error::NetworkError> {
+        if let Some(cursor) = recovery.acknowledgeable() {
+            self.store_cursor(cursor)?;
+        }
         Ok(())
+    }
+
+    async fn retry_recovery(
+        &self,
+        recovery: &mut RecoveryState,
+    ) -> Result<(), crate::error::NetworkError> {
+        // One channel per tick, rotating even when an old sender key never arrives.
+        let channel = recovery
+            .channels
+            .front()
+            .cloned()
+            .expect("pending recovery");
+        let outcome = tokio::time::timeout(
+            RECOVERY_BUDGET,
+            self.recover_channel_changes(
+                &channel,
+                recovery
+                    .progress
+                    .get_mut(&channel)
+                    .expect("recovery progress"),
+            ),
+        )
+        .await;
+        match outcome {
+            Ok(Ok(Applied::Complete)) => {
+                recovery.channels.pop_front();
+                recovery.progress.remove(&channel);
+            }
+            Ok(Ok(Applied::Pending)) | Err(_) => {
+                recovery.channels.rotate_left(1);
+            }
+            Ok(Err(
+                crate::error::NetworkError::ConnectionFailed(_)
+                | crate::error::NetworkError::Timeout
+                | crate::error::NetworkError::Unavailable
+                | crate::error::NetworkError::RateLimited,
+            )) => {
+                recovery.channels.rotate_left(1);
+            }
+            Ok(Err(error)) => return Err(error),
+        }
+        self.acknowledge_recovery(recovery)
     }
 
     /// Reconcile one channel from an authoritative retained mutation snapshot.
@@ -414,44 +569,56 @@ impl ChannelStreamService {
     async fn recover_channel_changes(
         &self,
         channel: &str,
-    ) -> Result<(), crate::error::NetworkError> {
+        progress: &mut RecoveryProgress,
+    ) -> Result<Applied, crate::error::NetworkError> {
         let channel_id = channel.parse::<ChannelId>().map_err(|_| {
             crate::error::NetworkError::InvalidRequest("invalid resync channel".into())
         })?;
-        let mut page_token: Option<String> = None;
-        loop {
-            let page = self
-                .grpc_pool
-                .message_client()
-                .get_message_changes(channel, page_token.as_deref())
-                .await?;
-            for message in &page.messages {
-                if message.channel_id != channel {
-                    return Err(crate::error::NetworkError::DataLoss(
-                        "resync channel mismatch".into(),
-                    ));
+        let page = self
+            .grpc_pool
+            .message_client()
+            .get_message_changes(channel, progress.page_token.as_deref())
+            .await?;
+        for message in &page.messages {
+            if message.channel_id != channel {
+                return Err(crate::error::NetworkError::DataLoss(
+                    "resync channel mismatch".into(),
+                ));
+            }
+            if message.deleted_at != 0 {
+                match self.apply_delete(&message.id, channel_id) {
+                    Ok(()) => {}
+                    Err(crate::services::message::MessageError::Storage(_)) => {
+                        progress.incomplete = true
+                    }
+                    Err(crate::services::message::MessageError::InvalidContent(error)) => {
+                        return Err(crate::error::NetworkError::DataLoss(error));
+                    }
+                    Err(error) => {
+                        return Err(crate::error::NetworkError::Unknown(error.to_string()));
+                    }
                 }
-                if message.deleted_at != 0 {
-                    self.apply_delete(&message.id, channel_id)
-                        .map_err(|e| crate::error::NetworkError::Unknown(e.to_string()))?;
-                } else {
-                    self.inbound
-                        .ingest_resynced(message, channel_id)
-                        .await
-                        .map_err(|e| match e {
-                            crate::services::message::MessageError::InvalidContent(e) => {
-                                crate::error::NetworkError::DataLoss(e)
-                            }
-                            e => crate::error::NetworkError::Unknown(e.to_string()),
-                        })?;
+            } else {
+                match self.inbound.ingest_resynced(message, channel_id).await {
+                    Ok(()) => {}
+                    Err(
+                        crate::services::message::MessageError::ResyncPending
+                        | crate::services::message::MessageError::Storage(_),
+                    ) => {
+                        progress.incomplete = true;
+                    }
+                    Err(crate::services::message::MessageError::InvalidContent(error)) => {
+                        return Err(crate::error::NetworkError::DataLoss(error));
+                    }
+                    Err(error) => {
+                        return Err(crate::error::NetworkError::Unknown(error.to_string()));
+                    }
                 }
             }
-            if page.next_page_token.is_empty() {
-                break;
-            }
-            page_token = Some(page.next_page_token);
         }
-        Ok(())
+        // Advance pagination only after every row in this page was considered.
+        // Cancellation retries this page; complete pages survive bounded ticks.
+        progress.finish_page(page.next_page_token)
     }
 
     /// Dispatch one `MessageEvent`.
@@ -463,6 +630,7 @@ impl ChannelStreamService {
     async fn handle_event(
         &self,
         event: chat_v1::MessageEvent,
+        recovery: &mut RecoveryState,
     ) -> Result<(), crate::error::NetworkError> {
         // The server's keepalive (also its first item, once subscribed). Not
         // data and never a cursor, so it goes before anything else.
@@ -473,7 +641,8 @@ impl ChannelStreamService {
         // Before anything that reads channel_id: a resync covers several
         // channels and carries none of its own.
         if let Some(MsgEventType::ResyncRequired(resync)) = &event.event {
-            self.handle_resync(&event.event_id, resync).await?;
+            self.handle_resync(&event.event_id, resync, recovery)
+                .await?;
             return Ok(());
         }
         validate_global_cursor(&event.event_id)?;
@@ -493,6 +662,7 @@ impl ChannelStreamService {
             }
         };
 
+        let mut applied = Applied::Complete;
         match event.event {
             Some(MsgEventType::MessageSent(msg)) => {
                 if msg.channel_id != event.channel_id {
@@ -500,7 +670,7 @@ impl ChannelStreamService {
                         "message channel mismatch".into(),
                     ));
                 }
-                require_ingested(self.inbound.ingest(&msg, channel_id, true).await)?;
+                applied = require_ingested(self.inbound.ingest(&msg, channel_id, true).await);
             }
             Some(MsgEventType::MessageUpdated(msg)) => {
                 if msg.channel_id != event.channel_id {
@@ -508,18 +678,26 @@ impl ChannelStreamService {
                         "edit channel mismatch".into(),
                     ));
                 }
-                require_ingested(self.inbound.ingest_edit(&msg, channel_id).await)?;
+                applied = require_ingested(self.inbound.ingest_edit(&msg, channel_id).await);
             }
-            Some(MsgEventType::MessageDeletedId(id)) => {
-                self.apply_delete(&id, channel_id)
-                    .map_err(|e| crate::error::NetworkError::Unknown(e.to_string()))?;
-            }
+            Some(MsgEventType::MessageDeletedId(id)) => match self.apply_delete(&id, channel_id) {
+                Ok(()) => {}
+                Err(crate::services::message::MessageError::Storage(_)) => {
+                    applied = Applied::Pending
+                }
+                Err(crate::services::message::MessageError::InvalidContent(error)) => {
+                    return Err(crate::error::NetworkError::DataLoss(error));
+                }
+                Err(error) => return Err(crate::error::NetworkError::Unknown(error.to_string())),
+            },
             Some(MsgEventType::ReactionAdded(update)) => {
-                self.handle_reaction(update, channel_id, false, event.timestamp)
+                applied = self
+                    .handle_reaction(update, channel_id, false, event.timestamp)
                     .await?;
             }
             Some(MsgEventType::ReactionRemoved(update)) => {
-                self.handle_reaction(update, channel_id, true, event.timestamp)
+                applied = self
+                    .handle_reaction(update, channel_id, true, event.timestamp)
                     .await?;
             }
             // Handled above, before the channel_id parse.
@@ -535,7 +713,11 @@ impl ChannelStreamService {
                 ));
             }
         }
-        self.store_cursor(&event.event_id)
+        if applied == Applied::Pending {
+            recovery.defer(&event.channel_id)?;
+        }
+        recovery.candidate = Some(event.event_id);
+        self.acknowledge_recovery(recovery)
     }
 
     async fn handle_reaction(
@@ -544,12 +726,14 @@ impl ChannelStreamService {
         channel_id: ChannelId,
         remove: bool,
         timestamp: u64,
-    ) -> Result<(), crate::error::NetworkError> {
+    ) -> Result<Applied, crate::error::NetworkError> {
         let (Ok(sender_id), Ok(reactor_id)) =
             (update.target_author_aci.parse(), update.reactor_id.parse())
         else {
             tracing::warn!(%channel_id, "Reaction event has invalid author or reactor identity");
-            return Ok(());
+            return Err(crate::error::NetworkError::DataLoss(
+                "invalid reaction identity".into(),
+            ));
         };
         // A stream must never mutate a target in another conversation.
         match self
@@ -563,14 +747,16 @@ impl ChannelStreamService {
                 // event forever would block every channel without fetching it.
                 // Recovery includes the complete current reaction snapshot;
                 // do not reapply this older delta over that newer snapshot.
-                self.recover_channel_changes(&channel_id.to_string())
-                    .await?;
-                return Ok(());
+                // Schedule authoritative recovery without applying the stale delta.
+                return Ok(Applied::Pending);
             }
             Ok(Some(_)) => {
                 tracing::warn!(%channel_id, "Rejected reaction targeting a different channel");
-                return Ok(());
+                return Err(crate::error::NetworkError::DataLoss(
+                    "reaction channel mismatch".into(),
+                ));
             }
+            Err(crate::services::message::MessageError::Storage(_)) => return Ok(Applied::Pending),
             Err(e) => return Err(crate::error::NetworkError::Unknown(e.to_string())),
         }
         match self.messages.record_reaction(
@@ -601,9 +787,10 @@ impl ChannelStreamService {
                 self.event_bus.emit_domain(event);
             }
             Ok(false) => {}
+            Err(crate::services::message::MessageError::Storage(_)) => return Ok(Applied::Pending),
             Err(error) => return Err(crate::error::NetworkError::Unknown(error.to_string())),
         }
-        Ok(())
+        Ok(Applied::Complete)
     }
 
     fn apply_delete(
@@ -772,8 +959,8 @@ mod heartbeat_dispatch {
             .find("event.is_heartbeat()")
             .expect("handle_event must drop heartbeats");
         let cursor = body
-            .find("self.store_cursor(")
-            .expect("handle_event still stores cursors");
+            .find("self.acknowledge_recovery(")
+            .expect("handle_event still acknowledges applied cursors");
         let parse = body
             .find("event.channel_id.parse")
             .expect("handle_event still parses channel_id");
@@ -839,7 +1026,7 @@ mod resync_required {
             .unwrap_or(body);
 
         assert!(
-            body.contains("self.catch_up_now().await"),
+            body.contains("self.catch_up_now()"),
             "a resync must run the forced catch-up: the skipped events are not coming on \
              the stream, and the rate-limited catch_up() can skip the sync that fetches them."
         );
@@ -869,13 +1056,79 @@ mod global_checkpoints {
 
     #[test]
     fn failures_and_memory_only_deferred_messages_are_not_acknowledged() {
-        assert!(require_ingested(Ingested::RetryableFailure).is_err());
-        assert!(require_ingested(Ingested::DeferredPendingSenderKey).is_err());
-        assert!(require_ingested(Ingested::Stored).is_ok());
+        assert!(require_ingested(Ingested::RetryableFailure) == Applied::Pending);
+        assert!(require_ingested(Ingested::DeferredPendingSenderKey) == Applied::Pending);
+        assert!(require_ingested(Ingested::Stored) == Applied::Complete);
         assert!(
-            require_ingested(Ingested::Dropped).is_ok(),
+            require_ingested(Ingested::Dropped) == Applied::Complete,
             "terminal rejection must not poison the stream"
         );
+    }
+
+    #[test]
+    fn an_unresolved_channel_holds_later_unrelated_checkpoint_positions() {
+        let a = "11111111-1111-1111-1111-111111111111";
+        let b = "22222222-2222-2222-2222-222222222222";
+        let mut state = RecoveryState::default();
+        state.defer(a).unwrap();
+        state.candidate = Some(format!("v1:{{\"{a}\":\"12-0\",\"{b}\":\"50-0\"}}"));
+        assert_eq!(state.acknowledgeable(), None);
+        state.channels.rotate_left(1);
+        assert_eq!(
+            state.acknowledgeable(),
+            None,
+            "a retry is not an acknowledgement"
+        );
+        state.channels.pop_front();
+        assert_eq!(state.acknowledgeable(), state.candidate.as_deref());
+    }
+
+    #[test]
+    fn retry_rotation_is_fair_and_a_new_gap_restarts_partial_truth() {
+        let mut state = RecoveryState::default();
+        state.defer("a").unwrap();
+        state.defer("b").unwrap();
+        let progress = state.progress.get_mut("a").unwrap();
+        progress.page_token = Some("page-two".into());
+        progress.incomplete = true;
+        state.channels.rotate_left(1);
+        assert_eq!(state.channels.front().unwrap(), "b");
+        state.defer("a").unwrap();
+        assert_eq!(state.channels.len(), 2, "no duplicate recovery work");
+        assert!(state.progress["a"].page_token.is_none());
+        assert!(!state.progress["a"].incomplete);
+    }
+
+    #[test]
+    fn successful_later_pages_do_not_acknowledge_an_earlier_failed_row() {
+        let mut progress = RecoveryProgress::default();
+        progress.incomplete = true;
+        assert_eq!(
+            progress.finish_page("page-two".into()).unwrap(),
+            Applied::Pending
+        );
+        assert_eq!(
+            progress.finish_page(String::new()).unwrap(),
+            Applied::Pending
+        );
+        assert!(
+            progress.page_token.is_none(),
+            "retry starts from authoritative truth"
+        );
+        assert_eq!(
+            progress.finish_page(String::new()).unwrap(),
+            Applied::Complete
+        );
+    }
+
+    #[test]
+    fn repeated_page_tokens_are_validation_failures_not_pending_ingestion() {
+        let mut progress = RecoveryProgress::default();
+        progress.finish_page("page-two".into()).unwrap();
+        assert!(matches!(
+            progress.finish_page("page-two".into()),
+            Err(crate::error::NetworkError::DataLoss(_))
+        ));
     }
 
     #[test]
@@ -888,7 +1141,10 @@ mod global_checkpoints {
             .split_once("fn handle_reaction")
             .unwrap()
             .0;
-        assert!(body.find("self.store_cursor(").unwrap() > body.find("match event.event").unwrap());
+        assert!(
+            body.find("self.acknowledge_recovery(").unwrap()
+                > body.find("match event.event").unwrap()
+        );
         assert!(body.contains("require_ingested(self.inbound.ingest"));
         let compact: String = body.chars().filter(|c| !c.is_whitespace()).collect();
         assert!(

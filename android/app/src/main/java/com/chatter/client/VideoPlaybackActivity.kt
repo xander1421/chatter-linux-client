@@ -7,6 +7,7 @@ import android.media.AudioManager
 import android.media.MediaDataSource
 import android.media.MediaPlayer
 import android.os.Bundle
+import android.util.Log
 import android.view.Gravity
 import android.view.SurfaceHolder
 import android.view.SurfaceView
@@ -19,6 +20,11 @@ import java.io.IOException
 /** Private decoder surface. Plaintext is read from Rust memory/authenticated ranges,
  * never a URL, public file, temporary plaintext file, or an external player. */
 class VideoPlaybackActivity : Activity(), SurfaceHolder.Callback, MediaController.MediaPlayerControl {
+    // Only fixed labels are logged: never source identifiers or exception contents.
+    private enum class FailureStage {
+        SOURCE_VALIDATION, PLAYER_CREATE, AUDIO_ATTRIBUTES, DISPLAY, DATA_SOURCE,
+        VIDEO_SCALING, LISTENERS, PREPARE_ASYNC, PLAYER_ERROR, PAUSE, AUDIO_FOCUS, START, SEEK
+    }
     private var token = 0L
     private var player: MediaPlayer? = null
     private var prepared = false
@@ -80,18 +86,21 @@ class VideoPlaybackActivity : Activity(), SurfaceHolder.Callback, MediaControlle
         surface.setOnClickListener { if (prepared) controller.show() }
         frame.addOnLayoutChangeListener { _, _, _, _, _, _, _, _, _ -> fitSurface() }
         surface.holder.addCallback(this)
-        if (token <= 0 || nativeVideoSize(token) <= 0) fail()
+        if (token <= 0 || nativeVideoSize(token) <= 0) fail(FailureStage.SOURCE_VALIDATION)
     }
 
     override fun surfaceCreated(holder: SurfaceHolder) {
         if (released || player != null) return
+        var stage = FailureStage.PLAYER_CREATE
         try {
             val media = MediaPlayer()
             player = media
+            stage = FailureStage.AUDIO_ATTRIBUTES
             media.setAudioAttributes(AudioAttributes.Builder().setUsage(AudioAttributes.USAGE_MEDIA)
                 .setContentType(AudioAttributes.CONTENT_TYPE_MOVIE).build())
+            stage = FailureStage.DISPLAY
             media.setDisplay(holder)
-            media.setVideoScalingMode(MediaPlayer.VIDEO_SCALING_MODE_SCALE_TO_FIT)
+            stage = FailureStage.DATA_SOURCE
             media.setDataSource(object : MediaDataSource() {
                 override fun getSize(): Long = nativeVideoSize(token)
                 override fun readAt(position: Long, buffer: ByteArray, offset: Int, size: Int): Int {
@@ -106,6 +115,10 @@ class VideoPlaybackActivity : Activity(), SurfaceHolder.Callback, MediaControlle
                 }
                 override fun close() { nativeReleaseVideo(token) }
             })
+            // SDK contract: scaling requires a data source (Initialized), not Idle.
+            stage = FailureStage.VIDEO_SCALING
+            media.setVideoScalingMode(MediaPlayer.VIDEO_SCALING_MODE_SCALE_TO_FIT)
+            stage = FailureStage.LISTENERS
             media.setOnVideoSizeChangedListener { _, width, height ->
                 videoWidth = width; videoHeight = height; fitSurface()
             }
@@ -113,9 +126,10 @@ class VideoPlaybackActivity : Activity(), SurfaceHolder.Callback, MediaControlle
                 if (!released) { prepared = true; start(); controller.show() }
             }
             media.setOnCompletionListener { if (!released) { pause(); controller.show(0) } }
-            media.setOnErrorListener { _, _, _ -> fail(); true }
+            media.setOnErrorListener { _, _, _ -> fail(FailureStage.PLAYER_ERROR); true }
+            stage = FailureStage.PREPARE_ASYNC
             media.prepareAsync()
-        } catch (_: Exception) { fail() }
+        } catch (_: Exception) { fail(stage) }
     }
     override fun surfaceChanged(holder: SurfaceHolder, format: Int, width: Int, height: Int) {}
     override fun surfaceDestroyed(holder: SurfaceHolder) { release(); finish() }
@@ -131,7 +145,9 @@ class VideoPlaybackActivity : Activity(), SurfaceHolder.Callback, MediaControlle
         if (videoView.layoutParams.width != width || videoView.layoutParams.height != height)
             videoView.layoutParams = FrameLayout.LayoutParams(width, height, Gravity.CENTER)
     }
-    private fun fail() {
+    private fun fail(stage: FailureStage) {
+        if (released) return
+        Log.e("ChatterVideo", "Playback failure stage=${stage.name}")
         Toast.makeText(this, "Unable to play this video", Toast.LENGTH_LONG).show()
         release(); finish()
     }
@@ -159,17 +175,17 @@ class VideoPlaybackActivity : Activity(), SurfaceHolder.Callback, MediaControlle
     private fun pausePlayer() {
         if (prepared && !released) {
             try { if (player?.isPlaying == true) player?.pause() }
-            catch (_: IllegalStateException) { fail() }
+            catch (_: IllegalStateException) { fail(FailureStage.PAUSE) }
         }
     }
     override fun start() {
         if (!prepared || released || !foreground) return
         if (!hasFocus) {
             try { hasFocus = audioManager.requestAudioFocus(focus) == AudioManager.AUDIOFOCUS_REQUEST_GRANTED }
-            catch (_: Exception) { fail(); return }
+            catch (_: Exception) { fail(FailureStage.AUDIO_FOCUS); return }
         }
         if (hasFocus) {
-            try { player?.start() } catch (_: IllegalStateException) { fail() }
+            try { player?.start() } catch (_: IllegalStateException) { fail(FailureStage.START) }
         }
     }
     override fun pause() {
@@ -182,7 +198,7 @@ class VideoPlaybackActivity : Activity(), SurfaceHolder.Callback, MediaControlle
     override fun seekTo(position: Int) {
         if (prepared && !released) {
             try { player?.seekTo(position.coerceIn(0, getDuration().coerceAtLeast(0))) }
-            catch (_: IllegalStateException) { fail() }
+            catch (_: IllegalStateException) { fail(FailureStage.SEEK) }
         }
     }
     override fun isPlaying(): Boolean = prepared && player?.isPlaying == true

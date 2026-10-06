@@ -2803,11 +2803,11 @@ mod tests {
         };
 
         assert!(
-            inbound
-                .ingest_resynced(&parked, t.channel_id)
-                .await
-                .is_err(),
-            "resync must not acknowledge content still waiting for a sender key"
+            matches!(
+                inbound.ingest_resynced(&parked, t.channel_id).await,
+                Err(MessageError::ResyncPending)
+            ),
+            "a missing sender key is a pending application gap, not malformed truth"
         );
         inbound
             .ingest_resynced(&next, t.channel_id)

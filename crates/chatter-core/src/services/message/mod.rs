@@ -76,6 +76,10 @@ pub enum MessageError {
     #[error("invalid content: {0}")]
     InvalidContent(String),
 
+    /// Resync truth exists but its ingestion is not yet durable.
+    #[error("resync ingestion not yet applied")]
+    ResyncPending,
+
     /// Network operation failed.
     #[error("network error: {0}")]
     Network(#[from] NetworkError),
@@ -1358,15 +1362,28 @@ impl MessageService {
             .id
             .parse::<crate::domain::ids::MessageId>()
             .map_err(|_| MessageError::InvalidContent("invalid message id".into()))?;
-        let Some(local) = self.get_message_local(&id)? else {
-            return Ok(());
+        let local = self.get_message_local(&id)?;
+        let author = if message.author_id.is_empty() {
+            None
+        } else {
+            Some(message.author_id.parse::<UserId>().map_err(|_| {
+                MessageError::InvalidContent("invalid reaction snapshot author".into())
+            })?)
         };
-        if local.conversation_id != channel_id || local.is_deleted {
-            return Ok(());
-        }
-        let Some(sender) = local.sender_id else {
-            return Ok(());
-        };
+        // An uncached own encrypted row has no authenticated message clock.
+        // Preserve its backup limitation while validating all supplied identities.
+        let encrypted = matches!(
+            message
+                .content
+                .as_ref()
+                .and_then(|content| content.r#type.as_ref()),
+            Some(crate::proto::chat_v1::message::content::Type::Encrypted(_))
+        );
+        let target_timestamp = local
+            .as_ref()
+            .map(|row| row.sent_at)
+            .or_else(|| (!encrypted).then_some(message.timestamp));
+        // Validate the entire snapshot before any early return or ledger mutation.
         let desired: Vec<(UserId, String)> = message
             .reactions
             .iter()
@@ -1375,8 +1392,12 @@ impl MessageService {
                     .reactor_id
                     .parse::<UserId>()
                     .map_err(|_| MessageError::InvalidContent("invalid reactor id".into()))?;
-                if reaction.target_author_aci != sender.to_string()
-                    || reaction.target_sent_timestamp != local.sent_at
+                let target = reaction.target_author_aci.parse::<UserId>().map_err(|_| {
+                    MessageError::InvalidContent("invalid reaction target author".into())
+                })?;
+                if Some(target) != author
+                    || target_timestamp
+                        .is_some_and(|timestamp| reaction.target_sent_timestamp != timestamp)
                 {
                     return Err(MessageError::InvalidContent(
                         "reaction target mismatch".into(),
@@ -1385,6 +1406,20 @@ impl MessageService {
                 Ok((reactor, reaction.emoji.clone()))
             })
             .collect::<Result<_, MessageError>>()?;
+        let Some(local) = local else {
+            return Ok(());
+        };
+        if local.conversation_id != channel_id || local.is_deleted {
+            return Ok(());
+        }
+        if local.sender_id != author {
+            return Err(MessageError::InvalidContent(
+                "reaction snapshot author mismatch".into(),
+            ));
+        }
+        let Some(sender) = local.sender_id else {
+            return Ok(());
+        };
         let existing = self.message_repo.get_reactions(&sender, local.sent_at)?;
         for reaction in existing {
             if !desired

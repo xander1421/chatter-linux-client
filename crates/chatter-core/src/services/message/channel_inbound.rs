@@ -45,12 +45,15 @@ pub enum Ingested {
 
 fn ensure_resync_ingested(outcome: Ingested) -> Result<(), MessageError> {
     match outcome {
-        Ingested::RetryableFailure | Ingested::DeferredPendingSenderKey => Err(
-            MessageError::InvalidContent("resync ingestion not yet applied".into()),
-        ),
-        // Terminal rejection, duplicate/tombstone and own-device messages do
-        // not become valid through retry; preserving them would poison a stream.
-        Ingested::Stored | Ingested::OwnMessage | Ingested::Dropped => Ok(()),
+        Ingested::RetryableFailure | Ingested::DeferredPendingSenderKey => {
+            Err(MessageError::ResyncPending)
+        }
+        // Tombstones are handled before ingest. A rejected resync payload is
+        // a validation error, never evidence that authoritative truth was applied.
+        Ingested::Stored | Ingested::OwnMessage => Ok(()),
+        Ingested::Dropped => Err(MessageError::InvalidContent(
+            "resync message rejected".into(),
+        )),
     }
 }
 
@@ -186,11 +189,9 @@ impl ChannelInbound {
 
     /// One undeleted message from a resync page (`get_message_changes`).
     ///
-    /// Errors only for a bad message id or a local storage failure. Whatever
-    /// Retryable storage/decrypt failure or memory-only sender-key deferral
-    /// stops recovery before the stream checkpoint can advance. Terminal
-    /// malformed/member-rejected payloads and already applied messages remain
-    /// handled outcomes, so an invalid payload does not poison every reconnect.
+    /// Missing sender keys and retryable ingest failures are typed application
+    /// gaps. Validation/storage errors remain distinct; only a fully applied
+    /// message and its authoritative reactions may complete recovery.
     pub async fn ingest_resynced(
         &self,
         proto_msg: &chat_v1::Message,
@@ -203,7 +204,75 @@ impl ChannelInbound {
         if self.messages.message_repo.is_tombstoned(&id)? {
             return Ok(());
         }
+        // Validate the server envelope even when ciphertext was already consumed.
+        // Empty authors remain valid for anonymous rows; nonempty identities
+        // must parse. Conversion validates parent IDs and content without decrypting.
+        let author = if proto_msg.author_id.is_empty() {
+            None
+        } else {
+            Some(
+                proto_msg
+                    .author_id
+                    .parse::<UserId>()
+                    .map_err(|_| MessageError::InvalidContent("invalid resync author".into()))?,
+            )
+        };
+        let envelope = proto_to_domain_message_with_sender(
+            proto_msg,
+            author,
+            conversation_type_for_channel(&self.messages.channel_repo, &channel_id),
+        )?;
+        if envelope.conversation_id != channel_id {
+            return Err(MessageError::InvalidContent(
+                "resync channel mismatch".into(),
+            ));
+        }
+        let content = proto_msg
+            .content
+            .as_ref()
+            .and_then(|content| content.r#type.as_ref())
+            .ok_or_else(|| {
+                MessageError::InvalidContent("resync message has no content type".into())
+            })?;
+        let encrypted = if let chat_v1::message::content::Type::Encrypted(encrypted) = content {
+            let group = GroupEncrypted::decode(encrypted.ciphertext.as_slice()).map_err(|_| {
+                MessageError::InvalidContent("invalid resync encrypted envelope".into())
+            })?;
+            if group.channel_id != channel_id.to_string() || group.ciphertext.is_empty() {
+                return Err(MessageError::InvalidContent(
+                    "invalid resync group envelope".into(),
+                ));
+            }
+            if author.is_none() || proto_msg.author_device_id == 0 {
+                return Err(MessageError::InvalidContent(
+                    "invalid resync encrypted author".into(),
+                ));
+            }
+            true
+        } else {
+            false
+        };
         let existing = self.messages.get_message_local(&id)?;
+        if let Some(local) = &existing {
+            // Encrypted envelopes carry a transport clock; the cached sent_at
+            // is the authenticated DataMessage clock, so do not equate them.
+            if local.sender_id != author
+                || local.thread_id != envelope.thread_id
+                || (!encrypted && local.sent_at != proto_msg.timestamp)
+            {
+                return Err(MessageError::InvalidContent(
+                    "resync message identity mismatch".into(),
+                ));
+            }
+        }
+        if existing
+            .as_ref()
+            .is_some_and(|local| local.conversation_id != channel_id)
+        {
+            return Err(MessageError::InvalidContent(
+                "resync local channel mismatch".into(),
+            ));
+        }
         match &existing {
             // Never seen: store it as the server has it, edit included.
             None => {
@@ -214,18 +283,8 @@ impl ChannelInbound {
             }
             Some(_) => {}
         }
-        match self
-            .messages
+        self.messages
             .reconcile_channel_reactions(proto_msg, channel_id)
-        {
-            // A malformed reaction is this message's problem, not the resync's.
-            Err(MessageError::InvalidContent(e)) => {
-                tracing::warn!(%channel_id, message_id = %id, error = %e,
-                    "Resync: skipping reactions that do not match their message");
-                Ok(())
-            }
-            other => other,
-        }
     }
 
     /// Decrypt + convert, without touching storage.
@@ -814,6 +873,14 @@ mod tests {
         );
 
         client.messages().delete_message_local(&message_id).unwrap();
+        let mut stale_malformed = proto.clone();
+        stale_malformed.author_id = "bad-author".into();
+        stale_malformed.parent_id = "bad-parent".into();
+        stale_malformed.content = None;
+        inbound
+            .ingest_resynced(&stale_malformed, channel_id)
+            .await
+            .unwrap();
         inbound.ingest(&proto, channel_id, false).await;
         assert!(
             client
@@ -952,6 +1019,224 @@ mod tests {
                 .edited_at,
             stored.edited_at
         );
+        // Resync must not turn a mismatched cached target or malformed
+        // authoritative reaction snapshot into successful application.
+        assert!(matches!(
+            inbound
+                .ingest_resynced(&message(&id, author, "newer", sent + 30), ChannelId::new())
+                .await,
+            Err(MessageError::InvalidContent(_))
+        ));
+        let mut bad_reactions = message(&id, author, "newer", sent + 30);
+        bad_reactions.reactions.push(chat_v1::ReactionUpdate {
+            target_author_aci: stranger.to_string(),
+            target_sent_timestamp: sent,
+            reactor_id: stranger.to_string(),
+            emoji: "👍".into(),
+            ..Default::default()
+        });
+        assert!(matches!(
+            inbound.ingest_resynced(&bad_reactions, channel_id).await,
+            Err(MessageError::InvalidContent(_))
+        ));
+        assert_eq!(edits(), 0);
+        // A cached row still validates its envelope before clearing reactions.
+        client
+            .messages()
+            .record_reaction(&author, sent, &stranger, "👍", false)
+            .unwrap();
+        let replay = message(&id, author, "newer", sent + 30);
+        let mut malformed = Vec::new();
+        let mut bad = replay.clone();
+        bad.author_id = "bad-author".into();
+        malformed.push(bad);
+        let mut bad = replay.clone();
+        bad.author_id = stranger.to_string();
+        malformed.push(bad);
+        let mut bad = replay.clone();
+        bad.parent_id = "bad-parent".into();
+        malformed.push(bad);
+        let mut bad = replay.clone();
+        bad.parent_id = crate::domain::ids::MessageId::new().to_string();
+        malformed.push(bad);
+        let mut bad = replay.clone();
+        bad.timestamp += 1;
+        malformed.push(bad);
+        let mut bad = replay.clone();
+        bad.channel_id = ChannelId::new().to_string();
+        malformed.push(bad);
+        let mut bad = replay.clone();
+        bad.content = None;
+        malformed.push(bad);
+        let mut bad = replay.clone();
+        bad.content = Some(chat_v1::message::Content { r#type: None });
+        malformed.push(bad);
+        let mut bad = replay.clone();
+        bad.author_device_id = 1;
+        bad.content = Some(chat_v1::message::Content {
+            r#type: Some(chat_v1::message::content::Type::Encrypted(
+                chat_v1::EncryptedData {
+                    ciphertext: vec![0xff],
+                    ..Default::default()
+                },
+            )),
+        });
+        malformed.push(bad);
+        // A valid first reaction must not mutate the ledger before a later invalid entry.
+        let mut bad = replay.clone();
+        bad.reactions.push(chat_v1::ReactionUpdate {
+            target_author_aci: author.to_string(),
+            target_sent_timestamp: sent,
+            reactor_id: stranger.to_string(),
+            emoji: "❤".into(),
+            ..Default::default()
+        });
+        bad.reactions.push(chat_v1::ReactionUpdate {
+            target_author_aci: author.to_string(),
+            target_sent_timestamp: sent,
+            reactor_id: "bad-reactor".into(),
+            emoji: "👍".into(),
+            ..Default::default()
+        });
+        malformed.push(bad);
+        for bad in malformed {
+            assert!(matches!(
+                inbound.ingest_resynced(&bad, channel_id).await,
+                Err(MessageError::InvalidContent(_))
+            ));
+            let ledger = client
+                .messages()
+                .message_repo
+                .get_reactions(&author, sent)
+                .unwrap();
+            assert_eq!(ledger.len(), 1);
+            assert_eq!(ledger[0].emoji.value, "👍");
+            assert_eq!(body(), text("newer"));
+        }
+        // Cached ciphertext is inspected structurally, never decrypted again.
+        // The transport timestamp need not equal the stored DataMessage clock.
+        let mut encrypted_replay = replay.clone();
+        encrypted_replay.author_device_id = 1;
+        encrypted_replay.timestamp = sent + 100;
+        encrypted_replay.content = Some(chat_v1::message::Content {
+            r#type: Some(chat_v1::message::content::Type::Encrypted(
+                chat_v1::EncryptedData {
+                    ciphertext: GroupEncrypted {
+                        channel_id: channel_id.to_string(),
+                        ciphertext: vec![1, 2, 3],
+                        timestamp: sent,
+                    }
+                    .encode_to_vec(),
+                    ..Default::default()
+                },
+            )),
+        });
+        for group in [
+            GroupEncrypted::default(),
+            GroupEncrypted {
+                channel_id: ChannelId::new().to_string(),
+                ciphertext: vec![1],
+                timestamp: sent,
+            },
+            GroupEncrypted {
+                channel_id: channel_id.to_string(),
+                ciphertext: Vec::new(),
+                timestamp: sent,
+            },
+        ] {
+            let mut bad = encrypted_replay.clone();
+            bad.content = Some(chat_v1::message::Content {
+                r#type: Some(chat_v1::message::content::Type::Encrypted(
+                    chat_v1::EncryptedData {
+                        ciphertext: group.encode_to_vec(),
+                        ..Default::default()
+                    },
+                )),
+            });
+            assert!(matches!(
+                inbound.ingest_resynced(&bad, channel_id).await,
+                Err(MessageError::InvalidContent(_))
+            ));
+            assert_eq!(
+                client
+                    .messages()
+                    .message_repo
+                    .get_reactions(&author, sent)
+                    .unwrap()
+                    .len(),
+                1
+            );
+        }
+        encrypted_replay.author_id = author.to_string().to_uppercase();
+        inbound
+            .ingest_resynced(&encrypted_replay, channel_id)
+            .await
+            .unwrap();
+        // Replies use the same parent UUID in the server envelope and local row.
+        let reply_id = crate::domain::ids::MessageId::new();
+        let mut reply = message(&reply_id, author, "reply", 0);
+        reply.parent_id = id.to_string();
+        reply.timestamp = sent + 3;
+        assert_eq!(
+            inbound.ingest(&reply, channel_id, false).await,
+            Ingested::Stored
+        );
+        reply.content = encrypted_replay.content.clone();
+        reply.author_device_id = 1;
+        reply.timestamp = sent + 103;
+        inbound.ingest_resynced(&reply, channel_id).await.unwrap();
+        assert_eq!(
+            client
+                .messages()
+                .get_message_local(&reply_id)
+                .unwrap()
+                .unwrap()
+                .thread_id,
+            Some(id)
+        );
+        assert_eq!(body(), text("newer"));
+        assert!(
+            client
+                .messages()
+                .message_repo
+                .get_reactions(&author, sent)
+                .unwrap()
+                .is_empty()
+        );
+        // Anonymous cached rows cannot bypass malformed reaction validation.
+        let anonymous_id = crate::domain::ids::MessageId::new();
+        let mut anonymous = message(&anonymous_id, author, "anonymous", 0);
+        anonymous.author_id.clear();
+        anonymous.timestamp = sent + 2;
+        assert_eq!(
+            inbound.ingest(&anonymous, channel_id, false).await,
+            Ingested::Stored
+        );
+        inbound
+            .ingest_resynced(&anonymous, channel_id)
+            .await
+            .unwrap();
+        anonymous.reactions.push(chat_v1::ReactionUpdate {
+            target_author_aci: "bad-target".into(),
+            target_sent_timestamp: sent + 2,
+            reactor_id: "bad-reactor".into(),
+            emoji: "👍".into(),
+            ..Default::default()
+        });
+        assert!(matches!(
+            inbound.ingest_resynced(&anonymous, channel_id).await,
+            Err(MessageError::InvalidContent(_))
+        ));
+        anonymous.reactions[0].reactor_id = stranger.to_string();
+        assert!(matches!(
+            client
+                .messages()
+                .reconcile_channel_reactions(&anonymous, channel_id),
+            Err(MessageError::InvalidContent(_))
+        ));
+        // Valid replay still succeeds after invalid rows were rejected.
+        inbound.ingest_resynced(&replay, channel_id).await.unwrap();
+        assert_eq!(edits(), 0);
         // A resync of a message never seen stores it, edit included.
         let unseen = crate::domain::ids::MessageId::new();
         inbound
@@ -1045,10 +1330,19 @@ mod resync_acknowledgement_tests {
     use super::*;
 
     #[test]
-    fn deferred_or_failed_resync_requires_retry_but_terminal_rejection_does_not() {
-        assert!(ensure_resync_ingested(Ingested::DeferredPendingSenderKey).is_err());
-        assert!(ensure_resync_ingested(Ingested::RetryableFailure).is_err());
-        assert!(ensure_resync_ingested(Ingested::Dropped).is_ok());
+    fn resync_distinguishes_pending_application_from_rejected_content() {
+        assert!(matches!(
+            ensure_resync_ingested(Ingested::DeferredPendingSenderKey),
+            Err(MessageError::ResyncPending)
+        ));
+        assert!(matches!(
+            ensure_resync_ingested(Ingested::RetryableFailure),
+            Err(MessageError::ResyncPending)
+        ));
+        assert!(matches!(
+            ensure_resync_ingested(Ingested::Dropped),
+            Err(MessageError::InvalidContent(_))
+        ));
         assert!(ensure_resync_ingested(Ingested::Stored).is_ok());
     }
 }
