@@ -13,6 +13,9 @@ use crate::{MainWindow, run_ui};
 pub fn wire_reaction_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
     let weak_window = window.as_weak();
+    // Complete one selection before deciding the next toggle. Rapid taps must
+    // not race their own local snapshot or persist in network-completion order.
+    let selection_queue = Arc::new(tokio::sync::Mutex::new(()));
 
     window.on_reaction_selected(move |sender_id: SharedString, timestamp_ns: SharedString, _message_id: SharedString, emoji: SharedString| {
         let sender_id_str = sender_id.to_string();
@@ -32,8 +35,10 @@ pub fn wire_reaction_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
         let handle = ui_ctx.conversation(conversation.clone());
         let weak = weak_window.clone();
         let client = ui_ctx.clone();
+        let selection_queue = selection_queue.clone();
 
         tokio::spawn(async move {
+            let _selection = selection_queue.lock().await;
             let target_author: chatter_core::domain::UserId = match sender_id_str.parse() {
                 Ok(id) => id,
                 Err(_) => {
