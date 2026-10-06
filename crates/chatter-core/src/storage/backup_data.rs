@@ -518,51 +518,51 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
                         | "pending_scoped_reactions"
                 )
                 .then(|| th.table.clone());
-                let scoped_indices = if (th.table == "unified_reactions" && !legacy_reactions)
-                    || th.table == "reaction_scoped_quarantine"
-                    || ledger_table.is_some()
-                {
-                    let identity = if ledger_table.is_some() {
-                        [
-                            "conversation_id",
-                            "conversation_type",
-                            "author_id",
-                            "target_sent_at",
-                            "actor_id",
-                            "emoji",
-                        ]
+                let scoped_indices: Option<[usize; 6]> =
+                    if (th.table == "unified_reactions" && !legacy_reactions)
+                        || th.table == "reaction_scoped_quarantine"
+                        || ledger_table.is_some()
+                    {
+                        let identity = if ledger_table.is_some() {
+                            [
+                                "conversation_id",
+                                "conversation_type",
+                                "author_id",
+                                "target_sent_at",
+                                "actor_id",
+                                "emoji",
+                            ]
+                        } else {
+                            [
+                                "conversation_id",
+                                "conversation_type",
+                                "sender_id",
+                                "sent_at_ns",
+                                "user_id",
+                                "emoji",
+                            ]
+                        };
+                        Some(
+                            identity
+                                .map(|name| {
+                                    names.iter().position(|column| column == name).ok_or_else(
+                                        || {
+                                            StorageError::InvalidData(
+                                                "Scoped backup evidence lacks identity".into(),
+                                            )
+                                        },
+                                    )
+                                })
+                                .into_iter()
+                                .collect::<Result<Vec<_>, _>>()?
+                                .try_into()
+                                .map_err(|_| {
+                                    StorageError::InvalidData("Scoped backup identity width".into())
+                                })?,
+                        )
                     } else {
-                        [
-                            "conversation_id",
-                            "conversation_type",
-                            "sender_id",
-                            "sent_at_ns",
-                            "user_id",
-                            "emoji",
-                        ]
+                        None
                     };
-                    Some(
-                        identity
-                            .map(|name| {
-                                names
-                                    .iter()
-                                    .position(|column| column == name)
-                                    .ok_or_else(|| {
-                                        StorageError::InvalidData(
-                                            "Scoped backup evidence lacks identity".into(),
-                                        )
-                                    })
-                            })
-                            .into_iter()
-                            .collect::<Result<Vec<_>, _>>()?
-                            .try_into()
-                            .map_err(|_| {
-                                StorageError::InvalidData("Scoped backup identity width".into())
-                            })?,
-                    )
-                } else {
-                    None
-                };
                 let insert_sql = if let Some(table) = &ledger_table {
                     names.iter().position(|n| n == "action_ts").ok_or_else(|| {
                         StorageError::InvalidData("Reaction backup lacks action clock".into())

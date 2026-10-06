@@ -8,6 +8,7 @@ use crate::storage::{
     Database, MessageRepository, repositories::settings_repo::SettingsRepository,
     serialization::db_deserialize,
 };
+use prost::Message as _;
 use std::sync::Arc;
 
 fn open(path: &std::path::Path, own: UserId) -> Arc<Database> {

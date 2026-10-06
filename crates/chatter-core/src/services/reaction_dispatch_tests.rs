@@ -64,7 +64,13 @@ async fn delayed_dispatch_keeps_wire_clock_and_converges_for_every_scope_kind() 
     ] {
         let author = UserId::new();
         let actor = UserId::new();
-        let message = Message::new_text(ChannelId::new(), kind, Some(author), "target".into(), 100);
+        let message = Message::new_text(
+            ChannelId::new(),
+            kind.clone(),
+            Some(author),
+            "target".into(),
+            100,
+        );
         let scope = ReactionScope::of(&message);
         let (_d1, repo1) = fixture(&message);
         let (_d2, repo2) = fixture(&message);
