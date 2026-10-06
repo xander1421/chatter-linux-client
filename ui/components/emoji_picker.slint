@@ -81,8 +81,8 @@ export component EmojiPicker inherits GlassSurface {
     }
 
     VerticalLayout {
-        padding: Spacing.sm;
-        spacing: Spacing.sm;
+        padding: root.embedded ? Spacing.xs : Spacing.sm;
+        spacing: root.embedded ? Spacing.xs : Spacing.sm;
 
         // Search lives in the unified drawer when embedded.
         Rectangle {
@@ -279,7 +279,7 @@ export component EmojiPicker inherits GlassSurface {
         }
 
         // Search results header (only show when searching)
-        if root.search-query != "": Text {
+        if root.search-query != "" && !root.embedded: Text {
             text: "Search results";
             color: Colors.text-secondary;
             font-size: Typography.xs;
@@ -288,7 +288,7 @@ export component EmojiPicker inherits GlassSurface {
         }
 
         // Emoji grid — columns adapt to available width
-        Flickable {
+        emoji-grid := Flickable {
             vertical-stretch: 1;
             viewport-height: Math.ceil(root.emoji-list.length / root.emoji-columns) * 44px;
 

@@ -68,8 +68,8 @@ export component GifPicker inherits GlassSurface {
     }
 
     VerticalLayout {
-        padding: Spacing.sm;
-        spacing: Spacing.sm;
+        padding: root.embedded ? Spacing.xs : Spacing.sm;
+        spacing: root.embedded ? Spacing.xs : Spacing.sm;
 
         // Standalone picker chrome
         if !root.embedded: HorizontalLayout {
@@ -344,7 +344,7 @@ export component GifPicker inherits GlassSurface {
             }
 
             // GIF grid - 2 columns
-            if !root.loading && root.results.length > 0: Flickable {
+            if !root.loading && root.results.length > 0: gif-grid := Flickable {
                 width: 100%;
                 height: 100%;
                 viewport-height: Math.ceil(root.results.length / 2) * 90px;

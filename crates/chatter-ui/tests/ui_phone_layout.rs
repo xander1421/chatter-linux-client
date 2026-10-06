@@ -413,17 +413,21 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     w.set_composer_text("".into());
     pump_size(&w, PHONE_W, 460.0);
 
-    // Attachment-only and caption drafts share the same raised row. Previews
-    // live between its actual button shells, without a second accessory tray.
-    w.set_pending_attachments(slint::ModelRc::new(slint::VecModel::from(vec![
-        chatter_ui::PendingAttachmentData {
-            id: "geometry-only".into(),
-            filename: "unsent.txt".into(),
-            category: "document".into(),
-            is_ready: true,
-            ..Default::default()
-        },
-    ])));
+    // Read actual items at every requested width: typing, attachment-only,
+    // captions, overflow scrolling and pointer removal all keep Send lower.
+    let removed = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+    let removed_callback = removed.clone();
+    let weak = w.as_weak();
+    w.on_remove_attachment(move |id| {
+        removed_callback.borrow_mut().push(id.clone());
+        let w = weak.unwrap();
+        let remaining = w
+            .get_pending_attachments()
+            .iter()
+            .filter(|attachment| attachment.id != id)
+            .collect::<Vec<_>>();
+        w.set_pending_attachments(slint::ModelRc::new(slint::VecModel::from(remaining)));
+    });
     for (mobile, width, height) in [
         (true, 320.0, PHONE_H),
         (true, PHONE_W, PHONE_H),
@@ -431,6 +435,22 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
         (false, 1280.0, 900.0),
     ] {
         w.set_is_mobile_platform(mobile);
+        w.set_pending_attachments(slint::ModelRc::default());
+        for draft in ["typing".to_owned(), "readable multiline words ".repeat(40)] {
+            w.set_composer_text(draft.into());
+            pump_size(&w, width, height);
+            assert_action_geometry(&w, true);
+            assert!(composer_native_item(&w) == original_input);
+        }
+        w.set_pending_attachments(slint::ModelRc::new(slint::VecModel::from(vec![
+            chatter_ui::PendingAttachmentData {
+                id: "geometry-only".into(),
+                filename: "unsent.txt".into(),
+                category: "document".into(),
+                is_ready: true,
+                ..Default::default()
+            },
+        ])));
         for caption in ["", "caption"] {
             w.set_composer_text(caption.into());
             pump_size(&w, width, height);
@@ -438,32 +458,56 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
             assert_attachment_strip_geometry(&w);
             assert!(composer_native_item(&w) == original_input);
         }
+        w.set_composer_text("".into());
+        w.set_pending_attachments(slint::ModelRc::new(slint::VecModel::from(
+            (0..10)
+                .map(|i| chatter_ui::PendingAttachmentData {
+                    id: format!("overflow-{i}").into(),
+                    filename: format!("long-preview-{i}.txt").into(),
+                    category: "document".into(),
+                    is_ready: i != 1,
+                    ..Default::default()
+                })
+                .collect::<Vec<_>>(),
+        )));
+        pump_size(&w, width, height);
+        assert_attachment_strip_geometry(&w);
+        let first_remove = one(&w, "Remove attachment");
+        let before = rect(&first_remove).0;
+        scroll_attachment_strip(&w, -200.0);
+        pump_size(&w, width, height);
+        assert!(
+            rect(&first_remove).0 < before - 50.0,
+            "attachment overflow did not scroll at {width}"
+        );
+        assert_action_geometry(&w, true);
+        assert_attachment_strip_geometry(&w);
+        let strip =
+            testing::ElementHandle::find_by_element_id(&w, "MessageComposer::attachment-strip")
+                .find(|e| e.size().width > 0.0 && e.size().height > 0.0)
+                .unwrap();
+        let (cx, _, cw, _) = rect(&strip);
+        let remove = testing::ElementHandle::find_by_accessible_label(&w, "Remove attachment")
+            .find(|e| {
+                let (x, _, width, height) = rect(e);
+                height > 0.0 && x >= cx && x + width <= cx + cw
+            })
+            .expect("fully visible remove target inside actual preview clip");
+        let (x, y, rw, rh) = rect(&remove);
+        let count = removed.borrow().len();
+        click_at(&w, x + rw / 2.0, y + rh / 2.0);
+        pump_size(&w, width, height);
+        assert_eq!(
+            removed.borrow().len(),
+            count + 1,
+            "preview remove pointer missed at {width}"
+        );
+        assert_eq!(w.get_pending_attachments().row_count(), 9);
+        assert_action_geometry(&w, true);
+        assert_attachment_strip_geometry(&w);
+        assert!(composer_native_item(&w) == original_input);
     }
     w.set_is_mobile_platform(true);
-    pump_size(&w, PHONE_W, PHONE_H);
-    assert_composer_caps(&w, false, 0.0);
-    // Overflow must move the real repeated cards inside the bounded clip.
-    w.set_pending_attachments(slint::ModelRc::new(slint::VecModel::from(
-        (0..4)
-            .map(|i| chatter_ui::PendingAttachmentData {
-                id: format!("overflow-{i}").into(),
-                filename: format!("long-preview-{i}.txt").into(),
-                category: "document".into(),
-                is_ready: i != 1,
-                ..Default::default()
-            })
-            .collect::<Vec<_>>(),
-    )));
-    pump_size(&w, PHONE_W, PHONE_H);
-    assert_attachment_strip_geometry(&w);
-    let first_remove = one(&w, "Remove attachment");
-    let before = rect(&first_remove).0;
-    scroll_attachment_strip(&w, -200.0);
-    pump_size(&w, PHONE_W, PHONE_H);
-    let after = rect(&first_remove).0;
-    assert!(after < before - 50.0, "attachment overflow did not scroll");
-    assert_attachment_strip_geometry(&w);
-    assert!(composer_native_item(&w) == original_input);
     w.set_composer_text("".into());
     w.set_pending_attachments(slint::ModelRc::new(slint::VecModel::from(Vec::<
         chatter_ui::PendingAttachmentData,
@@ -1074,6 +1118,87 @@ fn attachment_and_keyboard_handover_boundaries(w: &MainWindow) {
     w.set_pending_attachments(slint::ModelRc::new(slint::VecModel::from(Vec::<
         chatter_ui::PendingAttachmentData,
     >::new())));
+    w.set_composer_emoji_list(slint::ModelRc::new(slint::VecModel::from(vec![
+        chatter_ui::EmojiData {
+            emoji: "😀".into(),
+            name: "fixture emoji".into(),
+            category: 0,
+        },
+    ])));
+    w.set_composer_gif_picker_results(slint::ModelRc::new(slint::VecModel::from(vec![
+        chatter_ui::GifData {
+            id: "fixture-gif".into(),
+            width: 100,
+            height: 100,
+            ..Default::default()
+        },
+    ])));
+    // Search owns a visible drawer ABOVE the actual IME. Exercise the real
+    // search input and tab callbacks; a zero-height clipped picker cannot pass.
+    for (width, height, ime) in [
+        (320.0, 640.0, 260.0),
+        (PHONE_W, PHONE_H, 340.0),
+        (768.0, 1024.0, 360.0),
+    ] {
+        keyboard(0.0);
+        w.set_composer_text("".into());
+        w.set_composer_emoji_picker_visible(true);
+        w.set_composer_gif_picker_visible(false);
+        w.set_composer_emoji_search("".into());
+        w.set_composer_gif_picker_search("".into());
+        pump_size(w, width, height);
+        click_element(w, "Search emoji and GIFs");
+        keyboard(ime);
+        pump_size(w, width, height);
+        for (tab, typed) in [("Emoji", "e"), ("GIFs", "g")] {
+            if tab == "GIFs" {
+                click_element(w, tab);
+            }
+            key(w, typed.into());
+            pump_size(w, width, height);
+            assert_eq!(
+                if tab == "Emoji" {
+                    w.get_composer_emoji_search()
+                } else {
+                    w.get_composer_gif_picker_search()
+                }
+                .as_str(),
+                typed,
+                "search must retain focus across IME resize and tab switch"
+            );
+            let element = |id: &str| {
+                testing::ElementHandle::find_by_element_id(w, id)
+                    .find(|e| e.size().width > 0.0 && e.size().height > 0.0)
+                    .expect("visible drawer item")
+            };
+            let (dx, dy, dw, dh) = rect(&element("ChatLayout::picker-drawer"));
+            let (sx, sy, sw, sh) = rect(&one(w, "Search emoji and GIFs"));
+            let (rx, ry, rw, rh) = rect(&element("ChatLayout::picker-results"));
+            let (_, ty, _, th) = rect(&one(w, tab));
+            assert!(dy + dh <= height - ime + 0.5, "drawer overlaps actual IME");
+            assert!(sx >= dx && sx + sw <= dx + dw && sy >= dy && sh > 0.0);
+            assert!(rx >= dx && rx + rw <= dx + dw + 0.5 && ry >= sy + sh);
+            assert!(
+                rh >= 48.0,
+                "search leaves no useful results at {width}x{height}: {rh}"
+            );
+            assert!(ry + rh <= ty + 0.5 && ty + th <= dy + dh + 0.5);
+            let grid = element(if tab == "Emoji" {
+                "EmojiPicker::emoji-grid"
+            } else {
+                "GifPicker::gif-grid"
+            });
+            let (_, gy, _, gh) = rect(&grid);
+            assert!(
+                gh >= 32.0 && gy >= ry && gy + gh <= ry + rh + 0.5,
+                "actual {tab} results viewport is not useful/visible: {gh}"
+            );
+        }
+        keyboard(0.0);
+        w.set_composer_emoji_picker_visible(false);
+        w.set_composer_gif_picker_visible(false);
+        pump_size(w, width, height);
+    }
     keyboard(300.0);
     pump_size(w, PHONE_W, PHONE_H);
     click_element(w, "Emoji & GIF picker");
@@ -1420,8 +1545,8 @@ fn assert_action_geometry(w: &MainWindow, raised: bool) {
     if raised {
         assert!((fx - sx - 4.0).abs() < 0.5);
         assert!(
-            (fw - (sw - 8.0)).abs() < 0.5,
-            "populated field is not full width"
+            (fw - (sw - 8.0 - 52.0)).abs() < 0.5,
+            "populated field must reserve the lower Send target and gap"
         );
         // 4px bottom inset + 4px inter-shell gap + 4px field inset.
         assert!((fy - (ey + eh) - 12.0).abs() < 0.5);
@@ -1434,17 +1559,22 @@ fn assert_action_geometry(w: &MainWindow, raised: bool) {
                 .expect("raised composer surface")
         };
         let (lx, ly, lw, lh) = rect(&surface("MessageComposer::left-action-surface"));
-        let (rx, ry, rw, rh) = rect(&surface("MessageComposer::right-action-surface"));
+        let right_surface =
+            attachment_visible.then(|| rect(&surface("MessageComposer::right-action-surface")));
         let (ix, iy, iw, ih) = rect(&surface("MessageComposer::field-surface"));
         assert!((ex - lx - 4.0).abs() < 0.5 && (ey - ly - 4.0).abs() < 0.5);
         assert!((lw - 56.0).abs() < 0.5 && (lh - 56.0).abs() < 0.5);
-        assert!(
-            rx > lx + lw,
-            "button shells must leave a transparent middle"
-        );
-        assert!((rh - 56.0).abs() < 0.5 && (ry - ly).abs() < 0.5);
-        let expected_right = if attachment_visible { 108.0 } else { 56.0 };
-        assert!((rw - expected_right).abs() < 0.5);
+        if let Some((rx, ry, rw, rh)) = right_surface {
+            assert!(
+                rx > lx + lw,
+                "button shells must leave a transparent middle"
+            );
+            assert!((rh - 56.0).abs() < 0.5 && (ry - ly).abs() < 0.5);
+            assert!(
+                (rw - 56.0).abs() < 0.5,
+                "top right shell contains Attach only"
+            );
+        }
         assert!((iy - ly - lh - 4.0).abs() < 0.5);
         assert!((ix - sx).abs() < 0.5 && (iw - sw).abs() < 0.5);
         assert!((fx - ix - 4.0).abs() < 0.5 && (fy - iy - 4.0).abs() < 0.5);
@@ -1462,11 +1592,29 @@ fn assert_action_geometry(w: &MainWindow, raised: bool) {
     }
     if let Some((tx, ty, tw, th)) = terminal {
         assert!((sx + sw - tx - tw - 4.0).abs() < 0.5);
-        assert!((ty - ey).abs() < 0.5 && tw >= 48.0 && th >= 48.0);
+        assert!(tw >= 48.0 && th >= 48.0);
+        if raised {
+            assert!(
+                (ty + th - fy - fh).abs() < 0.5,
+                "Send must stay at the lower field bottom"
+            );
+            assert!(
+                (tx - fx - fw - 4.0).abs() < 0.5,
+                "field and Send targets must not overlap"
+            );
+            assert!(
+                ty >= ey + eh + 12.0,
+                "raised top row must never contain Send"
+            );
+        } else {
+            assert!((ty - ey).abs() < 0.5);
+        }
     }
     if attachment_visible {
         let (ax, ay, aw, ah) = rect(&one(w, "Attach file"));
-        if let Some((tx, _, _, _)) = terminal {
+        if raised {
+            assert!((sx + sw - ax - aw - 4.0).abs() < 0.5);
+        } else if let Some((tx, _, _, _)) = terminal {
             assert!((tx - ax - aw - 4.0).abs() < 0.5);
         } else {
             assert!((sx + sw - ax - aw - 4.0).abs() < 0.5);
@@ -1483,8 +1631,9 @@ fn assert_action_geometry(w: &MainWindow, raised: bool) {
     ] {
         assert_eq!(
             testing::ElementHandle::find_by_accessible_label(w, label)
-                .any(|e| e.size().height > 0.0),
-            expected,
+                .filter(|e| e.size().height > 0.0)
+                .count(),
+            usize::from(expected),
             "unexpected action {label}"
         );
     }

@@ -107,10 +107,16 @@ export component ChatLayout inherits Rectangle {
     callback composer-focus-released();
     callback composer-keyboard-requested(length);
     in property <length> keyboard-inset;
+    private property <bool> drawer-search-focused: false;
     // The host already subtracts the IME. Reserve only the part of the drawer
     // it does not occupy while hideSoftInput's asynchronous insets arrive.
     property <length> drawer-height: min(340px, (root.height + root.keyboard-inset) * 0.48);
-    property <length> drawer-space: max(0px, root.drawer-height - root.keyboard-inset);
+    // Search needs its own visible drawer above the IME, rather than sharing
+    // the same reservation as the composer keyboard handover. Bound it to
+    // the remaining pane so search, tabs and results fit on short phones.
+    property <length> drawer-space: root.drawer-search-focused
+        ? min(root.drawer-height, root.height * 0.6)
+        : max(0px, root.drawer-height - root.keyboard-inset);
     in property <string> inserted-emoji;
     in property <int> insert-serial;
     changed insert-serial => {
@@ -526,7 +532,8 @@ export component ChatLayout inherits Rectangle {
             }
         }
 
-        if (root.emoji-picker-visible || root.gif-picker-visible) && !root.selection-mode && root.composer-notice == "": GlassSurface {
+        if (root.emoji-picker-visible || root.gif-picker-visible) && !root.selection-mode && root.composer-notice == "": picker-drawer := GlassSurface {
+            init => { root.drawer-search-focused = false; }
             width: 100%;
             height: root.drawer-space;
             clip: true;
@@ -555,6 +562,7 @@ export component ChatLayout inherits Rectangle {
                                 color: Colors.text-primary;
                                 single-line: true;
                                 accessible-label: "Search emoji and GIFs";
+                                changed has-focus => { root.drawer-search-focused = self.has-focus; }
                                 edited => {
                                     if root.gif-picker-visible { root.gif-search = self.text; root.gif-search-changed(self.text); }
                                     else { root.emoji-search = self.text; root.emoji-search-changed(self.text); }
@@ -563,9 +571,10 @@ export component ChatLayout inherits Rectangle {
                         }
                     }
                 }
-                Rectangle {
+                picker-results := Rectangle {
                     vertical-stretch: 1;
                     min-height: 0px;
+                    clip: true;
                     if root.emoji-picker-visible: EmojiPicker {
                         embedded: true; show-gif-tab: false; show: true;
                         max-picker-width: parent.width;
@@ -602,7 +611,6 @@ export component ChatLayout inherits Rectangle {
                         accessible-label: tab;
                         Text { text: tab; color: Colors.text-primary; horizontal-alignment: center; vertical-alignment: center; }
                         TouchArea { clicked => {
-                            drawer-search.clear-focus();
                             root.emoji-picker-visible = index == 0;
                             root.gif-picker-visible = index == 1;
                             if index == 0 { root.emoji-clicked(); } else { root.gif-clicked(); }

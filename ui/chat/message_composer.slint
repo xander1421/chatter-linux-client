@@ -171,6 +171,7 @@ export component MessageComposer inherits GlassSurface {
     property <bool> show-attachment-action: !root.is-editing && (MeshGlobal.active-id == "" || MeshGlobal.active-kind != "dm");
     property <bool> show-terminal-action: root.can-send || (!root.is-editing && MeshGlobal.active-id == "");
     property <length> raised-toolbar-height: raised-actions ? Spacing.touch-target-min + row-padding * 2 + Spacing.xs : 0px;
+    property <length> lower-terminal-width: show-terminal-action ? Spacing.touch-target-min + Spacing.xs : 0px;
     property <length> trailing-actions-width: (show-attachment-action ? Spacing.touch-target-min + Spacing.xs : 0px)
         + (show-terminal-action ? Spacing.touch-target-min + Spacing.xs : 0px);
 
@@ -709,6 +710,7 @@ export component MessageComposer inherits GlassSurface {
             width: 100%;
             height: root.content-height + root.raised-toolbar-height + root.row-padding * 2;
             property <length> action-y: root.row-padding + (root.raised-actions ? 0px : (root.content-height - Spacing.touch-target-min) / 2);
+            property <length> lower-action-y: root.row-padding + root.raised-toolbar-height + root.content-height - Spacing.touch-target-min;
 
             // Decorative surfaces never reparent or replace the native input.
             left-action-surface := GlassSurface {
@@ -723,9 +725,9 @@ export component MessageComposer inherits GlassSurface {
             }
             right-action-surface := GlassSurface {
                 y: 0px;
-                visible: root.raised-actions;
+                visible: root.raised-actions && root.show-attachment-action;
                 x: parent.width - self.width;
-                width: root.trailing-actions-width + root.row-padding;
+                width: root.show-attachment-action ? Spacing.touch-target-min + root.row-padding * 2 : 0px;
                 height: Spacing.touch-target-min + root.row-padding * 2;
                 material-level: root.material-level;
                 elevation: root.elevation;
@@ -953,11 +955,11 @@ export component MessageComposer inherits GlassSurface {
                 }
             }
 
-            // One full-width input below the toolbar; compact inline when empty.
+            // One native input below the toolbar beside Send; compact inline when empty.
             Rectangle {
                 x: root.row-padding + (root.raised-actions ? 0px : Spacing.touch-target-min + Spacing.xs);
                 y: root.row-padding + root.raised-toolbar-height;
-                width: parent.width - root.row-padding * 2 - (root.raised-actions ? 0px : Spacing.touch-target-min + Spacing.xs + root.trailing-actions-width);
+                width: parent.width - root.row-padding * 2 - (root.raised-actions ? root.lower-terminal-width : Spacing.touch-target-min + Spacing.xs + root.trailing-actions-width);
                 height: root.content-height;
                 background: Colors.inset;
                 // Concentric with the shell: radius-chrome − chrome-inset.
@@ -1079,7 +1081,7 @@ export component MessageComposer inherits GlassSurface {
             // would be an offer the transport declines. Hidden while editing:
             // an edit changes text only.
             if root.show-attachment-action: Rectangle {
-                x: parent.width - root.row-padding - Spacing.touch-target-min - (root.show-terminal-action ? Spacing.touch-target-min + Spacing.xs : 0px);
+                x: parent.width - root.row-padding - Spacing.touch-target-min - (!root.raised-actions && root.show-terminal-action ? Spacing.touch-target-min + Spacing.xs : 0px);
                 y: parent.action-y;
                 width: Spacing.touch-target-min;
                 height: Spacing.touch-target-min;
@@ -1157,10 +1159,10 @@ export component MessageComposer inherits GlassSurface {
                 }
             }
 
-            // Filled send action inside the compact trailing material.
+            // Send stays at the normal bottom action position beside the native field.
             if root.can-send: Rectangle {
                 x: parent.width - root.row-padding - Spacing.touch-target-min;
-                y: parent.action-y;
+                y: parent.lower-action-y;
                 width: Spacing.touch-target-min;
                 height: Spacing.touch-target-min;
                 background: send-touch.has-hover ? Colors.action-hover : Colors.action-fill;
