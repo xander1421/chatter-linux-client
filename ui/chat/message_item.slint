@@ -426,9 +426,10 @@ export component MessageItem inherits Rectangle {
                 // Wrapper for bubble + absolutely positioned reactions
                 Rectangle {
                     width: bubble.width;
-                    height: bubble.height + (root.has-reactions ? 26px : 0);
+                    height: bubble.height + (root.has-reactions ? 30px : 0);
 
                 bubble := Rectangle {
+                    y: 0px;
                     property <bool> bubble-hovered: bubble-touch.has-hover;
                     accessible-role: text;
                     accessible-label: root.is-own ? "Your message: " + root.content : root.sender-name + " says: " + root.content;
@@ -1286,13 +1287,13 @@ export component MessageItem inherits Rectangle {
                 if root.has-reactions: reactions-pill := Rectangle {
                     height: 22px;
                     width: reactions-row.preferred-width + 8px;
-                    background: Colors.surface-raised;
+                    background: root.is-own ? Colors.bubble-own : Colors.bubble-other;
                     border-radius: self.height / 2;
                     border-width: Elevation.rim-width;
                     border-color: Elevation.raised-rim;
 
                     x: root.is-own ? 8px : max(8px, bubble.width - self.width - 8px);
-                    y: bubble.height + 2px;
+                    y: bubble.height + 4px;
                     accessible-role: button;
                     accessible-label: "Reactions: " + root.reaction-summary;
 
