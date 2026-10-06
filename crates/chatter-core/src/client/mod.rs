@@ -26,7 +26,7 @@ pub mod events;
 mod jarvis;
 #[cfg(feature = "jarvis")]
 pub use jarvis::{
-    JARVIS_CHANNEL_NAME, JarvisRow, is_jarvis_channel, jarvis_channel_id, jarvis_channel_reply_text,
+    is_jarvis_channel, jarvis_channel_id, jarvis_channel_reply_text, JarvisRow, JARVIS_CHANNEL_NAME,
 };
 mod link_device;
 pub mod membership;
@@ -65,8 +65,8 @@ mod profile;
 mod profile_visibility;
 mod shared_content;
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+use std::sync::Arc;
 
 use parking_lot::Mutex;
 use tokio::task::JoinHandle;
@@ -94,7 +94,7 @@ use crate::services::channel::ChannelService;
 use crate::services::conversation::ConversationHandle;
 use crate::services::dm_bootstrap_service::DmBootstrapService;
 use crate::services::gateway::outgoing::{
-    OutgoingIntent, OwnedOutgoingServices, QuoteIntent, SendError, SendResult, route_outgoing_owned,
+    route_outgoing_owned, OutgoingIntent, OwnedOutgoingServices, QuoteIntent, SendError, SendResult,
 };
 #[cfg(feature = "jarvis")]
 use crate::services::jarvis::JarvisService;
@@ -104,9 +104,9 @@ use crate::services::section_service::SectionService;
 use crate::services::session_service::{SessionError, SessionService};
 use crate::services::signal::SignalService;
 use crate::services::user::UserService;
+use crate::state::chat_state::PendingAttachment;
 #[cfg(feature = "jarvis")]
 use crate::state::JarvisState;
-use crate::state::chat_state::PendingAttachment;
 use crate::state::{
     ActiveConversation, AuthState, ChatState, MessageState, OfflineState, UserState,
 };
@@ -596,7 +596,7 @@ impl ChatterClient {
     #[cfg(feature = "mesh")]
     #[must_use]
     pub fn mesh_enabled(&self) -> bool {
-        use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
+        use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
         SettingsRepository::new(self.services.database.clone())
             .get_bool(keys::MESH_ENABLED)
             .ok()
@@ -616,7 +616,7 @@ impl ChatterClient {
         &self,
         enabled: bool,
     ) -> Result<(), crate::services::mesh::MeshError> {
-        use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
+        use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
         SettingsRepository::new(self.services.database.clone())
             .set_bool(keys::MESH_ENABLED, enabled)?;
         if enabled {
@@ -1938,7 +1938,7 @@ impl ChatterClient {
 
     /// Read the user's search-shortcut preference (defaults to `Both`).
     pub fn get_search_shortcut(&self) -> crate::services::search::SearchShortcut {
-        use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
+        use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
         let repo = SettingsRepository::new(self.services.database.clone());
         let raw = repo
             .get_string(keys::SEARCH_SHORTCUT)
@@ -1952,7 +1952,7 @@ impl ChatterClient {
     /// chosen at registration and persisted under `keys::FULL_USERNAME`. This is
     /// the exact form `lookup_by_username` expects. `None` before registration.
     pub fn full_username(&self) -> Option<String> {
-        use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
+        use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
         SettingsRepository::new(self.services.database.clone())
             .get_string(keys::FULL_USERNAME)
             .ok()
@@ -1964,7 +1964,7 @@ impl ChatterClient {
         &self,
         shortcut: crate::services::search::SearchShortcut,
     ) -> Result<(), crate::error::StorageError> {
-        use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
+        use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
         let repo = SettingsRepository::new(self.services.database.clone());
         repo.set_string(keys::SEARCH_SHORTCUT, shortcut.as_str())
     }
@@ -4328,7 +4328,7 @@ impl ChatterClient {
         &self,
         level: crate::services::notification_service::NotificationDetailLevel,
     ) -> Result<(), crate::error::StorageError> {
-        use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
+        use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
         SettingsRepository::new(self.services.database.clone())
             .set_string(keys::NOTIFICATION_DETAIL_LEVEL, level.as_str())?;
         self.services.notification_service.set_detail_level(level);
@@ -4405,7 +4405,7 @@ impl ChatterClient {
         // disabled server-side (or we haven't logged in since the field was
         // added) — nothing to subscribe to.
         let topic = {
-            use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
+            use crate::storage::repositories::settings_repo::{keys, SettingsRepository};
             SettingsRepository::new(self.services.database.clone())
                 .get_string(keys::PUSH_TOPIC)
                 .ok()
@@ -4929,6 +4929,14 @@ mod transport_switch_tests {
     // Serialize these regressions because reachability is process-global.
     static AUTHORITY_TEST_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
+    async fn stop_authority_fixture(client: &ChatterClient) {
+        // shutdown aborts the monitor before its best-effort presence RPC.
+        // These fixtures deliberately have no live presence server; cancel
+        // that unrelated RPC instead of hanging teardown on a lazy channel.
+        let _ =
+            tokio::time::timeout(std::time::Duration::from_millis(250), client.shutdown()).await;
+    }
+
     fn pending_dial(
         pool: &crate::network::grpc::GrpcClientPool,
     ) -> (
@@ -4949,7 +4957,7 @@ mod transport_switch_tests {
     #[tokio::test]
     async fn connect_uses_new_rpc_evidence_when_pending_dial_finishes() {
         use crate::network::connection::{
-            ConnectionState, ServerStatus, server_status, set_server_status,
+            server_status, set_server_status, ConnectionState, ServerStatus,
         };
         use crate::network::grpc::transport::outcome_tests::authoritative_inbox;
         let _serial = AUTHORITY_TEST_LOCK.lock().await;
@@ -4997,7 +5005,7 @@ mod transport_switch_tests {
                         ConnectionState::Disconnected
                     }
                 );
-                client.shutdown().await;
+                stop_authority_fixture(&client).await;
             }
         }
     }
@@ -5005,7 +5013,7 @@ mod transport_switch_tests {
     #[tokio::test]
     async fn connection_generation_swap_never_installs_or_publishes_old_dial() {
         use crate::network::connection::{
-            ConnectionState, ServerStatus, server_status, set_server_status,
+            server_status, set_server_status, ConnectionState, ServerStatus,
         };
         use crate::network::grpc::transport::outcome_tests::authoritative_inbox;
         let _serial = AUTHORITY_TEST_LOCK.lock().await;
@@ -5036,14 +5044,14 @@ mod transport_switch_tests {
                 client.offline_state().connection_state(),
                 ConnectionState::Connected
             );
-            client.shutdown().await;
+            stop_authority_fixture(&client).await;
         }
     }
 
     #[tokio::test]
     async fn cached_channel_connect_returns_only_confirmed_authority() {
         use crate::network::connection::{
-            ServerStatus, server_evidence_revision, server_status, set_server_status,
+            server_evidence_revision, server_status, set_server_status, ServerStatus,
         };
         let _serial = AUTHORITY_TEST_LOCK.lock().await;
         let (client, _dir) = build_test_client();
@@ -5068,13 +5076,13 @@ mod transport_switch_tests {
                 "local construction fabricated evidence"
             );
         }
-        client.shutdown().await;
+        stop_authority_fixture(&client).await;
     }
 
     #[tokio::test]
     async fn startup_timeout_is_bounded_and_fenced_by_rpc_and_generation() {
         use crate::network::connection::{
-            ConnectionState, ServerStatus, server_status, set_server_status,
+            server_status, set_server_status, ConnectionState, ServerStatus,
         };
         use crate::network::grpc::transport::outcome_tests::authoritative_inbox;
         let _serial = AUTHORITY_TEST_LOCK.lock().await;
@@ -5124,14 +5132,14 @@ mod transport_switch_tests {
                     ConnectionState::Connected
                 );
             }
-            client.shutdown().await;
+            stop_authority_fixture(&client).await;
         }
     }
 
     #[tokio::test]
     async fn monitor_mirrors_rpc_edges_while_production_probe_is_pending() {
         use crate::network::connection::{
-            ConnectionState, ServerStatus, server_status, set_server_status,
+            server_status, set_server_status, ConnectionState, ServerStatus,
         };
         use crate::network::grpc::transport::outcome_tests::authoritative_inbox;
         let _serial = AUTHORITY_TEST_LOCK.lock().await;
@@ -5180,7 +5188,7 @@ mod transport_switch_tests {
         monitor.abort();
         let _ = monitor.await;
         assert!(second_complete.is_closed());
-        client.shutdown().await;
+        stop_authority_fixture(&client).await;
     }
 
     /// Signed-out startup contacts nothing: no boot connect, no reachability
