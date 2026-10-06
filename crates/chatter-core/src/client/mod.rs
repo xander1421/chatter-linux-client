@@ -5088,9 +5088,19 @@ mod transport_switch_tests {
         let _serial = AUTHORITY_TEST_LOCK.lock().await;
         for scenario in 0..3 {
             let (client, _dir) = build_test_client();
+            let user = crate::domain::ids::UserId::new();
             client
-                .auth_state()
-                .set_logged_in(crate::domain::ids::UserId::new(), 1, "Me".into());
+                .sessions()
+                .set_string_setting(
+                    crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID,
+                    &user.to_string(),
+                )
+                .unwrap();
+            client.auth_state().set_logged_in(user, 1, "Me".into());
+            assert!(
+                client.is_logged_in(),
+                "fixture must enter authenticated startup"
+            );
             set_server_status(ServerStatus::Unknown);
             let (started, complete) = pending_dial(&client.services.grpc_pool);
             let boot = {
@@ -5101,7 +5111,10 @@ mod transport_switch_tests {
                         .await
                 })
             };
-            started.await.unwrap();
+            tokio::time::timeout(std::time::Duration::from_secs(1), started)
+                .await
+                .expect("authenticated startup must reach the controlled dial")
+                .unwrap();
             if scenario == 1 {
                 authoritative_inbox(None, false).await.unwrap();
             }
