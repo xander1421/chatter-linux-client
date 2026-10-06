@@ -77,8 +77,8 @@ pub struct AndroidWindowAdapter {
     /// every keystroke.
     ime_input_type: Cell<Option<(i_slint_core::items::InputType, bool)>>,
     /// Whether the last state we pushed carried a compose region, i.e. whether
-    /// the input method may still be composing. Gates the stale-composition
-    /// reset below so it only fires when there is something to clear.
+    /// the input method may still be composing. Used to settle composition
+    /// before a pointer gesture moves the native selection.
     had_compose: Cell<bool>,
     /// Merged (committed + preedit) text of the last state pushed. Used to tell
     /// a real edit from the cursor-only churn the seen-set is meant to absorb.
@@ -224,10 +224,9 @@ impl i_slint_core::window::WindowAdapterInternal for AndroidWindowAdapter {
                 // "a composition is outstanding" — lands an empty state between
                 // keystrokes and wipes them. Measured twice: the keyboard
                 // opened, the field focused, and not one character ever
-                // arrived. The stale-composition clear lives on Disable only
-                // (§112m); anything Disable does not cover has to be handled
-                // app-side, the way message_composer.slint's
-                // reset-composition() does it.
+                // arrived. Disable now detaches ownership without an empty
+                // push; the first Enable for a new session publishes that
+                // field's actual state. Destroyed-field cleanup is separate.
                 //
                 // Tell the IME what kind of field this is. Without it every
                 // field — passwords and PINs included — opened as plain text,
@@ -303,6 +302,9 @@ impl i_slint_core::window::WindowAdapterInternal for AndroidWindowAdapter {
                 props
             }
             InputMethodRequest::Update(props) => {
+                if self.ime_client.borrow().is_none() {
+                    return;
+                }
                 if self.ime_dispatching.get() {
                     *self.deferred_ime_update.borrow_mut() = Some(props);
                     return;
@@ -310,33 +312,15 @@ impl i_slint_core::window::WindowAdapterInternal for AndroidWindowAdapter {
                 props
             }
             InputMethodRequest::Disable => {
-                self.dismiss_selection_menu();
-                // A parked Update belongs to the field losing focus.
+                // Native focus loss (SAF picker / pause) is not a text edit.
+                // Publishing an empty GameTextInput state here queues a full
+                // replacement which can arrive after resume and erase the draft.
+                // Detach the client before hiding; the next Enable resets the
+                // session and publishes the new owner's actual text/selection.
+                *self.ime_client.borrow_mut() = None;
                 self.deferred_ime_update.take();
-                // Clear a composition on the way out, so a field that loses
-                // focus cannot leave one behind for the next field (§112m).
-                // Conditional, for the restart-storm reason described on the
-                // Enable arm above.
-                //
-                // HONESTLY: this did NOT fix §112m in testing. Dismissing a
-                // dialog mid-composition still leaked text into the next field
-                // focused, which means Slint does not send Disable for a field
-                // that disappears with its modal — the reset never runs for the
-                // case that matters. Kept because it is correct for the case it
-                // does cover (focus moving between live fields) and costs one
-                // comparison, but §112m remains OPEN and needs an app-side
-                // reset at every modal dismissal, the way
-                // message_composer.slint's reset-composition() does it.
-                if self.had_compose.replace(false) {
-                    self.set_game_text_input_state(TextInputState {
-                        text: String::new(),
-                        selection: TextSpan { start: 0, end: 0 },
-                        compose_region: None,
-                    });
-                }
+                self.forget_ime_session();
                 self.app.hide_soft_input(true);
-                *self.last_ime_epoch.borrow_mut() = None;
-                self.ime_states_seen.borrow_mut().clear();
                 return;
             }
             _ => return,

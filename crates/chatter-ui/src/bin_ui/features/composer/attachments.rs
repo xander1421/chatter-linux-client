@@ -118,6 +118,15 @@ pub(crate) fn wire_attachment_clicked(
         #[cfg(feature = "mesh")]
         let ui_ctx_attach = ui_ctx_attach.clone();
         tracing::debug!("Attachment clicked");
+        let Some(w) = weak.upgrade() else { return };
+        if w.get_composer_attachment_picker_open() {
+            return;
+        }
+        // Settle IME and retain native selection BEFORE the picker can pause
+        // Android or take desktop focus. This is the real callback boundary,
+        // covering both Attach and the attachment tray's Add action.
+        w.invoke_prepare_attachment_picker();
+        i_slint_core::properties::ChangeTracker::run_change_handlers();
 
         // Before the active-conversation check below, not after: a mesh room or
         // cell is not an `ActiveConversation` at all — that enum is the
@@ -143,6 +152,7 @@ pub(crate) fn wire_attachment_clicked(
 
         if matches!(conversation, ActiveConversation::None) {
             tracing::warn!("Cannot upload: no active conversation selected");
+            w.invoke_finish_attachment_picker(true);
             return;
         }
 
@@ -161,6 +171,7 @@ pub(crate) fn wire_attachment_clicked(
                     .with_multiple(true);
 
                 let selected_files = FilePicker::pick_files(config).await;
+                finish_picker(&weak, &chat_state, conversation, revision);
 
                 if selected_files.is_empty() {
                     tracing::debug!("File picker cancelled or no files selected");
@@ -188,6 +199,7 @@ pub(crate) fn wire_attachment_clicked(
                 // user pick any file; images/videos/audio/docs all qualify.
                 let selected_files =
                     crate::platform::android::file_picker::pick_files(&["*/*"]).await;
+                finish_picker(&weak, &chat_state, conversation, revision);
 
                 if selected_files.is_empty() {
                     tracing::debug!("File picker cancelled or no files selected");
@@ -213,6 +225,26 @@ pub(crate) fn wire_attachment_clicked(
         {
             let _ = (&chat_state, &weak);
             tracing::warn!("File picker not yet implemented on iOS");
+            w.invoke_finish_attachment_picker(true);
+        }
+    });
+}
+
+/// A cancelled or failed chooser still completes the input handover. A picker
+/// opened in another conversation/session must never focus that new composer.
+fn finish_picker(
+    weak: &Weak<MainWindow>,
+    chat_state: &ChatState,
+    conversation: ActiveConversation,
+    revision: u64,
+) {
+    let weak = weak.clone();
+    let chat_state = chat_state.clone();
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(w) = weak.upgrade() {
+            let restore = chat_state.active_conversation() == conversation
+                && chat_state.get().attachment_revision == revision;
+            w.invoke_finish_attachment_picker(restore);
         }
     });
 }

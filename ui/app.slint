@@ -95,7 +95,34 @@ export component MainWindow inherits Window {
     // `WindowInsets.Type.ime()` respectively, so they must both be subtracted
     // from the content area to lift the composer above the keyboard.
     property <length> safe-area-top: root.safe-area-insets.top;
-    property <length> safe-area-bottom: root.safe-area-insets.bottom + root.virtual-keyboard-size.height;
+    property <length> safe-area-bottom: root.safe-area-insets.bottom
+        + max(root.virtual-keyboard-size.height, root.composer-keyboard-reserve);
+    private property <length> composer-keyboard-reserve: 0px;
+    public function cancel-composer-keyboard-handover() {
+        root.composer-keyboard-reserve = 0px;
+        keyboard-handover-timeout.stop();
+        keyboard-handover-settle.stop();
+    }
+    function request-composer-keyboard(space: length) {
+        if root.is-mobile-platform {
+            root.composer-keyboard-reserve = space;
+            keyboard-handover-timeout.start();
+            keyboard-handover-timeout.restart();
+        }
+    }
+    // Keep the drawer's occupied space while the native keyboard is requested.
+    // Its inset animation may end below drawer height; release after it settles.
+    keyboard-handover-settle := Timer {
+        interval: 120ms;
+        running: false;
+        triggered => { root.cancel-composer-keyboard-handover(); }
+    }
+    // A refused keyboard request must not leave an invisible permanent panel.
+    keyboard-handover-timeout := Timer {
+        interval: 1500ms;
+        running: false;
+        triggered => { root.cancel-composer-keyboard-handover(); }
+    }
 
     // True on Android/iOS — set by Rust at startup. Means TOUCH INPUT: target
     // sizes, press-and-hold, no keyboard shortcuts. It does not pick the
@@ -868,6 +895,7 @@ export component MainWindow inherits Window {
     // themselves, so the call's end no longer owes them a trip to the list.
     changed mobile-show-chat => {
         if !root.mobile-show-chat {
+            root.cancel-composer-keyboard-handover();
             root.active-call-fullscreen = false;
             root.call-raised-pane = false;
             // Once a TextInput has had focus, popping the screen it lived on leaves
@@ -1222,6 +1250,7 @@ export component MainWindow inherits Window {
     forward-focus: back-scope;
 
     changed channel-id => {
+        root.cancel-composer-keyboard-handover();
         VoiceRecording.cancel();
         root.composer-emoji-picker-visible = false;
         root.composer-gif-picker-visible = false;
@@ -1233,13 +1262,28 @@ export component MainWindow inherits Window {
     changed selection-mode => { if root.selection-mode { VoiceRecording.cancel(); } }
     changed composer-is-editing => { if root.composer-is-editing { VoiceRecording.cancel(); } }
     changed thread-panel-visible => { VoiceRecording.cancel(); }
-    changed active-tab => { VoiceRecording.cancel(); }
-    changed current-view => { VoiceRecording.cancel(); }
+    changed active-tab => { root.cancel-composer-keyboard-handover(); VoiceRecording.cancel(); }
+    changed current-view => { root.cancel-composer-keyboard-handover(); VoiceRecording.cancel(); }
     // Drop whatever text field holds focus (hiding the soft keyboard with it)
     // without leaving the window focus-less: Back keeps arriving at
     // back-scope. Called from Rust when Android's Back hid the keyboard
     // behind Slint's back (platform/android/activity.rs).
+    in-out property <bool> composer-attachment-picker-open: false;
+    private property <int> attachment-prepare-serial;
+    private property <int> attachment-restore-serial;
+    public function prepare-attachment-picker() {
+        root.composer-attachment-picker-open = true;
+        root.attachment-prepare-serial += 1;
+    }
+    public function finish-attachment-picker(restore: bool) {
+        root.composer-attachment-picker-open = false;
+        if restore && root.current-view == "main" && root.active-modal == ""
+            && (!root.compact-layout || root.mobile-show-chat) {
+            root.attachment-restore-serial += 1;
+        }
+    }
     public function release-text-focus() {
+        root.cancel-composer-keyboard-handover();
         back-scope.focus();
     }
 
@@ -1279,6 +1323,7 @@ export component MainWindow inherits Window {
     // focus owner until search or the keyboard toggle takes focus.
     changed composer-emoji-picker-visible => {
         if root.composer-emoji-picker-visible {
+            root.cancel-composer-keyboard-handover();
             back-scope.focus();
         }
     }
@@ -1290,6 +1335,7 @@ export component MainWindow inherits Window {
             root.composer-gif-closed();
         }
         if root.composer-gif-picker-visible {
+            root.cancel-composer-keyboard-handover();
             back-scope.focus();
         }
     }
@@ -1302,6 +1348,7 @@ export component MainWindow inherits Window {
         }
     }
     changed active-modal => {
+        root.cancel-composer-keyboard-handover();
         if root.active-modal != "" { VoiceRecording.cancel(); }
         root.secure-screen(root.active-modal == "recovery-codes");
         // On open too: taking focus off the composer is what hides the soft
@@ -1313,6 +1360,10 @@ export component MainWindow inherits Window {
     // (modal_container.slint, §112i), and only the Window can see it.
     changed virtual-keyboard-size => {
         VirtualKeyboard.height = root.virtual-keyboard-size.height;
+        if root.composer-keyboard-reserve > 0px && root.virtual-keyboard-size.height > 0px {
+            keyboard-handover-settle.start();
+            keyboard-handover-settle.restart();
+        }
     }
 
     // Catches Android's hardware/gesture Back. It wraps the whole window body
@@ -1913,6 +1964,8 @@ export component MainWindow inherits Window {
                         is-media-playing: root.is-media-playing;
                         audio-progress: root.audio-progress;
                         audio-elapsed: root.audio-elapsed;
+                        attachment-prepare-serial: root.attachment-prepare-serial;
+                        attachment-restore-serial: root.attachment-restore-serial;
                         composer-text <=> root.composer-text;
                         composer-placeholder: root.composer-placeholder;
                         composer-notice: root.composer-notice;
@@ -1928,6 +1981,8 @@ export component MainWindow inherits Window {
                         composer-reply-thumbnail: root.composer-reply-thumbnail;
 
                         // Picker state
+                        keyboard-inset: root.virtual-keyboard-size.height;
+                        composer-keyboard-requested(space) => { root.request-composer-keyboard(space); }
                         composer-focus-released => { root.release-text-focus(); }
                         inserted-emoji: root.inserted-emoji;
                         insert-serial: root.insert-serial;

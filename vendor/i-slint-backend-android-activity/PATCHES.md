@@ -11,6 +11,14 @@ Copied from the Cargo registry at exactly 1.17.1. Keep upstream licensing files.
   integers unchanged. Keeping cached state in UTF-8 avoids Cyrillic/emoji
   caret drift and mismatched self echoes without changing IME refresh timing.
   Host regression: `python3 tests/check_game_text_offsets.py` (rustc only).
+- `androidwindowadapter.rs` (game-activity): a live field's Disable detaches
+  its IME client and deferred updates without publishing an empty full-text
+  replacement. A SAF picker / pause is focus loss, not draft deletion; a queued
+  empty reset could otherwise replace that field after resume. Detached Updates
+  and inbound reports are ignored, and the next Enable starts a fresh session
+  with its owner's actual text/selection. Destroyed-field cleanup stays separate.
+  Host production-boundary regression: `python3 tests/check_picker_focus_lifecycle.py`
+  (rustc only); does not claim OEM IME/device coverage.
 - `lib.rs` `run_event_loop`: frame pacing. Upstream capped the poll timeout at a
   hardcoded 10 ms while animations run (its own FIXME), so a fling ticked at
   ~100 fps whatever the panel's rate. Now, while animating with a native window,

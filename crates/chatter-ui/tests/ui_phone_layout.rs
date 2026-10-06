@@ -908,6 +908,204 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     key(&w, "z".into());
     assert_eq!(w.get_composer_text().as_str(), "z");
     assert_action_geometry(&w, true);
+    attachment_and_keyboard_handover_boundaries(&w);
+}
+
+/// Exercise production picker handover and actual window IME geometry. The
+/// native dialog is represented by window deactivation/activation; attachment
+/// staging is represented by its real pending tray model, with no data erased.
+fn attachment_and_keyboard_handover_boundaries(w: &MainWindow) {
+    use slint::platform::WindowEvent;
+    w.set_is_mobile_platform(true);
+    w.set_mobile_show_chat(true);
+    w.set_composer_text("ab😀cd".into());
+    pump_size(w, PHONE_W, PHONE_H);
+    let item = composer_native_item(w);
+    let input = item.downcast::<i_slint_core::items::TextInput>().unwrap();
+    let input = input.as_pin_ref();
+    let adapter = item.window_adapter().unwrap();
+    let callbacks = std::rc::Rc::new(std::cell::Cell::new(0));
+    let observed = callbacks.clone();
+    let weak = w.as_weak();
+    // Same production preparation invoked at the actual host callback boundary.
+    w.on_attachment_clicked(move || {
+        observed.set(observed.get() + 1);
+        weak.upgrade().unwrap().invoke_prepare_attachment_picker();
+        i_slint_core::properties::ChangeTracker::run_change_handlers();
+    });
+    for (action, selected) in [
+        ("Attach file", false),
+        ("Attach file", true),
+        ("Add attachment", false),
+    ] {
+        let field = one(w, "Message input");
+        click_at(
+            w,
+            field.absolute_position().x + 20.0,
+            field.absolute_position().y + 20.0,
+        );
+        input.set_selection_offsets(&adapter, &item, 6, 2); // reversed UTF-8 selection
+        let before = callbacks.get();
+        click_element(w, action);
+        assert_eq!(callbacks.get(), before + 1);
+        assert_eq!(w.get_composer_text().as_str(), "ab😀cd");
+        assert!(!input.has_focus());
+        w.window()
+            .dispatch_event(WindowEvent::WindowActiveChanged(false));
+        if selected {
+            w.set_pending_attachments(slint::ModelRc::new(slint::VecModel::from(vec![
+                chatter_ui::PendingAttachmentData {
+                    id: "retained-photo".into(),
+                    filename: "unsent-photo.jpg".into(),
+                    category: "image".into(),
+                    is_ready: true,
+                    ..Default::default()
+                },
+            ])));
+        }
+        w.window()
+            .dispatch_event(WindowEvent::WindowActiveChanged(true));
+        w.invoke_finish_attachment_picker(true);
+        pump_size(w, PHONE_W, PHONE_H);
+        assert!(composer_native_item(w) == item);
+        assert_eq!(w.get_composer_text().as_str(), "ab😀cd");
+        assert_eq!(
+            (
+                input.anchor_position_byte_offset(),
+                input.cursor_position_byte_offset()
+            ),
+            (6, 2)
+        );
+        assert!(input.has_focus());
+        if selected || action == "Add attachment" {
+            assert_eq!(w.get_pending_attachments().row_count(), 1);
+            assert_eq!(
+                w.get_pending_attachments().row_data(0).unwrap().id.as_str(),
+                "retained-photo"
+            );
+        }
+    }
+    // Android pause/resume without a picker also retains committed Unicode
+    // and the native reversed selection (WindowActivation preserves anchors).
+    input.set_selection_offsets(&adapter, &item, 6, 2);
+    w.window()
+        .dispatch_event(WindowEvent::WindowActiveChanged(false));
+    w.window()
+        .dispatch_event(WindowEvent::WindowActiveChanged(true));
+    assert_eq!(w.get_composer_text().as_str(), "ab😀cd");
+    assert_eq!(
+        (
+            input.anchor_position_byte_offset(),
+            input.cursor_position_byte_offset()
+        ),
+        (6, 2)
+    );
+    // Preedit must be settled before the dialog destroys native focus.
+    input.set_selection_offsets(&adapter, &item, 2, 2);
+    composition(w, "é", false);
+    click_element(w, "Attach file");
+    assert_eq!(w.get_composer_text().as_str(), "abé😀cd");
+    w.invoke_finish_attachment_picker(true);
+    pump_size(w, PHONE_W, PHONE_H);
+    assert_eq!(input.cursor_position_byte_offset(), 4);
+    assert_eq!(input.preedit_text().as_str(), "");
+    // A return for a departed conversation must not seize the new input.
+    click_element(w, "Attach file");
+    w.set_composer_text("another conversation".into());
+    w.invoke_finish_attachment_picker(false);
+    pump_size(w, PHONE_W, PHONE_H);
+    assert!(!input.has_focus());
+    assert_eq!(w.get_composer_text().as_str(), "another conversation");
+
+    let window_item = i_slint_core::window::WindowInner::from_pub(w.window())
+        .window_item_rc()
+        .unwrap();
+    let window = window_item
+        .downcast::<i_slint_core::items::WindowItem>()
+        .unwrap();
+    let window = window.as_pin_ref();
+    let keyboard = |height: f32| {
+        window
+            .virtual_keyboard_size
+            .set(i_slint_core::lengths::LogicalSize::new(PHONE_W, height));
+        i_slint_core::properties::ChangeTracker::run_change_handlers();
+        slint::platform::update_timers_and_animations();
+    };
+    let field_bottom = || {
+        let field = one(w, "Message input");
+        field.absolute_position().y + field.size().height
+    };
+    w.set_pending_attachments(slint::ModelRc::new(slint::VecModel::from(Vec::<
+        chatter_ui::PendingAttachmentData,
+    >::new())));
+    keyboard(300.0);
+    pump_size(w, PHONE_W, PHONE_H);
+    click_element(w, "Emoji & GIF picker");
+    i_slint_core::properties::ChangeTracker::run_change_handlers();
+    let while_hiding = field_bottom();
+    keyboard(0.0);
+    pump_size(w, PHONE_W, PHONE_H);
+    assert!(
+        (field_bottom() - while_hiding).abs() < 1.0,
+        "keyboard-to-drawer double-counted occupied space"
+    );
+    let drawer_bottom = field_bottom();
+    click_element(w, "Show keyboard");
+    i_slint_core::properties::ChangeTracker::run_change_handlers();
+    assert!(!w.get_composer_emoji_picker_visible());
+    assert!(
+        (field_bottom() - drawer_bottom).abs() < 1.0,
+        "drawer-to-keyboard exposed a full-height frame before IME insets"
+    );
+    keyboard(300.0);
+    pump_size(w, PHONE_W, PHONE_H); // real settle timer releases the handover
+    let with_keyboard = field_bottom();
+    keyboard(0.0);
+    pump_size(w, PHONE_W, PHONE_H);
+    assert!(
+        field_bottom() > with_keyboard + 250.0,
+        "keyboard handover left a sticky spacer"
+    );
+    // Back/cancel must release even when the keyboard request is refused.
+    click_element(w, "Emoji & GIF picker");
+    pump_size(w, PHONE_W, PHONE_H);
+    click_element(w, "Show keyboard");
+    i_slint_core::properties::ChangeTracker::run_change_handlers();
+    let reserved = field_bottom();
+    w.invoke_release_text_focus();
+    i_slint_core::properties::ChangeTracker::run_change_handlers();
+    assert!(field_bottom() > reserved + 250.0);
+    // The production pause listener calls this cancellation boundary; it must
+    // also drop an outstanding reservation before navigation/backgrounding.
+    click_element(w, "Emoji & GIF picker");
+    pump_size(w, PHONE_W, PHONE_H);
+    click_element(w, "Show keyboard");
+    i_slint_core::properties::ChangeTracker::run_change_handlers();
+    let reserved = field_bottom();
+    w.invoke_cancel_composer_keyboard_handover();
+    i_slint_core::properties::ChangeTracker::run_change_handlers();
+    assert!(field_bottom() > reserved + 250.0);
+    click_element(w, "Emoji & GIF picker");
+    pump_size(w, PHONE_W, PHONE_H);
+    click_element(w, "Show keyboard");
+    i_slint_core::properties::ChangeTracker::run_change_handlers();
+    let reserved = field_bottom();
+    w.set_channel_id("picker-handover-next".into());
+    i_slint_core::properties::ChangeTracker::run_change_handlers();
+    assert!(field_bottom() > reserved + 250.0);
+    click_element(w, "Emoji & GIF picker");
+    pump_size(w, PHONE_W, PHONE_H);
+    click_element(w, "Show keyboard");
+    i_slint_core::properties::ChangeTracker::run_change_handlers();
+    let reserved = field_bottom();
+    slint::Timer::single_shot(std::time::Duration::from_millis(1600), || {
+        slint::quit_event_loop().unwrap();
+    });
+    slint::run_event_loop().unwrap();
+    assert!(
+        field_bottom() > reserved + 250.0,
+        "refused keyboard request left a sticky spacer"
+    );
 }
 
 fn pump_size(w: &MainWindow, width: f32, height: f32) {

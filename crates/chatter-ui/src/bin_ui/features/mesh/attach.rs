@@ -39,6 +39,9 @@ pub fn intercept_attachment(ui_ctx: &Arc<ChatterClient>, weak: slint::Weak<MainW
     };
 
     if matches!(conversation, MeshConversation::Dm(_)) {
+        if let Some(w) = weak.upgrade() {
+            w.invoke_finish_attachment_picker(true);
+        }
         run_ui!(weak, |w| w.global::<MeshGlobal>().set_notice(
             "Files are not sent in a mesh direct message — the file packet is not encrypted."
                 .into()
@@ -52,6 +55,12 @@ pub fn intercept_attachment(ui_ctx: &Arc<ChatterClient>, weak: slint::Weak<MainW
         // on a link measured in single-digit kB/s, so a multi-select would
         // silently queue minutes of airtime behind one tap.
         let picked: Vec<PathBuf> = pick_one().await;
+        let finish = weak.clone();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(w) = finish.upgrade() {
+                w.invoke_finish_attachment_picker(super::active().as_ref() == Some(&conversation));
+            }
+        });
         let Some(path) = picked.into_iter().next() else {
             return;
         };

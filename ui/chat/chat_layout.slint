@@ -105,6 +105,12 @@ export component ChatLayout inherits Rectangle {
     callback gif-selected(string, string);
     callback gif-search-changed(string);
     callback composer-focus-released();
+    callback composer-keyboard-requested(length);
+    in property <length> keyboard-inset;
+    // The host already subtracts the IME. Reserve only the part of the drawer
+    // it does not occupy while hideSoftInput's asynchronous insets arrive.
+    property <length> drawer-height: min(340px, (root.height + root.keyboard-inset) * 0.48);
+    property <length> drawer-space: max(0px, root.drawer-height - root.keyboard-inset);
     in property <string> inserted-emoji;
     in property <int> insert-serial;
     changed insert-serial => {
@@ -112,6 +118,8 @@ export component ChatLayout inherits Rectangle {
     }
 
     // Composer properties
+    in property <int> attachment-prepare-serial;
+    in property <int> attachment-restore-serial;
     in-out property <string> composer-text: "";
     out property <bool> composer-composing: composer.composing;
     out property <string> composer-composed-text: composer.composed-text;
@@ -455,8 +463,10 @@ export component ChatLayout inherits Rectangle {
             width: 100%;
             vertical-stretch: 0;
             mobile: root.mobile;
-            available-pane-height: root.height - (composer.picker-open ? min(340px, root.height * 0.48) : 0px);
+            available-pane-height: root.height - (composer.picker-open ? root.drawer-space : 0px);
             backdrop-paused: message-list.scrolling;
+            attachment-prepare-serial: root.attachment-prepare-serial;
+            attachment-restore-serial: root.attachment-restore-serial;
             text <=> root.composer-text;
             placeholder: root.composer-placeholder;
             send-status: root.composer-send-status;
@@ -497,6 +507,7 @@ export component ChatLayout inherits Rectangle {
                 root.emoji-picker-visible = false;
                 root.gif-clicked();
             }
+            keyboard-requested => { root.composer-keyboard-requested(root.drawer-height); }
             input-dismissed => { root.composer-focus-released(); }
             input-focused => {
                 root.emoji-picker-visible = false;
@@ -515,7 +526,8 @@ export component ChatLayout inherits Rectangle {
 
         if (root.emoji-picker-visible || root.gif-picker-visible) && !root.selection-mode && root.composer-notice == "": GlassSurface {
             width: 100%;
-            height: min(340px, root.height * 0.48);
+            height: root.drawer-space;
+            clip: true;
             vertical-stretch: 0;
             VerticalLayout {
                 padding: Spacing.sm;

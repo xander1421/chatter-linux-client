@@ -87,6 +87,9 @@ fn android_main(app: i_slint_backend_android_activity::AndroidApp) {
         std::cell::OnceCell<std::sync::Arc<chatter_core::client::ChatterClient>>,
     > = Default::default();
     let listener_client = visibility_client.clone();
+    let visibility_window: std::rc::Rc<std::cell::OnceCell<slint::Weak<MainWindow>>> =
+        Default::default();
+    let listener_window = visibility_window.clone();
     slint::platform::set_platform(Box::new(
         i_slint_backend_android_activity::AndroidPlatform::new_with_event_listener(
             app,
@@ -100,6 +103,9 @@ fn android_main(app: i_slint_backend_android_activity::AndroidApp) {
                 if !visible {
                     // Screen locked or app backgrounded: drop every decoded image.
                     crate::bin_ui::decode_cache::on_lock();
+                    if let Some(window) = listener_window.get().and_then(slint::Weak::upgrade) {
+                        window.invoke_cancel_composer_keyboard_handover();
+                    }
                 }
                 if let Some(client) = listener_client.get() {
                     let _rt = rt_handle().enter();
@@ -124,6 +130,7 @@ fn android_main(app: i_slint_backend_android_activity::AndroidApp) {
     let app_state = rt.block_on(app_init());
     let _guard = rt.enter();
     let _ = visibility_client.set(app_state.ui_ctx.clone());
+    let _ = visibility_window.set(slint::ComponentHandle::as_weak(&app_state.window));
 
     // Safe-area insets (status bar, nav bar, IME) are now bound in `app.slint`
     // directly off the Window's built-in `safe-area-insets` and

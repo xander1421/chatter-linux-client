@@ -43,6 +43,22 @@ export component MessageComposer inherits GlassSurface {
     visible: !root.collapsed;
     clip: VoiceRecording.active;
     in property <bool> picker-open: false;
+    in property <int> attachment-prepare-serial;
+    in property <int> attachment-restore-serial;
+    private property <bool> attachment-suspended: false;
+    private property <string> attachment-draft;
+    changed attachment-prepare-serial => {
+        root.suspend-input();
+        root.attachment-draft = root.text;
+        root.attachment-suspended = true;
+        root.input-dismissed();
+    }
+    changed attachment-restore-serial => {
+        if root.attachment-suspended && root.text == root.attachment-draft && !root.collapsed {
+            root.restore-input();
+        }
+        root.attachment-suspended = false;
+    }
     private property <bool> input-ever-focused: false;
     private property <int> saved-anchor;
     private property <int> saved-cursor;
@@ -71,6 +87,7 @@ export component MessageComposer inherits GlassSurface {
         root.suspending-input = false;
     }
     callback input-dismissed();
+    callback keyboard-requested();
     changed collapsed => {
         if root.collapsed {
             root.suspend-input();
@@ -927,6 +944,7 @@ export component MessageComposer inherits GlassSurface {
                     mouse-cursor: pointer;
                     clicked => {
                         if !root.picker-open { root.suspend-input(); }
+                        if root.picker-open { root.keyboard-requested(); }
                         root.emoji-clicked();
                         if !root.picker-open { root.restore-input(); }
                     }
