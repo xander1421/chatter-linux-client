@@ -67,7 +67,7 @@ pub struct VideoDevice {
 }
 
 /// Video capture configuration.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub struct VideoCaptureConfig {
     /// Desired width.
     pub width: u32,
@@ -113,6 +113,11 @@ impl VideoCapture {
             config: VideoCaptureConfig::default(),
             capture_handle: None,
         }
+    }
+
+    /// Effective device/configuration, retained when capture stops.
+    pub(crate) fn reconnect_selection(&self) -> (String, VideoCaptureConfig) {
+        (self.device_path.clone(), self.config.clone())
     }
 
     /// List available video input devices.
@@ -1202,5 +1207,26 @@ mod tests {
             &mut u,
             &mut v
         ));
+    }
+}
+
+#[cfg(test)]
+mod reconnect_selection_tests {
+    use super::*;
+
+    #[test]
+    fn stopping_capture_retains_effective_nondefault_selection() {
+        let mut capture = VideoCapture::new();
+        // Set the effective fields exactly as start does, without opening a
+        // physical camera or starting a capture thread in this lifecycle test.
+        capture.device_path = "/dev/video7".into();
+        capture.config = VideoCaptureConfig {
+            width: 1920,
+            height: 1080,
+            fps: 30,
+        };
+        let before = capture.reconnect_selection();
+        capture.stop();
+        assert_eq!(capture.reconnect_selection(), before);
     }
 }

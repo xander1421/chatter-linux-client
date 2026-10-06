@@ -1959,8 +1959,30 @@ pub struct GroupKeyStatus {
 #[derive(Clone)]
 struct ReconnectMedia {
     microphone: Option<String>,
-    camera: bool,
+    camera: Option<(String, VideoCaptureConfig)>,
     muted: bool,
+}
+
+// Failed attempts must not replace intent with the disconnected manager's state.
+fn remember_reconnect_media(
+    saved: &mut Option<ReconnectMedia>,
+    snapshot: impl FnOnce() -> ReconnectMedia,
+) {
+    saved.get_or_insert_with(snapshot);
+}
+
+async fn restore_camera_with<F, Fut>(
+    camera: Option<(String, VideoCaptureConfig)>,
+    publish: F,
+) -> Result<(), CallError>
+where
+    F: FnOnce(String, VideoCaptureConfig) -> Fut,
+    Fut: std::future::Future<Output = Result<(), CallError>>,
+{
+    if let Some((device, config)) = camera {
+        publish(device, config).await?;
+    }
+    Ok(())
 }
 
 /// Media a channel group-call participant may not publish yet (§124 1k).
@@ -2609,9 +2631,9 @@ async fn reconnect_impl(
         let mut active = active_call.borrow_mut();
         let state = active.as_mut().ok_or(CallError::NotInCall)?;
         let snapshot = room_manager.snapshot_reconnect_keys(&state.key_state)?;
-        state.reconnect_media.get_or_insert_with(|| ReconnectMedia {
+        remember_reconnect_media(&mut state.reconnect_media, || ReconnectMedia {
             microphone: room_manager.reconnect_microphone_device(),
-            camera: room_manager.is_camera_enabled(),
+            camera: room_manager.reconnect_camera_selection(),
             muted: room_manager.is_microphone_muted(),
         });
         (
@@ -2687,10 +2709,14 @@ async fn restore_reconnected_media(
             tracing::warn!(%error, "reconnect microphone restoration failed");
         }
     }
-    if media.camera {
-        if let Err(error) = room_manager.publish_camera(None, None).await {
-            tracing::warn!(%error, "reconnect camera restoration failed");
-        }
+    if let Err(error) = restore_camera_with(media.camera, |device, config| async move {
+        room_manager
+            .publish_camera(Some(&device), Some(config))
+            .await
+    })
+    .await
+    {
+        tracing::warn!(%error, "reconnect camera restoration failed");
     }
 }
 
@@ -4444,5 +4470,40 @@ mod reconnect_timer_boundary_tests {
             .is_err()
         );
         assert_eq!(chain.current_key(), before.current_key());
+    }
+}
+
+#[cfg(test)]
+mod reconnect_camera_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn nondefault_camera_arguments_survive_failed_attempts_and_restore() {
+        let config = VideoCaptureConfig {
+            width: 1920,
+            height: 1080,
+            fps: 30,
+        };
+        let mut saved = None;
+        remember_reconnect_media(&mut saved, || ReconnectMedia {
+            microphone: Some("selected-mic".into()),
+            camera: Some(("/dev/video7".into(), config.clone())),
+            muted: true,
+        });
+        // Production retry boundary must not consult torn-down capture state.
+        for _ in 0..2 {
+            remember_reconnect_media(&mut saved, || panic!("replaced preserved intent"));
+        }
+        let media = saved.as_ref().unwrap();
+        assert!(media.muted);
+        assert_eq!(media.microphone.as_deref(), Some("selected-mic"));
+        let mut observed = None;
+        restore_camera_with(media.camera.clone(), |device, settings| {
+            observed = Some((device, settings));
+            std::future::ready(Ok(()))
+        })
+        .await
+        .unwrap();
+        assert_eq!(observed, Some(("/dev/video7".into(), config)));
     }
 }

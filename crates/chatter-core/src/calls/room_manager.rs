@@ -142,6 +142,51 @@ pub(crate) struct ReconnectKeys {
     next: zeroize::Zeroizing<Vec<u8>>,
 }
 
+/// Synchronous provisional-room transaction: never expose a room or commit
+/// chain authority until every bounded catch-up install succeeds. The callback
+/// is the real room E2EE manager in production and permits precise fault points
+/// in tests using the retained native provider.
+fn initialize_provisional_keys(
+    snapshot: Option<&ReconnectKeys>,
+    catch_up: Option<(&mut crate::crypto::call_key_provider::CallKeyState, u32)>,
+    mut install: impl FnMut(u32, Vec<u8>, Vec<u8>) -> bool,
+) -> Result<Option<u32>, CallError> {
+    let result = (|| {
+        if let Some(snapshot) = snapshot {
+            if !install(
+                snapshot.epoch,
+                snapshot.current.to_vec(),
+                snapshot.next.to_vec(),
+            ) {
+                return Err(CallError::CryptoError(
+                    "Reconnect media key installation failed".into(),
+                ));
+            }
+        }
+        if let Some((chain, target)) = catch_up {
+            crate::services::call_worker::install_reconnect_catch_up(chain, target, &mut install)?;
+            return Ok(Some(chain.epoch()));
+        }
+        Ok(None)
+    })();
+    if result.is_err() {
+        if let Some(snapshot) = snapshot {
+            if !install(
+                snapshot.epoch,
+                snapshot.current.to_vec(),
+                snapshot.next.to_vec(),
+            ) {
+                // Restore retry authority metadata even under persistent native
+                // rejection. This cannot guarantee restoration of native bytes.
+                snapshot
+                    .provider
+                    .set_shared_key(snapshot.current.to_vec(), key_ring_index(snapshot.epoch));
+            }
+        }
+    }
+    result
+}
+
 /// Manages LiveKit room connections with E2EE.
 pub struct RoomManager {
     timing: RwLock<Option<CallTiming>>,
@@ -642,6 +687,12 @@ impl RoomManager {
         self.audio_capture.read().is_muted()
     }
 
+    /// Snapshot the effective selection before disconnect clears publication.
+    pub(crate) fn reconnect_camera_selection(&self) -> Option<(String, VideoCaptureConfig)> {
+        self.is_camera_enabled()
+            .then(|| self.video_capture.read().reconnect_selection())
+    }
+
     /// Check if the camera is currently on (track published).
     pub fn is_camera_enabled(&self) -> bool {
         self.camera_published
@@ -929,63 +980,27 @@ impl RoomManager {
 
         // Complete key initialization before publishing the room handle, emitting
         // Connected, or permitting any new local media publication.
-        if let Some(snapshot) = snapshot.as_ref() {
-            if !room.e2ee_manager().install_shared_media_key(
-                key_ring_index(snapshot.epoch),
-                snapshot.current.to_vec(),
-                Some((
-                    key_ring_index(snapshot.epoch.wrapping_add(1)),
-                    snapshot.next.to_vec(),
-                )),
-            ) {
-                let _ = room.close().await;
-                self.set_state(RoomState::Disconnected);
-                self.retire_timing(Some(&timing));
-                return Err(CallError::CryptoError(
-                    "Reconnect media key installation failed".into(),
-                ));
-            }
-        }
-
-        if let Some((chain, started_at)) = catch_up {
+        let catch_up = catch_up.map(|(chain, started_at)| {
             let target = started_at
                 .map(crate::services::call_worker::reconnect_wall_epoch)
                 .unwrap_or(chain.epoch());
-            let result = crate::services::call_worker::install_reconnect_catch_up(
-                chain,
-                target,
-                |epoch, current, next| {
-                    room.e2ee_manager().install_shared_media_key(
-                        key_ring_index(epoch),
-                        current,
-                        Some((key_ring_index(epoch + 1), next)),
-                    )
-                },
-            );
-            if let Err(error) = result {
-                // A later step may fail after earlier native steps selected an
-                // epoch. Restore authority so the next snapshot/retry agrees.
-                if let Some(snapshot) = snapshot.as_ref() {
-                    if !room.e2ee_manager().install_shared_media_key(
-                        key_ring_index(snapshot.epoch),
-                        snapshot.current.to_vec(),
-                        Some((key_ring_index(snapshot.epoch + 1), snapshot.next.to_vec())),
-                    ) {
-                        // The provisional manager will be closed. Even a
-                        // persistent native rejection must leave the retained
-                        // provider's selected-index metadata retryable.
-                        snapshot.provider.set_shared_key(
-                            snapshot.current.to_vec(),
-                            key_ring_index(snapshot.epoch),
-                        );
-                    }
-                }
+            (chain, target)
+        });
+        match initialize_provisional_keys(snapshot.as_ref(), catch_up, |epoch, current, next| {
+            room.e2ee_manager().install_shared_media_key(
+                key_ring_index(epoch),
+                current,
+                Some((key_ring_index(epoch.wrapping_add(1)), next)),
+            )
+        }) {
+            Ok(Some(epoch)) => self.e2ee.write().epoch = epoch,
+            Ok(None) => {}
+            Err(error) => {
                 let _ = room.close().await;
                 self.set_state(RoomState::Disconnected);
                 self.retire_timing(Some(&timing));
                 return Err(error);
             }
-            self.e2ee.write().epoch = chain.epoch();
         }
 
         // Enable E2EE
@@ -1747,6 +1762,130 @@ mod timing_lifecycle_tests {
 mod reconnect_initialization_tests {
     use super::*;
     use crate::crypto::call_key_provider::CallKeyState;
+
+    #[test]
+    fn provisional_partial_rejection_rolls_back_native_provider_and_retries() {
+        // No SDK Room or sender cryptor fixture is constructed here. Real
+        // KeyProvider setters mutate native slots; callback rejection supplies
+        // the bounded fault after current selection or before any mutation.
+        for failure_epoch in [0, 2] {
+            for reject_next in [false, true] {
+                for reject_rollback in [false, true] {
+                    let original = CallKeyState::new(&[9; 32], "provisional-native").unwrap();
+                    let provider = KeyProvider::with_shared_key(
+                        KeyProviderOptions {
+                            key_ring_size: KEY_RING_SIZE,
+                            ratchet_window_size: 0,
+                            ..KeyProviderOptions::default()
+                        },
+                        original.current_key_vec(),
+                    );
+                    let snapshot = ReconnectKeys {
+                        provider: provider.clone(),
+                        epoch: original.epoch(),
+                        current: zeroize::Zeroizing::new(original.current_key_vec()),
+                        next: zeroize::Zeroizing::new(original.peek_next_key().unwrap().to_vec()),
+                    };
+                    let reference = KeyProvider::with_shared_key(
+                        KeyProviderOptions {
+                            key_ring_size: KEY_RING_SIZE,
+                            ratchet_window_size: 0,
+                            ..KeyProviderOptions::default()
+                        },
+                        original.current_key_vec(),
+                    );
+                    reference.set_shared_key(snapshot.next.to_vec(), 1);
+                    reference.set_shared_key(snapshot.current.to_vec(), 0);
+                    let mut candidate = original.clone();
+                    let mut failed = false;
+                    let mut rollback_seen = false;
+                    let result = initialize_provisional_keys(
+                        Some(&snapshot),
+                        Some((&mut candidate, 3)),
+                        |epoch, current, next| {
+                            if failed {
+                                rollback_seen = true;
+                                assert_eq!(epoch, snapshot.epoch);
+                                if reject_rollback {
+                                    return false;
+                                }
+                            }
+                            if epoch == failure_epoch && !failed {
+                                failed = true;
+                                if reject_next {
+                                    provider.set_shared_key(current, key_ring_index(epoch));
+                                    assert_eq!(
+                                        provider.get_latest_key_index(),
+                                        key_ring_index(epoch)
+                                    );
+                                }
+                                return false;
+                            }
+                            // set_shared_key selects data metadata as well, so restore
+                            // current selection after installing future receive material.
+                            provider.set_shared_key(next, key_ring_index(epoch + 1));
+                            provider.set_shared_key(current, key_ring_index(epoch));
+                            true
+                        },
+                    );
+                    assert!(result.is_err());
+                    assert!(rollback_seen);
+                    assert_eq!(candidate.epoch(), original.epoch());
+                    assert_eq!(candidate.current_key(), original.current_key());
+                    assert_eq!(candidate.anchor(), original.anchor());
+                    assert_eq!(
+                        provider.get_latest_key_index(),
+                        key_ring_index(original.epoch())
+                    );
+                    let current_material = provider
+                        .get_shared_key(key_ring_index(original.epoch()))
+                        .unwrap();
+                    assert_eq!(Some(current_material), reference.get_shared_key(0));
+                    if !reject_rollback {
+                        assert_eq!(provider.get_shared_key(1), reference.get_shared_key(1));
+                    }
+                    // Retrying the same production helper reconstructs all elapsed
+                    // slots and commits only after every callback succeeds.
+                    assert_eq!(
+                        initialize_provisional_keys(
+                            Some(&snapshot),
+                            Some((&mut candidate, 3)),
+                            |epoch, current, next| {
+                                provider.set_shared_key(next, key_ring_index(epoch + 1));
+                                provider.set_shared_key(current, key_ring_index(epoch));
+                                true
+                            }
+                        )
+                        .unwrap(),
+                        Some(3)
+                    );
+                    assert_eq!(candidate.epoch(), 3);
+                    assert_eq!(provider.get_latest_key_index(), 3);
+                    for epoch in 0..=4 {
+                        assert!(
+                            !provider
+                                .get_shared_key(key_ring_index(epoch))
+                                .unwrap()
+                                .is_empty()
+                        );
+                    }
+                    // Compare derived native material against an independently
+                    // reconstructed provider, never reimport native exports.
+                    let mut expected = original.clone();
+                    for epoch in 0..=4 {
+                        reference.set_shared_key(expected.current_key_vec(), key_ring_index(epoch));
+                        assert_eq!(
+                            provider.get_shared_key(key_ring_index(epoch)),
+                            reference.get_shared_key(key_ring_index(epoch))
+                        );
+                        if epoch < 4 {
+                            expected.ratchet().unwrap();
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     #[tokio::test]
     async fn muted_microphone_request_survives_teardown_until_explicit_stop() {
