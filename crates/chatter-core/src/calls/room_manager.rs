@@ -736,6 +736,10 @@ impl RoomManager {
         }
     }
 
+    fn retire_timing(&self, expected: Option<&CallTiming>) {
+        retire_timing_slot(&self.timing, expected);
+    }
+
     pub(crate) async fn connect_timed(
         &self,
         url: &str,
@@ -743,7 +747,7 @@ impl RoomManager {
         encryption_key: Vec<u8>,
         timing: CallTiming,
     ) -> Result<(), CallError> {
-        *self.timing.write() = Some(timing.clone());
+        replace_timing_slot(&self.timing, timing.clone());
         timing.mark("room_connect_begin");
         self.set_state(RoomState::Connecting);
 
@@ -802,6 +806,9 @@ impl RoomManager {
             "Call stage"
         );
         timing.mark(stage);
+        if !matches!(&connected, Ok(Ok(_))) {
+            self.retire_timing(Some(&timing));
+        }
         let (room, mut events) = connected
             .map_err(|_| {
                 CallError::ConnectionFailed("LiveKit connection timed out (10s)".to_string())
@@ -950,6 +957,9 @@ impl RoomManager {
                 tokio::task::yield_now().await;
             }
 
+            // Retire only this handler's observer: a detached old handler must
+            // never retire a newer connection's timing.
+            timing.retire();
             // Room disconnected - stop audio/video playback
             tracing::info!("Room event stream ended - marking disconnected");
             if let Some(playback) = audio_playback.read().as_ref() {
@@ -970,6 +980,7 @@ impl RoomManager {
     /// signaled to stop (non-blocking) and will clean themselves up.
     /// Thread joins happen in Drop to ensure proper cleanup.
     pub async fn disconnect(&self) {
+        self.retire_timing(None);
         // Update state immediately so UI can respond
         self.set_state(RoomState::Disconnected);
 
@@ -1467,5 +1478,63 @@ mod key_ring_tests {
             0,
             "next slot after the last epoch"
         );
+    }
+}
+
+fn replace_timing_slot(slot: &RwLock<Option<CallTiming>>, next: CallTiming) {
+    let mut current = slot.write();
+    if let Some(previous) = current.take() {
+        previous.retire();
+    }
+    *current = Some(next);
+}
+
+// Keep selection and retirement under the slot lock, so a failed old connect
+// cannot clear or retire the replacement connection's observer.
+fn retire_timing_slot(slot: &RwLock<Option<CallTiming>>, expected: Option<&CallTiming>) {
+    let mut current = slot.write();
+    if expected.is_none_or(|expected| {
+        current
+            .as_ref()
+            .is_some_and(|timing| timing.same_attempt(expected))
+    }) {
+        if let Some(timing) = current.take() {
+            timing.retire();
+        }
+    }
+    if let Some(expected) = expected {
+        expected.retire();
+    }
+}
+
+#[cfg(test)]
+mod timing_lifecycle_tests {
+    use super::{CallTiming, RwLock, replace_timing_slot, retire_timing_slot};
+
+    #[test]
+    fn disconnect_then_failed_reconnect_rejects_queued_key_milestone() {
+        let old = CallTiming::new("join_requested_worker");
+        let slot = RwLock::new(Some(old.clone()));
+        retire_timing_slot(&slot, None);
+        // Token refresh fails before connect_timed can install a new observer.
+        assert!(slot.read().is_none());
+        assert!(!old.mark("call_key_accepted_publish_gate_open"));
+        assert!(!old.first_decoded_frame());
+    }
+
+    #[test]
+    fn failed_old_connection_does_not_retire_replacement() {
+        let old = CallTiming::new("test");
+        let next = CallTiming::new("test");
+        let slot = RwLock::new(Some(old.clone()));
+        replace_timing_slot(&slot, next.clone());
+        assert!(!old.first_decoded_frame());
+        retire_timing_slot(&slot, Some(&old));
+        assert!(!old.mark("remote_participant_present"));
+        assert!(slot.read().as_ref().unwrap().same_attempt(&next));
+        assert!(next.first_decoded_frame());
+        retire_timing_slot(&slot, Some(&next));
+        assert!(slot.read().is_none());
+        assert!(!next.mark("call_key_accepted_publish_gate_open"));
     }
 }

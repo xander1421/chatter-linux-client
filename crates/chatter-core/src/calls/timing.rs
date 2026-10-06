@@ -1,9 +1,11 @@
 //! Privacy-safe, process-local timing; no participant, room or call identifiers.
 use std::sync::{
     Arc,
-    atomic::{AtomicBool, AtomicU64, Ordering},
+    atomic::{AtomicU64, Ordering},
 };
 use std::time::Instant;
+
+use parking_lot::Mutex;
 
 static NEXT_ATTEMPT: AtomicU64 = AtomicU64::new(1);
 
@@ -12,34 +14,56 @@ pub(crate) struct CallTiming(Arc<Attempt>);
 struct Attempt {
     id: u64,
     started: Instant,
-    first_frame: AtomicBool,
+    evidence: Mutex<Evidence>,
+}
+#[derive(Default)]
+struct Evidence {
+    retired: bool,
+    first_frame: bool,
 }
 impl CallTiming {
     pub(crate) fn new(stage: &'static str) -> Self {
         let timing = Self(Arc::new(Attempt {
             id: NEXT_ATTEMPT.fetch_add(1, Ordering::Relaxed),
             started: Instant::now(),
-            first_frame: AtomicBool::new(false),
+            evidence: Mutex::new(Evidence::default()),
         }));
         timing.mark(stage);
         timing
     }
-    pub(crate) fn mark(&self, stage: &'static str) {
+    /// Serializes retirement with the entire emission, not just its eligibility
+    /// check. Called only by setup/event/decoder tasks, never audio callbacks.
+    fn emit(&self, first_frame: bool, emit: impl FnOnce()) -> bool {
+        let mut evidence = self.0.evidence.lock();
+        if evidence.retired || (first_frame && evidence.first_frame) {
+            return false;
+        }
+        if first_frame {
+            evidence.first_frame = true;
+        }
+        emit();
+        true
+    }
+    pub(crate) fn retire(&self) {
+        self.0.evidence.lock().retired = true;
+    }
+    pub(crate) fn same_attempt(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
+    fn log(&self, stage: &'static str) {
         tracing::info!(target: "call_timing", attempt = self.0.id, stage,
             elapsed_us = self.0.started.elapsed().as_micros().min(u64::MAX as u128) as u64,
             "Call timing milestone (local monotonic clock)");
     }
-    pub(crate) fn first_decoded_frame(&self) {
-        if claim_first(&self.0.first_frame) {
-            // NativeAudioStream yields post-decoder PCM, including possible
-            // silence/concealment. This is not authenticated packet receipt,
-            // nonzero speech, output consumption, or physical audibility.
-            self.mark("first_remote_decoded_pcm_frame");
-        }
+    pub(crate) fn mark(&self, stage: &'static str) -> bool {
+        self.emit(false, || self.log(stage))
     }
-}
-fn claim_first(flag: &AtomicBool) -> bool {
-    !flag.swap(true, Ordering::Relaxed)
+    pub(crate) fn first_decoded_frame(&self) -> bool {
+        // NativeAudioStream yields post-decoder PCM, including possible
+        // silence/concealment. This is not authenticated packet receipt,
+        // nonzero speech, output consumption, or physical audibility.
+        self.emit(true, || self.log("first_remote_decoded_pcm_frame"))
+    }
 }
 #[cfg(test)]
 mod tests {
@@ -59,8 +83,8 @@ mod tests {
     fn decoded_frame_evidence_is_shared_and_does_not_leak_to_next_attempt() {
         let timing = CallTiming::new("test");
         timing.first_decoded_frame();
-        assert!(!claim_first(&timing.clone().0.first_frame));
-        assert!(claim_first(&CallTiming::new("test").0.first_frame));
+        assert!(!timing.clone().first_decoded_frame());
+        assert!(CallTiming::new("test").first_decoded_frame());
     }
     #[test]
     fn concurrent_tracks_report_one_frame_per_attempt() {
@@ -68,9 +92,7 @@ mod tests {
         let mut workers = Vec::new();
         for _ in 0..8 {
             let timing = timing.clone();
-            workers.push(std::thread::spawn(move || {
-                claim_first(&timing.0.first_frame)
-            }));
+            workers.push(std::thread::spawn(move || timing.first_decoded_frame()));
         }
         assert_eq!(
             workers
@@ -80,6 +102,49 @@ mod tests {
                 .count(),
             1
         );
-        assert!(claim_first(&CallTiming::new("test").0.first_frame));
+        assert!(CallTiming::new("test").first_decoded_frame());
+    }
+}
+
+#[cfg(test)]
+mod retirement_tests {
+    use super::*;
+
+    #[test]
+    fn retirement_rejects_delayed_events_and_unclaimed_pcm_from_all_clones() {
+        let timing = CallTiming::new("test");
+        let detached = timing.clone();
+        timing.retire();
+        timing.retire(); // Teardown paths may overlap.
+        assert!(!detached.mark("remote_audio_track_subscribed"));
+        assert!(!detached.first_decoded_frame());
+        assert!(!timing.0.evidence.lock().first_frame);
+        let next = CallTiming::new("test");
+        assert!(next.mark("remote_participant_present"));
+        assert!(next.first_decoded_frame());
+    }
+
+    #[test]
+    fn retirement_waits_for_emission_and_blocks_every_later_emission() {
+        let timing = CallTiming::new("test");
+        let observer = timing.clone();
+        let (entered_tx, entered_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel();
+        let emission = std::thread::spawn(move || {
+            observer.emit(true, || {
+                entered_tx.send(()).unwrap();
+                release_rx.recv().unwrap();
+            })
+        });
+        entered_rx.recv().unwrap();
+        // The emission holds the same lock that retirement must acquire.
+        assert!(timing.0.evidence.try_lock().is_none());
+        let retiring = timing.clone();
+        let retirement = std::thread::spawn(move || retiring.retire());
+        release_tx.send(()).unwrap();
+        assert!(emission.join().unwrap());
+        retirement.join().unwrap();
+        assert!(!timing.emit(false, || panic!("stale milestone emitted")));
+        assert!(!timing.emit(true, || panic!("stale PCM emitted")));
     }
 }
