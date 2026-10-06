@@ -1251,14 +1251,75 @@ impl ChatterClient {
             channel_id.to_string(),
         );
 
-        // A group ring has no hangup to end it — the call goes on whether or
-        // not we answer — so it rings out here, as Signal's does.
+        // Watch the authoritative call, not the initiator's departure: other
+        // participants may keep the room alive. Reconcile after subscribing
+        // and on every retry to cover a missed/reordered end or a rapid
+        // start/end between the lookup above and presentation.
         let worker = worker.clone();
         let signaling = self.call_signaling().clone();
+        let pool = self.services.grpc_pool.clone();
         tokio::spawn(async move {
-            tokio::time::sleep(RING_TIMEOUT).await;
+            use super::group_ring_lifecycle::{event_ends_ring, snapshot_ends_ring};
+            use crate::proto::chat_v1::{CallEventType, call_event};
+            use futures::StreamExt;
+
+            let deadline = tokio::time::Instant::now() + RING_TIMEOUT;
+            let mut events: Option<
+                futures::stream::BoxStream<
+                    'static,
+                    Result<crate::proto::chat_v1::CallEvent, crate::error::NetworkError>,
+                >,
+            > = None;
+            let mut reconcile = tokio::time::interval(std::time::Duration::from_secs(2));
+            reconcile.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+            let reason = loop {
+                tokio::select! {
+                    _ = tokio::time::sleep_until(deadline) => break CallEndReason::NoAnswer,
+                    _ = reconcile.tick() => {
+                        if !signaling.is_ringing_group_call_invite(handle.as_str()) {
+                            return; // answered/declined: preserve keys and active media
+                        }
+                        if events.is_none() {
+                            let mut client = pool.call_client();
+                            if let Ok(Ok(stream)) = tokio::time::timeout_at(
+                                deadline.min(tokio::time::Instant::now() + CALL_POLICY_RPC_TIMEOUT),
+                                client.stream_call_events(vec![handle.as_str().to_owned()], vec![]),
+                            ).await {
+                                events = Some(Box::pin(stream));
+                            }
+                        }
+                        // Redis PubSub has no replay. A fresh authoritative snapshot
+                        // closes the subscribe gap and repairs a dropped end event.
+                        let mut client = pool.call_client();
+                        if let Ok(Ok(info)) = tokio::time::timeout_at(
+                            deadline.min(tokio::time::Instant::now() + CALL_POLICY_RPC_TIMEOUT),
+                            client.get_active_call_in_channel(&channel),
+                        ).await {
+                            if snapshot_ends_ring(handle.as_str(), info.as_ref().map(|i| i.id.as_str())) {
+                                break CallEndReason::RemoteHangup;
+                            }
+                        }
+                    }
+                    event = async { events.as_mut().unwrap().next().await }, if events.is_some() => {
+                        match event {
+                            Some(Ok(event)) => {
+                                if event_ends_ring(
+                                    handle.as_str(), &channel, &event.call_id, &event.channel_id,
+                                    event.r#type == CallEventType::Ended as i32
+                                        && matches!(event.data, Some(call_event::Data::CallEnded(_))),
+                                ) {
+                                    break CallEndReason::RemoteHangup;
+                                }
+                            }
+                            _ => events = None, // reconnect on next bounded reconciliation tick
+                        }
+                    }
+                }
+            };
             signaling.drop_ringing_group_call_invite(handle.as_str());
-            worker.orch_withdraw_incoming(handle, CallEndReason::NoAnswer);
+            // Only removes the incoming slot. A racing accept or an unrelated
+            // active call must never be disconnected by ring cancellation.
+            worker.orch_withdraw_incoming(handle, reason);
         });
     }
 

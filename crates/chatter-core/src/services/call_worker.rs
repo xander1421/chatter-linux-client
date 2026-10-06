@@ -4758,3 +4758,71 @@ mod verification_snapshot_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod group_ring_cancel_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn cancellation_withdraws_only_matching_pending_and_preserves_accepted_call() {
+        let channel = tonic::transport::Endpoint::from_static("http://127.0.0.1:9").connect_lazy();
+        let worker = CallWorkerHandle::spawn(crate::network::grpc::CallClient::new(
+            channel.into(),
+            crate::network::grpc::interceptors::AuthInterceptor::new(),
+        ));
+        let mut events = worker.subscribe_call_events();
+        let first = CallHandle::from("group-first");
+        let second = CallHandle::from("group-second");
+        for call in [&first, &second] {
+            worker.orch_present_incoming(
+                call.clone(),
+                OrchestratedCallKind::GroupChannel,
+                UserId::new(),
+                "Caller".into(),
+                false,
+                false,
+                String::new(),
+                None,
+                Some("Shared room".into()),
+                "channel".into(),
+            );
+            assert!(matches!(
+                tokio::time::timeout(std::time::Duration::from_secs(5), events.recv())
+                    .await
+                    .unwrap()
+                    .unwrap(),
+                CallOrchestratorEvent::IncomingPresented { .. }
+            ));
+        }
+        worker.orch_withdraw_incoming(first.clone(), CallEndReason::RemoteHangup);
+        assert!(
+            matches!(tokio::time::timeout(std::time::Duration::from_secs(5), events.recv()).await.unwrap().unwrap(), CallOrchestratorEvent::IncomingWithdrawn { call, reason: CallEndReason::RemoteHangup } if call == first)
+        );
+        // Duplicate/stale end cannot touch the next invite. A queued accept
+        // wins against later cancellation: withdrawal owns incoming only.
+        worker.orch_withdraw_incoming(first, CallEndReason::RemoteHangup);
+        worker.orch_accept_incoming(second.clone()).await.unwrap();
+        worker.orch_mark_connected(
+            second.clone(),
+            OrchestratedCallKind::GroupChannel,
+            UserId::new(),
+            false,
+        );
+        assert!(matches!(
+            tokio::time::timeout(std::time::Duration::from_secs(5), events.recv())
+                .await
+                .unwrap()
+                .unwrap(),
+            CallOrchestratorEvent::ActiveConnected { .. }
+        ));
+        worker.orch_withdraw_incoming(second, CallEndReason::RemoteHangup);
+        assert_eq!(
+            worker.orch_active_kind().await,
+            Some(OrchestratedCallKind::GroupChannel)
+        );
+        assert!(
+            events.try_recv().is_err(),
+            "no terminal event or media teardown after accepting"
+        );
+    }
+}

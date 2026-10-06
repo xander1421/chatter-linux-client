@@ -137,4 +137,34 @@ mod tests {
         task.await.unwrap();
         assert_eq!(*log.0.lock(), ["show c1", "cancel c1"]);
     }
+    #[tokio::test]
+    async fn ended_group_ring_cancels_native_notification_without_canceling_new_call() {
+        let log = Arc::new(Log::default());
+        let (tx, rx) = broadcast::channel(8);
+        let task =
+            spawn_call_notification_bridge(rx, Arc::new(NotificationService::new(log.clone())));
+        let mut group = presented("group-old");
+        if let CallOrchestratorEvent::IncomingPresented {
+            kind,
+            channel_context,
+            ..
+        } = &mut group
+        {
+            *kind = OrchestratedCallKind::GroupChannel;
+            *channel_context = Some("Shared room".into());
+        }
+        tx.send(group).unwrap();
+        tx.send(presented("new-call")).unwrap();
+        tx.send(CallOrchestratorEvent::IncomingWithdrawn {
+            call: CallHandle::from("group-old"),
+            reason: CallEndReason::RemoteHangup,
+        })
+        .unwrap();
+        drop(tx);
+        task.await.unwrap();
+        assert_eq!(
+            *log.0.lock(),
+            ["show group-old", "show new-call", "cancel group-old"]
+        );
+    }
 }

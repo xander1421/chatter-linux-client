@@ -18,6 +18,8 @@ mod anon_group;
 mod appearance;
 mod auth;
 pub mod calls;
+#[cfg(feature = "media")]
+mod group_ring_lifecycle;
 pub mod channels;
 mod composer;
 pub use composer::{ComposerReply, ComposerSend};

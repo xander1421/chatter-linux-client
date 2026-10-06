@@ -240,7 +240,7 @@ impl CallClient {
         &mut self,
         call_ids: Vec<String>,
         channel_ids: Vec<String>,
-    ) -> Result<impl Stream<Item = Result<CallEvent, NetworkError>>, NetworkError> {
+    ) -> Result<impl Stream<Item = Result<CallEvent, NetworkError>> + use<>, NetworkError> {
         let request = StreamCallEventsRequest {
             call_ids,
             channel_ids,

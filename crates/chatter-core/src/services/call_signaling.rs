@@ -413,6 +413,15 @@ impl CallSignalingService {
             .collect()
     }
 
+    /// Whether the invite is still waiting for an answer (not collecting keys
+    /// for an accepted join). Ring cancellation only owns this state.
+    pub fn is_ringing_group_call_invite(&self, call_id: &str) -> bool {
+        self.group_call_invites
+            .lock()
+            .get(call_id)
+            .is_some_and(|i| !i.accepted)
+    }
+
     /// The ring ran out: forget the invite unless the user has answered.
     pub fn drop_ringing_group_call_invite(&self, call_id: &str) {
         self.group_call_invites
