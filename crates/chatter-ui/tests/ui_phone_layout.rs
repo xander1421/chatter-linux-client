@@ -456,10 +456,11 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     )));
     pump_size(&w, PHONE_W, PHONE_H);
     assert_attachment_strip_geometry(&w);
-    let before = rect(&one(&w, "Remove attachment")).0;
+    let first_remove = one(&w, "Remove attachment");
+    let before = rect(&first_remove).0;
     scroll_attachment_strip(&w, -200.0);
     pump_size(&w, PHONE_W, PHONE_H);
-    let after = rect(&one(&w, "Remove attachment")).0;
+    let after = rect(&first_remove).0;
     assert!(after < before - 50.0, "attachment overflow did not scroll");
     assert_attachment_strip_geometry(&w);
     assert!(composer_native_item(&w) == original_input);
