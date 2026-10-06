@@ -1021,6 +1021,34 @@ mod log_redaction_tests {
 
     #[tokio::test]
     async fn server_error_text_event_payload_and_url_do_not_reach_logs() {
+        const ISOLATED_CAPTURE: &str = "CHATTER_PUSH_LOG_REDACTION_CHILD";
+        if std::env::var_os(ISOLATED_CAPTURE).is_none() {
+            // Callsite interest and the maximum enabled level are process-global.
+            // In tracing-core's single-dispatch fast path, another test thread
+            // registering this callsite can cache its own default subscriber's
+            // "never" interest, even while our capture subscriber is alive.
+            // Run the real assertions alone in this same test executable rather
+            // than retrying emissions or racing another cache rebuild.
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args([
+                    "--exact",
+                    "network::streaming::push_listener::log_redaction_tests::server_error_text_event_payload_and_url_do_not_reach_logs",
+                    "--test-threads=1",
+                    "--nocapture",
+                ])
+                .env(ISOLATED_CAPTURE, "1")
+                .output()
+                .expect("launch isolated push log redaction test");
+            assert!(
+                output.status.success()
+                    && String::from_utf8_lossy(&output.stdout).contains("1 passed; 0 failed"),
+                "isolated push log redaction test failed or did not run: {}\n{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr),
+            );
+            return;
+        }
+
         let bytes = Arc::new(Mutex::new(Vec::new()));
         let writer = Capture(bytes.clone());
         let subscriber = tracing_subscriber::fmt()
