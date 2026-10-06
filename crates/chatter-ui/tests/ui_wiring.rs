@@ -5376,13 +5376,19 @@ fn chrome_over_the_list_pauses_backdrop_while_scrolling() {
         "every selection-bar button pauses with the bar"
     );
     let composer = include_str!("../../../ui/chat/message_composer.slint");
-    assert_eq!(
-        composer.matches("HeaderButton {").count(),
-        composer
-            .matches("backdrop-paused: root.backdrop-paused;")
-            .count(),
-        "the voice-record buttons pause with the composer"
-    );
+    // Raised composer surfaces also sample the backdrop. Verify each element
+    // directly so adding a surface cannot mask a missing recording-button binding.
+    for marker in ["HeaderButton {", "GlassSurface {"] {
+        let elements: Vec<_> = composer.match_indices(marker).collect();
+        assert!(!elements.is_empty(), "composer must exercise {marker}");
+        for (pos, _) in elements {
+            let element = block_around(composer, pos + marker.len(), 1);
+            assert!(
+                element.contains("backdrop-paused: root.backdrop-paused;"),
+                "composer {marker} at {pos} must pause with the composer"
+            );
+        }
+    }
 }
 
 /// The sidebar's typing dots fade through their background's alpha. An
