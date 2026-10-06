@@ -4,6 +4,13 @@ Copied from the Cargo registry at exactly 1.17.1. Keep upstream licensing files.
 
 - `androidwindowadapter.rs` (game-activity path): IME state handling — see the
   `[patch.crates-io]` comment in the workspace `Cargo.toml`.
+- `text_input_offsets.rs` / `androidwindowadapter.rs`: convert GameTextInput's
+  Java UTF-16 selection/composition offsets to UTF-8 before inbound echo guards
+  and core dispatch, and convert every outbound state back to UTF-16. The
+  locked android-activity 0.6.1 decodes string encoding but forwards span
+  integers unchanged. Keeping cached state in UTF-8 avoids Cyrillic/emoji
+  caret drift and mismatched self echoes without changing IME refresh timing.
+  Host regression: `python3 tests/check_game_text_offsets.py` (rustc only).
 - `lib.rs` `run_event_loop`: frame pacing. Upstream capped the poll timeout at a
   hardcoded 10 ms while animations run (its own FIXME), so a fling ticked at
   ~100 fps whatever the panel's rate. Now, while animating with a native window,

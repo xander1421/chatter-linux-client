@@ -11,6 +11,7 @@
 
 mod androidwindowadapter;
 mod javahelper;
+mod text_input_offsets;
 
 #[cfg(all(not(feature = "aa-06"), feature = "aa-05"))]
 pub use android_activity_05 as android_activity;

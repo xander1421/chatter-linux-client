@@ -328,7 +328,7 @@ impl i_slint_core::window::WindowAdapterInternal for AndroidWindowAdapter {
                 // reset at every modal dismissal, the way
                 // message_composer.slint's reset-composition() does it.
                 if self.had_compose.replace(false) {
-                    self.app.set_text_input_state(TextInputState {
+                    self.set_game_text_input_state(TextInputState {
                         text: String::new(),
                         selection: TextSpan { start: 0, end: 0 },
                         compose_region: None,
@@ -479,7 +479,7 @@ impl i_slint_core::window::WindowAdapterInternal for AndroidWindowAdapter {
         *self.last_pushed_text.borrow_mut() = Some(text.clone());
         self.last_pushed_cursor.set(sel_end);
 
-        self.app.set_text_input_state(TextInputState {
+        self.set_game_text_input_state(TextInputState {
             text,
             selection: TextSpan { start: sel_start, end: sel_end },
             compose_region: compose.map(|(start, end)| TextSpan { start, end }),
@@ -566,7 +566,7 @@ impl AndroidWindowAdapter {
         if !disable {
             return;
         }
-        self.app.set_text_input_state(TextInputState {
+        self.set_game_text_input_state(TextInputState {
             text: String::new(),
             selection: TextSpan { start: 0, end: 0 },
             compose_region: None,
@@ -734,11 +734,30 @@ impl AndroidWindowAdapter {
         self.last_ime_selection.set((cursor, cursor));
         *self.last_pushed_text.borrow_mut() = Some(text.clone());
         self.ime_states_seen.borrow_mut().clear();
-        self.app.set_text_input_state(TextInputState {
+        self.set_game_text_input_state(TextInputState {
             text,
             selection: TextSpan { start: cursor, end: cursor },
             compose_region: None,
         });
+    }
+
+    /// Convert every outbound state, including finish_composing and clears,
+    /// at the boundary. Echo guards and pending cursor state remain UTF-8.
+    fn set_game_text_input_state(&self, mut state: android_activity::input::TextInputState) {
+        use android_activity::input::TextSpan;
+        let (start, end) = crate::text_input_offsets::utf8_span_to_utf16(
+            &state.text,
+            (state.selection.start, state.selection.end),
+        );
+        state.selection = TextSpan { start, end };
+        state.compose_region = state.compose_region.map(|span| {
+            let (start, end) = crate::text_input_offsets::utf8_span_to_utf16(
+                &state.text,
+                (span.start, span.end),
+            );
+            TextSpan { start, end }
+        });
+        self.app.set_text_input_state(state);
     }
 
     fn try_dispatch_key_event(&self, ev: WindowEvent) -> KeyEventResult {
@@ -953,6 +972,21 @@ impl AndroidWindowAdapter {
                     }
                 }
                 InputEvent::TextEvent(state) => {
+                    // android-activity decodes the string, but leaves Java UTF-16
+                    // span offsets unchanged. Everything below uses UTF-8 bytes.
+                    let mut state = state.clone();
+                    let (start, end) = crate::text_input_offsets::utf16_span_to_utf8(
+                        &state.text,
+                        (state.selection.start, state.selection.end),
+                    );
+                    state.selection = android_activity::input::TextSpan { start, end };
+                    state.compose_region = state.compose_region.map(|span| {
+                        let (start, end) = crate::text_input_offsets::utf16_span_to_utf8(
+                            &state.text,
+                            (span.start, span.end),
+                        );
+                        android_activity::input::TextSpan { start, end }
+                    });
                     // No live field owns the input method: this is the IME
                     // still reporting on a field that was destroyed (or a
                     // late report after it was released). Delivering it would
