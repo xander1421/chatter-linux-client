@@ -503,8 +503,9 @@ class MainActivity : GameActivity() {
             val input = contentResolver.openInputStream(uri) ?: return null
             input.use { stream -> out.outputStream().use { stream.copyTo(it) } }
             out.absolutePath
-        } catch (e: Exception) {
-            Log.e(TAG, "copyToCache failed for $uri", e)
+        } catch (_: Exception) {
+            // Provider URIs and exception messages can identify private files.
+            Log.e(TAG, "Attachment copy failed")
             null
         }
     }
