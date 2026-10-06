@@ -256,4 +256,157 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
             "composer {side} inset is {got}px, not chrome-inset ({inset}px)"
         );
     }
+
+    // A long draft must leave history visible with a phone-sized IME viewport.
+    // Drive the actual raw input: no source-string or duplicate layout probe.
+    chatter_ui::bin_ui::features::composer::wire_text_format(&w);
+    let draft = format!(
+        "{}\nEND",
+        "wrapped words preserve the entire draft ".repeat(28)
+    );
+    w.set_composer_text(draft.clone().into());
+    pump_size(&w, PHONE_W, 460.0);
+    let field = one(&w, "Message input");
+    let shell = testing::ElementHandle::find_by_element_type_name(&w, "MessageComposer")
+        .find(|e| e.size().height > 0.0)
+        .unwrap();
+    assert!(
+        shell.size().height <= 184.5,
+        "composer occupies too much of the IME-reduced pane: {:?}",
+        shell.size()
+    );
+    assert!(field.size().height >= 48.0, "input touch floor disappeared");
+    let raw = testing::ElementHandle::find_by_element_id(&w, "text-input")
+        .find(|e| e.accessible_value().as_ref().map(|s| s.as_str()) == Some(draft.as_str()))
+        .expect("actual composer TextInput");
+    click_at(
+        &w,
+        field.absolute_position().x + 20.0,
+        field.absolute_position().y + 20.0,
+    );
+    for _ in 0..100 {
+        key(&w, slint::platform::Key::DownArrow.into());
+    }
+    key(&w, slint::platform::Key::End.into());
+    pump_size(&w, PHONE_W, 460.0);
+    assert_tail_visible(&raw, &one(&w, "Message input"));
+    key(&w, "!".into());
+    assert_eq!(w.get_composer_text().as_str(), format!("{draft}!"));
+    key(&w, "\n".into());
+    key(&w, "tail".into());
+    pump_size(&w, PHONE_W, 460.0);
+    assert_tail_visible(&raw, &one(&w, "Message input"));
+    let end_y = raw.absolute_position().y;
+    for _ in 0..100 {
+        key(&w, slint::platform::Key::UpArrow.into());
+    }
+    key(&w, slint::platform::Key::Home.into());
+    pump_size(&w, PHONE_W, 460.0);
+    assert!(
+        raw.absolute_position().y > end_y + 40.0,
+        "caret movement did not scroll back"
+    );
+    key(&w, "START ".into());
+    assert!(w.get_composer_text().as_str().starts_with("START "));
+    for _ in 0..100 {
+        key(&w, slint::platform::Key::DownArrow.into());
+    }
+    key(&w, slint::platform::Key::End.into());
+    // Rewrap and resize while preserving the same end caret.
+    pump_size(&w, 360.0, 380.0);
+    assert_tail_visible(&raw, &one(&w, "Message input"));
+    let expected = w.get_composer_text();
+    w.set_composer_emoji_picker_visible(true);
+    pump_size(&w, PHONE_W, PHONE_H);
+    w.set_composer_emoji_picker_visible(false);
+    pump_size(&w, PHONE_W, 460.0);
+    assert_tail_visible(&raw, &one(&w, "Message input"));
+    assert_eq!(
+        w.get_composer_text(),
+        expected,
+        "resize/picker changed draft body"
+    );
+    // Uncommitted wrapped text is visible without being written into the body.
+    let composing = " composed words".repeat(18);
+    composition(&w, &composing, false);
+    pump_size(&w, PHONE_W, 460.0);
+    assert_eq!(
+        w.get_composer_text(),
+        expected,
+        "preedit was committed by scrolling"
+    );
+    assert_tail_visible(&raw, &one(&w, "Message input"));
+    composition(&w, &composing, true);
+    pump_size(&w, PHONE_W, 460.0);
+    assert_eq!(
+        w.get_composer_text().as_str(),
+        format!("{expected}{composing}")
+    );
+
+    // Desktop pointer events must still reach raw TextInput through the
+    // noninteractive viewport; arrows edit where the caret actually moved.
+    w.set_is_mobile_platform(false);
+    w.set_composer_text("".into());
+    pump_size(&w, 1000.0, 800.0);
+    let field = one(&w, "Message input");
+    click_at(
+        &w,
+        field.absolute_position().x + 20.0,
+        field.absolute_position().y + 20.0,
+    );
+    key(&w, "abc".into());
+    key(&w, slint::platform::Key::LeftArrow.into());
+    key(&w, "X".into());
+    assert_eq!(
+        w.get_composer_text().as_str(),
+        "abXc",
+        "desktop pointer/caret regression"
+    );
+}
+
+fn pump_size(w: &MainWindow, width: f32, height: f32) {
+    w.window().set_size(slint::LogicalSize::new(width, height));
+    slint::Timer::single_shot(std::time::Duration::from_millis(200), || {
+        slint::quit_event_loop().unwrap();
+    });
+    w.run().unwrap();
+}
+
+fn key(w: &MainWindow, text: slint::SharedString) {
+    use slint::platform::WindowEvent;
+    w.window()
+        .dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
+    w.window().dispatch_event(WindowEvent::KeyReleased { text });
+}
+
+fn click_at(w: &MainWindow, x: f32, y: f32) {
+    use slint::platform::{PointerEventButton, WindowEvent};
+    let position = slint::LogicalPosition::new(x, y);
+    let button = PointerEventButton::Left;
+    w.window()
+        .dispatch_event(WindowEvent::PointerPressed { position, button });
+    w.window()
+        .dispatch_event(WindowEvent::PointerReleased { position, button });
+}
+
+fn assert_tail_visible(raw: &testing::ElementHandle, field: &testing::ElementHandle) {
+    let bottom = raw.absolute_position().y + raw.size().height;
+    let field_bottom = field.absolute_position().y + field.size().height;
+    assert!(
+        bottom <= field_bottom + 1.0 && bottom > field_bottom - 32.0,
+        "end of wrapped input is outside its viewport: input bottom={bottom}, field bottom={field_bottom}"
+    );
+}
+
+fn composition(w: &MainWindow, text: &str, commit: bool) {
+    use i_slint_core::input::{InternalKeyEvent, KeyEventType};
+    let mut event = InternalKeyEvent::default();
+    if commit {
+        event.event_type = KeyEventType::CommitComposition;
+        event.key_event.text = text.into();
+    } else {
+        event.event_type = KeyEventType::UpdateComposition;
+        event.preedit_text = text.into();
+    }
+    i_slint_core::window::WindowInner::from_pub(w.window()).process_key_input(event);
 }

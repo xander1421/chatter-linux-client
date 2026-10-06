@@ -455,6 +455,7 @@ export component ChatLayout inherits Rectangle {
             width: 100%;
             vertical-stretch: 0;
             mobile: root.mobile;
+            available-pane-height: root.height - (composer.picker-open ? min(340px, root.height * 0.48) : 0px);
             backdrop-paused: message-list.scrolling;
             text <=> root.composer-text;
             placeholder: root.composer-placeholder;

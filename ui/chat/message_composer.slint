@@ -188,10 +188,53 @@ export component MessageComposer inherits GlassSurface {
     // send boxes beside it: those are touch targets, so the floor is the touch
     // minimum. A shorter row was what made them 36dp on a phone.
     property <length> min-input-height: Spacing.touch-target-min;
-    // ~18 lines. Beyond this the message list above would collapse to nothing.
-    // Past this cap, the inner Rectangle clips and the cursor stays in view.
-    property <length> max-input-height: 400px;
+    // The host supplies the chat pane after IME/system insets. Leave room for
+    // history even on a short landscape pane, and stop growing at six lines.
+    in property <length> available-pane-height: 800px;
+    property <length> input-line-height: line-measure.preferred-height;
+    property <length> max-input-height: root.mobile
+        ? max(min-input-height, min(input-line-height * 6 + padding-vertical,
+            available-pane-height * 0.4 - attachment-tray-height - edit-bar-height
+                - reply-bar-height - format-bar-height - row-padding * 2))
+        : 400px;
     property <length> padding-vertical: Spacing.sm * 2;
+    private property <length> cursor-y: 0px;
+    function reveal-cursor() {
+        // Raw TextInput reports the committed caret. Include the composing
+        // suffix's wrapped line while preedit is being displayed.
+        root.caret-top = text-input.preedit-text == "" ? cursor-y
+            : max(cursor-y, preedit-measure.preferred-height - input-line-height);
+        if root.caret-top + input-scroll.viewport-y < 0px {
+            input-scroll.viewport-y = -root.caret-top;
+        } else if root.caret-top + input-line-height + input-scroll.viewport-y > input-scroll.height {
+            input-scroll.viewport-y = input-scroll.height - root.caret-top - input-line-height;
+        }
+        input-scroll.viewport-y = min(0px, max(input-scroll.height - input-scroll.viewport-height,
+            input-scroll.viewport-y));
+    }
+    private property <length> caret-top;
+    // Re-query geometry after wrapping/viewport changes without clearing focus,
+    // committing preedit or changing either selection endpoint.
+    function refresh-cursor() {
+        text-input.set-selection-offsets(text-input.anchor-position-byte-offset,
+            text-input.cursor-position-byte-offset);
+        root.reveal-cursor();
+    }
+    line-measure := Text {
+        visible: false;
+        text: "Mg";
+        font-size: Typography.base;
+    }
+    preedit-measure := Text {
+        visible: false;
+        width: text-input.width;
+        font-size: Typography.base;
+        wrap: word-wrap;
+        text: TextFormat.replace(root.composed-text, "",
+            text-input.cursor-position-byte-offset + TextFormat.byte-length(text-input.preedit-text),
+            TextFormat.byte-length(root.composed-text));
+        changed preferred-height => { if root.composing { root.reveal-cursor(); } }
+    }
 
     // Use the TextInput's actual `preferred-height` (recomputed by Slint's
     // text shaper from the wrapped layout) instead of guessing from
@@ -903,60 +946,78 @@ export component MessageComposer inherits GlassSurface {
                     animate opacity { duration: 150ms; }
                 }
 
-                // Text input — raw TextInput. A previous swap to std-widgets
-                // `TextEdit` (a ScrollView wrapper) intercepted pointer
-                // events on desktop, leaving the field unclickable.
-                text-input := TextInput {
+                // Keep raw TextInput: no std TextEdit/ScrollView focus wrapper.
+                // Noninteractive Flickable forwards desktop pointer/selection
+                // events unchanged (pinned core items/flickable.rs). Mobile may
+                // pan long drafts; cursor movement follows in both modes.
+                input-scroll := Flickable {
                     x: Spacing.md;
-                    // Centred while the row is at its floor, top-anchored once the
-                    // text grows past it — otherwise the first line would sit
-                    // Spacing.sm above the placeholder it replaces.
-                    y: max(Spacing.sm, (parent.height - self.preferred-height) / 2);
+                    y: Spacing.sm;
                     width: parent.width - Spacing.md * 2;
                     height: parent.height - Spacing.sm * 2;
-                    color: Colors.text-primary;
-                    font-size: Typography.base;
-                    text <=> root.text;
-                    enabled: !root.disabled && !root.collapsed && !VoiceRecording.active;
-                    wrap: word-wrap;
-                    single-line: false;
-
-                    changed has-focus => {
-                        if self.has-focus { root.input-ever-focused = true; }
-                        if self.has-focus && !root.suspending-input {
-                            root.input-focused();
+                    viewport-width: self.width;
+                    viewport-height: max(self.height, text-input.preferred-height);
+                    interactive: root.mobile;
+                    changed height => { root.refresh-cursor(); }
+                    text-input := TextInput {
+                        x: 0px;
+                        // Centred while the row is at its floor, top-anchored once the
+                        // text grows past it — otherwise the first line would sit
+                        // Spacing.sm above the placeholder it replaces.
+                        y: max(0px, (input-scroll.height - self.preferred-height) / 2);
+                        width: input-scroll.width;
+                        height: max(input-scroll.height, self.preferred-height);
+                        page-height: input-scroll.height;
+                        changed width => { root.refresh-cursor(); }
+                        changed preedit-text => { root.reveal-cursor(); }
+                        cursor-position-changed(position) => {
+                            root.cursor-y = position.y;
+                            root.reveal-cursor();
                         }
-                    }
+                        color: Colors.text-primary;
+                        font-size: Typography.base;
+                        text <=> root.text;
+                        enabled: !root.disabled && !root.collapsed && !VoiceRecording.active;
+                        wrap: word-wrap;
+                        single-line: false;
 
-                    key-pressed(event) => {
-                        // Enter sends on desktop. On a phone it is a newline, like
-                        // Signal: the soft keyboard has no Shift+Enter, so sending on
-                        // it made multi-line messages impossible. Send is the button.
-                        if (event.text == "\n" && !event.modifiers.shift && !root.mobile) {
-                            if (root.can-send && !VoiceRecording.active) {
-                                if (root.is-editing) {
-                                    root.send-edit(root.edit-message-id, root.outgoing-text);
-                                } else {
-                                    root.send(root.outgoing-text);
-                                }
-                                root.reset-after-send();
+                        changed has-focus => {
+                            if self.has-focus { root.input-ever-focused = true; }
+                            if self.has-focus && !root.suspending-input {
+                                root.input-focused();
                             }
-                            return accept;
                         }
-                        if (event.text == "v" && (event.modifiers.control || event.modifiers.meta)) {
-                            // Attach clipboard image if present; TextInput still
-                            // handles text paste (we don't consume the event).
-                            root.paste-image();
+
+                        key-pressed(event) => {
+                            // Enter sends on desktop. On a phone it is a newline, like
+                            // Signal: the soft keyboard has no Shift+Enter, so sending on
+                            // it made multi-line messages impossible. Send is the button.
+                            if (event.text == "\n" && !event.modifiers.shift && !root.mobile) {
+                                if (root.can-send && !VoiceRecording.active) {
+                                    if (root.is-editing) {
+                                        root.send-edit(root.edit-message-id, root.outgoing-text);
+                                    } else {
+                                        root.send(root.outgoing-text);
+                                    }
+                                    root.reset-after-send();
+                                }
+                                return accept;
+                            }
+                            if (event.text == "v" && (event.modifiers.control || event.modifiers.meta)) {
+                                // Attach clipboard image if present; TextInput still
+                                // handles text paste (we don't consume the event).
+                                root.paste-image();
+                                return reject;
+                            }
                             return reject;
                         }
-                        return reject;
-                    }
 
-                    edited => {
-                        if (self.text != "") {
-                            root.check-mention-trigger(self.text);
+                        edited => {
+                            if (self.text != "") {
+                                root.check-mention-trigger(self.text);
+                            }
+                            root.typing-changed(self.text != "");
                         }
-                        root.typing-changed(self.text != "");
                     }
                 }
             }
