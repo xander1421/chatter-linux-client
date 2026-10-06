@@ -328,12 +328,18 @@ pub(crate) fn queue_reaction_with_conn(
             "Scoped reaction admission full; evidence retained".into(),
         ));
     }
+    // Latest add must survive a later same-emoji tombstone in the compressed
+    // queue, otherwise held arrival and ordinary delivery select differently.
+    if !remove {
+        conn.execute("INSERT INTO pending_reaction_add_selections(conversation_id,conversation_type,author_id,target_sent_at,actor_id,emoji,action_ts) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(conversation_type,conversation_id,author_id,target_sent_at,actor_id) DO UPDATE SET emoji=excluded.emoji,action_ts=excluded.action_ts WHERE excluded.action_ts>pending_reaction_add_selections.action_ts OR (excluded.action_ts=pending_reaction_add_selections.action_ts AND excluded.emoji>pending_reaction_add_selections.emoji)",params![scope.id.to_string(),scope.kind.as_str(),author.to_string(),target_sent_at as i64,reactor.to_string(),emoji,reaction_ts as i64])?;
+    }
     conn.execute("INSERT INTO pending_scoped_reactions
             (conversation_id,conversation_type,author_id,target_sent_at,actor_id,emoji,remove,action_ts,received_at)
             VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)
             ON CONFLICT(conversation_type,conversation_id,author_id,target_sent_at,actor_id,emoji)
             DO UPDATE SET remove=excluded.remove,action_ts=excluded.action_ts,received_at=excluded.received_at
-            WHERE excluded.action_ts > pending_scoped_reactions.action_ts",
+            WHERE excluded.action_ts > pending_scoped_reactions.action_ts
+            OR (excluded.action_ts = pending_scoped_reactions.action_ts AND excluded.remove > pending_scoped_reactions.remove)",
             params![scope.id.to_string(),scope.kind.as_str(),author.to_string(),target_sent_at as i64,reactor.to_string(),emoji,remove,reaction_ts as i64,now as i64])?;
     Ok(())
 }
@@ -476,7 +482,7 @@ pub(crate) fn take_on_arrival<'a>(
             reactions: Vec::new(),
         });
     }
-    let mut scoped = conn.prepare("SELECT actor_id,emoji,remove,action_ts FROM pending_scoped_reactions WHERE conversation_id=?1 AND conversation_type=?2 AND author_id=?3 AND target_sent_at=?4 ORDER BY action_ts,received_at")?;
+    let mut scoped = conn.prepare("SELECT actor_id,emoji,remove,action_ts FROM pending_scoped_reactions WHERE conversation_id=?1 AND conversation_type=?2 AND author_id=?3 AND target_sent_at=?4 UNION ALL SELECT actor_id,emoji,0,action_ts FROM pending_reaction_add_selections WHERE conversation_id=?1 AND conversation_type=?2 AND author_id=?3 AND target_sent_at=?4 ORDER BY action_ts,remove,emoji")?;
     let scoped_rows = scoped
         .query_map(
             params![
@@ -497,6 +503,7 @@ pub(crate) fn take_on_arrival<'a>(
         .collect::<Result<Vec<_>, _>>()?;
     drop(scoped);
     conn.execute("DELETE FROM pending_scoped_reactions WHERE conversation_id=?1 AND conversation_type=?2 AND author_id=?3 AND target_sent_at=?4",params![conversation,message.conversation_type.as_str(),author,message.sent_at as i64])?;
+    conn.execute("DELETE FROM pending_reaction_add_selections WHERE conversation_id=?1 AND conversation_type=?2 AND author_id=?3 AND target_sent_at=?4",params![conversation,message.conversation_type.as_str(),author,message.sent_at as i64])?;
     let own: Option<String> = conn
         .query_row(
             "SELECT value FROM settings WHERE key='auth.current_user_id'",

@@ -85,6 +85,7 @@ mod v084_scoped_reactions;
 mod v085_reaction_receive_journal;
 mod v086_channel_message_clocks;
 mod v087_single_reaction;
+mod v088_reaction_normalization;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -173,6 +174,7 @@ pub use v084_scoped_reactions::V084ScopedReactions;
 pub use v085_reaction_receive_journal::V085ReactionReceiveJournal;
 pub use v086_channel_message_clocks::V086ChannelMessageClocks;
 pub use v087_single_reaction::V087SingleReaction;
+pub use v088_reaction_normalization::V088ReactionNormalization;
 
 /// Trait for database migrations.
 ///
@@ -392,4 +394,5 @@ pub fn default_migrations() -> MigrationRunner {
         .register(V085ReactionReceiveJournal)
         .register(V086ChannelMessageClocks)
         .register(V087SingleReaction)
+        .register(V088ReactionNormalization)
 }

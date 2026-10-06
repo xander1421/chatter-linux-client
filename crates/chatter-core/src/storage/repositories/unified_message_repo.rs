@@ -43,6 +43,16 @@ fn index_shared_content(conn: &rusqlite::Connection, message: &Message) {
 #[path = "channel_message_clocks.rs"]
 mod channel_message_clocks;
 
+#[path = "reaction_clock.rs"]
+mod reaction_clock;
+
+#[path = "reaction_normalization.rs"]
+pub(crate) mod reaction_normalization;
+
+#[cfg(test)]
+#[path = "reaction_storage_regressions.rs"]
+mod reaction_storage_regressions;
+
 impl UnifiedMessageRepository {
     /// Create a new UnifiedMessageRepository.
     pub fn new(db: Arc<Database>) -> Self {
@@ -247,6 +257,10 @@ impl UnifiedMessageRepository {
             &author,
             message.sent_at,
         )?;
+        let count_votes = || {
+            conn.query_row("SELECT COUNT(*) FROM unified_reactions WHERE conversation_id=?1 AND conversation_type=?2 AND sender_id=?3 AND sent_at_ns=?4",params![message.conversation_id.to_string(),message.conversation_type.as_str(),author.to_string(),message.sent_at as i64],|r|r.get::<_,i64>(0))
+        };
+        let before = count_votes()?;
         let mut changed = false;
         for r in reactions {
             if !accept_reaction_action(
@@ -289,7 +303,7 @@ impl UnifiedMessageRepository {
             message.sent_at,
             &me,
         )?;
-        Ok(changed)
+        Ok(changed || count_votes()? != before)
     }
 
     /// Get a message by ID.
@@ -904,7 +918,7 @@ impl UnifiedMessageRepository {
                 })
             })
             .transpose()?;
-        let mut stmt=tx.prepare("SELECT actor_id,emoji,remove,action_ts FROM pending_scoped_reactions WHERE conversation_id=?1 AND conversation_type=?2 AND author_id=?3 AND target_sent_at=?4 ORDER BY action_ts,received_at")?;
+        let mut stmt=tx.prepare("SELECT actor_id,emoji,remove,action_ts FROM pending_scoped_reactions WHERE conversation_id=?1 AND conversation_type=?2 AND author_id=?3 AND target_sent_at=?4 UNION ALL SELECT actor_id,emoji,0,action_ts FROM pending_reaction_add_selections WHERE conversation_id=?1 AND conversation_type=?2 AND author_id=?3 AND target_sent_at=?4 ORDER BY action_ts,remove,emoji")?;
         let rows = stmt
             .query_map(
                 params![
@@ -936,6 +950,7 @@ impl UnifiedMessageRepository {
                     .parse()
                     .map_err(|_| StorageError::InvalidData("Invalid held reaction actor".into()))?;
                 tx.execute("DELETE FROM pending_scoped_reactions WHERE conversation_id=?1 AND conversation_type=?2 AND author_id=?3 AND target_sent_at=?4 AND actor_id=?5 AND emoji=?6",params![scope.id.to_string(),scope.kind.as_str(),author.to_string(),target_ts as i64,actor,emoji])?;
+                tx.execute("DELETE FROM pending_reaction_add_selections WHERE conversation_id=?1 AND conversation_type=?2 AND author_id=?3 AND target_sent_at=?4 AND actor_id=?5",params![scope.id.to_string(),scope.kind.as_str(),author.to_string(),target_ts as i64,actor])?;
                 accepted.push(super::message_modifier_repo::PendingReaction {
                     reactor,
                     emoji,
@@ -1273,6 +1288,8 @@ impl UnifiedMessageRepository {
     }
 
     /// Replace a verified complete server snapshot and both projections atomically.
+    /// A nonempty clockless snapshot cannot create ordered actor evidence: each
+    /// desired vote must agree with retained add/selection authority.
     pub fn replace_reaction_snapshot(
         &self,
         scope: &ReactionScope,
@@ -1289,6 +1306,20 @@ impl UnifiedMessageRepository {
             return Err(StorageError::InvalidData(
                 "Reaction snapshot target is no longer stored".into(),
             ));
+        }
+        let mut actors = std::collections::HashSet::new();
+        for (actor, emoji) in desired {
+            if !actors.insert(actor) {
+                return Err(StorageError::InvalidData(
+                    "Reaction snapshot contains several votes for one actor".into(),
+                ));
+            }
+            let ordered: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM reaction_actor_selections s JOIN reaction_action_versions v ON v.conversation_id=s.conversation_id AND v.conversation_type=s.conversation_type AND v.author_id=s.author_id AND v.target_sent_at=s.target_sent_at AND v.actor_id=s.actor_id AND v.emoji=s.emoji WHERE s.conversation_id=?1 AND s.conversation_type=?2 AND s.author_id=?3 AND s.target_sent_at=?4 AND s.actor_id=?5 AND s.emoji=?6 AND v.remove=0 AND v.action_ts=s.action_ts)",params![scope.id.to_string(),scope.kind.as_str(),author.to_string(),sent_at as i64,actor.to_string(),emoji],|r|r.get(0))?;
+            if !ordered {
+                return Err(StorageError::InvalidData(
+                    "Reaction snapshot lacks compatible ordered actor evidence".into(),
+                ));
+            }
         }
         tx.execute("DELETE FROM unified_reactions WHERE conversation_id=?1 AND conversation_type=?2 AND sender_id=?3 AND sent_at_ns=?4",params![scope.id.to_string(),scope.kind.as_str(),author.to_string(),sent_at as i64])?;
         for (user, emoji) in desired {
@@ -1323,7 +1354,7 @@ impl UnifiedMessageRepository {
             reactor_id,
             current_user_id,
             emoji,
-            crate::util::time::TimestampNanos::now().as_u64(),
+            self.allocate_reaction_clock(reactor_id)?,
         )
     }
 
@@ -1403,7 +1434,7 @@ impl UnifiedMessageRepository {
             reactor_id,
             current_user_id,
             emoji,
-            crate::util::time::TimestampNanos::now().as_u64(),
+            self.allocate_reaction_clock(reactor_id)?,
         )
     }
 
@@ -2827,23 +2858,18 @@ fn accept_reaction_action(
             "Invalid reaction action clock".into(),
         ));
     }
-    // Adds replace the actor's selection across emojis, not just this emoji's
-    // ledger entry. Ignore delayed adds after a newer selection; a
-    // deterministic emoji tie-break makes equal-clock concurrent devices agree.
+    // Preserve per-emoji evidence even when a newer cross-emoji add owns the
+    // projection. At equal clocks a removal wins, independent of delivery order.
+    let accepted = conn.execute("INSERT INTO reaction_action_versions(conversation_id,conversation_type,author_id,target_sent_at,actor_id,emoji,action_ts,remove) VALUES(?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(conversation_type,conversation_id,author_id,target_sent_at,actor_id,emoji) DO UPDATE SET action_ts=excluded.action_ts,remove=excluded.remove WHERE excluded.action_ts>reaction_action_versions.action_ts OR (excluded.action_ts=reaction_action_versions.action_ts AND excluded.remove>reaction_action_versions.remove)",params![scope.id.to_string(),scope.kind.as_str(),author.to_string(),target as i64,actor.to_string(),emoji,action as i64,remove])?>0;
     if !remove {
-        let newer: bool = conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM reaction_actor_selections WHERE conversation_id=?1 AND conversation_type=?2 AND author_id=?3 AND target_sent_at=?4 AND actor_id=?5 AND (action_ts>?6 OR (action_ts=?6 AND emoji>=?7)))",
-            params![scope.id.to_string(),scope.kind.as_str(),author.to_string(),target as i64,actor.to_string(),action as i64,emoji],
-            |r| r.get(0),
-        )?;
-        if newer {
-            return Ok(false);
+        // Record the latest observed add even if its same-emoji removal arrived
+        // first. This retains the actor's selection through removal/replay and
+        // prevents the previous emoji reappearing in the opposite delivery order.
+        let selected = conn.execute("INSERT INTO reaction_actor_selections(conversation_id,conversation_type,author_id,target_sent_at,actor_id,emoji,action_ts) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(conversation_type,conversation_id,author_id,target_sent_at,actor_id) DO UPDATE SET emoji=excluded.emoji,action_ts=excluded.action_ts WHERE excluded.action_ts>reaction_actor_selections.action_ts OR (excluded.action_ts=reaction_actor_selections.action_ts AND excluded.emoji>reaction_actor_selections.emoji)", params![scope.id.to_string(),scope.kind.as_str(),author.to_string(),target as i64,actor.to_string(),emoji,action as i64])?>0;
+        if selected {
+            conn.execute("DELETE FROM unified_reactions WHERE conversation_id=?1 AND conversation_type=?2 AND sender_id=?3 AND sent_at_ns=?4 AND user_id=?5 AND emoji<>?6", params![scope.id.to_string(),scope.kind.as_str(),author.to_string(),target as i64,actor.to_string(),emoji])?;
         }
-    }
-    let accepted = conn.execute("INSERT INTO reaction_action_versions(conversation_id,conversation_type,author_id,target_sent_at,actor_id,emoji,action_ts,remove) VALUES(?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(conversation_type,conversation_id,author_id,target_sent_at,actor_id,emoji) DO UPDATE SET action_ts=excluded.action_ts,remove=excluded.remove WHERE excluded.action_ts>reaction_action_versions.action_ts",params![scope.id.to_string(),scope.kind.as_str(),author.to_string(),target as i64,actor.to_string(),emoji,action as i64,remove])?>0;
-    if accepted && !remove {
-        conn.execute("INSERT INTO reaction_actor_selections(conversation_id,conversation_type,author_id,target_sent_at,actor_id,emoji,action_ts) VALUES(?1,?2,?3,?4,?5,?6,?7) ON CONFLICT(conversation_type,conversation_id,author_id,target_sent_at,actor_id) DO UPDATE SET emoji=excluded.emoji,action_ts=excluded.action_ts", params![scope.id.to_string(),scope.kind.as_str(),author.to_string(),target as i64,actor.to_string(),emoji,action as i64])?;
-        conn.execute("DELETE FROM unified_reactions WHERE conversation_id=?1 AND conversation_type=?2 AND sender_id=?3 AND sent_at_ns=?4 AND user_id=?5 AND emoji<>?6", params![scope.id.to_string(),scope.kind.as_str(),author.to_string(),target as i64,actor.to_string(),emoji])?;
+        return Ok(accepted && selected);
     }
     Ok(accepted)
 }
