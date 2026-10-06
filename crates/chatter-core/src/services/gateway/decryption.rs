@@ -128,6 +128,73 @@ impl MessageGateway {
         result
     }
 
+    /// Anonymous mailbox receive: journal reactions before any application.
+    /// Nonreaction plaintext uses the existing router once, with DEM gating retained.
+    pub(crate) async fn process_incoming_reaction_durable(
+        &self,
+        envelope: crate::proto::chat_v1::SealedSenderMessage,
+        key: &crate::storage::receive_artifact::ReceiveKey,
+    ) -> Result<
+        (
+            Option<crate::storage::receive_artifact::ReceiveArtifact>,
+            Option<SealedSenderResult>,
+        ),
+        ServiceError,
+    > {
+        let mut received = match self
+            .signal_service
+            .decrypt_reaction_durable(&envelope.sealed_body, key)
+            .await
+        {
+            Ok(received) => received,
+            // The staged receive rejected Plaintext before persistent mutation.
+            // Only the unchanged gateway DEM gate may admit that envelope.
+            Err(crate::services::signal::actor::DurableReceiveError::PlaintextRejected) => {
+                return self
+                    .process_incoming_message(envelope)
+                    .await
+                    .map(|outcome| (None, Some(outcome)));
+            }
+            Err(crate::services::signal::actor::DurableReceiveError::Failure(
+                ServiceError::Crypto(CryptoError::DuplicateMessage { .. }),
+            )) => {
+                return Ok((None, Some(SealedSenderResult::MessageStored)));
+            }
+            Err(crate::services::signal::actor::DurableReceiveError::Failure(
+                ServiceError::Crypto(CryptoError::SessionDesync {
+                    sender_uuid,
+                    sender_device_id,
+                    msg_type,
+                    ciphertext,
+                    reason,
+                }),
+            )) => {
+                return self
+                    .build_decryption_error_report(
+                        &sender_uuid,
+                        sender_device_id,
+                        msg_type,
+                        &ciphertext,
+                        &reason,
+                        envelope.timestamp,
+                    )
+                    .map(|outcome| (None, Some(outcome)));
+            }
+            Err(crate::services::signal::actor::DurableReceiveError::Failure(error)) => {
+                return Err(error);
+            }
+        };
+        if let Some(artifact) = received.artifact {
+            received.content.zeroize();
+            return Ok((Some(artifact), None));
+        }
+        let result = self
+            .process_incoming_message_inner(&received.address, &received.content)
+            .await;
+        received.content.zeroize();
+        result.map(|outcome| (None, Some(outcome)))
+    }
+
     /// RECEIVER side of the 1:1 self-heal: we could not decrypt an inner
     /// Whisper/PreKey message from an authenticated sender. Build a
     /// `DecryptionErrorMessage` naming the failed ciphertext so the caller can

@@ -747,6 +747,7 @@ fn dispatch_dm_content(
         } => {
             tracing::debug!(peer_id = %peer_id, emoji = %emoji, remove, "DM reaction");
             let _ = event_tx.send(InboxEvent::DmReaction {
+                conversation_peer_id: Some(peer_id),
                 peer_id,
                 emoji,
                 remove,

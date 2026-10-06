@@ -35,6 +35,8 @@ pub enum ConversationError {
     Message(#[from] crate::services::MessageError),
     #[error("Channel error: {0}")]
     Channel(#[from] crate::services::channel::ChannelError),
+    #[error("Storage error: {0}")]
+    Storage(#[from] crate::error::StorageError),
     #[error("{0}")]
     Other(String),
 }
@@ -64,6 +66,18 @@ fn forwardable_attachments(
             ))
         })
         .collect()
+}
+
+/// Persisted reaction presentation for one scoped message. Never a UI delta.
+#[derive(Clone, Debug)]
+pub struct ReactionSnapshot {
+    pub scope: crate::domain::reaction::ReactionScope,
+    pub conversation: ActiveConversation,
+    pub author: UserId,
+    pub sent_at: u64,
+    pub counts: Vec<crate::domain::message::ReactionCount>,
+    pub own_emojis: Vec<String>,
+    pub summary: String,
 }
 
 /// Polymorphic conversation operations.
@@ -111,6 +125,77 @@ impl ConversationHandle {
     // Ephemeral operations (reaction, typing, pin, edit, delete)
     // ========================================================================
 
+    /// Read the persisted message at this exact conversation/author/timestamp.
+    /// Encrypted server-channel messages use the AnonGroup storage kind while
+    /// retaining the real server ChannelId; unrelated kinds never match.
+    pub fn reaction_snapshot(
+        &self,
+        author: &UserId,
+        sent_at: u64,
+    ) -> ConversationResult<Option<ReactionSnapshot>> {
+        let id = self
+            .conversation
+            .channel_id()
+            .ok_or(ConversationError::NoConversation)?;
+        let kinds = match self.conversation {
+            ActiveConversation::Channel(_) => {
+                vec![ConversationType::Channel, ConversationType::AnonGroup]
+            }
+            ActiveConversation::ServerDm { .. } => vec![ConversationType::ServerDm],
+            ActiveConversation::AnonDm(_) => vec![ConversationType::AnonDm],
+            ActiveConversation::AnonGroup(_) => vec![ConversationType::AnonGroup],
+            ActiveConversation::None => return Err(ConversationError::NoConversation),
+        };
+        let mut found = None;
+        for kind in kinds {
+            let scope = crate::domain::reaction::ReactionScope::new(id, kind);
+            if let Some(message) = self
+                .client
+                .messages()
+                .message_repo
+                .get_by_reaction_scope(&scope, author, sent_at)?
+            {
+                if found.is_some() {
+                    return Err(ConversationError::Other(
+                        "Ambiguous reaction storage kind for channel".into(),
+                    ));
+                }
+                found = Some(message);
+            }
+        }
+        let Some(message) = found else {
+            return Ok(None);
+        };
+        let scope = crate::domain::reaction::ReactionScope::of(&message);
+        self.client
+            .messages()
+            .message_repo
+            .ensure_reaction_scope_resolved(&scope, author, sent_at)?;
+        Ok(Some(ReactionSnapshot {
+            scope,
+            conversation: self.conversation,
+            author: *author,
+            sent_at,
+            summary: crate::domain::message::ReactionCount::summary_string(
+                &message.reaction_counts,
+            ),
+            counts: message.reaction_counts,
+            own_emojis: message.current_user_reactions,
+        }))
+    }
+
+    /// Bind a domain event to this exact persisted scope before exposing a UI snapshot.
+    pub fn reaction_snapshot_for_scope(
+        &self,
+        expected: &crate::domain::reaction::ReactionScope,
+        author: &UserId,
+        sent_at: u64,
+    ) -> ConversationResult<Option<ReactionSnapshot>> {
+        Ok(self
+            .reaction_snapshot(author, sent_at)?
+            .filter(|snapshot| snapshot.scope == *expected))
+    }
+
     /// Toggle a reaction: query local state, decide add vs remove, then
     /// dispatch. Returns `true` if the new state is "reacted".
     ///
@@ -125,11 +210,14 @@ impl ConversationHandle {
     ) -> Result<bool, ConversationError> {
         // Per-user check — the summary aggregate would flip other users'
         // reactions off.
-        let already = self
-            .client
-            .messages()
-            .user_has_reacted(target_author, target_sent_timestamp, emoji)
-            .unwrap_or(false);
+        let snapshot = self
+            .reaction_snapshot(target_author, target_sent_timestamp)?
+            .ok_or_else(|| {
+                ConversationError::Other(
+                    "Reaction target is not stored in this conversation".into(),
+                )
+            })?;
+        let already = snapshot.own_emojis.iter().any(|own| own == emoji);
         let remove = already;
         self.send_reaction(emoji, target_author, target_sent_timestamp, remove)
             .await?;
@@ -146,31 +234,46 @@ impl ConversationHandle {
     ) -> ConversationResult {
         // Sub-services on the wire-format side still take &str (proto field
         // type); convert once and reuse.
+        let scope = self
+            .reaction_snapshot(target_author, target_sent_timestamp)?
+            .ok_or_else(|| {
+                ConversationError::Other("Reaction target not stored in this conversation".into())
+            })?
+            .scope;
         let target_author_str = target_author.to_string();
+        if self.conversation == ActiveConversation::None {
+            return Err(ConversationError::NoConversation);
+        }
+        let user_id = self
+            .client
+            .auth_state()
+            .get()
+            .current_user_id
+            .ok_or_else(|| ConversationError::Other("Reaction requires a signed-in user".into()))?;
         match &self.conversation {
             ActiveConversation::AnonDm(id) => {
                 self.client
                     .anon_dms()
                     .send_reaction(id, emoji, &target_author_str, target_sent_timestamp, remove)
                     .await?;
-                // Persist own reaction
-                if let Some(user_id) = self.client.auth_state().get().current_user_id {
+                // Persist own reaction, surfacing storage failure.
+                {
                     if remove {
-                        let _ = self.client.anon_dms().remove_reaction(
+                        self.client.anon_dms().remove_reaction(
                             id,
                             target_author,
                             target_sent_timestamp,
                             &user_id,
                             emoji,
-                        );
+                        )?;
                     } else {
-                        let _ = self.client.anon_dms().add_reaction(
+                        self.client.anon_dms().add_reaction(
                             id,
                             target_author,
                             target_sent_timestamp,
                             &user_id,
                             emoji,
-                        );
+                        )?;
                     }
                 }
                 Ok(())
@@ -180,24 +283,24 @@ impl ConversationHandle {
                     .anon_groups()
                     .send_reaction(id, emoji, &target_author_str, target_sent_timestamp, remove)
                     .await?;
-                // Persist own reaction
-                if let Some(user_id) = self.client.auth_state().get().current_user_id {
+                // Persist own reaction, surfacing storage failure.
+                {
                     if remove {
-                        let _ = self.client.anon_groups().remove_reaction(
+                        self.client.anon_groups().remove_reaction(
                             id,
                             target_author,
                             target_sent_timestamp,
                             &user_id,
                             emoji,
-                        );
+                        )?;
                     } else {
-                        let _ = self.client.anon_groups().add_reaction(
+                        self.client.anon_groups().add_reaction(
                             id,
                             target_author,
                             target_sent_timestamp,
                             &user_id,
                             emoji,
-                        );
+                        )?;
                     }
                 }
                 Ok(())
@@ -206,36 +309,32 @@ impl ConversationHandle {
             // DM (mailbox/server) and channel share build + persist; only the
             // channel embeds a channel_id and the transport differs.
             _ => {
-                // Wire payload only needs target_author + target_sent_timestamp,
-                // so don't block the send on a local DB lookup.
+                // Scope and local storage were validated before any remote effect.
+                let wire_author = match self.conversation {
+                    ActiveConversation::ServerDm { peer_id } => {
+                        crate::domain::reaction::encode_dm_reaction_target(&peer_id, target_author)
+                    }
+                    _ => target_author_str.clone(),
+                };
                 let content = crate::services::build_reaction_content_with_channel(
                     emoji,
                     remove,
-                    &target_author_str,
+                    &wire_author,
                     target_sent_timestamp,
                     self.active_channel_id().as_deref(),
                 );
                 self.dispatch_content(content).await?;
-                // Best-effort local persist: no-op if the target message
-                // isn't in our DB (receiver may have scrolled past it).
-                //
-                // MUST go through `record_reaction`, which writes
-                // `unified_reactions` and rebuilds BOTH blobs on the message
-                // row. The old path (`update_reaction_by_sender`) only bumped
-                // the aggregate `reaction_counts`, leaving
-                // `current_user_reactions_blob` empty — so `user_has_reacted`
-                // always said no, `toggle_reaction` could only ever ADD, and
-                // tapping your own reaction in a DM or channel incremented the
-                // count instead of removing it. Observed on device: 1 → 2
-                // (§112w).
-                if let Some(user_id) = self.client.auth_state().get().current_user_id {
-                    let _ = self.client.messages().record_reaction(
+                // Persist after the remote effect. A local storage failure is
+                // surfaced; callers must not blindly retry the remote action.
+                {
+                    self.client.messages().record_reaction(
+                        &scope,
                         target_author,
                         target_sent_timestamp,
                         &user_id,
                         emoji,
                         remove,
-                    );
+                    )?;
                 }
                 Ok(())
             }
@@ -1853,5 +1952,150 @@ mod tests {
                 .unwrap()
                 .is_some()
         );
+    }
+    #[tokio::test]
+    async fn reaction_snapshot_is_scoped_and_repairs_persisted_add_remove_duplicates() {
+        use crate::domain::anon_dm::AnonDmId;
+        use crate::domain::anon_group::AnonGroupId;
+        let (client, _dir) = test_client();
+        let own = UserId::new();
+        let author = UserId::new();
+        let other = UserId::new();
+        client
+            .auth_state()
+            .set_logged_in(own, 1, "reaction fixture".into());
+        crate::storage::repositories::settings_repo::SettingsRepository::new(
+            client.messages().database(),
+        )
+        .set_string(
+            crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID,
+            &own.to_string(),
+        )
+        .unwrap();
+        let encrypted_channel = ChannelId::new();
+        let scopes = [
+            (
+                ActiveConversation::Channel(ChannelId::new()),
+                ConversationType::Channel,
+            ),
+            (
+                ActiveConversation::Channel(encrypted_channel),
+                ConversationType::AnonGroup,
+            ),
+            (
+                ActiveConversation::ServerDm {
+                    peer_id: UserId::new(),
+                },
+                ConversationType::ServerDm,
+            ),
+            (
+                ActiveConversation::AnonDm(AnonDmId::new()),
+                ConversationType::AnonDm,
+            ),
+            (
+                ActiveConversation::AnonGroup(AnonGroupId::new()),
+                ConversationType::AnonGroup,
+            ),
+        ];
+        for (index, (scope, kind)) in scopes.into_iter().enumerate() {
+            let sent_at = 400 + index as u64;
+            let id = scope.channel_id().unwrap();
+            store_peer_message(&client, id, kind.clone(), author, sent_at);
+            let handle = client.conversation(scope);
+            let snapshot = handle.reaction_snapshot(&author, sent_at).unwrap().unwrap();
+            assert!(snapshot.counts.is_empty());
+            assert_eq!(snapshot.conversation, scope);
+            assert_eq!(snapshot.author, author);
+            assert_eq!(snapshot.sent_at, sent_at);
+            for reactor in [own, own, other] {
+                client
+                    .messages()
+                    .record_reaction(
+                        &crate::domain::reaction::ReactionScope::new(id, kind.clone()),
+                        &author,
+                        sent_at,
+                        &reactor,
+                        "👍",
+                        false,
+                    )
+                    .unwrap();
+            }
+            let snapshot = handle.reaction_snapshot(&author, sent_at).unwrap().unwrap();
+            assert_eq!(snapshot.counts[0].count, 2);
+            assert_eq!(snapshot.own_emojis, vec!["👍".to_string()]);
+            for reactor in [own, own] {
+                client
+                    .messages()
+                    .record_reaction(
+                        &crate::domain::reaction::ReactionScope::new(id, kind.clone()),
+                        &author,
+                        sent_at,
+                        &reactor,
+                        "👍",
+                        true,
+                    )
+                    .unwrap();
+            }
+            let snapshot = handle.reaction_snapshot(&author, sent_at).unwrap().unwrap();
+            assert_eq!(snapshot.counts[0].count, 1);
+            assert!(snapshot.own_emojis.is_empty());
+            client
+                .messages()
+                .record_reaction(
+                    &crate::domain::reaction::ReactionScope::new(id, kind.clone()),
+                    &author,
+                    sent_at,
+                    &other,
+                    "👍",
+                    true,
+                )
+                .unwrap();
+            let snapshot = handle.reaction_snapshot(&author, sent_at).unwrap().unwrap();
+            assert!(snapshot.counts.is_empty());
+            assert!(snapshot.summary.is_empty());
+            assert!(
+                client
+                    .conversation(ActiveConversation::Channel(ChannelId::new()))
+                    .reaction_snapshot(&author, sent_at)
+                    .unwrap()
+                    .is_none()
+            );
+            assert!(handle.reaction_snapshot(&other, sent_at).unwrap().is_none());
+            assert!(
+                handle
+                    .reaction_snapshot(&author, sent_at + 100)
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        // Same UUID does not make an anonymous group into a friend DM.
+        assert!(
+            client
+                .conversation(ActiveConversation::ServerDm {
+                    peer_id: encrypted_channel.to_string().parse().unwrap()
+                })
+                .reaction_snapshot(&author, 401)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test]
+    async fn reaction_toggle_does_not_invent_success_for_missing_target() {
+        let (client, _dir) = test_client();
+        let own = UserId::new();
+        client
+            .auth_state()
+            .set_logged_in(own, 1, "reaction fixture".into());
+        crate::storage::repositories::settings_repo::SettingsRepository::new(
+            client.messages().database(),
+        )
+        .set_string(
+            crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID,
+            &own.to_string(),
+        )
+        .unwrap();
+        let handle = client.conversation(ActiveConversation::Channel(ChannelId::new()));
+        assert!(handle.toggle_reaction("👍", &own, 700).await.is_err());
     }
 }

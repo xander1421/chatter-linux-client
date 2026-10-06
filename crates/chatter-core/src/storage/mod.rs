@@ -11,6 +11,7 @@ pub mod mesh_identity_store;
 #[cfg(feature = "mesh")]
 pub mod mesh_store;
 pub mod migrations;
+pub mod receive_artifact;
 pub mod repositories;
 pub mod serialization;
 

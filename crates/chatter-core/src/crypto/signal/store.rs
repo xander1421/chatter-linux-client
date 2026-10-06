@@ -407,3 +407,123 @@ impl SenderKeyStore for SignalStore {
 // =============================================================================
 
 impl ProtocolStore for SignalStore {}
+
+/// Private write overlay for an exact sealed-envelope admission check. Both
+/// clones share the overlay, but no identity/session write reaches SQLite until
+/// commit. Kept inside the single-threaded Signal actor for the whole batch.
+#[derive(Clone)]
+pub(crate) struct StagedSignalStore {
+    base: SignalStore,
+    sessions: std::rc::Rc<std::cell::RefCell<Vec<(ProtocolAddress, SessionRecord)>>>,
+    identities: std::rc::Rc<std::cell::RefCell<Vec<(ProtocolAddress, IdentityKey)>>>,
+}
+impl StagedSignalStore {
+    pub(crate) fn new(base: SignalStore) -> Self {
+        Self {
+            base,
+            sessions: Default::default(),
+            identities: Default::default(),
+        }
+    }
+    /// Caller must already mark submission: a storage failure can leave a
+    /// partial local commit and must retain uncertainty. No ciphertext has been
+    /// deposited yet; the server still admits all devices in one transaction.
+    pub(crate) async fn commit(&mut self) -> Result<()> {
+        let identities = self.identities.borrow().clone();
+        let sessions = self.sessions.borrow().clone();
+        for (address, identity) in identities {
+            self.base.save_identity(&address, &identity).await?;
+        }
+        for (address, record) in sessions {
+            self.base.store_session(&address, &record).await?;
+        }
+        Ok(())
+    }
+}
+#[async_trait(?Send)]
+impl SessionStore for StagedSignalStore {
+    async fn load_session(&self, address: &ProtocolAddress) -> Result<Option<SessionRecord>> {
+        if let Some((_, record)) = self.sessions.borrow().iter().find(|(a, _)| a == address) {
+            return Ok(Some(record.clone()));
+        }
+        self.base.load_session(address).await
+    }
+    async fn store_session(
+        &mut self,
+        address: &ProtocolAddress,
+        record: &SessionRecord,
+    ) -> Result<()> {
+        // Serialize now too, so malformed staged state cannot be admitted.
+        record.serialize()?;
+        let mut sessions = self.sessions.borrow_mut();
+        if let Some((_, old)) = sessions.iter_mut().find(|(a, _)| a == address) {
+            *old = record.clone();
+        } else {
+            sessions.push((address.clone(), record.clone()));
+        }
+        Ok(())
+    }
+}
+#[async_trait(?Send)]
+impl IdentityKeyStore for StagedSignalStore {
+    async fn get_identity_key_pair(&self) -> Result<IdentityKeyPair> {
+        self.base.get_identity_key_pair().await
+    }
+    async fn get_local_registration_id(&self) -> Result<u32> {
+        self.base.get_local_registration_id().await
+    }
+    async fn get_identity(&self, address: &ProtocolAddress) -> Result<Option<IdentityKey>> {
+        if let Some((_, identity)) = self
+            .identities
+            .borrow()
+            .iter()
+            .find(|(a, _)| a.name() == address.name())
+        {
+            return Ok(Some(*identity));
+        }
+        self.base.get_identity(address).await
+    }
+    async fn is_trusted_identity(
+        &self,
+        address: &ProtocolAddress,
+        identity: &IdentityKey,
+        direction: Direction,
+    ) -> Result<bool> {
+        if let Some((_, staged)) = self
+            .identities
+            .borrow()
+            .iter()
+            .find(|(a, _)| a.name() == address.name())
+        {
+            if staged != identity {
+                return Ok(false);
+            }
+        }
+        self.base
+            .is_trusted_identity(address, identity, direction)
+            .await
+    }
+    async fn save_identity(
+        &mut self,
+        address: &ProtocolAddress,
+        identity: &IdentityKey,
+    ) -> Result<IdentityChange> {
+        let changed = self
+            .get_identity(address)
+            .await?
+            .is_some_and(|old| old != *identity);
+        let mut identities = self.identities.borrow_mut();
+        if let Some((_, old)) = identities
+            .iter_mut()
+            .find(|(a, _)| a.name() == address.name())
+        {
+            *old = *identity;
+        } else {
+            identities.push((address.clone(), *identity));
+        }
+        Ok(IdentityChange::from_changed(changed))
+    }
+}
+
+#[path = "receive_store.rs"]
+pub(crate) mod receive;

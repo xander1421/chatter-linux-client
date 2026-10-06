@@ -1190,6 +1190,7 @@ impl MessageService {
     /// count when the snapshot + delta both carry the same reaction.
     pub fn record_reaction(
         &self,
+        scope: &crate::domain::reaction::ReactionScope,
         target_sender: &UserId,
         target_sent_at_ns: u64,
         reactor: &UserId,
@@ -1199,11 +1200,63 @@ impl MessageService {
         let current = self.current_user_id()?;
         if remove {
             self.message_repo
-                .remove_reaction(target_sender, target_sent_at_ns, reactor, &current, emoji)
+                .remove_reaction(
+                    scope,
+                    target_sender,
+                    target_sent_at_ns,
+                    reactor,
+                    &current,
+                    emoji,
+                )
                 .map_err(MessageError::from)
         } else {
             self.message_repo
-                .add_reaction(target_sender, target_sent_at_ns, reactor, &current, emoji)
+                .add_reaction(
+                    scope,
+                    target_sender,
+                    target_sent_at_ns,
+                    reactor,
+                    &current,
+                    emoji,
+                )
+                .map_err(MessageError::from)
+        }
+    }
+
+    pub fn record_reaction_at(
+        &self,
+        scope: &crate::domain::reaction::ReactionScope,
+        target_sender: &UserId,
+        target_sent_at_ns: u64,
+        reactor: &UserId,
+        emoji: &str,
+        remove: bool,
+        action_ts: u64,
+    ) -> Result<bool, MessageError> {
+        let current = self.current_user_id()?;
+        if remove {
+            self.message_repo
+                .remove_reaction_at(
+                    scope,
+                    target_sender,
+                    target_sent_at_ns,
+                    reactor,
+                    &current,
+                    emoji,
+                    action_ts,
+                )
+                .map_err(MessageError::from)
+        } else {
+            self.message_repo
+                .add_reaction_at(
+                    scope,
+                    target_sender,
+                    target_sent_at_ns,
+                    reactor,
+                    &current,
+                    emoji,
+                    action_ts,
+                )
                 .map_err(MessageError::from)
         }
     }
@@ -1286,6 +1339,44 @@ impl MessageService {
         Ok((*actor != self.current_user_id()?).then_some(*conversation))
     }
 
+    /// Authenticate a DM destination claim against the actual envelope sender.
+    /// Legacy self-device envelopes have no destination and are rejected.
+    pub fn dm_reaction_admission(
+        &self,
+        transport_peer: Option<UserId>,
+        reactor: UserId,
+        target: &str,
+    ) -> Result<(crate::domain::reaction::ReactionScope, UserId), MessageError> {
+        let own = self.current_user_id()?;
+        let (claimed, author) = crate::domain::reaction::decode_dm_reaction_target(target)?;
+        let conversation_peer = if reactor == own {
+            claimed.or(transport_peer).ok_or_else(|| {
+                MessageError::InvalidContent("Self-device reaction lacks destination scope".into())
+            })?
+        } else {
+            if claimed.is_some_and(|destination| destination != own)
+                || transport_peer.is_some_and(|peer| peer != reactor)
+            {
+                return Err(MessageError::InvalidContent(
+                    "Reaction destination differs from authenticated transport".into(),
+                ));
+            }
+            reactor
+        };
+        if conversation_peer == own {
+            return Err(MessageError::InvalidContent(
+                "Reaction destination is not a peer conversation".into(),
+            ));
+        }
+        Ok((
+            crate::domain::reaction::ReactionScope::new(
+                ChannelId::from(conversation_peer),
+                ConversationType::ServerDm,
+            ),
+            author,
+        ))
+    }
+
     /// Persist a peer's reaction that arrived in `conversation`, after binding
     /// its target to that conversation ([`Self::resolve_inbound_target`]).
     /// One whose target is not here yet is held until it arrives (Signal
@@ -1295,7 +1386,7 @@ impl MessageService {
     #[allow(clippy::too_many_arguments)]
     pub fn record_inbound_reaction(
         &self,
-        conversation: &ChannelId,
+        scope: &crate::domain::reaction::ReactionScope,
         reactor: &UserId,
         target_author: &UserId,
         target_sent_at_ns: u64,
@@ -1303,22 +1394,86 @@ impl MessageService {
         remove: bool,
         reaction_ts: u64,
     ) -> Result<bool, MessageError> {
-        match self.lookup_inbound_target(conversation, reactor, target_author, target_sent_at_ns)? {
-            InboundTarget::Allowed(_) => {
-                self.record_reaction(target_author, target_sent_at_ns, reactor, emoji, remove)
-            }
-            InboundTarget::Refused => Ok(false),
-            InboundTarget::NotHeld => {
-                tracing::debug!(%reactor, %target_author, target_sent_at_ns, "Reaction before its message — held");
-                crate::storage::repositories::message_modifier_repo::MessageModifierRepository::new(self.database.clone())
-                    .queue_reaction(
-                        target_author, target_sent_at_ns, reactor, emoji, remove,
-                        self.held_modifier_scope(conversation, reactor)?, reaction_ts,
-                        crate::util::time::TimestampNanos::now().as_u64(),
-                    )?;
-                Ok(false)
+        let allowed = *reactor == self.current_user_id()?
+            || match scope.kind {
+                ConversationType::ServerDm => scope.id == ChannelId::from(*reactor),
+                ConversationType::Channel | ConversationType::AnonGroup => self
+                    .channel_repo
+                    .get_membership(&scope.id, reactor)?
+                    .is_some(),
+                _ => false,
+            };
+        if !allowed {
+            return Ok(false);
+        }
+        let Some(_target) =
+            self.message_repo
+                .get_by_reaction_scope(scope, target_author, target_sent_at_ns)?
+        else {
+            crate::storage::repositories::message_modifier_repo::MessageModifierRepository::new(
+                self.database.clone(),
+            )
+            .queue_reaction(
+                target_author,
+                target_sent_at_ns,
+                reactor,
+                emoji,
+                remove,
+                scope,
+                reaction_ts,
+                crate::util::time::TimestampNanos::now().as_u64(),
+            )?;
+            return Ok(false);
+        };
+        self.record_reaction_at(
+            scope,
+            target_author,
+            target_sent_at_ns,
+            reactor,
+            emoji,
+            remove,
+            reaction_ts,
+        )
+    }
+
+    /// Resolve a channel transport target only within its actual channel ID.
+    /// Encrypted server-channel rows use AnonGroup storage. Never search another ID.
+    pub fn channel_reaction_scope(
+        &self,
+        channel: ChannelId,
+        _author: &UserId,
+        _sent_at: u64,
+    ) -> Result<crate::domain::reaction::ReactionScope, MessageError> {
+        let mut found = None;
+        for kind in [ConversationType::Channel, ConversationType::AnonGroup] {
+            let candidate = crate::domain::reaction::ReactionScope::new(channel, kind);
+            if self
+                .message_repo
+                .get_by_reaction_scope(&candidate, _author, _sent_at)?
+                .is_some()
+            {
+                if found.is_some() {
+                    return Err(MessageError::InvalidContent(
+                        "Ambiguous channel reaction storage kind".into(),
+                    ));
+                }
+                found = Some(candidate);
             }
         }
+        if let Some(scope) = found {
+            return Ok(scope);
+        }
+        let channel_row = self.channel_repo.get(&channel)?.ok_or_else(|| {
+            MessageError::InvalidContent("Reaction channel metadata unavailable".into())
+        })?;
+        Ok(crate::domain::reaction::ReactionScope::new(
+            channel,
+            if channel_row.config.require_encryption {
+                ConversationType::AnonGroup
+            } else {
+                ConversationType::Channel
+            },
+        ))
     }
 
     /// The target of a pin (or `unpin`) that arrived in `conversation`, for
@@ -1351,8 +1506,8 @@ impl MessageService {
         }
     }
 
-    /// Replace a channel message's reaction ledger from an authoritative
-    /// server snapshot, including reactions removed while replay was skipped.
+    /// Validate server reaction projection identity without replacing the
+    /// independent sealed peer-control ledger or resolving historical ambiguity.
     pub fn reconcile_channel_reactions(
         &self,
         message: &crate::proto::chat_v1::Message,
@@ -1384,7 +1539,7 @@ impl MessageService {
             .map(|row| row.sent_at)
             .or_else(|| (!encrypted).then_some(message.timestamp));
         // Validate the entire snapshot before any early return or ledger mutation.
-        let desired: Vec<(UserId, String)> = message
+        let _validated: Vec<(UserId, String)> = message
             .reactions
             .iter()
             .map(|reaction| {
@@ -1409,7 +1564,17 @@ impl MessageService {
         let Some(local) = local else {
             return Ok(());
         };
-        if local.conversation_id != channel_id || local.is_deleted {
+        if local.conversation_id != channel_id
+            || !crate::domain::reaction::channel_snapshot_kind_matches(
+                &local.conversation_type,
+                encrypted,
+            )
+        {
+            return Err(MessageError::InvalidContent(
+                "Reaction snapshot conversation kind/id mismatch".into(),
+            ));
+        }
+        if local.is_deleted {
             return Ok(());
         }
         if local.sender_id != author {
@@ -1417,59 +1582,10 @@ impl MessageService {
                 "reaction snapshot author mismatch".into(),
             ));
         }
-        let Some(sender) = local.sender_id else {
-            return Ok(());
-        };
-        let existing = self.message_repo.get_reactions(&sender, local.sent_at)?;
-        for reaction in existing {
-            if !desired
-                .iter()
-                .any(|(user, emoji)| *user == reaction.user_id && *emoji == reaction.emoji.value)
-            {
-                if self.record_reaction(
-                    &sender,
-                    local.sent_at,
-                    &reaction.user_id,
-                    &reaction.emoji.value,
-                    true,
-                )? {
-                    self.event_bus
-                        .emit_domain(crate::events::DomainEvent::ReactionRemoved {
-                            sender_id: sender,
-                            sent_at_ns: local.sent_at,
-                            reactor_id: reaction.user_id,
-                            emoji: reaction.emoji.value,
-                            timestamp: message.updated_at / 1_000_000,
-                        });
-                }
-            }
-        }
-        for (reactor, emoji) in &desired {
-            if self.record_reaction(&sender, local.sent_at, reactor, emoji, false)? {
-                self.event_bus
-                    .emit_domain(crate::events::DomainEvent::ReactionAdded {
-                        sender_id: sender,
-                        sent_at_ns: local.sent_at,
-                        reactor_id: *reactor,
-                        emoji: emoji.clone(),
-                        timestamp: message.updated_at / 1_000_000,
-                    });
-            }
-        }
-        // Empty snapshots must also clear aggregate blobs left by older
-        // fetches that never populated the per-reactor ledger.
-        if let Some(mut local) = self.get_message_local(&id)? {
-            local.reaction_counts = self
-                .message_repo
-                .get_reaction_counts(&sender, local.sent_at)?;
-            let current = self.current_user_id()?;
-            local.current_user_reactions = desired
-                .iter()
-                .filter(|(user, _)| *user == current)
-                .map(|(_, emoji)| emoji.clone())
-                .collect();
-            self.update_message(&local)?;
-        }
+        // Client channel reactions travel as sealed peer controls. A server
+        // Message.reactions projection is not a complete snapshot of that ledger,
+        // even when nonempty, and cannot clear legacy ambiguity or tombstones.
+        // Retain verified local votes/projections; peer controls remain authority.
         Ok(())
     }
 
@@ -1529,12 +1645,13 @@ impl MessageService {
     /// anon (rebuilt locally) and regular (delivered from server) paths.
     pub fn user_has_reacted(
         &self,
+        scope: &crate::domain::reaction::ReactionScope,
         sender_id: &UserId,
         sent_at_ns: u64,
         emoji: &str,
     ) -> Result<bool, MessageError> {
         self.message_repo
-            .user_has_reacted(sender_id, sent_at_ns, emoji)
+            .user_has_reacted(scope, sender_id, sent_at_ns, emoji)
             .map_err(MessageError::from)
     }
 
@@ -1721,7 +1838,22 @@ mod inbound_target_tests {
         f.client
             .messages()
             .message_repo
-            .get_reactions(&f.carol, ts)
+            .get_reactions(
+                &crate::domain::reaction::ReactionScope::new(
+                    if ts == DM_TS {
+                        ChannelId::from(f.carol)
+                    } else {
+                        f.channel
+                    },
+                    if ts == DM_TS {
+                        ConversationType::ServerDm
+                    } else {
+                        ConversationType::Channel
+                    },
+                ),
+                &f.carol,
+                ts,
+            )
             .unwrap()
             .into_iter()
             .map(|r| r.user_id)
@@ -1738,7 +1870,10 @@ mod inbound_target_tests {
         // Bob, from his own DM, targets Carol's DM message and her channel message.
         assert!(
             !svc.record_inbound_reaction(
-                &ChannelId::from(f.bob),
+                &crate::domain::reaction::ReactionScope::new(
+                    ChannelId::from(f.bob),
+                    ConversationType::ServerDm
+                ),
                 &f.bob,
                 &f.carol,
                 DM_TS,
@@ -1750,7 +1885,10 @@ mod inbound_target_tests {
         );
         assert!(
             !svc.record_inbound_reaction(
-                &ChannelId::from(f.bob),
+                &crate::domain::reaction::ReactionScope::new(
+                    ChannelId::from(f.bob),
+                    ConversationType::ServerDm
+                ),
                 &f.bob,
                 &f.carol,
                 CH_TS,
@@ -1762,20 +1900,39 @@ mod inbound_target_tests {
         );
         // Bob claims the channel he is not a member of.
         assert!(
-            !svc.record_inbound_reaction(&f.channel, &f.bob, &f.carol, CH_TS, "x", false, 1)
-                .unwrap()
+            !svc.record_inbound_reaction(
+                &crate::domain::reaction::ReactionScope::new(f.channel, ConversationType::Channel),
+                &f.bob,
+                &f.carol,
+                CH_TS,
+                "x",
+                false,
+                1
+            )
+            .unwrap()
         );
         // Carol, a channel member, aims a channel reaction at her DM message.
         assert!(
-            !svc.record_inbound_reaction(&f.channel, &f.carol, &f.carol, DM_TS, "x", false, 1)
-                .unwrap()
+            !svc.record_inbound_reaction(
+                &crate::domain::reaction::ReactionScope::new(f.channel, ConversationType::Channel),
+                &f.carol,
+                &f.carol,
+                DM_TS,
+                "x",
+                false,
+                1
+            )
+            .unwrap()
         );
         assert!(reactors(&f, DM_TS).is_empty() && reactors(&f, CH_TS).is_empty());
 
         // The legitimate ones land.
         assert!(
             svc.record_inbound_reaction(
-                &ChannelId::from(f.carol),
+                &crate::domain::reaction::ReactionScope::new(
+                    ChannelId::from(f.carol),
+                    ConversationType::ServerDm
+                ),
                 &f.carol,
                 &f.carol,
                 DM_TS,
@@ -1786,18 +1943,39 @@ mod inbound_target_tests {
             .unwrap()
         );
         assert!(
-            svc.record_inbound_reaction(&f.channel, &f.carol, &f.carol, CH_TS, "x", false, 1)
-                .unwrap()
+            svc.record_inbound_reaction(
+                &crate::domain::reaction::ReactionScope::new(f.channel, ConversationType::Channel),
+                &f.carol,
+                &f.carol,
+                CH_TS,
+                "x",
+                false,
+                1
+            )
+            .unwrap()
         );
         assert_eq!(reactors(&f, DM_TS), vec![f.carol]);
         assert_eq!(reactors(&f, CH_TS), vec![f.carol]);
 
         // Removal is bound the same way.
-        svc.record_reaction(&f.carol, DM_TS, &f.bob, "y", false)
-            .unwrap();
+        svc.record_reaction(
+            &crate::domain::reaction::ReactionScope::new(
+                ChannelId::from(f.carol),
+                ConversationType::ServerDm,
+            ),
+            &f.carol,
+            DM_TS,
+            &f.bob,
+            "y",
+            false,
+        )
+        .unwrap();
         assert!(
             !svc.record_inbound_reaction(
-                &ChannelId::from(f.bob),
+                &crate::domain::reaction::ReactionScope::new(
+                    ChannelId::from(f.bob),
+                    ConversationType::ServerDm
+                ),
                 &f.bob,
                 &f.carol,
                 DM_TS,
@@ -1810,15 +1988,115 @@ mod inbound_target_tests {
         assert!(reactors(&f, DM_TS).contains(&f.bob));
         assert!(
             svc.record_inbound_reaction(
-                &ChannelId::from(f.carol),
+                &crate::domain::reaction::ReactionScope::new(
+                    ChannelId::from(f.carol),
+                    ConversationType::ServerDm
+                ),
                 &f.carol,
                 &f.carol,
                 DM_TS,
                 "x",
                 true,
-                1
+                2
             )
             .unwrap()
+        );
+    }
+
+    #[tokio::test]
+    async fn scoped_inbound_and_linked_device_reactions_never_cross_same_author_clock() {
+        let f = fixture();
+        let svc = f.client.messages();
+        let dm_scope = crate::domain::reaction::ReactionScope::new(
+            ChannelId::from(f.carol),
+            ConversationType::ServerDm,
+        );
+        let encrypted_scope =
+            crate::domain::reaction::ReactionScope::new(f.channel, ConversationType::AnonGroup);
+        svc.message_repo
+            .insert(&Message::new_text(
+                f.channel,
+                ConversationType::AnonGroup,
+                Some(f.carol),
+                "same author and clock".into(),
+                DM_TS,
+            ))
+            .unwrap();
+        let encoded = crate::domain::reaction::encode_dm_reaction_target(&f.carol, &f.carol);
+        let (admitted, author) = svc.dm_reaction_admission(None, f.me, &encoded).unwrap();
+        assert_eq!(admitted, dm_scope);
+        assert_eq!(author, f.carol);
+        assert!(
+            svc.dm_reaction_admission(None, f.me, &f.carol.to_string())
+                .is_err(),
+            "legacy own-device ambiguity is never guessed"
+        );
+        assert!(
+            svc.dm_reaction_admission(Some(f.bob), f.bob, &encoded)
+                .is_err(),
+            "remote actor cannot claim a destination other than this recipient"
+        );
+        let remote = crate::domain::reaction::encode_dm_reaction_target(&f.me, &f.carol);
+        assert_eq!(
+            svc.dm_reaction_admission(Some(f.carol), f.carol, &remote)
+                .unwrap()
+                .0,
+            dm_scope
+        );
+        assert!(
+            svc.record_inbound_reaction(&admitted, &f.me, &author, DM_TS, "👍", false, 1)
+                .unwrap()
+        );
+        assert!(
+            !svc.record_inbound_reaction(&admitted, &f.me, &author, DM_TS, "👍", false, 1)
+                .unwrap()
+        );
+        assert!(
+            svc.message_repo
+                .get_reactions(&encrypted_scope, &author, DM_TS)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            svc.record_inbound_reaction(&encrypted_scope, &f.carol, &author, DM_TS, "👍", false, 1)
+                .unwrap()
+        );
+        assert!(
+            svc.record_inbound_reaction(&dm_scope, &f.me, &author, DM_TS, "👍", true, 2)
+                .unwrap()
+        );
+        assert!(
+            !svc.record_inbound_reaction(&dm_scope, &f.me, &author, DM_TS, "👍", true, 2)
+                .unwrap()
+        );
+        assert!(
+            svc.message_repo
+                .get_by_reaction_scope(&dm_scope, &author, DM_TS)
+                .unwrap()
+                .unwrap()
+                .reaction_counts
+                .is_empty()
+        );
+        assert_eq!(
+            svc.message_repo
+                .get_by_reaction_scope(&encrypted_scope, &author, DM_TS)
+                .unwrap()
+                .unwrap()
+                .reaction_counts[0]
+                .count,
+            1
+        );
+        assert!(
+            svc.record_inbound_reaction(&encrypted_scope, &f.carol, &author, DM_TS, "👍", true, 2)
+                .unwrap()
+        );
+        assert!(
+            svc.message_repo
+                .get_by_reaction_scope(&encrypted_scope, &author, DM_TS)
+                .unwrap()
+                .unwrap()
+                .reaction_counts
+                .is_empty()
         );
     }
 

@@ -1304,7 +1304,13 @@ export component MessageItem inherits Rectangle {
                         alignment: center;
 
                         for reaction in root.reactions: Rectangle {
-                            width: entry.preferred-width;
+                            width: entry.preferred-width + 4px;
+                            border-radius: 8px;
+                            border-width: reaction.own ? 1px : 0px;
+                            border-color: Colors.primary;
+                            background: reaction.own ? Colors.primary.with-alpha(0.12) : transparent;
+                            accessible-role: button;
+                            accessible-label: reaction.emoji + (reaction.own ? ", your reaction" : "");
 
                             entry := HorizontalLayout {
                                 spacing: Spacing.xxs;

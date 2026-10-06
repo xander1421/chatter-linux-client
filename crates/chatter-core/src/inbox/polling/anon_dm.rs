@@ -298,6 +298,7 @@ pub async fn process_anon_dm_results(
     domain_tx: Option<&tokio::sync::broadcast::Sender<DomainEvent>>,
 ) -> ProcessedAnonDmMessages {
     let mut processed: ProcessedAnonDmMessages = HashMap::new();
+    crate::inbox::reaction_handoff::replay(message_repo, domain_tx);
 
     for result in results {
         let conversation_id = result.conversation_id;
@@ -324,12 +325,47 @@ pub async fn process_anon_dm_results(
                 continue;
             }
 
+            let key = match message_repo.reaction_receive_key(
+                "anon_dm",
+                conversation_id.into(),
+                &message_id,
+                msg.server_timestamp,
+            ) {
+                Ok(key) => key,
+                Err(_) => {
+                    tracing::warn!("Anonymous receive binding unavailable; envelope retained");
+                    continue;
+                }
+            };
             // Decrypt using pairwise service (sealed sender)
             let (sender_uuid, plaintext) = match pairwise_service
-                .decrypt_sealed_sender(&msg.encrypted_envelope, msg.server_timestamp)
+                .decrypt_reaction_durable(&msg.encrypted_envelope, &key)
                 .await
             {
-                Ok(result) => result,
+                Ok(received) => {
+                    if let Some(artifact) = received.artifact {
+                        if crate::inbox::reaction_handoff::apply(message_repo, &artifact, domain_tx)
+                            .is_ok()
+                        {
+                            deduplicator.mark_processed(&message_id);
+                            processed
+                                .entry(conversation_id)
+                                .or_default()
+                                .push(message_id);
+                        } else {
+                            tracing::warn!(
+                                "Anonymous reaction application failed; envelope retained"
+                            );
+                        }
+                        continue;
+                    }
+                    (received.address.name().to_string(), received.content)
+                }
+                Err(crate::error::ServiceError::Storage(_))
+                | Err(crate::error::ServiceError::Crypto(crate::error::CryptoError::Storage(_))) => {
+                    tracing::warn!("Atomic anonymous receive storage failed; envelope retained");
+                    continue;
+                }
                 Err(e) => {
                     tracing::warn!(
                         conversation_id = %conversation_id,
@@ -463,9 +499,13 @@ pub async fn process_anon_dm_results(
             let decision = match route_anon_dm_content(content, sender_id, conversation_id) {
                 AnonDmRoute::Deliver(events) => {
                     for event in events {
-                        let _ = event_tx
+                        if event_tx
                             .send(event.server_stamp_call_offer(msg.server_timestamp))
-                            .await;
+                            .await
+                            .is_err()
+                        {
+                            return processed;
+                        }
                     }
                     AckDecision::Ack
                 }

@@ -278,6 +278,19 @@ pub trait AnonInboxBackend {
         emoji: &str,
     ) -> Result<bool, String>;
 
+    /// Durable exact-scope admission for an authenticated anonymous transport.
+    #[allow(clippy::too_many_arguments)]
+    fn receive_reaction(
+        &self,
+        id: &Self::Id,
+        author: &UserId,
+        target_ts: u64,
+        reactor: &UserId,
+        emoji: &str,
+        remove: bool,
+        action_ts: u64,
+    ) -> Result<bool, crate::error::StorageError>;
+
     fn set_pinned(&self, id: &Self::Id, ts: u64, pinned: bool) -> Result<(), String>;
 
     fn get_message_id_by_timestamp(&self, id: &Self::Id, ts: u64) -> Option<MessageId>;
@@ -303,6 +316,8 @@ pub enum CommonDispatchOutcome {
     /// Content type not handled here. Caller must dispatch per-service logic
     /// (e.g. calls, profile updates, group management).
     NotHandled,
+    /// Persistent admission/application failed; caller must retain the envelope.
+    Failed(crate::error::StorageError),
     /// Content intentionally dropped (blocked sender, blocked conversation).
     Dropped,
 }
@@ -455,59 +470,34 @@ pub fn dispatch_common_content<B: AnonInboxBackend>(
         }
 
         Some(ContentKind::Reaction(reaction)) => {
-            let target_sender: UserId = reaction.target_author_aci.parse().unwrap_or(*sender_id);
+            let Ok(target_sender) = reaction.target_author_aci.parse::<UserId>() else {
+                tracing::warn!("Rejected invalid anonymous reaction author");
+                return CommonDispatchOutcome::Handled(events);
+            };
             let sent_at_ns = reaction.target_sent_timestamp;
 
-            // Storage is the dedup gate: only emit the UI delta when the
-            // unified-reactions row was actually changed. Repeats of the
-            // same reaction (snapshot + delta, or replay across polls)
-            // become no-ops here instead of double-counting in the UI.
-            let changed = if reaction.remove {
-                match backend.remove_reaction(
-                    id,
-                    &target_sender,
-                    sent_at_ns,
-                    sender_id,
-                    &reaction.emoji,
-                ) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        tracing::warn!(id = %id, error = %e, "Failed to remove reaction");
-                        false
-                    }
-                }
-            } else {
-                match backend.add_reaction(
-                    id,
-                    &target_sender,
-                    sent_at_ns,
-                    sender_id,
-                    &reaction.emoji,
-                ) {
-                    Ok(v) => v,
-                    Err(e) => {
-                        tracing::warn!(id = %id, error = %e, "Failed to add reaction");
-                        false
-                    }
-                }
+            // Admission can apply a batch of pending actors/emojis. Emit only
+            // persisted snapshot identity, never an invented incoming-actor delta.
+            let changed = match backend.receive_reaction(
+                id,
+                &target_sender,
+                sent_at_ns,
+                sender_id,
+                &reaction.emoji,
+                reaction.remove,
+                reaction.timestamp,
+            ) {
+                Ok(changed) => changed,
+                Err(error) => return CommonDispatchOutcome::Failed(error),
             };
             if changed {
-                let event = if reaction.remove {
-                    DomainEvent::ReactionRemoved {
-                        sender_id: target_sender,
-                        sent_at_ns,
-                        reactor_id: *sender_id,
-                        emoji: reaction.emoji.clone(),
-                        timestamp: reaction.target_sent_timestamp,
-                    }
-                } else {
-                    DomainEvent::ReactionAdded {
-                        sender_id: target_sender,
-                        sent_at_ns,
-                        reactor_id: *sender_id,
-                        emoji: reaction.emoji.clone(),
-                        timestamp: reaction.target_sent_timestamp,
-                    }
+                let event = DomainEvent::ReactionSnapshotChanged {
+                    scope: crate::domain::reaction::ReactionScope::new(
+                        (*id).into(),
+                        backend.conversation_type(),
+                    ),
+                    sender_id: target_sender,
+                    sent_at_ns,
                 };
                 events.push(event);
             }
@@ -664,6 +654,18 @@ mod tests {
         ) -> Result<bool, String> {
             unreachable!()
         }
+        fn receive_reaction(
+            &self,
+            _: &Self::Id,
+            _: &UserId,
+            _: u64,
+            _: &UserId,
+            _: &str,
+            _: bool,
+            _: u64,
+        ) -> Result<bool, crate::error::StorageError> {
+            unreachable!()
+        }
         fn set_pinned(&self, _: &AnonGroupId, _: u64, _: bool) -> Result<(), String> {
             unreachable!()
         }
@@ -775,6 +777,166 @@ mod tests {
         assert_eq!(
             m.edited_at,
             Some(chrono::DateTime::from_timestamp_nanos((sent + 30) as i64))
+        );
+    }
+}
+
+#[cfg(test)]
+mod reaction_receive_tests {
+    use super::*;
+    use crate::domain::anon_dm::{AnonDm, AnonDmStatus};
+    use crate::domain::anon_group::{AnonGroup, AnonGroupMember, AnonGroupRole};
+    use crate::domain::reaction::ReactionScope;
+    #[tokio::test]
+    async fn actual_anonymous_handlers_hold_early_reactions_and_surface_storage_failure() {
+        static MOCK: std::sync::Once = std::sync::Once::new();
+        MOCK.call_once(|| {
+            keyring::set_default_credential_builder(keyring::mock::default_credential_builder())
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let client = crate::client::ChatterClient::builder()
+            .server_url("https://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .unwrap();
+        let own = UserId::new();
+        let actor = UserId::new();
+        let author = UserId::new();
+        let timestamp = 100;
+        client
+            .messages()
+            .settings_repo
+            .set("auth.current_user_id", &own.to_string())
+            .unwrap();
+        let dm_service = client.anon_dms();
+        let groups = client.anon_groups();
+        let mut dm = AnonDm::new_initiated(actor);
+        dm.status = AnonDmStatus::Active;
+        dm.peer_mailbox_pk = Some([1; 32]);
+        dm_service.anon_dm_repo.insert_conversation(&dm).unwrap();
+        let group = AnonGroup::new_as_owner("fixture group".into(), own);
+        groups.anon_group_repo.insert_group(&group).unwrap();
+        groups
+            .anon_group_repo
+            .add_member(&AnonGroupMember::new(
+                group.id,
+                actor,
+                AnonGroupRole::Member,
+            ))
+            .unwrap();
+        let content = Content {
+            content: Some(content_v1::content::Content::Reaction(
+                content_v1::Reaction {
+                    emoji: "👍".into(),
+                    target_author_aci: author.to_string(),
+                    target_sent_timestamp: timestamp,
+                    timestamp: 10,
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        };
+        assert!(
+            dm_service
+                .process_incoming_content(&dm.id, &actor, &content)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            groups
+                .process_incoming_content(&group.id, &actor, &content)
+                .unwrap()
+                .is_empty()
+        );
+        let scope_dm = ReactionScope::new(dm.id.into(), ConversationType::AnonDm);
+        let scope_group = ReactionScope::new(group.id.into(), ConversationType::AnonGroup);
+        for scope in [&scope_dm, &scope_group] {
+            client
+                .messages()
+                .store_message_local(&Message::new_text(
+                    scope.id,
+                    scope.kind.clone(),
+                    Some(author),
+                    "same author and timestamp".into(),
+                    timestamp,
+                ))
+                .unwrap();
+            assert_eq!(
+                client
+                    .messages()
+                    .message_repo
+                    .get_reactions(scope, &author, timestamp)
+                    .unwrap()
+                    .len(),
+                1
+            );
+        }
+        assert!(
+            dm_service
+                .process_incoming_content(&dm.id, &actor, &content)
+                .unwrap()
+                .is_empty(),
+            "duplicate does not increment"
+        );
+        let mut remove = content.clone();
+        if let Some(content_v1::content::Content::Reaction(r)) = &mut remove.content {
+            r.remove = true;
+            r.timestamp = 20;
+        }
+        dm_service
+            .process_incoming_content(&dm.id, &actor, &remove)
+            .unwrap();
+        assert!(
+            client
+                .messages()
+                .message_repo
+                .get_reactions(&scope_dm, &author, timestamp)
+                .unwrap()
+                .is_empty()
+        );
+        assert_eq!(
+            client
+                .messages()
+                .message_repo
+                .get_reactions(&scope_group, &author, timestamp)
+                .unwrap()
+                .len(),
+            1
+        );
+        client.messages().settings_repo.database().connection().unwrap().execute_batch("CREATE TRIGGER fail_anon_projection BEFORE UPDATE OF reaction_counts_blob ON messages BEGIN SELECT RAISE(ABORT,'injected anonymous projection failure'); END;").unwrap();
+        assert!(matches!(
+            groups.process_incoming_content(&group.id, &actor, &remove),
+            Err(crate::services::anon_group::AnonGroupError::Storage(_))
+        ));
+        assert_eq!(
+            client
+                .messages()
+                .message_repo
+                .get_reactions(&scope_group, &author, timestamp)
+                .unwrap()
+                .len(),
+            1
+        );
+        client
+            .messages()
+            .settings_repo
+            .database()
+            .connection()
+            .unwrap()
+            .execute_batch("DROP TRIGGER fail_anon_projection")
+            .unwrap();
+        groups
+            .process_incoming_content(&group.id, &actor, &remove)
+            .unwrap();
+        assert!(
+            client
+                .messages()
+                .message_repo
+                .get_by_reaction_scope(&scope_group, &author, timestamp)
+                .unwrap()
+                .unwrap()
+                .reaction_counts
+                .is_empty()
         );
     }
 }

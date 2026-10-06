@@ -736,10 +736,15 @@ impl ChannelStreamService {
             ));
         };
         // A stream must never mutate a target in another conversation.
-        match self
+        let scope = self
             .messages
-            .get_by_sender_timestamp(&sender_id, update.target_sent_timestamp)
-        {
+            .channel_reaction_scope(channel_id, &sender_id, update.target_sent_timestamp)
+            .map_err(|e| crate::error::NetworkError::Unknown(e.to_string()))?;
+        match self.messages.message_repo.get_by_reaction_scope(
+            &scope,
+            &sender_id,
+            update.target_sent_timestamp,
+        ) {
             Ok(Some(message)) if message.conversation_id == channel_id => {}
             Ok(None) => {
                 // A recent reaction can refer to a message older than the
@@ -756,10 +761,10 @@ impl ChannelStreamService {
                     "reaction channel mismatch".into(),
                 ));
             }
-            Err(crate::services::message::MessageError::Storage(_)) => return Ok(Applied::Pending),
-            Err(e) => return Err(crate::error::NetworkError::Unknown(e.to_string())),
+            Err(_) => return Ok(Applied::Pending),
         }
         match self.messages.record_reaction(
+            &scope,
             &sender_id,
             update.target_sent_timestamp,
             &reactor_id,
@@ -769,6 +774,7 @@ impl ChannelStreamService {
             Ok(true) => {
                 let event = if remove {
                     DomainEvent::ReactionRemoved {
+                        scope: scope.clone(),
                         sender_id,
                         sent_at_ns: update.target_sent_timestamp,
                         reactor_id,
@@ -777,6 +783,7 @@ impl ChannelStreamService {
                     }
                 } else {
                     DomainEvent::ReactionAdded {
+                        scope: scope.clone(),
                         sender_id,
                         sent_at_ns: update.target_sent_timestamp,
                         reactor_id,

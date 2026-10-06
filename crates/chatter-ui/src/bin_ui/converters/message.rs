@@ -92,6 +92,7 @@ pub struct MessageDisplayData {
     pub has_reactions: bool,
     /// Typed reaction counts (source of truth; no string round-trips).
     pub reaction_counts: Vec<chatter_core::domain::message::ReactionCount>,
+    pub current_user_reactions: Vec<String>,
     pub reply_count: i32,
     pub reply_count_text: String,
     pub is_thread_reply: bool,
@@ -269,6 +270,7 @@ impl MessageDisplayData {
             .into(),
             reactions: ModelRc::new(VecModel::from(reaction_counts_to_entries(
                 &self.reaction_counts,
+                &self.current_user_reactions,
             ))),
             reply_count: self.reply_count,
             reply_count_text: self.reply_count_text.clone().into(),
@@ -398,6 +400,7 @@ pub fn message_to_display_data_with_replies(
         attachments: attachment_data,
         has_reactions: !msg.reaction_counts.is_empty(),
         reaction_counts: msg.reaction_counts.clone(),
+        current_user_reactions: msg.current_user_reactions.clone(),
         sender_avatar_bytes: sender_avatar,
         sender_avatar_decoded: None,
         reply_count,

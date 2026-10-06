@@ -31,6 +31,7 @@ pub fn wire_reaction_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
 
         let handle = ui_ctx.conversation(conversation.clone());
         let weak = weak_window.clone();
+        let client = ui_ctx.clone();
 
         tokio::spawn(async move {
             let target_author: chatter_core::domain::UserId = match sender_id_str.parse() {
@@ -41,7 +42,7 @@ pub fn wire_reaction_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
                 }
             };
             // Core decides add/remove from local state — UI doesn't query.
-            let now_reacted = match handle
+            let _now_reacted = match handle
                 .toggle_reaction(&emoji_str, &target_author, target_sent_timestamp)
                 .await
             {
@@ -58,9 +59,8 @@ pub fn wire_reaction_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
                 }
             };
 
-            let remove = !now_reacted;
             run_ui!(weak, |w| {
-                super::helpers::update_reaction_in_ui(&w, &sender_id_str, &timestamp_ns_str, &emoji_str, remove);
+                super::helpers::refresh_reaction_in_ui(&w, &client, conversation, &target_author, target_sent_timestamp);
             });
         });
     });

@@ -152,6 +152,25 @@ impl PairwiseService {
         Ok((address.name().to_string(), plaintext))
     }
 
+    /// Authenticated receive journal replay precedes another ratchet decrypt.
+    pub(crate) async fn decrypt_reaction_durable(
+        &self,
+        ciphertext: &[u8],
+        key: &crate::storage::receive_artifact::ReceiveKey,
+    ) -> Result<crate::services::signal::actor::DurableReceive, crate::error::ServiceError> {
+        self.signal_service
+            .decrypt_reaction_durable(ciphertext, key)
+            .await
+            .map_err(|error| match error {
+                crate::services::signal::actor::DurableReceiveError::Failure(source) => source,
+                crate::services::signal::actor::DurableReceiveError::PlaintextRejected => {
+                    crate::error::ServiceError::Validation(
+                        "Unratcheted anonymous plaintext rejected".into(),
+                    )
+                }
+            })
+    }
+
     /// Returns true if a usable Signal session already exists with this peer's
     /// primary device.
     ///

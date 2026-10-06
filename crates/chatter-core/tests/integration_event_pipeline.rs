@@ -90,6 +90,10 @@ fn test_domain_event_key_variants() {
     let _ = format!("{:?}", typing);
 
     let reaction = DomainEvent::ReactionAdded {
+        scope: chatter_core::domain::reaction::ReactionScope::new(
+            channel_id,
+            chatter_core::domain::message::ConversationType::Channel,
+        ),
         sender_id: user_id,
         sent_at_ns: 1234567890,
         reactor_id: UserId::new(),

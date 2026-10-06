@@ -90,6 +90,26 @@ impl AnonInboxBackend for AnonGroupService {
             .map_err(|e| e.to_string())
     }
 
+    fn receive_reaction(
+        &self,
+        id: &Self::Id,
+        author: &UserId,
+        target_ts: u64,
+        reactor: &UserId,
+        emoji: &str,
+        remove: bool,
+        action_ts: u64,
+    ) -> Result<bool, crate::error::StorageError> {
+        let scope =
+            crate::domain::reaction::ReactionScope::new((*id).into(), ConversationType::AnonGroup);
+        self.message_service
+            .message_repo
+            .hold_received_reaction(&scope, author, target_ts, reactor, emoji, remove, action_ts)?;
+        self.message_service
+            .message_repo
+            .apply_held_reaction_scope(&scope, author, target_ts)
+    }
+
     fn set_pinned(&self, id: &Self::Id, ts: u64, pinned: bool) -> Result<(), String> {
         self.set_message_pinned(id, ts, pinned)
             .map(|_| ())
@@ -188,6 +208,7 @@ impl AnonGroupService {
             CommonDispatchOutcome::Handled(events) => return Ok(events),
             CommonDispatchOutcome::Dropped => return Ok(vec![]),
             CommonDispatchOutcome::NotHandled => {}
+            CommonDispatchOutcome::Failed(error) => return Err(error.into()),
         }
 
         // Group-specific content types.

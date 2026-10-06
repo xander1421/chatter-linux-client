@@ -19,6 +19,7 @@ use rusqlite::{Connection, OptionalExtension, params};
 use crate::domain::UserId;
 use crate::domain::ids::ChannelId;
 use crate::domain::message::{ConversationType, Message, MessageContent};
+use crate::domain::reaction::ReactionScope;
 use crate::error::StorageError;
 use crate::storage::Database;
 use crate::storage::repositories::MessageRepository;
@@ -53,6 +54,7 @@ pub(crate) struct PendingReaction {
     pub reactor: UserId,
     pub emoji: String,
     pub remove: bool,
+    pub action_ts: u64,
 }
 
 /// What a message arriving now becomes.
@@ -200,22 +202,25 @@ impl MessageModifierRepository {
         reactor: &UserId,
         emoji: &str,
         remove: bool,
-        conversation: Option<ChannelId>,
+        scope: &ReactionScope,
         reaction_ts: u64,
         now: u64,
     ) -> Result<(), StorageError> {
-        self.upsert(
+        let conn = self.db.connection()?;
+        let tx = conn.unchecked_transaction()?;
+        queue_reaction_with_conn(
+            &tx,
             author,
             target_sent_at,
-            "reaction",
-            Some(reactor),
+            reactor,
             emoji,
-            conversation,
-            None,
-            reaction_ts,
             remove,
+            scope,
+            reaction_ts,
             now,
-        )
+        )?;
+        tx.commit()?;
+        Ok(())
     }
 
     /// Hold `pinner`'s pin (or `unpin`) of `author`'s message sent at
@@ -292,18 +297,74 @@ impl MessageModifierRepository {
     }
 }
 
+/// Connection-aware admission for the receive-artifact application transaction.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn queue_reaction_with_conn(
+    conn: &Connection,
+    author: &UserId,
+    target_sent_at: u64,
+    reactor: &UserId,
+    emoji: &str,
+    remove: bool,
+    scope: &ReactionScope,
+    reaction_ts: u64,
+    now: u64,
+) -> Result<(), StorageError> {
+    if target_sent_at == 0
+        || target_sent_at > i64::MAX as u64
+        || reaction_ts == 0
+        || reaction_ts > i64::MAX as u64
+        || emoji.is_empty()
+        || emoji.len() > 128
+    {
+        return Err(StorageError::InvalidData("Invalid held reaction".into()));
+    }
+    let existing:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM pending_scoped_reactions WHERE conversation_id=?1 AND conversation_type=?2 AND author_id=?3 AND target_sent_at=?4 AND actor_id=?5 AND emoji=?6)",params![scope.id.to_string(),scope.kind.as_str(),author.to_string(),target_sent_at as i64,reactor.to_string(),emoji],|r|r.get(0))?;
+    let count: i64 = conn.query_row("SELECT count(*) FROM pending_scoped_reactions", [], |r| {
+        r.get(0)
+    })?;
+    if !existing && count >= MAX_PENDING {
+        return Err(StorageError::InvalidData(
+            "Scoped reaction admission full; evidence retained".into(),
+        ));
+    }
+    conn.execute("INSERT INTO pending_scoped_reactions
+            (conversation_id,conversation_type,author_id,target_sent_at,actor_id,emoji,remove,action_ts,received_at)
+            VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)
+            ON CONFLICT(conversation_type,conversation_id,author_id,target_sent_at,actor_id,emoji)
+            DO UPDATE SET remove=excluded.remove,action_ts=excluded.action_ts,received_at=excluded.received_at
+            WHERE excluded.action_ts > pending_scoped_reactions.action_ts",
+            params![scope.id.to_string(),scope.kind.as_str(),author.to_string(),target_sent_at as i64,reactor.to_string(),emoji,remove,reaction_ts as i64,now as i64])?;
+    Ok(())
+}
+
 /// Whether `actor` may modify `message` (a reaction or pin held for it).
 /// [`MessageService::resolve_inbound_target`](crate::services::message::MessageService::resolve_inbound_target)'s
 /// rule, at arrival: from our own device (`conversation` NULL) anything we
 /// hold; from anyone else only a message in the conversation it arrived in
 /// (already matched by the caller), where they are the DM peer or a channel
 /// member.
-fn may_modify(
+pub(crate) fn may_modify(
     conn: &Connection,
     message: &Message,
     actor: &str,
     from_own_device: bool,
 ) -> Result<bool, StorageError> {
+    let own: Option<String> = conn
+        .query_row(
+            "SELECT value FROM settings WHERE key='auth.current_user_id'",
+            [],
+            |r| r.get(0),
+        )
+        .optional()?;
+    if let Some(own) = own {
+        let own: String = serde_json::from_str(&own)
+            .map_err(|_| StorageError::InvalidData("Invalid modifier account".into()))?;
+        let blocked:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM friendships WHERE user_id=?1 AND friend_id=?2 AND status=2)",params![own,actor],|r|r.get(0))?;
+        if blocked {
+            return Ok(false);
+        }
+    }
     if from_own_device {
         return Ok(true);
     }
@@ -312,10 +373,13 @@ fn may_modify(
             .parse::<UserId>()
             .is_ok_and(|a| message.conversation_id == ChannelId::from(a)),
         ConversationType::Channel => conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM memberships WHERE channel_id = ?1 AND user_id = ?2)",
+            "SELECT EXISTS(SELECT 1 FROM memberships WHERE channel_id=?1 AND user_id=?2)",params![message.conversation_id.to_string(),actor],|row|row.get(0))?,
+        ConversationType::AnonGroup => conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM memberships WHERE channel_id = ?1 AND user_id = ?2) OR (EXISTS(SELECT 1 FROM anon_group_members g JOIN anon_groups a ON a.id=g.group_id WHERE g.group_id=?1 AND g.user_id=?2 AND a.status<>2) AND NOT EXISTS(SELECT 1 FROM anon_group_blocked_users WHERE group_id=?1 AND user_id=?2))",
             params![message.conversation_id.to_string(), actor],
             |row| row.get(0),
         )?,
+        ConversationType::AnonDm => conn.query_row("SELECT EXISTS(SELECT 1 FROM anon_dm_conversations WHERE id=?1 AND peer_id=?2 AND status=1) AND NOT EXISTS(SELECT 1 FROM anon_dm_blocked_users WHERE user_id=?2)",params![message.conversation_id.to_string(),actor],|r|r.get(0))?,
         _ => false,
     })
 }
@@ -367,7 +431,7 @@ pub(crate) fn take_on_arrival<'a>(
     {
         let mut stmt = conn.prepare(&format!(
             "SELECT kind, actor_id, emoji, remove, conversation_id IS NULL FROM pending_message_modifiers
-             WHERE kind IN ('reaction', 'pin') AND {matching} ORDER BY action_ts, received_at"
+             WHERE kind = 'pin' AND {matching} ORDER BY action_ts, received_at"
         ))?;
         let rows = stmt.query_map(key, |row| {
             Ok((
@@ -396,19 +460,74 @@ pub(crate) fn take_on_arrival<'a>(
             set_edited(stored.to_mut(), &body, edited_at);
         }
     }
-    let mut reactions = Vec::new();
-    for (kind, actor, emoji, remove, own) in others {
-        if !may_modify(conn, message, &actor, own)? {
-            tracing::debug!(%actor, kind, "Held reaction/pin: sender may not modify its target — dropped");
-            continue;
+    for (_, actor, _, remove, own) in &others {
+        if may_modify(conn, message, actor, *own)? {
+            stored.to_mut().is_pinned = !*remove;
         }
-        if kind == "pin" {
-            stored.to_mut().is_pinned = !remove;
-        } else if let Ok(reactor) = actor.parse() {
+    }
+    others.clear();
+    // Historical uncertainty never prevents storing the message itself. Retain
+    // scoped pending reactions until complete authoritative recovery resolves it.
+    let legacy_ambiguous:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM reaction_legacy_unscoped WHERE sender_id=?1 AND sent_at_ns=?2)",params![author,message.sent_at as i64],|r|r.get(0))?;
+    let resolved_target:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM messages WHERE conversation_id=?1 AND conversation_type=?2 AND sender_id=?3 AND sent_at=?4) AND NOT EXISTS(SELECT 1 FROM reaction_scope_unresolved WHERE conversation_id=?1 AND conversation_type=?2 AND sender_id=?3 AND sent_at_ns=?4)",params![conversation,message.conversation_type.as_str(),author,message.sent_at as i64],|r|r.get(0))?;
+    if legacy_ambiguous && !resolved_target {
+        return Ok(Arrival::Store {
+            message: stored,
+            reactions: Vec::new(),
+        });
+    }
+    let mut scoped = conn.prepare("SELECT actor_id,emoji,remove,action_ts FROM pending_scoped_reactions WHERE conversation_id=?1 AND conversation_type=?2 AND author_id=?3 AND target_sent_at=?4 ORDER BY action_ts,received_at")?;
+    let scoped_rows = scoped
+        .query_map(
+            params![
+                conversation,
+                message.conversation_type.as_str(),
+                author,
+                message.sent_at as i64
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, String>(0)?,
+                    row.get::<_, String>(1)?,
+                    row.get::<_, bool>(2)?,
+                    row.get::<_, i64>(3)? as u64,
+                ))
+            },
+        )?
+        .collect::<Result<Vec<_>, _>>()?;
+    drop(scoped);
+    conn.execute("DELETE FROM pending_scoped_reactions WHERE conversation_id=?1 AND conversation_type=?2 AND author_id=?3 AND target_sent_at=?4",params![conversation,message.conversation_type.as_str(),author,message.sent_at as i64])?;
+    let own: Option<String> = conn
+        .query_row(
+            "SELECT value FROM settings WHERE key='auth.current_user_id'",
+            [],
+            |r| r.get(0),
+        )
+        .optional()?;
+    let own = own
+        .map(|v| {
+            serde_json::from_str::<String>(&v).map_err(|_| {
+                StorageError::InvalidData("Invalid current-user identity for held reactions".into())
+            })
+        })
+        .transpose()?;
+    let mut reactions = Vec::new();
+    for (actor, emoji, remove, action_ts) in scoped_rows {
+        // Identity is exact even for another local device; authorization never widens scope.
+        if may_modify(
+            conn,
+            message,
+            &actor,
+            own.as_deref() == Some(actor.as_str()),
+        )? {
+            let reactor = actor
+                .parse()
+                .map_err(|_| StorageError::InvalidData("Invalid held actor".into()))?;
             reactions.push(PendingReaction {
                 reactor,
                 emoji,
                 remove,
+                action_ts,
             });
         }
     }
@@ -738,9 +857,10 @@ mod tests {
         let m = client.messages();
         let (peer, stranger) = (UserId::new(), UserId::new());
         let dm_with_peer = ChannelId::from(peer);
+        let reaction_scope = ReactionScope::new(dm_with_peer, ConversationType::ServerDm);
         let reactors = |emoji: &str| -> Vec<UserId> {
             m.message_repo
-                .get_reactions(&peer, 100)
+                .get_reactions(&reaction_scope, &peer, 100)
                 .unwrap()
                 .into_iter()
                 .filter(|r| r.emoji.value == emoji)
@@ -751,31 +871,31 @@ mod tests {
         // The peer's 👍, removed (sent at 20) before the add (sent at 10)
         // reached us: the remove is newer and wins.
         assert!(
-            !m.record_inbound_reaction(&dm_with_peer, &peer, &peer, 100, "a", true, 20)
+            !m.record_inbound_reaction(&reaction_scope, &peer, &peer, 100, "a", true, 20)
                 .unwrap()
         );
         assert!(
-            !m.record_inbound_reaction(&dm_with_peer, &peer, &peer, 100, "a", false, 10)
+            !m.record_inbound_reaction(&reaction_scope, &peer, &peer, 100, "a", false, 10)
                 .unwrap()
         );
         // Added (30) after a remove (25) that arrived later: the add stands.
         assert!(
-            !m.record_inbound_reaction(&dm_with_peer, &peer, &peer, 100, "b", false, 30)
+            !m.record_inbound_reaction(&reaction_scope, &peer, &peer, 100, "b", false, 30)
                 .unwrap()
         );
         assert!(
-            !m.record_inbound_reaction(&dm_with_peer, &peer, &peer, 100, "b", true, 25)
+            !m.record_inbound_reaction(&reaction_scope, &peer, &peer, 100, "b", true, 25)
                 .unwrap()
         );
         // Ours, from another of our devices.
         assert!(
-            !m.record_inbound_reaction(&ChannelId::from(me), &me, &peer, 100, "c", false, 5)
+            !m.record_inbound_reaction(&reaction_scope, &me, &peer, 100, "c", false, 5)
                 .unwrap()
         );
         // A stranger, from their own DM, naming the peer's message.
         assert!(
             !m.record_inbound_reaction(
-                &ChannelId::from(stranger),
+                &ReactionScope::new(ChannelId::from(stranger), ConversationType::ServerDm),
                 &stranger,
                 &peer,
                 100,
@@ -810,7 +930,7 @@ mod tests {
 
         // Once the message is here, a reaction applies directly.
         assert!(
-            m.record_inbound_reaction(&dm_with_peer, &peer, &peer, 100, "e", false, 40)
+            m.record_inbound_reaction(&reaction_scope, &peer, &peer, 100, "e", false, 40)
                 .unwrap()
         );
     }
@@ -860,6 +980,7 @@ mod tests {
 
         // DM: pinned at 10, unpinned at 20 but delivered first.
         let dm_with_peer = ChannelId::from(peer);
+        let reaction_scope = ReactionScope::new(dm_with_peer, ConversationType::ServerDm);
         assert!(
             m.resolve_inbound_pin(&dm_with_peer, &peer, &peer, 100, true, 20)
                 .unwrap()

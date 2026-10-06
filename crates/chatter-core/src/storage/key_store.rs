@@ -1046,3 +1046,169 @@ impl KeyStore {
         }
     }
 }
+
+impl KeyStore {
+    /// Internal receive CAS read; callers use fixed schema identifiers only.
+    pub(crate) fn receive_read(
+        &self,
+        table: &'static str,
+        key: &str,
+        column: &'static str,
+    ) -> Result<Option<Vec<u8>>, StorageError> {
+        let conn = self.db.connection()?;
+        Self::receive_read_with_conn(&conn, table, key, column)
+    }
+    fn receive_read_with_conn(
+        conn: &rusqlite::Connection,
+        table: &str,
+        key: &str,
+        column: &str,
+    ) -> Result<Option<Vec<u8>>, StorageError> {
+        use rusqlite::OptionalExtension;
+        let key_column = match (table, column) {
+            ("sessions", "record") | ("remote_identities", "identity_key") => "address",
+            ("prekeys" | "signed_prekeys" | "kyber_prekeys", "record")
+            | ("local_identity", "identity_key_pair" | "CAST(registration_id AS BLOB)") => "id",
+            _ => {
+                return Err(StorageError::InvalidData(
+                    "invalid receive observation".into(),
+                ));
+            }
+        };
+        Ok(conn
+            .query_row(
+                &format!("SELECT {column} FROM {table} WHERE {key_column}=?1"),
+                [key],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+    pub fn receive_artifact(
+        &self,
+        key: &crate::storage::receive_artifact::ReceiveKey,
+        digest: &[u8],
+    ) -> Result<Option<crate::storage::receive_artifact::ReceiveArtifact>, StorageError> {
+        let conn = self.db.connection()?;
+        Self::check_receive_binding(&conn, key)?;
+        crate::storage::receive_artifact::load(&conn, key, digest)
+    }
+    pub fn pending_receive_artifacts(
+        &self,
+        account: &str,
+        device: u32,
+        limit: usize,
+    ) -> Result<Vec<crate::storage::receive_artifact::ReceiveArtifact>, StorageError> {
+        let conn = self.db.connection()?;
+        crate::storage::receive_artifact::list_pending(&conn, account, device, limit)
+    }
+    fn check_receive_binding(
+        conn: &rusqlite::Connection,
+        key: &crate::storage::receive_artifact::ReceiveKey,
+    ) -> Result<(), StorageError> {
+        key.validate()?;
+        let account: String = conn.query_row(
+            "SELECT value FROM settings WHERE key=?1",
+            [crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID],
+            |r| r.get(0),
+        )?;
+        let device: String = conn.query_row(
+            "SELECT value FROM settings WHERE key=?1",
+            [crate::storage::repositories::settings_repo::keys::CURRENT_DEVICE_ID],
+            |r| r.get(0),
+        )?;
+        if serde_json::from_str::<String>(&account).ok().as_deref()
+            != Some(key.local_account.as_str())
+            || serde_json::from_str::<u32>(&device).ok() != Some(key.local_device)
+        {
+            return Err(StorageError::InvalidData(
+                "receive account/device changed".into(),
+            ));
+        }
+        Ok(())
+    }
+    /// Caller must have observed upstream ACK success for this exact binding.
+    pub fn acknowledge_receive_artifact(
+        &self,
+        key: &crate::storage::receive_artifact::ReceiveKey,
+        digest: &[u8],
+    ) -> Result<(), StorageError> {
+        let mut conn = self.db.connection()?;
+        let tx = conn.transaction()?;
+        crate::storage::receive_artifact::mark_acknowledged(&tx, key, digest)?;
+        tx.commit()?;
+        Ok(())
+    }
+    pub(crate) fn check_receive_capacity(&self) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        crate::storage::receive_artifact::check_capacity(&conn)
+    }
+    pub(crate) fn receive_kyber_used(
+        &self,
+        kyber: u32,
+        ec: u32,
+        base: &[u8],
+    ) -> Result<bool, StorageError> {
+        Ok(self.db.connection()?.query_row("SELECT EXISTS(SELECT 1 FROM kyber_prekey_usage WHERE kyber_prekey_id=?1 AND ec_prekey_id=?2 AND base_key=?3)",params![kyber,ec,base],|r|r.get(0))?)
+    }
+    /// Commit every libsignal receive mutation and authenticated artifact together.
+    /// Never call public KeyStore writers while holding this connection guard.
+    pub(crate) fn commit_receive(
+        &self,
+        key: &crate::storage::receive_artifact::ReceiveKey,
+        changes: &crate::storage::receive_artifact::ReceiveChanges,
+        artifact: Option<&crate::storage::receive_artifact::ReceiveArtifact>,
+    ) -> Result<Option<crate::storage::receive_artifact::ReceiveArtifact>, StorageError> {
+        use crate::storage::receive_artifact;
+        key.validate()?;
+        let mut conn = self.db.connection()?;
+        let tx = conn.transaction()?;
+        Self::check_receive_binding(&tx, key)?;
+        if let Some(a) = artifact {
+            if let Some(existing) = receive_artifact::load(&tx, key, &a.digest)? {
+                return Ok(Some(existing));
+            }
+        }
+        if artifact.is_some() {
+            receive_artifact::check_capacity(&tx)?;
+            receive_artifact::reclaim_acknowledged(&tx)?;
+        }
+        for observed in &changes.observed {
+            if Self::receive_read_with_conn(&tx, observed.table, &observed.key, observed.column)?
+                != observed.value
+            {
+                return Err(StorageError::InvalidData(
+                    "Signal receive base state changed before commit".into(),
+                ));
+            }
+        }
+        let now = Utc::now().to_rfc3339();
+        for (address, identity) in &changes.identities {
+            tx.execute("INSERT INTO remote_identities(address,identity_key,first_seen_at,updated_at) VALUES(?1,?2,?3,?3) ON CONFLICT(address) DO UPDATE SET identity_key=excluded.identity_key,updated_at=excluded.updated_at",params![address,identity,now])?;
+        }
+        for (id, record) in &changes.signed {
+            tx.execute("INSERT INTO signed_prekeys(id,record,created_at) VALUES(?1,?2,?3) ON CONFLICT(id) DO UPDATE SET record=excluded.record,created_at=excluded.created_at",params![id,record,now])?;
+        }
+        for (id, record) in &changes.kyber {
+            tx.execute("INSERT INTO kyber_prekeys(id,record,created_at) VALUES(?1,?2,?3) ON CONFLICT(id) DO UPDATE SET record=excluded.record,created_at=excluded.created_at",params![id,record,now])?;
+        }
+        for (kyber, ec, base) in &changes.usage {
+            // Unique key is authoritative: never ignore reused base-key usage.
+            tx.execute("INSERT INTO kyber_prekey_usage(kyber_prekey_id,ec_prekey_id,base_key,used_at) VALUES(?1,?2,?3,?4)",params![kyber,ec,base,now])?;
+        }
+        for (id, record) in &changes.prekeys {
+            if let Some(record) = record {
+                tx.execute("INSERT INTO prekeys(id,record,created_at) VALUES(?1,?2,?3) ON CONFLICT(id) DO UPDATE SET record=excluded.record,created_at=excluded.created_at",params![id,record,now])?;
+            } else {
+                tx.execute("DELETE FROM prekeys WHERE id=?1", [id])?;
+            }
+        }
+        for (address, record) in &changes.sessions {
+            tx.execute("INSERT INTO sessions(address,record,updated_at) VALUES(?1,?2,?3) ON CONFLICT(address) DO UPDATE SET record=excluded.record,updated_at=excluded.updated_at",params![address,record,now])?;
+        }
+        if let Some(a) = artifact {
+            receive_artifact::insert(&tx, a)?;
+        }
+        tx.commit()?;
+        Ok(artifact.cloned())
+    }
+}

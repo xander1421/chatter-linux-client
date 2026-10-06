@@ -36,11 +36,11 @@ use super::{DmSendResult, MessageError, MessageService};
 
 // Mirrors internal/services/message/adapters/signal_crypto.go. Signal encryption
 // and sealed-sender wrapping add bytes; neither compresses the encoded Content.
-const MAX_SEALED_BODY_BYTES: usize = 8192;
+const MAX_SEALED_BODY_BYTES: usize = crate::crypto::signal::sealed_sender::MAX_SEALED_BODY_BYTES;
 
 fn validate_sealed_plaintext_size(encoded_len: usize) -> Result<(), MessageError> {
-    // A lower bound only: content within this cap may still exceed it after
-    // encryption. Those outcomes must retain the existing uncertain boundary.
+    // Cheap lower-bound refusal. The bounded actor also checks every actual
+    // envelope against this cap before committing any ratchet state.
     if encoded_len > MAX_SEALED_BODY_BYTES {
         return Err(MessageError::InvalidContent(format!(
             "message content too large for sealed delivery: {encoded_len} bytes (max {MAX_SEALED_BODY_BYTES})"
@@ -522,29 +522,14 @@ impl MessageService {
         let plaintext = content.encode_to_vec();
         let peer = peer_id.to_string();
         let mut auth_client = self.auth_client();
-        let mut ciphertexts = std::collections::HashMap::new();
-        let mut error = None;
-        crate::services::gateway::submission::mark_submission_started()?;
-        for &device_id in devices {
-            match self
-                .signal_service
-                .encrypt_message(&mut auth_client, &peer, device_id, &plaintext)
-                .await
-            {
-                Ok(ciphertext) => {
-                    ciphertexts.insert(device_id, ciphertext);
-                }
-                Err(e) => record_deposit_error(
-                    &mut error,
-                    MessageError::from_signal_send(e, "device encryption"),
-                ),
-            }
-        }
-        if ciphertexts.is_empty() {
-            return Err(error.unwrap_or_else(|| {
-                MessageError::DmError(format!("Failed to encrypt the retry for {peer_id}"))
-            }));
-        }
+        let ciphertexts = self
+            .signal_service
+            .encrypt_message_devices_bounded(&mut auth_client, &peer, devices, &plaintext)
+            .await
+            .map_err(|e| MessageError::from_signal_send(e, "device encryption"))?
+            .into_iter()
+            .map(|(device, sealed)| (device, sealed.ciphertext))
+            .collect();
         let uak = self.sealed_access_key(&peer, false);
         let mut message_client = self.message_client();
         let outcome = self
@@ -878,15 +863,9 @@ impl MessageService {
             })
             .is_some();
 
-        if crate::services::gateway::submission::mark_submission_started().is_err() {
-            return Ok(DepositOutcome {
-                error: Some(MessageError::NotLoggedIn),
-                ..Default::default()
-            });
-        }
         let (sealed, unrestricted) = match self
             .signal_service
-            .encrypt_message_all_devices_with_access_policy(
+            .encrypt_message_all_devices_bounded_with_access_policy(
                 auth_client,
                 recipient_id,
                 plaintext,

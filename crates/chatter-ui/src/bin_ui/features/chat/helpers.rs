@@ -141,34 +141,80 @@ pub(crate) fn edit_messages(
 // Shared UI update helpers
 // ============================================================================
 
-/// Update a message's reaction summary in the UI model.
-///
-/// Finds the message by sender_id + timestamp_ns and rewrites that one row.
-/// Used by all 4 reaction paths (anon DM, anon group, regular DM, channel).
-pub(crate) fn update_reaction_in_ui(
+/// Refresh one row from storage at UI application time. Queued completions
+/// carry only identity, so neither duplicates nor delayed tasks replay a delta
+/// or install an old snapshot over newer persisted state.
+pub fn refresh_reaction_in_ui(
     window: &MainWindow,
-    sender_id: &str,
-    timestamp_ns: &str,
-    emoji: &str,
-    remove: bool,
+    client: &std::sync::Arc<chatter_core::client::ChatterClient>,
+    conversation: chatter_core::state::ActiveConversation,
+    author: &UserId,
+    sent_at: u64,
 ) {
-    use crate::bin_ui::converters::{reaction_counts_to_entries, reactions_model_to_counts};
-    use chatter_core::domain::message::ReactionCount;
+    refresh_reaction_snapshot(window, client, conversation, None, author, sent_at);
+}
 
+/// Apply only the actual persisted conversation named by the incoming event.
+#[doc(hidden)]
+pub fn refresh_scoped_reaction_in_ui(
+    window: &MainWindow,
+    client: &std::sync::Arc<chatter_core::client::ChatterClient>,
+    conversation: chatter_core::state::ActiveConversation,
+    expected: &chatter_core::domain::reaction::ReactionScope,
+    author: &UserId,
+    sent_at: u64,
+) {
+    refresh_reaction_snapshot(
+        window,
+        client,
+        conversation,
+        Some(expected),
+        author,
+        sent_at,
+    );
+}
+
+fn refresh_reaction_snapshot(
+    window: &MainWindow,
+    client: &std::sync::Arc<chatter_core::client::ChatterClient>,
+    conversation: chatter_core::state::ActiveConversation,
+    expected: Option<&chatter_core::domain::reaction::ReactionScope>,
+    author: &UserId,
+    sent_at: u64,
+) {
+    if client.chat_state().active_conversation() != conversation {
+        return;
+    }
+    let handle = client.conversation(conversation);
+    let snapshot = match match expected {
+        Some(scope) => handle.reaction_snapshot_for_scope(scope, author, sent_at),
+        None => handle.reaction_snapshot(author, sent_at),
+    } {
+        Ok(Some(snapshot)) => snapshot,
+        Ok(None) => return,
+        Err(error) => {
+            tracing::warn!(%error, "Reaction snapshot unavailable");
+            return;
+        }
+    };
     edit_messages(window, |model| {
         for i in 0..model.row_count() {
             let Some(mut m) = model.row_data(i) else {
                 continue;
             };
-            if m.sender_id.as_str() != sender_id || m.timestamp_ns.as_str() != timestamp_ns {
+            if m.sender_id.as_str() != author.to_string()
+                || m.timestamp_ns.as_str() != sent_at.to_string()
+            {
                 continue;
             }
-            let mut counts = reactions_model_to_counts(&m.reactions);
-            ReactionCount::apply(&mut counts, emoji, remove);
-            m.has_reactions = !counts.is_empty();
-            m.reaction_summary = ReactionCount::summary_string(&counts).into();
-            m.reactions =
-                slint::ModelRc::new(slint::VecModel::from(reaction_counts_to_entries(&counts)));
+            m.has_reactions = !snapshot.counts.is_empty();
+            m.reaction_summary = snapshot.summary.clone().into();
+            m.reactions = slint::ModelRc::new(slint::VecModel::from(
+                crate::bin_ui::converters::reaction_counts_to_entries(
+                    &snapshot.counts,
+                    &snapshot.own_emojis,
+                ),
+            ));
             model.set_row_data(i, m);
         }
     });

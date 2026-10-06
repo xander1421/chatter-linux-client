@@ -38,6 +38,12 @@ pub struct InboxEventProcessor {
 impl InboxEventProcessor {
     /// Create from a CoreServices (convenience constructor).
     pub fn from_client(client: &Arc<crate::client::ChatterClient>) -> Self {
+        // Durable reaction intents already in this profile must not wait for
+        // network redelivery merely because the target is already stored.
+        crate::inbox::reaction_handoff::replay(
+            &client.messages().message_repo,
+            Some(&client.event_bus().domain_sender()),
+        );
         Self {
             message_service: client.messages().clone(),
             dm_bootstrap_service: client.dm_bootstrap().clone(),
@@ -800,6 +806,7 @@ impl InboxEventProcessor {
             // Ephemeral events — emit DomainEvent for DB persistence, UI also handles
             // =================================================================
             InboxEvent::DmReaction {
+                conversation_peer_id,
                 peer_id,
                 emoji,
                 remove,
@@ -807,15 +814,25 @@ impl InboxEventProcessor {
                 target_author_aci,
                 timestamp,
             } => {
-                let sender_id = target_author_aci.parse().unwrap_or(*peer_id);
+                let (scope, sender_id) = match self.message_service.dm_reaction_admission(
+                    *conversation_peer_id,
+                    *peer_id,
+                    target_author_aci,
+                ) {
+                    Ok(admitted) => admitted,
+                    Err(error) => {
+                        tracing::warn!(%error,"Rejected reaction destination metadata");
+                        return;
+                    }
+                };
                 // Persist first; the unified-reactions table has UNIQUE
-                // (sender_id, sent_at_ns, user_id, emoji) so this is idempotent.
+                // (conversation kind/id, author, time, reactor, emoji).
                 // Only emit the UI delta if the reaction was actually new —
                 // otherwise the snapshot + delta both apply and the bubble
                 // shows count=2 for a single reaction. The target must be in
                 // this friend DM (`resolve_inbound_target`).
                 match self.message_service.record_inbound_reaction(
-                    &crate::domain::ChannelId::from(*peer_id),
+                    &scope,
                     peer_id,
                     &sender_id,
                     *target_sent_timestamp,
@@ -826,6 +843,7 @@ impl InboxEventProcessor {
                     Ok(true) => {
                         let event = if *remove {
                             DomainEvent::ReactionRemoved {
+                                scope: scope.clone(),
                                 sender_id,
                                 sent_at_ns: *target_sent_timestamp,
                                 reactor_id: *peer_id,
@@ -834,6 +852,7 @@ impl InboxEventProcessor {
                             }
                         } else {
                             DomainEvent::ReactionAdded {
+                                scope: scope.clone(),
                                 sender_id,
                                 sent_at_ns: *target_sent_timestamp,
                                 reactor_id: *peer_id,
@@ -859,9 +878,24 @@ impl InboxEventProcessor {
                 target_author_aci,
                 timestamp,
             } => {
-                let target_sender_id = target_author_aci.parse().unwrap_or(*sender_id);
+                let Ok(target_sender_id) = target_author_aci.parse() else {
+                    tracing::warn!("Invalid reaction target author");
+                    return;
+                };
+                let scope = self.message_service.channel_reaction_scope(
+                    *channel_id,
+                    &target_sender_id,
+                    *target_sent_timestamp,
+                );
+                let scope = match scope {
+                    Ok(scope) => scope,
+                    Err(error) => {
+                        tracing::warn!(%error, "Reaction scope unavailable");
+                        return;
+                    }
+                };
                 match self.message_service.record_inbound_reaction(
-                    channel_id,
+                    &scope,
                     sender_id,
                     &target_sender_id,
                     *target_sent_timestamp,
@@ -872,6 +906,7 @@ impl InboxEventProcessor {
                     Ok(true) => {
                         let event = if *remove {
                             DomainEvent::ReactionRemoved {
+                                scope: scope.clone(),
                                 sender_id: target_sender_id,
                                 sent_at_ns: *target_sent_timestamp,
                                 reactor_id: *sender_id,
@@ -880,6 +915,7 @@ impl InboxEventProcessor {
                             }
                         } else {
                             DomainEvent::ReactionAdded {
+                                scope: scope.clone(),
                                 sender_id: target_sender_id,
                                 sent_at_ns: *target_sent_timestamp,
                                 reactor_id: *sender_id,

@@ -11,12 +11,12 @@ use crate::domain::ids::{AttachmentId, ChannelId, IntegrationId, MessageId, Reac
 use crate::domain::message::{
     ConversationType, Message, MessageContent, ReactionCount, Thread, UnreadAnchor,
 };
-use crate::domain::reaction::{Emoji, Reaction};
+use crate::domain::reaction::{Emoji, Reaction, ReactionScope};
 use crate::error::StorageError;
 use crate::storage::Database;
 use crate::storage::serialization::{db_deserialize, db_serialize};
 use chrono::{DateTime, Utc};
-use rusqlite::params;
+use rusqlite::{OptionalExtension, params};
 use std::collections::HashMap;
 use std::sync::Arc;
 
@@ -221,26 +221,52 @@ impl UnifiedMessageRepository {
         conn: &rusqlite::Connection,
         message: &Message,
         reactions: &[super::message_modifier_repo::PendingReaction],
-    ) -> Result<(), StorageError> {
-        use crate::services::current_user::CurrentUserProvider;
+    ) -> Result<bool, StorageError> {
         let (Some(author), false) = (message.sender_id, reactions.is_empty()) else {
-            return Ok(());
+            return Ok(false);
         };
-        let Ok(me) =
-            super::settings_repo::SettingsRepository::new(self.db.clone()).current_user_id()
-        else {
-            return Ok(());
-        };
+        let own: Option<String> = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key='auth.current_user_id'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let me: UserId = own
+            .and_then(|v| serde_json::from_str::<String>(&v).ok())
+            .and_then(|v| v.parse().ok())
+            .ok_or_else(|| {
+                StorageError::InvalidData("Held reaction requires current-user identity".into())
+            })?;
+        Self::ensure_reaction_scope_resolved_with_conn(
+            conn,
+            &ReactionScope::of(message),
+            &author,
+            message.sent_at,
+        )?;
+        let mut changed = false;
         for r in reactions {
+            if !accept_reaction_action(
+                conn,
+                &ReactionScope::of(message),
+                &author,
+                message.sent_at,
+                &r.reactor,
+                &r.emoji,
+                r.action_ts,
+                r.remove,
+            )? {
+                continue;
+            }
             if r.remove {
-                conn.execute(
-                    "DELETE FROM unified_reactions WHERE sender_id = ?1 AND sent_at_ns = ?2 AND user_id = ?3 AND emoji = ?4",
-                    params![author.to_string(), message.sent_at as i64, r.reactor.to_string(), r.emoji],
-                )?;
+                changed |= conn.execute(
+                    "DELETE FROM unified_reactions WHERE sender_id = ?1 AND sent_at_ns = ?2 AND user_id = ?3 AND emoji = ?4 AND conversation_id=?5 AND conversation_type=?6",
+                    params![author.to_string(), message.sent_at as i64, r.reactor.to_string(), r.emoji, message.conversation_id.to_string(), message.conversation_type.as_str()],
+                )?>0;
             } else {
-                conn.execute(
-                    "INSERT OR IGNORE INTO unified_reactions (id, sender_id, sent_at_ns, user_id, emoji, created_at)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                changed |= conn.execute(
+                    "INSERT OR IGNORE INTO unified_reactions (id, sender_id, sent_at_ns, user_id, emoji, created_at,conversation_id,conversation_type)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6,?7,?8)",
                     params![
                         ReactionId::new().to_string(),
                         author.to_string(),
@@ -248,17 +274,28 @@ impl UnifiedMessageRepository {
                         r.reactor.to_string(),
                         r.emoji,
                         Utc::now().to_rfc3339(),
+                        message.conversation_id.to_string(), message.conversation_type.as_str(),
                     ],
-                )?;
+                )?>0;
             }
         }
-        self.rebuild_reaction_blobs_with_conn(conn, &author, message.sent_at, &me)
+        self.rebuild_reaction_blobs_with_conn(
+            conn,
+            &ReactionScope::of(message),
+            &author,
+            message.sent_at,
+            &me,
+        )?;
+        Ok(changed)
     }
 
     /// Get a message by ID.
     pub fn get(&self, id: &MessageId) -> Result<Option<Message>, StorageError> {
         let conn = self.db.read_connection()?;
-        let mut stmt = conn.prepare(&format!("SELECT {} FROM messages WHERE id = ?1", MSG_COLS))?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {} FROM messages WHERE id = ?1",
+            message_columns("messages")
+        ))?;
         match stmt.query_row(params![id.to_string()], row_to_message) {
             Ok(msg) => Ok(Some(msg?)),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
@@ -336,7 +373,7 @@ impl UnifiedMessageRepository {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(&format!(
             "SELECT {} FROM messages WHERE sender_id = ?1 AND sent_at = ?2",
-            MSG_COLS
+            message_columns("messages")
         ))?;
         match stmt.query_row(
             params![sender_id.to_string(), sent_at as i64],
@@ -366,7 +403,7 @@ impl UnifiedMessageRepository {
                    AND sent_at < ?3 AND is_deleted = 0 \
                  ORDER BY sent_at DESC, sender_id DESC \
                  LIMIT ?4",
-                MSG_COLS
+                message_columns("messages")
             ))?;
             let mut rows = stmt.query(params![
                 conversation_id.to_string(),
@@ -381,7 +418,7 @@ impl UnifiedMessageRepository {
                  WHERE conversation_id = ?1 AND conversation_type = ?2 AND is_deleted = 0 \
                  ORDER BY sent_at DESC, sender_id DESC \
                  LIMIT ?3",
-                MSG_COLS
+                message_columns("messages")
             ))?;
             let mut rows = stmt.query(params![
                 conversation_id.to_string(),
@@ -403,7 +440,7 @@ impl UnifiedMessageRepository {
             "SELECT {} FROM messages \
              WHERE conversation_id = ?1 AND conversation_type = ?2 AND is_deleted = 0 \
              ORDER BY sent_at DESC LIMIT 1",
-            MSG_COLS
+            message_columns("messages")
         ))?;
         match stmt.query_row(
             params![conversation_id.to_string(), conversation_type.as_str()],
@@ -438,7 +475,8 @@ impl UnifiedMessageRepository {
                 thread_id = ?4, reply_to = COALESCE(?5, reply_to), attachments_blob = ?6,
                 is_pinned = ?7, is_edited = ?8, is_deleted = ?9, is_read = ?10,
                 updated_at = ?11, edited_at = ?12,
-                reaction_counts_blob = ?13, current_user_reactions_blob = ?14,
+                reaction_counts_blob = CASE WHEN EXISTS(SELECT 1 FROM reaction_scope_unresolved r WHERE r.conversation_id=messages.conversation_id AND r.conversation_type=messages.conversation_type AND r.sender_id=messages.sender_id AND r.sent_at_ns=messages.sent_at) THEN reaction_counts_blob ELSE ?13 END,
+                current_user_reactions_blob = CASE WHEN EXISTS(SELECT 1 FROM reaction_scope_unresolved r WHERE r.conversation_id=messages.conversation_id AND r.conversation_type=messages.conversation_type AND r.sender_id=messages.sender_id AND r.sent_at_ns=messages.sent_at) THEN current_user_reactions_blob ELSE ?14 END,
                 mentioned_integrations_blob = ?15, targets_ai_bot = ?16,
                 delivery_status = ?17,
                 reply_to_author_id = COALESCE(?18, reply_to_author_id),
@@ -511,7 +549,7 @@ impl UnifiedMessageRepository {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(&format!(
             "SELECT {} FROM messages WHERE conversation_type = ?1",
-            MSG_COLS
+            message_columns("messages")
         ))?;
         let rows = stmt.query_map(params![conversation_type.as_str()], row_to_message)?;
 
@@ -664,7 +702,7 @@ impl UnifiedMessageRepository {
              WHERE conversation_id = ?1 AND conversation_type = ?2 \
                AND is_pinned = 1 AND is_deleted = 0 \
              ORDER BY sent_at DESC",
-            MSG_COLS
+            message_columns("messages")
         ))?;
         let mut rows = stmt.query(params![
             conversation_id.to_string(),
@@ -791,6 +829,469 @@ impl UnifiedMessageRepository {
     // Reactions (unified_reactions table)
     // ========================================================================
 
+    /// Save only decoded authenticated reaction intent before acknowledging transport.
+    #[allow(clippy::too_many_arguments)]
+    pub fn hold_received_reaction(
+        &self,
+        scope: &ReactionScope,
+        author: &UserId,
+        target_ts: u64,
+        actor: &UserId,
+        emoji: &str,
+        remove: bool,
+        action_ts: u64,
+    ) -> Result<(), StorageError> {
+        super::message_modifier_repo::MessageModifierRepository::new(self.db.clone())
+            .queue_reaction(
+                author,
+                target_ts,
+                actor,
+                emoji,
+                remove,
+                scope,
+                action_ts,
+                crate::util::time::TimestampNanos::now().as_u64(),
+            )
+    }
+
+    /// Consume a durable handoff only after target arrival and roster authority.
+    /// Unresolved legacy ownership keeps its intent without changing history.
+    pub fn apply_held_reaction_scope(
+        &self,
+        scope: &ReactionScope,
+        author: &UserId,
+        target_ts: u64,
+    ) -> Result<bool, StorageError> {
+        let mut conn = self.db.connection()?;
+        let tx = conn.transaction()?;
+        let changed = self.apply_held_reaction_scope_with_conn(&tx, scope, author, target_ts)?;
+        tx.commit()?;
+        Ok(changed)
+    }
+
+    fn apply_held_reaction_scope_with_conn(
+        &self,
+        tx: &rusqlite::Connection,
+        scope: &ReactionScope,
+        author: &UserId,
+        target_ts: u64,
+    ) -> Result<bool, StorageError> {
+        match Self::ensure_reaction_scope_resolved_with_conn(tx, scope, author, target_ts) {
+            Ok(()) => {}
+            Err(StorageError::InvalidData(_)) => return Ok(false),
+            Err(error) => return Err(error),
+        }
+        let target=tx.query_row(&format!("SELECT {} FROM messages WHERE conversation_id=?1 AND conversation_type=?2 AND sender_id=?3 AND sent_at=?4 AND is_deleted=0",message_columns("messages")),params![scope.id.to_string(),scope.kind.as_str(),author.to_string(),target_ts as i64],row_to_message).optional()?.transpose()?;
+        let Some(target) = target else {
+            return Ok(false);
+        };
+        let own: Option<String> = tx
+            .query_row(
+                "SELECT value FROM settings WHERE key='auth.current_user_id'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let own = own
+            .map(|v| {
+                serde_json::from_str::<String>(&v).map_err(|_| {
+                    StorageError::InvalidData("Invalid reaction account identity".into())
+                })
+            })
+            .transpose()?;
+        let mut stmt=tx.prepare("SELECT actor_id,emoji,remove,action_ts FROM pending_scoped_reactions WHERE conversation_id=?1 AND conversation_type=?2 AND author_id=?3 AND target_sent_at=?4 ORDER BY action_ts,received_at")?;
+        let rows = stmt
+            .query_map(
+                params![
+                    scope.id.to_string(),
+                    scope.kind.as_str(),
+                    author.to_string(),
+                    target_ts as i64
+                ],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, String>(1)?,
+                        r.get::<_, bool>(2)?,
+                        r.get::<_, i64>(3)? as u64,
+                    ))
+                },
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        drop(stmt);
+        let mut accepted = Vec::new();
+        for (actor, emoji, remove, action_ts) in rows {
+            if super::message_modifier_repo::may_modify(
+                &tx,
+                &target,
+                &actor,
+                own.as_deref() == Some(actor.as_str()),
+            )? {
+                let reactor = actor
+                    .parse()
+                    .map_err(|_| StorageError::InvalidData("Invalid held reaction actor".into()))?;
+                tx.execute("DELETE FROM pending_scoped_reactions WHERE conversation_id=?1 AND conversation_type=?2 AND author_id=?3 AND target_sent_at=?4 AND actor_id=?5 AND emoji=?6",params![scope.id.to_string(),scope.kind.as_str(),author.to_string(),target_ts as i64,actor,emoji])?;
+                accepted.push(super::message_modifier_repo::PendingReaction {
+                    reactor,
+                    emoji,
+                    remove,
+                    action_ts,
+                });
+            }
+        }
+        self.apply_held_reactions(tx, &target, &accepted)
+    }
+
+    /// Bind this profile and exact mailbox before staged Signal receive.
+    pub(crate) fn reaction_receive_key(
+        &self,
+        transport: &str,
+        scope: ChannelId,
+        envelope: &str,
+        timestamp: u64,
+    ) -> Result<crate::storage::receive_artifact::ReceiveKey, StorageError> {
+        let conn = self.db.read_connection()?;
+        let (account, device) = reaction_receive_binding(&conn)?;
+        let key = crate::storage::receive_artifact::ReceiveKey {
+            local_account: account,
+            local_device: device,
+            transport: transport.into(),
+            scope: scope.to_string(),
+            envelope_id: envelope.into(),
+            server_timestamp_ns: timestamp,
+        };
+        key.validate()?;
+        Ok(key)
+    }
+
+    /// Transaction B: authenticated exact artifact, scoped intent/projections,
+    /// and applied flag commit together. Replays never reapply an applied vote.
+    pub(crate) fn apply_reaction_artifact(
+        &self,
+        artifact: &crate::storage::receive_artifact::ReceiveArtifact,
+    ) -> Result<Option<(ReactionScope, UserId, u64)>, StorageError> {
+        use crate::storage::receive_artifact;
+        let mut conn = self.db.connection()?;
+        let tx = conn.transaction()?;
+        let (account, device) = reaction_receive_binding(&tx)?;
+        if account != artifact.key.local_account || device != artifact.key.local_device {
+            return Err(StorageError::InvalidData(
+                "Reaction receive account changed".into(),
+            ));
+        }
+        let stored =
+            receive_artifact::load(&tx, &artifact.key, &artifact.digest)?.ok_or_else(|| {
+                StorageError::InvalidData("Authenticated receive artifact missing".into())
+            })?;
+        let mut expected = artifact.clone();
+        expected.applied = stored.applied;
+        expected.acknowledged = stored.acknowledged;
+        if stored.acknowledged {
+            expected.content.clear();
+        }
+        if stored != expected {
+            return Err(StorageError::InvalidData(
+                "Authenticated receive artifact mismatch".into(),
+            ));
+        }
+        if stored.applied {
+            return Ok(None);
+        }
+        let mut scope = ReactionScope::new(
+            stored
+                .key
+                .scope
+                .parse()
+                .map_err(|_| StorageError::InvalidData("Invalid receive scope".into()))?,
+            match stored.key.transport.as_str() {
+                "anon_dm" => ConversationType::AnonDm,
+                "anon_group" => ConversationType::AnonGroup,
+                _ => {
+                    return Err(StorageError::InvalidData(
+                        "Invalid receive transport".into(),
+                    ));
+                }
+            },
+        );
+        // Invalid payload destination is authenticated rejected input: preserve
+        // its journal evidence but never let it choose a foreign target.
+        let intent = crate::inbox::reaction_handoff::decode_artifact_reaction(&stored, &scope);
+        let mut applied = None;
+        if let Some((author, reaction)) = intent {
+            if reaction.target_author_aci.starts_with("channel:") {
+                let encrypted: Option<bool> = tx
+                    .query_row(
+                        "SELECT require_encryption FROM channels WHERE id=?1",
+                        [scope.id.to_string()],
+                        |r| r.get(0),
+                    )
+                    .optional()?;
+                let encrypted = encrypted.ok_or_else(|| {
+                    StorageError::InvalidData(
+                        "Reaction channel metadata not ready; authenticated artifact retained"
+                            .into(),
+                    )
+                })?;
+                let mut stmt=tx.prepare("SELECT DISTINCT conversation_type FROM messages WHERE conversation_id=?1 AND sender_id=?2 AND sent_at=?3 AND conversation_type IN ('channel','anon_group') AND is_deleted=0")?;
+                let kinds = stmt
+                    .query_map(
+                        params![
+                            scope.id.to_string(),
+                            author.to_string(),
+                            reaction.target_sent_timestamp as i64
+                        ],
+                        |r| r.get::<_, String>(0),
+                    )?
+                    .collect::<Result<Vec<_>, _>>()?;
+                drop(stmt);
+                if kinds.len() > 1 {
+                    return Err(StorageError::InvalidData(
+                        "Ambiguous channel receive storage kind".into(),
+                    ));
+                }
+                scope.kind = if let Some(kind) = kinds.first() {
+                    ConversationType::from_str_value(kind)?
+                } else if encrypted {
+                    ConversationType::AnonGroup
+                } else {
+                    ConversationType::Channel
+                };
+            }
+            let actor: UserId = stored.sender.parse().map_err(|_| {
+                StorageError::InvalidData("Invalid certified reaction sender".into())
+            })?;
+            let own = actor.to_string() == account;
+            // Same oriented durable friendship block used by Gateway; this
+            // artifact path bypasses its nonreaction router, not its block policy.
+            let blocked:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM friendships WHERE user_id=?1 AND friend_id=?2 AND status=2)",params![account,actor.to_string()],|r|r.get(0))?;
+            let allowed=!blocked && (own || match scope.kind {
+                ConversationType::AnonDm=>tx.query_row("SELECT EXISTS(SELECT 1 FROM anon_dm_conversations WHERE id=?1 AND peer_id=?2 AND status=1 AND length(peer_mailbox_pk)=32) AND NOT EXISTS(SELECT 1 FROM anon_dm_blocked_users WHERE user_id=?2)",params![scope.id.to_string(),actor.to_string()],|r|r.get::<_,bool>(0))?,
+                ConversationType::Channel=>tx.query_row("SELECT EXISTS(SELECT 1 FROM memberships WHERE channel_id=?1 AND user_id=?2)",params![scope.id.to_string(),actor.to_string()],|r|r.get::<_,bool>(0))?,
+                ConversationType::AnonGroup=>tx.query_row("SELECT EXISTS(SELECT 1 FROM memberships WHERE channel_id=?1 AND user_id=?2) OR (EXISTS(SELECT 1 FROM anon_group_members g JOIN anon_groups a ON a.id=g.group_id WHERE g.group_id=?1 AND g.user_id=?2 AND a.status<>2) AND NOT EXISTS(SELECT 1 FROM anon_group_blocked_users WHERE group_id=?1 AND user_id=?2))",params![scope.id.to_string(),actor.to_string()],|r|r.get::<_,bool>(0))?,
+                _=>false,
+            });
+            if !allowed && !blocked {
+                let refused:bool=match scope.kind {
+                    ConversationType::AnonDm=>tx.query_row("SELECT EXISTS(SELECT 1 FROM anon_dm_blocked_users WHERE user_id=?2) OR EXISTS(SELECT 1 FROM anon_dm_conversations WHERE id=?1 AND (status IN (2,3) OR peer_id<>?2))",params![scope.id.to_string(),actor.to_string()],|r|r.get(0))?,
+                    ConversationType::AnonGroup=>tx.query_row("SELECT EXISTS(SELECT 1 FROM anon_group_blocked_users WHERE group_id=?1 AND user_id=?2) OR EXISTS(SELECT 1 FROM anon_groups WHERE id=?1 AND status=2)",params![scope.id.to_string(),actor.to_string()],|r|r.get(0))?,
+                    _=>false,
+                };
+                if !refused {
+                    return Err(StorageError::InvalidData(
+                        "Reaction roster/readiness unavailable; authenticated artifact retained"
+                            .into(),
+                    ));
+                }
+            }
+            if allowed {
+                let action = if reaction.timestamp > 0 {
+                    reaction.timestamp
+                } else {
+                    stored.key.server_timestamp_ns
+                };
+                super::message_modifier_repo::queue_reaction_with_conn(
+                    &tx,
+                    &author,
+                    reaction.target_sent_timestamp,
+                    &actor,
+                    &reaction.emoji,
+                    reaction.remove,
+                    &scope,
+                    action,
+                    crate::util::time::TimestampNanos::now().as_u64(),
+                )?;
+                if self.apply_held_reaction_scope_with_conn(
+                    &tx,
+                    &scope,
+                    &author,
+                    reaction.target_sent_timestamp,
+                )? {
+                    applied = Some((scope, author, reaction.target_sent_timestamp));
+                }
+            }
+        }
+        receive_artifact::mark_applied(&tx, &stored)?;
+        tx.commit()?;
+        Ok(applied)
+    }
+
+    /// Called only for an exact envelope whose upstream acknowledgement succeeded.
+    pub(crate) fn acknowledge_reaction_artifact(
+        &self,
+        key: &crate::storage::receive_artifact::ReceiveKey,
+        digest: &[u8],
+    ) -> Result<(), StorageError> {
+        let mut conn = self.db.connection()?;
+        let tx = conn.transaction()?;
+        crate::storage::receive_artifact::mark_acknowledged(&tx, key, digest)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub(crate) fn pending_reaction_artifacts_after(
+        &self,
+        cursor: Option<&(u64, String)>,
+    ) -> Result<Vec<crate::storage::receive_artifact::ReceiveArtifact>, StorageError> {
+        use crate::storage::receive_artifact;
+        let conn = self.db.read_connection()?;
+        let (account, device) = reaction_receive_binding(&conn)?;
+        let mut stmt=conn.prepare("SELECT id FROM reaction_receive_artifacts WHERE local_account=?1 AND local_device=?2 AND state='pending' AND (?3 IS NULL OR (server_timestamp_ns,id)>(?3,?4)) ORDER BY server_timestamp_ns,id LIMIT ?5")?;
+        let ids = stmt
+            .query_map(
+                params![
+                    account,
+                    device,
+                    cursor.map(|v| v.0 as i64),
+                    cursor.map(|v| v.1.as_str()),
+                    receive_artifact::MAX_RECOVERY_BATCH as i64
+                ],
+                |r| r.get::<_, String>(0),
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut result = Vec::new();
+        for id in ids {
+            result.push(receive_artifact::load_by_id(&conn, &id)?.ok_or_else(|| {
+                StorageError::InvalidData("Receive artifact vanished during recovery read".into())
+            })?);
+        }
+        Ok(result)
+    }
+
+    /// Bounded restart-safe replay for handoffs whose target is already stored.
+    pub fn replay_held_reactions(&self) -> Result<Vec<(ReactionScope, UserId, u64)>, StorageError> {
+        let targets = {
+            let conn = self.db.read_connection()?;
+            let own: Option<String> = conn
+                .query_row(
+                    "SELECT value FROM settings WHERE key='auth.current_user_id'",
+                    [],
+                    |r| r.get(0),
+                )
+                .optional()?;
+            let own = own
+                .map(|v| {
+                    serde_json::from_str::<String>(&v).map_err(|_| {
+                        StorageError::InvalidData("Invalid reaction replay account".into())
+                    })
+                })
+                .transpose()?;
+            // Exact eligibility excludes unresolved/readiness heads before the
+            // work limit. Such rows remain durable and qualify after metadata arrives.
+            let mut stmt=conn.prepare("SELECT DISTINCT p.conversation_id,p.conversation_type,p.author_id,p.target_sent_at
+                FROM pending_scoped_reactions p JOIN messages m ON m.conversation_id=p.conversation_id AND m.conversation_type=p.conversation_type AND m.sender_id=p.author_id AND m.sent_at=p.target_sent_at
+                WHERE m.is_deleted=0 AND NOT EXISTS(SELECT 1 FROM reaction_scope_unresolved u WHERE u.conversation_id=p.conversation_id AND u.conversation_type=p.conversation_type AND u.sender_id=p.author_id AND u.sent_at_ns=p.target_sent_at)
+                AND NOT EXISTS(SELECT 1 FROM friendships f WHERE f.user_id=?1 AND f.friend_id=p.actor_id AND f.status=2)
+                AND (p.actor_id=?1
+                    OR (p.conversation_type='server_dm' AND p.conversation_id=p.actor_id)
+                    OR (p.conversation_type IN ('channel','anon_group') AND EXISTS(SELECT 1 FROM memberships v WHERE v.channel_id=p.conversation_id AND v.user_id=p.actor_id))
+                    OR (p.conversation_type='anon_dm' AND EXISTS(SELECT 1 FROM anon_dm_conversations d WHERE d.id=p.conversation_id AND d.peer_id=p.actor_id AND d.status=1 AND length(d.peer_mailbox_pk)=32) AND NOT EXISTS(SELECT 1 FROM anon_dm_blocked_users b WHERE b.user_id=p.actor_id))
+                    OR (p.conversation_type='anon_group' AND EXISTS(SELECT 1 FROM anon_group_members g JOIN anon_groups a ON a.id=g.group_id WHERE g.group_id=p.conversation_id AND g.user_id=p.actor_id AND a.status<>2) AND NOT EXISTS(SELECT 1 FROM anon_group_blocked_users b WHERE b.group_id=p.conversation_id AND b.user_id=p.actor_id)))
+                ORDER BY p.conversation_type,p.conversation_id,p.author_id,p.target_sent_at LIMIT 1000")?;
+            stmt.query_map(params![own], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, i64>(3)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?
+        };
+        let mut applied = Vec::new();
+        for (id, kind, author, ts) in targets {
+            let scope = ReactionScope::new(
+                id.parse().map_err(|_| {
+                    StorageError::InvalidData("Invalid handoff conversation".into())
+                })?,
+                ConversationType::from_str_value(&kind)?,
+            );
+            let author = author
+                .parse()
+                .map_err(|_| StorageError::InvalidData("Invalid handoff author".into()))?;
+            match self.apply_held_reaction_scope(&scope, &author, ts as u64) {
+                Ok(true) => applied.push((scope, author, ts as u64)),
+                Ok(false) => {}
+                Err(_) => {
+                    tracing::warn!("Independent pending reaction target awaits storage recovery")
+                }
+            }
+        }
+        Ok(applied)
+    }
+
+    pub fn get_by_reaction_scope(
+        &self,
+        scope: &ReactionScope,
+        author: &UserId,
+        sent_at: u64,
+    ) -> Result<Option<Message>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let mut stmt = conn.prepare(&format!("SELECT {} FROM messages WHERE conversation_id=?1 AND conversation_type=?2 AND sender_id=?3 AND sent_at=?4 AND is_deleted=0", message_columns("messages")))?;
+        let row = stmt
+            .query_row(
+                params![
+                    scope.id.to_string(),
+                    scope.kind.as_str(),
+                    author.to_string(),
+                    sent_at as i64
+                ],
+                row_to_message,
+            )
+            .optional()?;
+        row.transpose()
+    }
+
+    pub fn ensure_reaction_scope_resolved(
+        &self,
+        scope: &ReactionScope,
+        author: &UserId,
+        sent_at: u64,
+    ) -> Result<(), StorageError> {
+        let conn = self.db.read_connection()?;
+        Self::ensure_reaction_scope_resolved_with_conn(&conn, scope, author, sent_at)
+    }
+    fn ensure_reaction_scope_resolved_with_conn(
+        conn: &rusqlite::Connection,
+        scope: &ReactionScope,
+        author: &UserId,
+        sent_at: u64,
+    ) -> Result<(), StorageError> {
+        let unresolved:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM reaction_scope_unresolved WHERE conversation_id=?1 AND conversation_type=?2 AND sender_id=?3 AND sent_at_ns=?4)",params![scope.id.to_string(),scope.kind.as_str(),author.to_string(),sent_at as i64],|row|row.get(0))?;
+        if unresolved {
+            return Err(StorageError::InvalidData(
+                "Historical reaction ownership requires a complete authoritative snapshot".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Replace a verified complete server snapshot and both projections atomically.
+    pub fn replace_reaction_snapshot(
+        &self,
+        scope: &ReactionScope,
+        author: &UserId,
+        sent_at: u64,
+        current: &UserId,
+        desired: &[(UserId, String)],
+    ) -> Result<(), StorageError> {
+        let mut conn = self.db.connection()?;
+        let tx = conn.transaction()?;
+        let exists:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM messages WHERE conversation_id=?1 AND conversation_type=?2 AND sender_id=?3 AND sent_at=?4 AND is_deleted=0)",params![scope.id.to_string(),scope.kind.as_str(),author.to_string(),sent_at as i64],|r|r.get(0))?;
+        if !exists {
+            return Err(StorageError::InvalidData(
+                "Reaction snapshot target is no longer stored".into(),
+            ));
+        }
+        tx.execute("DELETE FROM unified_reactions WHERE conversation_id=?1 AND conversation_type=?2 AND sender_id=?3 AND sent_at_ns=?4",params![scope.id.to_string(),scope.kind.as_str(),author.to_string(),sent_at as i64])?;
+        for (user, emoji) in desired {
+            tx.execute("INSERT OR IGNORE INTO unified_reactions(id,conversation_id,conversation_type,sender_id,sent_at_ns,user_id,emoji,created_at) VALUES (?1,?2,?3,?4,?5,?6,?7,?8)",params![ReactionId::new().to_string(),scope.id.to_string(),scope.kind.as_str(),author.to_string(),sent_at as i64,user.to_string(),emoji,Utc::now().to_rfc3339()])?;
+        }
+        self.rebuild_reaction_blobs_with_conn(&tx, scope, author, sent_at, current)?;
+        tx.execute("DELETE FROM reaction_scope_unresolved WHERE conversation_id=?1 AND conversation_type=?2 AND sender_id=?3 AND sent_at_ns=?4",params![scope.id.to_string(),scope.kind.as_str(),author.to_string(),sent_at as i64])?;
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Add a reaction using Signal-style (sender_id, sent_at_ns) message identification.
     /// Inserts into `unified_reactions` and rebuilds the per-user blob cache on
     /// the message row using `current_user_id` (the locally-logged-in user) so
@@ -800,19 +1301,63 @@ impl UnifiedMessageRepository {
     /// Returns `true` if a new reaction was added.
     pub fn add_reaction(
         &self,
+        scope: &ReactionScope,
         sender_id: &UserId,
         sent_at_ns: u64,
         reactor_id: &UserId,
         current_user_id: &UserId,
         emoji: &str,
     ) -> Result<bool, StorageError> {
-        let conn = self.db.connection()?;
+        self.add_reaction_at(
+            scope,
+            sender_id,
+            sent_at_ns,
+            reactor_id,
+            current_user_id,
+            emoji,
+            crate::util::time::TimestampNanos::now().as_u64(),
+        )
+    }
+
+    pub fn add_reaction_at(
+        &self,
+        scope: &ReactionScope,
+        sender_id: &UserId,
+        sent_at_ns: u64,
+        reactor_id: &UserId,
+        current_user_id: &UserId,
+        emoji: &str,
+        action_ts: u64,
+    ) -> Result<bool, StorageError> {
+        let mut conn = self.db.connection()?;
+        let tx = conn.transaction()?;
+        let conn = &tx;
+        Self::ensure_reaction_scope_resolved_with_conn(conn, scope, sender_id, sent_at_ns)?;
+        let exists: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM messages WHERE conversation_id=?1 AND conversation_type=?2 AND sender_id=?3 AND sent_at=?4 AND is_deleted=0)",params![scope.id.to_string(),scope.kind.as_str(),sender_id.to_string(),sent_at_ns as i64],|row|row.get(0))?;
+        if !exists {
+            return Err(StorageError::InvalidData(
+                "Reaction target no longer stored in this scope".into(),
+            ));
+        }
+        if !accept_reaction_action(
+            conn, scope, sender_id, sent_at_ns, reactor_id, emoji, action_ts, false,
+        )? {
+            self.rebuild_reaction_blobs_with_conn(
+                conn,
+                scope,
+                sender_id,
+                sent_at_ns,
+                current_user_id,
+            )?;
+            tx.commit()?;
+            return Ok(false);
+        }
         let reaction_id = ReactionId::new();
         let now = Utc::now().to_rfc3339();
 
         let inserted = conn.execute(
-            "INSERT OR IGNORE INTO unified_reactions (id, sender_id, sent_at_ns, user_id, emoji, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+            "INSERT OR IGNORE INTO unified_reactions (id, sender_id, sent_at_ns, user_id, emoji, created_at, conversation_id, conversation_type)
+             SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8 WHERE EXISTS (SELECT 1 FROM messages WHERE conversation_id=?7 AND conversation_type=?8 AND sender_id=?2 AND sent_at=?3 AND is_deleted=0)",
             params![
                 reaction_id.to_string(),
                 sender_id.to_string(),
@@ -820,15 +1365,13 @@ impl UnifiedMessageRepository {
                 reactor_id.to_string(),
                 emoji,
                 now,
+                scope.id.to_string(), scope.kind.as_str(),
             ],
         )?;
 
-        if inserted == 0 {
-            return Ok(false); // Already exists
-        }
-
-        self.rebuild_reaction_blobs_with_conn(&conn, sender_id, sent_at_ns, current_user_id)?;
-        Ok(true)
+        self.rebuild_reaction_blobs_with_conn(conn, scope, sender_id, sent_at_ns, current_user_id)?;
+        tx.commit()?;
+        Ok(inserted > 0)
     }
 
     /// Remove a reaction by (sender_id, sent_at_ns, reactor_id, emoji).
@@ -837,30 +1380,71 @@ impl UnifiedMessageRepository {
     /// Returns `true` if a reaction was actually removed.
     pub fn remove_reaction(
         &self,
+        scope: &ReactionScope,
         sender_id: &UserId,
         sent_at_ns: u64,
         reactor_id: &UserId,
         current_user_id: &UserId,
         emoji: &str,
     ) -> Result<bool, StorageError> {
-        let conn = self.db.connection()?;
+        self.remove_reaction_at(
+            scope,
+            sender_id,
+            sent_at_ns,
+            reactor_id,
+            current_user_id,
+            emoji,
+            crate::util::time::TimestampNanos::now().as_u64(),
+        )
+    }
+
+    pub fn remove_reaction_at(
+        &self,
+        scope: &ReactionScope,
+        sender_id: &UserId,
+        sent_at_ns: u64,
+        reactor_id: &UserId,
+        current_user_id: &UserId,
+        emoji: &str,
+        action_ts: u64,
+    ) -> Result<bool, StorageError> {
+        let mut conn = self.db.connection()?;
+        let tx = conn.transaction()?;
+        let conn = &tx;
+        Self::ensure_reaction_scope_resolved_with_conn(conn, scope, sender_id, sent_at_ns)?;
+        let exists: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM messages WHERE conversation_id=?1 AND conversation_type=?2 AND sender_id=?3 AND sent_at=?4 AND is_deleted=0)",params![scope.id.to_string(),scope.kind.as_str(),sender_id.to_string(),sent_at_ns as i64],|row|row.get(0))?;
+        if !exists {
+            return Err(StorageError::InvalidData(
+                "Reaction target no longer stored in this scope".into(),
+            ));
+        }
+        if !accept_reaction_action(
+            conn, scope, sender_id, sent_at_ns, reactor_id, emoji, action_ts, true,
+        )? {
+            self.rebuild_reaction_blobs_with_conn(
+                conn,
+                scope,
+                sender_id,
+                sent_at_ns,
+                current_user_id,
+            )?;
+            tx.commit()?;
+            return Ok(false);
+        }
         let deleted = conn.execute(
             "DELETE FROM unified_reactions
-             WHERE sender_id = ?1 AND sent_at_ns = ?2 AND user_id = ?3 AND emoji = ?4",
+             WHERE sender_id = ?1 AND sent_at_ns = ?2 AND user_id = ?3 AND emoji = ?4 AND conversation_id=?5 AND conversation_type=?6",
             params![
                 sender_id.to_string(),
                 sent_at_ns as i64,
                 reactor_id.to_string(),
-                emoji
+                emoji, scope.id.to_string(), scope.kind.as_str()
             ],
         )?;
 
-        if deleted == 0 {
-            return Ok(false);
-        }
-
-        self.rebuild_reaction_blobs_with_conn(&conn, sender_id, sent_at_ns, current_user_id)?;
-        Ok(true)
+        self.rebuild_reaction_blobs_with_conn(conn, scope, sender_id, sent_at_ns, current_user_id)?;
+        tx.commit()?;
+        Ok(deleted > 0)
     }
 
     /// Check whether the current user has reacted with a given emoji on a message.
@@ -871,21 +1455,24 @@ impl UnifiedMessageRepository {
     /// logged-in user; regular DM/channel receive it from the server via proto).
     pub fn user_has_reacted(
         &self,
+        scope: &ReactionScope,
         sender_id: &UserId,
         sent_at_ns: u64,
         emoji: &str,
     ) -> Result<bool, StorageError> {
+        self.ensure_reaction_scope_resolved(scope, sender_id, sent_at_ns)?;
         let conn = self.db.read_connection()?;
         let blob: Option<Vec<u8>> = conn
             .query_row(
                 "SELECT current_user_reactions_blob FROM messages
-                 WHERE sender_id = ?1 AND sent_at = ?2",
-                params![sender_id.to_string(), sent_at_ns as i64],
+                 WHERE sender_id = ?1 AND sent_at = ?2 AND conversation_id=?3 AND conversation_type=?4",
+                params![sender_id.to_string(), sent_at_ns as i64, scope.id.to_string(), scope.kind.as_str()],
                 |row| row.get(0),
             )
-            .ok();
+            .optional()?;
         let reactions: Vec<String> = blob
-            .and_then(|b| db_deserialize(&b).ok())
+            .map(|b| db_deserialize(&b))
+            .transpose()?
             .unwrap_or_default();
         Ok(reactions.iter().any(|e| e == emoji))
     }
@@ -893,16 +1480,22 @@ impl UnifiedMessageRepository {
     /// Get all reactions on a message identified by (sender_id, sent_at_ns).
     pub fn get_reactions(
         &self,
+        scope: &ReactionScope,
         sender_id: &UserId,
         sent_at_ns: u64,
     ) -> Result<Vec<Reaction>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
             "SELECT id, sender_id, sent_at_ns, user_id, emoji, created_at
-             FROM unified_reactions WHERE sender_id = ?1 AND sent_at_ns = ?2
+             FROM unified_reactions WHERE sender_id = ?1 AND sent_at_ns = ?2 AND conversation_id=?3 AND conversation_type=?4
              ORDER BY created_at ASC",
         )?;
-        let mut rows = stmt.query(params![sender_id.to_string(), sent_at_ns as i64])?;
+        let mut rows = stmt.query(params![
+            sender_id.to_string(),
+            sent_at_ns as i64,
+            scope.id.to_string(),
+            scope.kind.as_str()
+        ])?;
         let mut reactions = Vec::new();
         while let Some(row) = rows.next()? {
             reactions.push(row_to_reaction(row)?);
@@ -913,15 +1506,21 @@ impl UnifiedMessageRepository {
     /// Get reaction counts per emoji for a message (from unified_reactions, not blob).
     pub fn get_reaction_counts(
         &self,
+        scope: &ReactionScope,
         sender_id: &UserId,
         sent_at_ns: u64,
     ) -> Result<Vec<ReactionCount>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
             "SELECT emoji, COUNT(*) FROM unified_reactions
-             WHERE sender_id = ?1 AND sent_at_ns = ?2 GROUP BY emoji ORDER BY COUNT(*) DESC",
+             WHERE sender_id = ?1 AND sent_at_ns = ?2 AND conversation_id=?3 AND conversation_type=?4 GROUP BY emoji ORDER BY COUNT(*) DESC",
         )?;
-        let mut rows = stmt.query(params![sender_id.to_string(), sent_at_ns as i64])?;
+        let mut rows = stmt.query(params![
+            sender_id.to_string(),
+            sent_at_ns as i64,
+            scope.id.to_string(),
+            scope.kind.as_str()
+        ])?;
         let mut counts = Vec::new();
         while let Some(row) = rows.next()? {
             let emoji_str: String = row.get(0)?;
@@ -943,8 +1542,9 @@ impl UnifiedMessageRepository {
         let mut stmt = conn.prepare(
             "SELECT r.sent_at_ns, r.emoji, COUNT(*) as cnt
              FROM unified_reactions r
-             INNER JOIN messages m ON r.sender_id = m.sender_id AND r.sent_at_ns = m.sent_at
+             INNER JOIN messages m ON r.sender_id = m.sender_id AND r.sent_at_ns = m.sent_at AND r.conversation_id=m.conversation_id AND r.conversation_type=m.conversation_type
              WHERE m.conversation_id = ?1 AND m.conversation_type = ?2 AND m.is_deleted = 0
+               AND NOT EXISTS(SELECT 1 FROM reaction_scope_unresolved u WHERE u.conversation_id=m.conversation_id AND u.conversation_type=m.conversation_type AND u.sender_id=m.sender_id AND u.sent_at_ns=m.sent_at)
              GROUP BY r.sent_at_ns, r.emoji
              ORDER BY r.sent_at_ns, cnt DESC",
         )?;
@@ -987,7 +1587,7 @@ impl UnifiedMessageRepository {
                AND is_deleted = 0 \
              ORDER BY sent_at DESC \
              LIMIT ?4",
-            MSG_COLS
+            message_columns("messages")
         ))?;
         let mut rows = stmt.query(params![
             conversation_id.to_string(),
@@ -1007,7 +1607,7 @@ impl UnifiedMessageRepository {
              WHERE content_json LIKE ?1 ESCAPE '\\' AND is_deleted = 0 \
              ORDER BY sent_at DESC \
              LIMIT ?2",
-            MSG_COLS
+            message_columns("messages")
         ))?;
         let mut rows = stmt.query(params![pattern, limit])?;
         collect_messages(&mut rows)
@@ -1046,7 +1646,7 @@ impl UnifiedMessageRepository {
                 "SELECT {} FROM messages \
                  WHERE thread_id = ?1 AND sent_at < ?2 AND is_deleted = 0 \
                  ORDER BY sent_at DESC LIMIT ?3",
-                MSG_COLS
+                message_columns("messages")
             ))?;
             let mut rows = stmt.query(params![thread_id.to_string(), before as i64, limit])?;
             collect_messages(&mut rows)?
@@ -1055,7 +1655,7 @@ impl UnifiedMessageRepository {
                 "SELECT {} FROM messages \
                  WHERE thread_id = ?1 AND is_deleted = 0 \
                  ORDER BY sent_at DESC LIMIT ?2",
-                MSG_COLS
+                message_columns("messages")
             ))?;
             let mut rows = stmt.query(params![thread_id.to_string(), limit])?;
             collect_messages(&mut rows)?
@@ -1231,7 +1831,7 @@ impl UnifiedMessageRepository {
     ) -> Result<Vec<Message>, StorageError> {
         let conn = self.db.read_connection()?;
         if let Some(before_id) = before {
-            let aliased = format!("m.{}", MSG_COLS.replace(", ", ", m."));
+            let aliased = message_columns("m");
             let mut stmt = conn.prepare(&format!(
                 "SELECT {} FROM messages m \
                  WHERE m.conversation_id = ?1 AND m.conversation_type = ?2 \
@@ -1255,7 +1855,7 @@ impl UnifiedMessageRepository {
                    AND thread_id IS NULL \
                  ORDER BY sent_at DESC, sender_id DESC \
                  LIMIT ?3",
-                MSG_COLS,
+                message_columns("messages"),
             ))?;
             let mut rows = stmt.query(params![
                 channel_id.to_string(),
@@ -1406,7 +2006,7 @@ impl UnifiedMessageRepository {
             "SELECT {} FROM messages \
              WHERE conversation_id = ?1 AND sent_at = ?2 AND is_deleted = 0 \
              LIMIT 1",
-            MSG_COLS,
+            message_columns("messages"),
         ))?;
         match stmt.query_row(
             params![channel_id.to_string(), timestamp_ns as i64],
@@ -1430,7 +2030,7 @@ impl UnifiedMessageRepository {
             "SELECT {} FROM messages \
              WHERE conversation_id = ?1 AND sender_id = ?2 AND sent_at = ?3 AND is_deleted = 0 \
              LIMIT 1",
-            MSG_COLS,
+            message_columns("messages"),
         ))?;
         match stmt.query_row(
             params![
@@ -1615,7 +2215,7 @@ impl UnifiedMessageRepository {
              WHERE conversation_id = ?1 AND conversation_type = ?2 \
                AND is_pinned = 1 AND is_deleted = 0 \
              ORDER BY sent_at DESC",
-            MSG_COLS,
+            message_columns("messages"),
         ))?;
         let mut rows = stmt.query(params![channel_id.to_string(), conversation_type.as_str()])?;
         collect_messages(&mut rows)
@@ -1630,7 +2230,7 @@ impl UnifiedMessageRepository {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(&format!(
             "SELECT {} FROM messages WHERE sender_id = ?1 ORDER BY sent_at DESC LIMIT ?2",
-            MSG_COLS,
+            message_columns("messages"),
         ))?;
         let mut rows = stmt.query(params![sender_id.to_string(), limit])?;
         collect_messages(&mut rows)
@@ -1646,6 +2246,7 @@ impl UnifiedMessageRepository {
     fn rebuild_reaction_blobs_with_conn(
         &self,
         conn: &rusqlite::Connection,
+        scope: &ReactionScope,
         sender_id: &UserId,
         sent_at_ns: u64,
         current_user_id: &UserId,
@@ -1656,9 +2257,14 @@ impl UnifiedMessageRepository {
         // Reaction counts
         let mut stmt = conn.prepare(
             "SELECT emoji, COUNT(*) FROM unified_reactions
-             WHERE sender_id = ?1 AND sent_at_ns = ?2 GROUP BY emoji",
+             WHERE sender_id = ?1 AND sent_at_ns = ?2 AND conversation_id=?3 AND conversation_type=?4 GROUP BY emoji",
         )?;
-        let mut rows = stmt.query(params![&sid, sent_at_ns as i64])?;
+        let mut rows = stmt.query(params![
+            &sid,
+            sent_at_ns as i64,
+            scope.id.to_string(),
+            scope.kind.as_str()
+        ])?;
         let mut counts: Vec<ReactionCount> = Vec::new();
         while let Some(row) = rows.next()? {
             let emoji_str: String = row.get(0)?;
@@ -1671,9 +2277,15 @@ impl UnifiedMessageRepository {
         // Current user's reactions
         let mut stmt2 = conn.prepare(
             "SELECT emoji FROM unified_reactions
-             WHERE sender_id = ?1 AND sent_at_ns = ?2 AND user_id = ?3",
+             WHERE sender_id = ?1 AND sent_at_ns = ?2 AND user_id = ?3 AND conversation_id=?4 AND conversation_type=?5",
         )?;
-        let mut rows2 = stmt2.query(params![&sid, sent_at_ns as i64, &uid])?;
+        let mut rows2 = stmt2.query(params![
+            &sid,
+            sent_at_ns as i64,
+            &uid,
+            scope.id.to_string(),
+            scope.kind.as_str()
+        ])?;
         let mut user_reactions: Vec<String> = Vec::new();
         while let Some(row) = rows2.next()? {
             user_reactions.push(row.get(0)?);
@@ -1687,8 +2299,8 @@ impl UnifiedMessageRepository {
         // Update the message row, resolving via (sender_id, sent_at)
         conn.execute(
             "UPDATE messages SET reaction_counts_blob = ?1, current_user_reactions_blob = ?2, updated_at = ?3
-             WHERE sender_id = ?4 AND sent_at = ?5 AND is_deleted = 0",
-            params![counts_blob, user_blob, Utc::now().to_rfc3339(), &sid, sent_at_ns as i64],
+             WHERE sender_id = ?4 AND sent_at = ?5 AND is_deleted = 0 AND conversation_id=?6 AND conversation_type=?7",
+            params![counts_blob, user_blob, Utc::now().to_rfc3339(), &sid, sent_at_ns as i64, scope.id.to_string(), scope.kind.as_str()],
         )?;
 
         Ok(())
@@ -1736,6 +2348,15 @@ const MSG_COLS: &str = "id, conversation_id, conversation_type, sender_id, devic
      mentioned_integrations_blob, targets_ai_bot, delivery_status, \
      reply_to_author_id, reply_to_text, \
      reply_to_thumbnail, reply_to_thumbnail_mime, failure_reason";
+
+/// Every ordinary message reader masks unresolved legacy reaction projections.
+/// Raw history stays stored and is never exposed as a scoped authoritative vote.
+fn message_columns(alias: &str) -> String {
+    let base = format!("{alias}.{}", MSG_COLS.replace(", ", &format!(", {alias}.")));
+    format!(
+        "{base}, EXISTS(SELECT 1 FROM reaction_scope_unresolved r WHERE r.conversation_id={alias}.conversation_id AND r.conversation_type={alias}.conversation_type AND r.sender_id={alias}.sender_id AND r.sent_at_ns={alias}.sent_at)"
+    )
+}
 
 /// Parse an RFC3339 datetime, falling back to now.
 fn parse_datetime(s: &str) -> DateTime<Utc> {
@@ -1795,13 +2416,22 @@ fn row_to_message(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Message, S
         Ok(a) => a,
         Err(e) => return Ok(Err(e)),
     };
-    let reaction_counts: Vec<ReactionCount> = match db_deserialize(&reaction_counts_blob) {
-        Ok(r) => r,
-        Err(e) => return Ok(Err(e)),
+    let unresolved: bool = row.get(28)?;
+    let reaction_counts: Vec<ReactionCount> = if unresolved {
+        Vec::new()
+    } else {
+        match db_deserialize(&reaction_counts_blob) {
+            Ok(r) => r,
+            Err(e) => return Ok(Err(e)),
+        }
     };
-    let current_user_reactions: Vec<String> = match db_deserialize(&current_user_reactions_blob) {
-        Ok(r) => r,
-        Err(e) => return Ok(Err(e)),
+    let current_user_reactions: Vec<String> = if unresolved {
+        Vec::new()
+    } else {
+        match db_deserialize(&current_user_reactions_blob) {
+            Ok(r) => r,
+            Err(e) => return Ok(Err(e)),
+        }
     };
     let mentioned_integrations: Vec<IntegrationId> =
         match db_deserialize(&mentioned_integrations_blob) {
@@ -2033,4 +2663,42 @@ mod tests {
         let pattern = format!("%{}%", query.replace('%', "\\%").replace('_', "\\_"));
         assert_eq!(pattern, "%100\\% done\\_now%");
     }
+}
+
+fn accept_reaction_action(
+    conn: &rusqlite::Connection,
+    scope: &ReactionScope,
+    author: &UserId,
+    target: u64,
+    actor: &UserId,
+    emoji: &str,
+    action: u64,
+    remove: bool,
+) -> Result<bool, StorageError> {
+    if action == 0 || action > i64::MAX as u64 {
+        return Err(StorageError::InvalidData(
+            "Invalid reaction action clock".into(),
+        ));
+    }
+    Ok(conn.execute("INSERT INTO reaction_action_versions(conversation_id,conversation_type,author_id,target_sent_at,actor_id,emoji,action_ts,remove) VALUES(?1,?2,?3,?4,?5,?6,?7,?8) ON CONFLICT(conversation_type,conversation_id,author_id,target_sent_at,actor_id,emoji) DO UPDATE SET action_ts=excluded.action_ts,remove=excluded.remove WHERE excluded.action_ts>reaction_action_versions.action_ts",params![scope.id.to_string(),scope.kind.as_str(),author.to_string(),target as i64,actor.to_string(),emoji,action as i64,remove])?>0)
+}
+
+fn reaction_receive_binding(conn: &rusqlite::Connection) -> Result<(String, u32), StorageError> {
+    use super::settings_repo::keys;
+    let account: String = conn.query_row(
+        "SELECT value FROM settings WHERE key=?1",
+        [keys::CURRENT_USER_ID],
+        |r| r.get(0),
+    )?;
+    let device: String = conn.query_row(
+        "SELECT value FROM settings WHERE key=?1",
+        [keys::CURRENT_DEVICE_ID],
+        |r| r.get(0),
+    )?;
+    Ok((
+        serde_json::from_str(&account)
+            .map_err(|_| StorageError::InvalidData("Invalid receive account".into()))?,
+        serde_json::from_str(&device)
+            .map_err(|_| StorageError::InvalidData("Invalid receive device".into()))?,
+    ))
 }

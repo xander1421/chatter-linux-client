@@ -20,6 +20,29 @@ use crate::error::{CryptoError, ServiceError};
 use crate::storage::KeyStore;
 use crate::storage::repositories::settings_repo::SettingsRepository;
 
+/// Result is returned only after receive state is durably committed.
+#[derive(Debug)]
+pub struct DurableReceive {
+    pub address: ProtocolAddress,
+    pub content: Vec<u8>,
+    pub msg_type: CiphertextMessageType,
+    pub artifact: Option<crate::storage::receive_artifact::ReceiveArtifact>,
+}
+
+/// Typed rejection prevents callers guessing crypto commit safety from text.
+#[derive(Debug, thiserror::Error)]
+pub enum DurableReceiveError {
+    #[error("unratcheted anonymous receive plaintext rejected")]
+    PlaintextRejected,
+    #[error(transparent)]
+    Failure(#[from] ServiceError),
+}
+impl From<crate::error::StorageError> for DurableReceiveError {
+    fn from(error: crate::error::StorageError) -> Self {
+        Self::Failure(ServiceError::Storage(error))
+    }
+}
+
 /// Map an identified-sender decrypt failure.
 ///
 /// `UntrustedIdentity` must survive as its own error — collapsed into
@@ -41,7 +64,7 @@ fn map_identified_decrypt_err(
 }
 
 /// Commands sent to the Signal Actor.
-pub enum SignalCommand {
+pub(crate) enum SignalCommand {
     GetIdentityFingerprint {
         response: oneshot::Sender<Result<String, ServiceError>>,
     },
@@ -98,6 +121,13 @@ pub enum SignalCommand {
         recipient_address: ProtocolAddress,
         response: oneshot::Sender<Result<Vec<u8>, ServiceError>>,
     },
+    EncryptSealedBoundedBatch {
+        plaintext: Vec<u8>,
+        sender_cert: SenderCertificate,
+        destinations: Vec<ProtocolAddress>,
+        permit: crate::services::gateway::submission::SubmissionPermit,
+        response: oneshot::Sender<Result<Vec<(ProtocolAddress, Vec<u8>, u32)>, ServiceError>>,
+    },
     EncryptIdentified {
         plaintext: Vec<u8>,
         recipient_address: ProtocolAddress,
@@ -120,6 +150,12 @@ pub enum SignalCommand {
         response: oneshot::Sender<
             Result<(ProtocolAddress, Vec<u8>, CiphertextMessageType), ServiceError>,
         >,
+    },
+    DecryptReactionDurable {
+        ciphertext: Vec<u8>,
+        trust_root: PublicKey,
+        key: crate::storage::receive_artifact::ReceiveKey,
+        response: oneshot::Sender<Result<DurableReceive, DurableReceiveError>>,
     },
     DecryptIdentified {
         ciphertext: Vec<u8>,
@@ -430,6 +466,11 @@ impl SignalActorHandle {
                             let _ = response.send(res);
                         }
 
+                        SignalCommand::EncryptSealedBoundedBatch { plaintext, sender_cert, destinations, permit, response } => {
+                            let res = SealedSenderManager::encrypt_bounded_batch(&plaintext, &sender_cert, &destinations, &store, &permit).await;
+                            let _ = response.send(res);
+                        }
+
                         SignalCommand::EncryptIdentified { plaintext, recipient_address, response } => {
                             let local_address = match local_protocol_address(&settings_repo) {
                                 Ok(a) => a,
@@ -470,6 +511,11 @@ impl SignalActorHandle {
                                 Err(e) => Err(ServiceError::Crypto(e)),
                             };
                             let _ = response.send(res);
+                        }
+
+                        SignalCommand::DecryptReactionDurable {ciphertext,trust_root,key,response} => {
+                            let res=crate::crypto::signal::store::receive::decrypt_durable(store.clone(),&ciphertext,&trust_root,key).await;
+                            let _=response.send(res);
                         }
 
                         SignalCommand::DecryptIdentified { ciphertext, sender_address, response } => {
@@ -950,6 +996,23 @@ impl SignalActorHandle {
         .await?
     }
 
+    pub(crate) async fn encrypt_sealed_bounded_batch(
+        &self,
+        plaintext: Vec<u8>,
+        sender_cert: SenderCertificate,
+        destinations: Vec<ProtocolAddress>,
+    ) -> Result<Vec<(ProtocolAddress, Vec<u8>, u32)>, ServiceError> {
+        let permit = crate::services::gateway::submission::SubmissionPermit::capture();
+        self.send(|tx| SignalCommand::EncryptSealedBoundedBatch {
+            plaintext,
+            sender_cert,
+            destinations,
+            permit,
+            response: tx,
+        })
+        .await?
+    }
+
     pub async fn encrypt_identified(
         &self,
         plaintext: Vec<u8>,
@@ -978,6 +1041,21 @@ impl SignalActorHandle {
             local_uuid,
             local_device_id,
             response: tx,
+        })
+        .await?
+    }
+
+    pub async fn decrypt_reaction_durable(
+        &self,
+        ciphertext: Vec<u8>,
+        trust_root: PublicKey,
+        key: crate::storage::receive_artifact::ReceiveKey,
+    ) -> Result<DurableReceive, DurableReceiveError> {
+        self.send(|response| SignalCommand::DecryptReactionDurable {
+            ciphertext,
+            trust_root,
+            key,
+            response,
         })
         .await?
     }

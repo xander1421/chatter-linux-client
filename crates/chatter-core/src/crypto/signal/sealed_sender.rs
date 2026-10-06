@@ -82,7 +82,87 @@ pub use libsignal_protocol::{
 #[derive(Clone)]
 pub struct SealedSenderManager;
 
+/// Mirrors the server's per-device sealed-body cap. It applies to the entire
+/// serialized envelope, including the actual certificate, PQXDH and SPQR data.
+pub(crate) const MAX_SEALED_BODY_BYTES: usize = 8192;
+
+/// Exact cap comparison; equality is permitted by the server.
+pub(crate) fn validate_sealed_body_size(
+    size: usize,
+    cap: usize,
+) -> Result<(), crate::error::ServiceError> {
+    if size > cap {
+        return Err(crate::error::ServiceError::Validation(format!(
+            "sealed envelope too large: {size} bytes (max {cap})"
+        )));
+    }
+    Ok(())
+}
+
 impl SealedSenderManager {
+    /// Encrypt against an in-memory write overlay, then admit ALL envelopes
+    /// before persisting any ratchet state. Return these exact ciphertexts:
+    /// never probe-and-re-encrypt, estimate Kyber/SPQR overhead or classify a
+    /// server error as safe. The actor serializes preparation and commit.
+    pub(crate) async fn encrypt_bounded_batch(
+        plaintext: &[u8],
+        sender_cert: &SenderCertificate,
+        destinations: &[ProtocolAddress],
+        base: &crate::crypto::SignalStore,
+        permit: &crate::services::gateway::submission::SubmissionPermit,
+    ) -> Result<Vec<(ProtocolAddress, Vec<u8>, u32)>, crate::error::ServiceError> {
+        let mut staged = super::store::StagedSignalStore::new(base.clone());
+        let mut identities = staged.clone();
+        let mut envelopes = Vec::with_capacity(destinations.len());
+        for destination in destinations {
+            if envelopes
+                .iter()
+                .any(|(address, _, _)| address == destination)
+            {
+                return Err(crate::error::ServiceError::Validation(
+                    "duplicate sealed destination".into(),
+                ));
+            }
+            let ciphertext = Self::encrypt(
+                plaintext,
+                sender_cert,
+                destination,
+                &mut staged,
+                &mut identities,
+            )
+            .await
+            .map_err(crate::error::ServiceError::Crypto)?;
+            validate_sealed_body_size(ciphertext.len(), MAX_SEALED_BODY_BYTES)?;
+            let record = staged
+                .load_session(destination)
+                .await
+                .map_err(|e| {
+                    crate::error::ServiceError::Crypto(CryptoError::Protocol(e.to_string()))
+                })?
+                .ok_or_else(|| {
+                    crate::error::ServiceError::Validation("missing staged session".into())
+                })?;
+            let registration_id = record.remote_registration_id().map_err(|e| {
+                crate::error::ServiceError::Crypto(CryptoError::Protocol(e.to_string()))
+            })?;
+            if registration_id == 0 {
+                return Err(crate::error::ServiceError::Validation(
+                    "staged session has no registration id".into(),
+                ));
+            }
+            envelopes.push((destination.clone(), ciphertext, registration_id));
+        }
+        if !envelopes.is_empty() {
+            permit
+                .start()
+                .map_err(crate::error::ServiceError::Storage)?;
+            staged.commit().await.map_err(|e| {
+                crate::error::ServiceError::Crypto(CryptoError::Protocol(e.to_string()))
+            })?;
+        }
+        Ok(envelopes)
+    }
+
     /// Create a new SealedSenderManager.
     pub fn new() -> Self {
         Self

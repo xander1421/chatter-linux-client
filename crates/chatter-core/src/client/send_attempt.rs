@@ -518,6 +518,97 @@ mod tests {
         }
     }
 
+    #[tokio::test]
+    async fn actor_permit_timeout_remains_durable_and_refusal_does_not_downgrade_ack() {
+        use crate::domain::{
+            ids::{ChannelId, UserId},
+            message::{ConversationType, Message},
+        };
+        use crate::services::gateway::submission::{SubmissionPermit, track_submission};
+        use crate::storage::repositories::UnifiedMessageRepository;
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("bounded-actor.db");
+        let db = std::sync::Arc::new(Database::open(&path, "test-only").unwrap());
+        db.run_migrations().unwrap();
+        let repo = UnifiedMessageRepository::new(db.clone());
+        let mut row = Message::new_text(
+            ChannelId::new(),
+            ConversationType::ServerDm,
+            Some(UserId::new()),
+            "receipt won".into(),
+            1,
+        );
+        row.delivery_status = "delivered".into();
+        repo.insert_outgoing(&row).unwrap();
+        let first = pending();
+        claim(&db, "bounded", &first).unwrap();
+        settle_failure(
+            &db,
+            "bounded",
+            first.attempt_id.parse().unwrap(),
+            false,
+            Some(row.id.to_string()),
+            SendError::Message(crate::services::message::MessageError::InvalidContent(
+                "local cap refusal".into(),
+            )),
+        )
+        .unwrap();
+        assert_eq!(
+            repo.get(&row.id).unwrap().unwrap().delivery_status,
+            "delivered"
+        );
+        let next = pending();
+        claim(&db, "bounded", &next).unwrap();
+        let (error, started, _) = track_submission(
+            async {
+                let permit = SubmissionPermit::capture();
+                // Actor runs on a different thread: task locals are not inherited.
+                std::thread::spawn(move || permit.start().unwrap())
+                    .join()
+                    .unwrap();
+                SendError::Message(crate::services::message::MessageError::Network(
+                    crate::error::NetworkError::Timeout,
+                ))
+            },
+            None,
+        )
+        .await;
+        assert!(started);
+        assert!(matches!(
+            settle_failure(
+                &db,
+                "bounded",
+                next.attempt_id.parse().unwrap(),
+                started,
+                Some(row.id.to_string()),
+                error
+            )
+            .unwrap(),
+            SendError::DeliveryUnconfirmed
+        ));
+        assert_eq!(
+            repo.get(&row.id).unwrap().unwrap().delivery_status,
+            "delivered"
+        );
+        drop(repo);
+        drop(db);
+        let db = Database::open(&path, "test-only").unwrap();
+        db.run_migrations().unwrap();
+        assert_eq!(
+            read_pending(&db, "bounded").unwrap().unwrap().attempt_id,
+            next.attempt_id
+        );
+        assert!(matches!(
+            claim(&db, "bounded", &pending()),
+            Err(SendError::SendInProgress)
+        ));
+        release(&db, "bounded", &next.attempt_id).unwrap();
+        assert!(matches!(
+            claim(&db, "bounded", &next),
+            Err(SendError::AttemptAlreadyConfirmed)
+        ));
+    }
+
     #[test]
     fn old_public_channel_receipt_does_not_confirm_the_fresh_retry_post() {
         let mut retry = pending();

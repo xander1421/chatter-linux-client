@@ -7,29 +7,14 @@ use crate::ReactionEntry;
 /// truth) → `ReactionEntry` (Slint view). No string round-trips.
 pub fn reaction_counts_to_entries(
     counts: &[chatter_core::domain::message::ReactionCount],
+    own_emojis: &[String],
 ) -> Vec<ReactionEntry> {
-    counts
-        .iter()
+    chatter_core::domain::reaction::reaction_presentation(counts, own_emojis)
+        .into_iter()
         .map(|r| ReactionEntry {
             emoji: r.emoji.clone().into(),
             count: r.count as i32,
-        })
-        .collect()
-}
-
-/// Read a Slint `ReactionEntry` model back into typed `ReactionCount`s so the
-/// UI can mutate the aggregate via `ReactionCount::apply` and re-render.
-pub fn reactions_model_to_counts(
-    model: &slint::ModelRc<ReactionEntry>,
-) -> Vec<chatter_core::domain::message::ReactionCount> {
-    use slint::Model;
-    model
-        .iter()
-        .map(|entry| {
-            chatter_core::domain::message::ReactionCount::new(
-                entry.emoji.to_string(),
-                entry.count.max(0) as u32,
-            )
+            own: r.own,
         })
         .collect()
 }

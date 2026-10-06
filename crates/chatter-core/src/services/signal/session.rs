@@ -527,6 +527,36 @@ impl SignalService {
             .inspect_err(|e| self.note_identity_change(e))
     }
 
+    /// Anonymous reaction receive journal. Caller supplies the actual transport
+    /// scope/envelope binding; the authenticated account/device are checked here
+    /// and again by the actor's SQLite commit/replay boundary.
+    pub async fn decrypt_reaction_durable(
+        &self,
+        ciphertext: &[u8],
+        key: &crate::storage::receive_artifact::ReceiveKey,
+    ) -> Result<super::actor::DurableReceive, super::actor::DurableReceiveError> {
+        key.validate()?;
+        let account = self
+            .settings_repo
+            .get_string(keys::CURRENT_USER_ID)?
+            .ok_or(ServiceError::NotLoggedIn)?;
+        let device = self
+            .settings_repo
+            .get::<u32>(keys::CURRENT_DEVICE_ID)?
+            .ok_or(ServiceError::NotLoggedIn)?;
+        if account != key.local_account || device != key.local_device {
+            return Err(ServiceError::Validation("receive account/device mismatch".into()).into());
+        }
+        self.actor
+            .decrypt_reaction_durable(ciphertext.to_vec(), self.trust_root, key.clone())
+            .await
+            .inspect_err(|e| {
+                if let super::actor::DurableReceiveError::Failure(source) = e {
+                    self.note_identity_change(source)
+                }
+            })
+    }
+
     /// Decrypt an incoming identified sender message.
     pub async fn decrypt_message_identified(
         &self,
@@ -1093,6 +1123,76 @@ impl SignalService {
         );
 
         Ok((ciphertexts, unrestricted))
+    }
+
+    /// Server-DM envelope admission: actual ciphertexts for the entire current
+    /// device set are checked before any durable ratchet write. The ordinary
+    /// uncapped helper remains available for non-sealed-body transports.
+    pub(crate) async fn encrypt_message_all_devices_bounded_with_access_policy(
+        &self,
+        auth_client: &mut AuthClient,
+        recipient_id: &str,
+        plaintext: &[u8],
+        need_access_policy: bool,
+    ) -> Result<(HashMap<u32, DeviceCiphertext>, bool), ServiceError> {
+        let (devices, unrestricted) = self
+            .ensure_sessions_and_access_policy_all_devices(
+                auth_client,
+                recipient_id,
+                need_access_policy,
+            )
+            .await?;
+        let ciphertexts = self
+            .encrypt_message_devices_bounded(auth_client, recipient_id, &devices, plaintext)
+            .await?;
+        Ok((ciphertexts, unrestricted))
+    }
+
+    /// Original-recipient retry uses precisely these devices. Never replace
+    /// them with today's roster or commit some devices before checking others.
+    pub(crate) async fn encrypt_message_devices_bounded(
+        &self,
+        auth_client: &mut AuthClient,
+        recipient_id: &str,
+        devices: &[u32],
+        plaintext: &[u8],
+    ) -> Result<HashMap<u32, DeviceCiphertext>, ServiceError> {
+        let mut devices = devices.to_vec();
+        devices.sort_unstable();
+        devices.dedup();
+        if devices.is_empty() {
+            return Ok(HashMap::new());
+        }
+        let mut destinations = Vec::with_capacity(devices.len());
+        let mut guards = Vec::with_capacity(devices.len());
+        for device in devices {
+            let lock = self
+                .get_encrypt_lock(&format!("{recipient_id}:{device}"))
+                .await;
+            guards.push(lock.lock_owned().await);
+            self.ensure_session(auth_client, recipient_id, device)
+                .await?;
+            let id = DeviceId::try_from(device)
+                .map_err(|_| ServiceError::Validation("Invalid device ID".into()))?;
+            destinations.push(ProtocolAddress::new(recipient_id.to_string(), id));
+        }
+        let certificate = self.get_or_request_sender_certificate(auth_client).await?;
+        let batch = self
+            .actor
+            .encrypt_sealed_bounded_batch(plaintext.to_vec(), certificate, destinations)
+            .await?;
+        Ok(batch
+            .into_iter()
+            .map(|(address, ciphertext, registration_id)| {
+                (
+                    u32::from(address.device_id()),
+                    DeviceCiphertext {
+                        ciphertext,
+                        registration_id,
+                    },
+                )
+            })
+            .collect())
     }
 
     /// Devices of `recipient_id` we hold a usable session with, ascending.

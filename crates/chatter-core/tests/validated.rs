@@ -5079,6 +5079,146 @@ async fn v15_post_compromise_security_heals_after_dh_ratchet() {
 //     bug.
 // ============================================================================
 
+// No befriend: accepting friendship through ChatterClient launches session
+// prewarming and profile-key handshakes. New accounts alone are not proof of
+// first contact. Receiver policy is deliberately unrestricted for this fixture,
+// so lack of a previously exchanged profile key cannot hide the cap behavior.
+// Mutation: bypass the actual-envelope gate; the refusal either reaches the
+// server and retains admission, or advances the prepared session on replay.
+#[tokio::test]
+async fn v16_fresh_contact_wrapped_cap_refusal_then_decrypted_send() {
+    skip_if_no_server!();
+    no_keyring_prompts();
+
+    let dir_a = tempfile::tempdir().unwrap();
+    let dir_b = tempfile::tempdir().unwrap();
+    let client_a = build_client(dir_a.path());
+    let client_b = build_client(dir_b.path());
+    let uid_a = register_and_start(&client_a, &unique_user("v16fresha"), "Alice").await;
+    let uid_b = register_and_start(&client_b, &unique_user("v16freshb"), "Bob").await;
+    assert!(
+        client_b
+            .set_sealed_sender_policy(true)
+            .await
+            .expect("set receiver policy failed"),
+        "receiver must explicitly allow sealed first contact"
+    );
+
+    let a_addr = format!("{uid_b}:1");
+    let b_addr = format!("{uid_a}:1");
+    assert!(
+        client_a
+            .signal()
+            .key_store()
+            .list_sessions_for_user(&uid_b.to_string())
+            .expect("list sender sessions failed")
+            .is_empty(),
+        "first contact requires no sender session for any recipient device"
+    );
+    assert!(
+        client_b
+            .signal()
+            .key_store()
+            .list_sessions_for_user(&uid_a.to_string())
+            .expect("list receiver sessions failed")
+            .is_empty(),
+        "first contact requires no receiver session for any sender device"
+    );
+    let mut events_b = client_b.subscribe_events();
+    let conversation = ActiveConversation::ServerDm { peer_id: uid_b };
+    let near_cap = "N".repeat(8000);
+    let mut prepared = None;
+    // First refusal must prepare from an empty store. Repeating the same
+    // refusal must leave that prepared record byte-identical: no ratchet step
+    // can be committed for an envelope that will never be submitted.
+    for _ in 0..2 {
+        let refused = client_a
+            .send_text(conversation, &near_cap)
+            .await
+            .expect("wrapped refusal must return its failed bubble");
+        assert!(
+            matches!(
+                refused.send_error,
+                Some(chatter_core::services::message::MessageError::InvalidContent(_))
+            ),
+            "fresh wrapped envelope must refuse locally with typed InvalidContent"
+        );
+        assert_eq!(
+            refused
+                .message
+                .expect("refusal must retain bubble")
+                .delivery_status,
+            "failed"
+        );
+        client_a
+            .ensure_send_available(conversation)
+            .expect("fresh wrapped refusal must release durable conversation admission");
+        let bytes = client_a
+            .signal()
+            .key_store()
+            .load_session(&a_addr)
+            .expect("read prepared session failed")
+            .expect("near-cap content must reach actual fresh session preparation");
+        let record = libsignal_protocol::SessionRecord::deserialize(&bytes)
+            .expect("prepared session is invalid");
+        assert!(
+            record
+                .get_kyber_ciphertext()
+                .expect("read Kyber state failed")
+                .is_some(),
+            "fresh preparation must include pending Kyber ciphertext"
+        );
+        if let Some(previous) = &prepared {
+            assert_eq!(
+                &bytes, previous,
+                "refused wrapping advanced the prepared session"
+            );
+        }
+        prepared = Some(bytes);
+        assert!(
+            client_b
+                .signal()
+                .key_store()
+                .load_session(&b_addr)
+                .expect("read receiver session failed")
+                .is_none(),
+            "refused first contact must not establish a receiver session"
+        );
+    }
+
+    let sentinel = format!("V16-FRESH-CAP-SENTINEL-{}", unique_marker());
+    let sent = client_a
+        .send_text(conversation, &sentinel)
+        .await
+        .expect("small send after fresh refusal was blocked");
+    assert!(
+        sent.send_error.is_none(),
+        "small delivery failed: {:?}",
+        sent.send_error
+    );
+    let received = wait_for_event(&mut events_b, EVENT_TIMEOUT, |event| {
+        matches!(event, DomainEvent::MessageReceived { message }
+            if message.conversation_id == ChannelId::from(uid_a)
+            && message.as_text() == Some(sentinel.as_str()))
+    })
+    .await
+    .expect("receiver never decrypted the small first-contact sentinel");
+    if let DomainEvent::MessageReceived { message } = received {
+        assert_eq!(message.as_text().unwrap().as_bytes(), sentinel.as_bytes());
+    }
+    assert!(
+        client_b
+            .signal()
+            .key_store()
+            .load_session(&b_addr)
+            .expect("read established receiver session failed")
+            .is_some(),
+        "successful sentinel must establish the receiver session"
+    );
+    client_a.shutdown().await;
+    client_b.shutdown().await;
+}
+
 #[tokio::test]
 async fn v16_message_roundtrip_fidelity() {
     skip_if_no_server!();
@@ -5322,6 +5462,27 @@ async fn v16_message_roundtrip_fidelity() {
         one_mb.len()
     );
 
+    // ---- WRAPPED CAP: under 8192 plaintext, oversized exact envelope ------
+    // The plaintext lower bound alone admitted this body and permanently held
+    // this conversation after server refusal. Actual certificate + Signal
+    // wrapping must now refuse locally, before persistent ratchet mutation.
+    let near_cap = "N".repeat(8000);
+    let refused = client_a
+        .send_text(ActiveConversation::ServerDm { peer_id: uid_b }, &near_cap)
+        .await
+        .expect("near-cap refusal must release previous oversize admission");
+    assert!(
+        matches!(
+            refused.send_error,
+            Some(chatter_core::services::message::MessageError::InvalidContent(_))
+        ),
+        "actual sealed envelope must be refused before submission"
+    );
+    assert_eq!(refused.message.unwrap().delivery_status, "failed");
+    client_a
+        .ensure_send_available(ActiveConversation::ServerDm { peer_id: uid_b })
+        .expect("near-cap wrapped refusal retained admission");
+
     // ---- JUST-UNDER-CAP: a multi-KB payload round-trips byte-exact ---------
     // Session is warm (battery already ran) so this is a regular SignalMessage
     // with small overhead; 6000 plaintext bytes leaves ample margin under the
@@ -5355,7 +5516,7 @@ async fn v16_message_roundtrip_fidelity() {
          interior newlines, control chars, emoji ZWJ, combining marks, RTL, AND \
          leading/trailing whitespace preserved byte-exact — F11 resolved); empty & \
          whitespace-only are REJECTED at send (F10); 1 MB rejected by the 8192-byte \
-         sealed-body cap; a 6 KB under-cap payload round-trips\n",
+         sealed-body cap; near-cap wrapping refusal releases admission; a 6 KB under-cap payload round-trips\n",
         battery.len()
     );
 
@@ -5465,16 +5626,10 @@ async fn setup_a_linked_b(tag: &str) -> AbFixture {
 }
 
 // ============================================================================
-// V17 — a self-synced REACTION attaches to the right message on A's linked
-// device, attributed to A (not mis-filed / mis-attributed).
-//
-// Reactions are stored Signal-style by (target_author, ns-timestamp) in a
-// conversation-independent table; the wire Reaction names its target by that
-// key. So the bare self-sync copy — the SAME bytes B gets — attaches to the
-// exact target message on A's linked device, with the reactor resolved from the
-// sealed-sender identity (= us). No destination is needed on the wire, unlike
-// the text path. THE DECISIVE ASSERTION: A's linked device emits ReactionAdded
-// for B's message with reactor = A.
+// V17 — a self-synced reaction preserves its exact DM destination and reactor.
+// The encrypted Reaction target metadata carries dm:destination:author. This
+// prevents a same-author/same-clock message in another conversation from being
+// changed by a linked-device copy; missing legacy self-device scope fails closed.
 //
 // MUTATION — RUN IT: in send_sealed_dm_content (server_dm.rs), add
 // `Some(content::Content::Reaction(_)) => None,` to the self_plaintext match so
@@ -5529,6 +5684,21 @@ async fn v17_self_synced_reaction_attaches_to_the_right_message_as_ours() {
     );
     println!("  positive control: B's target message present on A's linked device");
 
+    let other_peer = UserId::new();
+    let other_conversation = ActiveConversation::ServerDm {
+        peer_id: other_peer,
+    };
+    fx.client_as
+        .messages()
+        .store_message_local(&chatter_core::domain::message::Message::new_text(
+            chatter_core::domain::ChannelId::from(other_peer),
+            chatter_core::domain::message::ConversationType::ServerDm,
+            Some(uid_b),
+            "same author and timestamp in unrelated DM".into(),
+            ts_m,
+        ))
+        .unwrap();
+
     // Take A's linked device and B offline so the reaction SITS in A's linked
     // queue (inspect it) and B can't interfere.
     fx.client_as.shutdown().await;
@@ -5570,6 +5740,7 @@ async fn v17_self_synced_reaction_attaches_to_the_right_message_as_ours() {
     // mis-attributed to B, or attached to the wrong message, fails here.
     match &got {
         Some(DomainEvent::ReactionAdded {
+            scope,
             sender_id,
             sent_at_ns,
             reactor_id,
@@ -5593,16 +5764,34 @@ async fn v17_self_synced_reaction_attaches_to_the_right_message_as_ours() {
                 "reaction attached to the wrong message timestamp"
             );
             assert_eq!(emoji, "👍", "reaction emoji corrupted in transit");
+            assert_eq!(scope.id, chatter_core::domain::ChannelId::from(uid_b));
+            assert_eq!(
+                scope.kind,
+                chatter_core::domain::message::ConversationType::ServerDm
+            );
         }
         _ => panic!(
             "SELF-SYNC REACTION LOST: A's linked device never surfaced the reaction A made \
              from its primary. The reaction self-sync did not file on the linked device."
         ),
     }
+    let unaffected = client_as2
+        .conversation(other_conversation)
+        .reaction_snapshot(&uid_b, ts_m)
+        .unwrap()
+        .unwrap();
+    assert!(unaffected.counts.is_empty());
+    assert!(unaffected.own_emojis.is_empty());
+    let intended = client_as2
+        .conversation(ActiveConversation::ServerDm { peer_id: uid_b })
+        .reaction_snapshot(&uid_b, ts_m)
+        .unwrap()
+        .unwrap();
+    assert_eq!(intended.counts[0].count, 1);
+    assert_eq!(intended.own_emojis, vec!["👍"]);
     println!(
         "V17 PASS — A's own reaction, made on the primary, surfaced on A's LINKED device \
-         attached to B's message and attributed to A — message-anchored, no destination \
-         needed on the wire\n"
+         attached to B's scoped message and attributed to A — destination preserved\n"
     );
 
     fx.client_ap.shutdown().await;

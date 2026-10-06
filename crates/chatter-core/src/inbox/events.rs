@@ -133,6 +133,8 @@ pub enum InboxEvent {
     },
     /// Reaction received.
     DmReaction {
+        /// Actual transport conversation peer; absent on legacy self-device control envelopes.
+        conversation_peer_id: Option<UserId>,
         /// Peer user ID (who reacted).
         peer_id: UserId,
         /// Emoji.

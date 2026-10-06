@@ -6,6 +6,37 @@ use crate::domain::ids::{ReactionId, UserId};
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 
+/// Exact persisted conversation ownership for a reaction target.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct ReactionScope {
+    pub id: crate::domain::ids::ChannelId,
+    pub kind: crate::domain::message::ConversationType,
+}
+impl ReactionScope {
+    pub fn new(
+        id: crate::domain::ids::ChannelId,
+        kind: crate::domain::message::ConversationType,
+    ) -> Self {
+        Self { id, kind }
+    }
+    pub fn of(message: &crate::domain::message::Message) -> Self {
+        Self::new(message.conversation_id, message.conversation_type.clone())
+    }
+    pub fn cache_key(&self, author: &UserId, sent_at: u64) -> crate::domain::ids::MessageId {
+        crate::domain::ids::MessageId(uuid::Uuid::new_v5(
+            &uuid::Uuid::nil(),
+            format!(
+                "reaction:{}:{}:{}:{}",
+                self.kind.as_str(),
+                self.id,
+                author,
+                sent_at
+            )
+            .as_bytes(),
+        ))
+    }
+}
+
 // ============================================================================
 // Reaction
 // ============================================================================
@@ -206,4 +237,59 @@ mod tests {
         assert_eq!(categories.len(), 10);
         assert_ne!(EmojiCategory::Smileys, EmojiCategory::Custom);
     }
+}
+
+/// Existing target metadata carries the DM destination for linked-device sync.
+/// The destination is a claim; authenticated transport must validate it before use.
+pub fn encode_dm_reaction_target(destination: &UserId, author: &UserId) -> String {
+    format!("dm:{destination}:{author}")
+}
+
+pub fn decode_dm_reaction_target(
+    target: &str,
+) -> Result<(Option<UserId>, UserId), crate::error::StorageError> {
+    let invalid =
+        || crate::error::StorageError::InvalidData("Invalid scoped DM reaction target".into());
+    if let Some(scoped) = target.strip_prefix("dm:") {
+        let (destination, author) = scoped.split_once(':').ok_or_else(invalid)?;
+        Ok((
+            Some(destination.parse().map_err(|_| invalid())?),
+            author.parse().map_err(|_| invalid())?,
+        ))
+    } else {
+        Ok((None, target.parse().map_err(|_| invalid())?))
+    }
+}
+
+/// Presentation is derived from persisted counts and this account's own votes.
+/// UI binds this projection and never decides reaction ownership.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ReactionPresentation {
+    pub emoji: String,
+    pub count: u32,
+    pub own: bool,
+}
+
+pub fn reaction_presentation(
+    counts: &[crate::domain::message::ReactionCount],
+    own_emojis: &[String],
+) -> Vec<ReactionPresentation> {
+    counts
+        .iter()
+        .map(|count| ReactionPresentation {
+            emoji: count.emoji.clone(),
+            count: count.count,
+            own: own_emojis.contains(&count.emoji),
+        })
+        .collect()
+}
+
+/// Server channel recovery can reach current Channel rows or encrypted legacy
+/// AnonGroup rows. A plain channel envelope can never own a foreign DM/group row.
+pub fn channel_snapshot_kind_matches(
+    kind: &crate::domain::message::ConversationType,
+    encrypted: bool,
+) -> bool {
+    use crate::domain::message::ConversationType;
+    *kind == ConversationType::Channel || (encrypted && *kind == ConversationType::AnonGroup)
 }

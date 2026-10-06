@@ -191,7 +191,8 @@ impl ChannelInbound {
     ///
     /// Missing sender keys and retryable ingest failures are typed application
     /// gaps. Validation/storage errors remain distinct; only a fully applied
-    /// message and its authoritative reactions may complete recovery.
+    /// message application may complete recovery. Peer reaction authority is
+    /// independent of the server message projection.
     pub async fn ingest_resynced(
         &self,
         proto_msg: &chat_v1::Message,
@@ -256,7 +257,10 @@ impl ChannelInbound {
         if let Some(local) = &existing {
             // Encrypted envelopes carry a transport clock; the cached sent_at
             // is the authenticated DataMessage clock, so do not equate them.
-            if local.sender_id != author
+            if !crate::domain::reaction::channel_snapshot_kind_matches(
+                &local.conversation_type,
+                encrypted,
+            ) || local.sender_id != author
                 || local.thread_id != envelope.thread_id
                 || (!encrypted && local.sent_at != proto_msg.timestamp)
             {
@@ -563,14 +567,17 @@ impl ChannelInbound {
 
     /// Upsert, preserving attachments and reactions already stored locally.
     fn persist(&self, message: &mut Message, channel_id: ChannelId) -> bool {
+        // Channel controls are peer sealed-sender messages. Server projections
+        // cannot replace local reaction truth during backfill or live re-ingest.
+        message.reaction_counts.clear();
+        message.current_user_reactions.clear();
         match self.messages.get_message_local(&message.id) {
             Ok(Some(existing)) => {
                 if message.attachments.is_empty() {
                     message.attachments = existing.attachments;
                 }
-                if message.reaction_counts.is_empty() {
-                    message.reaction_counts = existing.reaction_counts;
-                }
+                message.reaction_counts = existing.reaction_counts;
+                message.current_user_reactions = existing.current_user_reactions;
                 // Read state is local: the server copy always converts as
                 // unread, so every catch-up re-fetch of a message the user had
                 // already read flipped it back to unread.
@@ -624,7 +631,7 @@ pub(crate) fn is_newer_edit(proto: &chat_v1::Message, existing: &Message) -> boo
 mod tests {
     use super::*;
     use crate::client::ChatterClient;
-    use crate::domain::message::ConversationType;
+    use crate::domain::message::{ConversationType, MessageContent};
 
     #[test]
     fn a_new_edit_is_not_a_duplicate_of_the_original() {
@@ -1043,7 +1050,14 @@ mod tests {
         // A cached row still validates its envelope before clearing reactions.
         client
             .messages()
-            .record_reaction(&author, sent, &stranger, "👍", false)
+            .record_reaction(
+                &crate::domain::reaction::ReactionScope::new(channel_id, ConversationType::Channel),
+                &author,
+                sent,
+                &stranger,
+                "👍",
+                false,
+            )
             .unwrap();
         let replay = message(&id, author, "newer", sent + 30);
         let mut malformed = Vec::new();
@@ -1107,7 +1121,14 @@ mod tests {
             let ledger = client
                 .messages()
                 .message_repo
-                .get_reactions(&author, sent)
+                .get_reactions(
+                    &crate::domain::reaction::ReactionScope::new(
+                        channel_id,
+                        ConversationType::Channel,
+                    ),
+                    &author,
+                    sent,
+                )
                 .unwrap();
             assert_eq!(ledger.len(), 1);
             assert_eq!(ledger[0].emoji.value, "👍");
@@ -1161,7 +1182,14 @@ mod tests {
                 client
                     .messages()
                     .message_repo
-                    .get_reactions(&author, sent)
+                    .get_reactions(
+                        &crate::domain::reaction::ReactionScope::new(
+                            channel_id,
+                            ConversationType::Channel
+                        ),
+                        &author,
+                        sent
+                    )
                     .unwrap()
                     .len(),
                 1
@@ -1199,9 +1227,17 @@ mod tests {
             client
                 .messages()
                 .message_repo
-                .get_reactions(&author, sent)
+                .get_reactions(
+                    &crate::domain::reaction::ReactionScope::new(
+                        channel_id,
+                        ConversationType::Channel
+                    ),
+                    &author,
+                    sent
+                )
                 .unwrap()
-                .is_empty()
+                .len()
+                == 1
         );
         // Anonymous cached rows cannot bypass malformed reaction validation.
         let anonymous_id = crate::domain::ids::MessageId::new();
@@ -1234,6 +1270,82 @@ mod tests {
                 .reconcile_channel_reactions(&anonymous, channel_id),
             Err(MessageError::InvalidContent(_))
         ));
+        // Same channel UUID/author/clock is insufficient authority for a
+        // channel snapshot to replace a foreign conversation-kind ledger.
+        for kind in [ConversationType::ServerDm, ConversationType::AnonDm] {
+            let mut foreign = Message::new_text(
+                channel_id,
+                kind.clone(),
+                Some(author),
+                "foreign history".into(),
+                sent,
+            );
+            let scope = crate::domain::reaction::ReactionScope::of(&foreign);
+            client.messages().store_message_local(&foreign).unwrap();
+            client
+                .messages()
+                .record_reaction(&scope, &author, sent, &stranger, "👍", false)
+                .unwrap();
+            let plain = message(&foreign.id, author, "foreign history", 0);
+            let encrypted = chat_v1::Message {
+                author_device_id: 1,
+                content: encrypted_replay.content.clone(),
+                ..plain.clone()
+            };
+            for envelope in [&plain, &encrypted] {
+                assert!(matches!(
+                    inbound.ingest_resynced(envelope, channel_id).await,
+                    Err(MessageError::InvalidContent(_))
+                ));
+                assert!(matches!(
+                    client
+                        .messages()
+                        .reconcile_channel_reactions(envelope, channel_id),
+                    Err(MessageError::InvalidContent(_))
+                ));
+            }
+            foreign = client
+                .messages()
+                .get_message_local(&foreign.id)
+                .unwrap()
+                .unwrap();
+            assert_eq!(
+                foreign.content,
+                MessageContent::Text("foreign history".into())
+            );
+            assert_eq!(foreign.reaction_counts[0].count, 1);
+        }
+        let legacy = Message::new_text(
+            channel_id,
+            ConversationType::AnonGroup,
+            Some(author),
+            "legacy encrypted history".into(),
+            sent,
+        );
+        client.messages().store_message_local(&legacy).unwrap();
+        let plain = message(&legacy.id, author, "legacy encrypted history", 0);
+        assert!(matches!(
+            inbound.ingest_resynced(&plain, channel_id).await,
+            Err(MessageError::InvalidContent(_))
+        ));
+        let encrypted = chat_v1::Message {
+            author_device_id: 1,
+            content: encrypted_replay.content.clone(),
+            ..plain
+        };
+        inbound
+            .ingest_resynced(&encrypted, channel_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            client
+                .messages()
+                .get_message_local(&legacy.id)
+                .unwrap()
+                .unwrap()
+                .conversation_type,
+            ConversationType::AnonGroup
+        );
         // Valid replay still succeeds after invalid rows were rejected.
         inbound.ingest_resynced(&replay, channel_id).await.unwrap();
         assert_eq!(edits(), 0);
@@ -1344,5 +1456,160 @@ mod resync_acknowledgement_tests {
             Err(MessageError::InvalidContent(_))
         ));
         assert!(ensure_resync_ingested(Ingested::Stored).is_ok());
+    }
+    #[tokio::test]
+    async fn peer_channel_reaction_survives_empty_or_partial_server_resync_and_legacy_ambiguity_remains_hidden()
+     {
+        use crate::client::ChatterClient;
+        use crate::domain::channel::{
+            Channel, ChannelType, MemberRole, Membership, NotificationPreference,
+        };
+        use crate::domain::message::ConversationType;
+        use crate::domain::reaction::ReactionScope;
+        static MOCK: std::sync::Once = std::sync::Once::new();
+        MOCK.call_once(|| {
+            keyring::set_default_credential_builder(keyring::mock::default_credential_builder())
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let client = ChatterClient::builder()
+            .server_url("https://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .unwrap();
+        let own = UserId::new();
+        let peer = UserId::new();
+        let author = UserId::new();
+        let id = ChannelId::new();
+        let service = client.messages();
+        service
+            .settings_repo
+            .set("auth.current_user_id", &own.to_string())
+            .unwrap();
+        service
+            .settings_repo
+            .set("auth.current_device_id", &1u32)
+            .unwrap();
+        for user in [own, peer] {
+            service.user_repo.ensure_user_exists(&user).unwrap();
+        }
+        service
+            .channel_repo
+            .insert(&Channel::new(
+                id,
+                "resync reaction fixture".into(),
+                ChannelType::Public,
+                own,
+            ))
+            .unwrap();
+        service
+            .channel_repo
+            .insert_membership(&Membership {
+                channel_id: id,
+                user_id: peer,
+                role: MemberRole::Member,
+                joined_at: chrono::Utc::now(),
+                last_read_message_id: None,
+                is_muted: false,
+                muted_until: None,
+                notification_preference: NotificationPreference::default(),
+            })
+            .unwrap();
+        let scope = ReactionScope::new(id, ConversationType::Channel);
+        let message = crate::domain::message::Message::new_text(
+            id,
+            ConversationType::Channel,
+            Some(author),
+            "peer authority".into(),
+            100,
+        );
+        service.store_message_local(&message).unwrap();
+        assert!(
+            service
+                .record_inbound_reaction(&scope, &peer, &author, 100, "👍", false, 10)
+                .unwrap()
+        );
+        assert!(
+            service
+                .record_inbound_reaction(&scope, &own, &author, 100, "👍", false, 11)
+                .unwrap()
+        );
+        let inbound = ChannelInbound::new(service.clone(), client.attachments().clone());
+        let mut envelope = chat_v1::Message {
+            id: message.id.to_string(),
+            channel_id: id.to_string(),
+            author_id: author.to_string(),
+            timestamp: 100,
+            content: Some(chat_v1::message::Content {
+                r#type: Some(chat_v1::message::content::Type::Text(
+                    "peer authority".into(),
+                )),
+            }),
+            ..Default::default()
+        };
+        inbound.ingest_resynced(&envelope, id).await.unwrap();
+        assert_eq!(
+            service
+                .message_repo
+                .get_reaction_counts(&scope, &author, 100)
+                .unwrap()[0]
+                .count,
+            2
+        );
+        assert!(
+            service
+                .user_has_reacted(&scope, &author, 100, "👍")
+                .unwrap()
+        );
+        // A partial server projection has no authority to erase our peer vote.
+        envelope.reactions.push(chat_v1::ReactionUpdate {
+            target_author_aci: author.to_string(),
+            target_sent_timestamp: 100,
+            reactor_id: peer.to_string(),
+            emoji: "👍".into(),
+            ..Default::default()
+        });
+        inbound.ingest_resynced(&envelope, id).await.unwrap();
+        assert_eq!(
+            service
+                .message_repo
+                .get_reaction_counts(&scope, &author, 100)
+                .unwrap()[0]
+                .count,
+            2
+        );
+        assert_eq!(inbound.ingest(&envelope, id, false).await, Ingested::Stored);
+        assert!(
+            service
+                .user_has_reacted(&scope, &author, 100, "👍")
+                .unwrap(),
+            "live/backfill projection preserves own highlight too"
+        );
+        service
+            .database
+            .connection()
+            .unwrap()
+            .execute(
+                "INSERT INTO reaction_scope_unresolved VALUES(?1,'channel',?2,100)",
+                rusqlite::params![id.to_string(), author.to_string()],
+            )
+            .unwrap();
+        envelope.reactions.clear();
+        inbound.ingest_resynced(&envelope, id).await.unwrap();
+        assert!(
+            service
+                .message_repo
+                .ensure_reaction_scope_resolved(&scope, &author, 100)
+                .is_err(),
+            "an empty server projection cannot invent complete legacy authority"
+        );
+        assert!(
+            service
+                .get_message_local(&message.id)
+                .unwrap()
+                .unwrap()
+                .reaction_counts
+                .is_empty(),
+            "quarantined old projection stays masked"
+        );
     }
 }

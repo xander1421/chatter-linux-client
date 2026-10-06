@@ -356,50 +356,21 @@ impl EventHandlers {
             // ================================================================
             // Reaction Events
             // ================================================================
-            DomainEvent::ReactionAdded {
-                sender_id,
-                sent_at_ns,
-                reactor_id,
-                emoji,
-                ..
-            } => {
-                let cache_key = crate::domain::MessageId::from_sender_timestamp(&sender_id, sent_at_ns);
-                tracing::info!(
-                    ?sender_id,
-                    sent_at_ns,
-                    ?reactor_id,
-                    %emoji,
-                    "Inbox event: ReactionAdded received"
-                );
-                // Storage persistence (and the dedup gate) lives in
-                // `inbox_processor` (regular DM / channel) and `base_anon`
-                // (anon DM / group). Those layers only emit
-                // `DomainEvent::ReactionAdded` when the unified-reactions
-                // row was newly inserted, so this listener can update the
-                // in-memory cache unconditionally without double-counting.
-                self.chat_state
-                    .update_reaction(&cache_key, emoji.clone(), 1, None);
-            }
-
-            DomainEvent::ReactionRemoved {
-                sender_id,
-                sent_at_ns,
-                reactor_id,
-                emoji,
-                ..
-            } => {
-                let cache_key = crate::domain::MessageId::from_sender_timestamp(&sender_id, sent_at_ns);
-                tracing::info!(
-                    ?sender_id,
-                    sent_at_ns,
-                    ?reactor_id,
-                    %emoji,
-                    "Inbox event: ReactionRemoved received"
-                );
-                // See ReactionAdded: dedup happens upstream in inbox_processor
-                // / base_anon, so the in-memory cache update can be unconditional.
-                self.chat_state
-                    .update_reaction(&cache_key, emoji.clone(), -1, None);
+            DomainEvent::ReactionAdded {scope,sender_id,sent_at_ns,..}
+            | DomainEvent::ReactionRemoved {scope,sender_id,sent_at_ns,..}
+            | DomainEvent::ReactionSnapshotChanged {scope,sender_id,sent_at_ns} => {
+                if let Some(service)=&self.message_service {
+                    // Events identify persisted targets. Re-read instead of
+                    // manufacturing aggregate counts from actor-specific deltas.
+                    match service.message_repo.get_by_reaction_scope(&scope,&sender_id,sent_at_ns) {
+                        Ok(Some(message))=> {
+                            let presentation=crate::domain::reaction::reaction_presentation(&message.reaction_counts,&message.current_user_reactions);
+                            self.chat_state.replace_reactions(&scope.cache_key(&sender_id,sent_at_ns),presentation.into_iter().map(|r|crate::state::chat_state::ReactionSummary {emoji:r.emoji,count:r.count,user_reacted:r.own}).collect());
+                        }
+                        Ok(None)=>self.chat_state.replace_reactions(&scope.cache_key(&sender_id,sent_at_ns),Vec::new()),
+                        Err(_)=>warn!("Persisted reaction cache refresh awaits storage recovery"),
+                    }
+                }
             }
 
             // ================================================================
@@ -1311,6 +1282,10 @@ mod tests {
         let reactor_id = UserId::new();
 
         handlers.handle_domain_event(DomainEvent::ReactionAdded {
+            scope: crate::domain::reaction::ReactionScope::new(
+                crate::domain::ChannelId::from(sender_id),
+                crate::domain::message::ConversationType::ServerDm,
+            ),
             sender_id,
             sent_at_ns,
             reactor_id,
@@ -1318,13 +1293,16 @@ mod tests {
             timestamp: 1234567890,
         });
 
-        let cache_key = MessageId::from_sender_timestamp(&sender_id, sent_at_ns);
+        let cache_key = crate::domain::reaction::ReactionScope::new(
+            crate::domain::ChannelId::from(sender_id),
+            crate::domain::message::ConversationType::ServerDm,
+        )
+        .cache_key(&sender_id, sent_at_ns);
         let reactions = handlers.chat_state.get_reactions(&cache_key);
-        assert!(reactions.is_some());
-        let reactions = reactions.unwrap();
-        assert_eq!(reactions.len(), 1);
-        assert_eq!(reactions[0].emoji, "👍");
-        assert_eq!(reactions[0].count, 1);
+        assert!(
+            reactions.is_none(),
+            "an event without a persisted repository is not count authority"
+        );
     }
 
     #[test]
@@ -1336,6 +1314,10 @@ mod tests {
 
         // Add reaction
         handlers.handle_domain_event(DomainEvent::ReactionAdded {
+            scope: crate::domain::reaction::ReactionScope::new(
+                crate::domain::ChannelId::from(sender_id),
+                crate::domain::message::ConversationType::ServerDm,
+            ),
             sender_id,
             sent_at_ns,
             reactor_id,
@@ -1345,6 +1327,10 @@ mod tests {
 
         // Remove reaction
         handlers.handle_domain_event(DomainEvent::ReactionRemoved {
+            scope: crate::domain::reaction::ReactionScope::new(
+                crate::domain::ChannelId::from(sender_id),
+                crate::domain::message::ConversationType::ServerDm,
+            ),
             sender_id,
             sent_at_ns,
             reactor_id,
@@ -1353,7 +1339,11 @@ mod tests {
         });
 
         // Should be removed entirely when count hits 0
-        let cache_key = MessageId::from_sender_timestamp(&sender_id, sent_at_ns);
+        let cache_key = crate::domain::reaction::ReactionScope::new(
+            crate::domain::ChannelId::from(sender_id),
+            crate::domain::message::ConversationType::ServerDm,
+        )
+        .cache_key(&sender_id, sent_at_ns);
         let reactions = handlers.chat_state.get_reactions(&cache_key);
         assert!(reactions.is_none());
     }
@@ -1509,5 +1499,77 @@ mod tests {
         let debug_str = format!("{:?}", handlers);
         assert!(debug_str.contains("EventHandlers"));
         assert!(debug_str.contains("message_state"));
+    }
+    #[tokio::test]
+    async fn reaction_events_refresh_persisted_scoped_cache_and_duplicate_snapshot_never_adds() {
+        use crate::domain::message::{ConversationType, Message};
+        use crate::domain::reaction::ReactionScope;
+        use crate::domain::{ChannelId, UserId};
+        static MOCK: std::sync::Once = std::sync::Once::new();
+        MOCK.call_once(|| {
+            keyring::set_default_credential_builder(keyring::mock::default_credential_builder())
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let client = crate::client::ChatterClient::builder()
+            .server_url("https://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .unwrap();
+        let own = UserId::new();
+        let author = UserId::new();
+        client
+            .messages()
+            .settings_repo
+            .set("auth.current_user_id", &own.to_string())
+            .unwrap();
+        let id = ChannelId::new();
+        let scope = ReactionScope::new(id, ConversationType::ServerDm);
+        let foreign = ReactionScope::new(id, ConversationType::AnonGroup);
+        for scope in [&scope, &foreign] {
+            client
+                .messages()
+                .message_repo
+                .insert(&Message::new_text(
+                    scope.id,
+                    scope.kind.clone(),
+                    Some(author),
+                    "same author clock".into(),
+                    100,
+                ))
+                .unwrap();
+        }
+        let chat = ChatState::new();
+        let handlers = EventHandlers::new(MessageState::new(), chat.clone())
+            .with_message_service(client.messages().clone());
+        let key = scope.cache_key(&author, 100);
+        let other_key = foreign.cache_key(&author, 100);
+        chat.update_reaction(&key, "👍".into(), 99, None);
+        chat.update_reaction(&other_key, "👍".into(), 77, None);
+        client
+            .messages()
+            .record_reaction(&scope, &author, 100, &own, "👍", false)
+            .unwrap();
+        let event = DomainEvent::ReactionSnapshotChanged {
+            scope: scope.clone(),
+            sender_id: author,
+            sent_at_ns: 100,
+        };
+        handlers.handle_domain_event(event.clone());
+        handlers.handle_domain_event(event.clone());
+        let shown = chat.get_reactions(&key).unwrap();
+        assert_eq!(shown[0].count, 1);
+        assert!(shown[0].user_reacted);
+        assert_eq!(
+            chat.get_reactions(&other_key).unwrap()[0].count,
+            77,
+            "kind collision stays separate"
+        );
+        client
+            .messages()
+            .record_reaction(&scope, &author, 100, &own, "👍", true)
+            .unwrap();
+        handlers.handle_domain_event(event);
+        assert!(chat.get_reactions(&key).is_none());
+        assert_eq!(chat.get_reactions(&other_key).unwrap()[0].count, 77);
     }
 }

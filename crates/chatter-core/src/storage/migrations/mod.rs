@@ -81,6 +81,8 @@ mod v080_pending_reactions_and_pins;
 mod v081_dm_mailbox_encryption_key;
 mod v082_verified_channel_membership;
 mod v083_mesh_sender_names;
+mod v084_scoped_reactions;
+mod v085_reaction_receive_journal;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -165,6 +167,8 @@ pub use v080_pending_reactions_and_pins::V080PendingReactionsAndPins;
 pub use v081_dm_mailbox_encryption_key::V081DmMailboxEncryptionKey;
 pub use v082_verified_channel_membership::V082VerifiedChannelMembership;
 pub use v083_mesh_sender_names::V083MeshSenderNames;
+pub use v084_scoped_reactions::V084ScopedReactions;
+pub use v085_reaction_receive_journal::V085ReactionReceiveJournal;
 
 /// Trait for database migrations.
 ///
@@ -374,4 +378,6 @@ pub fn default_migrations() -> MigrationRunner {
         .register(V081DmMailboxEncryptionKey)
         .register(V082VerifiedChannelMembership)
         .register(V083MeshSenderNames)
+        .register(V084ScopedReactions)
+        .register(V085ReactionReceiveJournal)
 }

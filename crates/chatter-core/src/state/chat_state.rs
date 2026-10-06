@@ -849,6 +849,20 @@ impl ChatState {
             .cloned()
     }
 
+    /// Replace a scoped cache entry with persisted core presentation.
+    pub fn replace_reactions(&self, message_id: &MessageId, reactions: Vec<ReactionSummary>) {
+        self.store.update(|state| {
+            if reactions.is_empty() {
+                state.streaming.recent_reactions.remove(message_id);
+            } else {
+                state
+                    .streaming
+                    .recent_reactions
+                    .insert(*message_id, reactions);
+            }
+        });
+    }
+
     /// Update a single reaction on a message.
     ///
     /// # Arguments

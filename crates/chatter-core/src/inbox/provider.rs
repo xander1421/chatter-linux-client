@@ -842,6 +842,11 @@ impl DeviceInboxProvider {
                                     })
                                     .unwrap_or(false)
                             };
+                            // Capture exact current-envelope binding before processing and
+                            // retain it until the actual upstream ACK result is known.
+                            let ack_bindings:std::collections::HashMap<_,_>=results.iter().flat_map(|result|result.messages.iter().filter_map(|message|{
+                                message_repo.reaction_receive_key("anon_dm",result.conversation_id.into(),&message.message_id,message.server_timestamp).ok().map(|key|((result.conversation_id,message.message_id.clone()),(key,crate::storage::receive_artifact::envelope_digest(&message.encrypted_envelope))))
+                            })).collect();
                             // Use deduplicator to prevent re-decryption when ack fails
                             let processed = process_anon_dm_results(
                                 results,
@@ -864,19 +869,40 @@ impl DeviceInboxProvider {
                             // Acknowledge processed messages to prevent re-delivery
                             for (conversation_id, message_ids) in processed {
                                 if !message_ids.is_empty() {
-                                    if let Err(e) = anon_poller
+                                    let ack_ids = message_ids.clone();
+                                    let ack_result = anon_poller
                                         .acknowledge_messages(
                                             &conversation_id,
                                             message_ids,
                                             &mut client,
                                         )
-                                        .await
-                                    {
+                                        .await;
+                                    if let Err(e) = &ack_result {
                                         tracing::warn!(
                                             conversation_id = %conversation_id,
                                             error = %e,
                                             "Failed to acknowledge anonymous DM messages"
                                         );
+                                    }
+                                    if ack_result.is_ok() {
+                                        for id in ack_ids {
+                                            if let Some((key, digest)) =
+                                                ack_bindings.get(&(conversation_id, id))
+                                            {
+                                                if crate::inbox::reaction_handoff::acknowledge(
+                                                    &message_repo,
+                                                    key,
+                                                    digest,
+                                                    true,
+                                                )
+                                                .is_err()
+                                                {
+                                                    tracing::warn!(
+                                                        "Anonymous ACK receipt awaits storage recovery"
+                                                    );
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }

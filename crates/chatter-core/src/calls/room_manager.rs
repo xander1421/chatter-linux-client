@@ -29,6 +29,32 @@ use super::video_capture::{VideoCapture, VideoCaptureConfig, VideoDevice};
 use super::video_playback::VideoPlayback;
 use crate::error::CallError;
 
+/// Room-wide SDK evidence, emitted once per connection. LiveKit omits the
+/// track from this event: this cannot attribute success to audio, a particular
+/// speaker, every packet, or physical playback. Local encryption and key
+/// ratcheting alone must never be reported as receiver success.
+#[derive(Default)]
+struct ReceiverCryptorEvidence {
+    reported_ok: bool,
+}
+
+impl ReceiverCryptorEvidence {
+    fn observe(
+        &mut self,
+        remote: bool,
+        state: livekit::webrtc::native::frame_cryptor::EncryptionState,
+    ) -> bool {
+        if remote
+            && state == livekit::webrtc::native::frame_cryptor::EncryptionState::Ok
+            && !self.reported_ok
+        {
+            self.reported_ok = true;
+            return true;
+        }
+        false
+    }
+}
+
 /// Current state of the room connection.
 #[derive(Clone, Debug, PartialEq)]
 pub enum RoomState {
@@ -859,8 +885,20 @@ impl RoomManager {
         let event_task_slot = self.event_task.clone();
         let handle = tokio::task::spawn_local(async move {
             tracing::info!("Room event handler started");
+            let mut cryptor_evidence = ReceiverCryptorEvidence::default();
             while let Some(event) = events.recv().await {
-                tracing::info!("LiveKit room event received: {:?}", event);
+                // Avoid dumping arbitrary SDK event payloads and identities.
+                if let livekit::RoomEvent::E2eeStateChanged { participant, state } = &event {
+                    if cryptor_evidence.observe(
+                        matches!(participant, livekit::participant::Participant::Remote(_)),
+                        *state,
+                    ) {
+                        tracing::info!(
+                            stage = "remote_frame_cryptor_ok",
+                            "Remote SDK frame cryptor reported Ok (room-wide, track unavailable)"
+                        );
+                    }
+                }
                 Self::handle_room_event(
                     event,
                     &event_tx,
@@ -1339,6 +1377,34 @@ impl RoomManager {
             }
             _ => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod receiver_cryptor_evidence_tests {
+    use super::ReceiverCryptorEvidence;
+    use livekit::webrtc::native::frame_cryptor::EncryptionState as State;
+
+    #[test]
+    fn local_encryption_and_remote_key_changes_are_not_receiver_success() {
+        let mut evidence = ReceiverCryptorEvidence::default();
+        assert!(!evidence.observe(false, State::Ok));
+        for state in [
+            State::New,
+            State::KeyRatcheted,
+            State::MissingKey,
+            State::DecryptionFailed,
+            State::EncryptionFailed,
+            State::InternalError,
+        ] {
+            assert!(!evidence.observe(true, state));
+        }
+        assert!(evidence.observe(true, State::Ok));
+        assert!(!evidence.observe(true, State::Ok));
+        assert!(!evidence.observe(true, State::DecryptionFailed));
+        assert!(!evidence.observe(true, State::Ok));
+        // A fresh connection gets its own evidence; no cross-call inheritance.
+        assert!(ReceiverCryptorEvidence::default().observe(true, State::Ok));
     }
 }
 

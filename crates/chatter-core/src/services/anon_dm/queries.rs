@@ -200,7 +200,7 @@ impl AnonDmService {
     /// Uses (sender_id, sent_at_ns) to identify the target message (Signal-style).
     pub fn add_reaction(
         &self,
-        _conversation_id: &AnonDmId,
+        conversation_id: &AnonDmId,
         sender_id: &UserId,
         sent_at_ns: u64,
         reactor_id: &UserId,
@@ -208,6 +208,10 @@ impl AnonDmService {
     ) -> Result<bool, AnonDmError> {
         let current_user_id = self.current_user_id()?;
         Ok(self.message_repo.add_reaction(
+            &crate::domain::reaction::ReactionScope::new(
+                (*conversation_id).into(),
+                ConversationType::AnonDm,
+            ),
             sender_id,
             sent_at_ns,
             reactor_id,
@@ -221,7 +225,7 @@ impl AnonDmService {
     /// Uses (sender_id, sent_at_ns) to identify the target message (Signal-style).
     pub fn remove_reaction(
         &self,
-        _conversation_id: &AnonDmId,
+        conversation_id: &AnonDmId,
         sender_id: &UserId,
         sent_at_ns: u64,
         reactor_id: &UserId,
@@ -229,6 +233,10 @@ impl AnonDmService {
     ) -> Result<bool, AnonDmError> {
         let current_user_id = self.current_user_id()?;
         Ok(self.message_repo.remove_reaction(
+            &crate::domain::reaction::ReactionScope::new(
+                (*conversation_id).into(),
+                ConversationType::AnonDm,
+            ),
             sender_id,
             sent_at_ns,
             reactor_id,

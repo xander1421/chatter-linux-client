@@ -115,12 +115,29 @@ pub async fn poll_group_mailboxes(
                 // safe to destroy. `poll_result.message_ids()` collected them
                 // all up front, which acked failures too.
                 let mut message_ids: Vec<String> = Vec::with_capacity(message_count);
+                let mut ack_bindings = Vec::new();
 
                 for msg in poll_result.messages {
                     total_messages += 1;
 
                     // Per NDSS '21: Group mailbox messages are sealed sender encrypted.
                     // The sender identity is revealed during SSDecVer (decryption).
+                    let binding = message_repo
+                        .reaction_receive_key(
+                            "anon_group",
+                            group_id,
+                            &msg.message_id,
+                            msg.server_timestamp,
+                        )
+                        .ok()
+                        .map(|key| {
+                            (
+                                key,
+                                crate::storage::receive_artifact::envelope_digest(
+                                    &msg.encrypted_envelope,
+                                ),
+                            )
+                        });
                     let decision = process_sealed_sender_group_message(
                         &msg.encrypted_envelope,
                         &msg.message_id,
@@ -140,21 +157,38 @@ pub async fn poll_group_mailboxes(
                     if decision.should_ack() {
                         retry_budget.forget(&msg.message_id);
                         message_ids.push(msg.message_id.clone());
+                        if let Some(binding) = binding {
+                            ack_bindings.push(binding);
+                        }
                     }
                 }
 
                 // Acknowledge processed messages using mailbox_id (works for both server-managed and anon groups)
                 if !message_ids.is_empty() {
-                    if let Err(e) = group_fanout
+                    let ack_result = group_fanout
                         .acknowledge_by_mailbox_id(&poll_result.mailbox_id, message_ids)
-                        .await
-                    {
+                        .await;
+                    if let Err(e) = &ack_result {
                         tracing::warn!(
                             group_id = %group_id,
                             mailbox_id = %poll_result.mailbox_id,
                             error = %e,
                             "Failed to acknowledge group mailbox messages"
                         );
+                    }
+                    if ack_result.is_ok() {
+                        for (key, digest) in ack_bindings {
+                            if crate::inbox::reaction_handoff::acknowledge(
+                                message_repo,
+                                &key,
+                                &digest,
+                                true,
+                            )
+                            .is_err()
+                            {
+                                tracing::warn!("Group ACK receipt awaits storage recovery");
+                            }
+                        }
                     }
                 }
             }
@@ -192,6 +226,16 @@ async fn process_sealed_sender_group_message(
     envelope_ts_ns: u64,
     retry_budget: &ack_policy::RetryBudget,
 ) -> AckDecision {
+    crate::inbox::reaction_handoff::replay(message_repo, domain_tx);
+    let key =
+        match message_repo.reaction_receive_key("anon_group", group_id, message_id, envelope_ts_ns)
+        {
+            Ok(key) => key,
+            Err(_) => {
+                tracing::warn!("Group receive binding unavailable");
+                return AckDecision::Retain;
+            }
+        };
     // Create SealedSenderMessage from raw envelope
     let sealed_sender_msg = SealedSenderMessage {
         sealed_body: envelope.to_vec(),
@@ -206,10 +250,25 @@ async fn process_sealed_sender_group_message(
     // LOSE the message: everything the match below handles was handled, so the
     // envelope is safe to drain.
     let outcome = match message_gateway
-        .process_incoming_message(sealed_sender_msg)
+        .process_incoming_reaction_durable(sealed_sender_msg, &key)
         .await
     {
-        Ok(outcome) => outcome,
+        Ok((Some(artifact), _)) => {
+            return match crate::inbox::reaction_handoff::apply(message_repo, &artifact, domain_tx) {
+                Ok(()) => AckDecision::Ack,
+                Err(_) => {
+                    tracing::warn!("Group reaction application failed; envelope retained");
+                    AckDecision::Retain
+                }
+            };
+        }
+        Ok((None, Some(outcome))) => outcome,
+        Ok((None, None)) => return AckDecision::Retain,
+        Err(crate::error::ServiceError::Storage(_))
+        | Err(crate::error::ServiceError::Crypto(crate::error::CryptoError::Storage(_))) => {
+            tracing::warn!("Atomic group receive storage failed; envelope retained");
+            return AckDecision::Retain;
+        }
         Err(e) => {
             tracing::error!(
                 group_id = %group_id,
@@ -433,21 +492,23 @@ async fn process_sealed_sender_group_message(
             group_id: anon_group_id,
             inner_content,
         } => {
+            if !crate::inbox::reaction_handoff::group_destination_matches(group_id, &anon_group_id)
+            {
+                tracing::warn!("Rejected group content claiming a different mailbox destination");
+                return AckDecision::Ack;
+            }
             tracing::info!(
                 sender_id = %sender_id,
                 group_id_hex = %hex::encode(&anon_group_id),
                 "Received anonymous group message, emitting UI event"
             );
 
-            // Emit UI event for the anonymous group message
-            let _ = event_tx.send(
-                InboxEvent::AnonGroupMessage {
-                    peer_id: sender_id,
-                    group_id: anon_group_id,
-                    inner_content,
-                }
-                .server_stamp_call_offer(envelope_ts_ns),
-            );
+            let event = InboxEvent::AnonGroupMessage {
+                peer_id: sender_id,
+                group_id: anon_group_id,
+                inner_content,
+            };
+            let _ = event_tx.send(event.server_stamp_call_offer(envelope_ts_ns));
         }
         SealedSenderResult::AnonGroupJoinAckReceived {
             sender_id,

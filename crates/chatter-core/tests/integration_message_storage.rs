@@ -7,6 +7,7 @@
 //! - Saved messages (Note to Self)
 //! - Signal-style (sender_id, sent_at) lookups
 
+use chatter_core::domain::reaction::ReactionScope;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
 use tempfile::TempDir;
@@ -1883,7 +1884,14 @@ fn test_reaction_counts_per_type_isolation() {
     );
     message_repo.insert(&msg_channel).unwrap();
     message_repo
-        .add_reaction(&sender, ts_channel, &reactor, &reactor, "fire")
+        .add_reaction(
+            &ReactionScope::of(&msg_channel),
+            &sender,
+            ts_channel,
+            &reactor,
+            &reactor,
+            "fire",
+        )
         .unwrap();
 
     // Insert a ServerDm message and react to it with a different emoji
@@ -1897,7 +1905,14 @@ fn test_reaction_counts_per_type_isolation() {
     );
     message_repo.insert(&msg_dm).unwrap();
     message_repo
-        .add_reaction(&sender, ts_dm, &reactor, &reactor, "heart")
+        .add_reaction(
+            &ReactionScope::of(&msg_dm),
+            &sender,
+            ts_dm,
+            &reactor,
+            &reactor,
+            "heart",
+        )
         .unwrap();
 
     // get_reaction_counts_for_conversation for Channel should only have "fire"
@@ -2286,28 +2301,487 @@ fn test_server_reaction_replay_and_reactor_isolation() {
     );
     repo.insert(&message).unwrap();
     assert!(
-        repo.add_reaction(&author, timestamp, &me, &me, "👍")
-            .unwrap()
+        repo.add_reaction(
+            &ReactionScope::of(&message),
+            &author,
+            timestamp,
+            &me,
+            &me,
+            "👍"
+        )
+        .unwrap()
     );
     assert!(
         !repo
-            .add_reaction(&author, timestamp, &me, &me, "👍")
+            .add_reaction(
+                &ReactionScope::of(&message),
+                &author,
+                timestamp,
+                &me,
+                &me,
+                "👍"
+            )
             .unwrap()
     );
     assert!(
-        repo.add_reaction(&author, timestamp, &other, &me, "👍")
-            .unwrap()
+        repo.add_reaction(
+            &ReactionScope::of(&message),
+            &author,
+            timestamp,
+            &other,
+            &me,
+            "👍"
+        )
+        .unwrap()
     );
-    assert_eq!(repo.get_reactions(&author, timestamp).unwrap().len(), 2);
-    assert!(
-        repo.remove_reaction(&author, timestamp, &other, &me, "👍")
+    assert_eq!(
+        repo.get_reactions(&ReactionScope::of(&message), &author, timestamp)
             .unwrap()
+            .len(),
+        2
+    );
+    assert!(
+        repo.remove_reaction(
+            &ReactionScope::of(&message),
+            &author,
+            timestamp,
+            &other,
+            &me,
+            "👍"
+        )
+        .unwrap()
     );
     assert!(
         !repo
-            .remove_reaction(&author, timestamp, &other, &me, "👍")
+            .remove_reaction(
+                &ReactionScope::of(&message),
+                &author,
+                timestamp,
+                &other,
+                &me,
+                "👍"
+            )
             .unwrap()
     );
-    assert_eq!(repo.get_reactions(&author, timestamp).unwrap().len(), 1);
-    assert!(repo.user_has_reacted(&author, timestamp, "👍").unwrap());
+    assert_eq!(
+        repo.get_reactions(&ReactionScope::of(&message), &author, timestamp)
+            .unwrap()
+            .len(),
+        1
+    );
+    assert!(
+        repo.user_has_reacted(&ReactionScope::of(&message), &author, timestamp, "👍")
+            .unwrap()
+    );
+}
+
+/// The *same* wire author/clock occurs in different IDs and kinds. Ledger,
+/// own-reactor cache and zero-count removal must never cross that boundary.
+#[test]
+fn reaction_same_author_clock_isolated_by_kind_and_id() {
+    let (_dir, db) = setup_test_db();
+    let repo = MessageRepository::new(db.clone());
+    let author = UserId::new();
+    let me = UserId::new();
+    let other = UserId::new();
+    let id = ChannelId::new();
+    let timestamp = next_timestamp_ns();
+    let scopes = [
+        ReactionScope::new(id, ConversationType::Channel),
+        ReactionScope::new(id, ConversationType::ServerDm),
+        ReactionScope::new(ChannelId::new(), ConversationType::Channel),
+        ReactionScope::new(ChannelId::new(), ConversationType::AnonDm),
+        // Encrypted server channels and anonymous groups use this storage kind.
+        ReactionScope::new(ChannelId::new(), ConversationType::AnonGroup),
+    ];
+    for scope in &scopes {
+        repo.insert(&Message::new_text(
+            scope.id,
+            scope.kind.clone(),
+            Some(author),
+            "same target clock".into(),
+            timestamp,
+        ))
+        .unwrap();
+    }
+    for scope in &scopes {
+        assert!(
+            repo.add_reaction(scope, &author, timestamp, &me, &me, "👍")
+                .unwrap()
+        );
+        assert!(
+            !repo
+                .add_reaction(scope, &author, timestamp, &me, &me, "👍")
+                .unwrap()
+        );
+        assert!(
+            repo.add_reaction(scope, &author, timestamp, &other, &me, "👍")
+                .unwrap()
+        );
+        assert_eq!(
+            repo.get_reactions(scope, &author, timestamp).unwrap().len(),
+            2
+        );
+        let stored = repo
+            .get_by_reaction_scope(scope, &author, timestamp)
+            .unwrap()
+            .unwrap();
+        assert_eq!(stored.reaction_counts[0].count, 2);
+        assert_eq!(stored.current_user_reactions, vec!["👍"]);
+        for untouched in scopes.iter().filter(|s| *s != scope) {
+            assert!(
+                repo.get_reactions(untouched, &author, timestamp)
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(
+                repo.get_by_reaction_scope(untouched, &author, timestamp)
+                    .unwrap()
+                    .unwrap()
+                    .reaction_counts
+                    .is_empty()
+            );
+        }
+        assert!(
+            repo.remove_reaction(scope, &author, timestamp, &me, &me, "👍")
+                .unwrap()
+        );
+        assert!(
+            !repo
+                .remove_reaction(scope, &author, timestamp, &me, &me, "👍")
+                .unwrap()
+        );
+        assert!(
+            repo.get_by_reaction_scope(scope, &author, timestamp)
+                .unwrap()
+                .unwrap()
+                .current_user_reactions
+                .is_empty()
+        );
+        assert!(
+            repo.remove_reaction(scope, &author, timestamp, &other, &me, "👍")
+                .unwrap()
+        );
+        assert!(
+            repo.get_by_reaction_scope(scope, &author, timestamp)
+                .unwrap()
+                .unwrap()
+                .reaction_counts
+                .is_empty()
+        );
+    }
+}
+
+/// Inject failure *after* the ledger SQL: neither add nor remove can leave a
+/// committed vote with an old projection. Replays also repair projection drift.
+#[test]
+fn reaction_projection_failure_rolls_back_ledger_and_duplicate_repairs_cache() {
+    let (_dir, db) = setup_test_db();
+    let repo = MessageRepository::new(db.clone());
+    let author = UserId::new();
+    let me = UserId::new();
+    let ts = next_timestamp_ns();
+    let scope = ReactionScope::new(ChannelId::new(), ConversationType::AnonGroup);
+    repo.insert(&Message::new_text(
+        scope.id,
+        scope.kind.clone(),
+        Some(author),
+        "target".into(),
+        ts,
+    ))
+    .unwrap();
+    let fail = || {
+        db.connection().unwrap().execute_batch("CREATE TRIGGER fail_reaction_projection BEFORE UPDATE OF reaction_counts_blob ON messages BEGIN SELECT RAISE(ABORT,'injected projection failure'); END;").unwrap()
+    };
+    let recover = || {
+        db.connection()
+            .unwrap()
+            .execute_batch("DROP TRIGGER fail_reaction_projection")
+            .unwrap()
+    };
+    fail();
+    assert!(
+        repo.add_reaction(&scope, &author, ts, &me, &me, "👍")
+            .is_err()
+    );
+    assert!(repo.get_reactions(&scope, &author, ts).unwrap().is_empty());
+    recover();
+    assert!(
+        repo.add_reaction(&scope, &author, ts, &me, &me, "👍")
+            .unwrap()
+    );
+    fail();
+    assert!(
+        repo.remove_reaction(&scope, &author, ts, &me, &me, "👍")
+            .is_err()
+    );
+    assert_eq!(repo.get_reactions(&scope, &author, ts).unwrap().len(), 1);
+    assert_eq!(
+        repo.get_by_reaction_scope(&scope, &author, ts)
+            .unwrap()
+            .unwrap()
+            .reaction_counts[0]
+            .count,
+        1
+    );
+    recover();
+    let mut stale = repo
+        .get_by_reaction_scope(&scope, &author, ts)
+        .unwrap()
+        .unwrap();
+    stale.reaction_counts.clear();
+    stale.current_user_reactions.clear();
+    repo.update(&stale).unwrap();
+    assert!(
+        !repo
+            .add_reaction(&scope, &author, ts, &me, &me, "👍")
+            .unwrap()
+    );
+    let repaired = repo
+        .get_by_reaction_scope(&scope, &author, ts)
+        .unwrap()
+        .unwrap();
+    assert_eq!(repaired.reaction_counts[0].count, 1);
+    assert_eq!(repaired.current_user_reactions, vec!["👍"]);
+    assert!(
+        repo.remove_reaction(&scope, &author, ts, &me, &me, "👍")
+            .unwrap()
+    );
+    assert!(
+        repo.get_by_reaction_scope(&scope, &author, ts)
+            .unwrap()
+            .unwrap()
+            .reaction_counts
+            .is_empty()
+    );
+}
+
+#[test]
+fn pending_reactions_same_target_are_consumed_only_by_exact_scope() {
+    let (_dir, db) = setup_test_db();
+    let repo = MessageRepository::new(db.clone());
+    let pending =
+        chatter_core::storage::repositories::message_modifier_repo::MessageModifierRepository::new(
+            db.clone(),
+        );
+    let me = UserId::new();
+    let author = UserId::new();
+    let ts = next_timestamp_ns();
+    chatter_core::storage::repositories::settings_repo::SettingsRepository::new(db.clone())
+        .set("auth.current_user_id", &me.to_string())
+        .unwrap();
+    let scope_a = ReactionScope::new(ChannelId::new(), ConversationType::ServerDm);
+    let scope_b = ReactionScope::new(scope_a.id, ConversationType::AnonGroup);
+    let scope_c = ReactionScope::new(ChannelId::new(), ConversationType::AnonDm);
+    let now = chatter_core::util::time::TimestampNanos::now().as_u64();
+    pending
+        .queue_reaction(&author, ts, &me, "👍", false, &scope_a, 1, now)
+        .unwrap();
+    pending
+        .queue_reaction(&author, ts, &me, "👍", false, &scope_b, 1, now)
+        .unwrap();
+    pending
+        .queue_reaction(&author, ts, &me, "👍", true, &scope_b, 3, now)
+        .unwrap();
+    pending
+        .queue_reaction(&author, ts, &me, "👍", false, &scope_b, 2, now)
+        .unwrap();
+    for scope in [&scope_c, &scope_b, &scope_a] {
+        repo.insert(&Message::new_text(
+            scope.id,
+            scope.kind.clone(),
+            Some(author),
+            "early target".into(),
+            ts,
+        ))
+        .unwrap();
+    }
+    assert_eq!(repo.get_reactions(&scope_a, &author, ts).unwrap().len(), 1);
+    assert!(
+        repo.get_reactions(&scope_b, &author, ts)
+            .unwrap()
+            .is_empty(),
+        "newer remove wins only in B"
+    );
+    assert!(
+        repo.get_reactions(&scope_c, &author, ts)
+            .unwrap()
+            .is_empty(),
+        "another ID never consumes pending A/B"
+    );
+    assert_eq!(
+        repo.get_by_reaction_scope(&scope_a, &author, ts)
+            .unwrap()
+            .unwrap()
+            .current_user_reactions,
+        vec!["👍"]
+    );
+    assert!(
+        repo.get_by_reaction_scope(&scope_b, &author, ts)
+            .unwrap()
+            .unwrap()
+            .reaction_counts
+            .is_empty()
+    );
+}
+
+#[test]
+fn unresolved_legacy_scope_requires_atomic_authoritative_recovery() {
+    let (_dir, db) = setup_test_db();
+    let repo = MessageRepository::new(db.clone());
+    let author = UserId::new();
+    let me = UserId::new();
+    let ts = next_timestamp_ns();
+    let scope = ReactionScope::new(ChannelId::new(), ConversationType::AnonGroup);
+    repo.insert(&Message::new_text(
+        scope.id,
+        scope.kind.clone(),
+        Some(author),
+        "retained history".into(),
+        ts,
+    ))
+    .unwrap();
+    repo.add_reaction(&scope, &author, ts, &me, &me, "👍")
+        .unwrap();
+    let original = repo
+        .get_by_reaction_scope(&scope, &author, ts)
+        .unwrap()
+        .unwrap();
+    let raw = || {
+        db.connection()
+            .unwrap()
+            .query_row(
+                "SELECT reaction_counts_blob,current_user_reactions_blob FROM messages WHERE id=?1",
+                [original.id.to_string()],
+                |r| Ok((r.get::<_, Vec<u8>>(0)?, r.get::<_, Vec<u8>>(1)?)),
+            )
+            .unwrap()
+    };
+    let preserved = raw();
+    db.connection()
+        .unwrap()
+        .execute(
+            "INSERT INTO reaction_scope_unresolved VALUES(?1,?2,?3,?4)",
+            rusqlite::params![
+                scope.id.to_string(),
+                scope.kind.as_str(),
+                author.to_string(),
+                ts as i64
+            ],
+        )
+        .unwrap();
+    let mut masked = repo.get(&original.id).unwrap().unwrap();
+    assert!(masked.reaction_counts.is_empty());
+    assert!(masked.current_user_reactions.is_empty());
+    for loaded in [
+        repo.list(&scope.id, &scope.kind, None, 10).unwrap(),
+        repo.list_asc(&scope.id, &scope.kind, None, 10).unwrap(),
+        repo.list_for_channel(&scope.id, &scope.kind, Some(&original.id), 10)
+            .unwrap(),
+    ] {
+        assert!(
+            loaded
+                .iter()
+                .all(|m| m.reaction_counts.is_empty() && m.current_user_reactions.is_empty())
+        );
+    }
+    masked.delivery_status = "delivered".into();
+    repo.update(&masked).unwrap();
+    assert_eq!(
+        raw(),
+        preserved,
+        "ordinary masked read/update must retain raw historical evidence"
+    );
+    assert!(
+        repo.ensure_reaction_scope_resolved(&scope, &author, ts)
+            .is_err()
+    );
+    assert!(
+        repo.remove_reaction(&scope, &author, ts, &me, &me, "👍")
+            .is_err()
+    );
+    db.connection().unwrap().execute_batch("CREATE TRIGGER fail_recovery BEFORE UPDATE OF reaction_counts_blob ON messages BEGIN SELECT RAISE(ABORT,'injected recovery failure'); END;").unwrap();
+    assert!(
+        repo.replace_reaction_snapshot(&scope, &author, ts, &me, &[])
+            .is_err()
+    );
+    assert!(
+        repo.ensure_reaction_scope_resolved(&scope, &author, ts)
+            .is_err()
+    );
+    assert_eq!(repo.get_reactions(&scope, &author, ts).unwrap().len(), 1);
+    assert!(
+        repo.get_by_reaction_scope(&scope, &author, ts)
+            .unwrap()
+            .unwrap()
+            .reaction_counts
+            .is_empty()
+    );
+    assert_eq!(
+        raw(),
+        preserved,
+        "failed recovery must keep original hidden blobs"
+    );
+    db.connection()
+        .unwrap()
+        .execute_batch("DROP TRIGGER fail_recovery")
+        .unwrap();
+    repo.replace_reaction_snapshot(&scope, &author, ts, &me, &[])
+        .unwrap();
+    repo.ensure_reaction_scope_resolved(&scope, &author, ts)
+        .unwrap();
+    let message = repo
+        .get_by_reaction_scope(&scope, &author, ts)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        message.content,
+        MessageContent::Text("retained history".into())
+    );
+    assert!(message.reaction_counts.is_empty());
+    assert!(message.current_user_reactions.is_empty());
+}
+
+#[test]
+fn ambiguous_legacy_reaction_does_not_drop_an_independent_held_pin() {
+    let (_dir, db) = setup_test_db();
+    let repo = MessageRepository::new(db.clone());
+    let pending =
+        chatter_core::storage::repositories::message_modifier_repo::MessageModifierRepository::new(
+            db.clone(),
+        );
+    let actor = UserId::new();
+    let author = UserId::new();
+    let ts = next_timestamp_ns();
+    let scope = ReactionScope::new(ChannelId::from(actor), ConversationType::ServerDm);
+    db.connection().unwrap().execute("INSERT INTO reaction_legacy_unscoped(id,sender_id,sent_at_ns,user_id,emoji,created_at) VALUES (?1,?2,?3,?4,'👍','fixture')",rusqlite::params![uuid::Uuid::new_v4().to_string(),author.to_string(),ts as i64,actor.to_string()]).unwrap();
+    pending
+        .queue_pin(
+            &author,
+            ts,
+            &actor,
+            false,
+            Some(scope.id),
+            10,
+            chatter_core::util::time::TimestampNanos::now().as_u64(),
+        )
+        .unwrap();
+    let target = Message::new_text(
+        scope.id,
+        scope.kind.clone(),
+        Some(author),
+        "retained history".into(),
+        ts,
+    );
+    repo.insert(&target).unwrap();
+    let loaded = repo.get(&target.id).unwrap().unwrap();
+    assert!(
+        loaded.is_pinned,
+        "reaction-only quarantine must not discard an authorized held pin"
+    );
+    assert!(loaded.reaction_counts.is_empty());
+    assert!(
+        repo.ensure_reaction_scope_resolved(&scope, &author, ts)
+            .is_err()
+    );
 }

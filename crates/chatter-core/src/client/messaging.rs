@@ -109,12 +109,13 @@ impl ChatterClient {
 
     pub fn user_has_reacted(
         &self,
+        scope: &crate::domain::reaction::ReactionScope,
         sender_id: &crate::domain::ids::UserId,
         sent_at_ns: u64,
         emoji: &str,
     ) -> bool {
         self.messages()
-            .user_has_reacted(sender_id, sent_at_ns, emoji)
+            .user_has_reacted(scope, sender_id, sent_at_ns, emoji)
             .unwrap_or(false)
     }
 

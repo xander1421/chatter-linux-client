@@ -275,6 +275,33 @@ tokio::task_local! {
 pub(crate) fn check_send_session() -> Result<(), StorageError> {
     SEND_SESSION.try_with(SendSession::check).unwrap_or(Ok(()))
 }
+/// Carries the original future's admission boundary across the Signal actor.
+/// Start only after every exact envelope fits, before the first durable write.
+#[derive(Clone)]
+pub(crate) struct SubmissionPermit {
+    boundary: Option<std::sync::Arc<SendBoundary>>,
+    session: Option<SendSession>,
+}
+impl SubmissionPermit {
+    pub(crate) fn capture() -> Self {
+        Self {
+            boundary: SEND_BOUNDARY.try_with(Clone::clone).ok(),
+            session: SEND_SESSION.try_with(Clone::clone).ok(),
+        }
+    }
+    pub(crate) fn start(&self) -> Result<(), StorageError> {
+        if let Some(session) = &self.session {
+            session.check()?;
+        }
+        if let Some(boundary) = &self.boundary {
+            boundary
+                .started
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        }
+        Ok(())
+    }
+}
+
 pub(crate) fn mark_submission_started() -> Result<(), StorageError> {
     check_send_session()?;
     mark_existing_submission();

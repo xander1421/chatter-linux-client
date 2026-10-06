@@ -107,6 +107,7 @@ pub enum DomainEvent {
     },
     /// Reaction added to message.
     ReactionAdded {
+        scope: crate::domain::reaction::ReactionScope,
         /// Target message sender (target_author_aci in Signal protocol).
         sender_id: UserId,
         /// Target message sent timestamp in nanoseconds (target_sent_timestamp).
@@ -116,8 +117,15 @@ pub enum DomainEvent {
         /// When the reaction was sent (ms since epoch).
         timestamp: u64,
     },
+    /// Complete persisted reaction snapshot changed; carries no invented delta.
+    ReactionSnapshotChanged {
+        scope: crate::domain::reaction::ReactionScope,
+        sender_id: UserId,
+        sent_at_ns: u64,
+    },
     /// Reaction removed from message.
     ReactionRemoved {
+        scope: crate::domain::reaction::ReactionScope,
         sender_id: UserId,
         sent_at_ns: u64,
         reactor_id: UserId,
@@ -685,8 +693,9 @@ impl DomainEvent {
             DomainEvent::MessagesRead { channel_id, .. } => *channel_id,
             DomainEvent::MessagesDelivered { .. } => None,
             DomainEvent::ViewedReceipt { .. } => None,
-            DomainEvent::ReactionAdded { .. } => None,
-            DomainEvent::ReactionRemoved { .. } => None,
+            DomainEvent::ReactionAdded { scope, .. } => Some(scope.id),
+            DomainEvent::ReactionSnapshotChanged { scope, .. } => Some(scope.id),
+            DomainEvent::ReactionRemoved { scope, .. } => Some(scope.id),
             DomainEvent::MessagePinned { channel_id, .. } => Some(*channel_id),
             DomainEvent::MessageUnpinned { channel_id, .. } => Some(*channel_id),
             DomainEvent::KeyExchangeReceived {

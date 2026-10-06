@@ -346,7 +346,7 @@ impl AnonGroupService {
     /// Uses (sender_id, sent_at_ns) to identify the target message (Signal-style).
     pub fn add_reaction(
         &self,
-        _group_id: &AnonGroupId,
+        group_id: &AnonGroupId,
         sender_id: &UserId,
         sent_at_ns: u64,
         reactor_id: &UserId,
@@ -354,6 +354,10 @@ impl AnonGroupService {
     ) -> Result<bool, AnonGroupError> {
         let current_user_id = self.current_user_id()?;
         Ok(self.message_service.message_repo.add_reaction(
+            &crate::domain::reaction::ReactionScope::new(
+                (*group_id).into(),
+                ConversationType::AnonGroup,
+            ),
             sender_id,
             sent_at_ns,
             reactor_id,
@@ -367,7 +371,7 @@ impl AnonGroupService {
     /// Uses (sender_id, sent_at_ns) to identify the target message (Signal-style).
     pub fn remove_reaction(
         &self,
-        _group_id: &AnonGroupId,
+        group_id: &AnonGroupId,
         sender_id: &UserId,
         sent_at_ns: u64,
         reactor_id: &UserId,
@@ -375,6 +379,10 @@ impl AnonGroupService {
     ) -> Result<bool, AnonGroupError> {
         let current_user_id = self.current_user_id()?;
         Ok(self.message_service.message_repo.remove_reaction(
+            &crate::domain::reaction::ReactionScope::new(
+                (*group_id).into(),
+                ConversationType::AnonGroup,
+            ),
             sender_id,
             sent_at_ns,
             reactor_id,

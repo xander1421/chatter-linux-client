@@ -222,36 +222,29 @@ pub async fn handle_domain_event(
         // Reaction UI updates: update emoji summary on the message bubble + sidebar
         // Uses Signal-style (sender_id, sent_at_ns) composite key for matching.
         DomainEvent::ReactionAdded {
+            scope,
             sender_id,
             sent_at_ns,
-            emoji,
             ..
         } => {
-            messaging::handle_reaction_update(
-                window,
-                &sender_id.to_string(),
-                sent_at_ns,
-                &emoji,
-                false,
-            );
-            messaging::refresh_sidebar_for_reaction(window, ui_ctx, &emoji, false);
+            messaging::handle_reaction_update(window, ui_ctx, &scope, &sender_id, sent_at_ns);
         }
         DomainEvent::ReactionRemoved {
+            scope,
             sender_id,
             sent_at_ns,
-            emoji,
             ..
         } => {
-            messaging::handle_reaction_update(
-                window,
-                &sender_id.to_string(),
-                sent_at_ns,
-                &emoji,
-                true,
-            );
-            messaging::refresh_sidebar_for_reaction(window, ui_ctx, &emoji, true);
+            messaging::handle_reaction_update(window, ui_ctx, &scope, &sender_id, sent_at_ns);
         }
 
+        DomainEvent::ReactionSnapshotChanged {
+            scope,
+            sender_id,
+            sent_at_ns,
+        } => {
+            messaging::handle_reaction_update(window, ui_ctx, &scope, &sender_id, sent_at_ns);
+        }
         // Edit UI update: replace message content in-place
         DomainEvent::MessageEdited {
             message_id,

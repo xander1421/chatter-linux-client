@@ -317,6 +317,7 @@ pub fn spawn_notification_listener(
                     );
                 }
                 DomainEvent::ReactionAdded {
+                    scope,
                     sender_id,
                     sent_at_ns,
                     emoji,
@@ -332,8 +333,12 @@ pub fn spawn_notification_listener(
                     // Same mute / on-screen rules as the message it reacts
                     // to. A target we do not hold names no conversation to
                     // check, so it stays silent.
-                    let Some(target) =
-                        client.get_message_by_sender_timestamp(sender_id, *sent_at_ns)
+                    let Some(target) = client
+                        .messages()
+                        .message_repo
+                        .get_by_reaction_scope(scope, sender_id, *sent_at_ns)
+                        .ok()
+                        .flatten()
                     else {
                         continue;
                     };

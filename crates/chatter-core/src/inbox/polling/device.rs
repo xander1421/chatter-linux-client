@@ -1960,6 +1960,7 @@ pub fn dispatch_control_content(
             } else {
                 // No "channel:" prefix => channel-free DM (ServerDm) reaction.
                 let _ = event_tx.send(InboxEvent::DmReaction {
+                    conversation_peer_id: None,
                     peer_id: *sender_id,
                     emoji: reaction.emoji,
                     remove: reaction.remove,

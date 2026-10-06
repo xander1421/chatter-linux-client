@@ -366,57 +366,25 @@ pub(super) fn handle_delivery_status_update(
 /// message identifier per Signal Protocol spec.
 pub(super) fn handle_reaction_update(
     window: &Weak<MainWindow>,
-    sender_id: &str,
-    sent_at_ns: u64,
-    emoji: &str,
-    remove: bool,
-) {
-    let weak = window.clone();
-    let sender_id = sender_id.to_string();
-    let sent_at_ns_str = sent_at_ns.to_string();
-    let emoji = emoji.to_string();
-
-    let _ = slint::invoke_from_event_loop(move || {
-        let Some(w) = weak.upgrade() else { return };
-        crate::bin_ui::features::chat::update_reaction_in_ui(
-            &w,
-            &sender_id,
-            &sent_at_ns_str,
-            &emoji,
-            remove,
-        );
-    });
-}
-
-/// Refresh the sidebar preview for the active conversation after a reaction change.
-pub(super) fn refresh_sidebar_for_reaction(
-    window: &Weak<MainWindow>,
     ui_ctx: &Arc<ChatterClient>,
-    emoji: &str,
-    remove: bool,
+    scope: &chatter_core::domain::reaction::ReactionScope,
+    sender_id: &UserId,
+    sent_at_ns: u64,
 ) {
     let weak = window.clone();
+    let client = ui_ctx.clone();
     let conversation = ui_ctx.chat_state().active_conversation();
-    let emoji = emoji.to_string();
-
-    if matches!(conversation, chatter_core::state::ActiveConversation::None) {
-        return;
-    }
-
-    let ui_ctx_for_sidebar = ui_ctx.clone();
+    let author = *sender_id;
+    let expected_scope = scope.clone();
     let _ = slint::invoke_from_event_loop(move || {
         let Some(w) = weak.upgrade() else { return };
-        if remove {
-            return;
-        }
-        let preview = format!("Reacted {}", emoji);
-        let now = ui_ctx_for_sidebar.sidebar_time(chrono::Utc::now());
-        crate::bin_ui::features::sidebar::update_sidebar_preview(
+        crate::bin_ui::features::chat::refresh_scoped_reaction_in_ui(
             &w,
-            &ui_ctx_for_sidebar,
+            &client,
             conversation,
-            &preview,
-            &now,
+            &expected_scope,
+            &author,
+            sent_at_ns,
         );
     });
 }
