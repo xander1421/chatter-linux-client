@@ -7,8 +7,8 @@ use chatter_core::domain::message::{Message, MessageContent};
 
 use crate::{MessageItemData, RichTextBlock};
 
-use super::attachment::{attachment_to_display_data, AttachmentDisplayData};
-use super::markdown::{parse_blocks, strip_markdown, MarkdownBlock};
+use super::attachment::{AttachmentDisplayData, attachment_to_display_data};
+use super::markdown::{MarkdownBlock, parse_blocks, strip_markdown};
 use super::utils::{format_count, reaction_counts_to_entries};
 
 /// A message body as a row renders it: `rich_content` is the blocks the
@@ -377,11 +377,9 @@ pub fn message_to_display_data_with_replies(
 
     MessageDisplayData {
         message_id: msg.id.to_string(),
-        sender_id: if is_call {
-            call_initiator_id.clone()
-        } else {
-            msg.sender_id.map(|id| id.to_string()).unwrap_or_default()
-        },
+        // Actions and inbound updates address the stored event author; caller
+        // identity is used separately for presentation and call direction.
+        sender_id: msg.sender_id.map(|id| id.to_string()).unwrap_or_default(),
         sender_name: sender_name.to_string(),
         sender_initials: chatter_core::ui::initials_from_name(sender_name),
         content,
@@ -628,7 +626,8 @@ mod tests {
             "domain source stays intact"
         );
         let display = message_to_display_data(&msg, "Caller", &[], None);
-        assert_eq!(display.sender_id, caller.to_string());
+        assert_eq!(display.sender_id, end_sender.to_string());
+        assert_eq!(display.call_initiator_id, caller.to_string());
         assert_eq!(display.sender_initials, "C");
         assert!(!display.to_slint_with_user(&end_sender.to_string()).is_own);
     }
