@@ -166,8 +166,8 @@ export component MessageComposer inherits GlassSurface {
     // (OPEN-ITEMS §112c).
     property <bool> can-send: text != "" || text-input.preedit-text != "" || pending-attachments.length > 0;
     // Keep one native input alive across the inline/raised transition. Preedit
-    // participates without being committed; attachments alone stay inline.
-    property <bool> raised-actions: text != "" || text-input.preedit-text != "";
+    // participates without being committed; attachments also raise the controls.
+    property <bool> raised-actions: text != "" || text-input.preedit-text != "" || root.has-attachments;
     property <bool> show-attachment-action: !root.is-editing && (MeshGlobal.active-id == "" || MeshGlobal.active-kind != "dm");
     property <bool> show-terminal-action: root.can-send || (!root.is-editing && MeshGlobal.active-id == "");
     property <length> raised-toolbar-height: raised-actions ? Spacing.touch-target-min + row-padding * 2 + Spacing.xs : 0px;
@@ -220,7 +220,7 @@ export component MessageComposer inherits GlassSurface {
     property <length> input-line-height: line-measure.preferred-height;
     property <length> max-input-height: root.mobile
         ? max(min-input-height, min(input-line-height * 6 + padding-vertical,
-            available-pane-height * 0.4 - attachment-tray-height - edit-bar-height
+            available-pane-height * 0.4 - edit-bar-height
                 - reply-bar-height - format-bar-height - send-status-height - raised-toolbar-height - row-padding * 2))
         : 400px;
     property <length> padding-vertical: Spacing.sm * 2;
@@ -254,7 +254,6 @@ export component MessageComposer inherits GlassSurface {
     // Bar heights. Each bar is drawn at exactly this height, and the bars
     // hold text, so they grow with the text size.
     property <length> send-status-height: send-status != "" ? 28px : 0px;
-    property <length> attachment-tray-height: has-attachments ? 72px * Appearance.text-grow : 0px;
     property <length> edit-bar-height: is-editing ? Spacing.touch-target-min * Appearance.text-grow : 0px;
     property <length> reply-bar-height: is-replying ? 48px * Appearance.text-grow : 0px;
 
@@ -338,7 +337,7 @@ export component MessageComposer inherits GlassSurface {
 
     // Layout - dynamic height based on content (includes Bento Box when expanded)
     property <length> recording-height: max(112px, recording-layout.preferred-height + row-padding * 2);
-    height: root.collapsed ? 0px : VoiceRecording.active ? recording-height : content-height + raised-toolbar-height + attachment-tray-height + edit-bar-height + reply-bar-height + format-bar-height + send-status-height + row-padding * 2;
+    height: root.collapsed ? 0px : VoiceRecording.active ? recording-height : content-height + raised-toolbar-height + edit-bar-height + reply-bar-height + format-bar-height + send-status-height + row-padding * 2;
     // Action/input positions change immediately with text/preedit on every
     // platform. Settle the shell with them so the focused native field remains
     // inside its bounds between consecutive key events.
@@ -349,7 +348,7 @@ export component MessageComposer inherits GlassSurface {
     accessory-surface := GlassSurface {
         visible: root.raised-actions && !VoiceRecording.active && self.height > 0px;
         width: root.width;
-        height: root.attachment-tray-height + root.edit-bar-height + root.reply-bar-height + root.format-bar-height + root.send-status-height;
+        height: root.edit-bar-height + root.reply-bar-height + root.format-bar-height + root.send-status-height;
         material-level: root.material-level;
         elevation: root.elevation;
         backdrop-paused: root.backdrop-paused;
@@ -704,180 +703,6 @@ export component MessageComposer inherits GlassSurface {
             }
         }
 
-        // Attachment tray (shown when there are pending attachments)
-        if root.has-attachments: Rectangle {
-            width: 100%;
-            height: root.attachment-tray-height;
-            background: transparent;
-
-            Flickable {
-                width: 100%;
-                height: 100%;
-                // Calculate content width: each attachment is 180px + spacing, plus add button 56px
-                viewport-width: max(self.width, (180px + Spacing.sm) * root.pending-attachments.length + 56px + Spacing.md + Spacing.sm);
-                viewport-height: self.height;
-                interactive: true;
-
-                HorizontalLayout {
-                    padding: Spacing.sm;
-                    padding-left: Spacing.md;
-                    spacing: Spacing.sm;
-                    alignment: start;
-
-                    // Pending attachment items — Neo convex cards
-                    for attachment in root.pending-attachments: Rectangle {
-                        width: 180px;
-                        height: (Spacing.button-height + Spacing.sm * 2) * Appearance.text-grow;
-                        background: Colors.surface;
-                        border-radius: Spacing.radius-md;
-                        drop-shadow-blur: Elevation.card-blur;
-                        drop-shadow-offset-y: Elevation.card-offset;
-                        drop-shadow-color: Elevation.card-shadow;
-                        border-width: Elevation.rim-width;
-                        border-color: Elevation.card-rim;
-                        opacity: attachment.is-ready ? 1.0 : 0.7;
-
-                        property <color> category-bg: attachment.category == "image" ? Colors.cat-image :
-                                                      attachment.category == "video" ? Colors.cat-video :
-                                                      attachment.category == "audio" ? Colors.cat-audio :
-                                                      attachment.category == "document" ? Colors.cat-document :
-                                                      attachment.category == "code" ? Colors.cat-code :
-                                                      attachment.category == "archive" ? Colors.cat-archive :
-                                                      Colors.text-muted;
-
-                        property <string> category-emoji: attachment.category == "image" ? "\u{1F5BC}\u{FE0F}" :
-                                                          attachment.category == "video" ? "\u{1F3AC}\u{FE0F}" :
-                                                          attachment.category == "audio" ? "\u{1F3B5}\u{FE0F}" :
-                                                          attachment.category == "document" ? "\u{1F4C4}\u{FE0F}" :
-                                                          attachment.category == "code" ? "\u{1F4DD}\u{FE0F}" :
-                                                          attachment.category == "archive" ? "\u{1F4E6}\u{FE0F}" :
-                                                          "\u{1F4CE}\u{FE0F}";
-
-                        HorizontalLayout {
-                            padding: Spacing.sm;
-                            spacing: Spacing.sm;
-
-                            // Icon or thumbnail with loading indicator
-                            Rectangle {
-                                width: 40px;
-                                height: 40px;
-                                border-radius: Spacing.radius-sm;
-                                background: attachment.has-thumbnail ? transparent : category-bg.transparentize(0.8);
-                                clip: true;
-
-                                // Show thumbnail for images
-                                if attachment.has-thumbnail && attachment.is-ready: Image {
-                                    width: 100%;
-                                    height: 100%;
-                                    source: attachment.thumbnail;
-                                    image-fit: cover;
-                                }
-
-                                // Show icon for non-images when ready
-                                if !attachment.has-thumbnail && attachment.is-ready: Text {
-                                    width: 100%;
-                                    height: 100%;
-                                    text: category-emoji;
-                                    font-family: Typography.font-family-emoji;
-                                    font-size: Typography.lg;
-                                    horizontal-alignment: center;
-                                    vertical-alignment: center;
-                                }
-
-                                // Loading indicator when not ready
-                                if !attachment.is-ready: Text {
-                                    width: 100%;
-                                    height: 100%;
-                                    text: "\u{23F3}";  // Hourglass
-                                    font-size: Typography.lg;
-                                    horizontal-alignment: center;
-                                    vertical-alignment: center;
-                                }
-                            }
-
-                            // File info
-                            VerticalLayout {
-                                horizontal-stretch: 1;
-                                alignment: center;
-                                spacing: Spacing.xxs;
-
-                                Text {
-                                    text: attachment.filename;
-                                    color: Colors.text-primary;
-                                    font-size: Typography.xs;
-                                    overflow: elide;
-                                }
-                                HorizontalLayout {
-                                    spacing: Spacing.xs;
-
-                                    Text {
-                                        text: attachment.is-ready ? attachment.size-display : "Encrypting...";
-                                        color: Colors.text-muted;
-                                        font-size: Typography.xs;
-                                    }
-                                }
-                            }
-
-                            // Remove button
-                            Rectangle {
-                                width: Spacing.button-height;
-                                height: Spacing.button-height;
-                                background: remove-touch.has-hover ? Colors.error.transparentize(0.7) : Colors.error.transparentize(0.9);
-                                border-radius: Spacing.radius-full;
-                                accessible-role: button;
-                                accessible-label: "Remove attachment";
-
-                                Text {
-                                    width: 100%;
-                                    height: 100%;
-                                    text: "\u{00D7}";
-                                    font-size: Typography.xs;
-                                    color: Colors.error;
-                                    horizontal-alignment: center;
-                                    vertical-alignment: center;
-                                }
-
-                                remove-touch := TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => {
-                                        root.remove-attachment(attachment.id);
-                                    }
-                                }
-                            }
-                        }
-                    }
-
-                    // Add more button — Neo dashed outline
-                    Rectangle {
-                        width: 56px;
-                        height: 56px;
-                        background: add-more-touch.has-hover ? Colors.surface-hover : Colors.inset;
-                        border-radius: Spacing.radius-md;
-                        accessible-role: button;
-                        accessible-label: "Add attachment";
-
-                        Text {
-                            width: 100%;
-                            height: 100%;
-                            text: "+";
-                            font-size: Typography.xxl;
-                            color: Colors.text-muted;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-
-                        add-more-touch := TouchArea {
-                            enabled: !root.disabled;
-                            mouse-cursor: pointer;
-                            clicked => {
-                                root.attachment-clicked();
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
         // Populated actions have compact shells with transparent space between them.
         // Absolute geometry changes neither the native input nor focus/selection.
         Rectangle {
@@ -914,6 +739,183 @@ export component MessageComposer inherits GlassSurface {
                 material-level: root.material-level;
                 elevation: root.elevation;
                 backdrop-paused: root.backdrop-paused;
+            }
+
+            // Bounded previews occupy only the gap between the individual action shells.
+            if root.has-attachments: attachment-strip := Rectangle {
+                x: left-action-surface.width + Spacing.xs;
+                y: 0px;
+                width: max(0px, right-action-surface.x - self.x - Spacing.xs);
+                height: Spacing.touch-target-min + root.row-padding * 2;
+                clip: true;
+                background: transparent;
+
+                attachment-scroll := Flickable {
+                    width: 100%;
+                    height: 100%;
+                    // Center short strips; scroll longer strips inside the reserved gap.
+                    viewport-width: max(self.width, (180px + Spacing.xs) * root.pending-attachments.length + Spacing.touch-target-min);
+                    viewport-height: self.height;
+                    interactive: true;
+
+                    HorizontalLayout {
+                        padding: 0px;
+                        spacing: Spacing.xs;
+                        alignment: center;
+
+                        // Pending attachment items — Neo convex cards
+                        for attachment in root.pending-attachments: Rectangle {
+                            width: 180px;
+                            height: Spacing.touch-target-min + root.row-padding * 2;
+                            background: Colors.surface;
+                            border-radius: Spacing.radius-md;
+                            drop-shadow-blur: Elevation.card-blur;
+                            drop-shadow-offset-y: Elevation.card-offset;
+                            drop-shadow-color: Elevation.card-shadow;
+                            border-width: Elevation.rim-width;
+                            border-color: Elevation.card-rim;
+                            opacity: attachment.is-ready ? 1.0 : 0.7;
+
+                            property <color> category-bg: attachment.category == "image" ? Colors.cat-image :
+                                                          attachment.category == "video" ? Colors.cat-video :
+                                                          attachment.category == "audio" ? Colors.cat-audio :
+                                                          attachment.category == "document" ? Colors.cat-document :
+                                                          attachment.category == "code" ? Colors.cat-code :
+                                                          attachment.category == "archive" ? Colors.cat-archive :
+                                                          Colors.text-muted;
+
+                            property <string> category-emoji: attachment.category == "image" ? "\u{1F5BC}\u{FE0F}" :
+                                                              attachment.category == "video" ? "\u{1F3AC}\u{FE0F}" :
+                                                              attachment.category == "audio" ? "\u{1F3B5}\u{FE0F}" :
+                                                              attachment.category == "document" ? "\u{1F4C4}\u{FE0F}" :
+                                                              attachment.category == "code" ? "\u{1F4DD}\u{FE0F}" :
+                                                              attachment.category == "archive" ? "\u{1F4E6}\u{FE0F}" :
+                                                              "\u{1F4CE}\u{FE0F}";
+
+                            HorizontalLayout {
+                                padding: root.row-padding;
+                                spacing: Spacing.xs;
+
+                                // Icon or thumbnail with loading indicator
+                                Rectangle {
+                                    width: 32px;
+                                    height: 32px;
+                                    border-radius: Spacing.radius-sm;
+                                    background: attachment.has-thumbnail ? transparent : category-bg.transparentize(0.8);
+                                    clip: true;
+
+                                    // Show thumbnail for images
+                                    if attachment.has-thumbnail && attachment.is-ready: Image {
+                                        width: 100%;
+                                        height: 100%;
+                                        source: attachment.thumbnail;
+                                        image-fit: cover;
+                                    }
+
+                                    // Show icon for non-images when ready
+                                    if !attachment.has-thumbnail && attachment.is-ready: Text {
+                                        width: 100%;
+                                        height: 100%;
+                                        text: category-emoji;
+                                        font-family: Typography.font-family-emoji;
+                                        font-size: Typography.lg;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+
+                                    // Loading indicator when not ready
+                                    if !attachment.is-ready: Text {
+                                        width: 100%;
+                                        height: 100%;
+                                        text: "\u{23F3}";  // Hourglass
+                                        font-size: Typography.lg;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+                                }
+
+                                // File info
+                                VerticalLayout {
+                                    horizontal-stretch: 1;
+                                    alignment: center;
+                                    spacing: Spacing.xxs;
+
+                                    Text {
+                                        text: attachment.filename;
+                                        color: Colors.text-primary;
+                                        font-size: Typography.xs;
+                                        overflow: elide;
+                                    }
+                                    HorizontalLayout {
+                                        spacing: Spacing.xs;
+
+                                        Text {
+                                            text: attachment.is-ready ? attachment.size-display : "Encrypting...";
+                                            color: Colors.text-muted;
+                                            font-size: Typography.xs;
+                                            overflow: elide;
+                                        }
+                                    }
+                                }
+
+                                // Remove button
+                                Rectangle {
+                                    width: Spacing.touch-target-min;
+                                    height: Spacing.touch-target-min;
+                                    background: remove-touch.has-hover ? Colors.error.transparentize(0.7) : Colors.error.transparentize(0.9);
+                                    border-radius: Spacing.radius-full;
+                                    accessible-role: button;
+                                    accessible-label: "Remove attachment";
+
+                                    Text {
+                                        width: 100%;
+                                        height: 100%;
+                                        text: "\u{00D7}";
+                                        font-size: Typography.xs;
+                                        color: Colors.error;
+                                        horizontal-alignment: center;
+                                        vertical-alignment: center;
+                                    }
+
+                                    remove-touch := TouchArea {
+                                        mouse-cursor: pointer;
+                                        clicked => {
+                                            root.remove-attachment(attachment.id);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Add more button — Neo dashed outline
+                        Rectangle {
+                            width: Spacing.touch-target-min;
+                            height: Spacing.touch-target-min;
+                            background: add-more-touch.has-hover ? Colors.surface-hover : Colors.inset;
+                            border-radius: Spacing.radius-md;
+                            accessible-role: button;
+                            accessible-label: "Add attachment";
+
+                            Text {
+                                width: 100%;
+                                height: 100%;
+                                text: "+";
+                                font-size: Typography.xxl;
+                                color: Colors.text-muted;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+
+                            add-more-touch := TouchArea {
+                                enabled: !root.disabled;
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.attachment-clicked();
+                                }
+                            }
+                        }
+                    }
+                }
             }
 
             // Emoji & GIF button (unified — pickers toggle via tabs inside).

@@ -470,6 +470,8 @@ export component ChatLayout inherits Rectangle {
             text <=> root.composer-text;
             placeholder: root.composer-placeholder;
             send-status: root.composer-send-status;
+            // Composer owns attachment-row geometry; keep the host reservation
+            // based on its single reported height, including caption-free drafts.
             pending-attachments: root.pending-attachments;
             is-editing <=> root.composer-is-editing;
             edit-message-id <=> root.composer-edit-message-id;

@@ -208,10 +208,8 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     // outer controls and field share the top/bottom inset. The leading
     // emoji toggle owns the left edge; the field follows it by one inset.
     let spacing = include_str!("../../../ui/theme/spacing.slint");
-    assert!(
-        spacing
-            .contains("out property <length> radius-chrome-inner: radius-chrome - chrome-inset;")
-    );
+    assert!(spacing
+        .contains("out property <length> radius-chrome-inner: radius-chrome - chrome-inset;"));
     assert!(spacing.contains("out property <length> chrome-inset: xs;"));
     assert!(spacing.contains("out property <length> xs: 4px;"));
     let inset = 4.0_f32;
@@ -278,13 +276,11 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     slint::platform::update_timers_and_animations();
     assert_action_geometry(&w, true);
     assert!(composer_native_item(&w) == original_input);
-    assert!(
-        original_input
-            .downcast::<i_slint_core::items::TextInput>()
-            .unwrap()
-            .as_pin_ref()
-            .has_focus()
-    );
+    assert!(original_input
+        .downcast::<i_slint_core::items::TextInput>()
+        .unwrap()
+        .as_pin_ref()
+        .has_focus());
     pump_size(&w, PHONE_W, 460.0);
     assert_eq!(w.get_composer_text().as_str(), "a");
     assert!(composer_native_item(&w) == original_input);
@@ -374,13 +370,11 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     pump_size(&w, PHONE_W, 460.0);
     assert!(!w.get_composer_emoji_picker_visible() && !w.get_composer_gif_picker_visible());
     assert!(composer_native_item(&w) == original_input);
-    assert!(
-        original_input
-            .downcast::<i_slint_core::items::TextInput>()
-            .unwrap()
-            .as_pin_ref()
-            .has_focus()
-    );
+    assert!(original_input
+        .downcast::<i_slint_core::items::TextInput>()
+        .unwrap()
+        .as_pin_ref()
+        .has_focus());
     assert!(w.get_composer_text().is_empty());
     // This geometry fixture has no native IME arrival. End its outstanding
     // reservation before shrinking into the next independent raised-row case;
@@ -419,8 +413,8 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     w.set_composer_text("".into());
     pump_size(&w, PHONE_W, 460.0);
 
-    // An attachment alone must not raise the controls, even though Send is
-    // available. A populated caption does raise them, with tray space reserved.
+    // Attachment-only and caption drafts share the same raised row. Previews
+    // live between its actual button shells, without a second accessory tray.
     w.set_pending_attachments(slint::ModelRc::new(slint::VecModel::from(vec![
         chatter_ui::PendingAttachmentData {
             id: "geometry-only".into(),
@@ -430,12 +424,45 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
             ..Default::default()
         },
     ])));
+    for (mobile, width, height) in [
+        (true, 320.0, PHONE_H),
+        (true, PHONE_W, PHONE_H),
+        (true, 768.0, 1024.0),
+        (false, 1280.0, 900.0),
+    ] {
+        w.set_is_mobile_platform(mobile);
+        for caption in ["", "caption"] {
+            w.set_composer_text(caption.into());
+            pump_size(&w, width, height);
+            assert_action_geometry(&w, true);
+            assert_attachment_strip_geometry(&w);
+            assert!(composer_native_item(&w) == original_input);
+        }
+    }
+    w.set_is_mobile_platform(true);
     pump_size(&w, PHONE_W, PHONE_H);
-    assert_action_geometry(&w, false);
-    w.set_composer_text("caption".into());
+    assert_composer_caps(&w, false, 0.0);
+    // Overflow must move the real repeated cards inside the bounded clip.
+    w.set_pending_attachments(slint::ModelRc::new(slint::VecModel::from(
+        (0..4)
+            .map(|i| chatter_ui::PendingAttachmentData {
+                id: format!("overflow-{i}").into(),
+                filename: format!("long-preview-{i}.txt").into(),
+                category: "document".into(),
+                is_ready: i != 1,
+                ..Default::default()
+            })
+            .collect::<Vec<_>>(),
+    )));
     pump_size(&w, PHONE_W, PHONE_H);
-    assert_action_geometry(&w, true);
-    assert_composer_caps(&w, false, 72.0);
+    assert_attachment_strip_geometry(&w);
+    let before = rect(&one(&w, "Remove attachment")).0;
+    scroll_attachment_strip(&w, -200.0);
+    pump_size(&w, PHONE_W, PHONE_H);
+    let after = rect(&one(&w, "Remove attachment")).0;
+    assert!(after < before - 50.0, "attachment overflow did not scroll");
+    assert_attachment_strip_geometry(&w);
+    assert!(composer_native_item(&w) == original_input);
     w.set_composer_text("".into());
     w.set_pending_attachments(slint::ModelRc::new(slint::VecModel::from(Vec::<
         chatter_ui::PendingAttachmentData,
@@ -870,26 +897,22 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
         search.absolute_position().x + 10.0,
         search.absolute_position().y + 10.0,
     );
-    assert!(
-        !composer_native_item(&w)
-            .downcast::<i_slint_core::items::TextInput>()
-            .unwrap()
-            .as_pin_ref()
-            .has_focus()
-    );
+    assert!(!composer_native_item(&w)
+        .downcast::<i_slint_core::items::TextInput>()
+        .unwrap()
+        .as_pin_ref()
+        .has_focus());
     let field = one(&w, "Message input");
     click_at(
         &w,
         field.absolute_position().x + 20.0,
         field.absolute_position().y + 20.0,
     );
-    assert!(
-        composer_native_item(&w)
-            .downcast::<i_slint_core::items::TextInput>()
-            .unwrap()
-            .as_pin_ref()
-            .has_focus()
-    );
+    assert!(composer_native_item(&w)
+        .downcast::<i_slint_core::items::TextInput>()
+        .unwrap()
+        .as_pin_ref()
+        .has_focus());
     let desktop_input = composer_native_item(&w);
     key(&w, "a".into());
     assert_action_geometry(&w, true);
@@ -953,6 +976,10 @@ fn attachment_and_keyboard_handover_boundaries(w: &MainWindow) {
             field.absolute_position().y + 20.0,
         );
         input.set_selection_offsets(&adapter, &item, 6, 2); // reversed UTF-8 selection
+        if action == "Add attachment" {
+            scroll_attachment_strip(w, -10000.0);
+            pump_size(w, PHONE_W, PHONE_H);
+        }
         let before = callbacks.get();
         click_element(w, action);
         assert_eq!(callbacks.get(), before + 1);
@@ -1314,7 +1341,10 @@ fn assert_composer_caps(w: &MainWindow, drawer: bool, accessories: f32) {
         } else {
             0.0
         };
-    let toolbar = if input.text() != "" || input.preedit_text() != "" {
+    let toolbar = if input.text() != ""
+        || input.preedit_text() != ""
+        || w.get_pending_attachments().row_count() > 0
+    {
         60.0
     } else {
         0.0
@@ -1457,14 +1487,52 @@ fn assert_action_geometry(w: &MainWindow, raised: bool) {
             "unexpected action {label}"
         );
     }
-    assert!(
-        composer_native_item(w)
-            .downcast::<i_slint_core::items::TextInput>()
-            .is_some()
-    );
+    assert!(composer_native_item(w)
+        .downcast::<i_slint_core::items::TextInput>()
+        .is_some());
 }
 
 fn click_element(w: &MainWindow, label: &str) {
     let (x, y, width, height) = rect(&one(w, label));
     click_at(w, x + width / 2.0, y + height / 2.0);
+}
+
+/// Query the actual clip and surfaces so a tray above the row cannot pass.
+fn assert_attachment_strip_geometry(w: &MainWindow) {
+    let element = |id: &str| {
+        testing::ElementHandle::find_by_element_id(w, id)
+            .find(|e| e.size().width > 0.0 && e.size().height > 0.0)
+            .expect("visible attachment row element")
+    };
+    let (x, y, width, height) = rect(&element("MessageComposer::attachment-strip"));
+    let (lx, ly, lw, lh) = rect(&element("MessageComposer::left-action-surface"));
+    let (rx, ry, _, rh) = rect(&element("MessageComposer::right-action-surface"));
+    let (_, fy, _, _) = rect(&one(w, "Message input"));
+    assert!((x - lx - lw - 4.0).abs() < 0.5);
+    assert!((rx - x - width - 4.0).abs() < 0.5);
+    assert!((y - ly).abs() < 0.5 && (y - ry).abs() < 0.5);
+    assert!((height - lh).abs() < 0.5 && (height - rh).abs() < 0.5);
+    assert!(width > 0.0 && y + height < fy);
+    let scroll = element("MessageComposer::attachment-scroll");
+    let (cx, cy, cw, ch) = rect(&scroll);
+    assert!((cx - x).abs() < 0.5 && (cy - y).abs() < 0.5);
+    assert!((cw - width).abs() < 0.5 && (ch - height).abs() < 0.5);
+    for remove in testing::ElementHandle::find_by_accessible_label(w, "Remove attachment") {
+        let (_, ry, rw, rh) = rect(&remove);
+        assert!(rw >= 48.0 && rh >= 48.0);
+        assert!(ry >= y - 0.5 && ry + rh <= y + height + 0.5);
+    }
+}
+
+fn scroll_attachment_strip(w: &MainWindow, delta_x: f32) {
+    let strip = testing::ElementHandle::find_by_element_id(w, "MessageComposer::attachment-strip")
+        .find(|e| e.size().width > 0.0 && e.size().height > 0.0)
+        .expect("attachment strip");
+    let (x, y, width, height) = rect(&strip);
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+            position: slint::LogicalPosition::new(x + width / 2.0, y + height / 2.0),
+            delta_x,
+            delta_y: 0.0,
+        });
 }
