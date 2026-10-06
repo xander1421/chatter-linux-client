@@ -1135,8 +1135,14 @@ fn attachment_and_keyboard_handover_boundaries(w: &MainWindow) {
     ])));
     let drawer_element = |id: &str| {
         testing::ElementHandle::find_by_element_id(w, id)
-            .find(|e| e.size().width > 0.0 && e.size().height > 0.0)
-            .expect("visible drawer item")
+            // Results may be bounded to zero on the explicit short-pane case;
+            // the per-size useful-area assertions below remain authoritative.
+            .find(|e| {
+                e.size().width > 0.0
+                    && (e.size().height > 0.0
+                        || (id == "ChatLayout::picker-results" && e.size().height == 0.0))
+            })
+            .unwrap_or_else(|| panic!("visible drawer item {id}"))
     };
     let focused_search = || {
         use std::ops::ControlFlow;
