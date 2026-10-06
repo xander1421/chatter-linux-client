@@ -503,6 +503,18 @@ mod media_key_index_tests {
         rtp_transceiver::{RtpTransceiverDirection, RtpTransceiverInit},
     };
 
+    // SDK runtime tasks must outlive all native peer fixtures, as in the app.
+    fn test_runtime() -> &'static tokio::runtime::Runtime {
+        static RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
+        RUNTIME.get_or_init(|| {
+            tokio::runtime::Builder::new_multi_thread()
+                .worker_threads(2)
+                .enable_all()
+                .build()
+                .unwrap()
+        })
+    }
+
     fn manager() -> E2eeManager {
         E2eeManager::new(
             Some(E2eeOptions {
@@ -560,6 +572,7 @@ mod media_key_index_tests {
 
     #[test]
     fn media_epoch_updates_existing_and_later_senders_preserving_receive_ring() {
+        let _runtime = test_runtime().enter();
         let runtime = LkRuntime::instance();
         let manager = manager();
         let provider = manager.key_provider().unwrap();
@@ -648,6 +661,7 @@ mod media_key_index_tests {
 
     #[test]
     fn native_provider_rejection_does_not_select_a_sending_epoch() {
+        let _runtime = test_runtime().enter();
         let provider = KeyProvider::new(KeyProviderOptions::default());
         let manager = E2eeManager::new(
             Some(E2eeOptions {
@@ -663,6 +677,7 @@ mod media_key_index_tests {
 
     #[test]
     fn rotation_cannot_miss_sender_between_creation_and_registration() {
+        let _runtime = test_runtime().enter();
         let runtime = LkRuntime::instance();
         let manager = manager();
         assert!(manager.install_shared_media_key(7, vec![7; 32], Some((8, vec![8; 32]))));
