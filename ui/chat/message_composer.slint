@@ -34,6 +34,7 @@ export struct PendingAttachmentData {
 }
 
 export component MessageComposer inherits GlassSurface {
+    material-enabled: !root.raised-actions || VoiceRecording.active;
     material-level: 2;
     elevation: 3;
     border-radius: Spacing.radius-chrome;
@@ -152,7 +153,7 @@ export component MessageComposer inherits GlassSurface {
     property <bool> raised-actions: text != "" || text-input.preedit-text != "";
     property <bool> show-attachment-action: !root.is-editing && (MeshGlobal.active-id == "" || MeshGlobal.active-kind != "dm");
     property <bool> show-terminal-action: root.can-send || (!root.is-editing && MeshGlobal.active-id == "");
-    property <length> raised-toolbar-height: raised-actions ? Spacing.touch-target-min + Spacing.xs : 0px;
+    property <length> raised-toolbar-height: raised-actions ? Spacing.touch-target-min + row-padding * 2 + Spacing.xs : 0px;
     property <length> trailing-actions-width: (show-attachment-action ? Spacing.touch-target-min + Spacing.xs : 0px)
         + (show-terminal-action ? Spacing.touch-target-min + Spacing.xs : 0px);
 
@@ -203,7 +204,7 @@ export component MessageComposer inherits GlassSurface {
     property <length> max-input-height: root.mobile
         ? max(min-input-height, min(input-line-height * 6 + padding-vertical,
             available-pane-height * 0.4 - attachment-tray-height - edit-bar-height
-                - reply-bar-height - format-bar-height - raised-toolbar-height - row-padding * 2))
+                - reply-bar-height - format-bar-height - send-status-height - raised-toolbar-height - row-padding * 2))
         : 400px;
     property <length> padding-vertical: Spacing.sm * 2;
     function reveal-cursor() {
@@ -235,6 +236,7 @@ export component MessageComposer inherits GlassSurface {
 
     // Bar heights. Each bar is drawn at exactly this height, and the bars
     // hold text, so they grow with the text size.
+    property <length> send-status-height: send-status != "" ? 28px : 0px;
     property <length> attachment-tray-height: has-attachments ? 72px * Appearance.text-grow : 0px;
     property <length> edit-bar-height: is-editing ? Spacing.touch-target-min * Appearance.text-grow : 0px;
     property <length> reply-bar-height: is-replying ? 48px * Appearance.text-grow : 0px;
@@ -319,14 +321,22 @@ export component MessageComposer inherits GlassSurface {
 
     // Layout - dynamic height based on content (includes Bento Box when expanded)
     property <length> recording-height: max(112px, recording-layout.preferred-height + row-padding * 2);
-    height: root.collapsed ? 0px : VoiceRecording.active ? recording-height : content-height + raised-toolbar-height + attachment-tray-height + edit-bar-height + reply-bar-height + format-bar-height + row-padding * 2;
+    height: root.collapsed ? 0px : VoiceRecording.active ? recording-height : content-height + raised-toolbar-height + attachment-tray-height + edit-bar-height + reply-bar-height + format-bar-height + send-status-height + row-padding * 2;
     // Action/input positions change immediately with text/preedit on every
     // platform. Settle the shell with them so the focused native field remains
     // inside its bounds between consecutive key events.
     // "Touch input", plumbed from ChatLayout.
     in property <bool> mobile: false;
 
-    // The outer material supplies separation; the input keeps its functional focus edge.
+    // Accessories retain their own material when the raised main row is transparent.
+    accessory-surface := GlassSurface {
+        visible: root.raised-actions && !VoiceRecording.active && self.height > 0px;
+        width: root.width;
+        height: root.attachment-tray-height + root.edit-bar-height + root.reply-bar-height + root.format-bar-height + root.send-status-height;
+        material-level: root.material-level;
+        elevation: root.elevation;
+        backdrop-paused: root.backdrop-paused;
+    }
 
     VerticalLayout {
         // 100% width for proper text wrapping in children
@@ -661,7 +671,7 @@ export component MessageComposer inherits GlassSurface {
         // failure additionally raises the error toast.
         if root.send-status != "": Rectangle {
             width: 100%;
-            height: 28px;
+            height: root.send-status-height;
             background: transparent;
             HorizontalLayout {
                 padding-left: Spacing.md;
@@ -851,12 +861,40 @@ export component MessageComposer inherits GlassSurface {
             }
         }
 
-        // Actions share the shell, above populated text and beside empty text.
+        // Populated actions have compact shells with transparent space between them.
         // Absolute geometry changes neither the native input nor focus/selection.
         Rectangle {
             width: 100%;
             height: root.content-height + root.raised-toolbar-height + root.row-padding * 2;
             property <length> action-y: root.row-padding + (root.raised-actions ? 0px : (root.content-height - Spacing.touch-target-min) / 2);
+
+            // Decorative surfaces never reparent or replace the native input.
+            left-action-surface := GlassSurface {
+                visible: root.raised-actions;
+                width: Spacing.touch-target-min + root.row-padding * 2;
+                height: Spacing.touch-target-min + root.row-padding * 2;
+                material-level: root.material-level;
+                elevation: root.elevation;
+                backdrop-paused: root.backdrop-paused;
+            }
+            right-action-surface := GlassSurface {
+                visible: root.raised-actions;
+                x: parent.width - self.width;
+                width: root.trailing-actions-width + root.row-padding;
+                height: Spacing.touch-target-min + root.row-padding * 2;
+                material-level: root.material-level;
+                elevation: root.elevation;
+                backdrop-paused: root.backdrop-paused;
+            }
+            field-surface := GlassSurface {
+                visible: root.raised-actions;
+                y: root.raised-toolbar-height;
+                width: parent.width;
+                height: root.content-height + root.row-padding * 2;
+                material-level: root.material-level;
+                elevation: root.elevation;
+                backdrop-paused: root.backdrop-paused;
+            }
 
             // Emoji & GIF button (unified — pickers toggle via tabs inside).
             // 48px, not 36px: measured on a phone the old box was a 36dp target,
@@ -1096,7 +1134,7 @@ export component MessageComposer inherits GlassSurface {
                 }
             }
 
-            // Filled send action inside the shared composer material.
+            // Filled send action inside the compact trailing material.
             if root.can-send: Rectangle {
                 x: parent.width - root.row-padding - Spacing.touch-target-min;
                 y: parent.action-y;

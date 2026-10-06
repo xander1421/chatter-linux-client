@@ -1035,7 +1035,7 @@ fn assert_composer_caps(w: &MainWindow, drawer: bool, accessories: f32) {
             0.0
         };
     let toolbar = if input.text() != "" || input.preedit_text() != "" {
-        52.0
+        60.0
     } else {
         0.0
     };
@@ -1086,7 +1086,29 @@ fn assert_action_geometry(w: &MainWindow, raised: bool) {
             (fw - (sw - 8.0)).abs() < 0.5,
             "populated field is not full width"
         );
-        assert!((fy - (ey + eh) - 4.0).abs() < 0.5);
+        // 4px bottom inset + 4px inter-shell gap + 4px field inset.
+        assert!((fy - (ey + eh) - 12.0).abs() < 0.5);
+        let surface = |id: &str| {
+            testing::ElementHandle::find_by_element_id(w, id)
+                .find(|e| e.size().height > 0.0)
+                .expect("raised composer surface")
+        };
+        let (lx, ly, lw, lh) = rect(&surface("MessageComposer::left-action-surface"));
+        let (rx, ry, rw, rh) = rect(&surface("MessageComposer::right-action-surface"));
+        let (ix, iy, iw, ih) = rect(&surface("MessageComposer::field-surface"));
+        assert!((ex - lx - 4.0).abs() < 0.5 && (ey - ly - 4.0).abs() < 0.5);
+        assert!((lw - 56.0).abs() < 0.5 && (lh - 56.0).abs() < 0.5);
+        assert!(
+            rx > lx + lw,
+            "button shells must leave a transparent middle"
+        );
+        assert!((rh - 56.0).abs() < 0.5 && (ry - ly).abs() < 0.5);
+        let expected_right = if attachment_visible { 108.0 } else { 56.0 };
+        assert!((rw - expected_right).abs() < 0.5);
+        assert!((iy - ly - lh - 4.0).abs() < 0.5);
+        assert!((ix - sx).abs() < 0.5 && (iw - sw).abs() < 0.5);
+        assert!((fx - ix - 4.0).abs() < 0.5 && (fy - iy - 4.0).abs() < 0.5);
+        assert!((ih - fh - 8.0).abs() < 0.5);
     } else {
         assert!((fx - (ex + ew) - 4.0).abs() < 0.5);
         assert!((ey - fy).abs() < 0.5);
