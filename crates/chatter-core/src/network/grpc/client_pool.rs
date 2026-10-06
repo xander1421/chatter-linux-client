@@ -831,7 +831,9 @@ impl GrpcClientPool {
                 tracing::warn!(
                     "Transport error detected — disconnecting stale channel for reconnect"
                 );
-                set_server_status(ServerStatus::Unreachable);
+                // The transport boundary records the actual evidence. A
+                // server's Unavailable reply also triggers retry here, but
+                // still proves reachability.
                 pool.disconnect();
                 pool.note_transport_error();
             }),
@@ -860,12 +862,8 @@ impl GrpcClientPool {
             }
         };
 
-        // A completed RPC is the strongest evidence of reachability there is —
-        // better than the synthetic dial the monitor falls back to — so record it
-        // and spare the monitor a probe.
-        if result.is_ok() {
-            set_server_status(ServerStatus::Reachable);
-        }
+        // Production GrpcTransport records replies before NetworkError mapping
+        // loses their origin (server Unavailable versus local transport error).
         result
     }
 

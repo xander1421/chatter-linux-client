@@ -107,7 +107,7 @@ pub enum ServerStatus {
 
 impl ServerStatus {
     /// Stable discriminant (0=Unknown, 1=Reachable, 2=Unreachable), for the
-    /// atomic below and for any FFI that has to carry this across a boundary.
+    /// any FFI that has to carry this across a boundary.
     ///
     /// The UI does **not** read this: reachability reaches Slint through
     /// [`crate::state::OfflineState`], which the connection banner already
@@ -120,23 +120,9 @@ impl ServerStatus {
             Self::Unreachable => 2,
         }
     }
-
-    fn from_u8(v: u8) -> Self {
-        match v {
-            1 => Self::Reachable,
-            2 => Self::Unreachable,
-            _ => Self::Unknown,
-        }
-    }
 }
 
-/// Process-global server reachability, for the same reason `TOR_STATUS` is one:
-/// the layer that learns the answer is [`crate::network::grpc::GrpcClientPool`],
-/// which holds no `OfflineState` handle and would have to have one threaded
-/// through every client factory to report upwards.
-static SERVER_STATUS: std::sync::atomic::AtomicU8 = std::sync::atomic::AtomicU8::new(0);
-
-/// Millis since [`EPOCH`] at which [`SERVER_STATUS`] was last written. Zero
+/// Millis since [`EPOCH`] at which server reachability was last written. Zero
 /// means never. Read by the reachability monitor so a client whose own RPCs are
 /// already reporting does not also make synthetic dials.
 static SERVER_STATUS_AT_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
@@ -164,14 +150,25 @@ fn now_ms() -> u64 {
 /// transport error. Calling it from a guess is the one thing that would make
 /// the indicator it feeds dishonest.
 pub fn set_server_status(status: ServerStatus) {
-    SERVER_STATUS.store(status.as_i32() as u8, std::sync::atomic::Ordering::Release);
     SERVER_STATUS_AT_MS.store(now_ms(), std::sync::atomic::Ordering::Release);
-    // `watch::send` wakes only when the value changes, so a successful RPC
+    // `send_if_modified` wakes only when the value changes, so a successful RPC
     // that reports Reachable again does not poke waiters. Subscribers see
     // the offline→online edge the banner already shows via OfflineState.
-    let _ = server_status_watch().send(status);
+    publish_server_status(server_status_watch(), status);
 }
 
+fn publish_server_status(tx: &tokio::sync::watch::Sender<ServerStatus>, status: ServerStatus) {
+    tx.send_if_modified(|current| {
+        if *current == status {
+            return false;
+        }
+        *current = status;
+        true
+    });
+}
+
+// One retained authoritative value; a separate atomic status and watch could
+// disagree when concurrent RPCs publish different outcomes.
 fn server_status_watch() -> &'static tokio::sync::watch::Sender<ServerStatus> {
     static TX: std::sync::LazyLock<tokio::sync::watch::Sender<ServerStatus>> =
         std::sync::LazyLock::new(|| {
@@ -194,7 +191,7 @@ pub fn subscribe_server_status() -> tokio::sync::watch::Receiver<ServerStatus> {
 
 /// Read the process-global server reachability.
 pub fn server_status() -> ServerStatus {
-    ServerStatus::from_u8(SERVER_STATUS.load(std::sync::atomic::Ordering::Acquire))
+    *server_status_watch().borrow()
 }
 
 /// How long ago the wire last told us anything, or `None` if it never has.
@@ -267,6 +264,20 @@ impl ConnectionState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn status_retained_without_receivers_and_duplicate_does_not_wake() {
+        let (tx, rx) = tokio::sync::watch::channel(ServerStatus::Unknown);
+        drop(rx);
+        publish_server_status(&tx, ServerStatus::Unreachable);
+        let mut rx = tx.subscribe();
+        assert_eq!(*rx.borrow_and_update(), ServerStatus::Unreachable);
+        publish_server_status(&tx, ServerStatus::Reachable);
+        rx.changed().await.unwrap();
+        assert_eq!(*rx.borrow_and_update(), ServerStatus::Reachable);
+        publish_server_status(&tx, ServerStatus::Reachable);
+        assert!(!rx.has_changed().unwrap());
+    }
 
     #[test]
     fn test_state_helper_methods() {

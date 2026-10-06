@@ -134,6 +134,7 @@ chrono = { version = "0.4", features = ["serde"] }
 uuid = { version = "1", features = ["v4", "v5", "serde"] }
 bytes = "1"
 http = "1"
+http-body = "1"
 mime_guess = "2"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "blocking", "stream", "charset", "http2", "macos-system-configuration"] }
 url = "2"

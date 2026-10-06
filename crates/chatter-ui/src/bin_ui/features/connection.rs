@@ -5,19 +5,11 @@
 //! anything usable without an account" alongside it.
 //!
 //! Both of the things this feeds make a claim to the user about whether the
-//! server is there, so both are only ever as honest as this module. Two things
-//! were wrong before and are worth not reintroducing:
+//! server is there, so both need an authoritative current reading.
 //!
-//! * It subscribed and waited. `OfflineState::subscribe` is a broadcast channel,
-//!   so it delivers changes from that moment on and nothing about the present —
-//!   and the two writes that existed both happened during boot, before
-//!   `wire_all` ran. A client that started with the server down therefore
-//!   rendered the Slint default, `"connected"`, forever. The snapshot below is
-//!   pushed before the subscription for that reason.
-//! * Nothing revised the state after boot, so even a correct first reading went
-//!   stale within seconds. That is now
-//!   `chatter-core/src/network/server_monitor.rs`'s job; this module only
-//!   renders what it publishes.
+//! Subscribe before reading the present state, and recover from broadcast lag
+//! by reading that authoritative state again. Events are wakeups, not a second
+//! source of truth for the label and unreachable flag.
 
 use std::sync::Arc;
 
@@ -25,8 +17,54 @@ use slint::ComponentHandle;
 
 use chatter_core::client::ChatterClient;
 use chatter_core::network::connection::ConnectionState;
+use chatter_core::state::{OfflineState, OfflineStateData, StateSnapshot};
+use tokio::sync::broadcast;
 
 use crate::MainWindow;
+
+fn subscribe_current(
+    state: &OfflineState,
+) -> (
+    broadcast::Receiver<StateSnapshot<OfflineStateData>>,
+    ConnectionState,
+) {
+    subscribe_then_read(state, || state.connection_state())
+}
+
+fn subscribe_then_read(
+    state: &OfflineState,
+    read: impl FnOnce() -> ConnectionState,
+) -> (
+    broadcast::Receiver<StateSnapshot<OfflineStateData>>,
+    ConnectionState,
+) {
+    let rx = state.subscribe();
+    (rx, read())
+}
+
+async fn next_current(
+    state: &OfflineState,
+    rx: &mut broadcast::Receiver<StateSnapshot<OfflineStateData>>,
+) -> Option<ConnectionState> {
+    match rx.recv().await {
+        Ok(_) => Some(state.connection_state()),
+        Err(broadcast::error::RecvError::Lagged(n)) => {
+            tracing::warn!(
+                dropped = n,
+                "Connection state receiver lagged; resynchronizing"
+            );
+            Some(state.connection_state())
+        }
+        Err(broadcast::error::RecvError::Closed) => None,
+    }
+}
+
+fn reconnect_attempt(state: ConnectionState) -> i32 {
+    match state {
+        ConnectionState::Reconnecting { attempt } => attempt as i32,
+        _ => 0,
+    }
+}
 
 /// Map a core connection state to the string the Slint surfaces switch on.
 fn state_label(state: ConnectionState) -> &'static str {
@@ -41,13 +79,10 @@ fn state_label(state: ConnectionState) -> &'static str {
 
 /// Wire connection state to the UI banner.
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    // The present state, before anyone subscribes to changes to it.
-    let state = ui_ctx.offline_state().connection_state();
+    let (mut rx, state) = subscribe_current(ui_ctx.offline_state());
     window.set_connection_status(state_label(state).into());
-    window.set_server_unreachable(ui_ctx.server_unreachable());
-    window.set_connection_reconnect_attempt(
-        ui_ctx.offline_state().reconnect_attempt().unwrap_or(0) as i32,
-    );
+    window.set_server_unreachable(state.is_unreachable());
+    window.set_connection_reconnect_attempt(reconnect_attempt(state));
 
     // Whether the sign-in screens have anywhere to offer as an alternative to
     // themselves. Core's call, not ours.
@@ -55,25 +90,16 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     window.set_is_signed_in(ui_ctx.is_logged_in());
 
     let weak = window.as_weak();
-    let mut rx = ui_ctx.offline_state().subscribe();
     let ui_ctx_for_task = ui_ctx.clone();
 
     tokio::spawn(async move {
         loop {
-            let snapshot = match rx.recv().await {
-                Ok(snap) => snap,
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    tracing::warn!(dropped = n, "Connection state receiver lagged");
-                    continue;
-                }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            let Some(state) = next_current(ui_ctx_for_task.offline_state(), &mut rx).await else {
+                break;
             };
-
-            let state_string = state_label(snapshot.connection_state).to_owned();
-            // "Settled-unreachable" is core's distinction, not a `!= connected`
-            // test here — see `ConnectionState::is_unreachable`.
-            let unreachable = ui_ctx_for_task.server_unreachable();
-            let attempt = snapshot.reconnect_attempt.unwrap_or(0) as i32;
+            let state_string = state_label(state).to_owned();
+            let unreachable = state.is_unreachable();
+            let attempt = reconnect_attempt(state);
             // Re-read rather than cache: the mesh can start, or fail, after this
             // task began, and an offer to use it has to be current at the moment
             // it is made.
@@ -92,4 +118,47 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             });
         }
     });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn startup_transition_after_snapshot_remains_observable() {
+        let state = OfflineState::new();
+        let (mut rx, initial) = subscribe_then_read(&state, || {
+            let initial = state.connection_state();
+            // Force the old snapshot-before-subscribe transition window.
+            state.set_connection_state(ConnectionState::Connected);
+            initial
+        });
+        assert_eq!(initial, ConnectionState::Disconnected);
+        let current = tokio::time::timeout(
+            std::time::Duration::from_secs(1),
+            next_current(&state, &mut rx),
+        )
+        .await
+        .expect("startup transition must remain observable")
+        .unwrap();
+        assert_eq!(state_label(current), "connected");
+        assert!(!current.is_unreachable());
+    }
+
+    #[tokio::test]
+    async fn lag_recovers_latest_state_without_another_publication() {
+        let state = OfflineState::new();
+        let (mut rx, _) = subscribe_current(&state);
+        for _ in 0..64 {
+            state.set_connection_state(ConnectionState::Disconnected);
+        }
+        state.set_connection_state(ConnectionState::Connected);
+        // First recv returns Lagged. Recovery must return immediately, rather
+        // than waiting for another event or rendering retained stale events.
+        let current = next_current(&state, &mut rx).await.unwrap();
+        assert_eq!(state_label(current), "connected");
+        assert!(!current.is_unreachable());
+        let queued = next_current(&state, &mut rx).await.unwrap();
+        assert_eq!(queued, ConnectionState::Connected);
+    }
 }

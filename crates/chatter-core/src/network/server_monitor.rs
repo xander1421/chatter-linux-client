@@ -23,13 +23,10 @@
 //! # Why it mostly does nothing
 //!
 //! Real RPCs are better evidence than a synthetic dial, and
-//! [`GrpcClientPool::call_with_retry`] already records every one of their
-//! outcomes. So the task only dials when nothing on the wire has reported
-//! within [`PROBE_INTERVAL`]: a busy signed-in client never probes at all, and
-//! the client that does probe is the signed-out one sitting on a login screen
-//! with no other traffic — exactly the case that used to have no signal.
-//!
-//! [`GrpcClientPool::call_with_retry`]: crate::network::grpc::GrpcClientPool::call_with_retry
+//! the shared `GrpcTransport` service records response and transport outcomes.
+//! The task only dials when nothing on the wire has reported within
+//! [`PROBE_INTERVAL`]. Signed-out startup defers contact; after an explicit
+//! server action, idle Direct clients can recover using a synthetic dial.
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -44,7 +41,7 @@ use crate::state::OfflineState;
 /// server coming back sooner, longer means fewer radio wakeups on a phone whose
 /// whole reason for running this app right now may be that there is no
 /// infrastructure left to talk to. Anything the user actively tries — register,
-/// log in, send — reports immediately through `call_with_retry` regardless, so
+/// log in, send — reports immediately through `GrpcTransport` regardless, so
 /// this interval only governs the idle case.
 const PROBE_INTERVAL: Duration = Duration::from_secs(30);
 
@@ -54,16 +51,28 @@ const TICK: Duration = Duration::from_secs(5);
 /// Run the reachability monitor.
 ///
 /// Started by `ChatterClient::start_server_monitor`, which is called
-/// independently of login — a signed-out user is precisely who needs this. The
-/// handle is registered with the client's task list and aborted by
+/// after restored signed-in startup or the first explicit server action.
+/// Signed-out startup defers contact and does not start this task. The handle
+/// is registered with the client's task list and aborted by
 /// `ChatterClient::shutdown`, which is why there is no exit condition here.
 pub async fn run(pool: Arc<GrpcClientPool>, offline_state: OfflineState) {
     // Mirror whatever is already known before the first tick, so a UI that
     // subscribes at startup is not left reading a default.
+    let mut status_rx = crate::network::connection::subscribe_server_status();
     mirror(&offline_state);
+    let mut tick = tokio::time::interval(TICK);
+    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+    tick.tick().await;
 
     loop {
-        tokio::time::sleep(TICK).await;
+        tokio::select! {
+            result = status_rx.changed() => {
+                if result.is_err() { return; }
+                mirror(&offline_state);
+                continue;
+            }
+            _ = tick.tick() => {}
+        }
 
         let stale = server_status_age().is_none_or(|age| age >= PROBE_INTERVAL);
         if stale && probe_is_worth_it(&pool) {
@@ -84,7 +93,7 @@ pub async fn run(pool: Arc<GrpcClientPool>, offline_state: OfflineState) {
 /// It is not, under onion transport: every probe would build a fresh Tor circuit,
 /// and doing that twice a minute forever costs far more than the indicator is
 /// worth. Anon mode is also the case that needs it least — it implies a signed-in
-/// session, whose own RPCs report reachability through `call_with_retry` for
+/// session, whose own RPCs report reachability through `GrpcTransport` for
 /// free. So under Tor this reports whatever the real traffic last said and stops
 /// there, which is a staler answer but never a fabricated one.
 fn probe_is_worth_it(pool: &GrpcClientPool) -> bool {
