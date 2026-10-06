@@ -635,13 +635,21 @@ fn composition_selection(w: &MainWindow, text: &str, selection: Option<std::ops:
 
 fn composer_native_item(w: &MainWindow) -> i_slint_core::item_tree::ItemRc {
     use std::ops::ControlFlow;
+    let field = one(w, "Message input");
+    let (fx, fy, fw, fh) = rect(&field);
+    // Accessibility omits an empty value; select the actual clipped input by
+    // its composer bounds even while its committed draft is empty.
     let raw = testing::ElementHandle::find_by_element_id(w, "text-input")
         .find(|e| {
-            e.size().height > 0.0
-                && e.accessible_value().as_ref().map(|v| v.as_str())
-                    == Some(w.get_composer_text().as_str())
+            let (x, y, width, height) = rect(e);
+            width > 0.0
+                && height > 0.0
+                && x >= fx - 0.5
+                && x + width <= fx + fw + 0.5
+                && y < fy + fh
+                && y + height > fy
         })
-        .expect("actual raw composer");
+        .expect("actual raw composer within message input");
     let raw_position = raw.absolute_position();
     let root = i_slint_core::window::WindowInner::from_pub(w.window())
         .window_item_rc()
