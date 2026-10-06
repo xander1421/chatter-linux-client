@@ -11061,6 +11061,7 @@ async fn v46_reactions_edits_pins_roundtrip_in_dm() {
     befriend(&client_a, &client_b, uid_a, uid_b).await;
 
     let mut events_a = client_a.subscribe_events();
+    let mut events_b = client_b.subscribe_events();
     let conv_on_a = ChannelId::from(uid_b); // A's thread with B
 
     // A DMs msgR to B (A's reaction target). Capture A's own stored copy id.
@@ -11090,6 +11091,30 @@ async fn v46_reactions_edits_pins_roundtrip_in_dm() {
     let e_id = a_msg_e.id;
 
     // ---- REACTION: B reacts to A's msgR ----------------------------------
+    // A visible reaction action requires the actual target on B, just as in
+    // the UI. Receipt of B's other message on A does not establish this.
+    let reaction_target_text = r_text.clone();
+    let target = wait_for_event(&mut events_b, EVENT_TIMEOUT, move |ev| {
+        matches!(
+            ev, DomainEvent::MessageReceived { message }
+                if message.conversation_id == ChannelId::from(uid_a)
+                    && message.sender_id == Some(uid_a)
+                    && message.as_text() == Some(reaction_target_text.as_str())
+        )
+    })
+    .await;
+    let Some(DomainEvent::MessageReceived { message: target }) = target else {
+        panic!("POSITIVE CONTROL FAILED: B never received A's reaction target");
+    };
+    assert_eq!(
+        target.sent_at,
+        r_ts,
+        "B must react to the exact original target clock"
+    );
+    assert!(
+        client_b.get_message_local(&target.id).is_some(),
+        "reaction target must be durably stored on B"
+    );
     client_b
         .conversation(ActiveConversation::ServerDm { peer_id: uid_a })
         .send_reaction("\u{1F44D}", &uid_a, r_ts, false)
