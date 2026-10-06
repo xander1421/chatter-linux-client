@@ -382,6 +382,12 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
             .has_focus()
     );
     assert!(w.get_composer_text().is_empty());
+    // This geometry fixture has no native IME arrival. End its outstanding
+    // reservation before shrinking into the next independent raised-row case;
+    // otherwise the 340px drawer reserve clips the next tap in a 460px window.
+    // Arrival/interruption/refusal timing is exercised by the handover helper.
+    w.invoke_cancel_composer_keyboard_handover();
+    i_slint_core::properties::ChangeTracker::run_change_handlers();
 
     w.set_composer_text("toggle draft".into());
     pump_size(&w, PHONE_W, 460.0);
@@ -408,6 +414,8 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     assert_eq!(native.cursor_position_byte_offset(), 6);
     assert_eq!(native.anchor_position_byte_offset(), 6);
     assert!(native.has_focus());
+    w.invoke_cancel_composer_keyboard_handover();
+    i_slint_core::properties::ChangeTracker::run_change_handlers();
     w.set_composer_text("".into());
     pump_size(&w, PHONE_W, 460.0);
 
