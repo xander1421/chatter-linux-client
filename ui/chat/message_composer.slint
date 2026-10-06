@@ -669,7 +669,7 @@ export component MessageComposer inherits GlassSurface {
         // In-flight send. Sits above the input so it reads as a property of the
         // conversation, and disappears the moment the message lands or fails —
         // failure additionally raises the error toast.
-        if root.send-status != "": Rectangle {
+        if root.send-status != "": send-status-row := Rectangle {
             width: 100%;
             height: root.send-status-height;
             background: transparent;
@@ -870,6 +870,8 @@ export component MessageComposer inherits GlassSurface {
 
             // Decorative surfaces never reparent or replace the native input.
             left-action-surface := GlassSurface {
+                x: 0px;
+                y: 0px;
                 visible: root.raised-actions;
                 width: Spacing.touch-target-min + root.row-padding * 2;
                 height: Spacing.touch-target-min + root.row-padding * 2;
@@ -878,6 +880,7 @@ export component MessageComposer inherits GlassSurface {
                 backdrop-paused: root.backdrop-paused;
             }
             right-action-surface := GlassSurface {
+                y: 0px;
                 visible: root.raised-actions;
                 x: parent.width - self.width;
                 width: root.trailing-actions-width + root.row-padding;

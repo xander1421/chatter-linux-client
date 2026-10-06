@@ -235,7 +235,7 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     w.set_mobile_show_chat(true);
     pump(&w);
     let shell = testing::ElementHandle::find_by_element_type_name(&w, "MessageComposer")
-        .find(|e| e.size().height > 0.0)
+        .find(|e| e.type_name().is_some_and(|t| t == "MessageComposer") && e.size().height > 0.0)
         .expect("no MessageComposer on the open chat");
     let (sx, sy, sw, sh) = rect(&shell);
     let (fx, fy, fw, fh) = rect(&one(&w, "Message input"));
@@ -298,6 +298,47 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     assert!(w.get_composer_text().is_empty());
     assert!(composer_native_item(&w) == original_input);
     assert_action_geometry(&w, false);
+
+    // Status is an actual 28px row in both inline and raised layouts. A long
+    // draft saturates the pane cap, proving that status consumes its budget
+    // rather than simply growing the root beyond the available history space.
+    let status = "Sending geometry fixture";
+    for (draft, raised) in [
+        ("".to_owned(), false),
+        ("status budget words ".repeat(100), true),
+    ] {
+        w.set_composer_text(draft.into());
+        pump_size(&w, PHONE_W, 460.0);
+        let field_without_status = one(&w, "Message input").size().height;
+        w.set_composer_send_status(status.into());
+        pump_size(&w, PHONE_W, 460.0);
+        assert_action_geometry(&w, raised);
+        assert_send_status_geometry(&w, false, raised);
+        let field_with_status = one(&w, "Message input").size().height;
+        if raised {
+            assert!(
+                (field_without_status - field_with_status - 28.0).abs() < 0.5,
+                "status must consume 28px of the saturated input budget"
+            );
+        } else {
+            assert!((field_without_status - field_with_status).abs() < 0.5);
+        }
+        // Drawer height is deducted before applying the same 40% pane cap.
+        w.set_composer_emoji_picker_visible(true);
+        pump_size(&w, PHONE_W, PHONE_H);
+        assert_action_geometry(&w, raised);
+        assert_send_status_geometry(&w, true, raised);
+        w.set_composer_emoji_picker_visible(false);
+        w.set_composer_send_status("".into());
+        pump_size(&w, PHONE_W, 460.0);
+        assert!(
+            testing::ElementHandle::find_by_element_id(&w, "MessageComposer::send-status-row")
+                .all(|e| e.size().height == 0.0)
+        );
+        assert!((one(&w, "Message input").size().height - field_without_status).abs() < 0.5);
+    }
+    w.set_composer_text("".into());
+    pump_size(&w, PHONE_W, 460.0);
 
     // Exercise the actual conditional width branches: a mesh room has Attach
     // but no mic, a mesh DM has neither, and an empty edit has no trailing action.
@@ -421,7 +462,7 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     pump_size(&w, PHONE_W, 460.0);
     let field = one(&w, "Message input");
     let shell = testing::ElementHandle::find_by_element_type_name(&w, "MessageComposer")
-        .find(|e| e.size().height > 0.0)
+        .find(|e| e.type_name().is_some_and(|t| t == "MessageComposer") && e.size().height > 0.0)
         .unwrap();
     assert!(
         shell.size().height <= 184.5,
@@ -778,7 +819,7 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
         .find(|e| e.size().height > 0.0)
         .unwrap();
     let shell = testing::ElementHandle::find_by_element_type_name(&w, "MessageComposer")
-        .find(|e| e.size().height > 0.0)
+        .find(|e| e.type_name().is_some_and(|t| t == "MessageComposer") && e.size().height > 0.0)
         .unwrap();
     assert!((panel.size().height - shell.size().height).abs() < 0.5);
     assert!(one(&w, "Cancel voice message").size().height >= 48.0);
@@ -1008,8 +1049,9 @@ fn assert_composer_caps(w: &MainWindow, drawer: bool, accessories: f32) {
     let pane = testing::ElementHandle::find_by_element_type_name(w, "ChatLayout")
         .find(|e| e.size().height > 0.0)
         .unwrap();
+    // The type query includes inherited material elements; require the root.
     let shell = testing::ElementHandle::find_by_element_type_name(w, "MessageComposer")
-        .find(|e| e.size().height > 0.0)
+        .find(|e| e.type_name().is_some_and(|t| t == "MessageComposer") && e.size().height > 0.0)
         .unwrap();
     let item = composer_native_item(w);
     let input = item.downcast::<i_slint_core::items::TextInput>().unwrap();
@@ -1049,10 +1091,36 @@ fn assert_composer_caps(w: &MainWindow, drawer: bool, accessories: f32) {
     );
 }
 
+fn assert_send_status_geometry(w: &MainWindow, drawer: bool, raised: bool) {
+    let shell = testing::ElementHandle::find_by_element_type_name(w, "MessageComposer")
+        .find(|e| e.type_name().is_some_and(|t| t == "MessageComposer") && e.size().height > 0.0)
+        .expect("actual composer root");
+    let status = testing::ElementHandle::find_by_element_id(w, "MessageComposer::send-status-row")
+        .find(|e| e.size().height > 0.0)
+        .expect("actual send status row");
+    let (sx, sy, sw, sh) = rect(&shell);
+    let (tx, ty, tw, th) = rect(&status);
+    let (fx, fy, _, fh) = rect(&one(w, "Message input"));
+    assert!((th - 28.0).abs() < 0.5, "status row must be exactly 28px");
+    assert!((tx - sx).abs() < 0.5 && (ty - sy).abs() < 0.5 && (tw - sw).abs() < 0.5);
+    let toolbar = if raised { 60.0 } else { 0.0 };
+    assert!(
+        (sh - (fh + toolbar + 28.0 + 8.0)).abs() < 0.5,
+        "actual root height must include exactly one status row: {:?}",
+        rect(&shell)
+    );
+    assert!((fy - (ty + th) - toolbar - 4.0).abs() < 0.5);
+    if raised {
+        assert!((fx - sx - 4.0).abs() < 0.5);
+    }
+    assert!((sy + sh - fy - fh - 4.0).abs() < 0.5);
+    assert_composer_caps(w, drawer, 28.0);
+}
+
 /// Check actual controls against the actual field: no duplicate layout model.
 fn assert_action_geometry(w: &MainWindow, raised: bool) {
     let shell = testing::ElementHandle::find_by_element_type_name(w, "MessageComposer")
-        .find(|e| e.size().height > 0.0)
+        .find(|e| e.type_name().is_some_and(|t| t == "MessageComposer") && e.size().height > 0.0)
         .unwrap();
     let (sx, sy, sw, sh) = rect(&shell);
     let (fx, fy, fw, fh) = rect(&one(w, "Message input"));
@@ -1088,9 +1156,12 @@ fn assert_action_geometry(w: &MainWindow, raised: bool) {
         );
         // 4px bottom inset + 4px inter-shell gap + 4px field inset.
         assert!((fy - (ey + eh) - 12.0).abs() < 0.5);
+        // Require primary surface metadata, never an inherited material layer.
         let surface = |id: &str| {
             testing::ElementHandle::find_by_element_id(w, id)
-                .find(|e| e.size().height > 0.0)
+                .find(|e| {
+                    e.type_name().is_some_and(|t| t == "GlassSurface") && e.size().height > 0.0
+                })
                 .expect("raised composer surface")
         };
         let (lx, ly, lw, lh) = rect(&surface("MessageComposer::left-action-surface"));
