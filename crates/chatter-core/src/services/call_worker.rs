@@ -1720,51 +1720,7 @@ fn run_call_worker(
                 }
 
                 CallCommand::SetEncryptionKey { key, response } => {
-                    // DM caller path: the real ECDH-derived key has arrived
-                    // (the callee connected with this same key). Re-root the
-                    // ratchet chain on it and install it at LiveKit index 0 so
-                    // both peers share one key_state + epoch baseline. Without
-                    // re-rooting, the caller would keep ratcheting from the
-                    // transient placeholder and desync from the callee at the
-                    // first 30s ratchet.
-                    let success = match <[u8; 32]>::try_from(key.as_slice()) {
-                        Ok(arr) => {
-                            let mut guard = active_call.borrow_mut();
-                            // Install the SAME key the callee gave LiveKit: the
-                            // HKDF-derived `current_key_vec()`, NOT the raw ECDH
-                            // secret. The callee connects with
-                            // `CallKeyState::new(secret, call_id).current_key_vec()`
-                            // (see join_call_impl), so installing the raw secret
-                            // here leaves the caller's LiveKit index-0 key one HKDF
-                            // step off from the callee's — E2EE frames then never
-                            // decrypt and remote video/audio stays black.
-                            let derived = if let Some(state) = guard.as_mut() {
-                                let call_id = state.key_state.call_id().to_string();
-                                match CallKeyState::new(&arr, &call_id) {
-                                    Ok(ks) => {
-                                        let k = ks.current_key_vec();
-                                        state.key_state = ks;
-                                        Some(k)
-                                    }
-                                    Err(e) => {
-                                        tracing::error!("Re-root key_state failed: {}", e);
-                                        None
-                                    }
-                                }
-                            } else {
-                                None
-                            };
-                            drop(guard);
-                            match derived {
-                                Some(k) => room_manager.reset_shared_key(k),
-                                None => false,
-                            }
-                        }
-                        Err(_) => {
-                            tracing::error!("Encryption key is not 32 bytes; ignoring");
-                            false
-                        }
-                    };
+                    let success = reset_dm_media_key(&active_call, &room_manager, key);
                     let _ = response.send(success);
                 }
 
@@ -2121,6 +2077,31 @@ fn open_publish_gate(
 // These are the command actor's production installation paths. A zeroizing
 // candidate is committed only after native media key selection succeeds, so a
 // rejected install neither opens publication nor makes the authority epoch stale.
+fn reset_dm_media_key(
+    active_call: &Rc<RefCell<Option<ActiveCallState>>>,
+    room_manager: &Arc<RoomManager>,
+    key: Vec<u8>,
+) -> bool {
+    let key = zeroize::Zeroizing::new(key);
+    let Ok(root) = <[u8; 32]>::try_from(key.as_slice()) else {
+        return false;
+    };
+    let root = zeroize::Zeroizing::new(root);
+    let mut guard = active_call.borrow_mut();
+    let Some(state) = guard.as_mut() else {
+        return false;
+    };
+    let Ok(candidate) = CallKeyState::new(&root, state.key_state.call_id()) else {
+        return false;
+    };
+    // The callee installs this derived media key, never the raw ECDH root.
+    if !room_manager.reset_shared_key(candidate.current_key_vec()) {
+        return false;
+    }
+    state.key_state = candidate;
+    true
+}
+
 fn rotate_group_media_key(
     active_call: &Rc<RefCell<Option<ActiveCallState>>>,
     room_manager: &Arc<RoomManager>,
@@ -2595,12 +2576,12 @@ async fn reconnect_impl(
     active_call: &Rc<RefCell<Option<ActiveCallState>>>,
 ) -> Result<(), CallError> {
     // Get current call info
-    let (call_id, key_vec, livekit_url) = {
+    let (call_id, snapshot, livekit_url) = {
         let active = active_call.borrow();
         let state = active.as_ref().ok_or(CallError::NotInCall)?;
         (
             state.call.id.to_string(),
-            state.key_state.current_key_vec(),
+            room_manager.snapshot_reconnect_keys(&state.key_state)?,
             state.livekit_url.clone(),
         )
     };
@@ -2619,9 +2600,9 @@ async fn reconnect_impl(
             .map_err(|e| CallError::ServerError(format!("Reconnect failed: {}", e)))?
     };
 
-    // Reconnect to LiveKit with new token but same key
+    // Reconnect with the staged absolute epoch and retained native receive ring
     room_manager
-        .connect(&livekit_url, &response.livekit_token, key_vec)
+        .connect_reusing_keys(&livekit_url, &response.livekit_token, snapshot)
         .await?;
 
     tracing::info!(call_id = %call_id, "Reconnected successfully");
@@ -3978,6 +3959,30 @@ mod media_key_install_failure_tests {
         ));
         assert!(!room.is_connected());
         assert_eq!(room.key_epoch(), 0);
+    }
+
+    #[test]
+    fn failed_dm_reroot_preserves_chain_and_same_root_retry() {
+        let active = awaiting_call();
+        let (room, _events) = RoomManager::new();
+        let room = Arc::new(room);
+        {
+            let mut guard = active.borrow_mut();
+            guard.as_mut().unwrap().key_state.ratchet().unwrap();
+        }
+        let original = active.borrow().as_ref().unwrap().key_state.clone();
+        for _ in 0..2 {
+            // Invoke the same production helper as SetEncryptionKey, including
+            // the real disconnected RoomManager reset failure.
+            assert!(!reset_dm_media_key(&active, &room, vec![9; 32]));
+            let guard = active.borrow();
+            let state = guard.as_ref().unwrap();
+            assert!(state.key_state.current_key() == original.current_key());
+            assert_eq!(state.key_state.epoch(), original.epoch());
+            assert_eq!(state.key_state.anchor(), original.anchor());
+            assert!(state.publish_gate.is_closed());
+            assert!(state.publish_gate.mic.is_some());
+        }
     }
 
     #[test]

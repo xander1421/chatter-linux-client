@@ -133,6 +133,15 @@ struct E2eeState {
     epoch: u32,
 }
 
+// Keep native ownership of the receive ring: get_shared_key exports derived
+// native material, which must never be passed back through SetSharedKey.
+pub(crate) struct ReconnectKeys {
+    provider: KeyProvider,
+    epoch: u32,
+    current: zeroize::Zeroizing<Vec<u8>>,
+    next: zeroize::Zeroizing<Vec<u8>>,
+}
+
 /// Manages LiveKit room connections with E2EE.
 pub struct RoomManager {
     timing: RwLock<Option<CallTiming>>,
@@ -747,18 +756,7 @@ impl RoomManager {
         encryption_key: Vec<u8>,
         timing: CallTiming,
     ) -> Result<(), CallError> {
-        replace_timing_slot(&self.timing, timing.clone());
-        timing.mark("room_connect_begin");
-        self.set_state(RoomState::Connecting);
-
-        // Create key provider with Signal-derived key.
-        //
-        // `ratchet_window_size: 0` disables LiveKit's OWN key ratchet. We drive
-        // the key chain externally (CallKeyState, pushed via `set_shared_key`).
-        // With a non-zero window, a single transient decrypt failure makes
-        // LiveKit auto-ratchet its shared key using its PBKDF2 derivation —
-        // which diverges from our HKDF chain and never re-syncs, permanently
-        // killing media. We install the keys ourselves, so LiveKit must not.
+        // Disable the SDK ratchet: the application owns the HKDF epoch chain.
         let key_provider = KeyProvider::with_shared_key(
             KeyProviderOptions {
                 ratchet_window_size: 0,
@@ -767,12 +765,71 @@ impl RoomManager {
             },
             encryption_key,
         );
+        self.connect_with_provider(url, token, key_provider, 0, timing, None)
+            .await
+    }
+
+    pub(crate) fn snapshot_reconnect_keys(
+        &self,
+        chain: &crate::crypto::call_key_provider::CallKeyState,
+    ) -> Result<ReconnectKeys, CallError> {
+        let e2ee = self.e2ee.read();
+        let provider = e2ee.provider.clone().ok_or(CallError::NotInCall)?;
+        if e2ee.epoch != chain.epoch()
+            || provider.get_latest_key_index() != key_ring_index(chain.epoch())
+        {
+            return Err(CallError::CryptoError(
+                "Reconnect key epoch mismatch".into(),
+            ));
+        }
+        Ok(ReconnectKeys {
+            provider,
+            epoch: chain.epoch(),
+            current: zeroize::Zeroizing::new(chain.current_key_vec()),
+            next: zeroize::Zeroizing::new(
+                chain
+                    .peek_next_key()
+                    .map_err(|e| CallError::CryptoError(e.to_string()))?
+                    .to_vec(),
+            ),
+        })
+    }
+
+    pub(crate) async fn connect_reusing_keys(
+        &self,
+        url: &str,
+        token: &str,
+        snapshot: ReconnectKeys,
+    ) -> Result<(), CallError> {
+        self.connect_with_provider(
+            url,
+            token,
+            snapshot.provider.clone(),
+            snapshot.epoch,
+            CallTiming::new("room_reconnect_requested"),
+            Some(snapshot),
+        )
+        .await
+    }
+
+    async fn connect_with_provider(
+        &self,
+        url: &str,
+        token: &str,
+        key_provider: KeyProvider,
+        epoch: u32,
+        timing: CallTiming,
+        snapshot: Option<ReconnectKeys>,
+    ) -> Result<(), CallError> {
+        replace_timing_slot(&self.timing, timing.clone());
+        timing.mark("room_connect_begin");
+        self.set_state(RoomState::Connecting);
 
         // Store key provider for later ratcheting
         {
             let mut e2ee = self.e2ee.write();
             e2ee.provider = Some(key_provider.clone());
-            e2ee.epoch = 0;
+            e2ee.epoch = epoch;
         }
 
         // Configure room with E2EE
@@ -814,6 +871,26 @@ impl RoomManager {
                 CallError::ConnectionFailed("LiveKit connection timed out (10s)".to_string())
             })?
             .map_err(|e| CallError::ConnectionFailed(e.to_string()))?;
+
+        // Complete key initialization before publishing the room handle, emitting
+        // Connected, or permitting any new local media publication.
+        if let Some(snapshot) = snapshot {
+            if !room.e2ee_manager().install_shared_media_key(
+                key_ring_index(snapshot.epoch),
+                snapshot.current.to_vec(),
+                Some((
+                    key_ring_index(snapshot.epoch.wrapping_add(1)),
+                    snapshot.next.to_vec(),
+                )),
+            ) {
+                let _ = room.close().await;
+                self.set_state(RoomState::Disconnected);
+                self.retire_timing(Some(&timing));
+                return Err(CallError::CryptoError(
+                    "Reconnect media key installation failed".into(),
+                ));
+            }
+        }
 
         // Enable E2EE
         room.e2ee_manager().set_enabled(true);
@@ -1210,6 +1287,7 @@ impl RoomManager {
     /// both peers on the same key and the same epoch baseline, so the periodic
     /// ratchet then advances them in lockstep.
     pub fn reset_shared_key(&self, key: Vec<u8>) -> bool {
+        let key = zeroize::Zeroizing::new(key);
         let mut e2ee = self.e2ee.write();
         match e2ee.provider.as_ref() {
             Some(_) => {}
@@ -1222,7 +1300,10 @@ impl RoomManager {
         let Some(room) = room.as_ref() else {
             return false;
         };
-        if !room.e2ee_manager().install_shared_media_key(0, key, None) {
+        if !room
+            .e2ee_manager()
+            .install_shared_media_key(0, key.to_vec(), None)
+        {
             return false;
         }
         e2ee.epoch = 0;
@@ -1563,5 +1644,70 @@ mod timing_lifecycle_tests {
         retire_timing_slot(&slot, Some(&next));
         assert!(slot.read().is_none());
         assert!(!next.mark("call_key_accepted_publish_gate_open"));
+    }
+}
+
+#[cfg(test)]
+mod reconnect_initialization_tests {
+    use super::*;
+    use crate::crypto::call_key_provider::CallKeyState;
+
+    #[tokio::test]
+    async fn fresh_room_failed_connect_preserves_absolute_epoch_and_native_ring() {
+        for epoch in [7, 15, 16, 17] {
+            let (manager, _events) = RoomManager::new();
+            let mut chain = CallKeyState::new(&[3; 32], "reconnect-boundary").unwrap();
+            let provider = KeyProvider::with_shared_key(
+                KeyProviderOptions {
+                    ratchet_window_size: 0,
+                    key_ring_size: KEY_RING_SIZE,
+                    ..KeyProviderOptions::default()
+                },
+                chain.current_key_vec(),
+            );
+            for _ in 0..epoch {
+                chain.ratchet().unwrap();
+                provider.set_shared_key(chain.current_key_vec(), key_ring_index(chain.epoch()));
+            }
+            let before = zeroize::Zeroizing::new(
+                (0..KEY_RING_SIZE)
+                    .map(|i| provider.get_shared_key(i))
+                    .collect::<Vec<_>>(),
+            );
+            {
+                let mut state = manager.e2ee.write();
+                state.provider = Some(provider.clone());
+                state.epoch = epoch;
+            }
+            let snapshot = manager.snapshot_reconnect_keys(&chain).unwrap();
+            manager.disconnect().await;
+            // Exercise the production fresh-room initialization path without
+            // a server. A malformed URL fails before any network connection.
+            assert!(
+                manager
+                    .connect_reusing_keys("invalid://", "", snapshot)
+                    .await
+                    .is_err()
+            );
+            assert_eq!(manager.key_epoch(), epoch);
+            assert_eq!(
+                manager
+                    .e2ee
+                    .read()
+                    .provider
+                    .as_ref()
+                    .unwrap()
+                    .get_latest_key_index(),
+                key_ring_index(epoch)
+            );
+            for i in 0..KEY_RING_SIZE {
+                let held = zeroize::Zeroizing::new(provider.get_shared_key(i));
+                assert!(*held == before[i as usize]);
+            }
+            // Snapshot staging must reject mismatched authority before teardown.
+            chain.ratchet().unwrap();
+            assert!(manager.snapshot_reconnect_keys(&chain).is_err());
+            assert_eq!(manager.key_epoch(), epoch);
+        }
     }
 }
