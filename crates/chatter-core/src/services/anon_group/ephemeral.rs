@@ -4,8 +4,7 @@ use crate::domain::anon_group::AnonGroupId;
 use crate::domain::ids::ChannelId;
 use crate::domain::message::ConversationType;
 use crate::services::{
-    build_delete_for_everyone_content, build_edit_content, build_pin_content,
-    build_reaction_content, build_typing_content,
+    build_delete_for_everyone_content, build_edit_content, build_pin_content, build_typing_content,
 };
 
 use super::{AnonGroupError, AnonGroupService};
@@ -23,13 +22,45 @@ impl AnonGroupService {
         target_sent_timestamp: u64,
         remove: bool,
     ) -> Result<(), AnonGroupError> {
+        let actor = self.current_user_id()?;
+        let action_ts = self
+            .message_service
+            .message_repo
+            .allocate_reaction_clock(&actor)?;
+        self.send_reaction_at(
+            group_id,
+            emoji,
+            target_author_aci,
+            target_sent_timestamp,
+            remove,
+            action_ts,
+        )
+        .await
+    }
+
+    /// Send an already allocated action without restamping it.
+    pub async fn send_reaction_at(
+        &self,
+        group_id: &AnonGroupId,
+        emoji: &str,
+        target_author_aci: &str,
+        target_sent_timestamp: u64,
+        remove: bool,
+        action_ts: u64,
+    ) -> Result<(), AnonGroupError> {
         // Silently ignore if blocked
         if self.check_group_not_blocked(group_id).is_err() {
             return Ok(());
         }
 
-        let content =
-            build_reaction_content(emoji, remove, target_author_aci, target_sent_timestamp);
+        let content = crate::services::gateway::builders::build_reaction_content_with_channel_at(
+            emoji,
+            remove,
+            target_author_aci,
+            target_sent_timestamp,
+            None,
+            action_ts,
+        );
         self.send_ephemeral_message(group_id, content).await
     }
 

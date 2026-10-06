@@ -8,7 +8,7 @@ use crate::proto::content_v1::{
 };
 use crate::services::gateway::builders::{
     build_data_message_content_with_quote, build_delete_for_everyone_content,
-    build_delivery_receipt_content, build_edit_content, build_pin_content, build_reaction_content,
+    build_delivery_receipt_content, build_edit_content, build_pin_content,
     build_read_receipt_content, build_typing_content,
 };
 use crate::util::time::TimestampNanos;
@@ -450,6 +450,29 @@ impl AnonDmService {
         target_sent_timestamp: u64,
         remove: bool,
     ) -> Result<(), AnonDmError> {
+        let actor = self.current_user_id()?;
+        let action_ts = self.message_repo.allocate_reaction_clock(&actor)?;
+        self.send_reaction_at(
+            conversation_id,
+            emoji,
+            target_author_aci,
+            target_sent_timestamp,
+            remove,
+            action_ts,
+        )
+        .await
+    }
+
+    /// Send an already allocated action without restamping it.
+    pub async fn send_reaction_at(
+        &self,
+        conversation_id: &AnonDmId,
+        emoji: &str,
+        target_author_aci: &str,
+        target_sent_timestamp: u64,
+        remove: bool,
+        action_ts: u64,
+    ) -> Result<(), AnonDmError> {
         // Silently ignore if blocked
         if self
             .check_conversation_not_blocked(conversation_id)
@@ -471,8 +494,14 @@ impl AnonDmService {
         };
 
         let peer_mailbox_pk = dm.peer_mailbox_pk.unwrap();
-        let content =
-            build_reaction_content(emoji, remove, target_author_aci, target_sent_timestamp);
+        let content = crate::services::gateway::builders::build_reaction_content_with_channel_at(
+            emoji,
+            remove,
+            target_author_aci,
+            target_sent_timestamp,
+            None,
+            action_ts,
+        );
         self.send_ephemeral_message(&dm.peer_id, &peer_mailbox_pk, conversation_id, content)
             .await
     }

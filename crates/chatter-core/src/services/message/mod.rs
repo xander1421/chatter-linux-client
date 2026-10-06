@@ -1197,30 +1197,10 @@ impl MessageService {
         emoji: &str,
         remove: bool,
     ) -> Result<bool, MessageError> {
-        let current = self.current_user_id()?;
-        if remove {
-            self.message_repo
-                .remove_reaction(
-                    scope,
-                    target_sender,
-                    target_sent_at_ns,
-                    reactor,
-                    &current,
-                    emoji,
-                )
-                .map_err(MessageError::from)
-        } else {
-            self.message_repo
-                .add_reaction(
-                    scope,
-                    target_sender,
-                    target_sent_at_ns,
-                    reactor,
-                    &current,
-                    emoji,
-                )
-                .map_err(MessageError::from)
-        }
+        let action_ts = self.message_repo.allocate_reaction_clock(reactor)?;
+        self.record_reaction_at(
+            scope, target_sender, target_sent_at_ns, reactor, emoji, remove, action_ts,
+        )
     }
 
     pub fn record_reaction_at(

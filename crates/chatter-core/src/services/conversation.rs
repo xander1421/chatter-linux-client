@@ -217,9 +217,28 @@ impl ConversationHandle {
                     "Reaction target is not stored in this conversation".into(),
                 )
             })?;
-        let already = snapshot.own_emojis.iter().any(|own| own == emoji);
-        let remove = already;
-        self.send_reaction(emoji, target_author, target_sent_timestamp, remove)
+        self.toggle_reaction_for_scope(&snapshot.scope, emoji, target_author, target_sent_timestamp)
+            .await
+    }
+
+    /// Toggle only the message scope captured by the caller. A switched or
+    /// replaced conversation cannot redirect an already queued UI intent.
+    pub async fn toggle_reaction_for_scope(
+        &self,
+        scope: &crate::domain::reaction::ReactionScope,
+        emoji: &str,
+        target_author: &UserId,
+        target_sent_timestamp: u64,
+    ) -> Result<bool, ConversationError> {
+        let snapshot = self
+            .reaction_snapshot_for_scope(scope, target_author, target_sent_timestamp)?
+            .ok_or_else(|| {
+                ConversationError::Other(
+                    "Reaction target no longer stored in captured scope".into(),
+                )
+            })?;
+        let remove = snapshot.own_emojis.iter().any(|own| own == emoji);
+        self.send_reaction_for_scope(scope, emoji, target_author, target_sent_timestamp, remove)
             .await?;
         Ok(!remove)
     }
@@ -232,129 +251,139 @@ impl ConversationHandle {
         target_sent_timestamp: u64,
         remove: bool,
     ) -> ConversationResult {
-        // Sub-services on the wire-format side still take &str (proto field
-        // type); convert once and reuse.
         let scope = self
             .reaction_snapshot(target_author, target_sent_timestamp)?
             .ok_or_else(|| {
                 ConversationError::Other("Reaction target not stored in this conversation".into())
             })?
             .scope;
+        self.send_reaction_for_scope(&scope, emoji, target_author, target_sent_timestamp, remove)
+            .await
+    }
+
+    async fn send_reaction_for_scope(
+        &self,
+        scope: &crate::domain::reaction::ReactionScope,
+        emoji: &str,
+        target_author: &UserId,
+        target_sent_timestamp: u64,
+        remove: bool,
+    ) -> ConversationResult {
+        self.reaction_snapshot_for_scope(scope, target_author, target_sent_timestamp)?
+            .ok_or_else(|| {
+                ConversationError::Other(
+                    "Reaction target no longer stored in captured scope".into(),
+                )
+            })?;
         let target_author_str = target_author.to_string();
         if self.conversation == ActiveConversation::None {
             return Err(ConversationError::NoConversation);
         }
-        let user_id = self
-            .client
-            .auth_state()
-            .get()
+        let auth = self.client.auth_state().get();
+        let session_revision = auth.session_revision;
+        let user_id = auth
             .current_user_id
             .ok_or_else(|| ConversationError::Other("Reaction requires a signed-in user".into()))?;
-        match &self.conversation {
-            ActiveConversation::AnonDm(id) => {
-                self.client
-                    .anon_dms()
-                    .send_reaction(id, emoji, &target_author_str, target_sent_timestamp, remove)
-                    .await?;
-                // Persist own reaction, surfacing storage failure.
-                {
-                    if remove {
-                        self.client.anon_dms().remove_reaction(
-                            id,
-                            target_author,
-                            target_sent_timestamp,
-                            &user_id,
-                            emoji,
-                        )?;
-                    } else {
-                        self.client.anon_dms().add_reaction(
-                            id,
-                            target_author,
-                            target_sent_timestamp,
-                            &user_id,
-                            emoji,
-                        )?;
-                    }
-                }
-                Ok(())
-            }
-            ActiveConversation::AnonGroup(id) => {
-                self.client
-                    .anon_groups()
-                    .send_reaction(id, emoji, &target_author_str, target_sent_timestamp, remove)
-                    .await?;
-                // Persist own reaction, surfacing storage failure.
-                {
-                    if remove {
-                        self.client.anon_groups().remove_reaction(
-                            id,
-                            target_author,
-                            target_sent_timestamp,
-                            &user_id,
-                            emoji,
-                        )?;
-                    } else {
-                        self.client.anon_groups().add_reaction(
-                            id,
-                            target_author,
-                            target_sent_timestamp,
-                            &user_id,
-                            emoji,
-                        )?;
-                    }
-                }
-                Ok(())
-            }
-            ActiveConversation::None => Err(ConversationError::NoConversation),
-            // DM (mailbox/server) and channel share build + persist; only the
-            // channel embeds a channel_id and the transport differs.
-            _ => {
-                // Scope and local storage were validated before any remote effect.
-                let wire_author = match self.conversation {
-                    ActiveConversation::ServerDm { peer_id } => {
-                        crate::domain::reaction::encode_dm_reaction_target(&peer_id, target_author)
-                    }
-                    _ => target_author_str.clone(),
-                };
-                let wire_clock = if matches!(self.conversation, ActiveConversation::Channel(_)) {
-                    let target = self
-                        .client
-                        .messages()
-                        .message_repo
-                        .get_by_reaction_scope(&scope, target_author, target_sent_timestamp)?
-                        .ok_or_else(|| {
-                            ConversationError::Other("Reaction target no longer stored".into())
-                        })?;
+        let action_ts = self
+            .client
+            .messages()
+            .message_repo
+            .allocate_reaction_clock(&user_id)?;
+        let dispatch = async {
+            match &self.conversation {
+                ActiveConversation::AnonDm(id) => {
                     self.client
-                        .messages()
-                        .message_repo
-                        .authenticated_channel_reaction_clock(&target)?
-                } else {
-                    target_sent_timestamp
-                };
-                let content = crate::services::build_reaction_content_with_channel(
+                        .anon_dms()
+                        .send_reaction_at(
+                            id,
+                            emoji,
+                            &target_author_str,
+                            target_sent_timestamp,
+                            remove,
+                            action_ts,
+                        )
+                        .await?;
+                }
+                ActiveConversation::AnonGroup(id) => {
+                    self.client
+                        .anon_groups()
+                        .send_reaction_at(
+                            id,
+                            emoji,
+                            &target_author_str,
+                            target_sent_timestamp,
+                            remove,
+                            action_ts,
+                        )
+                        .await?;
+                }
+                ActiveConversation::None => return Err(ConversationError::NoConversation),
+                // DM (mailbox/server) and channel share build + persist; only the
+                // channel embeds a channel_id and the transport differs.
+                _ => {
+                    // Scope and local storage were validated before any remote effect.
+                    let wire_author = match self.conversation {
+                        ActiveConversation::ServerDm { peer_id } => {
+                            crate::domain::reaction::encode_dm_reaction_target(
+                                &peer_id,
+                                target_author,
+                            )
+                        }
+                        _ => target_author_str.clone(),
+                    };
+                    let wire_clock = if matches!(self.conversation, ActiveConversation::Channel(_))
+                    {
+                        let target = self
+                            .client
+                            .messages()
+                            .message_repo
+                            .get_by_reaction_scope(&scope, target_author, target_sent_timestamp)?
+                            .ok_or_else(|| {
+                                ConversationError::Other("Reaction target no longer stored".into())
+                            })?;
+                        self.client
+                            .messages()
+                            .message_repo
+                            .authenticated_channel_reaction_clock(&target)?
+                    } else {
+                        target_sent_timestamp
+                    };
+                    let content =
+                        crate::services::gateway::builders::build_reaction_content_with_channel_at(
+                            emoji,
+                            remove,
+                            &wire_author,
+                            wire_clock,
+                            self.active_channel_id().as_deref(),
+                            action_ts,
+                        );
+                    self.dispatch_content(content).await?;
+                }
+            }
+            Ok(())
+        };
+        complete_reaction_dispatch(action_ts, dispatch, |clock| {
+            let auth = self.client.auth_state().get();
+            if auth.session_revision != session_revision || auth.current_user_id != Some(user_id) {
+                return Err(ConversationError::Other(
+                    "Reaction auth session changed while sending".into(),
+                ));
+            }
+
+            self.client
+                .messages()
+                .record_reaction_at(
+                    &scope,
+                    target_author,
+                    target_sent_timestamp,
+                    &user_id,
                     emoji,
                     remove,
-                    &wire_author,
-                    wire_clock,
-                    self.active_channel_id().as_deref(),
-                );
-                self.dispatch_content(content).await?;
-                // Persist after the remote effect. A local storage failure is
-                // surfaced; callers must not blindly retry the remote action.
-                {
-                    self.client.messages().record_reaction(
-                        &scope,
-                        target_author,
-                        target_sent_timestamp,
-                        &user_id,
-                        emoji,
-                        remove,
-                    )?;
-                }
-                Ok(())
-            }
-        }
+                    clock,
+                )
+                .map_err(ConversationError::Message)
+        })
+        .await
     }
 
     /// Send a typing indicator.
@@ -1512,6 +1541,26 @@ impl ConversationHandle {
     }
 }
 
+/// Shared by actual dispatch and regression transport injection. The caller has
+/// already allocated the action clock; completion cannot allocate another one.
+async fn complete_reaction_dispatch<F, P>(
+    action_ts: u64,
+    dispatch: F,
+    persist: P,
+) -> ConversationResult
+where
+    F: std::future::Future<Output = ConversationResult>,
+    P: FnOnce(u64) -> Result<bool, ConversationError>,
+{
+    dispatch.await?;
+    if !persist(action_ts)? {
+        return Err(ConversationError::Other(
+            "Reaction action superseded while sending".into(),
+        ));
+    }
+    Ok(())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2115,3 +2164,7 @@ mod tests {
         assert!(handle.toggle_reaction("👍", &own, 700).await.is_err());
     }
 }
+
+#[cfg(test)]
+#[path = "reaction_dispatch_tests.rs"]
+mod reaction_dispatch_tests;

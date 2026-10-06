@@ -241,7 +241,27 @@ pub fn build_reaction_content_with_channel(
     target_sent_timestamp: u64,
     channel_id: Option<&str>,
 ) -> Content {
-    let now = TimestampNanos::now().as_u64();
+    build_reaction_content_with_channel_at(
+        emoji,
+        remove,
+        target_author_aci,
+        target_sent_timestamp,
+        channel_id,
+        TimestampNanos::now().as_u64(),
+    )
+}
+
+/// Build an immutable reaction action. Dispatch, local persistence and copies
+/// must retain this allocated clock, including across delayed completion.
+pub fn build_reaction_content_with_channel_at(
+    emoji: &str,
+    remove: bool,
+    target_author_aci: &str,
+    target_sent_timestamp: u64,
+    channel_id: Option<&str>,
+    action_ts: u64,
+) -> Content {
+    let now = action_ts;
     // Note: Reaction proto doesn't have channel_id field - we encode it in target_author_aci
     // as "channel:{channel_id}:{author_aci}" for channels, or just author_aci for DMs
     let encoded_author = if let Some(ch_id) = channel_id {
