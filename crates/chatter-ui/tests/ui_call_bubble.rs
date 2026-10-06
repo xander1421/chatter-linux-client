@@ -32,6 +32,7 @@ fn call_clock_is_below_status_and_icon_with_channel_identity_only() {
     w.set_channel_name("Call fixture".into());
     for kind in [ConversationKind::Channel, ConversationKind::ServerDm] {
         w.set_conversation_kind(kind);
+        w.set_is_dm(kind == ConversationKind::ServerDm);
         for (own, continuation, show_sender) in [
             (false, false, true),
             (true, false, true),
@@ -91,8 +92,16 @@ fn call_clock_is_below_status_and_icon_with_channel_identity_only() {
                 }
                 let identity =
                     kind == ConversationKind::Channel && !own && !continuation && show_sender;
-                assert_eq!(!visible(&w, "Avatar for CF").is_empty(), identity);
-                assert_eq!(!visible(&w, "Caller Fixture").is_empty(), identity);
+                assert_eq!(
+                    !visible(&w, "Avatar for CF").is_empty(),
+                    identity,
+                    "avatar: {kind:?}, own={own}, continuation={continuation}, show={show_sender}, status={status}"
+                );
+                assert_eq!(
+                    !visible(&w, "Caller Fixture").is_empty(),
+                    identity,
+                    "name: {kind:?}, own={own}, continuation={continuation}, show={show_sender}, status={status}"
+                );
                 assert!(cp.x >= 0.0 && cp.x + clock.size().width <= 412.5);
             }
         }

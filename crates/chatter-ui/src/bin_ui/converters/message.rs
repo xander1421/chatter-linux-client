@@ -613,11 +613,9 @@ mod tests {
             call_display_sender(&msg),
             std::borrow::Cow::Borrowed(_)
         ));
-        msg.content = MessageContent::Call(CallMessage::started(
-            "call-fixture".into(),
-            caller,
-            String::new(),
-        ));
+        msg.content = MessageContent::Call(
+            CallMessage::started("call-fixture".into(), caller, String::new()).ended(),
+        );
         let identity = call_display_sender(&msg);
         assert_eq!(identity.sender_id, Some(caller));
         assert_eq!(
