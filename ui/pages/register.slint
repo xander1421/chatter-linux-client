@@ -419,9 +419,15 @@ export component RegisterPage inherits Rectangle {
                                 horizontal-alignment: center;
                             }
 
-                            // Server selection
+                            // Direct endpoint configuration; Shield uses the pinned onion service.
+                            Text {
+                                text: "Direct server URL";
+                                color: Colors.text-secondary;
+                                font-size: Typography.sm;
+                            }
+
                             Input {
-                                placeholder: "Server URL";
+                                placeholder: "Direct server URL";
                                 text <=> root.server-url;
                                 disabled: root.loading;
                             }
@@ -442,6 +448,14 @@ export component RegisterPage inherits Rectangle {
                                     disabled: root.loading;
                                     clicked => { root.server-url = "https://api.chatter.example.com"; }
                                 }
+                            }
+
+                            if AnonMode.enabled: Text {
+                                text: "Localhost and Official set the direct connection URL. With Shield on, registration uses the configured onion service over Tor.";
+                                color: Colors.text-muted;
+                                font-size: Typography.xxs;
+                                wrap: word-wrap;
+                                min-height: self.preferred-height;
                             }
 
                             if root.loading && AnonMode.onboarding-progress != "": Text {
