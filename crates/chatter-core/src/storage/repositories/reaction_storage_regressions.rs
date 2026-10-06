@@ -294,9 +294,23 @@ fn reaction_storage_installed87_repair_matches_runtime_future_admission() {
             db.connection().unwrap().execute_batch("UPDATE reaction_actor_selections SET emoji='A',action_ts=30; DELETE FROM schema_version WHERE version=88;").unwrap();
             db.run_migrations().unwrap();
         }
+        // B is already active: the public bool describes a visible vote change,
+        // while advancing its retained action clock is still admitted.
         assert!(
-            repo.add_reaction_at(&scope, &own, 100, &own, &own, "B", 25)
+            !repo
+                .add_reaction_at(&scope, &own, 100, &own, &own, "B", 25)
                 .unwrap()
+        );
+        assert_eq!(
+            db.connection()
+                .unwrap()
+                .query_row(
+                    "SELECT action_ts FROM reaction_actor_selections WHERE emoji='B'",
+                    [],
+                    |row| row.get::<_, i64>(0),
+                )
+                .unwrap(),
+            25,
         );
         assert!(
             !repo
