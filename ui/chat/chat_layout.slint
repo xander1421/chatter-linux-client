@@ -547,7 +547,12 @@ export component ChatLayout inherits Rectangle {
         }
 
         if root.drawer-visible: picker-drawer := GlassSurface {
-            init => { root.drawer-search-focused = false; }
+            init => {
+                root.drawer-search-focused = false;
+                // A fullscreen call can destroy/remount the chat while picker
+                // flags stay true, so restore Back ownership on this mount too.
+                root.composer-focus-released();
+            }
             width: 100%;
             height: root.drawer-space;
             clip: true;
