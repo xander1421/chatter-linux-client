@@ -625,8 +625,15 @@ export component ChatLayout inherits Rectangle {
                         accessible-label: tab;
                         Text { text: tab; color: Colors.text-primary; horizontal-alignment: center; vertical-alignment: center; }
                         TouchArea { clicked => {
-                            root.emoji-picker-visible = index == 0;
-                            root.gif-picker-visible = index == 1;
+                            // Open the destination first: switching tabs keeps
+                            // the unified drawer alive and its search focused.
+                            if index == 0 {
+                                root.emoji-picker-visible = true;
+                                root.gif-picker-visible = false;
+                            } else {
+                                root.gif-picker-visible = true;
+                                root.emoji-picker-visible = false;
+                            }
                             if index == 0 { root.emoji-clicked(); } else { root.gif-clicked(); }
                         } }
                     }

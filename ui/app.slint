@@ -1321,8 +1321,10 @@ export component MainWindow inherits Window {
     // to back-scope instead: the keyboard still goes away, and Back arrives.
     // The drawer suspends text input on every platform. Give Back/Escape a
     // focus owner until search or the keyboard toggle takes focus.
-    changed composer-emoji-picker-visible => {
-        if root.composer-emoji-picker-visible {
+    private property <bool> composer-drawer-visible:
+        root.composer-emoji-picker-visible || root.composer-gif-picker-visible;
+    changed composer-drawer-visible => {
+        if root.composer-drawer-visible {
             root.cancel-composer-keyboard-handover();
             back-scope.focus();
         }
@@ -1333,10 +1335,6 @@ export component MainWindow inherits Window {
         if !root.composer-gif-picker-visible {
             root.composer-gif-generation += 1;
             root.composer-gif-closed();
-        }
-        if root.composer-gif-picker-visible {
-            root.cancel-composer-keyboard-handover();
-            back-scope.focus();
         }
     }
     // Same hole for the search palette: its field holds focus, and picking a
