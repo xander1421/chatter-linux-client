@@ -1133,12 +1133,31 @@ fn attachment_and_keyboard_handover_boundaries(w: &MainWindow) {
             ..Default::default()
         },
     ])));
+    let drawer_element = |id: &str| {
+        testing::ElementHandle::find_by_element_id(w, id)
+            .find(|e| e.size().width > 0.0 && e.size().height > 0.0)
+            .expect("visible drawer item")
+    };
+    let focused_search = || {
+        use std::ops::ControlFlow;
+        window_item
+            .visit_descendants(|item| {
+                if let Some(input) = item.downcast::<i_slint_core::items::TextInput>() {
+                    if input.as_pin_ref().has_focus() {
+                        return ControlFlow::Break(item.clone());
+                    }
+                }
+                ControlFlow::Continue(())
+            })
+            .expect("focused native drawer search")
+    };
     // Search owns a visible drawer ABOVE the actual IME. Exercise the real
     // search input and tab callbacks; a zero-height clipped picker cannot pass.
     for (width, height, ime) in [
         (320.0, 640.0, 260.0),
         (PHONE_W, PHONE_H, 340.0),
         (768.0, 1024.0, 360.0),
+        (320.0, 640.0, 360.0), // short remaining pane: both tabs may hit the cap
     ] {
         keyboard(0.0);
         w.set_composer_text("".into());
@@ -1147,9 +1166,16 @@ fn attachment_and_keyboard_handover_boundaries(w: &MainWindow) {
         w.set_composer_emoji_search("".into());
         w.set_composer_gif_picker_search("".into());
         pump_size(w, width, height);
+        let baseline = rect(&drawer_element("ChatLayout::picker-drawer"));
         click_element(w, "Search emoji and GIFs");
+        let search_item = focused_search();
+        // Focus alone, without actual IME, must keep the bottom baseline.
+        pump_size(w, width, height);
+        assert!((rect(&drawer_element("ChatLayout::picker-drawer")).1 - baseline.1).abs() < 0.5);
         keyboard(ime);
         pump_size(w, width, height);
+        let mut emoji_top = 0.0;
+        let mut emoji_height = 0.0;
         for (tab, typed) in [("Emoji", "e"), ("GIFs", "g")] {
             if tab == "GIFs" {
                 click_element(w, tab);
@@ -1166,38 +1192,142 @@ fn attachment_and_keyboard_handover_boundaries(w: &MainWindow) {
                 typed,
                 "search must retain focus across IME resize and tab switch"
             );
-            let element = |id: &str| {
-                testing::ElementHandle::find_by_element_id(w, id)
-                    .find(|e| e.size().width > 0.0 && e.size().height > 0.0)
-                    .expect("visible drawer item")
-            };
-            let (dx, dy, dw, dh) = rect(&element("ChatLayout::picker-drawer"));
+            let (dx, dy, dw, dh) = rect(&drawer_element("ChatLayout::picker-drawer"));
             let (sx, sy, sw, sh) = rect(&one(w, "Search emoji and GIFs"));
-            let (rx, ry, rw, rh) = rect(&element("ChatLayout::picker-results"));
+            let (rx, ry, rw, rh) = rect(&drawer_element("ChatLayout::picker-results"));
             let (_, ty, _, th) = rect(&one(w, tab));
+            assert!(
+                focused_search() == search_item,
+                "tab/IME resize replaced search input"
+            );
+            assert!(dy < baseline.1 - 1.0, "search did not move UP with IME");
+            let (_, hy, _, hh) = rect(&drawer_element("ChatLayout::top-chrome"));
+            let (_, cy, _, _) = rect(&drawer_element("ChatLayout::composer"));
+            assert!(cy >= hy + hh - 0.5, "drawer pushed composer through header");
             assert!(dy + dh <= height - ime + 0.5, "drawer overlaps actual IME");
+            if tab == "Emoji" {
+                emoji_top = dy;
+                emoji_height = dh;
+            } else {
+                assert!(dy <= emoji_top + 0.5 && dh >= emoji_height - 0.5);
+                if height - ime >= 380.0 {
+                    assert!(
+                        dy < emoji_top - 1.0,
+                        "GIF search must move HIGHER than Emoji"
+                    );
+                }
+            }
             assert!(sx >= dx && sx + sw <= dx + dw && sy >= dy && sh > 0.0);
             assert!(rx >= dx && rx + rw <= dx + dw + 0.5 && ry >= sy + sh);
             assert!(
-                rh >= 48.0,
+                rh >= if height - ime >= 380.0 { 48.0 } else { 0.0 },
                 "search leaves no useful results at {width}x{height}: {rh}"
             );
             assert!(ry + rh <= ty + 0.5 && ty + th <= dy + dh + 0.5);
-            let grid = element(if tab == "Emoji" {
-                "EmojiPicker::emoji-grid"
-            } else {
-                "GifPicker::gif-grid"
-            });
+            let grid = testing::ElementHandle::find_by_element_id(
+                w,
+                if tab == "Emoji" {
+                    "EmojiPicker::emoji-grid"
+                } else {
+                    "GifPicker::gif-grid"
+                },
+            )
+            .next()
+            .expect("actual picker grid, including bounded short-pane fallback");
             let (_, gy, _, gh) = rect(&grid);
             assert!(
-                gh >= 32.0 && gy >= ry && gy + gh <= ry + rh + 0.5,
+                gh >= if height - ime >= 380.0 { 32.0 } else { 0.0 }
+                    && gy >= ry
+                    && gy + gh <= ry + rh + 0.5,
                 "actual {tab} results viewport is not useful/visible: {gh}"
             );
         }
+        let native = search_item
+            .downcast::<i_slint_core::items::TextInput>()
+            .unwrap();
+        let native = native.as_pin_ref();
+        let caret = native.cursor_position_byte_offset();
+        let anchor = native.anchor_position_byte_offset();
+        let gif_results = w.get_composer_gif_picker_results();
+        let first_gif = gif_results.row_data(0).expect("fixture GIF result");
+        keyboard(0.0);
+        pump_size(w, width, height);
+        let closed = rect(&drawer_element("ChatLayout::picker-drawer"));
+        assert!(
+            (closed.1 - baseline.1).abs() < 0.5 && (closed.3 - baseline.3).abs() < 0.5,
+            "keyboard close must move DOWN to original baseline despite retained focus"
+        );
+        assert!(focused_search() == search_item);
+        assert_eq!(
+            (
+                native.cursor_position_byte_offset(),
+                native.anchor_position_byte_offset()
+            ),
+            (caret, anchor)
+        );
+        assert_eq!(w.get_composer_emoji_search().as_str(), "e");
+        assert_eq!(w.get_composer_gif_picker_search().as_str(), "g");
+        assert!(w.get_composer_gif_picker_visible() && !w.get_composer_emoji_picker_visible());
+        assert_eq!(
+            w.get_composer_gif_picker_results().row_count(),
+            gif_results.row_count()
+        );
+        let retained_gif = w
+            .get_composer_gif_picker_results()
+            .row_data(0)
+            .expect("retained GIF result");
+        assert_eq!(
+            (retained_gif.id, retained_gif.full_url),
+            (first_gif.id, first_gif.full_url)
+        );
+        // Reopen the IME on the same input, without a new pointer focus event.
+        keyboard(ime);
+        pump_size(w, width, height);
+        assert!(rect(&drawer_element("ChatLayout::picker-drawer")).1 < closed.1 - 1.0);
+        key(w, "x".into());
+        assert_eq!(w.get_composer_gif_picker_search().as_str(), "gx");
         keyboard(0.0);
         w.set_composer_emoji_picker_visible(false);
         w.set_composer_gif_picker_visible(false);
         pump_size(w, width, height);
+        // Destroy/reopen with a live inset: stale search focus must not expand.
+        keyboard(ime);
+        w.set_composer_emoji_picker_visible(true);
+        pump_size(w, width, height);
+        let reopened = testing::ElementHandle::find_by_element_id(w, "ChatLayout::picker-drawer")
+            .next()
+            .expect("reopened drawer");
+        let (_, _, _, unfocused_height) = rect(&reopened);
+        assert!(
+            unfocused_height <= (baseline.3 - ime).max(0.0) + 0.5,
+            "destroy/reopen retained stale search-focus expansion"
+        );
+        w.set_composer_emoji_picker_visible(false);
+        keyboard(0.0);
+        pump_size(w, width, height);
+        if width == PHONE_W {
+            // The production chat-navigation handler closes both tabs and
+            // destroys the drawer. Reopening must require fresh search focus.
+            w.set_composer_gif_picker_visible(true);
+            pump_size(w, width, height);
+            click_element(w, "Search emoji and GIFs");
+            keyboard(ime);
+            pump_size(w, width, height);
+            w.set_mobile_show_chat(false);
+            pump_size(w, width, height);
+            assert!(!w.get_composer_emoji_picker_visible() && !w.get_composer_gif_picker_visible());
+            w.set_mobile_show_chat(true);
+            w.set_composer_emoji_picker_visible(true);
+            pump_size(w, width, height);
+            let reopened =
+                testing::ElementHandle::find_by_element_id(w, "ChatLayout::picker-drawer")
+                    .next()
+                    .expect("drawer after chat navigation");
+            assert!(reopened.size().height <= (baseline.3 - ime).max(0.0) + 0.5);
+            w.set_composer_emoji_picker_visible(false);
+            keyboard(0.0);
+            pump_size(w, width, height);
+        }
     }
     keyboard(300.0);
     pump_size(w, PHONE_W, PHONE_H);

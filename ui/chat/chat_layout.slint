@@ -111,11 +111,21 @@ export component ChatLayout inherits Rectangle {
     // The host already subtracts the IME. Reserve only the part of the drawer
     // it does not occupy while hideSoftInput's asynchronous insets arrive.
     property <length> drawer-height: min(340px, (root.height + root.keyboard-inset) * 0.48);
-    // Search needs its own visible drawer above the IME, rather than sharing
-    // the same reservation as the composer keyboard handover. Bound it to
-    // the remaining pane so search, tabs and results fit on short phones.
-    property <length> drawer-space: root.drawer-search-focused
-        ? min(root.drawer-height, root.height * 0.6)
+    private property <bool> drawer-visible: (root.emoji-picker-visible || root.gif-picker-visible)
+        && !root.selection-mode && root.composer-notice == "";
+    changed drawer-visible => { if !root.drawer-visible { root.drawer-search-focused = false; } }
+    private property <bool> drawer-search-with-ime: root.drawer-visible
+        && root.drawer-search-focused && root.keyboard-inset > 0px;
+    // The pane already excludes the IME. Search lifts the drawer only while
+    // the keyboard is actually open; retained focus must not move its baseline.
+    // GIF thumbnails need more room than emoji cells. Both stop below the
+    // header and composer, with a shared bounded fallback on very short panes.
+    property <length> drawer-search-room: max(0px, root.height - top-chrome.height
+        - composer.height - (root.mobile ? Spacing.sm : 0px));
+    property <length> drawer-space: root.drawer-search-with-ime
+        ? min(root.drawer-search-room, root.gif-picker-visible
+            ? min(480px, root.height * 0.82)
+            : min(root.drawer-height, root.height * 0.6))
         : max(0px, root.drawer-height - root.keyboard-inset);
     in property <string> inserted-emoji;
     in property <int> insert-serial;
@@ -469,7 +479,11 @@ export component ChatLayout inherits Rectangle {
             width: 100%;
             vertical-stretch: 0;
             mobile: root.mobile;
-            available-pane-height: root.height - (composer.picker-open ? root.drawer-space : 0px);
+            // Search's drawer cap uses the measured composer. Give that composer
+            // an independent pane budget so the two heights cannot feed back.
+            available-pane-height: root.drawer-search-with-ime ? root.height
+                : root.height - (composer.picker-open
+                    ? max(0px, root.drawer-height - root.keyboard-inset) : 0px);
             backdrop-paused: message-list.scrolling;
             attachment-prepare-serial: root.attachment-prepare-serial;
             attachment-restore-serial: root.attachment-restore-serial;
@@ -532,7 +546,7 @@ export component ChatLayout inherits Rectangle {
             }
         }
 
-        if (root.emoji-picker-visible || root.gif-picker-visible) && !root.selection-mode && root.composer-notice == "": picker-drawer := GlassSurface {
+        if root.drawer-visible: picker-drawer := GlassSurface {
             init => { root.drawer-search-focused = false; }
             width: 100%;
             height: root.drawer-space;
