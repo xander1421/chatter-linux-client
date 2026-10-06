@@ -2124,6 +2124,7 @@ fn open_publish_gate(
     else {
         return;
     };
+    room_manager.timing_mark("call_key_accepted_publish_gate_open");
     tracing::info!(
         mic = media.mic.is_some(),
         camera = media.camera,
@@ -2304,11 +2305,14 @@ async fn join_call_impl(
         return Err(CallError::AlreadyInCall);
     }
 
+    let timing = crate::calls::timing::CallTiming::new("join_requested_worker");
+
     // Join call on server
     let response = {
         let mut client = call_client.lock().await;
         let rpc_started = std::time::Instant::now();
         tracing::info!(stage = "join_call_rpc_begin", %call_id, elapsed_us = 0u64, "Call stage");
+        timing.mark("join_rpc_begin");
         let joined = client.join_call(&call_id.to_string()).await;
         let stage = if joined.is_ok() {
             "join_call_rpc_succeeded"
@@ -2316,6 +2320,7 @@ async fn join_call_impl(
             "join_call_rpc_failed"
         };
         tracing::info!(stage, %call_id, elapsed_us = rpc_started.elapsed().as_micros() as u64, "Call stage");
+        timing.mark(stage);
         joined.map_err(|e| CallError::ServerError(e.to_string()))?
     };
 
@@ -2330,10 +2335,11 @@ async fn join_call_impl(
 
     // Connect to LiveKit room
     room_manager
-        .connect(
+        .connect_timed(
             &response.livekit_url,
             &response.livekit_token,
             key_state.current_key_vec(),
+            timing.clone(),
         )
         .await?;
 
@@ -2363,6 +2369,11 @@ async fn join_call_impl(
     call.add_participant(Participant::new(joiner_id));
 
     // Store active call
+    timing.mark(if encryption_root_key.is_none() {
+        "call_key_waiting"
+    } else {
+        "call_key_installed"
+    });
     let publish_gate = if encryption_root_key.is_none() {
         PublishGate::awaiting_key(matches!(call.call_type, CallType::Video))
     } else {

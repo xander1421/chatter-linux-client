@@ -21,6 +21,7 @@ use livekit::webrtc::audio_stream::native::NativeAudioStream;
 use parking_lot::{Mutex, RwLock};
 use tokio::sync::watch;
 
+use super::timing::CallTiming;
 use crate::error::CallError;
 
 /// Manages audio playback for remote participants.
@@ -454,6 +455,18 @@ impl AudioPlayback {
 
     /// Add a remote audio track for playback.
     pub fn add_track(&self, participant_id: String, track: RemoteAudioTrack) {
+        self.add_track_timed(participant_id, track, None);
+    }
+
+    pub(crate) fn add_track_timed(
+        &self,
+        participant_id: String,
+        track: RemoteAudioTrack,
+        timing: Option<CallTiming>,
+    ) {
+        if let Some(timing) = &timing {
+            timing.mark("remote_audio_track_subscribed");
+        }
         tracing::info!("Adding audio track from participant: {}", participant_id);
 
         // Re-activate playback (may have been stopped by a previous call)
@@ -491,6 +504,7 @@ impl AudioPlayback {
 
         tokio::spawn(async move {
             let mut first_nonzero = true;
+            let mut first_frame = true;
             let mut evidence_tick = tokio::time::interval(std::time::Duration::from_millis(100));
             evidence_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
@@ -504,6 +518,10 @@ impl AudioPlayback {
                     },
                     frame = audio_stream.next() => {
                         let Some(frame) = frame else { break; };
+                        if first_frame && !frame.data.is_empty() {
+                            if let Some(timing) = &timing { timing.first_decoded_frame(); }
+                            first_frame = false;
+                        }
                         let mut queue = queue.lock();
                         if queue.muted { continue; }
                         let nonzero = first_nonzero && frame.data.iter().any(|&s| s != 0);

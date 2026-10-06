@@ -8,6 +8,7 @@ mod audio_capture;
 mod audio_playback;
 pub mod audio_route;
 mod room_manager;
+pub(crate) mod timing;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 mod screen_capture;
 pub mod shared_frames;

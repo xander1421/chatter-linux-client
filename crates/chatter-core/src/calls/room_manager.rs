@@ -25,6 +25,7 @@ use super::audio_playback::AudioPlayback;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use super::screen_capture::{ScreenCapture, ScreenCaptureConfig, ScreenSource};
 use super::shared_frames::SharedVideoFrames;
+use super::timing::CallTiming;
 use super::video_capture::{VideoCapture, VideoCaptureConfig, VideoDevice};
 use super::video_playback::VideoPlayback;
 use crate::error::CallError;
@@ -134,6 +135,7 @@ struct E2eeState {
 
 /// Manages LiveKit room connections with E2EE.
 pub struct RoomManager {
+    timing: RwLock<Option<CallTiming>>,
     /// Current room (if connected).
     room: Arc<RwLock<Option<Room>>>,
     /// Current state.
@@ -211,6 +213,7 @@ impl RoomManager {
         };
 
         let manager = Self {
+            timing: RwLock::new(None),
             room: Arc::new(RwLock::new(None)),
             state: Arc::new(RwLock::new(RoomState::Disconnected)),
             event_tx,
@@ -718,6 +721,30 @@ impl RoomManager {
         token: &str,
         encryption_key: Vec<u8>,
     ) -> Result<(), CallError> {
+        self.connect_timed(
+            url,
+            token,
+            encryption_key,
+            CallTiming::new("room_connect_requested"),
+        )
+        .await
+    }
+
+    pub(crate) fn timing_mark(&self, stage: &'static str) {
+        if let Some(timing) = self.timing.read().as_ref() {
+            timing.mark(stage);
+        }
+    }
+
+    pub(crate) async fn connect_timed(
+        &self,
+        url: &str,
+        token: &str,
+        encryption_key: Vec<u8>,
+        timing: CallTiming,
+    ) -> Result<(), CallError> {
+        *self.timing.write() = Some(timing.clone());
+        timing.mark("room_connect_begin");
         self.set_state(RoomState::Connecting);
 
         // Create key provider with Signal-derived key.
@@ -774,6 +801,7 @@ impl RoomManager {
             elapsed_us = connect_started.elapsed().as_micros() as u64,
             "Call stage"
         );
+        timing.mark(stage);
         let (room, mut events) = connected
             .map_err(|_| {
                 CallError::ConnectionFailed("LiveKit connection timed out (10s)".to_string())
@@ -786,6 +814,11 @@ impl RoomManager {
         let room_name = room.name().to_string();
         let remote_participants: Vec<_> = room.remote_participants().values().cloned().collect();
         let participant_count = remote_participants.len() + 1;
+        timing.mark(if remote_participants.is_empty() {
+            "remote_participant_waiting"
+        } else {
+            "remote_participant_present"
+        });
 
         // Emit ParticipantJoined events for participants already in the room
         // (LiveKit only sends ParticipantConnected for NEW participants after we join)
@@ -819,7 +852,11 @@ impl RoomManager {
                                 track_sid
                             );
                             if let Some(playback) = self.audio_playback.read().as_ref() {
-                                playback.add_track(identity.clone(), audio_track);
+                                playback.add_track_timed(
+                                    identity.clone(),
+                                    audio_track,
+                                    Some(timing.clone()),
+                                );
                                 tracing::info!(
                                     "RoomManager: Added existing audio track to playback"
                                 );
@@ -893,6 +930,7 @@ impl RoomManager {
                         matches!(participant, livekit::participant::Participant::Remote(_)),
                         *state,
                     ) {
+                        timing.mark("remote_frame_cryptor_ok_room_wide_track_unknown");
                         tracing::info!(
                             stage = "remote_frame_cryptor_ok",
                             "Remote SDK frame cryptor reported Ok (room-wide, track unavailable)"
@@ -906,6 +944,7 @@ impl RoomManager {
                     &room_arc,
                     &audio_playback,
                     &video_playback,
+                    &timing,
                 );
                 // Yield to allow other tasks (like forwarder) to run
                 tokio::task::yield_now().await;
@@ -1170,9 +1209,11 @@ impl RoomManager {
         room: &Arc<RwLock<Option<Room>>>,
         audio_playback: &Arc<RwLock<Option<AudioPlayback>>>,
         video_playback: &Arc<RwLock<VideoPlayback>>,
+        timing: &CallTiming,
     ) {
         match event {
             livekit::RoomEvent::ParticipantConnected(participant) => {
+                timing.mark("remote_participant_present");
                 let identity = participant.identity().to_string();
                 let name = participant.name();
                 tracing::info!(
@@ -1266,7 +1307,11 @@ impl RoomManager {
                             track.sid()
                         );
                         if let Some(playback) = audio_playback.read().as_ref() {
-                            playback.add_track(participant_id.clone(), audio_track.clone());
+                            playback.add_track_timed(
+                                participant_id.clone(),
+                                audio_track.clone(),
+                                Some(timing.clone()),
+                            );
                             tracing::info!("RoomManager: Added audio track to playback");
                         } else {
                             tracing::warn!(
