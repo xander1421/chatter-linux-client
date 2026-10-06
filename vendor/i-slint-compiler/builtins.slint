@@ -1694,6 +1694,15 @@ export component TextInput {
     callback edited;
     /// The cursor was moved to the new (x, y) position described by the `Point` argument.
     callback cursor_position_changed(position: Point);
+    /// Native caret rectangle in local logical coordinates, using full composed
+    /// text and the IME selection's active endpoint (UTF-8 bytes). With no IME
+    /// selection it follows preedit end; independent of blink/focus visibility.
+    /// Reactive to text, composition selection, cursor, font and layout changes.
+    /// Reading these properties does not mutate selection, preferred-x or IME.
+    out property <length> visual-cursor-x;
+    out property <length> visual-cursor-y;
+    out property <length> visual-cursor-width;
+    out property <length> visual-cursor-height;
     /// Invoked when a key is pressed, the argument is a <Link type="KeyEvent" /> struct. Use this callback to
     /// handle keys before `TextInput` does. Return `accept` to indicate that you've handled the event, or return
     /// `reject` to let `TextInput` handle it.

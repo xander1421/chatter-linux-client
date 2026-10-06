@@ -207,10 +207,8 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     // outer controls and field share the top/bottom inset. The leading
     // emoji toggle owns the left edge; the field follows it by one inset.
     let spacing = include_str!("../../../ui/theme/spacing.slint");
-    assert!(
-        spacing
-            .contains("out property <length> radius-chrome-inner: radius-chrome - chrome-inset;")
-    );
+    assert!(spacing
+        .contains("out property <length> radius-chrome-inner: radius-chrome - chrome-inset;"));
     assert!(spacing.contains("out property <length> chrome-inset: xs;"));
     assert!(spacing.contains("out property <length> xs: 4px;"));
     let inset = 4.0_f32;
@@ -257,9 +255,25 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
         );
     }
 
+    // Empty committed body + >six-line preedit with selection at start.
+    chatter_ui::bin_ui::features::composer::wire_text_format(&w);
+    w.set_composer_text("".into());
+    pump_size(&w, PHONE_W, 460.0);
+    let field = one(&w, "Message input");
+    click_at(
+        &w,
+        field.absolute_position().x + 20.0,
+        field.absolute_position().y + 20.0,
+    );
+    let preedit_only = "uncommitted native caret words ".repeat(30);
+    composition_selection(&w, &preedit_only, Some(0..0));
+    pump_size(&w, PHONE_W, 460.0);
+    assert_native_caret_visible(&w);
+    assert!(w.get_composer_text().is_empty());
+    composition_selection(&w, "", None);
+
     // A long draft must leave history visible with a phone-sized IME viewport.
     // Drive the actual raw input: no source-string or duplicate layout probe.
-    chatter_ui::bin_ui::features::composer::wire_text_format(&w);
     let draft = format!(
         "{}\nEND",
         "wrapped words preserve the entire draft ".repeat(28)
@@ -276,6 +290,7 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
         shell.size()
     );
     assert!(field.size().height >= 48.0, "input touch floor disappeared");
+    assert_composer_caps(&w, false, 0.0);
     let raw = testing::ElementHandle::find_by_element_id(&w, "text-input")
         .find(|e| e.accessible_value().as_ref().map(|s| s.as_str()) == Some(draft.as_str()))
         .expect("actual composer TextInput");
@@ -290,12 +305,14 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     key(&w, slint::platform::Key::End.into());
     pump_size(&w, PHONE_W, 460.0);
     assert_tail_visible(&raw, &one(&w, "Message input"));
+    assert_native_caret_visible(&w);
     key(&w, "!".into());
     assert_eq!(w.get_composer_text().as_str(), format!("{draft}!"));
     key(&w, "\n".into());
     key(&w, "tail".into());
     pump_size(&w, PHONE_W, 460.0);
     assert_tail_visible(&raw, &one(&w, "Message input"));
+    assert_native_caret_visible(&w);
     let end_y = raw.absolute_position().y;
     for _ in 0..100 {
         key(&w, slint::platform::Key::UpArrow.into());
@@ -312,30 +329,118 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
         key(&w, slint::platform::Key::DownArrow.into());
     }
     key(&w, slint::platform::Key::End.into());
+    // Mobile long press gives the child input ownership before selection drag.
+    let clip = testing::ElementHandle::find_by_element_id(&w, "input-scroll")
+        .find(|e| e.size().height > 0.0)
+        .unwrap();
+    let start = slint::LogicalPosition::new(
+        clip.absolute_position().x + 20.0,
+        clip.absolute_position().y + 10.0,
+    );
+    let finish = slint::LogicalPosition::new(start.x + 90.0, start.y);
+    let button = slint::platform::PointerEventButton::Left;
+    let unchanged = w.get_composer_text();
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerPressed {
+            position: start,
+            button,
+        });
+    slint::Timer::single_shot(std::time::Duration::from_millis(600), || {
+        slint::quit_event_loop().unwrap();
+    });
+    w.run().unwrap();
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerMoved { position: finish });
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerReleased {
+            position: finish,
+            button,
+        });
+    pump_size(&w, PHONE_W, 460.0);
+    let item = composer_native_item(&w);
+    let input = item.downcast::<i_slint_core::items::TextInput>().unwrap();
+    let input = input.as_pin_ref();
+    assert_ne!(
+        input.anchor_position_byte_offset(),
+        input.cursor_position_byte_offset(),
+        "long press drag did not select text"
+    );
+    assert_eq!(
+        w.get_composer_text(),
+        unchanged,
+        "selection drag changed the draft"
+    );
+    input.set_selection_offsets(
+        &item.window_adapter().unwrap(),
+        &item,
+        unchanged.len() as i32,
+        unchanged.len() as i32,
+    );
+    pump_size(&w, PHONE_W, 460.0);
+    assert_native_caret_visible(&w);
+    // A reverse committed selection survives geometry refresh unchanged.
+    let cursor = unchanged.len() as i32 - 2;
+    input.set_selection_offsets(
+        &item.window_adapter().unwrap(),
+        &item,
+        unchanged.len() as i32,
+        cursor,
+    );
+    pump_size(&w, 360.0, 380.0);
+    assert_eq!(input.anchor_position_byte_offset(), unchanged.len() as i32);
+    assert_eq!(input.cursor_position_byte_offset(), cursor);
+    assert_native_caret_visible(&w);
+    input.set_selection_offsets(
+        &item.window_adapter().unwrap(),
+        &item,
+        unchanged.len() as i32,
+        unchanged.len() as i32,
+    );
     // Rewrap and resize while preserving the same end caret.
     pump_size(&w, 360.0, 380.0);
     assert_tail_visible(&raw, &one(&w, "Message input"));
+    assert_native_caret_visible(&w);
     let expected = w.get_composer_text();
     w.set_composer_emoji_picker_visible(true);
     pump_size(&w, PHONE_W, PHONE_H);
+    assert_native_caret_visible(&w);
+    assert_composer_caps(&w, true, 0.0);
     w.set_composer_emoji_picker_visible(false);
     pump_size(&w, PHONE_W, 460.0);
     assert_tail_visible(&raw, &one(&w, "Message input"));
+    assert_native_caret_visible(&w);
     assert_eq!(
         w.get_composer_text(),
         expected,
         "resize/picker changed draft body"
     );
-    // Uncommitted wrapped text is visible without being written into the body.
-    let composing = " composed words".repeat(18);
+    // Actual native composition: the active endpoint is independent of text.
+    let composing = " composed words 漢字 e\u{301} 👩‍👩‍👧‍👦\n".repeat(18);
     composition(&w, &composing, false);
     pump_size(&w, PHONE_W, 460.0);
-    assert_eq!(
-        w.get_composer_text(),
-        expected,
-        "preedit was committed by scrolling"
-    );
     assert_tail_visible(&raw, &one(&w, "Message input"));
+    assert_native_caret_visible(&w);
+    assert_eq!(w.get_composer_text(), expected);
+    composition_selection(&w, &composing, Some(0..0));
+    pump_size(&w, PHONE_W, 460.0);
+    assert_native_caret_visible(&w);
+    assert_eq!(w.get_composer_text(), expected, "scroll committed preedit");
+    composition_selection(
+        &w,
+        &composing,
+        Some(composing.len() as i32..composing.len() as i32),
+    );
+    pump_size(&w, PHONE_W, 460.0);
+    assert_native_caret_visible(&w);
+    let end_y = raw.absolute_position().y;
+    composition_selection(&w, &composing, Some(0..0));
+    pump_size(&w, PHONE_W, 460.0);
+    assert_native_caret_visible(&w);
+    assert!(
+        raw.absolute_position().y > end_y + 40.0,
+        "same-preedit end to start did not scroll"
+    );
+    assert_eq!(w.get_composer_text(), expected);
     composition(&w, &composing, true);
     pump_size(&w, PHONE_W, 460.0);
     assert_eq!(
@@ -343,17 +448,119 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
         format!("{expected}{composing}")
     );
 
+    // Full-word wrapping at a mid-word insertion, with committed suffix present.
+    // The short terminal fragment alone fits where the complete word cannot.
+    let body = format!(
+        "{}alphaBETAlongword 漢字 e\u{301} 👩‍👩‍👧‍👦\nEND",
+        "rows before wrap\n".repeat(12)
+    );
+    w.set_composer_text(body.clone().into());
+    pump_size(&w, 360.0, 380.0);
+    let item = composer_native_item(&w);
+    let input = item.downcast::<i_slint_core::items::TextInput>().unwrap();
+    let input = input.as_pin_ref();
+    let insertion = body.find("BETA").unwrap() as i32;
+    let window = item.window_adapter().unwrap();
+    input.set_selection_offsets(&window, &item, insertion, insertion);
+    let middle = " words fit until terminalfrag";
+    composition_selection(&w, middle, Some(middle.len() as i32..middle.len() as i32));
+    pump_size(&w, 360.0, 380.0);
+    assert_native_caret_visible(&w);
+    assert_eq!(w.get_composer_text().as_str(), body);
+    let mut prefix_wrap_differs = false;
+    for width in (280..=440).step_by(8) {
+        pump_size(&w, width as f32, 460.0);
+        assert_native_caret_visible(&w);
+        let prefix = format!("{}{}", &body[..insertion as usize], middle);
+        let probe = Box::pin(i_slint_core::items::TextInput::default());
+        let probe = probe.as_ref();
+        probe.text.set(prefix.clone().into());
+        probe.width.set(input.width());
+        probe.height.set(input.height());
+        probe.font_family.set(input.font_family());
+        probe.font_size.set(input.font_size());
+        probe.font_weight.set(input.font_weight());
+        probe.font_italic.set(input.font_italic());
+        probe.letter_spacing.set(input.letter_spacing());
+        probe.wrap.set(input.wrap());
+        probe.single_line.set(false);
+        probe.text_cursor_width.set(input.text_cursor_width());
+        let prefix_rect =
+            window
+                .renderer()
+                .text_input_cursor_rect_for_byte_offset(probe, &item, prefix.len());
+        let full_rect = input.visual_cursor_rect(&window, &item);
+        if full_rect.origin.y > prefix_rect.origin.y + full_rect.size.height * 0.5 {
+            prefix_wrap_differs = true;
+            break;
+        }
+    }
+    assert!(
+        prefix_wrap_differs,
+        "mid-word fixture must demonstrate full versus truncated-prefix wrapping"
+    );
+    for preedit in [
+        "漢字仮名交じり文".repeat(30),
+        "e\u{301} 👩‍👩‍👧‍👦 ".repeat(30),
+        "wrapped\n\n".repeat(12),
+    ] {
+        for endpoint in [0, preedit.len() as i32] {
+            composition_selection(&w, &preedit, Some(endpoint..endpoint));
+            pump_size(&w, PHONE_W, 460.0);
+            assert_native_caret_visible(&w);
+            assert_eq!(w.get_composer_text().as_str(), body);
+            assert_eq!(input.cursor_position_byte_offset(), insertion);
+            assert_eq!(input.anchor_position_byte_offset(), insertion);
+            assert_eq!(input.preedit_text().as_str(), preedit);
+        }
+    }
+    composition_selection(&w, "", None);
+    input.set_selection_offsets(&window, &item, body.len() as i32, body.len() as i32);
+    w.set_composer_is_replying(true);
+    w.set_composer_reply_preview("Accessory cap proof".into());
+    pump_size(&w, PHONE_W, 460.0);
+    assert_composer_caps(&w, false, 48.0);
+    assert_native_caret_visible(&w);
+    w.set_composer_emoji_picker_visible(true);
+    pump_size(&w, PHONE_W, PHONE_H);
+    assert_composer_caps(&w, true, 48.0);
+    assert_native_caret_visible(&w);
+    assert_eq!(w.get_composer_text().as_str(), body);
+    w.set_composer_emoji_picker_visible(false);
+    w.set_composer_is_replying(false);
+
     // Desktop pointer events must still reach raw TextInput through the
     // noninteractive viewport; arrows edit where the caret actually moved.
     w.set_is_mobile_platform(false);
     w.set_composer_text("".into());
     pump_size(&w, 1000.0, 800.0);
+    // Focus a different native input first, proving pointer focus restoration.
+    w.set_composer_emoji_picker_visible(true);
+    pump_size(&w, 1000.0, 800.0);
+    let search = testing::ElementHandle::find_by_element_id(&w, "drawer-search")
+        .find(|e| e.size().height > 0.0)
+        .expect("drawer search input");
+    click_at(
+        &w,
+        search.absolute_position().x + 10.0,
+        search.absolute_position().y + 10.0,
+    );
+    assert!(!composer_native_item(&w)
+        .downcast::<i_slint_core::items::TextInput>()
+        .unwrap()
+        .as_pin_ref()
+        .has_focus());
     let field = one(&w, "Message input");
     click_at(
         &w,
         field.absolute_position().x + 20.0,
         field.absolute_position().y + 20.0,
     );
+    assert!(composer_native_item(&w)
+        .downcast::<i_slint_core::items::TextInput>()
+        .unwrap()
+        .as_pin_ref()
+        .has_focus());
     key(&w, "abc".into());
     key(&w, slint::platform::Key::LeftArrow.into());
     key(&w, "X".into());
@@ -409,4 +616,114 @@ fn composition(w: &MainWindow, text: &str, commit: bool) {
         event.preedit_text = text.into();
     }
     i_slint_core::window::WindowInner::from_pub(w.window()).process_key_input(event);
+}
+
+fn composition_selection(w: &MainWindow, text: &str, selection: Option<std::ops::Range<i32>>) {
+    use i_slint_core::input::{InternalKeyEvent, KeyEventType};
+    let mut event = InternalKeyEvent::default();
+    event.event_type = KeyEventType::UpdateComposition;
+    event.preedit_text = text.into();
+    event.preedit_selection = selection;
+    i_slint_core::window::WindowInner::from_pub(w.window()).process_key_input(event);
+}
+
+fn composer_native_item(w: &MainWindow) -> i_slint_core::item_tree::ItemRc {
+    use std::ops::ControlFlow;
+    let raw = testing::ElementHandle::find_by_element_id(w, "text-input")
+        .find(|e| {
+            e.size().height > 0.0
+                && e.accessible_value().as_ref().map(|v| v.as_str())
+                    == Some(w.get_composer_text().as_str())
+        })
+        .expect("actual raw composer");
+    let raw_position = raw.absolute_position();
+    let root = i_slint_core::window::WindowInner::from_pub(w.window())
+        .window_item_rc()
+        .unwrap();
+    root.visit_descendants(|item| {
+        if let Some(input) = item.downcast::<i_slint_core::items::TextInput>() {
+            if input.as_pin_ref().text().as_str() == w.get_composer_text().as_str()
+                && item.geometry().size.height > 0.0
+                && (item.map_to_window(Default::default()).x - raw_position.x).abs() < 0.1
+                && (item.map_to_window(Default::default()).y - raw_position.y).abs() < 0.1
+            {
+                return ControlFlow::Break(item.clone());
+            }
+        }
+        ControlFlow::Continue(())
+    })
+    .expect("native composer input")
+}
+
+fn assert_native_caret_visible(w: &MainWindow) {
+    let item = composer_native_item(w);
+    let input = item.downcast::<i_slint_core::items::TextInput>().unwrap();
+    let input = input.as_pin_ref();
+    let caret = input.visual_cursor_rect(&item.window_adapter().unwrap(), &item);
+    assert!((input.visual_cursor_y().get() - caret.origin.y).abs() < 0.01);
+    assert!((input.visual_cursor_height().get() - caret.size.height).abs() < 0.01);
+    // Independently query the renderer at its actual drawn visual endpoint.
+    // App input is plain text, so no password conversion is needed here.
+    if let Some(drawn_offset) = input.visual_representation(None).cursor_position {
+        let drawn = item
+            .window_adapter()
+            .unwrap()
+            .renderer()
+            .text_input_cursor_rect_for_byte_offset(input, &item, drawn_offset);
+        assert_eq!(
+            caret, drawn,
+            "scroll geometry differs from native rendered caret"
+        );
+    }
+    let position = item.map_to_window(caret.origin);
+    let clip = testing::ElementHandle::find_by_element_id(w, "input-scroll")
+        .find(|e| e.size().height > 0.0)
+        .expect("actual Flickable clip");
+    let p = clip.absolute_position();
+    let size = clip.size();
+    assert!(caret.size.height > 0.0);
+    assert!(
+        position.x >= p.x - 0.5
+            && position.x + caret.size.width <= p.x + size.width + 0.5
+            && position.y >= p.y - 0.5
+            && position.y + caret.size.height <= p.y + size.height + 0.5,
+        "native caret {position:?} {:?} outside exact clip {p:?} {size:?}",
+        caret.size
+    );
+}
+
+fn assert_composer_caps(w: &MainWindow, drawer: bool, accessories: f32) {
+    let pane = testing::ElementHandle::find_by_element_type_name(w, "ChatLayout")
+        .find(|e| e.size().height > 0.0)
+        .unwrap();
+    let shell = testing::ElementHandle::find_by_element_type_name(w, "MessageComposer")
+        .find(|e| e.size().height > 0.0)
+        .unwrap();
+    let item = composer_native_item(w);
+    let input = item.downcast::<i_slint_core::items::TextInput>().unwrap();
+    let input = input.as_pin_ref();
+    let probe = Box::pin(i_slint_core::items::ComplexText::default());
+    let probe = probe.as_ref();
+    probe.text.set("Mg".into());
+    probe.font_family.set(input.font_family());
+    probe.font_size.set(input.font_size());
+    probe.font_weight.set(input.font_weight());
+    let line_height = item
+        .window_adapter()
+        .unwrap()
+        .renderer()
+        .text_size(probe, &item, None, i_slint_core::items::TextWrap::NoWrap)
+        .height
+        .ceil();
+    let pane_height = pane.size().height;
+    let available = pane_height
+        - if drawer {
+            340.0_f32.min(pane_height * 0.48)
+        } else {
+            0.0
+        };
+    // The accepted 48px floor is explicit for unusually short panes/accessories.
+    let cap = 48.0_f32.max((line_height * 6.0 + 8.0).min(available * 0.4 - accessories - 8.0));
+    assert!(shell.size().height <= cap + accessories + 8.5,
+        "composer {:?} exceeds six-line/actual-pane cap {cap}, pane={available}, accessories={accessories}", shell.size());
 }

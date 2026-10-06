@@ -928,6 +928,15 @@ impl i_slint_core::renderer::RendererSealed for SkiaRenderer {
         sharedparley::text_input_cursor_rect_for_byte_offset(self, text_input, item_rc, byte_offset)
     }
 
+    fn text_input_visual_cursor_rect_for_byte_offset(
+        &self,
+        text_input: std::pin::Pin<&i_slint_core::items::TextInput>,
+        item_rc: &i_slint_core::item_tree::ItemRc,
+        byte_offset: usize,
+    ) -> LogicalRect {
+        sharedparley::text_input_cursor_rect_for_byte_offset(self, text_input, item_rc, byte_offset)
+    }
+
     fn register_font_from_memory(
         &self,
         data: &'static [u8],

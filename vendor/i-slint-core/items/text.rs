@@ -23,7 +23,7 @@ use crate::item_rendering::{
     CachedRenderingData, HasFont, ItemRenderer, PlainOrStyledText, RenderString, RenderText,
 };
 use crate::layout::{LayoutInfo, Orientation};
-use crate::lengths::{LogicalLength, LogicalPoint, LogicalRect, LogicalSize, PointLengths};
+use crate::lengths::{LogicalLength, LogicalPoint, LogicalRect, LogicalSize, PointLengths, SizeLengths};
 use crate::platform::Clipboard;
 #[cfg(feature = "rtti")]
 use crate::rtti::*;
@@ -829,6 +829,12 @@ pub struct TextInput {
     pub enabled: Property<bool>,
     pub accepted: Callback<VoidArg>,
     pub cursor_position_changed: Callback<PointArg>,
+    /// Caret in full composed, shaped text; independent of blink/focus visibility.
+    pub visual_cursor_x: Property<LogicalLength>,
+    pub visual_cursor_y: Property<LogicalLength>,
+    pub visual_cursor_width: Property<LogicalLength>,
+    pub visual_cursor_height: Property<LogicalLength>,
+    visual_cursor_geometry: Property<LogicalRect>,
     pub edited: Callback<VoidArg>,
     pub key_pressed: Callback<KeyEventArg, EventResult>,
     pub key_released: Callback<KeyEventArg, EventResult>,
@@ -848,7 +854,55 @@ pub struct TextInput {
 }
 
 impl Item for TextInput {
-    fn init(self: Pin<&Self>, _self_rc: &ItemRc) {}
+    fn init(self: Pin<&Self>, self_rc: &ItemRc) {
+        let weak = self_rc.downgrade();
+        Self::FIELD_OFFSETS
+            .visual_cursor_geometry()
+            .apply_pin(self)
+            .set_binding(move || {
+                let Some(item) = weak.upgrade() else {
+                    return LogicalRect::default();
+                };
+                let Some(input) = item.downcast::<TextInput>() else {
+                    return LogicalRect::default();
+                };
+                let input = input.as_pin_ref();
+                // Initial construction can precede the window adapter. Still
+                // track layout/state so its first layout retries the query.
+                let _ = (
+                    input.width(),
+                    input.height(),
+                    input.text(),
+                    input.preedit_text(),
+                    input.preedit_selection(),
+                    input.cursor_position_byte_offset(),
+                );
+                let Some(window) = item.window_adapter() else {
+                    return LogicalRect::default();
+                };
+                input.visual_cursor_rect(&window, &item)
+            });
+        macro_rules! bind_geometry {
+            ($field:ident, $extract:expr) => {{
+                let weak = self_rc.downgrade();
+                Self::FIELD_OFFSETS
+                    .$field()
+                    .apply_pin(self)
+                    .set_binding(move || {
+                        weak.upgrade()
+                            .and_then(|item| item.downcast::<TextInput>())
+                            .map(|input| ($extract)(input.as_pin_ref().visual_cursor_geometry()))
+                            .unwrap_or_default()
+                    });
+            }};
+        }
+        bind_geometry!(visual_cursor_x, |r: LogicalRect| r.origin.x_length());
+        bind_geometry!(visual_cursor_y, |r: LogicalRect| r.origin.y_length());
+        bind_geometry!(visual_cursor_width, |r: LogicalRect| r.size.width_length());
+        bind_geometry!(visual_cursor_height, |r: LogicalRect| r
+            .size
+            .height_length());
+    }
 
     fn deinit(self: Pin<&Self>, window_adapter: &Rc<dyn WindowAdapter>) {
         if self.has_focus() {
@@ -2095,6 +2149,32 @@ impl TextInput {
         };
         repr.apply_password_character_substitution(self, password_character_fn);
         repr
+    }
+
+    /// Full native caret geometry in local logical coordinates. Composition offsets
+    /// are UTF-8 bytes relative to preedit; the active endpoint is `end`, including
+    /// reversed selections. With no supplied endpoint, use the preedit end even
+    /// though the renderer intentionally suppresses its blinking caret.
+    /// This query only reads state: it does not reset preferred-x, focus or IME.
+    pub fn visual_cursor_rect(
+        self: Pin<&Self>,
+        window_adapter: &Rc<dyn WindowAdapter>,
+        self_rc: &ItemRc,
+    ) -> LogicalRect {
+        let text = self.text();
+        let preedit = self.preedit_text();
+        let offset = self.cursor_position(&text)
+            + if preedit.is_empty() {
+                0
+            } else {
+                self.preedit_selection()
+                    .as_option()
+                    .map(|selection| safe_byte_offset(selection.end, &preedit))
+                    .unwrap_or(preedit.len())
+            };
+        window_adapter
+            .renderer()
+            .text_input_visual_cursor_rect_for_byte_offset(self, self_rc, offset)
     }
 
     fn cursor_rect_for_byte_offset(

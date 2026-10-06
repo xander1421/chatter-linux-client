@@ -142,6 +142,19 @@ impl RendererSealed for SkiaWGPURenderer {
         self.renderer.text_input_cursor_rect_for_byte_offset(text_input, item_rc, byte_offset)
     }
 
+    fn text_input_visual_cursor_rect_for_byte_offset(
+        &self,
+        text_input: Pin<&i_slint_core::items::TextInput>,
+        item_rc: &i_slint_core::items::ItemRc,
+        byte_offset: usize,
+    ) -> i_slint_core::lengths::LogicalRect {
+        self.renderer.text_input_visual_cursor_rect_for_byte_offset(
+            text_input,
+            item_rc,
+            byte_offset,
+        )
+    }
+
     fn register_font_from_memory(
         &self,
         data: &'static [u8],

@@ -198,44 +198,24 @@ export component MessageComposer inherits GlassSurface {
                 - reply-bar-height - format-bar-height - row-padding * 2))
         : 400px;
     property <length> padding-vertical: Spacing.sm * 2;
-    private property <length> cursor-y: 0px;
     function reveal-cursor() {
-        // Raw TextInput reports the committed caret. Include the composing
-        // suffix's wrapped line while preedit is being displayed.
-        root.caret-top = text-input.preedit-text == "" ? cursor-y
-            : max(cursor-y, preedit-measure.preferred-height - input-line-height);
+        // Native geometry shapes the full input and follows the actual IME
+        // selection endpoint, including selection-only composition updates.
+        root.caret-top = text-input.y + text-input.visual-cursor-y;
         if root.caret-top + input-scroll.viewport-y < 0px {
             input-scroll.viewport-y = -root.caret-top;
-        } else if root.caret-top + input-line-height + input-scroll.viewport-y > input-scroll.height {
-            input-scroll.viewport-y = input-scroll.height - root.caret-top - input-line-height;
+        } else if root.caret-top + text-input.visual-cursor-height + input-scroll.viewport-y > input-scroll.height {
+            input-scroll.viewport-y = input-scroll.height - root.caret-top - text-input.visual-cursor-height;
         }
         input-scroll.viewport-y = min(0px, max(input-scroll.height - input-scroll.viewport-height,
             input-scroll.viewport-y));
     }
     private property <length> caret-top;
-    // Re-query geometry after wrapping/viewport changes without clearing focus,
-    // committing preedit or changing either selection endpoint.
-    function refresh-cursor() {
-        text-input.set-selection-offsets(text-input.anchor-position-byte-offset,
-            text-input.cursor-position-byte-offset);
-        root.reveal-cursor();
-    }
     line-measure := Text {
         visible: false;
         text: "Mg";
         font-size: Typography.base;
     }
-    preedit-measure := Text {
-        visible: false;
-        width: text-input.width;
-        font-size: Typography.base;
-        wrap: word-wrap;
-        text: TextFormat.replace(root.composed-text, "",
-            text-input.cursor-position-byte-offset + TextFormat.byte-length(text-input.preedit-text),
-            TextFormat.byte-length(root.composed-text));
-        changed preferred-height => { if root.composing { root.reveal-cursor(); } }
-    }
-
     // Use the TextInput's actual `preferred-height` (recomputed by Slint's
     // text shaper from the wrapped layout) instead of guessing from
     // character count — guess undercounts when words don't break and the
@@ -958,7 +938,8 @@ export component MessageComposer inherits GlassSurface {
                     viewport-width: self.width;
                     viewport-height: max(self.height, text-input.preferred-height);
                     interactive: root.mobile;
-                    changed height => { root.refresh-cursor(); }
+                    changed height => { root.reveal-cursor(); }
+                    changed viewport-height => { root.reveal-cursor(); }
                     text-input := TextInput {
                         x: 0px;
                         // Centred while the row is at its floor, top-anchored once the
@@ -968,12 +949,9 @@ export component MessageComposer inherits GlassSurface {
                         width: input-scroll.width;
                         height: max(input-scroll.height, self.preferred-height);
                         page-height: input-scroll.height;
-                        changed width => { root.refresh-cursor(); }
-                        changed preedit-text => { root.reveal-cursor(); }
-                        cursor-position-changed(position) => {
-                            root.cursor-y = position.y;
-                            root.reveal-cursor();
-                        }
+                        changed visual-cursor-y => { root.reveal-cursor(); }
+                        changed visual-cursor-height => { root.reveal-cursor(); }
+                        changed y => { root.reveal-cursor(); }
                         color: Colors.text-primary;
                         font-size: Typography.base;
                         text <=> root.text;

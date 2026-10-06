@@ -79,6 +79,48 @@ pub trait RendererSealed {
         byte_offset: usize,
     ) -> LogicalRect;
 
+    /// Native visual caret query. `byte_offset` is a UTF-8 offset in the FULL
+    /// composed text (committed prefix + preedit + committed suffix), before
+    /// password masking. The default shapes a read-only snapshot using the
+    /// backend's existing native query: even committed-only backends (including
+    /// FixedTestFont) see the full text. Password masking/offset mapping is done
+    /// once before querying the plain-text snapshot (default mask U+25CF).
+    /// A backend with a different password glyph must override this query.
+    /// The original item's state, committed-offset query and IME are untouched.
+    /// Backends may override this to avoid the snapshot when they already shape
+    /// full composed text. The supplied item retains inherited font context.
+    fn text_input_visual_cursor_rect_for_byte_offset(
+        &self,
+        text_input: Pin<&crate::items::TextInput>,
+        item_rc: &ItemRc,
+        byte_offset: usize,
+    ) -> LogicalRect {
+        let representation = text_input.visual_representation(None);
+        let visual_offset = representation.map_byte_offset_from_actual_to_visual_text(byte_offset);
+        let snapshot = alloc::boxed::Box::pin(crate::items::TextInput::default());
+        let snapshot = snapshot.as_ref();
+        snapshot.text.set(representation.text);
+        macro_rules! copy_property {
+            ($($field:ident),* $(,)?) => { $(snapshot.$field.set(text_input.$field());)* };
+        }
+        copy_property!(
+            font_family,
+            font_size,
+            font_weight,
+            font_italic,
+            letter_spacing,
+            width,
+            height,
+            horizontal_alignment,
+            vertical_alignment,
+            wrap,
+            single_line,
+            text_cursor_width,
+            enabled
+        );
+        self.text_input_cursor_rect_for_byte_offset(snapshot, item_rc, visual_offset)
+    }
+
     /// Clear the caches for the items that are being removed
     fn free_graphics_resources(
         &self,
