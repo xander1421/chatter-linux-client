@@ -1240,7 +1240,7 @@ fn attachment_and_keyboard_handover_boundaries(w: &MainWindow) {
                 },
             )
             .next()
-            .expect("actual picker grid, including bounded short-pane fallback");
+            .unwrap_or_else(|| panic!("actual {tab} grid missing at {width}x{height}/IME{ime}: emoji={}, gif={}, loading={}, results={}; drawer={dy},{dh}; results-rect={ry},{rh}; tab={ty},{th}", w.get_composer_emoji_picker_visible(), w.get_composer_gif_picker_visible(), w.get_composer_gif_picker_loading(), w.get_composer_gif_picker_results().row_count()));
             let (_, gy, _, gh) = rect(&grid);
             assert!(
                 gh >= if height - ime >= 380.0 { 32.0 } else { 0.0 }
