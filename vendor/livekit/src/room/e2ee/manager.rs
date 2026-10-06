@@ -546,11 +546,16 @@ mod media_key_index_tests {
         sid: &str,
         expected: i32,
     ) -> FrameCryptor {
-        manager.register_rtp_sender("local".into(), sid.try_into().unwrap(), sender, |cryptor| {
-            // Assert native selection at the production boundary BEFORE enable.
-            assert!(!cryptor.enabled());
-            assert_eq!(cryptor.key_index(), expected);
-        })
+        manager.register_rtp_sender(
+            "local".into(),
+            sid.to_owned().try_into().unwrap(),
+            sender,
+            |cryptor| {
+                // Assert native selection at the production boundary BEFORE enable.
+                assert!(!cryptor.enabled());
+                assert_eq!(cryptor.key_index(), expected);
+            },
+        )
     }
 
     #[test]
@@ -582,7 +587,7 @@ mod media_key_index_tests {
             let later = register(&manager, later, "TR_later", index);
             assert!(later.enabled());
             assert_eq!(later.key_index(), index);
-            manager.remove_frame_cryptor("local".into(), "TR_later".try_into().unwrap());
+            manager.remove_frame_cryptor("local".into(), "TR_later".to_owned().try_into().unwrap());
             later_pc.close();
         }
         // A later video/screen sender uses the same production creation path.
@@ -616,7 +621,7 @@ mod media_key_index_tests {
         assert_eq!(video.key_index(), 4);
         assert_eq!(first.key_index(), 4);
         // Unpublication removes sender enrollment; later rotations do not touch it.
-        manager.remove_frame_cryptor("local".into(), "TR_video".try_into().unwrap());
+        manager.remove_frame_cryptor("local".into(), "TR_video".to_owned().try_into().unwrap());
         assert!(manager.install_shared_media_key(6, vec![6; 32], Some((7, vec![7; 32]))));
         assert_eq!(video.key_index(), 4);
         video_pc.close();
@@ -671,7 +676,7 @@ mod media_key_index_tests {
         });
         let cryptor = manager.register_rtp_sender(
             "local".into(),
-            "TR_race".try_into().unwrap(),
+            "TR_race".to_owned().try_into().unwrap(),
             rtp_sender,
             |cryptor| {
                 assert!(!cryptor.enabled());
@@ -697,7 +702,7 @@ mod media_key_index_tests {
         let receiver = manager.setup_rtp_receiver(&"remote".into(), receiver);
         let before = receiver.key_index();
         manager.inner.lock().frame_cryptors.insert(
-            ("remote".into(), "TR_remote".try_into().unwrap()),
+            ("remote".into(), "TR_remote".to_owned().try_into().unwrap()),
             receiver.clone(),
         );
         assert!(manager.install_shared_media_key(9, vec![9; 32], Some((10, vec![10; 32]))));
