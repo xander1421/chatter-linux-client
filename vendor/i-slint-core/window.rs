@@ -620,6 +620,9 @@ impl WindowInner {
             .map(|internal| internal.safe_area_inset())
             .unwrap_or_default();
         self.set_window_item_safe_area(inset.to_logical(scale_factor));
+        // A pre-attachment caret query may have cached an unavailable-window
+        // rectangle even when the input dimensions and state stay unchanged.
+        crate::item_tree::invalidate_text_input_geometry(component, &window_adapter);
         window_adapter.request_redraw();
         let weak = Rc::downgrade(&window_adapter);
         crate::timers::Timer::single_shot(Default::default(), move || {

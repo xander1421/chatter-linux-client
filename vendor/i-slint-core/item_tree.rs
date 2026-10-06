@@ -198,6 +198,37 @@ pub fn register_item_tree(item_tree_rc: &ItemTreeRc, window_adapter: Option<Wind
     }
 }
 
+/// Invalidate native caret caches in already materialized items on window attachment.
+/// Do not instantiate repeaters here: adapter construction can still be in progress.
+pub(crate) fn invalidate_text_input_geometry(
+    item_tree: &ItemTreeRc,
+    window_adapter: &WindowAdapterRc,
+) {
+    let tree = VRc::borrow_pin(item_tree);
+    for (index, node) in tree.as_ref().get_item_tree().iter().enumerate() {
+        match node {
+            ItemTreeNode::Item { .. } => {
+                let item = ItemRc::new(item_tree.clone(), index as u32);
+                if let Some(input) = item.downcast::<crate::items::TextInput>() {
+                    input
+                        .as_pin_ref()
+                        .bind_visual_cursor_geometry(&item, Some(window_adapter));
+                }
+            }
+            ItemTreeNode::DynamicTree { index, .. } => {
+                let range = tree.as_ref().get_subtree_range(*index);
+                for child in range.start..range.end {
+                    let mut subtree = ItemTreeWeak::default();
+                    tree.as_ref().get_subtree(*index, child, &mut subtree);
+                    if let Some(subtree) = subtree.upgrade() {
+                        invalidate_text_input_geometry(&subtree, window_adapter);
+                    }
+                }
+            }
+        }
+    }
+}
+
 /// Free the backend graphics resources allocated by the ItemTree's items.
 /// This will be called  if an sub-tree gets destroyed or a popup gets closed, ...
 /// It will be called only once not for every sub item
@@ -1476,6 +1507,7 @@ mod tests {
     #[derive(Default)]
     struct Renderer {
         supports_transformations: bool,
+        cursor_query: std::cell::RefCell<Option<(SharedString, usize, crate::items::InputType)>>,
     }
 
     struct WindowAdapter {
@@ -1491,7 +1523,10 @@ mod tests {
         fn new_with_transformations(supports_transformations: bool) -> Rc<Self> {
             Rc::<Self>::new_cyclic(|w| Self {
                 window: Window::new(w.clone()),
-                renderer: Renderer { supports_transformations },
+                renderer: Renderer {
+                    supports_transformations,
+                    ..Default::default()
+                },
             })
         }
     }
@@ -2519,7 +2554,8 @@ mod tests {
     struct TransformTestItemTree {
         item_tree: Vec<ItemTreeNode>,
         geometries: Vec<LogicalRect>,
-        window_adapter: std::rc::Weak<dyn crate::window::WindowAdapter>,
+        window_adapter: std::cell::RefCell<std::rc::Weak<dyn crate::window::WindowAdapter>>,
+        input: Option<crate::items::TextInput>,
         root: WindowItem,
         transform: Transform,
         clip: Clip,
@@ -2538,6 +2574,11 @@ mod tests {
 
         fn get_item_ref(self: Pin<&Self>, index: u32) -> Pin<VRef<'_, ItemVTable>> {
             let this = self.get_ref();
+            if index == 1 {
+                if let Some(input) = this.input.as_ref() {
+                    return Pin::new(VRef::new(input));
+                }
+            }
             match index {
                 0 => Pin::new(VRef::new(&this.root)),
                 1 => Pin::new(VRef::new(&this.transform)),
@@ -2608,7 +2649,7 @@ mod tests {
             _do_create: bool,
             result: &mut Option<WindowAdapterRc>,
         ) {
-            *result = self.window_adapter.upgrade()
+            *result = self.window_adapter.borrow().upgrade()
         }
 
         fn item_geometry(self: Pin<&Self>, index: u32) -> LogicalRect {
@@ -2680,13 +2721,161 @@ mod tests {
                     LogicalRect::new(Point2D::new(5., 6.), LogicalSize::new(20., 20.)),
                     LogicalRect::new(Point2D::new(8., 4.), LogicalSize::new(10., 10.)),
                 ],
-                window_adapter: Rc::downgrade(&window_adapter) as _,
+                window_adapter: std::cell::RefCell::new(Rc::downgrade(&window_adapter) as _),
+                input: None,
                 root: WindowItem::default(),
                 transform,
                 clip,
                 leaf: WindowItem::default(),
             })),
         )
+    }
+
+    #[test]
+    fn native_caret_retries_window_attachment_with_constant_input_geometry() {
+        use crate::items::{InputType, TextInput};
+
+        let input = TextInput::default();
+        input.width.set(LogicalLength::new(80.));
+        input.height.set(LogicalLength::new(40.));
+        // No resize can incidentally invalidate the cached unavailable result.
+        input.width.set_constant();
+        input.height.set_constant();
+        input.text.set("α\n漢尾".into());
+        input.cursor_position_byte_offset.set("α\n漢".len() as i32);
+        input.anchor_position_byte_offset.set(0);
+        let tree = VRc::new(TransformTestItemTree {
+            item_tree: vec![
+                ItemTreeNode::Item {
+                    is_accessible: false,
+                    children_count: 1,
+                    children_index: 1,
+                    parent_index: 0,
+                    item_array_index: 0,
+                },
+                ItemTreeNode::Item {
+                    is_accessible: false,
+                    children_count: 0,
+                    children_index: 0,
+                    parent_index: 0,
+                    item_array_index: 1,
+                },
+            ],
+            geometries: vec![
+                LogicalRect::new(LogicalPoint::default(), LogicalSize::new(100., 100.)),
+                LogicalRect::new(LogicalPoint::default(), LogicalSize::new(80., 40.)),
+            ],
+            window_adapter: std::cell::RefCell::new(std::rc::Weak::<WindowAdapter>::new()),
+            input: Some(input),
+            root: WindowItem::default(),
+            transform: Transform::default(),
+            clip: Clip::default(),
+            leaf: WindowItem::default(),
+        });
+        let dyn_tree = VRc::into_dyn(tree.clone());
+        register_item_tree(&dyn_tree, None);
+        let item = ItemRc::new(dyn_tree.clone(), 1);
+        let input = item.downcast::<TextInput>().unwrap();
+        let input = input.as_pin_ref();
+        let exposed_rect = || {
+            LogicalRect::new(
+                LogicalPoint::new(input.visual_cursor_x().get(), input.visual_cursor_y().get()),
+                LogicalSize::new(
+                    input.visual_cursor_width().get(),
+                    input.visual_cursor_height().get(),
+                ),
+            )
+        };
+        let state = || {
+            (
+                input.text(),
+                input.preedit_text(),
+                input.anchor_position_byte_offset(),
+                input.cursor_position_byte_offset(),
+                input.width(),
+                input.height(),
+                input.has_focus(),
+            )
+        };
+        let before = state();
+        assert!(item.window_adapter().is_none());
+        // Read and cache ALL four properties before attachment.
+        assert_eq!(exposed_rect(), LogicalRect::default());
+        assert_eq!(exposed_rect(), LogicalRect::default());
+        let adapter = WindowAdapter::new();
+        // Use the real attachment hook, without calling an invalidator in the test.
+        // Generated components publish their adapter OnceCell AFTER set_component.
+        crate::window::WindowInner::from_pub(&adapter.window).set_component(&dyn_tree);
+        assert!(item.window_adapter().is_none());
+        assert_eq!(
+            exposed_rect(),
+            LogicalRect::new(LogicalPoint::new(5., 10.), LogicalSize::new(1., 10.)),
+            "attachment must work even before the component publishes its adapter",
+        );
+        tree.as_pin_ref()
+            .window_adapter
+            .replace(Rc::downgrade(&adapter) as _);
+        let window = item.window_adapter().unwrap();
+        assert_eq!(
+            state(),
+            before,
+            "attachment changed input state or dimensions"
+        );
+        let direct = input.visual_cursor_rect(&window, &item);
+        assert_eq!(
+            direct,
+            LogicalRect::new(LogicalPoint::new(5., 10.), LogicalSize::new(1., 10.))
+        );
+        assert_eq!(
+            exposed_rect(),
+            direct,
+            "no-window default survived attachment"
+        );
+        assert!(direct.size.width > 0. && direct.size.height > 0.);
+
+        // The renderer implements only the legacy committed-text query. Its
+        // recorded argument proves the fallback supplies the suffix as well as
+        // preedit, and translates a multibyte endpoint exactly once.
+        input.text.set("αSUFFIX".into());
+        input.cursor_position_byte_offset.set("α".len() as i32);
+        input.anchor_position_byte_offset.set("α".len() as i32);
+        input.preedit_text.set("漢👩e\u{301}".into());
+        let composed = "α漢👩e\u{301}SUFFIX";
+        let endpoint = "α漢👩e\u{301}".len();
+        assert_ne!(
+            endpoint,
+            5 * "●".len(),
+            "fixture must require offset conversion"
+        );
+        let before = state();
+        let plain = input.visual_cursor_rect(&window, &item);
+        assert_eq!(exposed_rect(), plain);
+        assert_eq!(plain.origin, LogicalPoint::new(25., 0.));
+        assert_eq!(
+            adapter.renderer.cursor_query.borrow().as_ref(),
+            Some(&(composed.into(), endpoint, InputType::Text)),
+        );
+        assert_eq!(
+            state(),
+            before,
+            "fallback query mutated composition or selection"
+        );
+
+        input.input_type.set(InputType::Password);
+        let password = input.visual_cursor_rect(&window, &item);
+        assert_eq!(exposed_rect(), password);
+        assert_eq!(password.origin, LogicalPoint::new(25., 0.));
+        assert_eq!(
+            adapter.renderer.cursor_query.borrow().as_ref(),
+            Some(&(
+                "●".repeat(composed.chars().count()).into(),
+                5 * "●".len(),
+                InputType::Text
+            )),
+            "password snapshot must be plain, fully masked, and mapped exactly once",
+        );
+        assert_eq!(state(), before, "password geometry query mutated the input");
+        assert_eq!(input.input_type(), InputType::Password);
     }
 
     fn assert_point_approx_eq(actual: LogicalPoint, expected: LogicalPoint) {
@@ -3032,7 +3221,6 @@ mod tests {
             &self,
             _window_adapter: &std::rc::Rc<dyn crate::window::WindowAdapter>,
         ) {
-            unimplemented!("Not required in this test");
         }
 
         fn supports_transformations(&self) -> bool {
@@ -3057,11 +3245,25 @@ mod tests {
 
         fn text_input_cursor_rect_for_byte_offset(
             &self,
-            _text_input: Pin<&crate::items::TextInput>,
+            text_input: Pin<&crate::items::TextInput>,
             _item_rc: &ItemRc,
-            _byte_offset: usize,
+            byte_offset: usize,
         ) -> LogicalRect {
-            unimplemented!("Not required in this test");
+            let text = text_input.text();
+            let _ = self.cursor_query.replace(Some((
+                text.clone(),
+                byte_offset,
+                text_input.input_type(),
+            )));
+            // Deliberately committed-text-only, like FixedTestFont: the default
+            // visual query must supply full composed text and a valid mapped offset.
+            let prefix = &text[..byte_offset];
+            let line = prefix.chars().filter(|c| *c == '\n').count();
+            let column = prefix.rsplit('\n').next().unwrap().chars().count();
+            LogicalRect::new(
+                LogicalPoint::new(column as f32 * 5., line as f32 * 10.),
+                LogicalSize::new(1., 10.),
+            )
         }
 
         fn text_size(

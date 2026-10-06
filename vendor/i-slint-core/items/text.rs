@@ -855,33 +855,7 @@ pub struct TextInput {
 
 impl Item for TextInput {
     fn init(self: Pin<&Self>, self_rc: &ItemRc) {
-        let weak = self_rc.downgrade();
-        Self::FIELD_OFFSETS
-            .visual_cursor_geometry()
-            .apply_pin(self)
-            .set_binding(move || {
-                let Some(item) = weak.upgrade() else {
-                    return LogicalRect::default();
-                };
-                let Some(input) = item.downcast::<TextInput>() else {
-                    return LogicalRect::default();
-                };
-                let input = input.as_pin_ref();
-                // Initial construction can precede the window adapter. Still
-                // track layout/state so its first layout retries the query.
-                let _ = (
-                    input.width(),
-                    input.height(),
-                    input.text(),
-                    input.preedit_text(),
-                    input.preedit_selection(),
-                    input.cursor_position_byte_offset(),
-                );
-                let Some(window) = item.window_adapter() else {
-                    return LogicalRect::default();
-                };
-                input.visual_cursor_rect(&window, &item)
-            });
+        self.bind_visual_cursor_geometry(self_rc, None);
         macro_rules! bind_geometry {
             ($field:ident, $extract:expr) => {{
                 let weak = self_rc.downgrade();
@@ -2149,6 +2123,47 @@ impl TextInput {
         };
         repr.apply_password_character_substitution(self, password_character_fn);
         repr
+    }
+
+    /// Install or refresh the geometry binding when the item gains a window.
+    /// Adapter construction can precede the component's adapter OnceCell being
+    /// populated, so retain a weak fallback to the explicitly attached adapter.
+    pub(crate) fn bind_visual_cursor_geometry(
+        self: Pin<&Self>,
+        self_rc: &ItemRc,
+        window_adapter: Option<&Rc<dyn WindowAdapter>>,
+    ) {
+        let weak = self_rc.downgrade();
+        let weak_window = window_adapter.map(Rc::downgrade);
+        Self::FIELD_OFFSETS
+            .visual_cursor_geometry()
+            .apply_pin(self)
+            .set_binding(move || {
+                let Some(item) = weak.upgrade() else {
+                    return LogicalRect::default();
+                };
+                let Some(input) = item.downcast::<TextInput>() else {
+                    return LogicalRect::default();
+                };
+                let input = input.as_pin_ref();
+                // Initial construction can precede the window adapter. Track
+                // state here; window attachment explicitly refreshes this binding.
+                let _ = (
+                    input.width(),
+                    input.height(),
+                    input.text(),
+                    input.preedit_text(),
+                    input.preedit_selection(),
+                    input.cursor_position_byte_offset(),
+                );
+                let Some(window) = item
+                    .window_adapter()
+                    .or_else(|| weak_window.as_ref().and_then(alloc::rc::Weak::upgrade))
+                else {
+                    return LogicalRect::default();
+                };
+                input.visual_cursor_rect(&window, &item)
+            });
     }
 
     /// Full native caret geometry in local logical coordinates. Composition offsets
