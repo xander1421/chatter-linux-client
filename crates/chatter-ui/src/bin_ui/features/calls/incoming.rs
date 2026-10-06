@@ -215,6 +215,7 @@ fn render_accepted_call(
                         remote_participant,
                         local_participant,
                     ])),
+                    verification_key_version: "".into(),
                     verification_emoji_1: setup.verification_emojis[0].clone().into(),
                     verification_emoji_2: setup.verification_emojis[1].clone().into(),
                     verification_emoji_3: setup.verification_emojis[2].clone().into(),
@@ -270,6 +271,7 @@ fn render_accepted_call(
                     duration_seconds: 0,
                     is_connected: true,
                     participants: ModelRc::new(VecModel::from(participants)),
+                    verification_key_version: "".into(),
                     verification_emoji_1: setup.verification_emojis[0].clone().into(),
                     verification_emoji_2: setup.verification_emojis[1].clone().into(),
                     verification_emoji_3: setup.verification_emojis[2].clone().into(),
@@ -368,6 +370,7 @@ fn show_answering(w: &MainWindow) {
         participants: ModelRc::new(VecModel::from(vec![remote, local])),
         // No key agreed yet: show nothing (the plain lock) until the SAS
         // emoji arrive, as the dialling view does.
+        verification_key_version: "".into(),
         verification_emoji_1: "".into(),
         verification_emoji_2: "".into(),
         verification_emoji_3: "".into(),
@@ -491,6 +494,7 @@ fn render_active_anon_call(
             duration_seconds: 0,
             is_connected: true,
             participants: ModelRc::new(VecModel::from(vec![remote_participant, local_participant])),
+            verification_key_version: "".into(),
             verification_emoji_1: verification_emojis[0].clone().into(),
             verification_emoji_2: verification_emojis[1].clone().into(),
             verification_emoji_3: verification_emojis[2].clone().into(),

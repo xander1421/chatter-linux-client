@@ -482,10 +482,19 @@ export component ActiveCallView inherits Rectangle {
                             colorize: Colors.primary;
                             y: (parent.height - self.height) / 2;
                         }
-                        Text { font-family: Typography.font-family-emoji; text: call-data.verification-emoji-1; font-size: Typography.xs; vertical-alignment: center; }
-                        Text { font-family: Typography.font-family-emoji; text: call-data.verification-emoji-2; font-size: Typography.xs; vertical-alignment: center; }
-                        Text { font-family: Typography.font-family-emoji; text: call-data.verification-emoji-3; font-size: Typography.xs; vertical-alignment: center; }
-                        Text { font-family: Typography.font-family-emoji; text: call-data.verification-emoji-4; font-size: Typography.xs; vertical-alignment: center; }
+                        Text { accessible-role: text; accessible-label: "Call verification emoji 1: " + call-data.verification-emoji-1; font-family: Typography.font-family-emoji; text: call-data.verification-emoji-1; font-size: Typography.xs; vertical-alignment: center; }
+                        Text { accessible-role: text; accessible-label: "Call verification emoji 2: " + call-data.verification-emoji-2; font-family: Typography.font-family-emoji; text: call-data.verification-emoji-2; font-size: Typography.xs; vertical-alignment: center; }
+                        Text { accessible-role: text; accessible-label: "Call verification emoji 3: " + call-data.verification-emoji-3; font-family: Typography.font-family-emoji; text: call-data.verification-emoji-3; font-size: Typography.xs; vertical-alignment: center; }
+                        Text { accessible-role: text; accessible-label: "Call verification emoji 4: " + call-data.verification-emoji-4; font-family: Typography.font-family-emoji; text: call-data.verification-emoji-4; font-size: Typography.xs; vertical-alignment: center; }
+                    }
+
+                    if call-data.is-encrypted && call-data.verification-emoji-1 != "" && call-data.verification-key-version != "": Text {
+                        accessible-role: text;
+                        accessible-label: "Call key version " + call-data.verification-key-version;
+                        text: "v" + call-data.verification-key-version;
+                        font-size: Typography.xs;
+                        color: Colors.text-secondary;
+                        vertical-alignment: center;
                     }
 
                     if call-data.is-encrypted && call-data.verification-emoji-1 == "": Image {

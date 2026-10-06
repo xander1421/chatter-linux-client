@@ -65,6 +65,7 @@ where
                 .map(|call| chatter_core::client::calls::CallRoomSnapshot {
                     call,
                     remotes: None,
+                    verification: chatter_core::services::call_worker::CallEncryptionVerification::ExistingHandshake,
                 })
         }
     });
@@ -124,6 +125,28 @@ where
                 }
                 if let Some(remotes) = snapshot.remotes {
                     super::room_events::reconcile_roster(&mut data, remotes);
+                }
+                use chatter_core::services::call_worker::CallEncryptionVerification;
+                match snapshot.verification {
+                    CallEncryptionVerification::ExistingHandshake => {
+                        // DM/anonymous SAS belongs to the existing handshake.
+                        data.verification_key_version = "".into();
+                    }
+                    CallEncryptionVerification::WaitingForKey => {
+                        data.verification_emoji_1 = "".into();
+                        data.verification_emoji_2 = "".into();
+                        data.verification_emoji_3 = "".into();
+                        data.verification_emoji_4 = "".into();
+                        data.verification_key_version = "".into();
+                    }
+                    CallEncryptionVerification::MediaKey { epoch, emojis } => {
+                        let [e1, e2, e3, e4] = emojis;
+                        data.verification_emoji_1 = e1.into();
+                        data.verification_emoji_2 = e2.into();
+                        data.verification_emoji_3 = e3.into();
+                        data.verification_emoji_4 = e4.into();
+                        data.verification_key_version = epoch.to_string().into();
+                    }
                 }
                 data.is_connected = call.connected_at.is_some();
                 data.duration_seconds = call.duration_seconds().min(i32::MAX as i64) as i32;
@@ -455,6 +478,8 @@ pub(super) mod tests {
         window.set_active_call_data(data.clone());
         let source = Arc::new(Mutex::new(Some(CallRoomSnapshot {
             call: call.clone(),
+            verification:
+                chatter_core::services::call_worker::CallEncryptionVerification::ExistingHandshake,
             remotes: Some(roster(&["b", "a"])),
         })));
         let read = source.clone();
@@ -514,6 +539,8 @@ pub(super) mod tests {
         other.id = chatter_core::domain::ids::CallId::new();
         *source.lock().unwrap() = Some(CallRoomSnapshot {
             call: other,
+            verification:
+                chatter_core::services::call_worker::CallEncryptionVerification::ExistingHandshake,
             remotes: Some(roster(&["wrong-room"])),
         });
         pump(&window, 1100);
@@ -571,11 +598,115 @@ pub(super) mod tests {
         );
     }
 
+    fn verification_tracks_snapshot_with_identity_fences() {
+        use chatter_core::client::calls::CallRoomSnapshot;
+        use chatter_core::services::call_worker::CallEncryptionVerification as Verification;
+        let window = MainWindow::new().unwrap();
+        let call = Call::new(ChannelId::new(), UserId::new(), CallType::Group);
+        let mut data = window.get_active_call_data();
+        data.call_id = call.id.to_string().into();
+        data.channel_id = call.channel_id.to_string().into();
+        window.set_active_call_data(data);
+        let code = |epoch| Verification::MediaKey {
+            epoch,
+            emojis: if epoch == u32::MAX {
+                ["🌟", "🐶", "🚲", "🍎"].map(String::from)
+            } else {
+                ["🐱", "🌳", "🚀", "🍋"].map(String::from)
+            },
+        };
+        let source = Arc::new(Mutex::new(Some(CallRoomSnapshot {
+            call: call.clone(),
+            remotes: None,
+            verification: code(7),
+        })));
+        let read = source.clone();
+        start_call_presentation_with(&window, move || {
+            let snapshot = read.lock().unwrap().clone();
+            async move { snapshot }
+        });
+        let assert_code = |version: &str, expected: [&str; 4]| {
+            let data = window.get_active_call_data();
+            assert_eq!(data.verification_key_version.as_str(), version);
+            assert_eq!(
+                [
+                    data.verification_emoji_1.as_str(),
+                    data.verification_emoji_2.as_str(),
+                    data.verification_emoji_3.as_str(),
+                    data.verification_emoji_4.as_str(),
+                ],
+                expected
+            );
+        };
+        pump(&window, 100);
+        assert_code("7", ["🐱", "🌳", "🚀", "🍋"]);
+        source.lock().unwrap().as_mut().unwrap().verification = code(u32::MAX);
+        pump(&window, 1100);
+        assert_code("4294967295", ["🌟", "🐶", "🚲", "🍎"]);
+        source.lock().unwrap().as_mut().unwrap().verification = Verification::WaitingForKey;
+        pump(&window, 1100);
+        assert_code("", ["", "", "", ""]);
+        // A fresh key must replace every slot after pending, in the wire order.
+        source.lock().unwrap().as_mut().unwrap().verification = code(9);
+        pump(&window, 1100);
+        assert_code("9", ["🐱", "🌳", "🚀", "🍋"]);
+        // Handshake snapshots preserve both standard and anonymous SAS.
+        for anonymous in [false, true] {
+            let mut data = window.get_active_call_data();
+            data.is_anonymous_call = anonymous;
+            window.set_active_call_data(data);
+            source.lock().unwrap().as_mut().unwrap().verification = Verification::ExistingHandshake;
+            let read = source.clone();
+            start_call_presentation_with(&window, move || {
+                let snapshot = read.lock().unwrap().clone();
+                async move { snapshot }
+            });
+            pump(&window, 100);
+            assert_code("", ["🐱", "🌳", "🚀", "🍋"]);
+        }
+        // A pending result from another core call cannot erase this code.
+        source.lock().unwrap().as_mut().unwrap().call.id = chatter_core::domain::ids::CallId::new();
+        source.lock().unwrap().as_mut().unwrap().verification = Verification::WaitingForKey;
+        pump(&window, 1100);
+        assert_code("", ["🐱", "🌳", "🚀", "🍋"]);
+        stop_call_timer();
+        // Hold a real production snapshot in flight, replace UI, then release it.
+        let mut original = window.get_active_call_data();
+        original.is_anonymous_call = false;
+        window.set_active_call_data(original);
+        let (send, receive) = tokio::sync::oneshot::channel();
+        let receive = Arc::new(Mutex::new(Some(receive)));
+        start_call_presentation_with(&window, move || {
+            let receive = receive.lock().unwrap().take();
+            async move {
+                match receive {
+                    Some(receive) => receive.await.unwrap(),
+                    None => None,
+                }
+            }
+        });
+        pump(&window, 100);
+        let mut replacement = window.get_active_call_data();
+        replacement.call_id = "replacement".into();
+        replacement.verification_key_version = "123".into();
+        window.set_active_call_data(replacement);
+        send.send(Some(CallRoomSnapshot {
+            call,
+            remotes: None,
+            verification: Verification::WaitingForKey,
+        }))
+        .unwrap();
+        pump(&window, 100);
+        assert_code("123", ["🐱", "🌳", "🚀", "🍋"]);
+        stop_call_timer();
+    }
+
     #[test]
     fn call_presentation_restores_roster_and_refreshes_timer_with_identity_and_cancellation_guards()
     {
         i_slint_backend_testing::init_integration_test_with_system_time();
         let _runtime = runtime();
+        verification_tracks_snapshot_with_identity_fences();
         room_roster_restores_mount_overwrite_and_tracks_departures_and_rejoin();
         let window = MainWindow::new().unwrap();
         let mut call = Call::new(ChannelId::new(), UserId::new(), CallType::Group);

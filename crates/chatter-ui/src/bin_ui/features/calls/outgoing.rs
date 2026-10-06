@@ -105,6 +105,7 @@ fn show_dialling(weak: &slint::Weak<MainWindow>, call_type: CallType, ui_ctx: &A
         duration_seconds: 0,
         is_connected: false,
         participants: ModelRc::new(VecModel::from(vec![local_participant])),
+        verification_key_version: "".into(),
         verification_emoji_1: "".into(),
         verification_emoji_2: "".into(),
         verification_emoji_3: "".into(),
@@ -253,9 +254,8 @@ fn render_calling_placeholder(
         is_video_paused_locally: false,
     };
 
-    // Pre-known verification emojis (channel group calls) — show them at dial
-    // time. For DM + anon they stay empty until the answer arrives, and the
-    // view shows its plain lock in their place.
+    // Handshake setup may supply SAS; group setup remains empty until the
+    // presentation snapshot supplies the installed media key and its epoch.
     let [e1, e2, e3, e4] = setup.verification_emojis.clone().unwrap_or_default();
 
     // A 1:1 call pre-renders the callee's tile, so ringing shows who is being
@@ -306,6 +306,7 @@ fn render_calling_placeholder(
         duration_seconds: 0,
         is_connected: false,
         participants: ModelRc::new(VecModel::from(participants)),
+        verification_key_version: "".into(),
         verification_emoji_1: e1.into(),
         verification_emoji_2: e2.into(),
         verification_emoji_3: e3.into(),

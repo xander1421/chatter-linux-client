@@ -28,6 +28,8 @@ export struct ActiveCallData {
     is-connected: bool,
     participants: [CallParticipantData],
     // Verification emojis (SAS) - both parties should see the same emojis
+    // Empty for handshake SAS or while waiting for the group media key.
+    verification-key-version: string,
     verification-emoji-1: string,
     verification-emoji-2: string,
     verification-emoji-3: string,
