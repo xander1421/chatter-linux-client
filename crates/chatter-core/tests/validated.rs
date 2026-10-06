@@ -12461,6 +12461,15 @@ async fn channel_restart_receive(inject_retained_failure: bool) {
             );
             tokio::time::sleep(POLL_INTERVAL).await;
         }
+        let refresh = wait_for_event(&mut events_b2, EVENT_TIMEOUT, |event| {
+            matches!(event, DomainEvent::SyncComplete { messages_synced, .. }
+                if *messages_synced >= 52)
+        })
+        .await;
+        assert!(
+            refresh.is_some(),
+            "partial backfill stored rows but failed to notify the visible chat to reload"
+        );
         let settings = chatter_core::storage::repositories::settings_repo::SettingsRepository::new(
             client_b2.messages().database(),
         );

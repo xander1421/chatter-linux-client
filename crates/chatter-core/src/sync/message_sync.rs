@@ -44,6 +44,24 @@ pub struct FullMessageSyncResult {
     pub errors: Vec<String>,
 }
 
+impl FullMessageSyncResult {
+    fn record_channel(&mut self, result: MessageSyncResult, outcome: Result<(), SyncError>) {
+        // Persisted progress must reach SyncComplete even when this channel
+        // needs retry (including a later-page RPC failure). Only completion
+        // contributes to channels_synced; errors remain retry evidence.
+        self.total_fetched += result.fetched;
+        self.total_inserted += result.inserted;
+        match outcome {
+            Ok(()) => self.channels_synced += 1,
+            Err(e) => {
+                tracing::warn!(channel_id = %result.channel_id, error = %e,
+                    "Message sync failed for channel");
+                self.errors.push(format!("{}: {}", result.channel_id, e));
+            }
+        }
+    }
+}
+
 impl MessageSync {
     pub fn new(
         grpc_pool: Arc<GrpcClientPool>,
@@ -65,14 +83,24 @@ impl MessageSync {
         &self,
         channel_id: &ChannelId,
     ) -> Result<MessageSyncResult, SyncError> {
+        let mut result = MessageSyncResult {
+            channel_id: channel_id.to_string(),
+            ..Default::default()
+        };
+        self.sync_channel_into(channel_id, &mut result).await?;
+        Ok(result)
+    }
+
+    // Keep progress separate from completion so callers can report already
+    // persisted rows even when an ingestion or later fetch fails.
+    async fn sync_channel_into(
+        &self,
+        channel_id: &ChannelId,
+        result: &mut MessageSyncResult,
+    ) -> Result<(), SyncError> {
         let channel_id_str = channel_id.to_string();
         let sync_key = format!("sync:messages:{}:last_at_ns", channel_id);
         let last_sync = self.settings_repo.get::<u64>(&sync_key).ok().flatten();
-
-        let mut result = MessageSyncResult {
-            channel_id: channel_id_str.clone(),
-            ..Default::default()
-        };
 
         // Capture the boundary before fetching, so messages arriving during
         // pagination remain eligible on the next sync. The wire uses Unix ns.
@@ -144,7 +172,7 @@ impl MessageSync {
             );
         }
 
-        Ok(result)
+        Ok(())
     }
 
     /// Sync messages for all given channels.
@@ -152,21 +180,12 @@ impl MessageSync {
         let mut full_result = FullMessageSyncResult::default();
 
         for channel_id in channel_ids {
-            match self.sync_channel(channel_id).await {
-                Ok(result) => {
-                    full_result.channels_synced += 1;
-                    full_result.total_fetched += result.fetched;
-                    full_result.total_inserted += result.inserted;
-                }
-                Err(e) => {
-                    tracing::warn!(
-                        channel_id = %channel_id,
-                        error = %e,
-                        "Message sync failed for channel"
-                    );
-                    full_result.errors.push(format!("{}: {}", channel_id, e));
-                }
-            }
+            let mut result = MessageSyncResult {
+                channel_id: channel_id.to_string(),
+                ..Default::default()
+            };
+            let outcome = self.sync_channel_into(channel_id, &mut result).await;
+            full_result.record_channel(result, outcome);
         }
 
         tracing::info!(
@@ -207,5 +226,49 @@ mod timestamp_tests {
             chrono::DateTime::from_timestamp_nanos(reference as i64),
             now
         );
+    }
+}
+
+#[cfg(test)]
+mod partial_progress_tests {
+    use super::*;
+    use crate::sync::sync_engine::SyncCycleResult;
+
+    #[test]
+    fn partial_persistence_counts_survive_ingestion_and_later_page_network_errors() {
+        for error in [
+            SyncError::Storage("ingestion pending".into()),
+            SyncError::Network("next page unavailable".into()),
+        ] {
+            let channel = ChannelId::new().to_string();
+            let mut full = FullMessageSyncResult::default();
+            full.record_channel(
+                MessageSyncResult {
+                    channel_id: channel.clone(),
+                    fetched: 50,
+                    inserted: 49,
+                    pages: 1,
+                },
+                Err(error),
+            );
+            assert_eq!(full.total_fetched, 50);
+            assert_eq!(
+                full.total_inserted, 49,
+                "stored rows must trigger aggregate refresh"
+            );
+            assert_eq!(full.channels_synced, 0, "partial channel is not complete");
+            assert_eq!(full.errors.len(), 1);
+            assert!(full.errors[0].starts_with(&channel));
+            let cycle = SyncCycleResult {
+                messages_failed: !full.errors.is_empty(),
+                messages: full,
+                ..Default::default()
+            };
+            assert!(
+                cycle.needs_retry(),
+                "refresh must not turn pending truth into success"
+            );
+            assert_eq!(cycle.messages.total_inserted, 49);
+        }
     }
 }
