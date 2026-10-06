@@ -203,7 +203,7 @@ fn refresh_reaction_snapshot(
                 continue;
             };
             if m.sender_id.as_str() != author.to_string()
-                || m.timestamp_ns.as_str() != sent_at.to_string()
+                || m.timestamp_ns.as_str() != snapshot.sent_at.to_string()
             {
                 continue;
             }

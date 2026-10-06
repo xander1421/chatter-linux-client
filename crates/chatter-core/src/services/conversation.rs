@@ -175,7 +175,7 @@ impl ConversationHandle {
             scope,
             conversation: self.conversation,
             author: *author,
-            sent_at,
+            sent_at: message.sent_at,
             summary: crate::domain::message::ReactionCount::summary_string(
                 &message.reaction_counts,
             ),
@@ -316,11 +316,27 @@ impl ConversationHandle {
                     }
                     _ => target_author_str.clone(),
                 };
+                let wire_clock = if matches!(self.conversation, ActiveConversation::Channel(_)) {
+                    let target = self
+                        .client
+                        .messages()
+                        .message_repo
+                        .get_by_reaction_scope(&scope, target_author, target_sent_timestamp)?
+                        .ok_or_else(|| {
+                            ConversationError::Other("Reaction target no longer stored".into())
+                        })?;
+                    self.client
+                        .messages()
+                        .message_repo
+                        .authenticated_channel_reaction_clock(&target)?
+                } else {
+                    target_sent_timestamp
+                };
                 let content = crate::services::build_reaction_content_with_channel(
                     emoji,
                     remove,
                     &wire_author,
-                    target_sent_timestamp,
+                    wire_clock,
                     self.active_channel_id().as_deref(),
                 );
                 self.dispatch_content(content).await?;

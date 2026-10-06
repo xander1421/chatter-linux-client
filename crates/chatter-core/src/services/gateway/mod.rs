@@ -378,6 +378,37 @@ impl MessageGateway {
             &self.message_repo,
         );
 
+        // A solicited, authenticated channel resend carries the original UUID.
+        // It can prove the sender clock of an old row whose deferred receive
+        // stored the transport clock. Preserve that row and its ledgers rather
+        // than insert a duplicate or rewrite already encrypted controls.
+        if solicited && !data_message.message_id.is_empty() {
+            if let Some(existing) = self.message_repo.get(&message.id)? {
+                self.message_repo
+                    .bind_authenticated_channel_clock(&message)?;
+                let mut retained = self.message_repo.get(&existing.id)?.ok_or_else(|| {
+                    ServiceError::Validation("Resend target no longer stored".into())
+                })?;
+                if !retained.is_edited && retained.as_text() == Some("[Encrypted message]") {
+                    retained.content = message.content;
+                    if retained.attachments.is_empty() {
+                        retained.attachments = message.attachments;
+                    }
+                    self.message_repo.update(&retained)?;
+                }
+                return Ok(SealedSenderResult::DataMessageReceived {
+                    sender_id: sender_id
+                        .ok_or_else(|| ServiceError::Validation("Resend missing sender".into()))?,
+                    channel_id,
+                    message_id: retained.id,
+                    body: retained.as_text().unwrap_or_default().to_string(),
+                    timestamp: retained.sent_at,
+                    attachments: data_message.attachments,
+                    profile_key_changed,
+                });
+            }
+        }
+
         // Already held (a sender-key resend answering a second DecryptionError,
         // e.g. after a restart, or a re-delivery): the unique
         // (conversation, sender, sent_at) row exists, so the insert would fail

@@ -83,6 +83,7 @@ mod v082_verified_channel_membership;
 mod v083_mesh_sender_names;
 mod v084_scoped_reactions;
 mod v085_reaction_receive_journal;
+mod v086_channel_message_clocks;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -169,6 +170,7 @@ pub use v082_verified_channel_membership::V082VerifiedChannelMembership;
 pub use v083_mesh_sender_names::V083MeshSenderNames;
 pub use v084_scoped_reactions::V084ScopedReactions;
 pub use v085_reaction_receive_journal::V085ReactionReceiveJournal;
+pub use v086_channel_message_clocks::V086ChannelMessageClocks;
 
 /// Trait for database migrations.
 ///
@@ -380,4 +382,5 @@ pub fn default_migrations() -> MigrationRunner {
         .register(V083MeshSenderNames)
         .register(V084ScopedReactions)
         .register(V085ReactionReceiveJournal)
+        .register(V086ChannelMessageClocks)
 }

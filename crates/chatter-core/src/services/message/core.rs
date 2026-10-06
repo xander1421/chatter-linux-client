@@ -312,12 +312,15 @@ impl MessageService {
         // channels don't get mistagged as AnonGroup.
         let conv_type =
             super::conversion::conversation_type_for_channel(&self.channel_repo, channel_id);
-        let mut message = proto_to_domain_message(&proto_message, sender_id, conv_type)?;
+        let mut message = super::conversion::proto_to_outgoing_channel_message(
+            &proto_message,
+            sender_id,
+            conv_type,
+            sent_at,
+            is_dm || require_encryption,
+        )?;
         message.attachments = attachment_ids;
-        if is_dm || require_encryption {
-            // Encrypted receipts name the E2E DataMessage clock.
-            message.sent_at = sent_at;
-        } else {
+        if !(is_dm || require_encryption) {
             crate::storage::repositories::message_receipt_repo::MessageReceiptRepository::new(
                 self.database.clone(),
             )

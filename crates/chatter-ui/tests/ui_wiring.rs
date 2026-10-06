@@ -6787,3 +6787,76 @@ fn failed_reply_restores_its_thumbnail_after_navigation() {
     assert_eq!(h.w.get_composer_reply_to_sender_name().as_str(), "Author");
     assert_eq!(h.w.get_composer_reply_preview().as_str(), "Photo");
 }
+
+/// The Android reaction callback carries author/clock strings from production
+/// conversion; exercise that boundary with a clock above f64's exact range.
+#[test]
+fn reaction_converter_callback_preserves_author_and_nanosecond_clock() {
+    use chatter_core::domain::{
+        UserId,
+        ids::ChannelId,
+        message::{ConversationType, Message},
+    };
+    use chatter_core::inbox::{events::InboxEvent, polling::device::dispatch_control_content};
+    use std::sync::{Arc, Mutex};
+    testing::init_no_event_loop();
+    let window = MainWindow::new().unwrap();
+    let channel = ChannelId::new();
+    let author = UserId::new();
+    let actor = UserId::new();
+    let clock = 1_791_275_453_330_123_457u64;
+    let message = Message::new_text(
+        channel,
+        ConversationType::Channel,
+        Some(author),
+        "synthetic".into(),
+        clock,
+    );
+    let row =
+        chatter_ui::bin_ui::converters::message_to_display_data(&message, "synthetic", &[], None)
+            .to_slint_with_user(&actor.to_string());
+    let captured = Arc::new(Mutex::new(None));
+    let capture = captured.clone();
+    window.on_reaction_selected(move |sender, timestamp, _id, emoji| {
+        let parsed_author: UserId = sender.as_str().parse().unwrap();
+        let parsed_clock: u64 = timestamp.as_str().parse().unwrap();
+        *capture.lock().unwrap() = Some(
+            chatter_core::services::build_reaction_content_with_channel(
+                emoji.as_str(),
+                false,
+                &parsed_author.to_string(),
+                parsed_clock,
+                Some(&channel.to_string()),
+            )
+            .content
+            .unwrap(),
+        );
+    });
+    window.invoke_reaction_selected(row.sender_id, row.timestamp_ns, row.message_id, "👍".into());
+    let (tx, mut rx) = tokio::sync::broadcast::channel(4);
+    let stats = Arc::new(Default::default());
+    dispatch_control_content(
+        captured.lock().unwrap().take().unwrap(),
+        &actor,
+        1,
+        "synthetic",
+        clock + 1,
+        &tx,
+        &stats,
+    );
+    match rx.try_recv().unwrap() {
+        InboxEvent::ChannelReaction {
+            channel_id,
+            sender_id,
+            target_author_aci,
+            target_sent_timestamp,
+            ..
+        } => {
+            assert_eq!(channel_id, channel);
+            assert_eq!(sender_id, actor);
+            assert_eq!(target_author_aci, author.to_string());
+            assert_eq!(target_sent_timestamp, clock);
+        }
+        _ => panic!("reaction did not reach channel dispatcher"),
+    }
+}

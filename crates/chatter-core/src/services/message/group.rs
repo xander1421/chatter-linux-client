@@ -796,6 +796,18 @@ impl MessageService {
                             continue;
                         }
                     };
+                    if dm.channel_id.parse::<ChannelId>().ok() != Some(channel_id)
+                        || dm.timestamp == 0
+                        || proto_msg.channel_id.parse::<ChannelId>().ok() != Some(channel_id)
+                        || proto_msg.author_id.parse::<UserId>().ok() != Some(sender_id)
+                        || proto_msg.author_device_id != device_id
+                        || (!dm.message_id.is_empty() && dm.message_id != proto_msg.id)
+                        || ((!dm.message_id.is_empty() || !dm.thread_id.is_empty())
+                            && dm.thread_id != proto_msg.parent_id)
+                    {
+                        tracing::warn!("Retry: authenticated channel identity mismatch");
+                        continue;
+                    }
                     self.check_group_stamp(&channel_id, &dm);
 
                     // Persist incoming attachment pointers so the receiver can
@@ -832,6 +844,9 @@ impl MessageService {
                         })
                     };
                     let mut patched = proto_msg.clone();
+                    // Target identity comes from the authenticated DataMessage,
+                    // never from the later server transport envelope.
+                    patched.timestamp = dm.timestamp;
                     patched.content = Some(chat_v1::message::Content {
                         r#type: Some(new_type),
                     });
@@ -845,16 +860,19 @@ impl MessageService {
                         );
                     match proto_to_domain_message_with_sender(&patched, Some(sender_id), conv_type)
                     {
-                        Ok(message) => {
-                            // Persist so the healed message survives a channel
-                            // switch, then surface it (parity with stream path).
-                            match self.get_message_local(&message.id) {
-                                Ok(Some(_)) => {
-                                    let _ = self.update_message(&message);
-                                }
-                                _ => {
-                                    let _ = self.store_message_local(&message);
-                                }
+                        Ok(mut message) => {
+                            crate::services::gateway::inbound::apply_inbound_quote(
+                                &mut message,
+                                dm.quote.as_ref(),
+                                &self.message_repo,
+                            );
+                            if !super::channel_inbound::ChannelInbound::persist_message(
+                                self,
+                                &mut message,
+                                channel_id,
+                                !dm.message_id.is_empty(),
+                            ) {
+                                continue;
                             }
                             let _ = self
                                 .event_bus
@@ -2279,6 +2297,297 @@ mod tests {
         ));
     }
 
+    /// Connected production send conversion -> delayed server envelope ->
+    /// missing SKDM -> authenticated retry -> controls in both directions.
+    #[tokio::test]
+    async fn delayed_channel_receive_preserves_authenticated_reaction_identity() {
+        delayed_reaction_fixture(false).await;
+        delayed_reaction_fixture(true).await;
+    }
+
+    async fn delayed_reaction_fixture(legacy: bool) {
+        use crate::domain::{
+            MessageId,
+            message::{ConversationType, Message, MessageContent},
+            reaction::ReactionScope,
+        };
+        use crate::inbox::{polling::device::dispatch_control_content, state::InboxStats};
+        use crate::proto::content_v1;
+        use crate::services::inbox_processor::InboxEventProcessor;
+        use crate::services::message::channel_inbound::{ChannelInbound, Ingested};
+        use prost::Message as _;
+        let t = two_members();
+        let sent = TimestampNanos::now().as_u64();
+        let transport = sent + 445_413_938;
+        let id = MessageId::new();
+        let skdm = t
+            .alice
+            .signal()
+            .create_sender_key(&t.channel_id)
+            .await
+            .unwrap();
+        let dm = content_v1::DataMessage {
+            body: "bold target".into(),
+            message_id: if legacy {
+                id.to_string()
+            } else {
+                String::new()
+            },
+            channel_id: t.channel_id.to_string(),
+            timestamp: sent,
+            ..Default::default()
+        };
+        let plaintext = content_v1::Content {
+            timestamp: sent,
+            content: Some(content_v1::content::Content::DataMessage(dm)),
+            ..Default::default()
+        }
+        .encode_to_vec();
+        let (encrypted, _) = t
+            .alice
+            .messages()
+            .prepare_encrypted_content(
+                &mut t.alice.messages().auth_client(),
+                &t.channel_id,
+                &plaintext,
+                crate::proto::chat_v1::message::Content {
+                    r#type: Some(crate::proto::chat_v1::message::content::Type::Text(
+                        "bold target".into(),
+                    )),
+                },
+                false,
+                true,
+                sent,
+            )
+            .await
+            .unwrap();
+        let Some(crate::proto::chat_v1::message::content::Type::Encrypted(ciphertext)) =
+            encrypted.r#type
+        else {
+            panic!("production send must encrypt");
+        };
+        let ge = content_v1::GroupEncrypted::decode(ciphertext.ciphertext.as_slice()).unwrap();
+        let envelope = server_copy(&t, &id, transport, &ge);
+        let mut outgoing = super::super::conversion::proto_to_outgoing_channel_message(
+            &envelope,
+            t.alice_id,
+            ConversationType::Channel,
+            sent,
+            true,
+        )
+        .unwrap();
+        outgoing.content = MessageContent::Text("bold target".into());
+        t.alice
+            .messages()
+            .message_repo
+            .insert_outgoing(&outgoing)
+            .unwrap();
+        // Plain public messages already use the server's accepted row clock.
+        let plain = super::super::conversion::proto_to_outgoing_channel_message(
+            &crate::proto::chat_v1::Message {
+                content: Some(crate::proto::chat_v1::message::Content {
+                    r#type: Some(crate::proto::chat_v1::message::content::Type::Text(
+                        "public".into(),
+                    )),
+                }),
+                ..envelope.clone()
+            },
+            t.alice_id,
+            ConversationType::Channel,
+            sent,
+            false,
+        )
+        .unwrap();
+        assert_eq!(plain.sent_at, transport);
+        let inbound = ChannelInbound::new(t.bob.messages().clone(), t.bob.attachments().clone());
+        assert_eq!(
+            inbound.ingest(&envelope, t.channel_id, false).await,
+            Ingested::DeferredPendingSenderKey
+        );
+        let scope = ReactionScope::new(t.channel_id, ConversationType::Channel);
+        if legacy {
+            let mut old = Message::new_text(
+                t.channel_id,
+                ConversationType::Channel,
+                Some(t.alice_id),
+                "[Encrypted message]".into(),
+                transport,
+            );
+            old.id = id;
+            t.bob.messages().store_message_local(&old).unwrap();
+            t.bob
+                .messages()
+                .record_reaction_at(&scope, &t.alice_id, transport, &t.bob_id, "😂", false, 1)
+                .unwrap();
+        }
+        // Target-missing is retained, never guessed from a nearby clock.
+        assert!(
+            !t.bob
+                .messages()
+                .record_inbound_reaction(&scope, &t.alice_id, &t.alice_id, sent, "😂", false, 2)
+                .unwrap()
+        );
+        assert!(
+            t.bob
+                .messages()
+                .message_repo
+                .get_by_reaction_scope(&scope, &t.alice_id, sent)
+                .unwrap()
+                .is_none()
+        );
+        t.bob
+            .signal()
+            .process_sender_key(&t.alice_id, 1, &skdm)
+            .await
+            .unwrap();
+        t.bob
+            .messages()
+            .retry_pending_group_decrypts(t.channel_id, t.alice_id, 1)
+            .await;
+        let retained = if legacy { transport } else { sent };
+        let received = t.bob.messages().get_message_local(&id).unwrap().unwrap();
+        assert_eq!(received.sent_at, retained);
+        assert_eq!(received.as_text(), Some("bold target"));
+        assert_eq!(
+            t.bob
+                .messages()
+                .message_repo
+                .authenticated_channel_reaction_clock(&received)
+                .unwrap(),
+            sent
+        );
+        assert_eq!(
+            t.bob
+                .messages()
+                .message_repo
+                .get_reaction_counts(&scope, &t.alice_id, sent)
+                .unwrap()[0]
+                .count,
+            if legacy { 2 } else { 1 }
+        );
+        // Existing local ledger ownership survives; each peer's new control
+        // addresses the canonical authenticated clock through real dispatch.
+        t.alice
+            .messages()
+            .record_reaction_at(&scope, &t.alice_id, sent, &t.alice_id, "😂", false, 2)
+            .unwrap();
+        for (receiver, actor) in [(&t.alice, t.bob_id), (&t.bob, t.bob_id)] {
+            let content = crate::services::build_reaction_content_with_channel(
+                "😂",
+                false,
+                &t.alice_id.to_string(),
+                sent,
+                Some(&t.channel_id.to_string()),
+            );
+            let (tx, mut rx) = tokio::sync::broadcast::channel(8);
+            let stats = Arc::new(parking_lot::RwLock::new(InboxStats::default()));
+            dispatch_control_content(
+                content.content.unwrap(),
+                &actor,
+                1,
+                "reaction",
+                transport + 100,
+                &tx,
+                &stats,
+            );
+            InboxEventProcessor::from_client(receiver)
+                .process(&rx.try_recv().unwrap())
+                .await;
+        }
+        for client in [&t.alice, &t.bob] {
+            let snapshot = crate::services::conversation::ConversationHandle::new(
+                crate::state::ActiveConversation::Channel(t.channel_id),
+                client.clone(),
+            )
+            .reaction_snapshot(&t.alice_id, sent)
+            .unwrap()
+            .unwrap();
+            assert_eq!(
+                snapshot.sent_at,
+                if Arc::ptr_eq(client, &t.bob) {
+                    retained
+                } else {
+                    sent
+                }
+            );
+            assert_eq!(snapshot.counts[0].count, 2);
+            assert!(snapshot.own_emojis.contains(&"😂".to_string()));
+        }
+        // Cached ciphertext does not authenticate its outer timestamp. Replay
+        // preserves the exact mapping, cached row, and aggregate.
+        inbound
+            .ingest_resynced(&envelope, t.channel_id)
+            .await
+            .unwrap();
+        assert_eq!(
+            t.bob
+                .messages()
+                .get_message_local(&id)
+                .unwrap()
+                .unwrap()
+                .sent_at,
+            retained
+        );
+        let reopened = crate::client::ChatterClient::builder()
+            .server_url("https://localhost:1")
+            .data_dir(t._dirs.1.path().to_str().unwrap())
+            .build()
+            .unwrap();
+        let repo =
+            crate::storage::repositories::unified_message_repo::UnifiedMessageRepository::new(
+                reopened.messages().database.clone(),
+            );
+        assert_eq!(
+            repo.resolve_channel_reaction_clock(&scope, &t.alice_id, sent)
+                .unwrap(),
+            retained
+        );
+        assert_eq!(
+            repo.get_reaction_counts(&scope, &t.alice_id, sent).unwrap()[0].count,
+            2
+        );
+        assert!(
+            repo.get_by_reaction_scope(&scope, &t.alice_id, sent + 1)
+                .unwrap()
+                .is_none()
+        );
+        let foreign = ReactionScope::new(ChannelId::new(), ConversationType::Channel);
+        assert!(
+            repo.get_by_reaction_scope(&foreign, &t.alice_id, sent)
+                .unwrap()
+                .is_none()
+        );
+        for invalid in [
+            Message {
+                sender_id: Some(UserId::new()),
+                ..received.clone()
+            },
+            Message {
+                conversation_id: ChannelId::new(),
+                ..received.clone()
+            },
+            Message {
+                conversation_type: ConversationType::ServerDm,
+                ..received.clone()
+            },
+        ] {
+            assert!(repo.bind_authenticated_channel_clock(&invalid).is_err());
+        }
+        if legacy {
+            assert!(
+                repo.bind_authenticated_channel_clock(&Message {
+                    sent_at: sent + 1,
+                    ..received.clone()
+                })
+                .is_err()
+            );
+        }
+        assert_eq!(
+            repo.get_reaction_counts(&scope, &t.alice_id, sent).unwrap()[0].count,
+            2
+        );
+    }
+
     /// Alice's group message as the server hands it to Bob.
     fn server_copy(
         t: &TwoMembers,
@@ -3039,6 +3348,8 @@ mod tests {
             content: Some(content_v1::content::Content::DataMessage(
                 content_v1::DataMessage {
                     body: "from my tablet".into(),
+                    channel_id: t.channel_id.to_string(),
+                    timestamp: TimestampNanos::now().as_u64(),
                     ..Default::default()
                 },
             )),
@@ -3194,6 +3505,68 @@ mod tests {
         assert!(
             !m.solicited_resends
                 .contains(&(t.channel_id, t.alice_id, ts3 / 1_000_000))
+        );
+        // A solicited authenticated UUID can bind an old transport-clock row;
+        // an unsolicited or foreign-author claim cannot change its history.
+        use crate::domain::{
+            message::{ConversationType, Message},
+            reaction::ReactionScope,
+        };
+        let sent = ts3 + 20_000_000;
+        let transport = sent + 445_413_938;
+        let mut old = Message::new_text(
+            t.channel_id,
+            ConversationType::Channel,
+            Some(t.alice_id),
+            "[Encrypted message]".into(),
+            transport,
+        );
+        old.id = MessageId::new();
+        m.store_message_local(&old).unwrap();
+        let scope = ReactionScope::of(&old);
+        m.record_reaction_at(&scope, &t.alice_id, transport, &t.bob_id, "👍", false, 1)
+            .unwrap();
+        assert!(
+            !m.record_inbound_reaction(&scope, &t.alice_id, &t.alice_id, sent, "👍", false, 2)
+                .unwrap()
+        );
+        m.solicited_resends
+            .insert((t.channel_id, t.alice_id, sent / 1_000_000));
+        gateway
+            .store_data_message(resend(old.id, sent), Some(t.alice_id))
+            .await
+            .unwrap();
+        let healed = m.get_message_local(&old.id).unwrap().unwrap();
+        assert_eq!(healed.sent_at, transport);
+        assert_eq!(healed.as_text(), Some("resent"));
+        assert_eq!(
+            m.message_repo
+                .get_reaction_counts(&scope, &t.alice_id, sent)
+                .unwrap()[0]
+                .count,
+            2
+        );
+        let mut second = old.clone();
+        second.id = MessageId::new();
+        second.sent_at = transport + 1;
+        m.store_message_local(&second).unwrap();
+        assert!(
+            m.message_repo
+                .bind_authenticated_channel_clock(&Message {
+                    sent_at: sent,
+                    ..second.clone()
+                })
+                .is_err()
+        );
+        assert_eq!(
+            m.get_message_local(&second.id).unwrap().unwrap().sent_at,
+            transport + 1
+        );
+        assert_eq!(
+            m.message_repo
+                .resolve_channel_reaction_clock(&scope, &t.alice_id, sent)
+                .unwrap(),
+            transport
         );
     }
 

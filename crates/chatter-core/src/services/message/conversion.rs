@@ -60,6 +60,23 @@ pub fn proto_to_domain_message(
     proto_to_domain_message_with_sender(proto, Some(sender_id), conversation_type)
 }
 
+/// Materialize the accepted channel send using the same target clock as receive:
+/// plaintext is identified by the accepted server row; ciphertext by its
+/// authenticated DataMessage, whose clock the sender retained before sending.
+pub(crate) fn proto_to_outgoing_channel_message(
+    proto: &chat_v1::Message,
+    sender: crate::domain::ids::UserId,
+    kind: ConversationType,
+    sender_clock: u64,
+    encrypted: bool,
+) -> Result<Message, MessageError> {
+    let mut message = proto_to_domain_message(proto, sender, kind)?;
+    if encrypted {
+        message.sent_at = sender_clock;
+    }
+    Ok(message)
+}
+
 /// Convert a proto Message to a domain Message with optional sender.
 ///
 /// See `proto_to_domain_message` for the `conversation_type` contract.

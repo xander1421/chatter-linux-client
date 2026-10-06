@@ -40,6 +40,9 @@ fn index_shared_content(conn: &rusqlite::Connection, message: &Message) {
     }
 }
 
+#[path = "channel_message_clocks.rs"]
+mod channel_message_clocks;
+
 impl UnifiedMessageRepository {
     /// Create a new UnifiedMessageRepository.
     pub fn new(db: Arc<Database>) -> Self {
@@ -876,12 +879,14 @@ impl UnifiedMessageRepository {
         author: &UserId,
         target_ts: u64,
     ) -> Result<bool, StorageError> {
-        match Self::ensure_reaction_scope_resolved_with_conn(tx, scope, author, target_ts) {
+        let retained_ts =
+            Self::resolve_channel_reaction_clock_with_conn(tx, scope, author, target_ts)?;
+        match Self::ensure_reaction_scope_resolved_with_conn(tx, scope, author, retained_ts) {
             Ok(()) => {}
             Err(StorageError::InvalidData(_)) => return Ok(false),
             Err(error) => return Err(error),
         }
-        let target=tx.query_row(&format!("SELECT {} FROM messages WHERE conversation_id=?1 AND conversation_type=?2 AND sender_id=?3 AND sent_at=?4 AND is_deleted=0",message_columns("messages")),params![scope.id.to_string(),scope.kind.as_str(),author.to_string(),target_ts as i64],row_to_message).optional()?.transpose()?;
+        let target=tx.query_row(&format!("SELECT {} FROM messages WHERE conversation_id=?1 AND conversation_type=?2 AND sender_id=?3 AND sent_at=?4 AND is_deleted=0",message_columns("messages")),params![scope.id.to_string(),scope.kind.as_str(),author.to_string(),retained_ts as i64],row_to_message).optional()?.transpose()?;
         let Some(target) = target else {
             return Ok(false);
         };
@@ -1032,7 +1037,7 @@ impl UnifiedMessageRepository {
                             .into(),
                     )
                 })?;
-                let mut stmt=tx.prepare("SELECT DISTINCT conversation_type FROM messages WHERE conversation_id=?1 AND sender_id=?2 AND sent_at=?3 AND conversation_type IN ('channel','anon_group') AND is_deleted=0")?;
+                let mut stmt=tx.prepare("SELECT DISTINCT m.conversation_type FROM messages m WHERE m.conversation_id=?1 AND m.sender_id=?2 AND (m.sent_at=?3 OR EXISTS(SELECT 1 FROM channel_message_clocks a WHERE a.message_id=m.id AND a.conversation_id=m.conversation_id AND a.conversation_type=m.conversation_type AND a.author_id=m.sender_id AND a.authenticated_sent_at=?3)) AND m.conversation_type IN ('channel','anon_group') AND m.is_deleted=0")?;
                 let kinds = stmt
                     .query_map(
                         params![
@@ -1225,6 +1230,7 @@ impl UnifiedMessageRepository {
         author: &UserId,
         sent_at: u64,
     ) -> Result<Option<Message>, StorageError> {
+        let sent_at = self.resolve_channel_reaction_clock(scope, author, sent_at)?;
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(&format!("SELECT {} FROM messages WHERE conversation_id=?1 AND conversation_type=?2 AND sender_id=?3 AND sent_at=?4 AND is_deleted=0", message_columns("messages")))?;
         let row = stmt
@@ -1247,6 +1253,7 @@ impl UnifiedMessageRepository {
         author: &UserId,
         sent_at: u64,
     ) -> Result<(), StorageError> {
+        let sent_at = self.resolve_channel_reaction_clock(scope, author, sent_at)?;
         let conn = self.db.read_connection()?;
         Self::ensure_reaction_scope_resolved_with_conn(&conn, scope, author, sent_at)
     }
@@ -1274,6 +1281,7 @@ impl UnifiedMessageRepository {
         current: &UserId,
         desired: &[(UserId, String)],
     ) -> Result<(), StorageError> {
+        let sent_at = self.resolve_channel_reaction_clock(scope, author, sent_at)?;
         let mut conn = self.db.connection()?;
         let tx = conn.transaction()?;
         let exists:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM messages WHERE conversation_id=?1 AND conversation_type=?2 AND sender_id=?3 AND sent_at=?4 AND is_deleted=0)",params![scope.id.to_string(),scope.kind.as_str(),author.to_string(),sent_at as i64],|r|r.get(0))?;
@@ -1329,6 +1337,7 @@ impl UnifiedMessageRepository {
         emoji: &str,
         action_ts: u64,
     ) -> Result<bool, StorageError> {
+        let sent_at_ns = self.resolve_channel_reaction_clock(scope, sender_id, sent_at_ns)?;
         let mut conn = self.db.connection()?;
         let tx = conn.transaction()?;
         let conn = &tx;
@@ -1408,6 +1417,7 @@ impl UnifiedMessageRepository {
         emoji: &str,
         action_ts: u64,
     ) -> Result<bool, StorageError> {
+        let sent_at_ns = self.resolve_channel_reaction_clock(scope, sender_id, sent_at_ns)?;
         let mut conn = self.db.connection()?;
         let tx = conn.transaction()?;
         let conn = &tx;
@@ -1460,6 +1470,7 @@ impl UnifiedMessageRepository {
         sent_at_ns: u64,
         emoji: &str,
     ) -> Result<bool, StorageError> {
+        let sent_at_ns = self.resolve_channel_reaction_clock(scope, sender_id, sent_at_ns)?;
         self.ensure_reaction_scope_resolved(scope, sender_id, sent_at_ns)?;
         let conn = self.db.read_connection()?;
         let blob: Option<Vec<u8>> = conn
@@ -1484,6 +1495,7 @@ impl UnifiedMessageRepository {
         sender_id: &UserId,
         sent_at_ns: u64,
     ) -> Result<Vec<Reaction>, StorageError> {
+        let sent_at_ns = self.resolve_channel_reaction_clock(scope, sender_id, sent_at_ns)?;
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
             "SELECT id, sender_id, sent_at_ns, user_id, emoji, created_at
@@ -1510,6 +1522,7 @@ impl UnifiedMessageRepository {
         sender_id: &UserId,
         sent_at_ns: u64,
     ) -> Result<Vec<ReactionCount>, StorageError> {
+        let sent_at_ns = self.resolve_channel_reaction_clock(scope, sender_id, sent_at_ns)?;
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
             "SELECT emoji, COUNT(*) FROM unified_reactions

@@ -92,12 +92,13 @@ impl ChannelInbound {
         // conversation. (An own message in an ENCRYPTED channel still drops
         // out below — we cannot decrypt our own sender-key ciphertext — which
         // is what the message-backup path exists for.)
-        let mut message = match self.prepare(proto_msg, channel_id, emit).await {
-            Ok(m) => m,
-            Err(outcome) => return outcome,
-        };
+        let (mut message, authenticated_identity) =
+            match self.prepare(proto_msg, channel_id, emit).await {
+                Ok(m) => m,
+                Err(outcome) => return outcome,
+            };
 
-        if !self.persist(&mut message, channel_id) {
+        if !self.persist(&mut message, channel_id, authenticated_identity) {
             return Ingested::RetryableFailure;
         }
 
@@ -130,7 +131,7 @@ impl ChannelInbound {
         channel_id: ChannelId,
     ) -> Ingested {
         let message = match self.prepare(proto_msg, channel_id, true).await {
-            Ok(m) => m,
+            Ok((m, _)) => m,
             Err(outcome) => return outcome,
         };
         // An edit with no known author cannot be authorized.
@@ -303,7 +304,7 @@ impl ChannelInbound {
         proto_msg: &chat_v1::Message,
         channel_id: ChannelId,
         skip_own: bool,
-    ) -> Result<Message, Ingested> {
+    ) -> Result<(Message, bool), Ingested> {
         // The server keeps a message this user deleted for themselves (or a
         // peer deleted for everyone); every catch-up re-fetch hands it back.
         if let Ok(id) = proto_msg.id.parse::<crate::domain::ids::MessageId>() {
@@ -328,6 +329,11 @@ impl ChannelInbound {
                 .map(UserId::from)
         };
 
+        if proto_msg.channel_id.parse::<ChannelId>().ok() != Some(channel_id)
+            || (!proto_msg.author_id.is_empty() && sender_id.is_none())
+        {
+            return Err(Ingested::Dropped);
+        }
         let current_user = self.messages.settings_repo.current_user_id().ok();
         let is_own_user = sender_id.is_some() && sender_id == current_user;
         // THIS device's send: already on screen from the optimistic send, and
@@ -345,6 +351,7 @@ impl ChannelInbound {
         // Sender-key (group) ciphertext arrives as a GroupEncrypted proto
         // inside `EncryptedData.ciphertext`.
         let mut inbound_quote: Option<content_v1::Quote> = None;
+        let mut authenticated_identity = false;
         let decrypted = if let Some(chat_v1::message::content::Type::Encrypted(enc)) =
             proto_msg.content.as_ref().and_then(|c| c.r#type.as_ref())
         {
@@ -420,6 +427,15 @@ impl ChannelInbound {
                         }
                     };
 
+                    if dm.channel_id.parse::<ChannelId>().ok() != Some(channel_id)
+                        || dm.timestamp == 0
+                        || (!dm.message_id.is_empty() && dm.message_id != proto_msg.id)
+                        || ((!dm.message_id.is_empty() || !dm.thread_id.is_empty())
+                            && dm.thread_id != proto_msg.parent_id)
+                    {
+                        return Err(Ingested::Dropped);
+                    }
+                    authenticated_identity = !dm.message_id.is_empty();
                     // The sender's verified (revision, state_hash): fork or
                     // staleness check against ours.
                     self.messages.check_group_stamp(&channel_id, &dm);
@@ -554,7 +570,7 @@ impl ChannelInbound {
         // Our own message is stored read by the repository
         // (`UnifiedMessageRepository::stored_is_read`), on this path and every other.
 
-        Ok(message)
+        Ok((message, authenticated_identity))
     }
 
     fn current_device_id(&self) -> Option<u32> {
@@ -566,18 +582,62 @@ impl ChannelInbound {
     }
 
     /// Upsert, preserving attachments and reactions already stored locally.
-    fn persist(&self, message: &mut Message, channel_id: ChannelId) -> bool {
+    fn persist(
+        &self,
+        message: &mut Message,
+        channel_id: ChannelId,
+        authenticated_identity: bool,
+    ) -> bool {
+        Self::persist_message(&self.messages, message, channel_id, authenticated_identity)
+    }
+
+    pub(crate) fn persist_message(
+        messages: &MessageService,
+        message: &mut Message,
+        channel_id: ChannelId,
+        authenticated_identity: bool,
+    ) -> bool {
         // Channel controls are peer sealed-sender messages. Server projections
         // cannot replace local reaction truth during backfill or live re-ingest.
         message.reaction_counts.clear();
         message.current_user_reactions.clear();
-        match self.messages.get_message_local(&message.id) {
+        match messages.get_message_local(&message.id) {
             Ok(Some(existing)) => {
-                if message.attachments.is_empty() {
-                    message.attachments = existing.attachments;
+                if existing.conversation_id != channel_id
+                    || existing.conversation_type != message.conversation_type
+                    || existing.sender_id != message.sender_id
+                    || existing.thread_id != message.thread_id
+                {
+                    tracing::warn!("Channel envelope identity differs from retained row");
+                    return false;
                 }
-                message.reaction_counts = existing.reaction_counts;
-                message.current_user_reactions = existing.current_user_reactions;
+                if message.sent_at != existing.sent_at && !authenticated_identity {
+                    tracing::warn!(
+                        "Retained channel clock differs without authenticated message UUID"
+                    );
+                    return false;
+                }
+                if authenticated_identity && message.sender_id.is_some() {
+                    if let Err(error) = messages
+                        .message_repo
+                        .bind_authenticated_channel_clock(message)
+                    {
+                        tracing::warn!(%error, "Channel clock binding rejected");
+                        return false;
+                    }
+                }
+                let existing = match messages.get_message_local(&message.id) {
+                    Ok(Some(row)) => row,
+                    _ => return false,
+                };
+                // SQL update deliberately retains the original row's identity.
+                message.sent_at = existing.sent_at;
+                message.created_at = existing.created_at;
+                if message.attachments.is_empty() {
+                    message.attachments = existing.attachments.clone();
+                }
+                message.reaction_counts = existing.reaction_counts.clone();
+                message.current_user_reactions = existing.current_user_reactions.clone();
                 // Read state is local: the server copy always converts as
                 // unread, so every catch-up re-fetch of a message the user had
                 // already read flipped it back to unread.
@@ -588,17 +648,19 @@ impl ChannelInbound {
                 // edit-time ordering, 48h window: `apply_channel_edit`). A
                 // re-ingested original — backfill, resync — must not undo an
                 // applied edit or bypass those rules.
-                message.content = existing.content;
+                if existing.is_edited || existing.as_text() != Some("[Encrypted message]") {
+                    message.content = existing.content.clone();
+                }
                 message.is_edited = existing.is_edited;
                 message.edited_at = existing.edited_at;
-                if let Err(e) = self.messages.update_message(message) {
+                if let Err(e) = messages.update_message(message) {
                     tracing::warn!(%channel_id, message_id = %message.id, error = %e,
                         "Failed to update channel message");
                     return false;
                 }
             }
             Ok(None) => {
-                if let Err(e) = self.messages.store_message_local(message) {
+                if let Err(e) = messages.store_message_local(message) {
                     tracing::warn!(%channel_id, message_id = %message.id, error = %e,
                         "Failed to insert channel message");
                     return false;
@@ -609,6 +671,9 @@ impl ChannelInbound {
                     "Failed to read existing message before upsert");
                 return false;
             }
+        }
+        if let Ok(Some(stored)) = messages.get_message_local(&message.id) {
+            *message = stored;
         }
         true
     }

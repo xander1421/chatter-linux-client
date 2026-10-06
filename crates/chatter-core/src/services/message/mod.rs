@@ -1394,6 +1394,11 @@ impl MessageService {
         remove: bool,
         reaction_ts: u64,
     ) -> Result<bool, MessageError> {
+        let target_sent_at_ns = self.message_repo.resolve_channel_reaction_clock(
+            scope,
+            target_author,
+            target_sent_at_ns,
+        )?;
         let allowed = *reactor == self.current_user_id()?
             || match scope.kind {
                 ConversationType::ServerDm => scope.id == ChannelId::from(*reactor),
@@ -1858,6 +1863,109 @@ mod inbound_target_tests {
             .into_iter()
             .map(|r| r.user_id)
             .collect()
+    }
+
+    /// Connected control dispatch -> processor -> scoped ledger reproduction.
+    /// Missing display membership refuses even a locally held target; hydration
+    /// changes admission only for a new delivery, without replaying the refusal.
+    #[tokio::test]
+    async fn channel_reaction_connected_membership_hydration_diagnosis() {
+        use crate::inbox::{
+            events::InboxEvent, polling::device::dispatch_control_content, state::InboxStats,
+        };
+        use crate::services::inbox_processor::InboxEventProcessor;
+        use parking_lot::RwLock;
+        use tokio::sync::broadcast;
+
+        for kind in [ConversationType::Channel, ConversationType::AnonGroup] {
+            let f = fixture();
+            let svc = f.client.messages();
+            let original_scope =
+                crate::domain::reaction::ReactionScope::new(f.channel, ConversationType::Channel);
+            if kind == ConversationType::AnonGroup {
+                let mut target = svc
+                    .message_repo
+                    .get_by_reaction_scope(&original_scope, &f.carol, CH_TS)
+                    .unwrap()
+                    .unwrap();
+                svc.message_repo.delete(&target.id).unwrap();
+                target.conversation_type = kind.clone();
+                svc.message_repo.insert(&target).unwrap();
+            }
+            let scope = crate::domain::reaction::ReactionScope::new(f.channel, kind);
+            let stored_reactors = || {
+                svc.message_repo
+                    .get_reactions(&scope, &f.carol, CH_TS)
+                    .unwrap()
+                    .into_iter()
+                    .map(|r| r.user_id)
+                    .collect::<Vec<_>>()
+            };
+            assert!(
+                svc.record_reaction_at(&scope, &f.carol, CH_TS, &f.me, "👍", false, 1)
+                    .unwrap()
+            );
+            let processor = InboxEventProcessor::from_client(&f.client);
+            let (tx, mut rx) = broadcast::channel(8);
+            let mut domain = f.client.event_bus().subscribe_domain();
+            let stats = Arc::new(RwLock::new(InboxStats::default()));
+            let reaction = crate::services::build_reaction_content_with_channel(
+                "👍",
+                false,
+                &f.carol.to_string(),
+                CH_TS,
+                Some(&f.channel.to_string()),
+            )
+            .content
+            .unwrap();
+            dispatch_control_content(reaction.clone(), &f.bob, 1, "synthetic", 2, &tx, &stats);
+            let event = rx.try_recv().unwrap();
+            assert!(matches!(event, InboxEvent::ChannelReaction { .. }));
+            processor.process(&event).await;
+            assert_eq!(stored_reactors(), vec![f.me]);
+            assert!(
+                domain.try_recv().is_err(),
+                "refusal emits no reaction domain event"
+            );
+
+            // Same repository operation used by get_all_channel_members on open.
+            let mut roster = svc.channel_repo.list_members(&f.channel).unwrap();
+            let mut member = roster[0].clone();
+            member.user_id = f.bob;
+            roster.push(member);
+            svc.channel_repo
+                .replace_memberships(&f.channel, &roster)
+                .unwrap();
+            assert_eq!(
+                stored_reactors(),
+                vec![f.me],
+                "hydration cannot replay a refused reaction"
+            );
+            dispatch_control_content(
+                reaction.clone(),
+                &f.bob,
+                1,
+                "synthetic-replay",
+                2,
+                &tx,
+                &stats,
+            );
+            processor.process(&rx.try_recv().unwrap()).await;
+            let stored = stored_reactors();
+            assert_eq!(stored.len(), 2);
+            assert!(stored.contains(&f.me) && stored.contains(&f.bob));
+            assert!(matches!(
+                domain.try_recv().unwrap(),
+                crate::inbox::handlers::DomainEvent::ReactionAdded { .. }
+            ));
+            dispatch_control_content(reaction, &f.bob, 1, "synthetic-duplicate", 2, &tx, &stats);
+            processor.process(&rx.try_recv().unwrap()).await;
+            assert_eq!(stored_reactors().len(), 2);
+            assert!(
+                domain.try_recv().is_err(),
+                "duplicate does not emit a second delta"
+            );
+        }
     }
 
     /// Signal binds a reaction to the conversation it arrived in: a peer who

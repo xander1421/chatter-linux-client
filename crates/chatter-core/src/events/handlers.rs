@@ -365,7 +365,7 @@ impl EventHandlers {
                     match service.message_repo.get_by_reaction_scope(&scope,&sender_id,sent_at_ns) {
                         Ok(Some(message))=> {
                             let presentation=crate::domain::reaction::reaction_presentation(&message.reaction_counts,&message.current_user_reactions);
-                            self.chat_state.replace_reactions(&scope.cache_key(&sender_id,sent_at_ns),presentation.into_iter().map(|r|crate::state::chat_state::ReactionSummary {emoji:r.emoji,count:r.count,user_reacted:r.own}).collect());
+                            self.chat_state.replace_reactions(&scope.cache_key(&sender_id,message.sent_at),presentation.into_iter().map(|r|crate::state::chat_state::ReactionSummary {emoji:r.emoji,count:r.count,user_reacted:r.own}).collect());
                         }
                         Ok(None)=>self.chat_state.replace_reactions(&scope.cache_key(&sender_id,sent_at_ns),Vec::new()),
                         Err(_)=>warn!("Persisted reaction cache refresh awaits storage recovery"),
