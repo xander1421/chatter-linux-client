@@ -147,6 +147,14 @@ export component MessageComposer inherits GlassSurface {
     // so the send button is disabled and the word cannot be sent at all
     // (OPEN-ITEMS §112c).
     property <bool> can-send: text != "" || text-input.preedit-text != "" || pending-attachments.length > 0;
+    // Keep one native input alive across the inline/raised transition. Preedit
+    // participates without being committed; attachments alone stay inline.
+    property <bool> raised-actions: text != "" || text-input.preedit-text != "";
+    property <bool> show-attachment-action: !root.is-editing && (MeshGlobal.active-id == "" || MeshGlobal.active-kind != "dm");
+    property <bool> show-terminal-action: root.can-send || (!root.is-editing && MeshGlobal.active-id == "");
+    property <length> raised-toolbar-height: raised-actions ? Spacing.touch-target-min + Spacing.xs : 0px;
+    property <length> trailing-actions-width: (show-attachment-action ? Spacing.touch-target-min + Spacing.xs : 0px)
+        + (show-terminal-action ? Spacing.touch-target-min + Spacing.xs : 0px);
 
     // What actually gets sent. `TextInput.text` EXCLUDES the preedit -- the text
     // the input method is still composing -- so sending `text` silently drops
@@ -195,7 +203,7 @@ export component MessageComposer inherits GlassSurface {
     property <length> max-input-height: root.mobile
         ? max(min-input-height, min(input-line-height * 6 + padding-vertical,
             available-pane-height * 0.4 - attachment-tray-height - edit-bar-height
-                - reply-bar-height - format-bar-height - row-padding * 2))
+                - reply-bar-height - format-bar-height - raised-toolbar-height - row-padding * 2))
         : 400px;
     property <length> padding-vertical: Spacing.sm * 2;
     function reveal-cursor() {
@@ -285,9 +293,10 @@ export component MessageComposer inherits GlassSurface {
     // A selection is the one trigger that can never land in that window: it
     // takes a deliberate drag or long-press that ENDS before the bar appears,
     // and typing collapses a selection rather than making one. The composer's
-    // height is now invariant across the whole tap-then-type sequence. It is
-    // also what the bar is for — with nothing selected the buttons wrap an
-    // empty range.
+    // formatting bar stays absent across the tap-then-type sequence. The
+    // populated-text action row below now deliberately changes geometry on the
+    // first character without replacing the input or changing its focus.
+    // With nothing selected the formatting buttons would wrap an empty range.
     property <bool> show-formatting:
         text-input.anchor-position-byte-offset != text-input.cursor-position-byte-offset;
 
@@ -310,7 +319,7 @@ export component MessageComposer inherits GlassSurface {
 
     // Layout - dynamic height based on content (includes Bento Box when expanded)
     property <length> recording-height: max(112px, recording-layout.preferred-height + row-padding * 2);
-    height: root.collapsed ? 0px : VoiceRecording.active ? recording-height : content-height + attachment-tray-height + edit-bar-height + reply-bar-height + format-bar-height + row-padding * 2;
+    height: root.collapsed ? 0px : VoiceRecording.active ? recording-height : content-height + raised-toolbar-height + attachment-tray-height + edit-bar-height + reply-bar-height + format-bar-height + row-padding * 2;
     animate height { duration: 150ms; easing: ease-out; }
     // "Touch input", plumbed from ChatLayout.
     in property <bool> mobile: false;
@@ -840,24 +849,19 @@ export component MessageComposer inherits GlassSurface {
             }
         }
 
-        // Main input area - using HorizontalLayout for proper width distribution
-        HorizontalLayout {
+        // Actions share the shell, above populated text and beside empty text.
+        // Absolute geometry changes neither the native input nor focus/selection.
+        Rectangle {
             width: 100%;
-            height: root.content-height + root.row-padding * 2;
-            padding-left: root.row-padding;
-            padding-right: root.row-padding;
-            padding-top: root.row-padding;
-            padding-bottom: root.row-padding;
-            // 4px between the field and the three 48px buttons. At 8px the gaps
-            // read as part of the buttons, which are already the widest thing in
-            // the row; the width goes to the field instead.
-            spacing: Spacing.xs;
-            alignment: stretch;
+            height: root.content-height + root.raised-toolbar-height + root.row-padding * 2;
+            property <length> action-y: root.row-padding + (root.raised-actions ? 0px : (root.content-height - Spacing.touch-target-min) / 2);
 
             // Emoji & GIF button (unified — pickers toggle via tabs inside).
             // 48px, not 36px: measured on a phone the old box was a 36dp target,
             // under the 48dp minimum. The icon keeps its size; only the box grows.
             Rectangle {
+                x: root.row-padding;
+                y: parent.action-y;
                 width: Spacing.touch-target-min;
                 height: Spacing.touch-target-min;
                 background: emoji-touch.has-hover ? Colors.surface-hover : transparent;
@@ -886,13 +890,11 @@ export component MessageComposer inherits GlassSurface {
                 }
             }
 
-            // Text input area — Neo inset (concave, pressed into surface).
-            // min-width: 0 lets it shrink below its content's preferred width so
-            // the fixed-size emoji/attach/send buttons always stay on-screen
-            // (otherwise a long word / placeholder pushes Send past the edge).
+            // One full-width input below the toolbar; compact inline when empty.
             Rectangle {
-                horizontal-stretch: 1;
-                min-width: 0px;
+                x: root.row-padding + (root.raised-actions ? 0px : Spacing.touch-target-min + Spacing.xs);
+                y: root.row-padding + root.raised-toolbar-height;
+                width: parent.width - root.row-padding * 2 - (root.raised-actions ? 0px : Spacing.touch-target-min + Spacing.xs + root.trailing-actions-width);
                 height: root.content-height;
                 background: Colors.inset;
                 // Concentric with the shell: radius-chrome − chrome-inset.
@@ -1013,7 +1015,9 @@ export component MessageComposer inherits GlassSurface {
             // directed file for exactly that reason. Offering the button there
             // would be an offer the transport declines. Hidden while editing:
             // an edit changes text only.
-            if !root.is-editing && (MeshGlobal.active-id == "" || MeshGlobal.active-kind != "dm"): Rectangle {
+            if root.show-attachment-action: Rectangle {
+                x: parent.width - root.row-padding - Spacing.touch-target-min - (root.show-terminal-action ? Spacing.touch-target-min + Spacing.xs : 0px);
+                y: parent.action-y;
                 width: Spacing.touch-target-min;
                 height: Spacing.touch-target-min;
                 background: attachment-touch.has-hover ? Colors.surface-hover : transparent;
@@ -1043,6 +1047,8 @@ export component MessageComposer inherits GlassSurface {
             // Tap locks recording; hold releases to send, slide left cancels,
             // slide up locks. Mesh has its own file transport, not this path.
             if !root.can-send && !root.is-editing && MeshGlobal.active-id == "": Rectangle {
+                x: parent.width - root.row-padding - Spacing.touch-target-min;
+                y: parent.action-y;
                 width: Spacing.touch-target-min;
                 height: Spacing.touch-target-min;
                 accessible-role: button;
@@ -1090,6 +1096,8 @@ export component MessageComposer inherits GlassSurface {
 
             // Filled send action inside the shared composer material.
             if root.can-send: Rectangle {
+                x: parent.width - root.row-padding - Spacing.touch-target-min;
+                y: parent.action-y;
                 width: Spacing.touch-target-min;
                 height: Spacing.touch-target-min;
                 background: send-touch.has-hover ? Colors.action-hover : Colors.action-fill;

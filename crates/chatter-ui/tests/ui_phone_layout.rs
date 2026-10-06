@@ -16,7 +16,7 @@
 
 use chatter_ui::{MainWindow, ServerRecordRow, ServerRecordsGlobal};
 use i_slint_backend_testing as testing;
-use slint::ComponentHandle;
+use slint::{ComponentHandle, Model};
 
 /// Galaxy S25 portrait, 1440x3120 at 3.5x: ~412x891 logical.
 const PHONE_W: f32 = 412.0;
@@ -208,10 +208,8 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     // outer controls and field share the top/bottom inset. The leading
     // emoji toggle owns the left edge; the field follows it by one inset.
     let spacing = include_str!("../../../ui/theme/spacing.slint");
-    assert!(
-        spacing
-            .contains("out property <length> radius-chrome-inner: radius-chrome - chrome-inset;")
-    );
+    assert!(spacing
+        .contains("out property <length> radius-chrome-inner: radius-chrome - chrome-inset;"));
     assert!(spacing.contains("out property <length> chrome-inset: xs;"));
     assert!(spacing.contains("out property <length> xs: 4px;"));
     let inset = 4.0_f32;
@@ -268,12 +266,61 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
         field.absolute_position().x + 20.0,
         field.absolute_position().y + 20.0,
     );
+    // The first real keystroke raises actions without replacing/focusing a
+    // different native input; clearing restores the original compact row.
+    let original_input = composer_native_item(&w);
+    key(&w, "a".into());
+    pump_size(&w, PHONE_W, 460.0);
+    assert_eq!(w.get_composer_text().as_str(), "a");
+    assert!(composer_native_item(&w) == original_input);
+    assert_action_geometry(&w, true);
+    assert_composer_caps(&w, false, 0.0);
+    key(&w, slint::platform::Key::Backspace.into());
+    pump_size(&w, PHONE_W, 460.0);
+    assert!(w.get_composer_text().is_empty());
+    assert!(composer_native_item(&w) == original_input);
+    assert_action_geometry(&w, false);
+
+    // An attachment alone must not raise the controls, even though Send is
+    // available. A populated caption does raise them, with tray space reserved.
+    w.set_pending_attachments(slint::ModelRc::new(slint::VecModel::from(vec![
+        chatter_ui::PendingAttachmentData {
+            id: "geometry-only".into(),
+            filename: "unsent.txt".into(),
+            category: "document".into(),
+            is_ready: true,
+            ..Default::default()
+        },
+    ])));
+    pump_size(&w, PHONE_W, PHONE_H);
+    assert_action_geometry(&w, false);
+    w.set_composer_text("caption".into());
+    pump_size(&w, PHONE_W, PHONE_H);
+    assert_action_geometry(&w, true);
+    assert_composer_caps(&w, false, 72.0);
+    w.set_composer_text("".into());
+    w.set_pending_attachments(slint::ModelRc::new(slint::VecModel::from(Vec::<
+        chatter_ui::PendingAttachmentData,
+    >::new())));
+    pump_size(&w, PHONE_W, 460.0);
+    assert_action_geometry(&w, false);
+    let field = one(&w, "Message input");
+    click_at(
+        &w,
+        field.absolute_position().x + 20.0,
+        field.absolute_position().y + 20.0,
+    );
     let preedit_only = "uncommitted native caret words ".repeat(30);
     composition_selection(&w, &preedit_only, Some(0..0));
     pump_size(&w, PHONE_W, 460.0);
     assert_native_caret_visible(&w);
     assert!(w.get_composer_text().is_empty());
+    assert!(composer_native_item(&w) == original_input);
+    assert_action_geometry(&w, true);
+    assert_composer_caps(&w, false, 0.0);
     composition_selection(&w, "", None);
+    pump_size(&w, PHONE_W, 460.0);
+    assert_action_geometry(&w, false);
 
     // A long draft must leave history visible with a phone-sized IME viewport.
     // Drive the actual raw input: no source-string or duplicate layout probe.
@@ -294,6 +341,8 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     );
     assert!(field.size().height >= 48.0, "input touch floor disappeared");
     assert_composer_caps(&w, false, 0.0);
+    assert_action_geometry(&w, true);
+    assert!(composer_native_item(&w) == original_input);
     let raw = testing::ElementHandle::find_by_element_id(&w, "MessageComposer::text-input")
         .find(|e| e.accessible_value().as_ref().map(|s| s.as_str()) == Some(draft.as_str()))
         .expect("actual composer TextInput");
@@ -414,6 +463,8 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
         cursor,
     );
     pump_size(&w, 360.0, 380.0);
+    assert_action_geometry(&w, true);
+    assert_composer_caps(&w, false, 44.0);
     assert_eq!(input.anchor_position_byte_offset(), unchanged.len() as i32);
     assert_eq!(input.cursor_position_byte_offset(), cursor);
     assert_native_caret_visible(&w);
@@ -432,6 +483,7 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     pump_size(&w, PHONE_W, PHONE_H);
     assert_native_caret_visible(&w);
     assert_composer_caps(&w, true, 0.0);
+    assert_action_geometry(&w, true);
     w.set_composer_emoji_picker_visible(false);
     pump_size(&w, PHONE_W, 460.0);
     assert_tail_visible(&raw, &one(&w, "Message input"));
@@ -577,16 +629,60 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     w.set_composer_emoji_picker_visible(true);
     pump_size(&w, PHONE_W, PHONE_H);
     assert_composer_caps(&w, true, 48.0);
+    assert_action_geometry(&w, true);
     assert_native_caret_visible(&w);
     assert_eq!(w.get_composer_text().as_str(), body);
     w.set_composer_emoji_picker_visible(false);
+    w.set_composer_gif_picker_visible(true);
+    pump_size(&w, PHONE_W, PHONE_H);
+    assert_action_geometry(&w, true);
+    assert_composer_caps(&w, true, 48.0);
+    assert_native_caret_visible(&w);
+    assert_eq!(w.get_composer_text().as_str(), body);
+    w.set_composer_gif_picker_visible(false);
     w.set_composer_is_replying(false);
+    // Editing reserves its accessory and removes Attach without narrowing the
+    // raised field. Native selection, text and identity survive this resize.
+    w.set_composer_is_editing(true);
+    pump_size(&w, PHONE_W, 460.0);
+    assert_composer_caps(&w, false, 48.0);
+    assert_action_geometry(&w, true);
+    assert_native_caret_visible(&w);
+    assert!(composer_native_item(&w) == item);
+    assert_eq!(w.get_composer_text().as_str(), body);
+    assert!(
+        !testing::ElementHandle::find_by_accessible_label(&w, "Attach file")
+            .any(|e| e.size().height > 0.0)
+    );
+    w.set_composer_is_editing(false);
+
+    // The recording panel still owns the shell and its controls; ordinary
+    // input is disabled without replacing it or consuming the draft.
+    let recording = w.global::<chatter_ui::VoiceRecording>();
+    recording.set_active(true);
+    pump_size(&w, PHONE_W, 460.0);
+    let panel = testing::ElementHandle::find_by_element_id(&w, "MessageComposer::recording-panel")
+        .find(|e| e.size().height > 0.0)
+        .unwrap();
+    let shell = testing::ElementHandle::find_by_element_type_name(&w, "MessageComposer")
+        .find(|e| e.size().height > 0.0)
+        .unwrap();
+    assert!((panel.size().height - shell.size().height).abs() < 0.5);
+    assert!(one(&w, "Cancel voice message").size().height >= 48.0);
+    assert!(one(&w, "Send voice message").size().height >= 48.0);
+    assert!(!input.enabled());
+    assert_eq!(w.get_composer_text().as_str(), body);
+    recording.set_active(false);
+    pump_size(&w, PHONE_W, 460.0);
+    assert_action_geometry(&w, true);
+    assert!(composer_native_item(&w) == item);
 
     // Desktop pointer events must still reach raw TextInput through the
     // noninteractive viewport; arrows edit where the caret actually moved.
     w.set_is_mobile_platform(false);
     w.set_composer_text("".into());
     pump_size(&w, 1000.0, 800.0);
+    assert_action_geometry(&w, false);
     // Focus a different native input first, proving pointer focus restoration.
     w.set_composer_emoji_picker_visible(true);
     pump_size(&w, 1000.0, 800.0);
@@ -598,27 +694,27 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
         search.absolute_position().x + 10.0,
         search.absolute_position().y + 10.0,
     );
-    assert!(
-        !composer_native_item(&w)
-            .downcast::<i_slint_core::items::TextInput>()
-            .unwrap()
-            .as_pin_ref()
-            .has_focus()
-    );
+    assert!(!composer_native_item(&w)
+        .downcast::<i_slint_core::items::TextInput>()
+        .unwrap()
+        .as_pin_ref()
+        .has_focus());
     let field = one(&w, "Message input");
     click_at(
         &w,
         field.absolute_position().x + 20.0,
         field.absolute_position().y + 20.0,
     );
-    assert!(
-        composer_native_item(&w)
-            .downcast::<i_slint_core::items::TextInput>()
-            .unwrap()
-            .as_pin_ref()
-            .has_focus()
-    );
+    assert!(composer_native_item(&w)
+        .downcast::<i_slint_core::items::TextInput>()
+        .unwrap()
+        .as_pin_ref()
+        .has_focus());
+    let desktop_input = composer_native_item(&w);
     key(&w, "abc".into());
+    pump_size(&w, 1000.0, 800.0);
+    assert!(composer_native_item(&w) == desktop_input);
+    assert_action_geometry(&w, true);
     key(&w, slint::platform::Key::LeftArrow.into());
     key(&w, "X".into());
     assert_eq!(
@@ -793,11 +889,66 @@ fn assert_composer_caps(w: &MainWindow, drawer: bool, accessories: f32) {
         } else {
             0.0
         };
+    let toolbar = if input.text() != "" || input.preedit_text() != "" {
+        52.0
+    } else {
+        0.0
+    };
     // The accepted 48px floor is explicit for unusually short panes/accessories.
-    let cap = 48.0_f32.max((line_height * 6.0 + 16.0).min(available * 0.4 - accessories - 8.0));
+    let cap =
+        48.0_f32.max((line_height * 6.0 + 16.0).min(available * 0.4 - accessories - toolbar - 8.0));
     assert!(
-        shell.size().height <= cap + accessories + 8.5,
+        shell.size().height <= cap + accessories + toolbar + 8.5,
         "composer {:?} exceeds six-line/actual-pane cap {cap}, pane={available}, accessories={accessories}",
         shell.size()
     );
+}
+
+/// Check actual controls against the actual field: no duplicate layout model.
+fn assert_action_geometry(w: &MainWindow, raised: bool) {
+    let shell = testing::ElementHandle::find_by_element_type_name(w, "MessageComposer")
+        .find(|e| e.size().height > 0.0)
+        .unwrap();
+    let (sx, sy, sw, sh) = rect(&shell);
+    let (fx, fy, fw, fh) = rect(&one(w, "Message input"));
+    let emoji_label =
+        if w.get_composer_emoji_picker_visible() || w.get_composer_gif_picker_visible() {
+            "Show keyboard"
+        } else {
+            "Emoji & GIF picker"
+        };
+    let (ex, ey, ew, eh) = rect(&one(w, emoji_label));
+    let terminal_label = if raised || w.get_pending_attachments().row_count() > 0 {
+        "Send message"
+    } else {
+        "Record voice message"
+    };
+    let (tx, ty, tw, th) = rect(&one(w, terminal_label));
+    assert!((ex - sx - 4.0).abs() < 0.5);
+    assert!((sx + sw - tx - tw - 4.0).abs() < 0.5);
+    assert!(ew >= 48.0 && eh >= 48.0 && tw >= 48.0 && th >= 48.0);
+    assert!(fx >= sx && fx + fw <= sx + sw + 0.5 && fy + fh <= sy + sh + 0.5);
+    if raised {
+        assert!((fx - sx - 4.0).abs() < 0.5);
+        assert!(
+            (fw - (sw - 8.0)).abs() < 0.5,
+            "populated field is not full width"
+        );
+        assert!((fy - (ey + eh) - 4.0).abs() < 0.5);
+        assert!((ty - ey).abs() < 0.5);
+    } else {
+        assert!((fx - (ex + ew) - 4.0).abs() < 0.5);
+        assert!((ey - fy).abs() < 0.5 && (ty - fy).abs() < 0.5);
+    }
+    if !w.get_composer_is_editing() {
+        let (ax, ay, aw, ah) = rect(&one(w, "Attach file"));
+        assert!((tx - ax - aw - 4.0).abs() < 0.5);
+        assert!((ay - ey).abs() < 0.5 && aw >= 48.0 && ah >= 48.0);
+        if raised {
+            assert!(ay + ah <= fy);
+        }
+    }
+    assert!(composer_native_item(w)
+        .downcast::<i_slint_core::items::TextInput>()
+        .is_some());
 }
