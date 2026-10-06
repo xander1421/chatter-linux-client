@@ -396,10 +396,9 @@ impl ChatterClient {
                 KEY_REQUEST_AFTER,
             );
         } else {
-            // Publish microphone immediately: the key is ours, and we are alone.
-            if let Err(e) = call_worker.publish_microphone(None).await {
-                tracing::error!("Failed to publish microphone: {}", e);
-            }
+            // InitiateCall already attempts initial media publication before
+            // returning for the host. The worker owns that attempt and logs
+            // failures; publishing again here would restart an active capture.
 
             // Ring the channel (no key in it; fire-and-forget).
             let call_id_str = call.id.to_string();
