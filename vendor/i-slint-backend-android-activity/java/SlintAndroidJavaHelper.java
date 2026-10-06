@@ -706,7 +706,7 @@ public class SlintAndroidJavaHelper {
         try {
             return future.get(); // Wait for the result and return it
         } catch (Exception e) {
-            e.printStackTrace();
+            System.err.println("Clipboard read failed");
             return "";
         }
     }

@@ -1399,7 +1399,8 @@ fn native_key_modifiers(
         (Key::ShiftR, !command && meta.shift_right_on()),
         (
             Key::Alt,
-            !command && (meta.alt_on() || meta.alt_left_on() || meta.alt_right_on()),
+            // AltGr remains separate from public Alt, matching physical AltRight.
+            !command && (meta.alt_left_on() || (meta.alt_on() && !meta.alt_right_on())),
         ),
         (Key::AltGr, !command && meta.alt_right_on()),
         (

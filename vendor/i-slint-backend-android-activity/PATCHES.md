@@ -64,3 +64,20 @@ Copied from the Cargo registry at exactly 1.17.1. Keep upstream licensing files.
 On upgrade, re-apply all of these and recheck a fling's frame times on a 120 Hz device
 (`adb shell dumpsys SurfaceFlinger --latency '<SurfaceView layer>'`; the frames
 are GL on a SurfaceView, so `dumpsys gfxinfo` does not see them).
+
+- Native correction after `60d79d0d`: clipboard read failures log only the fixed
+  `Clipboard read failed` marker, never the exception/cause/provider details.
+  Right Alt snapshots (including aggregate ALT_ON + ALT_RIGHT_ON) emit AltGr
+  without inventing left Alt; core's existing Android public `alt` flag excludes
+  AltGr, preserving physical AltRight semantics. Explicit left + right retains both.
+  `check_native_key_commands.py` asserts exact SelectAll/Copy/Cut/Paste variants,
+  one press operation and no release operation at a recording shortcut seam,
+  held modifiers on both sides, extracted LostFocus cleanup and core reset, and
+  throwing synthetic provider stderr privacy. This seam does not execute TextInput
+  editing or full Window focus routing.
+  `python3 tests/check_native_key_commands.py --baseline` extracts real pre-fix
+  `60d79d0d^` mapper/plain dispatch and Java accessor; both compile with compatible
+  API mocks and must fail named Ctrl+V/dedicatedPaste and null-direct/nonempty-
+  coercion assertions. `--clipboard-ref 60d79d0d` is a privacy negative control
+  expected to fail the throwing-provider assertion. `--evidence-dir PATH` retains
+  generated sources, executables/classes and each command's output.
