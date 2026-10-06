@@ -416,21 +416,17 @@ impl GrpcClientPool {
     ///
     /// Returns `NetworkError::ConnectionFailed` if the connection fails.
     pub async fn connect(&self) -> Result<(), NetworkError> {
+        self.connect_with_evidence().await.map(|_| ())
+    }
+
+    /// Returns whether this dial established fresh wire contact. A cached
+    /// lazy QUIC channel remains usable, but proves no current reachability.
+    pub(crate) async fn connect_with_evidence(&self) -> Result<bool, NetworkError> {
         let (endpoint, mode, generation) = self.snapshot();
 
+        let revision = crate::network::connection::server_evidence_revision();
         let connect_result = self.dial(&endpoint, mode).await;
-        Self::note_onion_dial(mode, connect_result.is_ok());
-
-        let channel = connect_result.map_err(|e| {
-            crate::network::connection::set_server_status(
-                crate::network::connection::ServerStatus::Unreachable,
-            );
-            NetworkError::ConnectionFailed(format!("connection failed: {}", e))
-        })?;
-
-        // The transport changed while we dialled: this channel belongs to the
-        // old one. Dropping it is the whole point — installing it would put
-        // every later RPC back on the transport the user just left.
+        // Hold the swap lock through generation validation and publication.
         let mut guard = self.channel.write();
         if self
             .transport_gen
@@ -441,11 +437,23 @@ impl GrpcClientPool {
                 "transport changed while connecting; retry".into(),
             ));
         }
-        crate::network::connection::set_server_status(
-            crate::network::connection::ServerStatus::Reachable,
-        );
+        Self::note_onion_dial(mode, connect_result.is_ok());
+        let (channel, fresh) = connect_result.map_err(|e| {
+            crate::network::connection::set_server_status_if_current(
+                crate::network::connection::ServerStatus::Unreachable,
+                revision,
+            );
+            NetworkError::ConnectionFailed(format!("connection failed: {}", e))
+        })?;
+
+        if fresh {
+            crate::network::connection::set_server_status_if_current(
+                crate::network::connection::ServerStatus::Reachable,
+                revision,
+            );
+        }
         *guard = Some(channel);
-        Ok(())
+        Ok(fresh)
     }
 
     /// Dial the server, preferring QUIC when reachable.
@@ -462,7 +470,7 @@ impl GrpcClientPool {
         &self,
         endpoint: &Endpoint,
         mode: TransportMode,
-    ) -> Result<GrpcTransport, tonic::transport::Error> {
+    ) -> Result<(GrpcTransport, bool), tonic::transport::Error> {
         // QUIC target for this dial, when its probe is still in flight.
         #[cfg(feature = "quic")]
         let mut racing_quic: Option<http::Uri> = None;
@@ -482,7 +490,7 @@ impl GrpcClientPool {
                     // Re-probing on every dial() was a real bug: under
                     // reconnect churn it became a flood of UDP/TLS handshakes.
                     QuicProbeState::Working => match super::transport::build_quic(uri) {
-                        Ok(transport) => return Ok(transport),
+                        Ok(transport) => return Ok((transport, false)),
                         Err(e) => {
                             tracing::warn!(error = %e, "cached-working QUIC channel build failed — falling back to TCP");
                         }
@@ -548,12 +556,12 @@ impl GrpcClientPool {
             if *self.quic_probe.read() == QuicProbeState::Working {
                 if let Ok(transport) = super::transport::build_quic(uri) {
                     tracing::info!("transport: QUIC (probe succeeded)");
-                    return Ok(transport);
+                    return Ok((transport, true));
                 }
             }
         }
 
-        Ok(channel.into())
+        Ok((channel.into(), true))
     }
 
     /// Dial the server and throw the connection away: a reachability probe.
@@ -575,19 +583,35 @@ impl GrpcClientPool {
     /// [`channel`]: Self::channel
     /// [`call_with_retry`]: Self::call_with_retry
     pub async fn probe(&self) -> Result<(), NetworkError> {
-        use crate::network::connection::{ServerStatus, set_server_status};
+        use crate::network::connection::{
+            ServerStatus, server_evidence_revision, set_server_status_if_current,
+        };
 
-        let (endpoint, mode, _) = self.snapshot();
+        let (endpoint, mode, generation) = self.snapshot();
+        let revision = server_evidence_revision();
         let result = self.dial(&endpoint, mode).await;
+        // A transport swap uses this same lock, so validation and publication
+        // cannot race the switch after the generation check.
+        let _guard = self.channel.read();
+        if self
+            .transport_gen
+            .load(std::sync::atomic::Ordering::Acquire)
+            != generation
+        {
+            return Err(NetworkError::ConnectionFailed(
+                "transport changed while probing; retry".into(),
+            ));
+        }
         Self::note_onion_dial(mode, result.is_ok());
-
         match result {
-            Ok(_channel) => {
-                set_server_status(ServerStatus::Reachable);
+            Ok((_channel, fresh)) => {
+                if fresh {
+                    set_server_status_if_current(ServerStatus::Reachable, revision);
+                }
                 Ok(())
             }
             Err(e) => {
-                set_server_status(ServerStatus::Unreachable);
+                set_server_status_if_current(ServerStatus::Unreachable, revision);
                 Err(NetworkError::ConnectionFailed(format!(
                     "connection failed: {e}"
                 )))
@@ -985,6 +1009,41 @@ impl GrpcClientPool {
 mod tests {
     use super::*;
 
+    #[tokio::test]
+    async fn in_flight_direct_probe_is_discarded_after_endpoint_generation_changes() {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let pool = std::sync::Arc::new(
+            GrpcClientPool::new(&format!("http://{}", listener.local_addr().unwrap())).unwrap(),
+        );
+        let (accepted_tx, accepted_rx) = tokio::sync::oneshot::channel();
+        let (release_tx, release_rx) = tokio::sync::oneshot::channel();
+        let server = tokio::spawn(async move {
+            let (socket, _) = listener.accept().await.unwrap();
+            accepted_tx.send(()).unwrap();
+            let _ = release_rx.await;
+            drop(socket);
+        });
+        let probing_pool = pool.clone();
+        let probe = tokio::spawn(async move { probing_pool.probe().await });
+        tokio::time::timeout(Duration::from_secs(1), accepted_rx)
+            .await
+            .unwrap()
+            .unwrap();
+        pool.set_url("http://127.0.0.1:1").unwrap();
+        release_tx.send(()).unwrap();
+        let error = tokio::time::timeout(Duration::from_secs(1), probe)
+            .await
+            .unwrap()
+            .unwrap()
+            .unwrap_err();
+        assert!(
+            error
+                .to_string()
+                .contains("transport changed while probing")
+        );
+        server.await.unwrap();
+    }
+
     #[test]
     fn test_new_valid_url() {
         let pool = GrpcClientPool::new("https://localhost:50051");
@@ -1260,7 +1319,11 @@ mod tests {
         // listening at the far end — the real handshake is deferred to the
         // first RPC, same as connect_lazy().
         assert!(result.is_ok(), "dial() must not hang");
-        assert!(result.unwrap().is_ok());
+        let (_transport, fresh) = result.unwrap().unwrap();
+        assert!(
+            !fresh,
+            "cached lazy QUIC construction must not claim wire contact"
+        );
         assert_eq!(*pool.quic_probe.read(), QuicProbeState::Working);
     }
 

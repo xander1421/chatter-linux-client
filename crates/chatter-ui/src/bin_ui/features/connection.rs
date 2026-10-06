@@ -77,12 +77,21 @@ fn state_label(state: ConnectionState) -> &'static str {
     }
 }
 
+fn presentation(client: &ChatterClient, state: ConnectionState) -> (&'static str, bool, i32) {
+    (
+        state_label(state),
+        client.server_unreachable_for_state(state),
+        reconnect_attempt(state),
+    )
+}
+
 /// Wire connection state to the UI banner.
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let (mut rx, state) = subscribe_current(ui_ctx.offline_state());
-    window.set_connection_status(state_label(state).into());
-    window.set_server_unreachable(state.is_unreachable());
-    window.set_connection_reconnect_attempt(reconnect_attempt(state));
+    let (label, unreachable, attempt) = presentation(ui_ctx, state);
+    window.set_connection_status(label.into());
+    window.set_server_unreachable(unreachable);
+    window.set_connection_reconnect_attempt(attempt);
 
     // Whether the sign-in screens have anywhere to offer as an alternative to
     // themselves. Core's call, not ours.
@@ -97,9 +106,8 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let Some(state) = next_current(ui_ctx_for_task.offline_state(), &mut rx).await else {
                 break;
             };
-            let state_string = state_label(state).to_owned();
-            let unreachable = state.is_unreachable();
-            let attempt = reconnect_attempt(state);
+            let (label, unreachable, attempt) = presentation(&ui_ctx_for_task, state);
+            let state_string = label.to_owned();
             // Re-read rather than cache: the mesh can start, or fail, after this
             // task began, and an offer to use it has to be current at the moment
             // it is made.
@@ -123,6 +131,39 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn signed_out_deferred_presentation_then_explicit_contact_failure() {
+        let dir = tempfile::tempdir().unwrap();
+        // Local marker selects the existing file-backed test storage path,
+        // without a process-global environment change or an OS keyring.
+        std::fs::create_dir(dir.path().join("data")).unwrap();
+        std::fs::write(dir.path().join("data/no-keyring"), "").unwrap();
+        let client = ChatterClient::builder()
+            .server_url("http://127.0.0.1:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .unwrap();
+        assert!(
+            !client
+                .startup_connect(std::time::Duration::from_secs(1))
+                .await
+        );
+        let (_, captured) = subscribe_current(client.offline_state());
+        assert_eq!(presentation(&client, captured), ("disconnected", false, 0));
+        assert!(client.connect().await.is_err());
+        let failed = client.offline_state().connection_state();
+        assert_eq!(presentation(&client, failed), ("disconnected", true, 0));
+        client
+            .offline_state()
+            .set_connection_state(ConnectionState::Connected);
+        assert_eq!(presentation(&client, failed), ("disconnected", true, 0));
+        assert_eq!(
+            presentation(&client, ConnectionState::Connected),
+            ("connected", false, 0)
+        );
+        client.shutdown().await;
+    }
 
     #[tokio::test]
     async fn startup_transition_after_snapshot_remains_observable() {

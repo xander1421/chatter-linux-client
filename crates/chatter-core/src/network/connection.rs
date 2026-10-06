@@ -122,12 +122,20 @@ impl ServerStatus {
     }
 }
 
-/// Millis since [`EPOCH`] at which server reachability was last written. Zero
-/// means never. Read by the reachability monitor so a client whose own RPCs are
-/// already reporting does not also make synthetic dials.
-static SERVER_STATUS_AT_MS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+// Serialize status, monotonic timestamp and revision as one publication. The
+// revision also lets a synthetic dial discard its result after newer RPC evidence.
+#[derive(Default)]
+struct Evidence {
+    at_ms: u64,
+    revision: u64,
+}
 
-/// Monotonic origin for [`SERVER_STATUS_AT_MS`].
+static EVIDENCE: std::sync::Mutex<Evidence> = std::sync::Mutex::new(Evidence {
+    at_ms: 0,
+    revision: 0,
+});
+
+/// Monotonic origin for the serialized evidence timestamp.
 ///
 /// An `Instant` rather than the wall clock on purpose: a phone that picks up NTP
 /// (or crosses a timezone, or has its clock set by hand) can move `SystemTime`
@@ -150,11 +158,21 @@ fn now_ms() -> u64 {
 /// transport error. Calling it from a guess is the one thing that would make
 /// the indicator it feeds dishonest.
 pub fn set_server_status(status: ServerStatus) {
-    SERVER_STATUS_AT_MS.store(now_ms(), std::sync::atomic::Ordering::Release);
+    let mut evidence = EVIDENCE.lock().unwrap();
+    record_evidence(&mut evidence, server_status_watch(), status);
+}
+
+fn record_evidence(
+    evidence: &mut Evidence,
+    tx: &tokio::sync::watch::Sender<ServerStatus>,
+    status: ServerStatus,
+) {
+    evidence.at_ms = now_ms().max(evidence.at_ms);
+    evidence.revision += 1;
     // `send_if_modified` wakes only when the value changes, so a successful RPC
     // that reports Reachable again does not poke waiters. Subscribers see
     // the offline→online edge the banner already shows via OfflineState.
-    publish_server_status(server_status_watch(), status);
+    publish_server_status(tx, status);
 }
 
 fn publish_server_status(tx: &tokio::sync::watch::Sender<ServerStatus>, status: ServerStatus) {
@@ -178,6 +196,30 @@ fn server_status_watch() -> &'static tokio::sync::watch::Sender<ServerStatus> {
     &TX
 }
 
+/// Capture the evidence revision before starting a synthetic dial.
+pub(crate) fn server_evidence_revision() -> u64 {
+    EVIDENCE.lock().unwrap().revision
+}
+
+/// Publish a dial only if no newer wire evidence has arrived in the meantime.
+pub(crate) fn set_server_status_if_current(status: ServerStatus, revision: u64) -> bool {
+    let mut evidence = EVIDENCE.lock().unwrap();
+    record_if_current(&mut evidence, server_status_watch(), status, revision)
+}
+
+fn record_if_current(
+    evidence: &mut Evidence,
+    tx: &tokio::sync::watch::Sender<ServerStatus>,
+    status: ServerStatus,
+    revision: u64,
+) -> bool {
+    if evidence.revision != revision {
+        return false;
+    }
+    record_evidence(evidence, tx, status);
+    true
+}
+
 /// Subscribe to server reachability.
 ///
 /// The latest status is available from the receiver immediately. `changed`
@@ -196,7 +238,7 @@ pub fn server_status() -> ServerStatus {
 
 /// How long ago the wire last told us anything, or `None` if it never has.
 pub fn server_status_age() -> Option<std::time::Duration> {
-    let at = SERVER_STATUS_AT_MS.load(std::sync::atomic::Ordering::Acquire);
+    let at = EVIDENCE.lock().unwrap().at_ms;
     if at == 0 {
         return None;
     }
@@ -264,6 +306,54 @@ impl ConnectionState {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn newer_rpc_evidence_rejects_old_probe_even_without_status_edge() {
+        let (tx, _rx) = tokio::sync::watch::channel(ServerStatus::Reachable);
+        let mut evidence = Evidence::default();
+        let probe_revision = evidence.revision;
+        record_evidence(&mut evidence, &tx, ServerStatus::Reachable);
+        let at = evidence.at_ms;
+        assert!(!record_if_current(
+            &mut evidence,
+            &tx,
+            ServerStatus::Unreachable,
+            probe_revision
+        ));
+        assert_eq!(*tx.borrow(), ServerStatus::Reachable);
+        assert_eq!(evidence.at_ms, at);
+        let current = evidence.revision;
+        assert!(record_if_current(
+            &mut evidence,
+            &tx,
+            ServerStatus::Unreachable,
+            current
+        ));
+        assert!(evidence.at_ms >= at);
+        assert_eq!(*tx.borrow(), ServerStatus::Unreachable);
+    }
+
+    #[test]
+    fn concurrent_publications_keep_monotonic_evidence_and_matching_status() {
+        let (tx, _rx) = tokio::sync::watch::channel(ServerStatus::Unknown);
+        let evidence = std::sync::Mutex::new(Evidence::default());
+        std::thread::scope(|scope| {
+            for status in [ServerStatus::Reachable, ServerStatus::Unreachable] {
+                let evidence = &evidence;
+                let tx = &tx;
+                scope.spawn(move || {
+                    for _ in 0..100 {
+                        let mut current = evidence.lock().unwrap();
+                        let before = current.at_ms;
+                        record_evidence(&mut current, tx, status);
+                        assert!(current.at_ms >= before);
+                        assert_eq!(*tx.borrow(), status);
+                    }
+                });
+            }
+        });
+        assert_eq!(evidence.lock().unwrap().revision, 200);
+    }
 
     #[tokio::test]
     async fn status_retained_without_receivers_and_duplicate_does_not_wake() {

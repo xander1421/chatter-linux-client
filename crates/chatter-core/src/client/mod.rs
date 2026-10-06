@@ -720,8 +720,16 @@ impl ChatterClient {
     /// before anything has tried to reach it: a signed-out start defers all
     /// contact (`startup_connect`), and "unreachable" would be a guess.
     pub fn server_unreachable(&self) -> bool {
-        !self.server_contact_deferred.load(Ordering::SeqCst)
-            && self.offline_state().connection_state().is_unreachable()
+        self.server_unreachable_for_state(self.offline_state().connection_state())
+    }
+
+    /// Apply the deferred-contact guard to a captured connection state, without
+    /// rereading OfflineState and mixing two different UI snapshots.
+    pub fn server_unreachable_for_state(
+        &self,
+        state: crate::network::connection::ConnectionState,
+    ) -> bool {
+        !self.server_contact_deferred.load(Ordering::SeqCst) && state.is_unreachable()
     }
 
     pub fn start_server_monitor(&self) {
@@ -2302,10 +2310,12 @@ impl ChatterClient {
         if self.server_contact_deferred.swap(false, Ordering::SeqCst) {
             self.start_server_monitor();
         }
-        match self.services.auth_service.connect().await {
-            Ok(()) => {
-                self.offline_state()
-                    .set_connection_state(ConnectionState::Connected);
+        match self.services.grpc_pool.connect_with_evidence().await {
+            Ok(fresh) => {
+                if fresh {
+                    self.offline_state()
+                        .set_connection_state(ConnectionState::Connected);
+                }
                 Ok(())
             }
             Err(e) => {
@@ -4904,6 +4914,32 @@ mod transport_switch_tests {
             client.services.grpc_pool.transport_mode(),
             TransportMode::Direct
         );
+    }
+
+    #[tokio::test]
+    async fn captured_state_respects_deferred_contact_then_explicit_failure() {
+        use crate::network::connection::ConnectionState;
+        let (client, _dir) = build_test_client();
+        client.set_server_url("http://127.0.0.1:1").unwrap();
+        assert!(
+            !client
+                .startup_connect(std::time::Duration::from_secs(1))
+                .await
+        );
+        let captured = client.offline_state().connection_state();
+        assert_eq!(captured, ConnectionState::Disconnected);
+        assert!(!client.server_unreachable_for_state(captured));
+        assert!(client.connect().await.is_err());
+        let failed = client.offline_state().connection_state();
+        assert!(client.server_unreachable_for_state(failed));
+        client
+            .offline_state()
+            .set_connection_state(ConnectionState::Connected);
+        assert!(
+            client.server_unreachable_for_state(failed),
+            "use captured failure, not a second state read"
+        );
+        assert!(!client.server_unreachable());
     }
 
     /// Signed-out startup contacts nothing: no boot connect, no reachability

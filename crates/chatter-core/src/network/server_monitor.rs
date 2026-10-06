@@ -79,8 +79,21 @@ pub async fn run(pool: Arc<GrpcClientPool>, offline_state: OfflineState) {
             // The result is recorded by `probe` itself; the error is only worth
             // a debug line, because "the server is down" is an ordinary and
             // expected condition for this app rather than a fault.
-            if let Err(error) = pool.probe().await {
-                tracing::debug!(%error, "server monitor: probe failed");
+            let probe = pool.probe();
+            tokio::pin!(probe);
+            loop {
+                tokio::select! {
+                    result = &mut probe => {
+                        if let Err(error) = result {
+                            tracing::debug!(%error, "server monitor: probe failed");
+                        }
+                        break;
+                    }
+                    result = status_rx.changed() => {
+                        if result.is_err() { return; }
+                        mirror(&offline_state);
+                    }
+                }
             }
         }
 
