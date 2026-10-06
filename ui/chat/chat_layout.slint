@@ -557,11 +557,22 @@ export component ChatLayout inherits Rectangle {
             height: root.drawer-space;
             clip: true;
             vertical-stretch: 0;
-            VerticalLayout {
-                padding: Spacing.sm;
-                spacing: Spacing.xs;
-                Rectangle {
-                    height: Spacing.touch-target-min;
+            // Derive chrome from the independent drawer budget, never from
+            // a layout's measured height. Keep room for embedded picker chrome
+            // even when the IME leaves too little space for full touch targets.
+            private property <float> chrome-scale: min(1, max(0px, root.drawer-space - Spacing.touch-target-min)
+                / (2 * Spacing.touch-target-min + 2 * Spacing.sm + 2 * Spacing.xs));
+            private property <length> drawer-padding: Spacing.sm * self.chrome-scale;
+            private property <length> drawer-gap: Spacing.xs * self.chrome-scale;
+            private property <length> control-height: Spacing.touch-target-min * self.chrome-scale;
+            Rectangle {
+                width: parent.width;
+                height: root.drawer-space;
+                drawer-search-row := Rectangle {
+                    x: picker-drawer.drawer-padding;
+                    y: picker-drawer.drawer-padding;
+                    width: parent.width - 2 * picker-drawer.drawer-padding;
+                    height: picker-drawer.control-height;
                     border-radius: Spacing.radius-md;
                     background: Colors.inset;
                     HorizontalLayout {
@@ -591,8 +602,11 @@ export component ChatLayout inherits Rectangle {
                     }
                 }
                 picker-results := Rectangle {
-                    vertical-stretch: 1;
-                    min-height: 0px;
+                    x: picker-drawer.drawer-padding;
+                    y: drawer-search-row.y + drawer-search-row.height + picker-drawer.drawer-gap;
+                    width: drawer-search-row.width;
+                    height: max(0px, root.drawer-space - 2 * picker-drawer.drawer-padding
+                        - 2 * picker-drawer.drawer-gap - 2 * picker-drawer.control-height);
                     clip: true;
                     if root.emoji-picker-visible: EmojiPicker {
                         embedded: true; show-gif-tab: false; show: true;
@@ -620,10 +634,15 @@ export component ChatLayout inherits Rectangle {
                         gif-selected(id, url) => { root.gif-picker-visible = false; root.gif-selected(id, url); }
                     }
                 }
-                HorizontalLayout {
-                    height: Spacing.touch-target-min;
+                Rectangle {
+                    x: picker-drawer.drawer-padding;
+                    y: picker-results.y + picker-results.height + picker-drawer.drawer-gap;
+                    width: drawer-search-row.width;
+                    height: picker-drawer.control-height;
                     for tab[index] in ["Emoji", "GIFs"]: Rectangle {
-                        horizontal-stretch: 1;
+                        x: index * parent.width / 2;
+                        width: parent.width / 2;
+                        height: parent.height;
                         background: (index == 0 ? root.emoji-picker-visible : root.gif-picker-visible) ? Colors.primary.with-alpha(0.2) : transparent;
                         border-radius: Spacing.radius-md;
                         accessible-role: button;
