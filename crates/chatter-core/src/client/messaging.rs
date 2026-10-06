@@ -932,14 +932,10 @@ impl ChatterClient {
     /// Whether `peer` shares an anon group with us and we have no identified
     /// relationship to it — not a friend, no server DM history. For such a
     /// peer the identified DM is a NEW link between the two identities; for a
-    /// friend or an existing DM that link already exists.
+    /// friend or an existing DM that link already exists. Unreadable anon
+    /// membership is treated conservatively until storage is available again.
     fn known_only_from_anon_group(&self, peer: &crate::domain::ids::UserId) -> bool {
-        let comember = self.list_anon_groups().unwrap_or_default().iter().any(|g| {
-            self.get_anon_group_members(&g.id)
-                .iter()
-                .any(|m| &m.user_id == peer)
-        });
-        if !comember || self.is_friend(peer) {
+        if self.is_friend(peer) {
             return false;
         }
         let has_server_dm = self
@@ -950,7 +946,25 @@ impl ChatterClient {
                 1,
             )
             .is_ok_and(|m| !m.is_empty());
-        !has_server_dm
+        if has_server_dm {
+            return false;
+        }
+        // The sidebar façade turns storage errors into empty lists. Privacy
+        // routing must distinguish absence from an unreadable membership:
+        // without an established identified relationship, uncertainty may
+        // only open an existing anonymous conversation.
+        let Ok(groups) = self.anon_groups().list_groups() else {
+            return true;
+        };
+        for group in groups {
+            let Ok(members) = self.anon_groups().get_members(&group.id) else {
+                return true;
+            };
+            if members.iter().any(|member| &member.user_id == peer) {
+                return true;
+            }
+        }
+        false
     }
 
     /// Every conversation a message can be forwarded to, filtered by a
@@ -1850,7 +1864,7 @@ mod shield_mode_tests {
     use crate::services::user::UserError;
     use crate::state::ActiveConversation;
 
-    fn build_test_client() -> Arc<ChatterClient> {
+    fn build_test_client() -> (tempfile::TempDir, Arc<ChatterClient>) {
         // A real client stores its DB passphrase in the OS keyring; point
         // keyring at the in-memory mock (see `transport_switch_tests`).
         static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
@@ -1858,16 +1872,17 @@ mod shield_mode_tests {
             keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
         });
         let dir = tempfile::tempdir().unwrap();
-        ChatterClient::builder()
+        let client = ChatterClient::builder()
             .server_url("https://localhost:1")
             .data_dir(dir.path().to_str().unwrap())
             .build()
-            .expect("build client")
+            .expect("build client");
+        (dir, client)
     }
 
     #[tokio::test]
     async fn shield_mode_refuses_identified_calls() {
-        let client = build_test_client();
+        let (_dir, client) = build_test_client();
         client.anon_mode.store(true, Ordering::Release);
         let peer = UserId::new();
 
@@ -1937,7 +1952,7 @@ mod shield_mode_tests {
     async fn anon_group_comember_never_gets_an_identified_dm() {
         use crate::domain::anon_group::{AnonGroup, AnonGroupMember, AnonGroupRole};
 
-        let client = build_test_client();
+        let (_dir, client) = build_test_client();
         let (me, member, stranger) = (UserId::new(), UserId::new(), UserId::new());
         let group = AnonGroup::new_as_owner("g".into(), me);
         let repo = &client.anon_groups().anon_group_repo;
@@ -1956,6 +1971,117 @@ mod shield_mode_tests {
             client.resolve_dm_conversation(&stranger.to_string()),
             Some(ActiveConversation::ServerDm { peer_id: stranger })
         );
+    }
+
+    /// Holding the existing readers forces the pool to open another connection
+    /// by path, which requires the fixture's directory to remain alive.
+    #[tokio::test]
+    async fn fixture_keeps_database_available_to_new_readers() {
+        let (dir, client) = build_test_client();
+        let db = client.messages().database();
+        let readers: Vec<_> = (0..3).map(|_| db.read_connection().unwrap()).collect();
+        assert!(dir.path().exists());
+        let reader = db
+            .read_connection()
+            .expect("new reader can open the live DB path");
+        assert_eq!(
+            reader
+                .query_row("SELECT count(*) FROM anon_groups", [], |row| {
+                    row.get::<_, i64>(0)
+                })
+                .unwrap(),
+            0
+        );
+        drop(reader);
+        drop(readers);
+    }
+
+    /// Reproduce the old fixture's deleted-path failure with the real pool.
+    #[tokio::test]
+    async fn deleted_fixture_directory_prevents_new_repository_reader() {
+        let (dir, client) = build_test_client();
+        let db = client.messages().database();
+        let readers: Vec<_> = (0..3).map(|_| db.read_connection().unwrap()).collect();
+        dir.close().expect("remove fixture directory");
+        assert!(client.anon_groups().list_groups().is_err());
+        drop(readers);
+    }
+
+    /// Break actual SQL reads at each repository boundary, rather than mocking
+    /// a membership boolean: an unreadable table cannot authorize a new link.
+    #[tokio::test]
+    async fn anon_membership_read_errors_do_not_open_identified_dms() {
+        use crate::domain::anon_group::AnonGroup;
+        use crate::domain::message::Message;
+        use crate::domain::user::Friendship;
+        use crate::storage::repositories::settings_repo::keys;
+
+        for break_groups in [true, false] {
+            let (_dir, client) = build_test_client();
+            let (me, stranger, known, friend) =
+                (UserId::new(), UserId::new(), UserId::new(), UserId::new());
+            let group = AnonGroup::new_as_owner("g".into(), me);
+            client
+                .anon_groups()
+                .anon_group_repo
+                .insert_group(&group)
+                .unwrap();
+            client
+                .messages()
+                .settings_repo
+                .set_string(keys::CURRENT_USER_ID, &me.to_string())
+                .unwrap();
+            for user in [me, known, friend] {
+                client
+                    .messages()
+                    .user_repo
+                    .ensure_user_exists(&user)
+                    .unwrap();
+            }
+            let mut friendship = Friendship::new_request(me, friend);
+            friendship.accept();
+            client
+                .messages()
+                .user_repo
+                .insert_friendship(&friendship)
+                .unwrap();
+            let message = Message::new_text(
+                known.into(),
+                ConversationType::ServerDm,
+                Some(known),
+                "hello".into(),
+                1,
+            );
+            client.messages().message_repo.insert(&message).unwrap();
+            let db = client.messages().database();
+            db.connection()
+                .unwrap()
+                .execute_batch(if break_groups {
+                    "ALTER TABLE anon_groups RENAME COLUMN owner_id TO unreadable_owner_id"
+                } else {
+                    "ALTER TABLE anon_group_members RENAME COLUMN user_id TO unreadable_user_id"
+                })
+                .unwrap();
+            if break_groups {
+                assert!(client.anon_groups().list_groups().is_err());
+            } else {
+                assert!(client.anon_groups().list_groups().is_ok());
+                assert!(client.anon_groups().get_members(&group.id).is_err());
+            }
+            assert_eq!(client.resolve_dm_conversation(&stranger.to_string()), None);
+            for peer_id in [known, friend] {
+                assert_eq!(
+                    client.resolve_dm_conversation(&peer_id.to_string()),
+                    Some(ActiveConversation::ServerDm { peer_id })
+                );
+            }
+            client.anon_mode.store(true, Ordering::Release);
+            assert_eq!(client.resolve_dm_conversation(&known.to_string()), None);
+            assert_eq!(
+                client.resolve_dm_conversation(&friend.to_string()),
+                Some(ActiveConversation::ServerDm { peer_id: friend })
+            );
+        }
     }
 }
 
