@@ -40,6 +40,10 @@ required-features = ["ui-test-debug"]
 name = "ui_call_bubble"
 required-features = ["ui-test-debug"]
 
+[[test]]
+name = "ui_call_verification"
+required-features = ["ui-test-debug"]
+
 [dependencies]
 chatter-ui-slint = { path = "../chatter-ui-slint" }
 chatter-core = { path = "../chatter-core", default-features = false }

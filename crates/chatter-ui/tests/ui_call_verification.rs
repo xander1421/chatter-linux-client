@@ -4,11 +4,11 @@ use i_slint_backend_testing as testing;
 use slint::ComponentHandle;
 
 fn pump(w: &MainWindow) {
-    w.window().set_size(slint::LogicalSize::new(1000.0, 800.0));
+    w.window().set_size(slint::LogicalSize::new(412.0, 891.0));
     for _ in 0..12 {
         w.window()
             .dispatch_event(slint::platform::WindowEvent::Resized {
-                size: slint::LogicalSize::new(1000.0, 800.0),
+                size: slint::LogicalSize::new(412.0, 891.0),
             });
         slint::Timer::single_shot(std::time::Duration::from_millis(1), || {
             slint::quit_event_loop().unwrap();
@@ -33,6 +33,8 @@ fn call_header_keeps_four_ordered_emojis_and_key_version_across_presentations() 
     testing::init_integration_test_with_system_time();
     let w = MainWindow::new().unwrap();
     w.set_current_view("main".into());
+    w.set_is_mobile_platform(true);
+    w.set_mobile_show_chat(true);
     w.set_channel_name("Verification fixture".into());
     w.set_active_call_visible(true);
     w.set_call_is_video_enabled(false);
@@ -75,7 +77,7 @@ fn call_header_keeps_four_ordered_emojis_and_key_version_across_presentations() 
                     let position = element.absolute_position();
                     let size = element.size();
                     assert!(position.x >= 0.0 && position.y >= 0.0);
-                    assert!(position.x + size.width <= 1000.5 && position.y + size.height <= 800.5);
+                    assert!(position.x + size.width <= 412.5 && position.y + size.height <= 891.5);
                     if let Some(right) = previous_right {
                         assert!(position.x >= right - 0.5);
                     }
@@ -90,7 +92,7 @@ fn call_header_keeps_four_ordered_emojis_and_key_version_across_presentations() 
                 assert_eq!(version.len(), 1);
                 let position = version[0].absolute_position();
                 assert!(position.x >= previous_right.unwrap() - 0.5);
-                assert!(position.x + version[0].size().width <= 1000.5);
+                assert!(position.x + version[0].size().width <= 412.5);
                 assert!(
                     (position.y + version[0].size().height / 2.0 - baseline.unwrap()).abs() < 1.0
                 );
