@@ -12,7 +12,7 @@ use tonic::transport::Endpoint;
 use crate::error::NetworkError;
 
 use super::interceptors::AuthInterceptor;
-use super::retry::{RetryConfig, retry_unary};
+use super::retry::{retry_unary, RetryConfig};
 use super::transport::GrpcTransport;
 
 /// Ceiling on the QUIC reachability probe in [`GrpcClientPool::dial`]. QUIC/UDP
@@ -364,7 +364,7 @@ impl GrpcClientPool {
     /// loop (the inbox poller) exists to do it.
     fn note_onion_dial(mode: TransportMode, ok: bool) {
         if mode == TransportMode::Onion {
-            use crate::network::connection::{TorStatus, set_tor_status};
+            use crate::network::connection::{set_tor_status, TorStatus};
             set_tor_status(if ok {
                 TorStatus::Connected
             } else {
@@ -649,7 +649,7 @@ impl GrpcClientPool {
     /// [`call_with_retry`]: Self::call_with_retry
     pub async fn probe(&self) -> Result<(), NetworkError> {
         use crate::network::connection::{
-            ServerStatus, server_evidence_revision, set_server_status_if_current,
+            server_evidence_revision, set_server_status_if_current, ServerStatus,
         };
 
         let (endpoint, mode, generation) = self.snapshot();
@@ -908,7 +908,7 @@ impl GrpcClientPool {
         F: FnMut(&Self) -> Fut,
         Fut: Future<Output = Result<T, NetworkError>>,
     {
-        use crate::network::connection::{ServerStatus, set_server_status};
+        use crate::network::connection::{set_server_status, ServerStatus};
 
         let pool = self;
         let retry_config = RetryConfig::default();
@@ -1075,18 +1075,16 @@ mod tests {
 
     #[tokio::test]
     async fn in_flight_direct_probe_is_discarded_after_endpoint_generation_changes() {
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let pool = std::sync::Arc::new(
-            GrpcClientPool::new(&format!("http://{}", listener.local_addr().unwrap())).unwrap(),
-        );
+        let pool = std::sync::Arc::new(GrpcClientPool::new("http://127.0.0.1:1").unwrap());
         let (accepted_tx, accepted_rx) = tokio::sync::oneshot::channel();
         let (release_tx, release_rx) = tokio::sync::oneshot::channel();
-        let server = tokio::spawn(async move {
-            let (socket, _) = listener.accept().await.unwrap();
+        pool.controlled_dial.lock().replace(Box::pin(async move {
             accepted_tx.send(()).unwrap();
             let _ = release_rx.await;
-            drop(socket);
-        });
+            Err(NetworkError::ConnectionFailed(
+                "controlled old dial failure".into(),
+            ))
+        }));
         let probing_pool = pool.clone();
         let probe = tokio::spawn(async move { probing_pool.probe().await });
         tokio::time::timeout(Duration::from_secs(1), accepted_rx)
@@ -1100,12 +1098,9 @@ mod tests {
             .unwrap()
             .unwrap()
             .unwrap_err();
-        assert!(
-            error
-                .to_string()
-                .contains("transport changed while probing")
-        );
-        server.await.unwrap();
+        assert!(error
+            .to_string()
+            .contains("transport changed while probing"));
     }
 
     #[test]
@@ -1344,6 +1339,15 @@ mod tests {
         // either) — the point of this test is the QUIC decision, not a
         // successful connection.
         assert!(result.is_err());
+        // TCP can fail before the independently spawned QUIC probe finishes.
+        // Await its actual verdict; dial returning does not imply completion.
+        tokio::time::timeout(QUIC_PROBE_TIMEOUT + Duration::from_secs(1), async {
+            while *pool.quic_probe.read() == QuicProbeState::Probing {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .expect("background QUIC probe must finish within its deadline");
         assert_eq!(*pool.quic_probe.read(), QuicProbeState::Failed);
     }
 
@@ -1395,7 +1399,7 @@ mod tests {
     #[tokio::test]
     async fn cached_quic_connect_and_probe_do_not_fabricate_authority() {
         use crate::network::connection::{
-            ServerStatus, server_evidence_revision, server_status, set_server_status,
+            server_evidence_revision, server_status, set_server_status, ServerStatus,
         };
         let pool = GrpcClientPool::new("https://192.0.2.1:50051").unwrap();
         *pool.quic_probe.write() = QuicProbeState::Working;
