@@ -1735,12 +1735,14 @@ fn run_call_worker(
                 }
 
                 CallCommand::Reconnect { response } => {
-                    let result = reconnect_impl(
-                        &call_client,
-                        &room_manager,
-                        &active_call,
-                    )
-                    .await;
+                    let result = suspend_for_reconnect(
+                        &ratchet_cancel,
+                        reconnect_impl(&call_client, &room_manager, &active_call),
+                        || start_key_ratchet_timer(&room_manager, &ratchet_cancel, &active_call),
+                    ).await;
+                    if result.is_ok() {
+                        restore_reconnected_media(&room_manager, &active_call).await;
+                    }
                     let _ = response.send(result);
                 }
 
@@ -1939,6 +1941,8 @@ struct ActiveCallState {
     livekit_url: String,
     /// Closed while we hold none of the call's keys (a group joiner).
     publish_gate: PublishGate,
+    /// Retained across failed reconnect attempts, since teardown clears capture.
+    reconnect_media: Option<ReconnectMedia>,
 }
 
 /// The active call's group-key standing ([`CallWorkerHandle::group_key_status`]).
@@ -1950,6 +1954,13 @@ pub struct GroupKeyStatus {
     pub anchor: u32,
     /// Our media is held back: we hold no key of the call's yet.
     pub awaiting_key: bool,
+}
+
+#[derive(Clone)]
+struct ReconnectMedia {
+    microphone: Option<String>,
+    camera: bool,
+    muted: bool,
 }
 
 /// Media a channel group-call participant may not publish yet (§124 1k).
@@ -2286,6 +2297,7 @@ async fn initiate_call_impl(
 
     // Store active call
     *active_call.borrow_mut() = Some(ActiveCallState {
+        reconnect_media: None,
         call: call.clone(),
         key_state,
         room_name: response.room_name,
@@ -2397,6 +2409,7 @@ async fn join_call_impl(
         PublishGate::default()
     };
     *active_call.borrow_mut() = Some(ActiveCallState {
+        reconnect_media: None,
         call: call.clone(),
         key_state,
         room_name: call_info.room_name,
@@ -2476,6 +2489,7 @@ async fn connect_with_token_impl(
 
     // Store active call info
     *active_call.borrow_mut() = Some(ActiveCallState {
+        reconnect_media: None,
         call: call.clone(),
         key_state,
         room_name: room_name.clone(),
@@ -2567,6 +2581,21 @@ async fn end_call_impl(
     Ok(())
 }
 
+/// The actor suspends before polling any reconnect await, and replaces the
+/// timer only after staged installation succeeds, before media restoration awaits.
+async fn suspend_for_reconnect(
+    cancel: &Rc<RefCell<Option<tokio::sync::oneshot::Sender<()>>>>,
+    attempt: impl std::future::Future<Output = Result<(), CallError>>,
+    restart: impl FnOnce(),
+) -> Result<(), CallError> {
+    stop_key_ratchet_timer(cancel);
+    let result = attempt.await;
+    if result.is_ok() {
+        restart();
+    }
+    result
+}
+
 /// Reconnect to the current call after a connection drop.
 ///
 /// This gets a new token from the server and reconnects to LiveKit.
@@ -2576,13 +2605,21 @@ async fn reconnect_impl(
     active_call: &Rc<RefCell<Option<ActiveCallState>>>,
 ) -> Result<(), CallError> {
     // Get current call info
-    let (call_id, snapshot, livekit_url) = {
-        let active = active_call.borrow();
-        let state = active.as_ref().ok_or(CallError::NotInCall)?;
+    let (call_id, snapshot, livekit_url, mut candidate, started_at) = {
+        let mut active = active_call.borrow_mut();
+        let state = active.as_mut().ok_or(CallError::NotInCall)?;
+        let snapshot = room_manager.snapshot_reconnect_keys(&state.key_state)?;
+        state.reconnect_media.get_or_insert_with(|| ReconnectMedia {
+            microphone: room_manager.reconnect_microphone_device(),
+            camera: room_manager.is_camera_enabled(),
+            muted: room_manager.is_microphone_muted(),
+        });
         (
             state.call.id.to_string(),
-            room_manager.snapshot_reconnect_keys(&state.key_state)?,
+            snapshot,
             state.livekit_url.clone(),
+            state.key_state.clone(),
+            state.call.started_at,
         )
     };
 
@@ -2602,11 +2639,59 @@ async fn reconnect_impl(
 
     // Reconnect with the staged absolute epoch and retained native receive ring
     room_manager
-        .connect_reusing_keys(&livekit_url, &response.livekit_token, snapshot)
+        .connect_reusing_keys_aligned(
+            &livekit_url,
+            &response.livekit_token,
+            snapshot,
+            &mut candidate,
+            started_at,
+        )
         .await?;
-
+    // No await between room initialization and committing its authoritative
+    // chain. The actor restarts the timer before restoration can await.
+    active_call
+        .borrow_mut()
+        .as_mut()
+        .ok_or(CallError::NotInCall)?
+        .key_state = candidate;
     tracing::info!(call_id = %call_id, "Reconnected successfully");
     Ok(())
+}
+
+async fn restore_reconnected_media(
+    room_manager: &RoomManager,
+    active_call: &Rc<RefCell<Option<ActiveCallState>>>,
+) {
+    let media = {
+        let mut active = active_call.borrow_mut();
+        let Some(state) = active.as_mut() else {
+            return;
+        };
+        // A keyless group joiner retains its deferred requests and its gate.
+        let media = state.reconnect_media.take();
+        if state.publish_gate.is_closed() {
+            return;
+        }
+        media
+    };
+    let Some(media) = media else {
+        return;
+    };
+    // Restore requested tracks, including a muted microphone, after the
+    // authenticated gate and catch-up installation. Preserve its device.
+    if let Some(device) = media.microphone {
+        if let Err(error) = room_manager
+            .publish_microphone_restored(Some(&device), media.muted)
+            .await
+        {
+            tracing::warn!(%error, "reconnect microphone restoration failed");
+        }
+    }
+    if media.camera {
+        if let Err(error) = room_manager.publish_camera(None, None).await {
+            tracing::warn!(%error, "reconnect camera restoration failed");
+        }
+    }
 }
 
 /// Key ratchet interval in seconds.
@@ -2675,6 +2760,63 @@ fn ratchet_to(key_state: &mut CallKeyState, target: u32) -> Option<(u32, Vec<u8>
     Some(chain_install(key_state))
 }
 
+/// Reconnect uses the exact elapsed epoch, without introducing a new anchor
+/// or advancing early using the timer's boundary tolerance.
+pub(crate) fn reconnect_wall_epoch(start: chrono::DateTime<chrono::Utc>) -> u32 {
+    let elapsed = (chrono::Utc::now() - start).num_milliseconds() as f64 / 1000.0;
+    aligned_ratchet_schedule(elapsed, KEY_RATCHET_INTERVAL_SECS).0
+}
+
+/// Install each missed chain step, rather than skipping receive material in a
+/// multi-epoch outage. This fills the native ring with previous/current/next
+/// inputs in order; the final call selects the aligned sending epoch. The
+/// authority stays unchanged on any rejection and the same chain can retry.
+pub(crate) fn install_reconnect_catch_up(
+    chain: &mut CallKeyState,
+    target: u32,
+    mut install: impl FnMut(u32, Vec<u8>, Vec<u8>) -> bool,
+) -> Result<(), CallError> {
+    let target = target.max(chain.epoch());
+    if target - chain.epoch() > MAX_RATCHET_CATCH_UP {
+        return Err(CallError::CryptoError(
+            "Reconnect catch-up exceeds limit".into(),
+        ));
+    }
+    let mut candidate = chain.clone();
+    // Preflight exhaustion and derivation before mutating the native provider.
+    let mut final_state = candidate.clone();
+    while final_state.epoch() < target {
+        final_state
+            .ratchet()
+            .map_err(|e| CallError::CryptoError(e.to_string()))?;
+    }
+    final_state
+        .peek_next_key()
+        .map_err(|e| CallError::CryptoError(e.to_string()))?;
+    loop {
+        let next = candidate
+            .peek_next_key()
+            .map_err(|e| CallError::CryptoError(e.to_string()))?;
+        if !install(
+            candidate.epoch(),
+            candidate.current_key_vec(),
+            next.to_vec(),
+        ) {
+            return Err(CallError::CryptoError(
+                "Reconnect catch-up install failed".into(),
+            ));
+        }
+        if candidate.epoch() == target {
+            break;
+        }
+        candidate
+            .ratchet()
+            .map_err(|e| CallError::CryptoError(e.to_string()))?;
+    }
+    *chain = candidate;
+    Ok(())
+}
+
 /// Start the coordinated key ratchet timer.
 ///
 /// Both peers ratchet at wall-clock boundaries anchored to the server-assigned
@@ -2702,6 +2844,23 @@ fn start_key_ratchet_timer(
     ratchet_cancel: &Rc<RefCell<Option<tokio::sync::oneshot::Sender<()>>>>,
     active_call: &Rc<RefCell<Option<ActiveCallState>>>,
 ) {
+    let manager = room_manager.clone();
+    start_key_ratchet_scheduler(
+        ratchet_cancel,
+        active_call,
+        Rc::new(move |epoch, current, next| manager.set_ratcheted_shared_key(epoch, current, next)),
+        Rc::new(chrono::Utc::now),
+    );
+}
+
+// Clock and installation boundaries are injectable; production and boundary
+// regressions execute this same local scheduler and cancellation lifecycle.
+fn start_key_ratchet_scheduler(
+    ratchet_cancel: &Rc<RefCell<Option<tokio::sync::oneshot::Sender<()>>>>,
+    active_call: &Rc<RefCell<Option<ActiveCallState>>>,
+    install: Rc<dyn Fn(u32, Vec<u8>, Vec<u8>) -> bool>,
+    now: Rc<dyn Fn() -> chrono::DateTime<chrono::Utc>>,
+) {
     // Cancel any existing timer
     stop_key_ratchet_timer(ratchet_cancel);
 
@@ -2714,16 +2873,23 @@ fn start_key_ratchet_timer(
         .as_ref()
         .and_then(|s| s.call.started_at);
 
-    let room_manager = room_manager.clone();
     let active_call = active_call.clone();
 
     tokio::task::spawn_local(async move {
+        // A reconnect may cancel us before this local task is first polled.
+        // Never perform initial catch-up against a room already being removed.
+        if !matches!(
+            cancel_rx.try_recv(),
+            Err(tokio::sync::oneshot::error::TryRecvError::Empty)
+        ) {
+            return;
+        }
         // Advance our deterministic CallKeyState to the wall-clock epoch (one
         // step past ours when there is no anchor) and push that epoch's key
         // plus the next (forward window) to LiveKit. Returns false if the call
         // ended (caller should stop the timer).
         let ratchet_once = |active_call: &Rc<RefCell<Option<ActiveCallState>>>,
-                            room_manager: &Arc<RoomManager>|
+                            install: &dyn Fn(u32, Vec<u8>, Vec<u8>) -> bool|
          -> bool {
             let ratcheted = {
                 let mut call_guard = active_call.borrow_mut();
@@ -2732,14 +2898,21 @@ fn start_key_ratchet_timer(
                     return false;
                 };
                 let target = match call_start {
-                    Some(start) => wall_clock_epoch(start),
+                    Some(start) => {
+                        aligned_ratchet_schedule(
+                            (now() - start).num_milliseconds() as f64 / 1000.0
+                                + RATCHET_TICK_TOLERANCE_SECS,
+                            KEY_RATCHET_INTERVAL_SECS,
+                        )
+                        .0
+                    }
                     None => state.key_state.epoch().saturating_add(1),
                 };
                 let mut candidate = state.key_state.clone();
                 ratchet_to(&mut candidate, target).map(|install| (candidate, install))
             };
             if let Some((candidate, (epoch, key_cur, key_next))) = ratcheted {
-                if !room_manager.set_ratcheted_shared_key(epoch, key_cur, key_next) {
+                if !install(epoch, key_cur, key_next) {
                     tracing::warn!("Failed to push ratcheted key to LiveKit; timer stopping");
                     return false;
                 }
@@ -2755,7 +2928,7 @@ fn start_key_ratchet_timer(
         // catch up any epochs that elapsed before we connected.
         let first_delay_secs = match call_start {
             Some(start) => {
-                let elapsed = (chrono::Utc::now() - start).num_milliseconds() as f64 / 1000.0;
+                let elapsed = (now() - start).num_milliseconds() as f64 / 1000.0;
                 let (epoch_now, delay) =
                     aligned_ratchet_schedule(elapsed, KEY_RATCHET_INTERVAL_SECS);
 
@@ -2766,7 +2939,7 @@ fn start_key_ratchet_timer(
                     ratchet_to(&mut candidate, epoch_now).map(|install| (candidate, install))
                 });
                 if let Some((candidate, (epoch, key_cur, key_next))) = ratcheted {
-                    if !room_manager.set_ratcheted_shared_key(epoch, key_cur, key_next) {
+                    if !install(epoch, key_cur, key_next) {
                         tracing::warn!("Failed to install join catch-up media key; timer stopping");
                         return;
                     }
@@ -2801,14 +2974,15 @@ fn start_key_ratchet_timer(
 
         loop {
             tokio::select! {
-                _ = interval.tick() => {
-                    if !ratchet_once(&active_call, &room_manager) {
-                        break;
-                    }
-                }
+                biased;
                 _ = &mut cancel_rx => {
                     tracing::debug!("Key ratchet timer cancelled");
                     break;
+                }
+                _ = interval.tick() => {
+                    if !ratchet_once(&active_call, install.as_ref()) {
+                        break;
+                    }
                 }
             }
         }
@@ -3703,6 +3877,7 @@ mod group_key_install_tests {
         let mut call = Call::new(ChannelId::new(), UserId::new(), CallType::Voice);
         call.id = CALL.parse().unwrap();
         ActiveCallState {
+            reconnect_media: None,
             call,
             key_state: CallKeyState::new(&root, CALL).unwrap(),
             room_name: String::new(),
@@ -3914,6 +4089,7 @@ mod media_key_install_failure_tests {
         call.id = "11111111-2222-4333-8444-555555555555".parse().unwrap();
         let key_state = CallKeyState::new(&[1; 32], &call.id.to_string()).unwrap();
         Rc::new(RefCell::new(Some(ActiveCallState {
+            reconnect_media: None,
             call,
             key_state,
             room_name: String::new(),
@@ -4003,5 +4179,270 @@ mod media_key_install_failure_tests {
             assert!(state.publish_gate.mic.is_some());
         }
         assert!(!room.is_connected());
+    }
+}
+
+#[cfg(test)]
+mod reconnect_timer_boundary_tests {
+    use super::*;
+    use livekit::e2ee::key_provider::{KeyProvider, KeyProviderOptions};
+    use std::cell::Cell;
+
+    fn active(start: chrono::DateTime<chrono::Utc>) -> Rc<RefCell<Option<ActiveCallState>>> {
+        let mut call = Call::new(ChannelId::new(), UserId::new(), CallType::Voice);
+        call.started_at = Some(start);
+        let mut chain = CallKeyState::new(&[7; 32], &call.id.to_string()).unwrap();
+        chain.rotate([9; 32]).unwrap();
+        Rc::new(RefCell::new(Some(ActiveCallState {
+            call,
+            key_state: chain,
+            room_name: String::new(),
+            livekit_url: String::new(),
+            publish_gate: PublishGate::awaiting_key(false),
+            reconnect_media: None,
+        })))
+    }
+
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn cancelled_before_first_poll_never_installs_initial_catch_up() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let start = chrono::Utc::now() - chrono::Duration::seconds(120);
+                let active = active(start);
+                let cancel = Rc::new(RefCell::new(None));
+                let calls = Rc::new(Cell::new(0));
+                let count = calls.clone();
+                start_key_ratchet_scheduler(
+                    &cancel,
+                    &active,
+                    Rc::new(move |_, _, _| {
+                        count.set(count.get() + 1);
+                        true
+                    }),
+                    Rc::new(chrono::Utc::now),
+                );
+                stop_key_ratchet_timer(&cancel);
+                tokio::task::yield_now().await;
+                assert_eq!(calls.get(), 0);
+                assert_eq!(active.borrow().as_ref().unwrap().key_state.epoch(), 1);
+            })
+            .await;
+    }
+
+    /// Executes the production actor suspension/restart and local timer using
+    /// virtual elapsed time. Failure uses the actual absent-room installer;
+    /// success substitutes the SDK connection boundary with a native provider,
+    /// rather than reproducing any scheduling or catch-up decisions in a fake.
+    #[tokio::test(flavor = "current_thread", start_paused = true)]
+    async fn absent_room_failed_retry_then_multi_epoch_success_resumes_one_timer() {
+        tokio::task::LocalSet::new()
+            .run_until(async {
+                let anchor = chrono::Utc::now();
+                let base = tokio::time::Instant::now();
+                let clock: Rc<dyn Fn() -> chrono::DateTime<chrono::Utc>> =
+                    Rc::new(move || anchor + chrono::Duration::from_std(base.elapsed()).unwrap());
+                let active = active(anchor);
+                let original = active.borrow().as_ref().unwrap().key_state.clone();
+                let cancel = Rc::new(RefCell::new(None));
+                let present = Rc::new(Cell::new(true));
+                let installs = Rc::new(RefCell::new(Vec::new()));
+                let (manager, _) = RoomManager::new();
+                let manager = Arc::new(manager);
+                let provider = KeyProvider::with_shared_key(
+                    KeyProviderOptions {
+                        ratchet_window_size: 0,
+                        key_ring_size: 16,
+                        ..Default::default()
+                    },
+                    original.current_key_vec(),
+                );
+                let sink: Rc<dyn Fn(u32, Vec<u8>, Vec<u8>) -> bool> = {
+                    let present = present.clone();
+                    let installs = installs.clone();
+                    let manager = manager.clone();
+                    let provider = provider.clone();
+                    Rc::new(move |epoch, current, next| {
+                        installs.borrow_mut().push(epoch);
+                        if !present.get() {
+                            return manager.set_ratcheted_shared_key(epoch, current, next);
+                        }
+                        // Native receive bytes are checked below. This is an SDK
+                        // boundary substitute, not a successful Room::connect test.
+                        provider.set_shared_key(next, ((epoch + 1) % 16) as i32);
+                        provider.set_shared_key(current, (epoch % 16) as i32);
+                        true
+                    })
+                };
+                start_key_ratchet_scheduler(&cancel, &active, sink.clone(), clock.clone());
+                tokio::task::yield_now().await;
+                tokio::time::advance(std::time::Duration::from_secs(29)).await;
+                tokio::task::yield_now().await;
+                let before = installs.borrow().len();
+                let result = suspend_for_reconnect(
+                    &cancel,
+                    async {
+                        assert!(
+                            cancel.borrow().is_none(),
+                            "actor cancelled before teardown await"
+                        );
+                        present.set(false);
+                        manager.disconnect().await;
+                        // Boundary at 30 and subsequent boundary at 60 fall while absent.
+                        tokio::time::advance(std::time::Duration::from_secs(32)).await;
+                        tokio::task::yield_now().await;
+                        Err(CallError::ConnectionFailed("token fetch failed".into()))
+                    },
+                    || panic!("a failed retry must not restart"),
+                )
+                .await;
+                assert!(result.is_err());
+                assert_eq!(
+                    installs.borrow().len(),
+                    before,
+                    "suspended timer never installs against absent room"
+                );
+                let guard = active.borrow();
+                let state = guard.as_ref().unwrap();
+                assert_eq!(state.key_state.current_key(), original.current_key());
+                assert_eq!(state.key_state.anchor(), original.anchor());
+                assert_eq!(state.call.started_at, Some(anchor));
+                assert!(state.publish_gate.is_closed());
+                drop(guard);
+                let mut candidate = original.clone();
+                // Retry crosses additional epochs during the SDK-connect await.
+                let result = suspend_for_reconnect(
+                    &cancel,
+                    async {
+                        tokio::time::advance(std::time::Duration::from_secs(61)).await;
+                        tokio::task::yield_now().await;
+                        let target = aligned_ratchet_schedule(
+                            (clock() - anchor).num_milliseconds() as f64 / 1000.0,
+                            30,
+                        )
+                        .0;
+                        assert_eq!(target, 4);
+                        present.set(true); // provisional room, publication still gated
+                        install_reconnect_catch_up(&mut candidate, target, |e, c, n| {
+                            sink(e, c, n)
+                        })?;
+                        let mut guard = active.borrow_mut();
+                        let state = guard.as_mut().unwrap();
+                        assert!(state.publish_gate.is_closed());
+                        state.key_state = candidate.clone();
+                        Ok(())
+                    },
+                    || start_key_ratchet_scheduler(&cancel, &active, sink.clone(), clock.clone()),
+                )
+                .await;
+                assert!(result.is_ok());
+                tokio::task::yield_now().await;
+                assert_eq!(&*installs.borrow(), &[1, 2, 3, 4]);
+                let mut expected = original.clone();
+                while expected.epoch() <= 5 {
+                    let reference = KeyProvider::with_shared_key(
+                        KeyProviderOptions::default(),
+                        expected.current_key_vec(),
+                    );
+                    assert_eq!(
+                        provider
+                            .get_shared_key((expected.epoch() % 16) as i32)
+                            .expect("installed native receive key"),
+                        reference.get_shared_key(0).expect("native expected key"),
+                        "native receive material for outage epoch {}",
+                        expected.epoch()
+                    );
+                    expected.ratchet().unwrap();
+                }
+                assert_eq!(provider.get_latest_key_index(), 4);
+                // Replacing a live timer still leaves exactly one boundary install.
+                start_key_ratchet_scheduler(&cancel, &active, sink.clone(), clock.clone());
+                tokio::task::yield_now().await;
+                tokio::time::advance(std::time::Duration::from_secs(28)).await;
+                tokio::task::yield_now().await;
+                assert_eq!(&*installs.borrow(), &[1, 2, 3, 4, 5]);
+                tokio::time::advance(std::time::Duration::from_secs(30)).await;
+                tokio::task::yield_now().await;
+                assert_eq!(&*installs.borrow(), &[1, 2, 3, 4, 5, 6]);
+                let guard = active.borrow();
+                let state = guard.as_ref().unwrap();
+                assert_eq!(state.key_state.epoch(), 6);
+                assert_eq!(state.key_state.anchor(), original.anchor());
+                assert_eq!(state.call.started_at, Some(anchor));
+                assert!(state.publish_gate.is_closed());
+                assert!(state.publish_gate.mic.is_some());
+                stop_key_ratchet_timer(&cancel);
+            })
+            .await;
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    async fn multi_epoch_outage_across_ring_wrap_installs_previous_current_next() {
+        let mut chain = CallKeyState::new(&[7; 32], "ring-wrap").unwrap();
+        let original = chain.clone();
+        let provider = KeyProvider::with_shared_key(
+            KeyProviderOptions {
+                ratchet_window_size: 0,
+                key_ring_size: 16,
+                ..Default::default()
+            },
+            chain.current_key_vec(),
+        );
+        install_reconnect_catch_up(&mut chain, 18, |epoch, current, next| {
+            provider.set_shared_key(next, ((epoch + 1) % 16) as i32);
+            provider.set_shared_key(current, (epoch % 16) as i32);
+            true
+        })
+        .unwrap();
+        assert_eq!(chain.epoch(), 18);
+        assert_eq!(chain.anchor(), original.anchor());
+        assert_eq!(provider.get_latest_key_index(), 2);
+        let mut expected = original;
+        for epoch in 0..=19 {
+            if epoch >= 4 {
+                // last 16 receive epochs: previous window + current + next
+                let reference = KeyProvider::with_shared_key(
+                    KeyProviderOptions::default(),
+                    expected.current_key_vec(),
+                );
+                assert_eq!(
+                    provider
+                        .get_shared_key((epoch % 16) as i32)
+                        .expect("installed wrapped receive key"),
+                    reference
+                        .get_shared_key(0)
+                        .expect("native expected wrapped key"),
+                    "epoch {epoch}"
+                );
+            }
+            expected.ratchet().unwrap();
+        }
+    }
+
+    #[test]
+    fn partial_catch_up_rejection_keeps_authority_and_retries_all_receive_steps() {
+        let mut chain = CallKeyState::new(&[7; 32], "retry").unwrap();
+        chain.rotate([9; 32]).unwrap();
+        let original = chain.clone();
+        assert!(install_reconnect_catch_up(&mut chain, 4, |epoch, _, _| epoch != 3).is_err());
+        assert_eq!(chain.epoch(), original.epoch());
+        assert_eq!(chain.anchor(), original.anchor());
+        assert_eq!(chain.current_key(), original.current_key());
+        let mut installed = Vec::new();
+        install_reconnect_catch_up(&mut chain, 4, |epoch, _, _| {
+            installed.push(epoch);
+            true
+        })
+        .unwrap();
+        assert_eq!(installed, [1, 2, 3, 4]);
+        assert_eq!(chain.epoch(), 4);
+        assert_eq!(chain.anchor(), 1);
+        let before = chain.clone();
+        assert!(
+            install_reconnect_catch_up(&mut chain, MAX_RATCHET_CATCH_UP + 5, |_, _, _| panic!(
+                "preflight must reject before native mutation"
+            ))
+            .is_err()
+        );
+        assert_eq!(chain.current_key(), before.current_key());
     }
 }

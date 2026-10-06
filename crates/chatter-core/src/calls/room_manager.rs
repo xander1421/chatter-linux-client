@@ -153,6 +153,8 @@ pub struct RoomManager {
     event_tx: mpsc::Sender<RoomEvent>,
     /// Audio capture manager.
     audio_capture: Arc<RwLock<AudioCapture>>,
+    /// A muted microphone remains requested even though capture is paused.
+    microphone_requested: std::sync::atomic::AtomicBool,
     /// Audio playback manager for remote participants.
     audio_playback: Arc<RwLock<Option<AudioPlayback>>>,
     /// Video capture manager.
@@ -227,6 +229,7 @@ impl RoomManager {
             state: Arc::new(RwLock::new(RoomState::Disconnected)),
             event_tx,
             audio_capture: Arc::new(RwLock::new(AudioCapture::new())),
+            microphone_requested: std::sync::atomic::AtomicBool::new(false),
             audio_playback: Arc::new(RwLock::new(audio_playback)),
             video_capture: Arc::new(RwLock::new(VideoCapture::new())),
             camera_published: Arc::new(std::sync::atomic::AtomicBool::new(false)),
@@ -275,6 +278,14 @@ impl RoomManager {
     /// # Arguments
     /// * `device_id` - Optional device ID (uses default if None)
     pub async fn publish_microphone(&self, device_id: Option<&str>) -> Result<(), CallError> {
+        self.publish_microphone_restored(device_id, false).await
+    }
+
+    pub(crate) async fn publish_microphone_restored(
+        &self,
+        device_id: Option<&str>,
+        muted: bool,
+    ) -> Result<(), CallError> {
         let local_participant = {
             let room = self.room.read();
             room.as_ref()
@@ -285,7 +296,12 @@ impl RoomManager {
         // Start audio capture
         let audio_source = {
             let mut capture = self.audio_capture.write();
-            capture.start(device_id)?
+            let source = capture.start(device_id)?;
+            // Pause a restored muted capture before publishing the new track.
+            if muted {
+                capture.set_muted(true);
+            }
+            source
         };
 
         // Create and publish track
@@ -302,6 +318,8 @@ impl RoomManager {
             .await
             .map_err(|e| CallError::TrackPublishFailed(e.to_string()))?;
 
+        self.microphone_requested
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         tracing::info!("Published microphone track");
         Ok(())
     }
@@ -532,6 +550,8 @@ impl RoomManager {
 
     /// Stop microphone capture and unpublish track.
     pub fn stop_microphone(&self) {
+        self.microphone_requested
+            .store(false, std::sync::atomic::Ordering::SeqCst);
         let mut capture = self.audio_capture.write();
         capture.stop();
         // Note: Track will be auto-unpublished when room disconnects
@@ -609,6 +629,12 @@ impl RoomManager {
     pub fn set_microphone_muted(&self, muted: bool) {
         let mut capture = self.audio_capture.write();
         capture.set_muted(muted);
+    }
+
+    pub(crate) fn reconnect_microphone_device(&self) -> Option<String> {
+        self.microphone_requested
+            .load(std::sync::atomic::Ordering::SeqCst)
+            .then(|| self.audio_capture.read().device_name().to_string())
     }
 
     /// Check if microphone is muted.
@@ -756,6 +782,8 @@ impl RoomManager {
         encryption_key: Vec<u8>,
         timing: CallTiming,
     ) -> Result<(), CallError> {
+        self.microphone_requested
+            .store(false, std::sync::atomic::Ordering::SeqCst);
         // Disable the SDK ratchet: the application owns the HKDF epoch chain.
         let key_provider = KeyProvider::with_shared_key(
             KeyProviderOptions {
@@ -765,7 +793,7 @@ impl RoomManager {
             },
             encryption_key,
         );
-        self.connect_with_provider(url, token, key_provider, 0, timing, None)
+        self.connect_with_provider(url, token, key_provider, 0, timing, None, None)
             .await
     }
 
@@ -808,6 +836,29 @@ impl RoomManager {
             snapshot.epoch,
             CallTiming::new("room_reconnect_requested"),
             Some(snapshot),
+            None,
+        )
+        .await
+    }
+
+    /// Catch up on the provisional room, before its handle or Connected event
+    /// can permit publication. The caller commits this staged chain on success.
+    pub(crate) async fn connect_reusing_keys_aligned(
+        &self,
+        url: &str,
+        token: &str,
+        snapshot: ReconnectKeys,
+        chain: &mut crate::crypto::call_key_provider::CallKeyState,
+        started_at: Option<chrono::DateTime<chrono::Utc>>,
+    ) -> Result<(), CallError> {
+        self.connect_with_provider(
+            url,
+            token,
+            snapshot.provider.clone(),
+            snapshot.epoch,
+            CallTiming::new("room_reconnect_requested"),
+            Some(snapshot),
+            Some((chain, started_at)),
         )
         .await
     }
@@ -820,6 +871,10 @@ impl RoomManager {
         epoch: u32,
         timing: CallTiming,
         snapshot: Option<ReconnectKeys>,
+        catch_up: Option<(
+            &mut crate::crypto::call_key_provider::CallKeyState,
+            Option<chrono::DateTime<chrono::Utc>>,
+        )>,
     ) -> Result<(), CallError> {
         replace_timing_slot(&self.timing, timing.clone());
         timing.mark("room_connect_begin");
@@ -874,7 +929,7 @@ impl RoomManager {
 
         // Complete key initialization before publishing the room handle, emitting
         // Connected, or permitting any new local media publication.
-        if let Some(snapshot) = snapshot {
+        if let Some(snapshot) = snapshot.as_ref() {
             if !room.e2ee_manager().install_shared_media_key(
                 key_ring_index(snapshot.epoch),
                 snapshot.current.to_vec(),
@@ -890,6 +945,47 @@ impl RoomManager {
                     "Reconnect media key installation failed".into(),
                 ));
             }
+        }
+
+        if let Some((chain, started_at)) = catch_up {
+            let target = started_at
+                .map(crate::services::call_worker::reconnect_wall_epoch)
+                .unwrap_or(chain.epoch());
+            let result = crate::services::call_worker::install_reconnect_catch_up(
+                chain,
+                target,
+                |epoch, current, next| {
+                    room.e2ee_manager().install_shared_media_key(
+                        key_ring_index(epoch),
+                        current,
+                        Some((key_ring_index(epoch + 1), next)),
+                    )
+                },
+            );
+            if let Err(error) = result {
+                // A later step may fail after earlier native steps selected an
+                // epoch. Restore authority so the next snapshot/retry agrees.
+                if let Some(snapshot) = snapshot.as_ref() {
+                    if !room.e2ee_manager().install_shared_media_key(
+                        key_ring_index(snapshot.epoch),
+                        snapshot.current.to_vec(),
+                        Some((key_ring_index(snapshot.epoch + 1), snapshot.next.to_vec())),
+                    ) {
+                        // The provisional manager will be closed. Even a
+                        // persistent native rejection must leave the retained
+                        // provider's selected-index metadata retryable.
+                        snapshot.provider.set_shared_key(
+                            snapshot.current.to_vec(),
+                            key_ring_index(snapshot.epoch),
+                        );
+                    }
+                }
+                let _ = room.close().await;
+                self.set_state(RoomState::Disconnected);
+                self.retire_timing(Some(&timing));
+                return Err(error);
+            }
+            self.e2ee.write().epoch = chain.epoch();
         }
 
         // Enable E2EE
@@ -1653,6 +1749,21 @@ mod reconnect_initialization_tests {
     use crate::crypto::call_key_provider::CallKeyState;
 
     #[tokio::test]
+    async fn muted_microphone_request_survives_teardown_until_explicit_stop() {
+        let (manager, _) = RoomManager::new();
+        manager
+            .microphone_requested
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        manager.set_microphone_muted(true);
+        assert!(manager.reconnect_microphone_device().is_some());
+        assert!(manager.is_microphone_muted());
+        manager.disconnect().await;
+        assert!(manager.reconnect_microphone_device().is_some());
+        manager.stop_microphone();
+        assert!(manager.reconnect_microphone_device().is_none());
+    }
+
+    #[tokio::test]
     async fn fresh_room_failed_connect_preserves_absolute_epoch_and_native_ring() {
         for epoch in [7, 15, 16, 17] {
             let (manager, _events) = RoomManager::new();
@@ -1689,6 +1800,33 @@ mod reconnect_initialization_tests {
                     .await
                     .is_err()
             );
+            let before_chain = chain.clone();
+            for _ in 0..2 {
+                let snapshot = manager.snapshot_reconnect_keys(&chain).unwrap();
+                let mut candidate = chain.clone();
+                assert!(
+                    manager
+                        .connect_reusing_keys_aligned(
+                            "invalid://",
+                            "",
+                            snapshot,
+                            &mut candidate,
+                            Some(chrono::Utc::now() - chrono::Duration::seconds(900)),
+                        )
+                        .await
+                        .is_err()
+                );
+                assert_eq!(candidate.epoch(), before_chain.epoch());
+                assert_eq!(candidate.anchor(), before_chain.anchor());
+                assert_eq!(candidate.current_key(), before_chain.current_key());
+                // Provider is retained, but a boundary while the room is absent
+                // must fail without changing manager authority.
+                assert!(!manager.set_ratcheted_shared_key(
+                    epoch + 1,
+                    chain.peek_next_key().unwrap().to_vec(),
+                    vec![0; 32],
+                ));
+            }
             assert_eq!(manager.key_epoch(), epoch);
             assert_eq!(
                 manager
