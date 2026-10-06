@@ -42,6 +42,7 @@ pub enum AcceptedIncomingCall {
 #[cfg(feature = "media")]
 #[derive(Clone, Debug)]
 pub struct CallRoomSnapshot {
+    pub verification: crate::services::call_worker::CallEncryptionVerification,
     pub call: crate::domain::call::Call,
     /// None while ringing/disconnected: keep the pre-rendered peer presentation.
     pub remotes: Option<Vec<(String, crate::ui::chat_data::CallParticipantInfo)>>,
@@ -742,7 +743,8 @@ impl ChatterClient {
     #[cfg(feature = "media")]
     pub async fn call_room_snapshot(&self) -> Option<CallRoomSnapshot> {
         let worker = self.call_service().get()?.clone();
-        let call = worker.active_call().await?;
+        let initial = worker.verification_snapshot().await?;
+        let call = initial.call;
         let connected = matches!(
             worker.room_state().await,
             crate::calls::RoomState::Connected { .. }
@@ -763,7 +765,8 @@ impl ChatterClient {
         } else {
             None
         };
-        let current = worker.active_call().await?;
+        let latest = worker.verification_snapshot().await?;
+        let current = latest.call;
         if current.id != call.id
             || current.channel_id != call.channel_id
             || current.connected_at != call.connected_at
@@ -771,6 +774,7 @@ impl ChatterClient {
             return None;
         }
         Some(CallRoomSnapshot {
+            verification: latest.verification,
             call: current,
             remotes,
         })

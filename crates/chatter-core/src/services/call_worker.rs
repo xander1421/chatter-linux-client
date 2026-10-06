@@ -304,6 +304,21 @@ impl From<PendingIncoming> for PendingIncomingSnapshot {
     }
 }
 
+/// Public comparison state; media key material never leaves the worker.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CallEncryptionVerification {
+    ExistingHandshake,
+    WaitingForKey,
+    MediaKey { epoch: u32, emojis: [String; 4] },
+}
+
+/// Call identity and its verification state captured in one worker command.
+#[derive(Debug, Clone)]
+pub struct CallVerificationSnapshot {
+    pub call: Call,
+    pub verification: CallEncryptionVerification,
+}
+
 /// Commands sent to the call worker thread.
 enum CallCommand {
     /// Initiate a new call.
@@ -354,6 +369,9 @@ enum CallCommand {
     /// Get active call info.
     GetActiveCall {
         response: oneshot::Sender<Option<Call>>,
+    },
+    GetVerificationSnapshot {
+        response: oneshot::Sender<Option<CallVerificationSnapshot>>,
     },
     /// Get the room name of the active call.
     GetRoomName {
@@ -951,6 +969,15 @@ impl CallWorkerHandle {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
             .try_send(CallCommand::GetActiveCall { response: tx })
+            .ok()?;
+        rx.await.ok().flatten()
+    }
+
+    /// Atomically read call identity and verification derived from installed media state.
+    pub async fn verification_snapshot(&self) -> Option<CallVerificationSnapshot> {
+        let (tx, rx) = oneshot::channel();
+        self.cmd_tx
+            .try_send(CallCommand::GetVerificationSnapshot { response: tx })
             .ok()?;
         rx.await.ok().flatten()
     }
@@ -1572,6 +1599,16 @@ fn run_call_worker(
                     let _ = response.send(call);
                 }
 
+                CallCommand::GetVerificationSnapshot { response } => {
+                    let snapshot = call_verification_snapshot(
+                        active_call.borrow().as_ref(),
+                        &orchestrator,
+                        room_manager.is_connected(),
+                        room_manager.key_epoch(),
+                    );
+                    let _ = response.send(snapshot);
+                }
+
                 CallCommand::GetRoomName { response } => {
                     let name = active_call.borrow().as_ref().map(|a| a.room_name.clone());
                     let _ = response.send(name);
@@ -1943,6 +1980,54 @@ struct ActiveCallState {
     publish_gate: PublishGate,
     /// Retained across failed reconnect attempts, since teardown clears capture.
     reconnect_media: Option<ReconnectMedia>,
+}
+
+/// The same helper serves production snapshots and state-transition regressions.
+fn call_verification_snapshot(
+    active: Option<&ActiveCallState>,
+    orchestrator: &OrchestratorState,
+    connected: bool,
+    installed_epoch: u32,
+) -> Option<CallVerificationSnapshot> {
+    let state = active?;
+    let handle = derive_call_handle(state);
+    let kind = orchestrator
+        .active
+        .as_ref()
+        .filter(|a| a.call == handle)
+        .map(|a| a.kind)
+        .or_else(|| orchestrator.outgoing.get(&handle).map(|a| a.kind));
+    let verification = match kind {
+        Some(
+            OrchestratedCallKind::DmStandard
+            | OrchestratedCallKind::AnonDm
+            | OrchestratedCallKind::AnonGroup,
+        ) => CallEncryptionVerification::ExistingHandshake,
+        Some(OrchestratedCallKind::GroupChannel)
+            if connected
+                && !state.publish_gate.is_closed()
+                && installed_epoch == state.key_state.epoch()
+                && state.key_state.call_id() == state.call.id.to_string() =>
+        {
+            let data =
+                crate::services::call_verification::CallVerification::derive_verification_emojis(
+                    state.key_state.current_key(),
+                    &state.call.id.to_string(),
+                );
+            CallEncryptionVerification::MediaKey {
+                epoch: installed_epoch,
+                emojis: data
+                    .emojis
+                    .try_into()
+                    .expect("verification always derives four emojis"),
+            }
+        }
+        _ => CallEncryptionVerification::WaitingForKey,
+    };
+    Some(CallVerificationSnapshot {
+        call: state.call.clone(),
+        verification,
+    })
 }
 
 /// The active call's group-key standing ([`CallWorkerHandle::group_key_status`]).
@@ -4505,5 +4590,171 @@ mod reconnect_camera_tests {
         .await
         .unwrap();
         assert_eq!(observed, Some(("/dev/video7".into(), config)));
+    }
+}
+
+#[cfg(test)]
+mod verification_snapshot_tests {
+    use super::*;
+
+    fn active(root: [u8; 32]) -> ActiveCallState {
+        let mut call = Call::new(ChannelId::new(), UserId::new(), CallType::Video);
+        call.id = "11111111-2222-4333-8444-555555555555".parse().unwrap();
+        ActiveCallState {
+            key_state: CallKeyState::new(&root, &call.id.to_string()).unwrap(),
+            call,
+            room_name: String::new(),
+            livekit_url: String::new(),
+            publish_gate: PublishGate::default(),
+            reconnect_media: None,
+        }
+    }
+
+    fn orchestrator(state: &ActiveCallState, kind: OrchestratedCallKind) -> OrchestratorState {
+        OrchestratorState {
+            active: Some(OrchestratedActive {
+                call: derive_call_handle(state),
+                kind,
+            }),
+            ..Default::default()
+        }
+    }
+
+    fn verification(state: &ActiveCallState) -> CallEncryptionVerification {
+        call_verification_snapshot(
+            Some(state),
+            &orchestrator(state, OrchestratedCallKind::GroupChannel),
+            true,
+            state.key_state.epoch(),
+        )
+        .unwrap()
+        .verification
+    }
+
+    #[test]
+    fn peers_compare_installed_current_key_and_call_identity() {
+        let mut first = active([1; 32]);
+        let mut peer = active([1; 32]);
+        assert_eq!(verification(&first), verification(&peer));
+        let expected =
+            crate::services::call_verification::CallVerification::derive_verification_emojis(
+                first.key_state.current_key(),
+                &first.call.id.to_string(),
+            );
+        if let CallEncryptionVerification::MediaKey { emojis, .. } = verification(&first) {
+            assert_eq!(emojis.as_slice(), expected.emojis.as_slice());
+        } else {
+            panic!("connected keyed channel must expose comparison code");
+        }
+        assert!(matches!(
+            verification(&first),
+            CallEncryptionVerification::MediaKey { epoch: 0, .. }
+        ));
+        first.key_state.rotate([2; 32]).unwrap();
+        assert_ne!(verification(&first), verification(&peer));
+        adopt_group_key(&mut peer.key_state, [2; 32], 1).unwrap();
+        assert_eq!(verification(&first), verification(&peer));
+        first.key_state.ratchet().unwrap();
+        peer.key_state.ratchet().unwrap();
+        assert_eq!(verification(&first), verification(&peer));
+        peer.call.id = "22222222-2222-4333-8444-555555555555".parse().unwrap();
+        assert_eq!(
+            verification(&peer),
+            CallEncryptionVerification::WaitingForKey
+        );
+        peer.key_state = CallKeyState::new(&[1; 32], &peer.call.id.to_string()).unwrap();
+        assert_ne!(verification(&active([1; 32])), verification(&peer));
+        let wrong_key = active([3; 32]);
+        assert_ne!(verification(&active([1; 32])), verification(&wrong_key));
+    }
+
+    #[test]
+    fn keyless_disconnected_and_epoch_mismatch_suppress_code() {
+        let mut state = active([1; 32]);
+        let orch = orchestrator(&state, OrchestratedCallKind::GroupChannel);
+        assert_eq!(
+            call_verification_snapshot(Some(&state), &orch, false, 0)
+                .unwrap()
+                .verification,
+            CallEncryptionVerification::WaitingForKey
+        );
+        assert_eq!(
+            call_verification_snapshot(Some(&state), &orch, true, 1)
+                .unwrap()
+                .verification,
+            CallEncryptionVerification::WaitingForKey
+        );
+        state.publish_gate = PublishGate::awaiting_key(false);
+        assert_eq!(
+            verification(&state),
+            CallEncryptionVerification::WaitingForKey
+        );
+    }
+
+    #[test]
+    fn failed_install_then_committed_retry_and_reconnect_refresh_snapshot() {
+        let mut state = active([1; 32]);
+        state.publish_gate = PublishGate::awaiting_key(false);
+        let orch = orchestrator(&state, OrchestratedCallKind::GroupChannel);
+        let id = state.call.id;
+        let active = Rc::new(RefCell::new(Some(state)));
+        let (room, _events) = RoomManager::new();
+        let room = Arc::new(room);
+        assert!(install_group_media_key(&active, &room, id, [2; 32], 1).is_err());
+        assert_eq!(
+            call_verification_snapshot(
+                active.borrow().as_ref(),
+                &orch,
+                room.is_connected(),
+                room.key_epoch()
+            )
+            .unwrap()
+            .verification,
+            CallEncryptionVerification::WaitingForKey
+        );
+        // Model the authoritative state committed only after a successful SDK retry.
+        let mut held = active.borrow_mut();
+        let state = held.as_mut().unwrap();
+        adopt_group_key(&mut state.key_state, [2; 32], 1).unwrap();
+        state.publish_gate.open();
+        assert_eq!(
+            call_verification_snapshot(Some(state), &orch, false, 1)
+                .unwrap()
+                .verification,
+            CallEncryptionVerification::WaitingForKey
+        );
+        assert!(matches!(
+            call_verification_snapshot(Some(state), &orch, true, 1)
+                .unwrap()
+                .verification,
+            CallEncryptionVerification::MediaKey { epoch: 1, .. }
+        ));
+    }
+
+    #[test]
+    fn ended_replaced_and_handshake_modes_follow_authoritative_identity() {
+        let state = active([1; 32]);
+        let orch = orchestrator(&state, OrchestratedCallKind::GroupChannel);
+        assert!(call_verification_snapshot(None, &orch, true, 0).is_none());
+        let mut replacement = active([2; 32]);
+        replacement.call.id = CallId::new();
+        assert_eq!(
+            call_verification_snapshot(Some(&replacement), &orch, true, 0)
+                .unwrap()
+                .verification,
+            CallEncryptionVerification::WaitingForKey
+        );
+        for kind in [
+            OrchestratedCallKind::DmStandard,
+            OrchestratedCallKind::AnonDm,
+            OrchestratedCallKind::AnonGroup,
+        ] {
+            assert_eq!(
+                call_verification_snapshot(Some(&state), &orchestrator(&state, kind), false, 0)
+                    .unwrap()
+                    .verification,
+                CallEncryptionVerification::ExistingHandshake
+            );
+        }
     }
 }
