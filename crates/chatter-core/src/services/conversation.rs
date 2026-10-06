@@ -1543,7 +1543,7 @@ impl ConversationHandle {
 
 /// Shared by actual dispatch and regression transport injection. The caller has
 /// already allocated the action clock; completion cannot allocate another one.
-async fn complete_reaction_dispatch<F, P>(
+pub(crate) async fn complete_reaction_dispatch<F, P>(
     action_ts: u64,
     dispatch: F,
     persist: P,

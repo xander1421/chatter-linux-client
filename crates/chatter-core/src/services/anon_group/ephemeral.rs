@@ -48,10 +48,7 @@ impl AnonGroupService {
         remove: bool,
         action_ts: u64,
     ) -> Result<(), AnonGroupError> {
-        // Silently ignore if blocked
-        if self.check_group_not_blocked(group_id).is_err() {
-            return Ok(());
-        }
+        self.check_group_not_blocked(group_id)?;
 
         let content = crate::services::gateway::builders::build_reaction_content_with_channel_at(
             emoji,
@@ -61,7 +58,7 @@ impl AnonGroupService {
             None,
             action_ts,
         );
-        self.send_ephemeral_message(group_id, content).await
+        self.send_reaction_content(group_id, content).await
     }
 
     /// Send a typing indicator to all group members.

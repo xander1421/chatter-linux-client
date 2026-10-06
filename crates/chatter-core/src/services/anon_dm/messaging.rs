@@ -441,7 +441,7 @@ impl AnonDmService {
 
     /// Send a reaction to a message.
     ///
-    /// Reactions are ephemeral - they're silently dropped if conversation not ready.
+    /// Reactions are ephemeral; blocked, missing and unready targets fail explicitly.
     pub async fn send_reaction(
         &self,
         conversation_id: &AnonDmId,
@@ -473,37 +473,29 @@ impl AnonDmService {
         remove: bool,
         action_ts: u64,
     ) -> Result<(), AnonDmError> {
-        // Silently ignore if blocked
-        if self
-            .check_conversation_not_blocked(conversation_id)
-            .is_err()
-        {
-            return Ok(());
-        }
-
-        // Get conversation - silently ignore if not found or not ready
-        let dm = match self.anon_dm_repo.get_conversation(conversation_id)? {
-            Some(dm) if dm.is_ready() => dm,
-            _ => {
-                tracing::debug!(
-                    conversation_id = %conversation_id,
-                    "Dropping reaction - conversation not ready"
-                );
-                return Ok(());
-            }
-        };
-
-        let peer_mailbox_pk = dm.peer_mailbox_pk.unwrap();
-        let content = crate::services::gateway::builders::build_reaction_content_with_channel_at(
+        dispatch_reaction_at(
+            conversation_id,
+            || {
+                self.check_conversation_not_blocked(conversation_id)?;
+                self.anon_dm_repo
+                    .get_conversation(conversation_id)
+                    .map_err(AnonDmError::from)
+            },
             emoji,
-            remove,
             target_author_aci,
             target_sent_timestamp,
-            None,
+            remove,
             action_ts,
-        );
-        self.send_ephemeral_message(&dm.peer_id, &peer_mailbox_pk, conversation_id, content)
-            .await
+            |dm, content| async move {
+                // Readiness was checked by the reaction-only adapter.
+                let mailbox = dm
+                    .peer_mailbox_pk
+                    .ok_or(AnonDmError::ConversationNotReady(*conversation_id))?;
+                self.send_ephemeral_message(&dm.peer_id, &mailbox, conversation_id, content)
+                    .await
+            },
+        )
+        .await
     }
 
     /// Send an ephemeral message (typing, reaction, receipt) - no rate limiting, no queueing.
@@ -762,5 +754,104 @@ impl AnonDmService {
         );
 
         Ok(())
+    }
+}
+
+/// Actual reaction adapter; only the mailbox effect is injected in regressions.
+async fn dispatch_reaction_at<G, S, F>(
+    id: &AnonDmId,
+    gate: G,
+    emoji: &str,
+    author: &str,
+    target: u64,
+    remove: bool,
+    clock: u64,
+    send: S,
+) -> Result<(), AnonDmError>
+where
+    G: FnOnce() -> Result<Option<crate::domain::anon_dm::AnonDm>, AnonDmError>,
+    S: FnOnce(crate::domain::anon_dm::AnonDm, Content) -> F,
+    F: std::future::Future<Output = Result<(), AnonDmError>>,
+{
+    let dm = gate()?.ok_or(AnonDmError::ConversationNotFound(*id))?;
+    if !dm.is_ready() {
+        return Err(AnonDmError::ConversationNotReady(*id));
+    }
+    let content = crate::services::gateway::builders::build_reaction_content_with_channel_at(
+        emoji, remove, author, target, None, clock,
+    );
+    send(dm, content).await
+}
+
+#[cfg(test)]
+#[path = "../anonymous_reaction_test_fixture.rs"]
+mod reaction_test_fixture;
+
+#[cfg(test)]
+mod reaction_outcome_tests {
+    use super::*;
+    use crate::domain::anon_dm::{AnonDm, AnonDmStatus};
+    use crate::services::conversation::ConversationError;
+    use reaction_test_fixture::{Fixture, assert_encoded_action};
+    use std::cell::Cell;
+
+    #[tokio::test]
+    async fn actual_dm_reaction_adapter_gates_add_remove_and_retains_clock() {
+        for remove in [false, true] {
+            for mode in [
+                "blocked",
+                "missing",
+                "unready",
+                "transport_failed",
+                "delivered",
+            ] {
+                let fixture = Fixture::new(ConversationType::AnonDm, remove);
+                let mut dm = AnonDm::new_initiated(UserId::new());
+                let id = dm.id;
+                if mode != "unready" {
+                    dm.status = AnonDmStatus::Active;
+                    dm.peer_mailbox_pk = Some([7; 32]);
+                }
+                let attempts = Cell::new(0);
+                let author = fixture.author.to_string();
+                let dispatch = dispatch_reaction_at(
+                    &id,
+                    || match mode {
+                        "blocked" => Err(AnonDmError::ConversationBlocked(id)),
+                        "missing" => Ok(None),
+                        _ => Ok(Some(dm)),
+                    },
+                    "A",
+                    &author,
+                    100,
+                    remove,
+                    20,
+                    |_, content| {
+                        attempts.set(attempts.get() + 1);
+                        assert_encoded_action(&content, remove, 20, &fixture.author);
+                        async move {
+                            tokio::task::yield_now().await;
+                            if mode == "transport_failed" {
+                                Err(AnonDmError::MessageError("injected mailbox failure".into()))
+                            } else {
+                                Ok(())
+                            }
+                        }
+                    },
+                );
+                fixture
+                    .finish(
+                        async { dispatch.await.map_err(ConversationError::from) },
+                        remove,
+                        20,
+                        mode == "delivered",
+                    )
+                    .await;
+                assert_eq!(
+                    attempts.get(),
+                    usize::from(matches!(mode, "transport_failed" | "delivered"))
+                );
+            }
+        }
     }
 }

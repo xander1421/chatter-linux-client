@@ -94,6 +94,34 @@ mod tests {
     }
 
     #[test]
+    fn allocator_survives_file_close_reopen_and_target_evidence_deletion() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("allocator.db");
+        {
+            let mut conn = rusqlite::Connection::open(&path).unwrap();
+            conn.execute_batch(
+                "CREATE TABLE reaction_action_versions(actor_id TEXT,action_ts INTEGER);
+                CREATE TABLE reaction_actor_selections(actor_id TEXT,action_ts INTEGER);
+                CREATE TABLE pending_scoped_reactions(actor_id TEXT,action_ts INTEGER);
+                INSERT INTO reaction_actor_selections VALUES('me',800);",
+            )
+            .unwrap();
+            assert_eq!(allocate_with_conn(&mut conn, "me", 100).unwrap(), 801);
+            // Failed send has no vote; allocated version must still survive.
+        }
+        {
+            let mut reopened = rusqlite::Connection::open(&path).unwrap();
+            reopened
+                .execute("DELETE FROM reaction_actor_selections", [])
+                .unwrap();
+            assert_eq!(allocate_with_conn(&mut reopened, "me", 0).unwrap(), 802);
+        }
+        let mut reopened = rusqlite::Connection::open(&path).unwrap();
+        assert_eq!(allocate_with_conn(&mut reopened, "me", 1).unwrap(), 803);
+        assert_eq!(allocate_with_conn(&mut reopened, "other", 1).unwrap(), 1);
+    }
+
+    #[test]
     fn clock_exhaustion_does_not_wrap_or_overwrite() {
         let mut conn = db();
         assert_eq!(

@@ -594,6 +594,33 @@ impl AnonGroupService {
         Ok(())
     }
 
+    /// Reaction-only outcome policy: at least one confirmed remote delivery is
+    /// success, including partial fanout. Never resend or re-toggle automatically.
+    pub(super) async fn send_reaction_content(
+        &self,
+        group_id: &AnonGroupId,
+        inner_content: Content,
+    ) -> Result<(), AnonGroupError> {
+        dispatch_reaction_content(
+            group_id,
+            inner_content,
+            || {
+                let current = self.current_user_id()?;
+                self.check_group_not_blocked(group_id)?;
+                let members = self.anon_group_repo.get_members_with_mailbox(group_id)?;
+                Ok(members
+                    .into_iter()
+                    .filter(|m| m.user_id != current)
+                    .filter_map(|m| m.mailbox_pk.map(|key| (m.user_id, key)))
+                    .collect())
+            },
+            |(peer, key), content| async move {
+                self.send_to_anon_mailbox(&peer, &key, content).await
+            },
+        )
+        .await
+    }
+
     /// Send an ephemeral message (reaction, typing, receipt) to all group members.
     ///
     /// Unlike `send_message`, this skips rate limiting since ephemeral messages
@@ -735,5 +762,163 @@ mod tests {
             ..Default::default()
         };
         assert!(undelivered_post(&wrap(hangup)).is_none());
+    }
+}
+
+/// Production reaction fanout adapter, with injected mailbox effects for tests.
+/// A partial send retains the same action locally: some peers have observed it.
+/// Zero confirmed deliveries fails, including a group with no ready recipients.
+async fn dispatch_reaction_content<G, S, F>(
+    group_id: &AnonGroupId,
+    inner_content: Content,
+    gate: G,
+    mut send: S,
+) -> Result<(), AnonGroupError>
+where
+    G: FnOnce() -> Result<Vec<(crate::domain::UserId, [u8; 32])>, AnonGroupError>,
+    S: FnMut((crate::domain::UserId, [u8; 32]), Content) -> F,
+    F: std::future::Future<Output = Result<(), AnonGroupError>>,
+{
+    let recipients = gate()?;
+    if recipients.is_empty() {
+        return Err(AnonGroupError::MessageError(
+            "Reaction group has no ready remote recipients".into(),
+        ));
+    }
+    let content = Content {
+        content: Some(content_v1::content::Content::AnonGroupMessage(Box::new(
+            content_v1::AnonGroupMessage {
+                group_id: group_id.to_vec(),
+                inner_content: Some(Box::new(inner_content)),
+            },
+        ))),
+        ephemeral_reply_to: None,
+        timestamp: TimestampNanos::now().as_u64(),
+        padding: AnonGroupService::generate_padding(160),
+    };
+    let mut delivered = 0;
+    let mut failed = 0;
+    let mut first_error = None;
+    for recipient in recipients {
+        match send(recipient, content.clone()).await {
+            Ok(()) => delivered += 1,
+            Err(error) => {
+                failed += 1;
+                if first_error.is_none() {
+                    first_error = Some(error);
+                }
+            }
+        }
+    }
+    if delivered == 0 {
+        return Err(first_error
+            .unwrap_or_else(|| AnonGroupError::MessageError("Reaction delivery failed".into())));
+    }
+    if failed > 0 {
+        tracing::warn!(%group_id, delivered, failed, "Reaction partially delivered; retaining original action without automatic retry");
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "../anonymous_reaction_test_fixture.rs"]
+mod reaction_test_fixture;
+
+#[cfg(test)]
+mod reaction_outcome_tests {
+    use super::*;
+    use crate::domain::UserId;
+    use crate::domain::message::ConversationType;
+    use crate::services::conversation::ConversationError;
+    use prost::Message as _;
+    use reaction_test_fixture::{Fixture, assert_encoded_action};
+    use std::cell::RefCell;
+
+    #[tokio::test]
+    async fn actual_group_reaction_adapter_gates_total_failure_and_keeps_partial_action() {
+        for remove in [false, true] {
+            for mode in [
+                "blocked",
+                "missing",
+                "unready",
+                "all_failed",
+                "partial",
+                "delivered",
+            ] {
+                let fixture = Fixture::new(ConversationType::AnonGroup, remove);
+                let group = AnonGroupId::new();
+                let recipients = vec![
+                    (UserId::new(), [1; 32]),
+                    (UserId::new(), [2; 32]),
+                    (UserId::new(), [3; 32]),
+                ];
+                let captured = RefCell::new(Vec::new());
+                let inner =
+                    crate::services::gateway::builders::build_reaction_content_with_channel_at(
+                        "A",
+                        remove,
+                        &fixture.author.to_string(),
+                        100,
+                        None,
+                        20,
+                    );
+                let dispatch = dispatch_reaction_content(
+                    &group,
+                    inner,
+                    || match mode {
+                        "blocked" => Err(AnonGroupError::GroupBlocked(group)),
+                        "missing" => Err(AnonGroupError::GroupNotFound(group)),
+                        "unready" => Ok(vec![]),
+                        _ => Ok(recipients),
+                    },
+                    |(_, key), content| {
+                        let encoded = content.encode_to_vec();
+                        let decoded = Content::decode(encoded.as_slice()).unwrap();
+                        let Some(content_v1::content::Content::AnonGroupMessage(wrapped)) =
+                            decoded.content
+                        else {
+                            panic!("group wrapper");
+                        };
+                        assert_eq!(wrapped.group_id, group.to_vec());
+                        assert_encoded_action(
+                            wrapped.inner_content.as_deref().unwrap(),
+                            remove,
+                            20,
+                            &fixture.author,
+                        );
+                        captured.borrow_mut().push(encoded);
+                        async move {
+                            tokio::task::yield_now().await;
+                            if mode == "all_failed" || (mode == "partial" && key != [2; 32]) {
+                                Err(AnonGroupError::MessageError(
+                                    "injected mailbox failure".into(),
+                                ))
+                            } else {
+                                Ok(())
+                            }
+                        }
+                    },
+                );
+                fixture
+                    .finish(
+                        async { dispatch.await.map_err(ConversationError::from) },
+                        remove,
+                        20,
+                        matches!(mode, "partial" | "delivered"),
+                    )
+                    .await;
+                let captured = captured.borrow();
+                assert_eq!(
+                    captured.len(),
+                    if matches!(mode, "all_failed" | "partial" | "delivered") {
+                        3
+                    } else {
+                        0
+                    }
+                );
+                // Same envelope/action for each attempted peer, no repair/re-toggle.
+                assert!(captured.windows(2).all(|pair| pair[0] == pair[1]));
+            }
+        }
     }
 }
