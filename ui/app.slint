@@ -1277,7 +1277,7 @@ export component MainWindow inherits Window {
     }
     public function finish-attachment-picker(restore: bool) {
         root.composer-attachment-picker-open = false;
-        if restore && root.current-view == "main" && root.active-modal == ""
+        if restore && root.current-view == "main" && root.active-modal == "none"
             && (!root.compact-layout || root.mobile-show-chat) {
             root.attachment-restore-serial += 1;
         }
@@ -1363,6 +1363,10 @@ export component MainWindow inherits Window {
         if root.composer-keyboard-reserve > 0px && root.virtual-keyboard-size.height > 0px {
             keyboard-handover-settle.start();
             keyboard-handover-settle.restart();
+        } else if root.virtual-keyboard-size.height <= 0px {
+            // An interrupted arrival is not a settled keyboard. Keep the
+            // reservation until positive insets settle or refusal times out.
+            keyboard-handover-settle.stop();
         }
     }
 

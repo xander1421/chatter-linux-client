@@ -34,7 +34,7 @@ use crate::{MainWindow, MeshGlobal, run_ui};
 pub fn intercept_attachment(ui_ctx: &Arc<ChatterClient>, weak: slint::Weak<MainWindow>) -> bool {
     use chatter_core::services::mesh::MeshConversation;
 
-    let Some(conversation) = super::active() else {
+    let Some((Some(conversation), generation)) = super::active_session() else {
         return false;
     };
 
@@ -58,7 +58,11 @@ pub fn intercept_attachment(ui_ctx: &Arc<ChatterClient>, weak: slint::Weak<MainW
         let finish = weak.clone();
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = finish.upgrade() {
-                w.invoke_finish_attachment_picker(super::active().as_ref() == Some(&conversation));
+                let restore =
+                    super::active_session().is_some_and(|(active, current_generation)| {
+                        active.as_ref() == Some(&conversation) && current_generation == generation
+                    });
+                w.invoke_finish_attachment_picker(restore);
             }
         });
         let Some(path) = picked.into_iter().next() else {

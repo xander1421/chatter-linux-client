@@ -51,7 +51,9 @@ use crate::{MainWindow, MeshConversationData, MeshGlobal, run_ui};
 /// transport scope, not by a `ChannelId` the server ever heard of — so the
 /// open mesh scope is tracked here and cleared the moment any server-backed
 /// conversation is selected (see [`clear_active`]).
-static ACTIVE: Mutex<Option<MeshConversation>> = Mutex::new(None);
+// Keep identity and generation under one lock: returning to the same scope
+// after navigation must not revive a picker launched in its previous session.
+static ACTIVE: Mutex<(Option<MeshConversation>, u64)> = Mutex::new((None, 0));
 
 /// This device's derived mesh account id, cached after the first lookup.
 static LOCAL_USER: OnceLock<String> = OnceLock::new();
@@ -59,12 +61,17 @@ static LOCAL_USER: OnceLock<String> = OnceLock::new();
 /// The mesh conversation currently open.
 #[must_use]
 pub fn active() -> Option<MeshConversation> {
-    ACTIVE.lock().ok().and_then(|guard| guard.clone())
+    active_session().and_then(|(conversation, _)| conversation)
+}
+
+pub(super) fn active_session() -> Option<(Option<MeshConversation>, u64)> {
+    ACTIVE.lock().ok().map(|guard| guard.clone())
 }
 
 pub(super) fn set_active(conversation: Option<MeshConversation>) {
     if let Ok(mut guard) = ACTIVE.lock() {
-        *guard = conversation;
+        guard.1 = guard.1.wrapping_add(1);
+        guard.0 = conversation;
     }
 }
 

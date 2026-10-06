@@ -1066,6 +1066,38 @@ fn attachment_and_keyboard_handover_boundaries(w: &MainWindow) {
         field_bottom() > with_keyboard + 250.0,
         "keyboard handover left a sticky spacer"
     );
+    // A positive inset interrupted by zero must cancel its settle timer,
+    // retaining the drawer reservation past the old positive deadline.
+    click_element(w, "Emoji & GIF picker");
+    pump_size(w, PHONE_W, PHONE_H);
+    let drawer_bottom = field_bottom();
+    click_element(w, "Show keyboard");
+    i_slint_core::properties::ChangeTracker::run_change_handlers();
+    keyboard(100.0); // shorter than the drawer
+    assert!((field_bottom() - drawer_bottom).abs() < 1.0);
+    keyboard(0.0);
+    pump_size(w, PHONE_W, PHONE_H); // 200 ms exceeds the cancelled 120 ms settle
+    assert!(
+        (field_bottom() - drawer_bottom).abs() < 1.0,
+        "interrupted positive inset released the drawer reservation"
+    );
+    keyboard(100.0);
+    assert!(
+        (field_bottom() - drawer_bottom).abs() < 1.0,
+        "resumed short keyboard released reservation before settling"
+    );
+    pump_size(w, PHONE_W, PHONE_H);
+    let short_keyboard_bottom = field_bottom();
+    assert!(
+        short_keyboard_bottom > drawer_bottom + 150.0,
+        "settled short keyboard retained the taller drawer reservation"
+    );
+    keyboard(0.0);
+    pump_size(w, PHONE_W, PHONE_H);
+    assert!(
+        (field_bottom() - short_keyboard_bottom - 100.0).abs() < 1.0,
+        "short keyboard handover left a sticky spacer"
+    );
     // Back/cancel must release even when the keyboard request is refused.
     click_element(w, "Emoji & GIF picker");
     pump_size(w, PHONE_W, PHONE_H);
