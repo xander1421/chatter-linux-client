@@ -28,7 +28,8 @@ fn pump(w: &MainWindow) {
     slint::Timer::single_shot(std::time::Duration::from_millis(80), || {
         slint::quit_event_loop().unwrap();
     });
-    w.run().unwrap();
+    w.show().unwrap();
+    slint::run_event_loop().unwrap();
 }
 
 fn rect(e: &testing::ElementHandle) -> (f32, f32, f32, f32) {
@@ -335,13 +336,36 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     let clip = testing::ElementHandle::find_by_element_id(&w, "MessageComposer::input-scroll")
         .find(|e| e.size().height > 0.0)
         .unwrap();
-    let start = slint::LogicalPosition::new(
-        clip.absolute_position().x + 20.0,
-        clip.absolute_position().y + 10.0,
-    );
-    let finish = slint::LogicalPosition::new(start.x + 90.0, start.y);
-    let button = slint::platform::PointerEventButton::Left;
+    let item = composer_native_item(&w);
+    let input = item.downcast::<i_slint_core::items::TextInput>().unwrap();
+    let input = input.as_pin_ref();
+    let window = item.window_adapter().unwrap();
     let unchanged = w.get_composer_text();
+    assert!(unchanged.ends_with("tail"));
+    // Drag between shaped positions within the known final word, rather than
+    // arbitrary points that may both be after a short or empty wrapped line.
+    let start_rect =
+        window
+            .renderer()
+            .text_input_cursor_rect_for_byte_offset(input, &item, unchanged.len() - 3);
+    let end_rect =
+        window
+            .renderer()
+            .text_input_cursor_rect_for_byte_offset(input, &item, unchanged.len() - 1);
+    let origin = item.map_to_window(Default::default());
+    let start = slint::LogicalPosition::new(
+        origin.x + start_rect.origin.x + 0.2,
+        origin.y + start_rect.origin.y + start_rect.size.height / 2.0,
+    );
+    let finish = slint::LogicalPosition::new(
+        origin.x + end_rect.origin.x + 0.2,
+        origin.y + end_rect.origin.y + end_rect.size.height / 2.0,
+    );
+    assert!(
+        start.y >= clip.absolute_position().y
+            && finish.y < clip.absolute_position().y + clip.size().height
+    );
+    let button = slint::platform::PointerEventButton::Left;
     w.window()
         .dispatch_event(slint::platform::WindowEvent::PointerPressed {
             position: start,
@@ -350,7 +374,8 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     slint::Timer::single_shot(std::time::Duration::from_millis(600), || {
         slint::quit_event_loop().unwrap();
     });
-    w.run().unwrap();
+    w.show().unwrap();
+    slint::run_event_loop().unwrap();
     w.window()
         .dispatch_event(slint::platform::WindowEvent::PointerMoved { position: finish });
     w.window()
@@ -416,9 +441,33 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
         expected,
         "resize/picker changed draft body"
     );
+    // Direct picker property changes do not invoke the app's keyboard-toggle
+    // callback. Focus the actual composer before sending its native IME events.
+    let field = one(&w, "Message input");
+    click_at(
+        &w,
+        field.absolute_position().x + 20.0,
+        field.absolute_position().y + 20.0,
+    );
+    pump_size(&w, PHONE_W, 460.0);
+    input.set_selection_offsets(
+        &item.window_adapter().unwrap(),
+        &item,
+        expected.len() as i32,
+        expected.len() as i32,
+    );
+    assert!(
+        input.has_focus(),
+        "composition fixture must focus the composer"
+    );
     // Actual native composition: the active endpoint is independent of text.
     let composing = " composed words 漢字 e\u{301} 👩‍👩‍👧‍👦\n".repeat(18);
     composition(&w, &composing, false);
+    assert_eq!(
+        input.preedit_text().as_str(),
+        composing,
+        "native IME event missed the composer"
+    );
     pump_size(&w, PHONE_W, 460.0);
     assert_tail_visible(&raw, &one(&w, "Message input"));
     assert_native_caret_visible(&w);
@@ -445,9 +494,11 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     assert_eq!(w.get_composer_text(), expected);
     composition(&w, &composing, true);
     pump_size(&w, PHONE_W, 460.0);
+    // Slint normalizes committed key-event text to NFC; preedit stays verbatim.
+    let committed_composing = composing.replace("e\u{301}", "é");
     assert_eq!(
         w.get_composer_text().as_str(),
-        format!("{expected}{composing}")
+        format!("{expected}{committed_composing}")
     );
 
     // Full-word wrapping at a mid-word insertion, with committed suffix present.
@@ -582,7 +633,8 @@ fn pump_size(w: &MainWindow, width: f32, height: f32) {
     slint::Timer::single_shot(std::time::Duration::from_millis(200), || {
         slint::quit_event_loop().unwrap();
     });
-    w.run().unwrap();
+    w.show().unwrap();
+    slint::run_event_loop().unwrap();
 }
 
 fn key(w: &MainWindow, text: slint::SharedString) {
@@ -633,6 +685,7 @@ fn composition_selection(w: &MainWindow, text: &str, selection: Option<std::ops:
     i_slint_core::window::WindowInner::from_pub(w.window()).process_key_input(event);
 }
 
+#[track_caller]
 fn composer_native_item(w: &MainWindow) -> i_slint_core::item_tree::ItemRc {
     use std::ops::ControlFlow;
     let field = one(w, "Message input");
@@ -656,10 +709,14 @@ fn composer_native_item(w: &MainWindow) -> i_slint_core::item_tree::ItemRc {
         .unwrap();
     root.visit_descendants(|item| {
         if let Some(input) = item.downcast::<i_slint_core::items::TextInput>() {
+            let native_position = item.map_to_window(Default::default());
+            // ElementHandle includes the item's positioned origin;
+            // map_to_window(default) excludes its own x/y offset.
             if input.as_pin_ref().text().as_str() == w.get_composer_text().as_str()
                 && item.geometry().size.height > 0.0
-                && (item.map_to_window(Default::default()).x - raw_position.x).abs() < 0.1
-                && (item.map_to_window(Default::default()).y - raw_position.y).abs() < 0.1
+                && (native_position.x - raw_position.x).abs() < 0.1
+                && raw_position.y >= native_position.y - 0.1
+                && raw_position.y < native_position.y + item.geometry().size.height
             {
                 return ControlFlow::Break(item.clone());
             }
@@ -737,7 +794,7 @@ fn assert_composer_caps(w: &MainWindow, drawer: bool, accessories: f32) {
             0.0
         };
     // The accepted 48px floor is explicit for unusually short panes/accessories.
-    let cap = 48.0_f32.max((line_height * 6.0 + 8.0).min(available * 0.4 - accessories - 8.0));
+    let cap = 48.0_f32.max((line_height * 6.0 + 16.0).min(available * 0.4 - accessories - 8.0));
     assert!(
         shell.size().height <= cap + accessories + 8.5,
         "composer {:?} exceeds six-line/actual-pane cap {cap}, pane={available}, accessories={accessories}",

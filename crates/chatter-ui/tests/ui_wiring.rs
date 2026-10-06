@@ -878,8 +878,10 @@ fn message_react_edit_pin_actions_are_wired() {
         .find("on_reaction_selected")
         .expect("reaction handler present");
     assert!(
-        react_src[ri..].contains(".toggle_reaction("),
-        "the reaction picker must call ConversationHandle::toggle_reaction"
+        react_src[ri..].contains("selection_queue\n                .send(ReactionIntent {")
+            && react_src.contains("consume_fifo(intents,")
+            && react_src[..ri].contains(".toggle_reaction_for_scope("),
+        "the reaction picker must enqueue its scoped intent for the FIFO core consumer"
     );
 
     let edit_src = include_str!("../src/bin_ui/features/chat/edit.rs");
