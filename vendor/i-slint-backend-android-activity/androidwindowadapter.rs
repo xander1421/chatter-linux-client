@@ -826,16 +826,15 @@ impl AndroidWindowAdapter {
             if modifier == Some(index) || pressed == previous_held[index] {
                 continue;
             }
+            let mut key_event = KeyEvent::default();
+            key_event.text = key.into();
             WindowInner::from_pub(&self.window).process_key_input(InternalKeyEvent {
                 event_type: if pressed {
                     KeyEventType::KeyPressed
                 } else {
                     KeyEventType::KeyReleased
                 },
-                key_event: KeyEvent {
-                    text: key.into(),
-                    ..Default::default()
-                },
+                key_event,
                 ..Default::default()
             });
         }
@@ -846,16 +845,15 @@ impl AndroidWindowAdapter {
             if modifier == Some(index) || temporary == pressed {
                 continue;
             }
+            let mut key_event = KeyEvent::default();
+            key_event.text = key.into();
             WindowInner::from_pub(&self.window).process_key_input(InternalKeyEvent {
                 event_type: if pressed {
                     KeyEventType::KeyPressed
                 } else {
                     KeyEventType::KeyReleased
                 },
-                key_event: KeyEvent {
-                    text: key.into(),
-                    ..Default::default()
-                },
+                key_event,
                 ..Default::default()
             });
         }
