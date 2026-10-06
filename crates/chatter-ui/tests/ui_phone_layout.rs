@@ -644,8 +644,10 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
 
     // Full-word wrapping at a mid-word insertion, with committed suffix present.
     // The short terminal fragment alone fits where the complete word cannot.
+    // Keep Unicode on the next line: fallback glyphs change the caret height
+    // and origin, obscuring the Latin word's otherwise one-line wrap difference.
     let body = format!(
-        "{}alphaBETAlongword 漢字 e\u{301} 👩‍👩‍👧‍👦\nEND",
+        "{}alphaBETAlongword\n漢字 e\u{301} 👩‍👩‍👧‍👦\nEND",
         "rows before wrap\n".repeat(12)
     );
     w.set_composer_text(body.clone().into());
@@ -661,6 +663,24 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     pump_size(&w, 360.0, 380.0);
     assert_native_caret_visible(&w);
     assert_eq!(w.get_composer_text().as_str(), body);
+    assert!(input.has_focus());
+    assert_eq!(input.preedit_text().as_str(), middle);
+    assert_eq!(input.cursor_position_byte_offset(), insertion);
+    assert_eq!(input.anchor_position_byte_offset(), insertion);
+    let visual = input.visual_representation(None);
+    assert_eq!(
+        visual.cursor_position,
+        Some(insertion as usize + middle.len())
+    );
+    assert_eq!(
+        visual.text.as_str(),
+        format!(
+            "{}{}{}",
+            &body[..insertion as usize],
+            middle,
+            &body[insertion as usize..]
+        )
+    );
     let mut prefix_wrap_differs = false;
     for width in (280..=440).step_by(8) {
         pump_size(&w, width as f32, 460.0);
@@ -685,6 +705,10 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
                 .text_input_cursor_rect_for_byte_offset(probe, &item, prefix.len());
         let full_rect = input.visual_cursor_rect(&window, &item);
         if full_rect.origin.y > prefix_rect.origin.y + full_rect.size.height * 0.5 {
+            // Equal caret metrics and a leftward move prove an actual line
+            // wrap, rather than an origin shift from a taller fallback font.
+            assert!((full_rect.size.height - prefix_rect.size.height).abs() < 0.01);
+            assert!(full_rect.origin.x < prefix_rect.origin.x);
             prefix_wrap_differs = true;
             break;
         }
