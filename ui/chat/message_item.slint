@@ -1305,9 +1305,9 @@ export component MessageItem inherits Rectangle {
                         for reaction in root.reactions: Rectangle {
                             width: entry.preferred-width + 4px;
                             border-radius: 8px;
-                            border-width: reaction.own ? 1px : 0px;
-                            border-color: Colors.primary;
-                            background: reaction.own ? Colors.primary.with-alpha(0.12) : transparent;
+                            // Own reactions use neutral shading, without an accent ring.
+                            border-width: 0px;
+                            background: reaction.own ? Colors.text-primary.with-alpha(0.08) : transparent;
                             accessible-role: button;
                             accessible-label: reaction.emoji + (reaction.own ? ", your reaction" : "");
 
