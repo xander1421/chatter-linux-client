@@ -1229,7 +1229,8 @@ fn attachment_and_keyboard_handover_boundaries(w: &MainWindow) {
                 rh >= if height - ime >= 380.0 { 48.0 } else { 0.0 },
                 "search leaves no useful results at {width}x{height}: {rh}"
             );
-            assert!(ry + rh <= ty + 0.5 && ty + th <= dy + dh + 0.5);
+            assert!(ry + rh <= ty + 0.5 && ty + th <= dy + dh + 0.5,
+                "drawer containment {width}x{height}/IME{ime}/{tab}: drawer {dy},{dh}; results {ry},{rh}; tab {ty},{th}; composer {cy}; header {hy},{hh}");
             let grid = testing::ElementHandle::find_by_element_id(
                 w,
                 if tab == "Emoji" {
