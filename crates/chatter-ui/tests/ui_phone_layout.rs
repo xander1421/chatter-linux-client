@@ -293,7 +293,7 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     );
     assert!(field.size().height >= 48.0, "input touch floor disappeared");
     assert_composer_caps(&w, false, 0.0);
-    let raw = testing::ElementHandle::find_by_element_id(&w, "text-input")
+    let raw = testing::ElementHandle::find_by_element_id(&w, "MessageComposer::text-input")
         .find(|e| e.accessible_value().as_ref().map(|s| s.as_str()) == Some(draft.as_str()))
         .expect("actual composer TextInput");
     click_at(
@@ -332,7 +332,7 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     }
     key(&w, slint::platform::Key::End.into());
     // Mobile long press gives the child input ownership before selection drag.
-    let clip = testing::ElementHandle::find_by_element_id(&w, "input-scroll")
+    let clip = testing::ElementHandle::find_by_element_id(&w, "MessageComposer::input-scroll")
         .find(|e| e.size().height > 0.0)
         .unwrap();
     let start = slint::LogicalPosition::new(
@@ -539,7 +539,7 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     // Focus a different native input first, proving pointer focus restoration.
     w.set_composer_emoji_picker_visible(true);
     pump_size(&w, 1000.0, 800.0);
-    let search = testing::ElementHandle::find_by_element_id(&w, "drawer-search")
+    let search = testing::ElementHandle::find_by_element_id(&w, "ChatLayout::drawer-search")
         .find(|e| e.size().height > 0.0)
         .expect("drawer search input");
     click_at(
@@ -639,7 +639,7 @@ fn composer_native_item(w: &MainWindow) -> i_slint_core::item_tree::ItemRc {
     let (fx, fy, fw, fh) = rect(&field);
     // Accessibility omits an empty value; select the actual clipped input by
     // its composer bounds even while its committed draft is empty.
-    let raw = testing::ElementHandle::find_by_element_id(w, "text-input")
+    let raw = testing::ElementHandle::find_by_element_id(w, "MessageComposer::text-input")
         .find(|e| {
             let (x, y, width, height) = rect(e);
             width > 0.0
@@ -690,7 +690,7 @@ fn assert_native_caret_visible(w: &MainWindow) {
         );
     }
     let position = item.map_to_window(caret.origin);
-    let clip = testing::ElementHandle::find_by_element_id(w, "input-scroll")
+    let clip = testing::ElementHandle::find_by_element_id(w, "MessageComposer::input-scroll")
         .find(|e| e.size().height > 0.0)
         .expect("actual Flickable clip");
     let p = clip.absolute_position();
