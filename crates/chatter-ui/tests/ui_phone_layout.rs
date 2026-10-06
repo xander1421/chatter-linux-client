@@ -208,8 +208,10 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     // outer controls and field share the top/bottom inset. The leading
     // emoji toggle owns the left edge; the field follows it by one inset.
     let spacing = include_str!("../../../ui/theme/spacing.slint");
-    assert!(spacing
-        .contains("out property <length> radius-chrome-inner: radius-chrome - chrome-inset;"));
+    assert!(
+        spacing
+            .contains("out property <length> radius-chrome-inner: radius-chrome - chrome-inset;")
+    );
     assert!(spacing.contains("out property <length> chrome-inset: xs;"));
     assert!(spacing.contains("out property <length> xs: 4px;"));
     let inset = 4.0_f32;
@@ -276,11 +278,13 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     slint::platform::update_timers_and_animations();
     assert_action_geometry(&w, true);
     assert!(composer_native_item(&w) == original_input);
-    assert!(original_input
-        .downcast::<i_slint_core::items::TextInput>()
-        .unwrap()
-        .as_pin_ref()
-        .has_focus());
+    assert!(
+        original_input
+            .downcast::<i_slint_core::items::TextInput>()
+            .unwrap()
+            .as_pin_ref()
+            .has_focus()
+    );
     pump_size(&w, PHONE_W, 460.0);
     assert_eq!(w.get_composer_text().as_str(), "a");
     assert!(composer_native_item(&w) == original_input);
@@ -329,11 +333,13 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     pump_size(&w, PHONE_W, 460.0);
     assert!(!w.get_composer_emoji_picker_visible() && !w.get_composer_gif_picker_visible());
     assert!(composer_native_item(&w) == original_input);
-    assert!(original_input
-        .downcast::<i_slint_core::items::TextInput>()
-        .unwrap()
-        .as_pin_ref()
-        .has_focus());
+    assert!(
+        original_input
+            .downcast::<i_slint_core::items::TextInput>()
+            .unwrap()
+            .as_pin_ref()
+            .has_focus()
+    );
     assert!(w.get_composer_text().is_empty());
 
     w.set_composer_text("toggle draft".into());
@@ -791,24 +797,32 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
         search.absolute_position().x + 10.0,
         search.absolute_position().y + 10.0,
     );
-    assert!(!composer_native_item(&w)
-        .downcast::<i_slint_core::items::TextInput>()
-        .unwrap()
-        .as_pin_ref()
-        .has_focus());
+    assert!(
+        !composer_native_item(&w)
+            .downcast::<i_slint_core::items::TextInput>()
+            .unwrap()
+            .as_pin_ref()
+            .has_focus()
+    );
     let field = one(&w, "Message input");
     click_at(
         &w,
         field.absolute_position().x + 20.0,
         field.absolute_position().y + 20.0,
     );
-    assert!(composer_native_item(&w)
-        .downcast::<i_slint_core::items::TextInput>()
-        .unwrap()
-        .as_pin_ref()
-        .has_focus());
+    assert!(
+        composer_native_item(&w)
+            .downcast::<i_slint_core::items::TextInput>()
+            .unwrap()
+            .as_pin_ref()
+            .has_focus()
+    );
     let desktop_input = composer_native_item(&w);
-    key(&w, "abc".into());
+    key(&w, "a".into());
+    assert_action_geometry(&w, true);
+    key(&w, "b".into());
+    key(&w, "c".into());
+    assert_eq!(w.get_composer_text().as_str(), "abc");
     pump_size(&w, 1000.0, 800.0);
     assert!(composer_native_item(&w) == desktop_input);
     assert_action_geometry(&w, true);
@@ -819,6 +833,16 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
         "abXc",
         "desktop pointer/caret regression"
     );
+    key(&w, slint::platform::Key::End.into());
+    for _ in 0..4 {
+        key(&w, slint::platform::Key::Backspace.into());
+    }
+    assert_eq!(w.get_composer_text().as_str(), "");
+    assert_action_geometry(&w, false);
+    assert!(composer_native_item(&w) == desktop_input);
+    key(&w, "z".into());
+    assert_eq!(w.get_composer_text().as_str(), "z");
+    assert_action_geometry(&w, true);
 }
 
 fn pump_size(w: &MainWindow, width: f32, height: f32) {
@@ -1078,9 +1102,11 @@ fn assert_action_geometry(w: &MainWindow, raised: bool) {
             "unexpected action {label}"
         );
     }
-    assert!(composer_native_item(w)
-        .downcast::<i_slint_core::items::TextInput>()
-        .is_some());
+    assert!(
+        composer_native_item(w)
+            .downcast::<i_slint_core::items::TextInput>()
+            .is_some()
+    );
 }
 
 fn click_element(w: &MainWindow, label: &str) {
