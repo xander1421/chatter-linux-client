@@ -270,16 +270,99 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     // different native input; clearing restores the original compact row.
     let original_input = composer_native_item(&w);
     key(&w, "a".into());
+    // No event-loop sleep: the raised field must already fit its shell on the
+    // first layout, rather than waiting 150ms for an animated parent to catch up.
+    i_slint_core::properties::ChangeTracker::run_change_handlers();
+    slint::platform::update_timers_and_animations();
+    assert_action_geometry(&w, true);
+    assert!(composer_native_item(&w) == original_input);
+    assert!(original_input
+        .downcast::<i_slint_core::items::TextInput>()
+        .unwrap()
+        .as_pin_ref()
+        .has_focus());
     pump_size(&w, PHONE_W, 460.0);
     assert_eq!(w.get_composer_text().as_str(), "a");
     assert!(composer_native_item(&w) == original_input);
     assert_action_geometry(&w, true);
     assert_composer_caps(&w, false, 0.0);
     key(&w, slint::platform::Key::Backspace.into());
+    i_slint_core::properties::ChangeTracker::run_change_handlers();
+    slint::platform::update_timers_and_animations();
+    assert_action_geometry(&w, false);
     pump_size(&w, PHONE_W, 460.0);
     assert!(w.get_composer_text().is_empty());
     assert!(composer_native_item(&w) == original_input);
     assert_action_geometry(&w, false);
+
+    // Exercise the actual conditional width branches: a mesh room has Attach
+    // but no mic, a mesh DM has neither, and an empty edit has no trailing action.
+    let mesh = w.global::<chatter_ui::MeshGlobal>();
+    for kind in ["room", "dm"] {
+        mesh.set_active_id("geometry-mesh".into());
+        mesh.set_active_kind(kind.into());
+        pump_size(&w, PHONE_W, 460.0);
+        assert_action_geometry(&w, false);
+        w.set_composer_text("mesh draft".into());
+        pump_size(&w, PHONE_W, 460.0);
+        assert_action_geometry(&w, true);
+        assert_eq!(w.get_composer_text().as_str(), "mesh draft");
+        assert!(composer_native_item(&w) == original_input);
+        w.set_composer_text("".into());
+    }
+    mesh.set_active_id("".into());
+    mesh.set_active_kind("".into());
+    w.set_composer_is_editing(true);
+    pump_size(&w, PHONE_W, 460.0);
+    assert_action_geometry(&w, false);
+    w.set_composer_is_editing(false);
+    pump_size(&w, PHONE_W, 460.0);
+    assert_action_geometry(&w, false);
+
+    // The real Slint toggle callback opens the drawer and its keyboard action
+    // closes it/refocuses the same input; no network or emoji loader is needed.
+    click_element(&w, "Emoji & GIF picker");
+    pump_size(&w, PHONE_W, PHONE_H);
+    assert!(w.get_composer_emoji_picker_visible());
+    assert_action_geometry(&w, false);
+    click_element(&w, "Show keyboard");
+    pump_size(&w, PHONE_W, 460.0);
+    assert!(!w.get_composer_emoji_picker_visible() && !w.get_composer_gif_picker_visible());
+    assert!(composer_native_item(&w) == original_input);
+    assert!(original_input
+        .downcast::<i_slint_core::items::TextInput>()
+        .unwrap()
+        .as_pin_ref()
+        .has_focus());
+    assert!(w.get_composer_text().is_empty());
+
+    w.set_composer_text("toggle draft".into());
+    pump_size(&w, PHONE_W, 460.0);
+    let native = original_input
+        .downcast::<i_slint_core::items::TextInput>()
+        .unwrap();
+    let native = native.as_pin_ref();
+    native.set_selection_offsets(
+        &original_input.window_adapter().unwrap(),
+        &original_input,
+        6,
+        6,
+    );
+    click_element(&w, "Emoji & GIF picker");
+    pump_size(&w, PHONE_W, PHONE_H);
+    assert!(w.get_composer_emoji_picker_visible());
+    assert_action_geometry(&w, true);
+    click_element(&w, "Show keyboard");
+    pump_size(&w, PHONE_W, 460.0);
+    assert!(!w.get_composer_emoji_picker_visible());
+    assert_action_geometry(&w, true);
+    assert_eq!(w.get_composer_text().as_str(), "toggle draft");
+    assert!(composer_native_item(&w) == original_input);
+    assert_eq!(native.cursor_position_byte_offset(), 6);
+    assert_eq!(native.anchor_position_byte_offset(), 6);
+    assert!(native.has_focus());
+    w.set_composer_text("".into());
+    pump_size(&w, PHONE_W, 460.0);
 
     // An attachment alone must not raise the controls, even though Send is
     // available. A populated caption does raise them, with tray space reserved.
@@ -672,7 +755,21 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     assert!(one(&w, "Send voice message").size().height >= 48.0);
     assert!(!input.enabled());
     assert_eq!(w.get_composer_text().as_str(), body);
-    recording.set_active(false);
+    // Observe the real button -> global cancel callback without starting a
+    // microphone or constructing the authenticated service bridge.
+    let cancelled = std::rc::Rc::new(std::cell::Cell::new(0));
+    let cancel_count = cancelled.clone();
+    let weak = w.as_weak();
+    recording.on_cancel(move || {
+        cancel_count.set(cancel_count.get() + 1);
+        if let Some(w) = weak.upgrade() {
+            w.global::<chatter_ui::VoiceRecording>().set_active(false);
+            w.global::<chatter_ui::VoiceRecording>().set_busy(false);
+        }
+    });
+    click_element(&w, "Cancel voice message");
+    assert_eq!(cancelled.get(), 1);
+    assert!(!recording.get_active());
     pump_size(&w, PHONE_W, 460.0);
     assert_action_geometry(&w, true);
     assert!(composer_native_item(&w) == item);
@@ -918,15 +1015,22 @@ fn assert_action_geometry(w: &MainWindow, raised: bool) {
             "Emoji & GIF picker"
         };
     let (ex, ey, ew, eh) = rect(&one(w, emoji_label));
-    let terminal_label = if raised || w.get_pending_attachments().row_count() > 0 {
-        "Send message"
+    let mesh = w.global::<chatter_ui::MeshGlobal>();
+    let attachment_visible = !w.get_composer_is_editing()
+        && (mesh.get_active_id().is_empty() || mesh.get_active_kind() != "dm");
+    let send_visible = raised || w.get_pending_attachments().row_count() > 0;
+    let mic_visible =
+        !send_visible && !w.get_composer_is_editing() && mesh.get_active_id().is_empty();
+    let terminal_label = if send_visible {
+        Some("Send message")
+    } else if mic_visible {
+        Some("Record voice message")
     } else {
-        "Record voice message"
+        None
     };
-    let (tx, ty, tw, th) = rect(&one(w, terminal_label));
+    let terminal = terminal_label.map(|label| rect(&one(w, label)));
     assert!((ex - sx - 4.0).abs() < 0.5);
-    assert!((sx + sw - tx - tw - 4.0).abs() < 0.5);
-    assert!(ew >= 48.0 && eh >= 48.0 && tw >= 48.0 && th >= 48.0);
+    assert!(ew >= 48.0 && eh >= 48.0);
     assert!(fx >= sx && fx + fw <= sx + sw + 0.5 && fy + fh <= sy + sh + 0.5);
     if raised {
         assert!((fx - sx - 4.0).abs() < 0.5);
@@ -935,20 +1039,51 @@ fn assert_action_geometry(w: &MainWindow, raised: bool) {
             "populated field is not full width"
         );
         assert!((fy - (ey + eh) - 4.0).abs() < 0.5);
-        assert!((ty - ey).abs() < 0.5);
     } else {
         assert!((fx - (ex + ew) - 4.0).abs() < 0.5);
-        assert!((ey - fy).abs() < 0.5 && (ty - fy).abs() < 0.5);
+        assert!((ey - fy).abs() < 0.5);
+        let occupied = 52.0
+            + if attachment_visible { 52.0 } else { 0.0 }
+            + if terminal.is_some() { 52.0 } else { 0.0 };
+        assert!(
+            (fw - (sw - 8.0 - occupied)).abs() < 0.5,
+            "empty field reserves hidden actions"
+        );
     }
-    if !w.get_composer_is_editing() {
+    if let Some((tx, ty, tw, th)) = terminal {
+        assert!((sx + sw - tx - tw - 4.0).abs() < 0.5);
+        assert!((ty - ey).abs() < 0.5 && tw >= 48.0 && th >= 48.0);
+    }
+    if attachment_visible {
         let (ax, ay, aw, ah) = rect(&one(w, "Attach file"));
-        assert!((tx - ax - aw - 4.0).abs() < 0.5);
+        if let Some((tx, _, _, _)) = terminal {
+            assert!((tx - ax - aw - 4.0).abs() < 0.5);
+        } else {
+            assert!((sx + sw - ax - aw - 4.0).abs() < 0.5);
+        }
         assert!((ay - ey).abs() < 0.5 && aw >= 48.0 && ah >= 48.0);
         if raised {
             assert!(ay + ah <= fy);
         }
     }
+    for (label, expected) in [
+        ("Attach file", attachment_visible),
+        ("Send message", send_visible),
+        ("Record voice message", mic_visible),
+    ] {
+        assert_eq!(
+            testing::ElementHandle::find_by_accessible_label(w, label)
+                .any(|e| e.size().height > 0.0),
+            expected,
+            "unexpected action {label}"
+        );
+    }
     assert!(composer_native_item(w)
         .downcast::<i_slint_core::items::TextInput>()
         .is_some());
+}
+
+fn click_element(w: &MainWindow, label: &str) {
+    let (x, y, width, height) = rect(&one(w, label));
+    click_at(w, x + width / 2.0, y + height / 2.0);
 }

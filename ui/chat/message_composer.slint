@@ -320,7 +320,11 @@ export component MessageComposer inherits GlassSurface {
     // Layout - dynamic height based on content (includes Bento Box when expanded)
     property <length> recording-height: max(112px, recording-layout.preferred-height + row-padding * 2);
     height: root.collapsed ? 0px : VoiceRecording.active ? recording-height : content-height + raised-toolbar-height + attachment-tray-height + edit-bar-height + reply-bar-height + format-bar-height + row-padding * 2;
-    animate height { duration: 150ms; easing: ease-out; }
+    // Mobile action/input positions change immediately with text/preedit.
+    // Interpolating only the shell height leaves the raised field outside its
+    // shell for intermediate frames and repeatedly moves the focused field.
+    // Settle mobile geometry together; do not reset focus or composition.
+    animate height { duration: root.mobile ? 0ms : 150ms; easing: ease-out; }
     // "Touch input", plumbed from ChatLayout.
     in property <bool> mobile: false;
 
