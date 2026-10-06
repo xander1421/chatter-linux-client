@@ -691,9 +691,12 @@ public class SlintAndroidJavaHelper {
             @Override
             public String call() throws Exception {
                 ClipboardManager clipboard = (ClipboardManager) mActivity.getSystemService(Context.CLIPBOARD_SERVICE);
-                if (clipboard.hasPrimaryClip()) {
-                    ClipData.Item item = clipboard.getPrimaryClip().getItemAt(0);
-                    return item.getText().toString();
+                ClipData clip = clipboard.getPrimaryClip();
+                if (clip != null && clip.getItemCount() > 0) {
+                    // Native paste accepts Android's text coercion (including
+                    // styled text), and an empty/non-text clip is harmless.
+                    CharSequence text = clip.getItemAt(0).coerceToText(mActivity);
+                    return text == null ? "" : text.toString();
                 }
                 return "";
             }

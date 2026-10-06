@@ -19,6 +19,30 @@ Copied from the Cargo registry at exactly 1.17.1. Keep upstream licensing files.
   with its owner's actual text/selection. Destroyed-field cleanup stays separate.
   Host production-boundary regression: `python3 tests/check_picker_focus_lifecycle.py`
   (rustc only); does not claim OEM IME/device coverage.
+- `androidwindowadapter.rs`: preserve each Android KeyEvent's meta-state while
+  dispatching into core, whose modifier state comes from individual key
+  transitions (setting `KeyEvent.modifiers` alone is overwritten). This covers
+  IMEs such as Gboard sending Ctrl+A/C/X/V without separate Ctrl transitions;
+  aggregate and left/right-only bits are accepted. Dedicated Android Copy,
+  Cut and Paste keys use the same core shortcuts. One-shot modifiers are scoped
+  to that key; explicit held modifiers are restored and cleared on LostFocus.
+  Core retains responsibility for selection, preedit, read-only checks and
+  Unicode clipboard insertion; the GameTextInput full-state/UTF boundary is
+  unchanged. No clipboard snapshot or background persistence is introduced.
+- `java/SlintAndroidJavaHelper.java`: native clipboard reads accept Android's
+  `coerceToText` result and safely handle absent, empty and null text clips.
+  Host production/native regression:
+  `python3 tests/check_native_key_commands.py` (rustc + javac only). It extracts
+  the actual native mapping/dispatch, core modifier transitions and shortcut
+  classifier, and Java clipboard accessor into recording API seams. Synthetic
+  clipboard fixtures only; this does not certify OEM IME, JNI or live-device
+  clipboard/selection behavior.
+- **Remaining lifecycle limit:** GameTextInput `TextEvent(TextInputState)` in
+  locked android-activity 0.6.1 carries text/spans but no originating client or
+  session generation. The existing detached-input guard covers Disable while
+  unowned; after re-Enable it cannot identify an old report. A backend-local
+  generation cannot label that inbound report, so delayed post-refocus reports
+  are still unproven and no cross-field/password isolation claim is made.
 - `lib.rs` `run_event_loop`: frame pacing. Upstream capped the poll timeout at a
   hardcoded 10 ms while animations run (its own FIXME), so a fling ticked at
   ~100 fps whatever the panel's rate. Now, while animating with a native window,

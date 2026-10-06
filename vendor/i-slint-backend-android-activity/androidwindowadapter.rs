@@ -129,6 +129,9 @@ pub struct AndroidWindowAdapter {
     /// "push sel=(1,1)", "inbound sel=(1,1)", then "sel=(7,7)").
     ime_dispatching: Cell<bool>,
     deferred_ime_update: RefCell<Option<i_slint_core::window::InputMethodProperties>>,
+    /// Explicit modifier transitions, separate from an IME's meta-only command.
+    /// Restore held Shift for pointer selection without leaving virtual Ctrl stuck.
+    native_held_modifiers: Cell<[bool; 8]>,
 }
 
 impl WindowAdapter for AndroidWindowAdapter {
@@ -593,6 +596,7 @@ impl AndroidWindowAdapter {
             ime_client: RefCell::default(),
             ime_dispatching: Cell::new(false),
             deferred_ime_update: RefCell::default(),
+            native_held_modifiers: Cell::new([false; 8]),
         })
     }
 
@@ -645,6 +649,7 @@ impl AndroidWindowAdapter {
                 self.window.try_dispatch_event(WindowEvent::WindowActiveChanged(true))?;
             }
             PollEvent::Main(MainEvent::LostFocus) => {
+                self.native_held_modifiers.set([false; 8]);
                 self.long_press.take();
                 self.long_press_selection.set(false);
                 self.dismiss_selection_menu();
@@ -784,22 +789,92 @@ impl AndroidWindowAdapter {
         }
     }
 
+    // Android IMEs can send Ctrl+letter with metaState only, without separate
+    // modifier key events. Core derives modifiers from key transitions, ignoring
+    // KeyEvent.modifiers, so bracket this native event with those transitions.
+    fn dispatch_native_key_event(
+        &self,
+        native: &android_activity::input::KeyEvent,
+    ) -> KeyEventResult {
+        let Some(event) = map_key_event(native) else {
+            return KeyEventResult::EventIgnored;
+        };
+        let previous_held = self.native_held_modifiers.get();
+        let mut held = previous_held;
+        let modifier = match native.key_code() {
+            Keycode::CtrlLeft => Some(0),
+            Keycode::CtrlRight => Some(1),
+            Keycode::ShiftLeft => Some(2),
+            Keycode::ShiftRight => Some(3),
+            Keycode::AltLeft => Some(4),
+            Keycode::AltRight => Some(5),
+            Keycode::MetaLeft => Some(6),
+            Keycode::MetaRight => Some(7),
+            _ => None,
+        };
+        if let Some(index) = modifier {
+            held[index] = native.action() != KeyAction::Up;
+            self.native_held_modifiers.set(held);
+        }
+        let command = matches!(
+            native.key_code(),
+            Keycode::Copy | Keycode::Cut | Keycode::Paste
+        );
+        let modifiers = native_key_modifiers(native.meta_state(), command);
+        for (index, (key, pressed)) in modifiers.into_iter().enumerate() {
+            // The actual modifier key below supplies its own transition.
+            if modifier == Some(index) || pressed == previous_held[index] {
+                continue;
+            }
+            WindowInner::from_pub(&self.window).process_key_input(InternalKeyEvent {
+                event_type: if pressed {
+                    KeyEventType::KeyPressed
+                } else {
+                    KeyEventType::KeyReleased
+                },
+                key_event: KeyEvent {
+                    text: key.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            });
+        }
+        let result = self.try_dispatch_key_event(event);
+        // Do not let a one-shot IME command leave Ctrl held for TextAction or
+        // later events. Keep actual modifier key transitions held until Up.
+        for (index, ((key, temporary), pressed)) in modifiers.into_iter().zip(held).enumerate() {
+            if modifier == Some(index) || temporary == pressed {
+                continue;
+            }
+            WindowInner::from_pub(&self.window).process_key_input(InternalKeyEvent {
+                event_type: if pressed {
+                    KeyEventType::KeyPressed
+                } else {
+                    KeyEventType::KeyReleased
+                },
+                key_event: KeyEvent {
+                    text: key.into(),
+                    ..Default::default()
+                },
+                ..Default::default()
+            });
+        }
+        result
+    }
+
     fn process_inputs(&self) -> Result<(), PlatformError> {
         let mut iter =
             self.app.input_events_iter().map_err(|e| PlatformError::Other(e.to_string()))?;
         loop {
             let mut result = Ok(());
             let read_input = iter.next(|event| match event {
-                InputEvent::KeyEvent(key_event) => match map_key_event(key_event) {
-                    Some(ev) => {
-                        if self.try_dispatch_key_event(ev) == KeyEventResult::EventAccepted {
-                            InputStatus::Handled
-                        } else {
-                            InputStatus::Unhandled
-                        }
+                InputEvent::KeyEvent(key_event) => {
+                    if self.dispatch_native_key_event(key_event) == KeyEventResult::EventAccepted {
+                        InputStatus::Handled
+                    } else {
+                        InputStatus::Unhandled
                     }
-                    None => InputStatus::Unhandled,
-                },
+                }
                 InputEvent::MotionEvent(motion_event) => {
                     let offset = self.offset.get();
                     let scale = self.window.scale_factor();
@@ -1305,6 +1380,36 @@ fn button_for_event(
     return PointerEventButton::Other;
 }
 
+// Dedicated Android clipboard keys carry no Ctrl meta bit. Translate them to
+// the same core shortcuts as Ctrl+C/X/V, irrespective of incidental modifiers.
+fn native_key_modifiers(
+    meta: android_activity::input::MetaState,
+    command: bool,
+) -> [(Key, bool); 8] {
+    [
+        (
+            Key::Control,
+            command || meta.ctrl_on() || meta.ctrl_left_on(),
+        ),
+        (Key::ControlR, !command && meta.ctrl_right_on()),
+        (
+            Key::Shift,
+            !command && (meta.shift_on() || meta.shift_left_on()),
+        ),
+        (Key::ShiftR, !command && meta.shift_right_on()),
+        (
+            Key::Alt,
+            !command && (meta.alt_on() || meta.alt_left_on() || meta.alt_right_on()),
+        ),
+        (Key::AltGr, !command && meta.alt_right_on()),
+        (
+            Key::Meta,
+            !command && (meta.meta_on() || meta.meta_left_on()),
+        ),
+        (Key::MetaR, !command && meta.meta_right_on()),
+    ]
+}
+
 fn map_key_event(key_event: &android_activity::input::KeyEvent) -> Option<WindowEvent> {
     let text = map_key_code(key_event.key_code())?;
     let repeat = key_event.repeat_count() > 0;
@@ -1597,9 +1702,9 @@ fn map_key_code(code: android_activity::input::Keycode) -> Option<SharedString> 
         Keycode::MediaStepForward => None,
         Keycode::MediaStepBackward => None,
         Keycode::SoftSleep => None,
-        Keycode::Cut => None,
-        Keycode::Copy => None,
-        Keycode::Paste => None,
+        Keycode::Cut => Some("x".into()),
+        Keycode::Copy => Some("c".into()),
+        Keycode::Paste => Some("v".into()),
         Keycode::SystemNavigationUp => None,
         Keycode::SystemNavigationDown => None,
         Keycode::SystemNavigationLeft => None,
