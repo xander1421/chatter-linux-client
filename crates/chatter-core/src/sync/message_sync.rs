@@ -78,6 +78,7 @@ impl MessageSync {
         // pagination remain eligible on the next sync. The wire uses Unix ns.
         let sync_started_ns = reference_time_ns(chrono::Utc::now())?;
         let mut page_token: Option<String> = None;
+        let mut incomplete = false;
 
         loop {
             let mut client = self.grpc_pool.message_client();
@@ -105,16 +106,12 @@ impl MessageSync {
                 // messages must not fire a hundred UI events.
                 match self.inbound.ingest(proto_msg, *channel_id, false).await {
                     Ingested::Stored => result.inserted += 1,
-                    // Own messages and messages parked on a missing sender key
-                    // are expected outcomes, not sync failures.
-                    Ingested::OwnMessage
-                    | Ingested::DeferredPendingSenderKey
-                    | Ingested::Dropped => {}
-                    Ingested::RetryableFailure => {
-                        return Err(SyncError::Storage(format!(
-                            "channel {}: message ingestion must be retried",
-                            channel_id
-                        )));
+                    Ingested::OwnMessage | Ingested::Dropped => {}
+                    Ingested::DeferredPendingSenderKey | Ingested::RetryableFailure => {
+                        // A retained row can fail validation or wait for an SKDM
+                        // indefinitely. Hold the checkpoint, but finish this page
+                        // and later pages so it cannot starve newer offline rows.
+                        incomplete = true;
                     }
                 }
             }
@@ -126,7 +123,15 @@ impl MessageSync {
             page_token = Some(response.next_page_token.clone());
         }
 
-        // Update the per-channel sync timestamp
+        // Only a fully applied traversal can advance the durable boundary.
+        // Deferred sender-key rows are held in memory, so after a restart they
+        // must still be eligible for a server fetch.
+        if incomplete {
+            return Err(SyncError::Storage(format!(
+                "channel {}: message ingestion must be retried",
+                channel_id
+            )));
+        }
         let _ = self.settings_repo.set(&sync_key, &sync_started_ns);
 
         if result.inserted > 0 {

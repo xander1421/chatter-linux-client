@@ -613,6 +613,7 @@ impl ChannelInbound {
                 }
                 if message.sent_at != existing.sent_at && !authenticated_identity {
                     tracing::warn!(
+                        message_id = %message.id, incoming = message.sent_at, retained = existing.sent_at,
                         "Retained channel clock differs without authenticated message UUID"
                     );
                     return false;

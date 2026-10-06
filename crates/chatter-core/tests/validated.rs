@@ -12256,6 +12256,17 @@ async fn v53_identity_reset_publishes_a_key_the_server_serves() {
 ///      re-subscription half, the actual INFRA-1 regression.
 #[tokio::test]
 async fn v54_channel_messages_survive_a_client_restart() {
+    channel_restart_receive(false).await;
+}
+
+/// A rejected retained row must hold the durable boundary without starving
+/// later rows or later pages after a real same-directory client restart.
+#[tokio::test]
+async fn v54b_channel_restart_backfill_survives_a_rejected_retained_row() {
+    channel_restart_receive(true).await;
+}
+
+async fn channel_restart_receive(inject_retained_failure: bool) {
     skip_if_no_server!();
     no_keyring_prompts();
 
@@ -12350,6 +12361,31 @@ async fn v54_channel_messages_survive_a_client_restart() {
 
     // ---- PART 2: messages sent while B is DOWN survive the restart --------
     client_b.shutdown().await;
+    let baseline = client_b
+        .get_messages(&ActiveConversation::Channel(channel.id), 50)
+        .unwrap()
+        .into_iter()
+        .find(|msg| msg.as_text() == Some(marker_live.as_str()))
+        .expect("live baseline is durable");
+    let sync_key = format!("sync:messages:{}:last_at_ns", channel.id);
+    let mut retained_clock = baseline.sent_at;
+    if inject_retained_failure {
+        // Fault injection touches only this fixture's synthetic local DB.
+        // Force the oldest row to fail the exact-clock identity check and
+        // make it eligible for backfill, regardless of background sync timing.
+        retained_clock += 1_000_000_000;
+        let db = client_b.messages().database();
+        db.connection()
+            .unwrap()
+            .execute(
+                "UPDATE messages SET sent_at=?1 WHERE id=?2",
+                rusqlite::params![retained_clock as i64, baseline.id.to_string()],
+            )
+            .unwrap();
+        chatter_core::storage::repositories::settings_repo::SettingsRepository::new(db)
+            .set(&sync_key, &0_u64)
+            .unwrap();
+    }
     drop(client_b);
     drop(events_b);
     println!("  [PART 2] B shut down");
@@ -12363,6 +12399,17 @@ async fn v54_channel_messages_survive_a_client_restart() {
             .expect("A offline-window send failed");
     }
     println!("  A sent 2 messages while B was down");
+    let mut later_page_markers = Vec::new();
+    if inject_retained_failure {
+        for _ in 0..50 {
+            let marker = unique_marker();
+            client_a
+                .send_text(ActiveConversation::Channel(channel.id), &marker)
+                .await
+                .expect("A later-page offline send failed");
+            later_page_markers.push(marker);
+        }
+    }
 
     // The restart: same data dir, persisted session, `start()` — exactly what
     // reopening the app does.
@@ -12373,7 +12420,10 @@ async fn v54_channel_messages_survive_a_client_restart() {
         let mut found = false;
         while Instant::now() < deadline {
             let stored = client_b2
-                .get_messages(&ActiveConversation::Channel(channel.id.clone()), 50)
+                .get_messages(
+                    &ActiveConversation::Channel(channel.id.clone()),
+                    if inject_retained_failure { 100 } else { 50 },
+                )
                 .unwrap_or_default();
             if stored
                 .iter()
@@ -12392,6 +12442,47 @@ async fn v54_channel_messages_survive_a_client_restart() {
         );
     }
     println!("  [PART 2] both offline messages are present after the restart");
+    if inject_retained_failure {
+        let deadline = Instant::now() + EVENT_TIMEOUT;
+        loop {
+            let stored = client_b2
+                .get_messages(&ActiveConversation::Channel(channel.id), 100)
+                .unwrap();
+            if later_page_markers.iter().all(|marker| {
+                stored
+                    .iter()
+                    .any(|msg| msg.as_text() == Some(marker.as_str()))
+            }) {
+                break;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "a rejected retained row starved a later backfill page"
+            );
+            tokio::time::sleep(POLL_INTERVAL).await;
+        }
+        let settings = chatter_core::storage::repositories::settings_repo::SettingsRepository::new(
+            client_b2.messages().database(),
+        );
+        assert_eq!(
+            settings.get::<u64>(&sync_key).unwrap(),
+            Some(0),
+            "incomplete backfill must not advance its durable boundary"
+        );
+    }
+    let retained = client_b2
+        .messages()
+        .get_message_local(&baseline.id)
+        .unwrap()
+        .unwrap();
+    assert_eq!(
+        retained.sent_at, retained_clock,
+        "backfill must preserve retained identity"
+    );
+    assert_eq!(
+        retained.content, baseline.content,
+        "backfill must preserve retained history"
+    );
 
     // ---- PART 3: live delivery RESUMES after the restart ------------------
     let marker_after = unique_marker();
