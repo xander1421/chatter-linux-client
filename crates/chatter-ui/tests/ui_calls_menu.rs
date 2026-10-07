@@ -5,6 +5,23 @@ use i_slint_backend_testing as testing;
 use slint::platform::{PointerEventButton, WindowEvent};
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
+// The isolated target deliberately excludes the application/profile runtime.
+// Observe its cleanup boundary while executing the actual Back coordinator.
+mod bin_ui {
+    pub mod features {
+        pub mod modals {
+            pub mod profile {
+                thread_local! {
+                    pub static RETIRED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+                }
+                pub fn retire_avatar_edit() {
+                    RETIRED.with(|count| count.set(count.get() + 1));
+                }
+            }
+        }
+    }
+}
+
 // Include the actual navigation coordinator so the isolated Slint-only target
 // can run the same Back code without application/core/platform initialization.
 #[path = "../src/bin_ui/features/back.rs"]
@@ -68,6 +85,12 @@ fn calls_overflow_uses_real_header_hit_target_and_card_anchor() {
     testing::init_integration_test_with_system_time();
     let w = MainWindow::new().unwrap();
     back::wire(&w);
+    back::push(&w, "edit-profile");
+    w.set_edit_profile_loading(true);
+    w.invoke_back_pressed();
+    assert_eq!(w.get_modal_stack().row_count(), 0);
+    assert!(!w.get_edit_profile_loading());
+    bin_ui::features::modals::profile::RETIRED.with(|count| assert_eq!(count.get(), 1));
     w.set_current_view("main".into());
     w.set_connection_status("connected".into());
     w.set_call_history_rows(ModelRc::new(VecModel::from(
