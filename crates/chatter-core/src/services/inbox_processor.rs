@@ -997,15 +997,17 @@ impl InboxEventProcessor {
             InboxEvent::DmDeleteForEveryone {
                 target_author_aci,
                 destination_user_id,
+                target_call_id,
                 peer_id,
                 target_sent_timestamp,
             } => {
                 match self
                     .message_service
-                    .apply_scoped_dm_delete_received(
+                    .apply_scoped_call_or_timestamp_delete_received(
                         peer_id,
                         target_author_aci.as_deref(),
                         destination_user_id.as_deref(),
+                        target_call_id.as_deref(),
                         *target_sent_timestamp,
                     )
                     .await
@@ -1015,7 +1017,7 @@ impl InboxEventProcessor {
                             message_id: msg.id,
                             author_id: msg.sender_id.unwrap_or(*peer_id),
                             channel_id: Some(msg.conversation_id),
-                            target_sent_timestamp: *target_sent_timestamp,
+                            target_sent_timestamp: msg.sent_at,
                         });
                     }
                     Ok(None) => {}

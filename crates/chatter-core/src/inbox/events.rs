@@ -197,6 +197,7 @@ pub enum InboxEvent {
         target_author_aci: Option<String>,
         /// Encrypted self-device destination; accepted only when peer_id is us.
         destination_user_id: Option<String>,
+        target_call_id: Option<String>,
         /// Peer user ID (who sent the delete request).
         peer_id: UserId,
         /// Target message timestamp.

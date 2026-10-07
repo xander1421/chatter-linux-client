@@ -310,6 +310,9 @@ pub struct Delete {
     /// Self-device ServerDm destination; accepted only from authenticated self.
     #[prost(string, optional, tag="102")]
     pub destination_user_id: ::core::option::Option<::prost::alloc::string::String>,
+    /// Canonical nonnil shared call UUID; scoped DM Call records only.
+    #[prost(string, optional, tag="103")]
+    pub target_call_id: ::core::option::Option<::prost::alloc::string::String>,
 }
 /// Quote: Reference to a quoted/replied-to message
 /// Signal-compatible field numbers for potential interop

@@ -212,7 +212,11 @@ fn announce_if_missed(
 /// File the Call bubble for a finished call, when it was a 1:1 call, and
 /// show it in the open chat. Built from the closed history row, so the bubble
 /// and the Calls screen can never disagree.
-fn file_dm_bubble(history: &CallHistoryRepository, messages: &MessageService, call: &CallHandle) {
+pub(super) fn file_dm_bubble(
+    history: &CallHistoryRepository,
+    messages: &MessageService,
+    call: &CallHandle,
+) {
     let entry = match history.get(call.as_str()) {
         Ok(Some(entry)) => entry,
         Ok(None) => return,
@@ -258,7 +262,7 @@ fn file_dm_bubble(history: &CallHistoryRepository, messages: &MessageService, ca
 ///   notification (`should_notify_message`) and is filed read.
 /// * The id is the call's: the handle's UUID (an anon handle is
 ///   `anon-<uuid>`), so every terminal event of one call names one bubble.
-fn dm_call_bubble(entry: &CallHistoryEntry, me: UserId) -> Option<Message> {
+pub(super) fn dm_call_bubble(entry: &CallHistoryEntry, me: UserId) -> Option<Message> {
     let (channel, peer) = match entry.conversation_type {
         ConversationType::ServerDm => {
             let peer: UserId = entry.conversation_id.parse().ok()?;

@@ -1099,6 +1099,7 @@ mod sync_sent_copy_tests {
                 target_sent_timestamp: 3,
                 target_author_aci: None,
                 destination_user_id: None,
+                target_call_id: None,
             }),
             ..Default::default()
         };

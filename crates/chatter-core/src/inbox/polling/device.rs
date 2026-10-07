@@ -2070,10 +2070,12 @@ pub fn dispatch_control_content(
                     let _ = event_tx.send(InboxEvent::DmDeleteForEveryone {
                         target_author_aci: delete.target_author_aci,
                         destination_user_id: delete.destination_user_id,
+                        target_call_id: delete.target_call_id,
                         peer_id: *sender_id,
                         target_sent_timestamp: delete.target_sent_timestamp,
                     });
-                } else if delete.destination_user_id.is_some()
+                } else if delete.target_call_id.is_some()
+                    || delete.destination_user_id.is_some()
                     || delete
                         .target_author_aci
                         .as_deref()

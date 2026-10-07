@@ -582,6 +582,37 @@ impl ConversationHandle {
         }
     }
 
+    /// Prepare the same scoped control the send path dispatches, from a locally
+    /// selected stored record. The peer never resolves our local timestamp.
+    pub(crate) fn prepare_delete_for_everyone(
+        &self,
+        target_author: &UserId,
+        target_sent_timestamp: u64,
+    ) -> ConversationResult<(crate::domain::Message, crate::proto::content_v1::Content)> {
+        let target = self.stored_message(target_author, target_sent_timestamp)?;
+        if !self.can_delete_for_everyone(target_author, target_sent_timestamp)? {
+            return Err(ConversationError::Other(
+                "cannot delete this message for everyone".into(),
+            ));
+        }
+        let content = if matches!(
+            target.conversation_type,
+            ConversationType::ServerDm | ConversationType::AnonDm
+        ) {
+            crate::services::gateway::builders::build_stored_dm_delete_content(
+                &target,
+                &self.client.messages().current_user_id()?,
+            )?
+        } else {
+            crate::services::gateway::builders::build_targeted_delete_content(
+                target_sent_timestamp,
+                Some(&target_author.to_string()),
+                self.active_channel_id().as_deref(),
+            )
+        };
+        Ok((target, content))
+    }
+
     /// Send a delete-for-everyone and persist locally.
     ///
     /// `target_author` is the message's sender. In a 1:1 DM this may be the
@@ -591,12 +622,8 @@ impl ConversationHandle {
         target_author: &UserId,
         target_sent_timestamp: u64,
     ) -> ConversationResult {
-        let target = self.stored_message(target_author, target_sent_timestamp)?;
-        if !self.can_delete_for_everyone(target_author, target_sent_timestamp)? {
-            return Err(ConversationError::Other(
-                "cannot delete this message for everyone".into(),
-            ));
-        }
+        let (target, prepared_content) =
+            self.prepare_delete_for_everyone(target_author, target_sent_timestamp)?;
         match &self.conversation {
             ActiveConversation::AnonDm(id) => {
                 self.client
@@ -624,11 +651,7 @@ impl ConversationHandle {
             }
             ActiveConversation::None => Err(ConversationError::NoConversation),
             _ => {
-                let content = crate::services::gateway::builders::build_targeted_delete_content(
-                    target_sent_timestamp,
-                    Some(&target_author.to_string()),
-                    self.active_channel_id().as_deref(),
-                );
+                let content = prepared_content;
                 self.dispatch_content(content).await?;
                 // The server keeps an authorless copy of a sealed-sender
                 // message; take it down too, or a device fetching history
@@ -642,13 +665,28 @@ impl ConversationHandle {
                     tracing::warn!(message_id = %target.id, error = %e,
                         "delete-for-everyone: server copy of sealed message not deleted");
                 }
-                if target.conversation_type == ConversationType::ServerDm {
+                if target.conversation_type == ConversationType::ServerDm
+                    && crate::storage::repositories::message_modifier_repo::canonical_call_record_id(&target).is_none()
+                {
                     if let Some(author) = target.sender_id {
                         crate::storage::repositories::message_modifier_repo::MessageModifierRepository::new(self.client.messages().database.clone())
                             .queue_dm_delete(&author, target.sent_at, Some(target.conversation_id), crate::util::time::TimestampNanos::now().as_u64())?;
                     }
                 }
-                self.client.messages().delete_message_local(&target.id)?;
+                if let Some(call_id) =
+                    crate::storage::repositories::message_modifier_repo::canonical_call_record_id(
+                        &target,
+                    )
+                {
+                    crate::storage::repositories::message_modifier_repo::apply_call_delete(
+                        self.client.messages().database.clone(),
+                        &self.client.messages().message_repo,
+                        &crate::domain::reaction::ReactionScope::of(&target),
+                        &call_id.to_string(),
+                    )?;
+                } else {
+                    self.client.messages().delete_message_local(&target.id)?;
+                }
                 Ok(())
             }
         }

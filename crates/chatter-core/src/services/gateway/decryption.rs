@@ -891,6 +891,7 @@ impl MessageGateway {
                     return Ok(DmContent::DeleteForEveryone {
                         target_author_aci: delete.target_author_aci,
                         destination_user_id: delete.destination_user_id,
+                        target_call_id: delete.target_call_id,
                         target_sent_timestamp: delete.target_sent_timestamp,
                     });
                 }

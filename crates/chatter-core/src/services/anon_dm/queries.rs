@@ -194,6 +194,43 @@ impl AnonDmService {
         self.apply_targeted_received_delete(conversation_id, peer, None, sent_timestamp)
     }
 
+    pub(crate) fn apply_received_call_delete(
+        &self,
+        conversation_id: &AnonDmId,
+        peer: &UserId,
+        target_author: Option<&str>,
+        claim: &str,
+    ) -> Result<Option<Message>, AnonDmError> {
+        let Some(dm) = self.get_conversation(conversation_id)? else {
+            return Ok(None);
+        };
+        let me = self.current_user_id()?;
+        if dm.peer_id != *peer
+            || peer.as_uuid().is_nil()
+            || !dm.is_ready()
+            || self.is_user_blocked(peer)?
+            || self.is_conversation_blocked(conversation_id)?
+            || target_author.is_some_and(|v| {
+                v.parse::<UserId>()
+                    .ok()
+                    .is_none_or(|a| a != me && a != *peer)
+            })
+        {
+            return Ok(None);
+        }
+        Ok(
+            crate::storage::repositories::message_modifier_repo::apply_call_delete(
+                self.settings_repo.database().clone(),
+                &self.message_repo,
+                &crate::domain::reaction::ReactionScope::new(
+                    (*conversation_id).into(),
+                    ConversationType::AnonDm,
+                ),
+                claim,
+            )?,
+        )
+    }
+
     pub fn apply_targeted_received_delete(
         &self,
         conversation_id: &AnonDmId,

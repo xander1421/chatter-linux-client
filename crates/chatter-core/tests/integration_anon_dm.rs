@@ -1011,6 +1011,7 @@ async fn test_anon_dm_message_with_delete() {
     let delete = Delete {
         target_author_aci: None,
         destination_user_id: None,
+        target_call_id: None,
         target_sent_timestamp: 1234567890,
     };
 

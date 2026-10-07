@@ -193,19 +193,28 @@ impl AnonDmService {
                 if !data.channel_id.is_empty() || delete.destination_user_id.is_some() {
                     return Ok(vec![]);
                 }
-                return Ok(self
-                    .apply_targeted_received_delete(
+                let deleted = if let Some(claim) = delete.target_call_id.as_deref() {
+                    self.apply_received_call_delete(
+                        conversation_id,
+                        sender_id,
+                        delete.target_author_aci.as_deref(),
+                        claim,
+                    )?
+                } else {
+                    self.apply_targeted_received_delete(
                         conversation_id,
                         sender_id,
                         delete.target_author_aci.as_deref(),
                         delete.target_sent_timestamp,
                     )?
+                };
+                return Ok(deleted
                     .into_iter()
                     .map(|message| DomainEvent::MessageDeleted {
                         message_id: message.id,
                         author_id: message.sender_id.unwrap_or(*sender_id),
                         channel_id: Some(message.conversation_id),
-                        target_sent_timestamp: delete.target_sent_timestamp,
+                        target_sent_timestamp: message.sent_at,
                     })
                     .collect());
             }

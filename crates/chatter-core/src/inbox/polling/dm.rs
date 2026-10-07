@@ -495,7 +495,7 @@ pub async fn poll_dm_mailboxes(
 
 /// Dispatch DM content based on type.
 #[allow(clippy::too_many_arguments)]
-fn dispatch_dm_content(
+pub(crate) fn dispatch_dm_content(
     dm_content: DmContent,
     sender_id: &UserId,
     // The peer device whose mailbox-layer key opened this envelope.
@@ -793,6 +793,7 @@ fn dispatch_dm_content(
         DmContent::DeleteForEveryone {
             target_author_aci,
             destination_user_id,
+            target_call_id,
             target_sent_timestamp,
         } => {
             tracing::debug!(
@@ -803,7 +804,9 @@ fn dispatch_dm_content(
             let _ = event_tx.send(InboxEvent::DmDeleteForEveryone {
                 target_author_aci,
                 destination_user_id,
-                peer_id,
+                target_call_id,
+                // Scope follows the authenticated decrypted sender, not mailbox routing metadata.
+                peer_id: *sender_id,
                 target_sent_timestamp,
             });
         }

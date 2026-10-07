@@ -411,11 +411,46 @@ pub fn build_targeted_delete_content(
                 target_sent_timestamp,
                 target_author_aci: target_author_aci.map(str::to_owned),
                 destination_user_id: None,
+                target_call_id: None,
             }),
             ..Default::default()
         })),
         ..Default::default()
     }
+}
+
+/// Build a scoped DM delete from a stored record. Anonymous Call authors are
+/// nil storage placeholders; the authenticated local participant is field 101.
+pub(crate) fn build_stored_dm_delete_content(
+    target: &crate::domain::message::Message,
+    me: &crate::domain::ids::UserId,
+) -> Result<Content, crate::error::StorageError> {
+    use crate::storage::repositories::message_modifier_repo::canonical_call_record_id;
+    let call_id = canonical_call_record_id(target);
+    if matches!(
+        target.content,
+        crate::domain::message::MessageContent::Call(_)
+    ) && call_id.is_none()
+    {
+        return Err(crate::error::StorageError::InvalidData(
+            "Noncanonical DM call record".into(),
+        ));
+    }
+    let author = if call_id.is_some()
+        && target.conversation_type == crate::domain::message::ConversationType::AnonDm
+    {
+        *me
+    } else {
+        target.sender_id.ok_or_else(|| {
+            crate::error::StorageError::InvalidData("Delete target has no author".into())
+        })?
+    };
+    let mut content =
+        build_targeted_delete_content(target.sent_at, Some(&author.to_string()), None);
+    if let Some(content::Content::DataMessage(data)) = &mut content.content {
+        data.delete.as_mut().unwrap().target_call_id = call_id.map(|id| id.to_string());
+    }
+    Ok(content)
 }
 
 // =============================================================================

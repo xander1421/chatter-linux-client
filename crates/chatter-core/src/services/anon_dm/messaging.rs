@@ -671,12 +671,34 @@ impl AnonDmService {
         author: &UserId,
         timestamp: u64,
     ) -> Result<(), AnonDmError> {
-        let content = crate::services::gateway::builders::build_targeted_delete_content(
-            timestamp,
-            Some(&author.to_string()),
-            None,
-        );
-        self.send_message(conversation_id, content).await
+        let target = self.get_message_by_sender_timestamp(conversation_id, author, timestamp)?;
+        let me = self.current_user_id()?;
+        let content = match target.as_ref() {
+            Some(record) => {
+                crate::services::gateway::builders::build_stored_dm_delete_content(record, &me)?
+            }
+            None => crate::services::gateway::builders::build_targeted_delete_content(
+                timestamp,
+                Some(&author.to_string()),
+                None,
+            ),
+        };
+        self.send_message(conversation_id, content).await?;
+        if let Some(target) = target.as_ref() {
+            if let Some(call_id) =
+                crate::storage::repositories::message_modifier_repo::canonical_call_record_id(
+                    target,
+                )
+            {
+                crate::storage::repositories::message_modifier_repo::apply_call_delete(
+                    self.settings_repo.database().clone(),
+                    &self.message_repo,
+                    &crate::domain::reaction::ReactionScope::of(target),
+                    &call_id.to_string(),
+                )?;
+            }
+        }
+        Ok(())
     }
 
     /// Send a pin/unpin message.

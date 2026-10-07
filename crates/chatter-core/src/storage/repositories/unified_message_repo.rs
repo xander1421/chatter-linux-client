@@ -158,6 +158,10 @@ impl UnifiedMessageRepository {
                 super::message_modifier_repo::Arrival::Store { message, reactions } => {
                     (message, reactions)
                 }
+                super::message_modifier_repo::Arrival::CallDeleted => {
+                    tx.commit()?;
+                    return Ok(false);
+                }
                 super::message_modifier_repo::Arrival::Deleted => {
                     tx.execute(
                         "INSERT OR IGNORE INTO deleted_messages (id) VALUES (?1)",
@@ -326,6 +330,14 @@ impl UnifiedMessageRepository {
     /// Get a message by ID.
     pub fn get(&self, id: &MessageId) -> Result<Option<Message>, StorageError> {
         let conn = self.db.read_connection()?;
+        self.get_with_connection(&conn, id)
+    }
+
+    pub(super) fn get_with_connection(
+        &self,
+        conn: &rusqlite::Connection,
+        id: &MessageId,
+    ) -> Result<Option<Message>, StorageError> {
         let mut stmt = conn.prepare(&format!(
             "SELECT {} FROM messages WHERE id = ?1",
             message_columns("messages")

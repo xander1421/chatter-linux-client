@@ -600,6 +600,7 @@ fn test_exact_delete_wire_matches_protoc_fixture() {
         target_sent_timestamp: 12345,
         target_author_aci: Some("11111111-1111-4111-8111-111111111111".into()),
         destination_user_id: Some("22222222-2222-4222-8222-222222222222".into()),
+        target_call_id: None,
     };
     let expected: &[u8] = &[
         0x09, 0x39, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xaa, 0x06, 0x24, 0x31, 0x31, 0x31,
@@ -626,5 +627,37 @@ fn test_exact_delete_wire_matches_protoc_fixture() {
         [
             0x09, 0x39, 0x30, 0, 0, 0, 0, 0, 0, 0xaa, 0x06, 0x00, 0xb2, 0x06, 0x00
         ]
+    );
+}
+
+/// Frozen protoc bytes for the optional call identity, including explicit empty presence.
+#[test]
+fn test_stable_call_delete_wire_matches_protoc_fixture() {
+    use chatter_core::proto::content_v1::Delete;
+    use prost::Message;
+    let delete = Delete {
+        target_sent_timestamp: 12345,
+        target_call_id: Some("33333333-3333-4333-8333-333333333333".into()),
+        ..Default::default()
+    };
+    let expected: &[u8] = &[
+        0x09, 0x39, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xba, 0x06, 0x24, 0x33, 0x33, 0x33,
+        0x33, 0x33, 0x33, 0x33, 0x33, 0x2d, 0x33, 0x33, 0x33, 0x33, 0x2d, 0x34, 0x33, 0x33, 0x33,
+        0x2d, 0x38, 0x33, 0x33, 0x33, 0x2d, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33, 0x33,
+        0x33, 0x33, 0x33,
+    ];
+    assert_eq!(delete.encode_to_vec(), expected);
+    assert_eq!(Delete::decode(expected).unwrap(), delete);
+    let empty = Delete {
+        target_call_id: Some(String::new()),
+        ..delete
+    };
+    let expected_empty: &[u8] = &[
+        0x09, 0x39, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xba, 0x06, 0x00,
+    ];
+    assert_eq!(empty.encode_to_vec(), expected_empty);
+    assert_eq!(
+        Delete::decode(expected_empty).unwrap().target_call_id,
+        Some(String::new())
     );
 }

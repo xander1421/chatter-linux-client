@@ -14,15 +14,15 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 
+use crate::domain::UserId;
 use crate::domain::ids::ChannelId;
 use crate::domain::message::{ConversationType, Message, MessageContent};
 use crate::domain::reaction::ReactionScope;
-use crate::domain::UserId;
 use crate::error::StorageError;
-use crate::storage::repositories::MessageRepository;
 use crate::storage::Database;
+use crate::storage::repositories::MessageRepository;
 
 /// How long a modifier waits for its target: the server keeps a queued
 /// message for 30 days, so a target can arrive that late and no later.
@@ -67,6 +67,8 @@ pub(crate) enum Arrival<'a> {
     },
     /// Its author deleted it for everyone before it got here: do not store.
     Deleted,
+    /// Scoped call tombstone; never create a global message-ID tombstone.
+    CallDeleted,
 }
 
 pub struct MessageModifierRepository {
@@ -372,6 +374,77 @@ impl MessageModifierRepository {
     }
 }
 
+/// Wire claims must use one unambiguous UUID encoding; empty/nil are refused.
+pub(crate) fn canonical_call_claim(value: &str) -> Option<uuid::Uuid> {
+    let id = uuid::Uuid::parse_str(value).ok()?;
+    (!id.is_nil() && value == id.to_string()).then_some(id)
+}
+
+/// Only genuine canonical 1:1 Call records confer shared-call delete authority.
+pub(crate) fn canonical_call_record_id(message: &Message) -> Option<uuid::Uuid> {
+    let MessageContent::Call(call) = &message.content else {
+        return None;
+    };
+    let raw = match message.conversation_type {
+        ConversationType::ServerDm => call.call_id.as_str(),
+        ConversationType::AnonDm => call.call_id.strip_prefix("anon-").unwrap_or(&call.call_id),
+        _ => return None,
+    };
+    let id = canonical_call_claim(raw)?;
+    (message.id.as_uuid() == &id).then_some(id)
+}
+
+/// Exact scope AND typed Call identity, never a global author/timestamp lookup.
+pub(crate) fn apply_call_delete(
+    db: Arc<Database>,
+    messages: &MessageRepository,
+    scope: &ReactionScope,
+    claim: &str,
+) -> Result<Option<Message>, StorageError> {
+    let Some(id) = canonical_call_claim(claim) else {
+        return Ok(None);
+    };
+    if !matches!(
+        scope.kind,
+        ConversationType::ServerDm | ConversationType::AnonDm
+    ) {
+        return Ok(None);
+    }
+    let conn = db.connection()?;
+    let tx = conn.unchecked_transaction()?;
+    let target =
+        messages.get_with_connection(&tx, &crate::domain::ids::MessageId::from_uuid(id))?;
+    if target.as_ref().is_some_and(|m| {
+        m.conversation_id != scope.id
+            || m.conversation_type != scope.kind
+            || canonical_call_record_id(m) != Some(id)
+    }) {
+        return Ok(None);
+    }
+    let now = crate::util::time::TimestampNanos::now().as_u64();
+    tx.execute(
+        "INSERT INTO pending_message_modifiers
+            (author_id,target_sent_at,kind,actor_id,emoji,conversation_id,body,action_ts,remove,received_at)
+         VALUES (?1,0,'delete','',?2,?3,?4,0,0,?5)
+         ON CONFLICT(author_id,target_sent_at,kind,actor_id,emoji) DO UPDATE SET received_at=excluded.received_at",
+        params![id.to_string(), format!("call-delete:{}:{}:{}",scope.kind.as_str(),scope.id,id),
+            scope.id.to_string(), format!("call:{}",scope.kind.as_str()), now as i64],
+    )?;
+    prune(&tx, now)?;
+    if let Some(message) = &target {
+        tx.execute(
+            "DELETE FROM messages WHERE id=?1 AND conversation_id=?2 AND conversation_type=?3",
+            params![
+                message.id.to_string(),
+                scope.id.to_string(),
+                scope.kind.as_str()
+            ],
+        )?;
+    }
+    tx.commit()?;
+    Ok(target)
+}
+
 /// Connection-aware admission for the receive-artifact application transaction.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn queue_reaction_with_conn(
@@ -476,6 +549,20 @@ pub(crate) fn take_on_arrival<'a>(
     conn: &Connection,
     message: &'a Message,
 ) -> Result<Arrival<'a>, StorageError> {
+    // Call identity is shared across replicas; authors and timestamps are local.
+    // Check before the author fallback, including anonymous nil-authored calls.
+    if let Some(call_id) = canonical_call_record_id(message) {
+        let deleted: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM pending_message_modifiers WHERE kind='delete' AND author_id=?1 AND target_sent_at=0 AND conversation_id=?2 AND body=?3 AND emoji=?4)",
+            params![call_id.to_string(), message.conversation_id.to_string(),
+                format!("call:{}", message.conversation_type.as_str()),
+                format!("call-delete:{}:{}:{}", message.conversation_type.as_str(), message.conversation_id, call_id)],
+            |row| row.get(0),
+        )?;
+        if deleted {
+            return Ok(Arrival::CallDeleted);
+        }
+    }
     let Some(author) = message.sender_id else {
         return Ok(Arrival::Store {
             message: Cow::Borrowed(message),

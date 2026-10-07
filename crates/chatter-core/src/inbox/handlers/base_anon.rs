@@ -360,7 +360,8 @@ pub fn dispatch_common_content<B: AnonInboxBackend>(
         Some(ContentKind::DataMessage(data_msg)) => {
             // Delete-for-everyone wrapped inside DataMessage
             if let Some(delete) = &data_msg.delete {
-                if delete.destination_user_id.is_some()
+                if delete.target_call_id.is_some()
+                    || delete.destination_user_id.is_some()
                     || delete
                         .target_author_aci
                         .as_deref()
@@ -690,6 +691,7 @@ mod tests {
                         target_sent_timestamp: 42,
                         target_author_aci: None,
                         destination_user_id: None,
+                        target_call_id: None,
                     }),
                     ..Default::default()
                 },

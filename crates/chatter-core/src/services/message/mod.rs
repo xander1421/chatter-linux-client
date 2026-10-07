@@ -982,6 +982,63 @@ impl MessageService {
             .await
     }
 
+    /// Explicit call identity never falls back to timestamp semantics on refusal.
+    pub(crate) async fn apply_scoped_call_or_timestamp_delete_received(
+        &self,
+        sender: &UserId,
+        target_author: Option<&str>,
+        destination: Option<&str>,
+        target_call_id: Option<&str>,
+        timestamp: u64,
+    ) -> Result<Option<Message>, MessageError> {
+        let Some(claim) = target_call_id else {
+            return self
+                .apply_scoped_dm_delete_received(sender, target_author, destination, timestamp)
+                .await;
+        };
+        let me = self.current_user_id()?;
+        if sender.as_uuid().is_nil() {
+            return Ok(None);
+        }
+        let peer = if *sender == me {
+            let (Some(destination), Some(author)) = (destination, target_author) else {
+                return Ok(None);
+            };
+            let (Ok(peer), Ok(author)) = (destination.parse::<UserId>(), author.parse::<UserId>())
+            else {
+                return Ok(None);
+            };
+            if peer == me || peer.as_uuid().is_nil() || (author != me && author != peer) {
+                return Ok(None);
+            }
+            peer
+        } else {
+            if destination.is_some() {
+                return Ok(None);
+            }
+            if target_author.is_some_and(|value| {
+                value
+                    .parse::<UserId>()
+                    .ok()
+                    .is_none_or(|a| a != me && a != *sender)
+            }) {
+                return Ok(None);
+            }
+            *sender
+        };
+        Ok(
+            crate::storage::repositories::message_modifier_repo::apply_call_delete(
+                self.database.clone(),
+                &self.message_repo,
+                &crate::domain::reaction::ReactionScope::new(
+                    ChannelId::from(peer),
+                    ConversationType::ServerDm,
+                ),
+                claim,
+            )?,
+        )
+    }
+
     /// Route using the authenticated sender, accepting a destination only on
     /// self-device copies. No legacy self-copy destination or author guessing.
     pub async fn apply_scoped_dm_delete_received(
@@ -3405,5 +3462,9 @@ mod inbound_target_tests {
         );
         // Our own devices act on any conversation we hold (Signal: isMe).
         assert!(resolve(&ChannelId::from(f.me), &f.me, DM_TS).is_some());
+    }
+    #[cfg(feature = "media")]
+    mod stable_call_delete_tests {
+        include!("stable_call_delete_tests.rs");
     }
 }
