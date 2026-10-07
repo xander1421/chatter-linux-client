@@ -268,15 +268,29 @@ class MainActivity : GameActivity() {
      */
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
-        setIntent(intent)
-        val callId = intent.getStringExtra("incoming_call_id")
-        if (callId.isNullOrEmpty()) return
-        if (intent.getBooleanExtra("auto_accept", false)) {
-            Log.i(TAG, "accept-from-notification call_id=$callId")
-            nativeAcceptIncomingCall(callId)
-        } else {
-            // The notification body: bring the ring screen back if Back hid it.
-            nativeShowIncomingCall(callId)
+        // Public launcher intents are untrusted. The action is routing only;
+        // the native boundary authenticates and consumes the random capability
+        // before notification cancellation or any call/UI effects.
+        val action = intent.action ?: return
+        if (action != "com.chatter.client.CALL_ACCEPT" &&
+            action != "com.chatter.client.CALL_OPEN" &&
+            action != "com.chatter.client.CALL_FULL_SCREEN") return
+        try {
+            val callId = intent.getStringExtra("incoming_call_id") ?: return
+            val capability = intent.getStringExtra("call_notification_capability") ?: return
+            if (callId.isEmpty() || capability.isEmpty()) return
+            when (action) {
+                "com.chatter.client.CALL_ACCEPT" -> {
+                    if (!intent.getBooleanExtra("auto_accept", false)) return
+                    nativeAcceptIncomingCall(callId, capability)
+                }
+                else -> {
+                    if (intent.getBooleanExtra("auto_accept", false)) return
+                    nativeShowIncomingCall(callId, action, capability)
+                }
+            }
+        } catch (_: RuntimeException) {
+            // Malformed public extras are neither consent nor a reason to crash.
         }
     }
 
@@ -284,10 +298,10 @@ class MainActivity : GameActivity() {
     private external fun nativeRegisterActivity()
 
     /** Implemented in Rust. Runs the in-app accept flow for an incoming call. */
-    private external fun nativeAcceptIncomingCall(callId: String)
+    private external fun nativeAcceptIncomingCall(callId: String, capability: String)
 
     /** Implemented in Rust. Re-shows a ringing call's screen that Back hid. */
-    private external fun nativeShowIncomingCall(callId: String)
+    private external fun nativeShowIncomingCall(callId: String, action: String, capability: String)
 
     /** Implemented in Rust. Back hid the keyboard: drop Slint's text focus too. */
     private external fun nativeImeHiddenByBack()

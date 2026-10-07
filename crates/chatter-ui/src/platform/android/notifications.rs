@@ -22,8 +22,33 @@ use chatter_core::system::notification_sink::NotificationSink;
 use jni::JNIEnv;
 use jni::objects::{JObject, JString, JValue};
 
+#[path = "call_notification_consent.rs"]
+pub(crate) mod call_consent;
 #[path = "call_notification_identity.rs"]
 mod call_identity;
+
+static CALL_CONSENT: std::sync::Mutex<call_consent::Consent> =
+    std::sync::Mutex::new(call_consent::Consent::new());
+
+pub(crate) fn consume_call_consent(call_id: &str, action: &str, token: &str) -> bool {
+    CALL_CONSENT
+        .lock()
+        .map(|mut state| state.consume(call_id, action, token, std::time::Instant::now()))
+        .unwrap_or(false)
+}
+
+pub(crate) fn consume_and_cancel_call_consent(call_id: &str, action: &str, token: &str) -> bool {
+    let Ok(mut state) = CALL_CONSENT.lock() else {
+        return false;
+    };
+    if !state.consume(call_id, action, token, std::time::Instant::now()) {
+        return false;
+    }
+    // Keep the publication lock through cancellation so a replacement cannot
+    // be posted between capability consumption and dismissal.
+    let _ = AndroidNotifications::new().cancel_call_platform(call_id);
+    true
+}
 
 pub(crate) const CHANNEL_ID: &str = "chatter_messages";
 const CHANNEL_NAME: &str = "Messages";
@@ -213,11 +238,9 @@ impl AndroidNotifications {
         Ok(())
     }
 
-    /// Post a ringing, full-screen incoming-call notification with Accept /
-    /// Decline action buttons. Tapping a button broadcasts to
-    /// `CallActionReceiver`, which calls back into Rust to accept/decline
-    /// `call_id` without opening the app. The body/full-screen intent opens the
-    /// in-app call screen.
+    /// Post a ringing notification with capability-authenticated actions.
+    /// Accept launches MainActivity; Decline uses the nonexported receiver.
+    /// Body/full-screen intents only open the in-app call screen.
     fn show_incoming_call_raw(
         &self,
         call_id: &str,
@@ -225,6 +248,16 @@ impl AndroidNotifications {
         body: &str,
     ) -> Result<(), SystemError> {
         self.init_calls_channel()?;
+        // Serialize publication, replacement and revocation: an older build may
+        // never overwrite a newer notification's proof. Poisoning fails closed.
+        let mut consent = CALL_CONSENT
+            .lock()
+            .map_err(|_| SystemError::NotificationSend("Call consent unavailable".into()))?;
+        let tokens = consent.issue(
+            call_id,
+            std::time::Instant::now(),
+            chatter_core::services::call_worker::RING_TIMEOUT,
+        );
 
         let id = call_notification_id(call_id);
         let mut env = get_jni_env()?;
@@ -306,7 +339,22 @@ impl AndroidNotifications {
         .map_err(nerr)?;
 
         // Full-screen + content intent → open the in-app ring screen (no auto-accept).
-        let fs_pi = build_activity_intent(&mut env, &context, call_id, id, false)?;
+        let fs_pi = build_activity_intent(
+            &mut env,
+            &context,
+            call_id,
+            id,
+            call_consent::FULL_SCREEN,
+            &tokens[2],
+        )?;
+        let open_pi = build_activity_intent(
+            &mut env,
+            &context,
+            call_id,
+            id,
+            call_consent::OPEN,
+            &tokens[1],
+        )?;
         env.call_method(
             &builder,
             "setFullScreenIntent",
@@ -318,7 +366,7 @@ impl AndroidNotifications {
             &builder,
             "setContentIntent",
             "(Landroid/app/PendingIntent;)Landroid/app/Notification$Builder;",
-            &[JValue::Object(&fs_pi)],
+            &[JValue::Object(&open_pi)],
         )
         .map_err(nerr)?;
 
@@ -329,8 +377,14 @@ impl AndroidNotifications {
         // from the content intent's; `id` is any positive i32, so `id * 2`
         // overflowed (a panic that killed the notification bridge for every
         // later call). Wrapping keeps them distinct without overflow.
-        let accept_pi =
-            build_activity_intent(&mut env, &context, call_id, id.wrapping_mul(2), true)?;
+        let accept_pi = build_activity_intent(
+            &mut env,
+            &context,
+            call_id,
+            id.wrapping_mul(2),
+            call_consent::ACCEPT,
+            &tokens[0],
+        )?;
         let accept = make_action(&mut env, IC_CALL, "Accept", &accept_pi)?;
         let decline = build_action(
             &mut env,
@@ -340,6 +394,7 @@ impl AndroidNotifications {
             call_id,
             IC_CLOSE,
             id.wrapping_mul(2).wrapping_add(1),
+            &tokens[3],
         )?;
         env.call_method(
             &builder,
@@ -380,6 +435,14 @@ impl AndroidNotifications {
     }
 
     fn cancel_call_raw(&self, call_id: &str) -> Result<(), SystemError> {
+        let mut consent = CALL_CONSENT
+            .lock()
+            .map_err(|_| SystemError::NotificationSend("Call consent unavailable".into()))?;
+        consent.revoke(call_id);
+        self.cancel_call_platform(call_id)
+    }
+
+    fn cancel_call_platform(&self, call_id: &str) -> Result<(), SystemError> {
         let id = call_notification_id(call_id);
         let mut env = get_jni_env()?;
         let context = get_app_context(&mut env)?;
@@ -627,6 +690,7 @@ fn build_action<'a>(
     call_id: &str,
     icon: i32,
     request_code: i32,
+    capability: &str,
 ) -> Result<JObject<'a>, SystemError> {
     // Target the receiver by class NAME via setClassName, not find_class +
     // Intent(Context, Class): this notification is built on the JNI poller
@@ -653,6 +717,7 @@ fn build_action<'a>(
     )
     .map_err(nerr)?;
     add_call_intent_identity(env, &intent, call_id, action)?;
+    add_call_capability(env, &intent, capability)?;
     let k = env.new_string("call_id").map_err(nerr)?;
     let v = env.new_string(call_id).map_err(nerr)?;
     env.call_method(
@@ -713,9 +778,9 @@ fn make_action<'a>(
 }
 
 /// Build a PendingIntent that launches `MainActivity` (the in-app call screen),
-/// carrying the incoming call_id. When `auto_accept` is set, MainActivity
-/// accepts the call on arrival (the Accept button); otherwise it just opens the
-/// ring screen (full-screen / content intent). Launched via an activity
+/// carrying a call/action-bound capability. Only authenticated Accept invokes
+/// acceptance; body and full-screen open have independent one-shot proofs.
+/// Launched via an activity
 /// PendingIntent so the notification can foreground the app — a broadcast
 /// receiver can't reliably start an activity on Android 14+.
 fn build_activity_intent<'a>(
@@ -723,7 +788,8 @@ fn build_activity_intent<'a>(
     context: &JObject<'a>,
     call_id: &str,
     request_code: i32,
-    auto_accept: bool,
+    action: &str,
+    capability: &str,
 ) -> Result<JObject<'a>, SystemError> {
     // setClassName (string) instead of find_class — see build_action.
     let intent = env
@@ -739,12 +805,16 @@ fn build_activity_intent<'a>(
         &[JValue::Object(context), JValue::Object(&cls_name)],
     )
     .map_err(nerr)?;
-    add_call_intent_identity(
-        env,
+    add_call_intent_identity(env, &intent, call_id, action)?;
+    add_call_capability(env, &intent, capability)?;
+    let j_action = env.new_string(action).map_err(nerr)?;
+    env.call_method(
         &intent,
-        call_id,
-        if auto_accept { "accept" } else { "open" },
-    )?;
+        "setAction",
+        "(Ljava/lang/String;)Landroid/content/Intent;",
+        &[JValue::Object(&j_action)],
+    )
+    .map_err(nerr)?;
     // FLAG_ACTIVITY_NEW_TASK | FLAG_ACTIVITY_SINGLE_TOP
     env.call_method(
         &intent,
@@ -762,7 +832,7 @@ fn build_activity_intent<'a>(
         &[JValue::Object(&k), JValue::Object(&v)],
     )
     .map_err(nerr)?;
-    if auto_accept {
+    if action == call_consent::ACCEPT {
         let ak = env.new_string("auto_accept").map_err(nerr)?;
         env.call_method(
             &intent,
@@ -789,6 +859,25 @@ fn build_activity_intent<'a>(
         .l()
         .map_err(nerr)?;
     Ok(pi)
+}
+
+fn add_call_capability(
+    env: &mut JNIEnv<'_>,
+    intent: &JObject<'_>,
+    capability: &str,
+) -> Result<(), SystemError> {
+    let key = env
+        .new_string("call_notification_capability")
+        .map_err(nerr)?;
+    let value = env.new_string(capability).map_err(nerr)?;
+    env.call_method(
+        intent,
+        "putExtra",
+        "(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;",
+        &[JValue::Object(&key), JValue::Object(&value)],
+    )
+    .map_err(nerr)?;
+    Ok(())
 }
 
 /// Extras do not distinguish Android PendingIntents. Explicit components stay
