@@ -269,7 +269,8 @@ impl MessageActions {
     /// as sent). Resend is offered for every failed outgoing bubble, including
     /// one that carries a [`Message::failure_reason`]. Edit needs a non-empty
     /// body, so an attachment-only voice note is not editable. Edit and
-    /// delete-for-everyone also require the remote-action window.
+    /// channel/group delete-for-everyone also require the remote-action window.
+    /// Either DM participant may delete an older delivered message for both.
     ///
     /// `one_to_one_dm`: either authenticated participant may request
     /// delete-for-everyone. Channels and groups stay author-only.
@@ -295,7 +296,9 @@ impl MessageActions {
             reply: on_server,
             edit: is_own && on_server && within_window && has_body,
             pin: on_server,
-            delete_for_everyone: on_server && within_window && (is_own || one_to_one_dm),
+            delete_for_everyone: on_server
+                && sent_at > 0
+                && (one_to_one_dm || (is_own && within_window)),
             delete_for_me: !is_deleted,
             forward: !is_deleted,
             copy: !is_deleted,
@@ -1489,8 +1492,16 @@ mod tests {
 
         let old_text = bubble("sent", Some("hello"), false, old);
         let actions = old_text.actions(true, NOW);
-        assert!(!actions.edit && !actions.delete_for_everyone);
+        assert!(!actions.edit && actions.delete_for_everyone);
         assert!(actions.react && actions.reply && actions.pin && actions.info);
+        assert!(old_text.actions(false, NOW).delete_for_everyone);
+        let mut old_channel = old_text.clone();
+        old_channel.conversation_type = ConversationType::Channel;
+        assert!(!old_channel.actions(true, NOW).delete_for_everyone);
+        assert!(!old_channel.actions(false, NOW).delete_for_everyone);
+        let mut old_anonymous_dm = old_text.clone();
+        old_anonymous_dm.conversation_type = ConversationType::AnonDm;
+        assert!(old_anonymous_dm.actions(false, NOW).delete_for_everyone);
 
         let sent_voice = bubble("delivered", None, true, young);
         let actions = sent_voice.actions(true, NOW);
