@@ -46,6 +46,11 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Chatter">
 
+        <!-- Older Android Beam stacks may advertise the foreground app's URI
+             even without app NFC code. Chatter does not offer NFC sharing. -->
+        <meta-data android:name="android.nfc.disable_beam_default"
+            android:value="true" />
+
         <provider android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.viewer-media"
             android:exported="false" android:grantUriPermissions="true">
