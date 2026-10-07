@@ -86,7 +86,12 @@ pub fn open_user_profile_in_conversation(
     ui_ctx: Option<&Arc<ChatterClient>>,
     conversation: chatter_core::state::ActiveConversation,
 ) {
-    let is_self = auth_state.get().current_user_id.as_ref() == Some(user_id);
+    let scoped_member = matches!(
+        conversation,
+        chatter_core::state::ActiveConversation::AnonGroup(_)
+    );
+    w.set_profile_scoped_member(scoped_member);
+    let is_self = !scoped_member && auth_state.get().current_user_id.as_ref() == Some(user_id);
 
     w.set_profile_user_id(user_id.to_string().into());
     w.set_profile_is_anonymous(conversation.is_anon());
@@ -98,7 +103,31 @@ pub fn open_user_profile_in_conversation(
     w.set_profile_share_link("".into());
     w.set_profile_share_status("".into());
 
-    if is_self {
+    if let chatter_core::state::ActiveConversation::AnonGroup(group_id) = conversation {
+        let member = ui_ctx.and_then(|ctx| ctx.get_anon_group_member(&group_id, user_id));
+        let name = ui_ctx
+            .and_then(|ctx| ctx.get_anon_group_member_display_name(&group_id, user_id))
+            .filter(|name| !name.is_empty())
+            .unwrap_or_else(|| "Anonymous member".into());
+        w.set_profile_initials(initials_from_name(&name).into());
+        w.set_profile_display_name(name.into());
+        w.set_profile_avatar_source(
+            member
+                .and_then(|member| member.avatar)
+                .as_deref()
+                .and_then(crate::bin_ui::converters::avatar_bytes_to_image)
+                .unwrap_or_default(),
+        );
+        w.set_profile_username("".into());
+        w.set_profile_bio("".into());
+        w.set_profile_status_text("".into());
+        w.set_profile_presence("offline".into());
+        w.set_profile_is_self(false);
+        w.set_profile_is_friend(false);
+        w.set_profile_is_blocked(false);
+        w.set_profile_is_verified(false);
+        crate::bin_ui::features::chat::disappearing::hide_for_profile(w);
+    } else if is_self {
         let state = auth_state.get();
         let display_name = state.display_name.clone().unwrap_or_default();
         // The handle chosen at registration. Never the user id: that is not
@@ -241,7 +270,7 @@ pub fn open_user_profile_in_conversation(
             // A peer's name/bio/avatar edit is not pushed reliably; refetch on
             // open (throttled in core) so the modal catches up via
             // UserProfileUpdated.
-            if !is_self {
+            if !is_self && !scoped_member {
                 let (refresh_ctx, peer) = (ctx.clone(), *user_id);
                 tokio::spawn(async move { refresh_ctx.refresh_profile_if_stale(&peer).await });
             }
@@ -249,10 +278,16 @@ pub fn open_user_profile_in_conversation(
             // tabs" looks like, and flashing "Nothing shared yet" for the
             // length of one query reads as a bug.
             w.set_profile_shared_loading(true);
-            w.set_profile_last_seen(ctx.peer_last_seen_label(user_id).into());
+            if !scoped_member {
+                w.set_profile_last_seen(ctx.peer_last_seen_label(user_id).into());
+            }
             w.set_profile_is_muted(
-                ctx.is_conversation_muted(dm_conversation(user_id))
-                    .unwrap_or(false),
+                ctx.is_conversation_muted(if scoped_member {
+                    conversation
+                } else {
+                    dm_conversation(user_id)
+                })
+                .unwrap_or(false),
             );
             load_shared_tabs(w.as_weak(), ctx.clone(), *user_id, conversation);
         }
@@ -664,7 +699,16 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let muted = !w.get_profile_is_muted();
         // Reflect immediately, then persist — snapping back on failure.
         w.set_profile_is_muted(muted);
-        if let Err(e) = ui_ctx_mute.mute_conversation(dm_conversation(&peer_id), muted) {
+        if let Err(e) = ui_ctx_mute.mute_conversation(
+            if w.get_profile_scoped_member() {
+                SHARED_PAGE
+                    .with(|p| p.borrow().conversation)
+                    .unwrap_or(chatter_core::state::ActiveConversation::None)
+            } else {
+                dm_conversation(&peer_id)
+            },
+            muted,
+        ) {
             tracing::error!(error = %e, "Failed to persist profile mute");
             w.set_profile_is_muted(!muted);
         }
@@ -679,6 +723,9 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let Some(w) = weak_window.upgrade() else {
             return;
         };
+        if w.get_profile_scoped_member() {
+            return;
+        }
         let peer_id = w.get_profile_user_id().to_string();
         if peer_id.is_empty() {
             return;
@@ -701,6 +748,12 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
     window.on_profile_add_friend(move || {
         let weak = weak_window.clone();
+        if weak
+            .upgrade()
+            .is_some_and(|w| w.get_profile_scoped_member())
+        {
+            return;
+        }
         let ui_ctx = ui_ctx_add.clone();
 
         let profile_user_id = weak.upgrade().map(|w| w.get_profile_user_id().to_string());
@@ -770,6 +823,12 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
     window.on_profile_remove_friend(move || {
         let weak = weak_window.clone();
+        if weak
+            .upgrade()
+            .is_some_and(|w| w.get_profile_scoped_member())
+        {
+            return;
+        }
         let ui_ctx = ui_ctx_remove.clone();
 
         let profile_user_id = weak.upgrade().map(|w| w.get_profile_user_id().to_string());
@@ -846,6 +905,12 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
     window.on_profile_block_user(move || {
         let weak = weak_window.clone();
+        if weak
+            .upgrade()
+            .is_some_and(|w| w.get_profile_scoped_member())
+        {
+            return;
+        }
         let ui_ctx = ui_ctx_block.clone();
 
         let profile_user_id = weak.upgrade().map(|w| w.get_profile_user_id().to_string());
@@ -922,6 +987,9 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let Some(w) = weak_window.upgrade() else {
             return;
         };
+        if w.get_profile_scoped_member() {
+            return;
+        }
         let peer = w.get_profile_user_id().to_string();
         let Some(dm_id) = ui_ctx_dm
             .resolve_dm_conversation(&peer)

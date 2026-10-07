@@ -688,6 +688,7 @@ export component MainWindow inherits Window {
     // User profile modal properties
     in property <string> profile-user-id: "";
     in property <bool> profile-is-anonymous: false;
+    in property <bool> profile-scoped-member: false;
     in property <string> profile-display-name: "";
     in property <string> profile-username: "";
     in property <image> profile-avatar-source;
@@ -2284,6 +2285,7 @@ export component MainWindow inherits Window {
             show-modal: true;
             user-id: root.profile-user-id;
             is-anonymous: root.profile-is-anonymous;
+            scoped-member: root.profile-scoped-member;
             display-name: root.profile-display-name;
             username: root.profile-username;
             avatar-source: root.profile-avatar-source;

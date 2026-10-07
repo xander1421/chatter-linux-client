@@ -228,7 +228,7 @@ pub(super) fn handle_presence_changed(
         }
 
         // 3. Update profile modal presence if showing this user
-        if w.get_profile_user_id() == user_id_str {
+        if !w.get_profile_scoped_member() && w.get_profile_user_id() == user_id_str {
             w.set_profile_presence(presence_slint.clone());
         }
 
@@ -448,7 +448,7 @@ pub(super) fn handle_user_profile_updated(
         }
 
         // 3. Profile modal if currently showing this user.
-        if w.get_profile_user_id() == user_id_str {
+        if !w.get_profile_scoped_member() && w.get_profile_user_id() == user_id_str {
             w.set_profile_display_name(display_name_slint.clone());
             // `status_message` is the bio Edit Profile writes (profile.rs), so it
             // belongs in the About row, not the custom-status line.

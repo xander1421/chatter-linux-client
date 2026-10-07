@@ -56,6 +56,7 @@ export component UserProfileModal inherits Rectangle {
     in property <string> username: "";
     in property <image> avatar-source;
     in property <bool> is-anonymous: false;
+    in property <bool> scoped-member: false;
     in property <string> initials: "";
     in property <string> status-text: "";  // custom status message
     in property <string> presence: "offline";  // "online", "away", "dnd", "offline"
@@ -363,7 +364,9 @@ export component UserProfileModal inherits Rectangle {
                         // "Message" in Anon Mode only for a friend: the friend
                         // DM goes over the mailbox there; core has no DM to
                         // open with anyone else (resolve_dm_conversation).
-                        for act in AnonMode.enabled && !root.is-friend ? [
+                        for act in root.scoped-member ? [
+                            { id: "mute", label: root.is-muted ? "Unmute conversation" : "Mute conversation", icon: root.is-muted ? Icons.bell-off : Icons.bell },
+                        ] : AnonMode.enabled && !root.is-friend ? [
                             { id: "mute", label: root.is-muted ? "Unmute" : "Mute", icon: root.is-muted ? Icons.bell-off : Icons.bell },
                             { id: "call", label: "Call", icon: Icons.phone },
                             { id: "video", label: "Video", icon: Icons.video },
@@ -832,7 +835,7 @@ export component UserProfileModal inherits Rectangle {
                     }
 
                     // ── Friend / block row ────────────────────────────
-                    if !root.is-self && !root.is-blocked: HorizontalLayout {
+                    if !root.scoped-member && !root.is-self && !root.is-blocked: HorizontalLayout {
                         padding-left: Spacing.md;
                         padding-right: Spacing.md;
                         padding-top: Spacing.lg;
