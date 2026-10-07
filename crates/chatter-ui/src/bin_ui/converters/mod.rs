@@ -10,6 +10,7 @@ mod channel;
 mod kind;
 pub(crate) mod markdown;
 mod message;
+pub(crate) mod pin_preview;
 #[cfg(test)]
 mod open_bench;
 mod utils;

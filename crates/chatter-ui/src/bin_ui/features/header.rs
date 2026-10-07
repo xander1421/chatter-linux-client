@@ -135,7 +135,15 @@ fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let ui_ctx = ui_ctx_show.clone();
         let conversation = ui_ctx.chat_state().active_conversation();
         tokio::spawn(async move {
-            let items = ui_ctx.pinned_display_items(conversation).await;
+            let mut items = ui_ctx.pinned_display_items(conversation).await;
+            for item in &mut items {
+                item.preview = pinned_plaintext_preview(
+                    &ui_ctx,
+                    conversation,
+                    &item.message_id,
+                    &item.preview,
+                );
+            }
             let _ = slint::invoke_from_event_loop(move || {
                 let Some(w) = weak.upgrade() else {
                     return;
@@ -182,6 +190,28 @@ fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             jump_to_message(&w, &ui_ctx_goto, &message_id.to_string());
         }
     });
+}
+
+/// Resolve the full text before stripping/truncating; core previews can already
+/// end halfway through a formatting marker. Non-text captions remain literal.
+fn pinned_plaintext_preview(
+    ui_ctx: &ChatterClient,
+    conversation: ActiveConversation,
+    message_id: &MessageId,
+    caption: &str,
+) -> String {
+    let message = match conversation {
+        ActiveConversation::AnonGroup(_) => ui_ctx.get_anon_group_message(
+            &chatter_core::domain::anon_group::AnonGroupMessageId::from_string(
+                message_id.to_string(),
+            ),
+        ),
+        _ => ui_ctx.get_message_local(message_id),
+    };
+    crate::bin_ui::converters::pin_preview::preview_or_caption(
+        message.as_ref().and_then(|message| message.as_text()),
+        caption,
+    )
 }
 
 pub(crate) fn refresh_pinned_ui(w: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
@@ -241,7 +271,12 @@ fn update_pinned_ui_from_loaded_messages(
     // Fall back to DB lookup in background thread
     std::thread::spawn(move || {
         let preview = match current_msg_id {
-            Some(msg_id) => ui_ctx.pinned_message_preview(&conversation, &msg_id),
+            Some(msg_id) => pinned_plaintext_preview(
+                &ui_ctx,
+                conversation,
+                &msg_id,
+                &ui_ctx.pinned_message_preview(&conversation, &msg_id),
+            ),
             None => String::new(),
         };
 
