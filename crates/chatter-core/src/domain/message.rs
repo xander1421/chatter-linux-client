@@ -44,6 +44,13 @@ pub enum ConversationType {
 }
 
 impl ConversationType {
+    /// 1:1 DMs: either authenticated participant may request delete-for-everyone.
+    /// Channels, groups, saved messages, and mesh rooms stay author-only.
+    #[must_use]
+    pub fn is_one_to_one_dm(&self) -> bool {
+        matches!(self, Self::ServerDm | Self::AnonDm | Self::MeshDm)
+    }
+
     /// Convert to database string representation.
     pub fn as_str(&self) -> &'static str {
         match self {
@@ -263,6 +270,9 @@ impl MessageActions {
     /// one that carries a [`Message::failure_reason`]. Edit needs a non-empty
     /// body, so an attachment-only voice note is not editable. Edit and
     /// delete-for-everyone also require the remote-action window.
+    ///
+    /// `one_to_one_dm`: either authenticated participant may request
+    /// delete-for-everyone. Channels and groups stay author-only.
     #[must_use]
     pub fn decide(
         is_own: bool,
@@ -272,6 +282,7 @@ impl MessageActions {
         now_ns: u64,
         text: Option<&str>,
         has_attachments: bool,
+        one_to_one_dm: bool,
     ) -> Self {
         let reached = !is_own || (delivery_status != "failed" && delivery_status != "sending");
         let within_window =
@@ -284,7 +295,7 @@ impl MessageActions {
             reply: on_server,
             edit: is_own && on_server && within_window && has_body,
             pin: on_server,
-            delete_for_everyone: is_own && on_server && within_window,
+            delete_for_everyone: on_server && within_window && (is_own || one_to_one_dm),
             delete_for_me: !is_deleted,
             forward: !is_deleted,
             copy: !is_deleted,
@@ -369,6 +380,7 @@ impl Message {
             now_ns,
             self.as_text(),
             self.has_attachments(),
+            self.conversation_type.is_one_to_one_dm(),
         )
     }
 
@@ -1490,9 +1502,15 @@ mod tests {
 
         let peer = bubble("sent", Some("hello"), false, young);
         let actions = peer.actions(false, NOW);
-        assert!(!actions.resend && !actions.edit && !actions.delete_for_everyone && !actions.info);
+        assert!(!actions.resend && !actions.edit && !actions.info);
+        assert!(actions.delete_for_everyone);
         assert!(actions.react && actions.reply && actions.pin && actions.forward && actions.copy);
         assert!(actions.select && actions.delete_for_me);
+
+        let mut channel_peer = bubble("sent", Some("hello"), false, young);
+        channel_peer.conversation_type = ConversationType::Channel;
+        let actions = channel_peer.actions(false, NOW);
+        assert!(!actions.delete_for_everyone);
 
         let sending = bubble("sending", Some("hello"), false, young);
         let actions = sending.actions(true, NOW);

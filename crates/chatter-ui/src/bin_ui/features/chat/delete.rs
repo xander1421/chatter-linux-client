@@ -116,6 +116,13 @@ pub fn wire_delete_everyone_message(window: &MainWindow, ui_ctx: &Arc<ChatterCli
         let sender_for_ui = sender_id_str.clone();
         let timestamp_for_ui = timestamp_ns_str.clone();
 
+        let target_sender_id: UserId = match sender_id_str.parse() {
+            Ok(id) => id,
+            Err(e) => {
+                tracing::error!(error = %e, "Invalid sender ID for delete-everyone");
+                return;
+            }
+        };
         let target_sent_timestamp: u64 = match timestamp_ns_str.parse() {
             Ok(ts) => ts,
             Err(e) => {
@@ -126,7 +133,10 @@ pub fn wire_delete_everyone_message(window: &MainWindow, ui_ctx: &Arc<ChatterCli
 
         tokio::spawn(async move {
             let handle = ui_ctx_spawn.conversation(conversation);
-            if let Err(e) = handle.send_delete(target_sent_timestamp).await {
+            if let Err(e) = handle
+                .send_delete(&target_sender_id, target_sent_timestamp)
+                .await
+            {
                 tracing::error!(error = %e, "Failed to send delete-for-everyone");
                 return;
             }

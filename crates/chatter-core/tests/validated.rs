@@ -6114,7 +6114,7 @@ async fn v20_delete_for_everyone_actually_deletes_on_the_recipient() {
     // Same timestamp B stored (Signal's (author, ns-timestamp) message key).
     client_a
         .conversation(ActiveConversation::ServerDm { peer_id: uid_b })
-        .send_delete(sent_at)
+        .send_delete(&uid_a, sent_at)
         .await
         .expect("send_delete (delete-for-everyone) failed");
     println!("  A issued delete-for-everyone for sent_at={sent_at}");

@@ -978,7 +978,21 @@ impl MessageService {
         peer: &UserId,
         target_sent_at: u64,
     ) -> Result<Option<Message>, MessageError> {
-        self.apply_delete(peer, self.dm_modifier_scope(peer), target_sent_at)
+        let scope = self.dm_modifier_scope(peer);
+        if let Some(message) = self.take_delete_target(peer, scope, target_sent_at)? {
+            return Ok(Some(message));
+        }
+        // Either 1:1 participant may delete the other's message. The sealed
+        // sender is `peer`; if they named our timestamp, take our row.
+        let Ok(me) = self.current_user_id() else {
+            return self.apply_delete(peer, scope, target_sent_at);
+        };
+        if me != *peer {
+            if let Some(message) = self.take_delete_target(&me, scope, target_sent_at)? {
+                return Ok(Some(message));
+            }
+        }
+        self.apply_delete(peer, scope, target_sent_at)
     }
 
     /// A channel delete-for-everyone from `sender` of its message sent at
@@ -999,7 +1013,7 @@ impl MessageService {
     /// storage on the event must not still find the deleted message there.
     /// One not here yet is held (Signal-Desktop `Deletes.preload.ts:28`), so
     /// it is never stored when it arrives (`message_modifier_repo`).
-    fn apply_delete(
+    fn take_delete_target(
         &self,
         author: &UserId,
         conversation: Option<ChannelId>,
@@ -1013,6 +1027,23 @@ impl MessageService {
                 self.message_repo.delete(&message.id)?;
                 Ok(Some(message))
             }
+            _ => Ok(None),
+        }
+    }
+
+    fn apply_delete(
+        &self,
+        author: &UserId,
+        conversation: Option<ChannelId>,
+        target_sent_at: u64,
+    ) -> Result<Option<Message>, MessageError> {
+        if let Some(message) = self.take_delete_target(author, conversation, target_sent_at)? {
+            return Ok(Some(message));
+        }
+        match self
+            .message_repo
+            .get_by_sender_timestamp(author, target_sent_at)?
+        {
             Some(_) => Ok(None),
             None => {
                 crate::storage::repositories::message_modifier_repo::MessageModifierRepository::new(

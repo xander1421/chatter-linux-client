@@ -71,6 +71,9 @@ export component CallHistoryScreen inherits Rectangle {
             root.close();
         }
 
+        Rectangle {
+            vertical-stretch: 1;
+
         VerticalLayout {
             spacing: Spacing.md;
             vertical-stretch: 1;
@@ -357,42 +360,44 @@ export component CallHistoryScreen inherits Rectangle {
                 }
             }
         }
-    }
 
-    // Header ⋮ menu. A scrim closes it; the card sits under the header's
-    // trailing edge, where the ⋮ is.
-    if root.show-modal && root.show-more-menu: Rectangle {
-        background: Materials.scrim;
-
-        TouchArea {
-            clicked => { root.show-more-menu = false; }
-        }
-
-        GlassSurface {
-            material-level: 3;
-            elevation: 4;
-
-            x: parent.width - self.width - Spacing.lg;
-            y: Spacing.lg + (root.mobile-mode ? Spacing.header-action-box-touch : Spacing.header-action-box);
-            width: menu-label.preferred-width + 2 * Spacing.lg;
-            height: Spacing.touch-target-min;
-            border-radius: Spacing.radius-xl;
-
-            menu-label := Text {
-                text: "Clear call history";
-                color: Colors.error;
-                font-size: Typography.base;
-                horizontal-alignment: center;
-                vertical-alignment: center;
+            // Anchored under the header ⋮ (trailing control), not the window
+            // corner: this overlay is the Modal body, whose right edge lines
+            // up with that button.
+            if root.show-more-menu: Rectangle {
                 width: 100%;
                 height: 100%;
-            }
+                background: Materials.scrim;
+                TouchArea {
+                    clicked => { root.show-more-menu = false; }
+                }
 
-            menu-touch := TouchArea {
-                mouse-cursor: pointer;
-                clicked => {
-                    root.show-more-menu = false;
-                    root.show-clear-confirm = true;
+                GlassSurface {
+                    material-level: 3;
+                    elevation: 4;
+                    x: parent.width - self.width;
+                    y: 0;
+                    width: menu-label.preferred-width + 2 * Spacing.lg;
+                    height: Spacing.touch-target-min;
+                    border-radius: Spacing.radius-xl;
+
+                    menu-label := Text {
+                        text: "Clear call history";
+                        color: Colors.error;
+                        font-size: Typography.base;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        width: 100%;
+                        height: 100%;
+                    }
+
+                    menu-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => {
+                            root.show-more-menu = false;
+                            root.show-clear-confirm = true;
+                        }
+                    }
                 }
             }
         }

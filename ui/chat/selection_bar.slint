@@ -23,6 +23,12 @@ import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
 import { HeaderButton } from "../components/header_button.slint";
 
+export global SelectionChrome {
+    in-out property <bool> can-delete-everyone: false;
+    callback select-all();
+    callback delete-everyone();
+}
+
 export component SelectionBar inherits GlassSurface {
     material-level: 2;
     elevation: 3;
@@ -72,6 +78,15 @@ export component SelectionBar inherits GlassSurface {
         HeaderButton {
             backdrop-paused: root.backdrop-paused;
             touch: root.touch;
+            icon: Icons.check;
+            label: "Select all";
+            enabled: true;
+            clicked => { SelectionChrome.select-all(); }
+        }
+
+        HeaderButton {
+            backdrop-paused: root.backdrop-paused;
+            touch: root.touch;
             icon: Icons.copy;
             label: "Copy selected";
             enabled: root.count > 0;
@@ -91,10 +106,20 @@ export component SelectionBar inherits GlassSurface {
             backdrop-paused: root.backdrop-paused;
             touch: root.touch;
             icon: Icons.trash;
-            label: "Delete selected";
+            label: "Delete selected for me";
             destructive: true;
             enabled: root.count > 0;
             clicked => { root.delete-clicked(); }
+        }
+
+        HeaderButton {
+            backdrop-paused: root.backdrop-paused;
+            touch: root.touch;
+            icon: Icons.trash;
+            label: "Delete selected for everyone";
+            destructive: true;
+            enabled: root.count > 0 && SelectionChrome.can-delete-everyone;
+            clicked => { SelectionChrome.delete-everyone(); }
         }
     }
 }

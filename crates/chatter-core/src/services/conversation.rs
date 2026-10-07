@@ -583,21 +583,30 @@ impl ConversationHandle {
     }
 
     /// Send a delete-for-everyone and persist locally.
-    pub async fn send_delete(&self, target_sent_timestamp: u64) -> ConversationResult {
+    ///
+    /// `target_author` is the message's sender. In a 1:1 DM this may be the
+    /// peer; channels still only succeed for our own messages.
+    pub async fn send_delete(
+        &self,
+        target_author: &UserId,
+        target_sent_timestamp: u64,
+    ) -> ConversationResult {
+        if !self.can_delete_for_everyone(target_author, target_sent_timestamp)? {
+            return Err(ConversationError::Other(
+                "cannot delete this message for everyone".into(),
+            ));
+        }
         match &self.conversation {
             ActiveConversation::AnonDm(id) => {
                 self.client
                     .anon_dms()
                     .send_delete_for_everyone(id, target_sent_timestamp)
                     .await?;
-                // Persist locally
-                if let Some(user_id) = self.client.auth_state().get().current_user_id {
-                    let _ = self.client.anon_dms().delete_message_by_timestamp(
-                        id,
-                        &user_id,
-                        target_sent_timestamp,
-                    );
-                }
+                let _ = self.client.anon_dms().delete_message_by_timestamp(
+                    id,
+                    target_author,
+                    target_sent_timestamp,
+                );
                 Ok(())
             }
             ActiveConversation::AnonGroup(id) => {
@@ -605,14 +614,11 @@ impl ConversationHandle {
                     .anon_groups()
                     .send_delete_for_everyone(id, target_sent_timestamp)
                     .await?;
-                // Persist locally
-                if let Some(user_id) = self.client.auth_state().get().current_user_id {
-                    let _ = self.client.anon_groups().delete_message_by_timestamp(
-                        id,
-                        &user_id,
-                        target_sent_timestamp,
-                    );
-                }
+                let _ = self.client.anon_groups().delete_message_by_timestamp(
+                    id,
+                    target_author,
+                    target_sent_timestamp,
+                );
                 Ok(())
             }
             ActiveConversation::None => Err(ConversationError::NoConversation),
@@ -625,14 +631,21 @@ impl ConversationHandle {
                 // The server keeps an authorless copy of a sealed-sender
                 // message; take it down too, or a device fetching history
                 // gets it back. Best-effort: the E2E delete already went out.
-                if let Some(msg) = self.own_message_by_timestamp(target_sent_timestamp) {
+                if let Some(msg) = self
+                    .client
+                    .messages()
+                    .get_by_sender_timestamp(target_author, target_sent_timestamp)
+                    .ok()
+                    .flatten()
+                {
                     if let Err(e) = self.client.messages().delete_sealed_server_copy(&msg).await {
                         tracing::warn!(message_id = %msg.id, error = %e,
                             "delete-for-everyone: server copy of sealed message not deleted");
                     }
+                    let _ = self.client.messages().delete_message_local(&msg.id);
+                } else {
+                    self.delete_local_by_timestamp(target_sent_timestamp);
                 }
-                // Persist deletion locally (sender doesn't get their own delete back)
-                self.delete_local_by_timestamp(target_sent_timestamp);
                 Ok(())
             }
         }
@@ -1481,16 +1494,6 @@ impl ConversationHandle {
                     .update_message_body(&msg.id, &new_content);
             }
         }
-    }
-
-    /// Delete a message from local DB by timestamp (for sender's own deletes).
-    fn own_message_by_timestamp(&self, sent_timestamp: u64) -> Option<crate::domain::Message> {
-        let user_id = self.client.auth_state().get().current_user_id?;
-        self.client
-            .messages()
-            .get_by_sender_timestamp(&user_id, sent_timestamp)
-            .ok()
-            .flatten()
     }
 
     fn delete_local_by_timestamp(&self, sent_timestamp: u64) {

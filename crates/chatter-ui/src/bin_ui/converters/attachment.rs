@@ -280,7 +280,7 @@ pub fn attachment_to_display_data(attachment: &Attachment) -> AttachmentDisplayD
 
     AttachmentDisplayData {
         id: id_str,
-        filename: meta.name.clone(),
+        filename: meta.bubble_filename().to_string(),
         size_display: format_file_size(meta.size),
         mime_type: meta.mime_type.clone(),
         category: category.to_string(),

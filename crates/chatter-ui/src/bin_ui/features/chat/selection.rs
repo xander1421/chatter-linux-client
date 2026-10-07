@@ -22,6 +22,7 @@ use std::sync::Arc;
 use slint::{ComponentHandle, Model, SharedString};
 
 use chatter_core::client::ChatterClient;
+use chatter_core::domain::UserId;
 
 use crate::MainWindow;
 
@@ -44,6 +45,23 @@ fn sync_model(w: &MainWindow, selected_ids: &HashSet<String>) {
     w.set_selected_message_count(selected_ids.len() as i32);
 }
 
+fn refresh_delete_everyone(w: &MainWindow, ui_ctx: &ChatterClient, selected_ids: &HashSet<String>) {
+    let handle = ui_ctx.conversation(ui_ctx.chat_state().active_conversation());
+    let model = w.get_messages();
+    let all_ok = !selected_ids.is_empty()
+        && model.iter().filter(|row| selected_ids.contains(row.message_id.as_str())).all(|row| {
+            let Ok(author) = row.sender_id.parse::<UserId>() else {
+                return false;
+            };
+            let Ok(ts) = row.timestamp_ns.parse() else {
+                return false;
+            };
+            handle.can_delete_for_everyone(&author, ts).unwrap_or(false)
+        });
+    w.global::<crate::SelectionChrome>()
+        .set_can_delete_everyone(all_ok);
+}
+
 /// Leave selection mode and drop the marks.
 fn exit(w: &MainWindow, selected_ids: &Rc<RefCell<HashSet<String>>>) {
     selected_ids.borrow_mut().clear();
@@ -61,6 +79,7 @@ pub fn wire_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     {
         let weak = window.as_weak();
         let selected_ids = selected_ids.clone();
+        let ui_ctx = ui_ctx.clone();
         window.on_message_selection_toggled(move |message_id: SharedString| {
             let Some(w) = weak.upgrade() else { return };
             let id = message_id.to_string();
@@ -75,9 +94,12 @@ pub fn wire_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             }
             if selected_ids.borrow().is_empty() {
                 exit(&w, &selected_ids);
+                w.global::<crate::SelectionChrome>()
+                    .set_can_delete_everyone(false);
             } else {
                 w.set_selection_mode(true);
                 sync_model(&w, &selected_ids.borrow());
+                refresh_delete_everyone(&w, &ui_ctx, &selected_ids.borrow());
             }
         });
     }
@@ -182,5 +204,73 @@ pub fn wire_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             }
             exit(&w, &selected_ids);
         });
+    }
+
+    {
+        let weak = window.as_weak();
+        let selected_ids = selected_ids.clone();
+        let ui_ctx = ui_ctx.clone();
+        window
+            .global::<crate::SelectionChrome>()
+            .on_select_all(move || {
+                let Some(w) = weak.upgrade() else { return };
+                {
+                    let mut set = selected_ids.borrow_mut();
+                    set.clear();
+                    let model = w.get_messages();
+                    for row in model.iter() {
+                        let id = row.message_id.to_string();
+                        if !id.is_empty() && !row.is_deleted {
+                            set.insert(id);
+                        }
+                    }
+                }
+                if selected_ids.borrow().is_empty() {
+                    exit(&w, &selected_ids);
+                    w.global::<crate::SelectionChrome>()
+                        .set_can_delete_everyone(false);
+                } else {
+                    w.set_selection_mode(true);
+                    sync_model(&w, &selected_ids.borrow());
+                    refresh_delete_everyone(&w, &ui_ctx, &selected_ids.borrow());
+                }
+            });
+    }
+
+    {
+        let weak = window.as_weak();
+        let selected_ids = selected_ids.clone();
+        let ui_ctx = ui_ctx.clone();
+        window
+            .global::<crate::SelectionChrome>()
+            .on_delete_everyone(move || {
+                let Some(w) = weak.upgrade() else { return };
+                let handle = ui_ctx.conversation(ui_ctx.chat_state().active_conversation());
+                let targets: Vec<(SharedString, SharedString)> = {
+                    let set = selected_ids.borrow();
+                    let model = w.get_messages();
+                    model
+                        .iter()
+                        .filter(|row| set.contains(row.message_id.as_str()))
+                        .filter(|row| {
+                            row.sender_id
+                                .parse()
+                                .ok()
+                                .zip(row.timestamp_ns.parse().ok())
+                                .is_some_and(|(author, ts)| {
+                                    handle.can_delete_for_everyone(&author, ts).unwrap_or(false)
+                                })
+                        })
+                        .map(|row| (row.sender_id.clone(), row.timestamp_ns.clone()))
+                        .collect()
+                };
+                tracing::info!(count = targets.len(), "UI callback: bulk delete-for-everyone");
+                for (sender_id, timestamp_ns) in targets {
+                    w.invoke_delete_everyone_message(sender_id, timestamp_ns);
+                }
+                exit(&w, &selected_ids);
+                w.global::<crate::SelectionChrome>()
+                    .set_can_delete_everyone(false);
+            });
     }
 }
