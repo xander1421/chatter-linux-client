@@ -1241,23 +1241,16 @@ impl InboxEventProcessor {
                 target_author_aci,
                 target_sent_timestamp,
             } => {
-                // A peer must never delete our messages: only our own
-                // devices send a delete-for-me.
-                if self.message_service.current_user_id().ok().as_ref() != Some(sender_id) {
-                    tracing::warn!(sender_id = %sender_id, "DeleteForMeSync from another user dropped");
-                    return;
-                }
-                if let Some(msg) = self.lookup_message(&target_author_aci, *target_sent_timestamp) {
-                    if let Ok(channel_id) = conversation_id.parse() {
-                        self.event_bus.emit_domain(DomainEvent::DeleteForMeSync {
-                            conversation_id: channel_id,
-                            target_author_id: msg
-                                .sender_id
-                                .unwrap_or_else(crate::domain::ids::UserId::new),
-                            target_message_id: msg.id,
-                            timestamp: crate::util::time::TimestampNanos::now().as_u64(),
-                        });
-                    }
+                if let Err(error) = admit_delete_for_me_sync(
+                    &self.message_service.message_repo,
+                    &self.event_bus,
+                    self.message_service.current_user_id().ok(),
+                    *sender_id,
+                    conversation_id,
+                    target_author_aci,
+                    *target_sent_timestamp,
+                ) {
+                    tracing::warn!(%error, "DeleteForMeSync rejected");
                 }
             }
 
@@ -1479,19 +1472,6 @@ impl InboxEventProcessor {
     // =====================================================================
     // Helper methods
     // =====================================================================
-
-    /// Look up a message by sender UUID string + sent_at timestamp.
-    fn lookup_message(
-        &self,
-        sender_id_str: &str,
-        sent_timestamp: u64,
-    ) -> Option<crate::domain::Message> {
-        let sender_id: UserId = sender_id_str.parse().ok()?;
-        self.message_service
-            .get_by_sender_timestamp(&sender_id, sent_timestamp)
-            .ok()
-            .flatten()
-    }
 
     fn handle_anon_group_invite(
         &self,
@@ -1995,3 +1975,65 @@ impl InboxEventProcessor {
         });
     }
 }
+
+/// Legacy sync has no storage-kind field. Resolve only within its exact ID,
+/// author and clock, and refuse collisions rather than guessing a kind.
+fn admit_delete_for_me_sync(
+    repo: &crate::storage::MessageRepository,
+    bus: &EventBus,
+    own: Option<UserId>,
+    sender: UserId,
+    conversation_id: &str,
+    author: &str,
+    sent_at: u64,
+) -> Result<(), crate::error::StorageError> {
+    use crate::domain::message::ConversationType as CT;
+    use crate::domain::reaction::ReactionScope;
+    use crate::error::StorageError;
+    let invalid = || StorageError::InvalidData("Invalid or ambiguous delete-for-me target".into());
+    let own = own.filter(|own| *own == sender).ok_or_else(invalid)?;
+    if sent_at == 0 || sent_at > i64::MAX as u64 {
+        return Err(invalid());
+    }
+    let id: crate::domain::ids::ChannelId = conversation_id.parse().map_err(|_| invalid())?;
+    let author: UserId = author.parse().map_err(|_| invalid())?;
+    let mut target = None;
+    // Unsupported kinds participate only in collision detection. They never
+    // become deletion targets through this own-device server sync protocol.
+    for kind in [
+        CT::Channel,
+        CT::ServerDm,
+        CT::SavedMessages,
+        CT::AnonDm,
+        CT::AnonGroup,
+        CT::Mesh,
+        CT::MeshDm,
+    ] {
+        let scope = ReactionScope::new(id, kind);
+        if let Some(message) = repo.get_by_reaction_scope(&scope, &author, sent_at)? {
+            if target.is_some() {
+                return Err(invalid());
+            }
+            target = Some(message);
+        }
+    }
+    let Some(target) = target else {
+        return Ok(());
+    };
+    match target.conversation_type {
+        CT::Channel | CT::ServerDm => {}
+        CT::SavedMessages if id == crate::domain::ids::ChannelId::from(own) && author == own => {}
+        _ => return Err(invalid()),
+    }
+    bus.emit_domain(DomainEvent::DeleteForMeSync {
+        conversation_id: id,
+        target_author_id: author,
+        target_message_id: target.id,
+        timestamp: TimestampNanos::now().as_u64(),
+    });
+    Ok(())
+}
+
+#[cfg(test)]
+#[path = "inbox_delete_for_me_tests.rs"]
+mod inbox_delete_for_me_tests;

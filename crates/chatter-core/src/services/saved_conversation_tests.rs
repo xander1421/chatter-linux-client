@@ -39,6 +39,8 @@ fn saved_lookup_menu_and_local_delete_preserve_colliding_channel_and_dm() {
     let menu = stored_message_menu(&saved, true, now);
     assert!(menu.actions.copy && menu.actions.select && menu.actions.delete_for_me);
     assert!(!menu.actions.delete_for_everyone && !menu.actions.resend);
+    assert!(!menu.actions.edit && !menu.actions.pin && !menu.actions.react);
+    assert!(require_remote_message_kind(&saved.conversation_type).is_err());
     assert!(scoped_stored_message(&repo, &scope, &peer, now).is_err());
     assert!(scoped_stored_message(&repo, &scope, &own, now + 1).is_err());
     for (conversation, expected) in [
@@ -48,6 +50,7 @@ fn saved_lookup_menu_and_local_delete_preserve_colliding_channel_and_dm() {
         let normal_scope = message_storage_scope(&conversation, Some(own), Some(&channel)).unwrap();
         let normal = scoped_stored_message(&repo, &normal_scope, &own, now).unwrap();
         assert_eq!(normal.id, expected.id);
+        assert!(require_remote_message_kind(&normal.conversation_type).is_ok());
         assert!(
             stored_message_menu(&normal, true, now)
                 .actions

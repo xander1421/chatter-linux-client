@@ -115,11 +115,23 @@ fn stored_message_menu(message: &crate::domain::Message, is_own: bool, now_ns: u
     // Channel variant must never grant a public-channel remote delete.
     if message.conversation_type == ConversationType::SavedMessages {
         actions.delete_for_everyone = false;
+        actions.edit = false;
+        actions.pin = false;
+        actions.react = false;
     }
     MessageMenu {
         actions,
         pinned: message.is_pinned,
     }
+}
+
+fn require_remote_message_kind(kind: &ConversationType) -> ConversationResult {
+    if *kind == ConversationType::SavedMessages {
+        return Err(ConversationError::Other(
+            "Saved message action is unsupported".into(),
+        ));
+    }
+    Ok(())
 }
 
 /// Persisted reaction presentation for one scoped message. Never a UI delta.
@@ -160,6 +172,19 @@ impl ConversationHandle {
             conversation: client.chat_state().active_conversation(),
             client: client.clone(),
         }
+    }
+
+    fn require_remote_message_actions(&self) -> ConversationResult {
+        let channel = self
+            .conversation
+            .channel_id()
+            .and_then(|id| self.client.get_channel_local(&id));
+        let scope = message_storage_scope(
+            &self.conversation,
+            self.client.auth_state().get().current_user_id,
+            channel.as_ref(),
+        )?;
+        require_remote_message_kind(&scope.kind)
     }
 
     /// A handle for another conversation on the same client.
@@ -262,6 +287,7 @@ impl ConversationHandle {
         target_author: &UserId,
         target_sent_timestamp: u64,
     ) -> Result<bool, ConversationError> {
+        self.require_remote_message_actions()?;
         // Per-user check — the summary aggregate would flip other users'
         // reactions off.
         let snapshot = self
@@ -305,6 +331,7 @@ impl ConversationHandle {
         target_sent_timestamp: u64,
         remove: bool,
     ) -> ConversationResult {
+        self.require_remote_message_actions()?;
         let scope = self
             .reaction_snapshot(target_author, target_sent_timestamp)?
             .ok_or_else(|| {
@@ -323,6 +350,8 @@ impl ConversationHandle {
         target_sent_timestamp: u64,
         remove: bool,
     ) -> ConversationResult {
+        self.require_remote_message_actions()?;
+        require_remote_message_kind(&scope.kind)?;
         self.reaction_snapshot_for_scope(scope, target_author, target_sent_timestamp)?
             .ok_or_else(|| {
                 ConversationError::Other(
@@ -485,6 +514,7 @@ impl ConversationHandle {
         target_sent_timestamp: u64,
         unpin: bool,
     ) -> ConversationResult {
+        self.require_remote_message_actions()?;
         let new_pinned = !unpin;
         // Sub-services on the proto side still take &str.
         let target_author_str = target_author.to_string();
@@ -605,6 +635,7 @@ impl ConversationHandle {
         target_sent_timestamp: u64,
         new_text: &str,
     ) -> ConversationResult {
+        self.require_remote_message_actions()?;
         match &self.conversation {
             ActiveConversation::AnonDm(id) => {
                 // anon_dms().send_edit() persists internally
