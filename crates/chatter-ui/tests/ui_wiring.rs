@@ -1945,6 +1945,8 @@ fn forward_message_confirm_is_wired_to_core() {
     use slint::{ModelRc, VecModel};
     let peer = "3f2c8a90-1111-2222-3333-444455556666";
     let targets = vec![chatter_ui::ForwardTarget {
+        avatar_source: slint::Image::default(),
+        is_anonymous: false,
         id: peer.into(),
         name: "Test Peer".into(),
         target_type: "dm".into(),
@@ -6632,12 +6634,17 @@ fn refused_send_keeps_the_midline_composition_and_draft() {
         false
     });
     ime(&w, "b", false);
-    w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed {
-        text: slint::platform::Key::Return.into(),
-    });
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+            text: slint::platform::Key::Return.into(),
+        });
     assert_eq!(sent.borrow().as_deref(), Some("abc"));
     w.invoke_settle_composer();
-    assert_eq!(w.get_composer_text().as_str(), "abc", "refusal erased the unsent word");
+    assert_eq!(
+        w.get_composer_text().as_str(),
+        "abc",
+        "refusal erased the unsent word"
+    );
 }
 
 #[test]
@@ -6649,9 +6656,9 @@ fn ordinary_send_mid_switch_refuses_without_taking_the_new_chats_tray_or_reply()
     h.w.set_composer_is_replying(true);
     h.w.set_composer_reply_to_sender(uuid::Uuid::new_v4().to_string().into());
     h.w.set_composer_reply_to_timestamp("1700000000000".into());
-    h.client.chat_state().set_active_conversation(
-        chatter_core::state::ActiveConversation::Channel(h.b),
-    );
+    h.client
+        .chat_state()
+        .set_active_conversation(chatter_core::state::ActiveConversation::Channel(h.b));
     h.stage("b.png");
     assert!(!h.w.invoke_send("A draft".into()));
     assert_eq!(h.w.get_composer_text().as_str(), "A draft");
@@ -6667,13 +6674,13 @@ fn queued_draft_navigation_uses_actual_owner_and_expires_on_session_reset() {
     h.w.set_composer_is_replying(true);
     h.stage("a.png");
     let revision = h.client.chat_state().get().attachment_revision;
-    h.client.chat_state().set_active_conversation(
-        chatter_core::state::ActiveConversation::Channel(h.b),
-    );
+    h.client
+        .chat_state()
+        .set_active_conversation(chatter_core::state::ActiveConversation::Channel(h.b));
     let c = chatter_core::domain::ids::ChannelId::new();
-    h.client.chat_state().set_active_conversation(
-        chatter_core::state::ActiveConversation::Channel(c),
-    );
+    h.client
+        .chat_state()
+        .set_active_conversation(chatter_core::state::ActiveConversation::Channel(c));
     // The B callback never ran. Its replacement must park what is actually
     // displayed under A, not the asynchronously expected intermediate B.
     chatter_ui::bin_ui::features::composer::sync_composer_draft(&h.w, &h.client, revision);
@@ -6702,18 +6709,26 @@ fn definite_send_failure_parks_exact_reply_and_files_without_overwriting_new_inp
     h.w.set_composer_reply_to_timestamp("1700000000000".into());
     h.w.set_composer_reply_to_sender_name("Author".into());
     h.w.set_composer_reply_preview("Photo".into());
-    h.w.set_composer_reply_thumbnail(slint::Image::from_rgba8(
-        slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(&bytes, 2, 1),
-    ));
+    h.w.set_composer_reply_thumbnail(slint::Image::from_rgba8(slint::SharedPixelBuffer::<
+        slint::Rgba8Pixel,
+    >::clone_from_slice(
+        &bytes, 2, 1
+    )));
     h.w.set_composer_reply_has_thumbnail(true);
     h.stage("missing.png");
-    let send = chatter_ui::bin_ui::features::chat::send_message::take_composer_send(&h.w, &h.client)
-        .unwrap();
+    let send =
+        chatter_ui::bin_ui::features::chat::send_message::take_composer_send(&h.w, &h.client)
+            .unwrap();
     // The synthetic staged file does not exist: the production attachment
     // preparation fails before any deposit or network submission.
-    assert!(!test_rt().block_on(chatter_ui::bin_ui::features::chat::send_message::deliver(
-        h.w.as_weak(), h.client.clone(), send.clone(), std::time::Instant::now(),
-    )));
+    assert!(
+        !test_rt().block_on(chatter_ui::bin_ui::features::chat::send_message::deliver(
+            h.w.as_weak(),
+            h.client.clone(),
+            send.clone(),
+            std::time::Instant::now(),
+        ))
+    );
     h.w.set_composer_text("newer draft".into());
     chatter_ui::bin_ui::features::chat::send_message::recover_failed_send(&h.w, &h.client, send);
     assert_eq!(h.w.get_composer_text().as_str(), "newer draft");

@@ -66,6 +66,8 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             if let Some(w) = weak.upgrade() {
                 w.set_mobile_show_chat(false);
                 w.set_loading_messages(false);
+                super::super::header::finish_pending_jump(&w, &ui_ctx);
+                super::super::header::refresh_pinned_ui(&w, &ui_ctx);
             }
             return;
         };
@@ -76,6 +78,8 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
         // Clear inline GIF animations
         crate::bin_ui::gif_state::clear_inline_gifs();
+
+        super::super::header::cancel_pending_jump_for(active);
 
         let is_anon_dm = matches!(active, chatter_core::state::ActiveConversation::AnonDm(_));
         let peer_id_for_dm: Option<UserId> = match active {
@@ -185,8 +189,12 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         conv.peer_display_name.clone().unwrap_or_else(|| "Private Chat".to_string()),
                         "Private Chat".to_string()
                     ),
-                    None => ("Private Chat".to_string(), "NDSS'21 Protocol".to_string()),
+                    None => ("Private Chat".to_string(), "Private Chat".to_string()),
                 };
+
+                let anon_header_avatar = ui_ctx.get_anon_dm_conversation(&anon_dm_id)
+                    .and_then(|conversation| conversation.peer_avatar)
+                    .and_then(|bytes| crate::bin_ui::converters::avatar_bytes_to_image(&bytes));
 
                 let initial_count = display_messages.len();
                 tracing::info!(dm_id = %anon_dm_id, count = initial_count, "[UI_OPEN_DM] anon DM spawn run_ui firing");
@@ -201,6 +209,8 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     w.set_messages(ModelRc::new(VecModel::from(slint_messages)));
                     tracing::debug!(elapsed_ms = open_started.elapsed().as_millis(), "conversation open: messages presented");
                     w.set_loading_messages(false);
+                super::super::header::finish_pending_jump(&w, &ui_ctx);
+                super::super::header::refresh_pinned_ui(&w, &ui_ctx);
                     crate::bin_ui::converters::set_conversation_kind(
                         &w, &chatter_core::domain::message::ConversationType::AnonDm, false,
                     );
@@ -208,8 +218,8 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     w.set_channel_name(title.into());
                     w.set_topic(subtitle.into());
                     w.set_header_presence_status("online".into());
-                    w.set_channel_has_avatar(false);
-                    w.set_channel_avatar_source(slint::Image::default());
+                    w.set_channel_has_avatar(anon_header_avatar.is_some());
+                    w.set_channel_avatar_source(anon_header_avatar.unwrap_or_default());
                     crate::bin_ui::gif_state::auto_register_gifs_from_messages(w.as_weak(), ui_ctx.clone());
                 });
                 return;
@@ -309,6 +319,8 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 w.set_messages(ModelRc::new(VecModel::from(slint_messages)));
                 tracing::debug!(elapsed_ms = open_started.elapsed().as_millis(), "conversation open: messages presented");
                 w.set_loading_messages(false);
+                super::super::header::finish_pending_jump(&w, &ui_ctx);
+                super::super::header::refresh_pinned_ui(&w, &ui_ctx);
                 crate::bin_ui::converters::set_conversation_kind(&w, &conv_type, false);
                 w.set_is_dm(true);
                 w.set_channel_name(title.into());

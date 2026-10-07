@@ -81,6 +81,7 @@ pub(crate) fn select_conversation(
     conv: chatter_core::state::ActiveConversation,
 ) -> bool {
     use chatter_core::state::ActiveConversation;
+    super::header::cancel_pending_jump_for(conv);
     match conv {
         ActiveConversation::Channel(id) => window.invoke_channel_selected(id.to_string().into()),
         ActiveConversation::ServerDm { peer_id } => {

@@ -10,6 +10,8 @@ import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { ChatHeader } from "chat_header.slint";
+import { DisappearingStatus } from "disappearing_status.slint";
+import { DisappearingGlobal } from "disappearing_global.slint";
 import { ConversationKind } from "conversation_kind.slint";
 import { MessageList, MessageItemData, MessageAttachmentData, ReactionEntry } from "message_list.slint";
 import { MessageComposer, PendingAttachmentData } from "message_composer.slint";
@@ -36,6 +38,7 @@ export component ChatLayout inherits Rectangle {
     in property <string> privacy-line-override: "";
     // With an override: whether the messages leave this device unencrypted.
     in property <bool> privacy-line-exposed: false;
+    in property <bool> is-anonymous: false;
     in property <bool> is-dm: false;  // When true, show minimal message UI (no avatars/names)
     in property <int> member-count: 0;
     in property <string> topic: "";
@@ -193,6 +196,8 @@ export component ChatLayout inherits Rectangle {
     callback pinned-next-clicked();
     callback pinned-go-to-message();
     callback pinned-dismiss-clicked();
+    callback sender-profile-requested(string);
+    in property <image> pinned-thumbnail;
     callback pinned-show-clicked();  // Re-show dismissed pinned bar
 
     // Message list callbacks
@@ -229,6 +234,7 @@ export component ChatLayout inherits Rectangle {
     background: Colors.background;
 
     message-list := MessageList {
+        sender-profile-requested(user-id) => { root.sender-profile-requested(user-id); }
         width: 100%;
         height: 100%;
         top-inset: top-chrome.height;
@@ -238,6 +244,7 @@ export component ChatLayout inherits Rectangle {
         selection-mode: root.selection-mode;
         mobile: root.mobile;
         is-dm: root.is-dm;
+                    is-anonymous: root.is-anonymous;
         can-thread: root.conversation-kind == ConversationKind.channel;
         is-mesh: MeshGlobal.active-id != "";
         // A mesh room and a geohash cell are plaintext broadcasts. Only a
@@ -390,6 +397,11 @@ export component ChatLayout inherits Rectangle {
             }
         }
 
+        if DisappearingGlobal.status-label != "": DisappearingStatus {
+            width: 100%;
+            vertical-stretch: 0;
+        }
+
         // Channel membership not verified (failed, fork, or no verified state
         // yet): sending is paused, and this says why. Core decides whether it
         // shows and what it says (`channel_membership_header`).
@@ -412,6 +424,7 @@ export component ChatLayout inherits Rectangle {
         // Pinned messages bar (Telegram-style, always visible when pinned messages exist)
         if root.has-pinned-messages: PinnedBar {
             backdrop-paused: message-list.scrolling;
+            thumbnail: root.pinned-thumbnail;
             message-preview: root.pinned-message-preview;
             current-index: root.pinned-current-index;
             total-count: root.pinned-total-count;

@@ -550,6 +550,9 @@ pub fn messages_to_display_batch(
     > = std::collections::HashMap::new();
 
     for (i, msg) in messages.iter().enumerate() {
+        if chatter_core::services::disappearing::is_timer_notice(msg) {
+            continue;
+        }
         let identity = display_senders[i].as_ref();
         let sender = names.get(i).cloned().unwrap_or_default();
         let (avatar_bytes, avatar_pixels) = avatars

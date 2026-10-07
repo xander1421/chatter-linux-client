@@ -52,6 +52,8 @@ import { SettingsScreen, LocalAIProviderData, CatalogModelData } from "settings/
 import { AccountMenu } from "settings/account_menu.slint";
 import { CreateMenu, NewChatPicker } from "sidebar/create_menu.slint";
 import { ChatHeaderMenu } from "chat/chat_header_menu.slint";
+import { PinnedMessagesModal, PinnedItem } from "modals/pinned_messages.slint";
+export { PinnedItem }
 import { JarvisMemoryModal, MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData } from "modals/jarvis_memory.slint";
 
 // Import components
@@ -431,6 +433,14 @@ export component MainWindow inherits Window {
     in property <string> image-viewer-filename: "";
     in property <string> image-viewer-size: "";
     callback close-image-viewer();
+    in-out property <string> media-viewer-attachment-id: "";
+    in-out property <string> media-viewer-position: "";
+    in-out property <bool> media-viewer-has-previous: false;
+    in-out property <bool> media-viewer-has-next: false;
+    callback media-viewer-navigate(int);
+    callback media-viewer-export(bool); // true = copy image, false = download
+    callback media-viewer-open-downloads();
+
 
     // ========== Code preview state ==========
     in-out property <bool> code-preview-visible: false;
@@ -568,6 +578,11 @@ export component MainWindow inherits Window {
     callback pinned-next-clicked();
     callback pinned-dismiss-clicked();
     callback pinned-show-clicked();
+    callback pinned-item-selected(string);
+    callback sender-profile-requested(string);
+    in property <[PinnedItem]> pinned-items;
+    in property <image> pinned-thumbnail;
+
     callback pinned-go-to-message();
 
     // ========== Thread panel state ==========
@@ -672,6 +687,7 @@ export component MainWindow inherits Window {
 
     // User profile modal properties
     in property <string> profile-user-id: "";
+    in property <bool> profile-is-anonymous: false;
     in property <string> profile-display-name: "";
     in property <string> profile-username: "";
     in property <image> profile-avatar-source;
@@ -1938,6 +1954,7 @@ export component MainWindow inherits Window {
                         privacy-line-override: root.privacy-line-override;
                         privacy-line-exposed: root.privacy-line-exposed;
                         is-dm: root.is-dm;
+                        is-anonymous: root.conversation-kind == ConversationKind.anon-dm || root.conversation-kind == ConversationKind.anon-group;
                         member-count: root.member-count;
                         topic: root.topic;
                         typing-indicator: root.typing-indicator;
@@ -2029,6 +2046,8 @@ export component MainWindow inherits Window {
                         pinned-go-to-message => { root.pinned-go-to-message(); }
                         pinned-dismiss-clicked => { root.pinned-dismiss-clicked(); }
                         pinned-show-clicked => { root.pinned-show-clicked(); }
+                        pinned-thumbnail: root.pinned-thumbnail;
+                        sender-profile-requested(user-id) => { root.sender-profile-requested(user-id); }
                         open-message-link(url) => { root.open-message-link(url); }
                         message-clicked(id) => { root.message-clicked(id); }
                         reply-clicked(sender-id, timestamp-ns) => { root.reply-clicked(sender-id, timestamp-ns); }
@@ -2264,6 +2283,7 @@ export component MainWindow inherits Window {
         if root.active-modal == "user-profile" || root.active-modal == "edit-profile": UserProfileModal {
             show-modal: true;
             user-id: root.profile-user-id;
+            is-anonymous: root.profile-is-anonymous;
             display-name: root.profile-display-name;
             username: root.profile-username;
             avatar-source: root.profile-avatar-source;
@@ -2820,9 +2840,18 @@ export component MainWindow inherits Window {
 
         // The chat header's ⋯ menu, dropped from the top-right of the chat
         // pane (the header's trailing edge on a phone and on two-pane).
+        if root.active-modal == "pinned-messages": PinnedMessagesModal {
+            show-modal: true;
+            items: root.pinned-items;
+            close => { root.nav-close("pinned-messages"); }
+            selected(message-id) => { root.pinned-item-selected(message-id); }
+        }
+
         if root.active-modal == "chat-menu": ChatHeaderMenu {
             show-video-call: root.chat-menu-video;
             show-settings: root.chat-menu-settings;
+            show-pinned: root.pinned-total-count > 0;
+            pinned => { root.nav-close("chat-menu"); root.pinned-show-clicked(); }
             card-x: root.width - self.card-width - Spacing.sm;
             card-y: (root.is-mobile-platform ? Spacing.xs + Spacing.header-height-touch : Spacing.header-height) + Spacing.xs;
             close => { root.nav-close("chat-menu"); }
@@ -3212,6 +3241,15 @@ export component MainWindow inherits Window {
             source: root.image-viewer-source;
             filename: root.image-viewer-filename;
             size-display: root.image-viewer-size;
+            position-label: root.media-viewer-position;
+            has-previous: root.media-viewer-has-previous;
+            has-next: root.media-viewer-has-next;
+            previous => { root.media-viewer-navigate(-1); }
+            next => { root.media-viewer-navigate(1); }
+            download => { root.media-viewer-export(false); }
+            copy-image => { root.media-viewer-export(true); }
+            open-downloads => { root.media-viewer-open-downloads(); }
+
 
             close => {
                 root.image-viewer-visible = false;
@@ -3224,6 +3262,14 @@ export component MainWindow inherits Window {
             show: true;
             frame: root.video-player-frame;
             filename: root.video-player-filename;
+            position-label: root.media-viewer-position;
+            has-previous: root.media-viewer-has-previous;
+            has-next: root.media-viewer-has-next;
+            previous => { root.media-viewer-navigate(-1); }
+            next => { root.media-viewer-navigate(1); }
+            download => { root.media-viewer-export(false); }
+            open-downloads => { root.media-viewer-open-downloads(); }
+
             progress: root.video-player-progress;
             elapsed: root.video-player-elapsed;
             duration: root.video-player-duration;

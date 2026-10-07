@@ -19,6 +19,11 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
 
     window.on_channel_selected(move |channel_id: SharedString| {
+        if let Ok(id) = channel_id.parse::<ChannelId>() {
+            super::super::header::cancel_pending_jump_for(
+                chatter_core::state::ActiveConversation::Channel(id),
+            );
+        }
         let channel_id_str = channel_id.to_string();
         let weak = weak_window.clone();
         super::show_chat_pane(&weak);
@@ -265,6 +270,8 @@ pub async fn load_channel_into_ui(
             .collect();
         w.set_messages(ModelRc::new(VecModel::from(slint_messages)));
         w.set_loading_messages(false);
+        super::super::header::finish_pending_jump(&w, &ui_ctx);
+        super::super::header::refresh_pinned_ui(&w, &ui_ctx);
 
         // Auto-register GIF animations for inline playback
         crate::bin_ui::gif_state::auto_register_gifs_from_messages(w.as_weak(), ui_ctx_gifs);

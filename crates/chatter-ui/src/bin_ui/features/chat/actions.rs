@@ -163,6 +163,12 @@ fn forward_targets(ui_ctx: &Arc<ChatterClient>, query: &str) -> Vec<ForwardTarge
         .forward_destinations(query)
         .into_iter()
         .map(|d| ForwardTarget {
+            avatar_source: crate::bin_ui::features::modals::target_avatar(ui_ctx, &d.kind, &d.id),
+            is_anonymous: matches!(
+                d.kind,
+                chatter_core::domain::message::ConversationType::AnonDm
+                    | chatter_core::domain::message::ConversationType::AnonGroup
+            ),
             id: d.id.into(),
             name: d.name.into(),
             target_type: d.kind.as_str().into(),

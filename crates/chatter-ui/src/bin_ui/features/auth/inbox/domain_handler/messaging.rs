@@ -20,6 +20,9 @@ pub(super) fn handle_message_received(
     ui_ctx: &Arc<ChatterClient>,
     message: Message,
 ) {
+    if chatter_core::services::disappearing::is_timer_notice(&message) {
+        return;
+    }
     let conversation_id = message.conversation_id;
     let sender_id = message.sender_id;
     let timestamp = message.sent_at;

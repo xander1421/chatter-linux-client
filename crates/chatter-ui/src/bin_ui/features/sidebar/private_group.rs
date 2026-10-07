@@ -120,6 +120,8 @@ pub fn load_private_group_messages(
                 .collect();
             w.set_messages(ModelRc::new(VecModel::from(slint_messages)));
             w.set_loading_messages(false);
+            super::super::header::finish_pending_jump(&w, &ui_ctx);
+            super::super::header::refresh_pinned_ui(&w, &ui_ctx);
 
             // Auto-register GIF animations
             crate::bin_ui::gif_state::auto_register_gifs_from_messages(w.as_weak(), ui_ctx_gifs);
@@ -132,6 +134,11 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<Chat
     let weak_window = window.as_weak();
 
     window.on_private_group_selected(move |group_id: SharedString| {
+        if let Ok(id) = group_id.parse::<AnonGroupId>() {
+            super::super::header::cancel_pending_jump_for(
+                chatter_core::state::ActiveConversation::AnonGroup(id),
+            );
+        }
         let group_id_str = group_id.to_string();
         let weak = weak_window.clone();
         super::show_chat_pane(&weak);
@@ -267,6 +274,8 @@ async fn load_private_group_messages_internal(
             .collect();
         w.set_messages(ModelRc::new(VecModel::from(slint_messages)));
         w.set_loading_messages(false);
+        super::super::header::finish_pending_jump(&w, &ui_ctx);
+        super::super::header::refresh_pinned_ui(&w, &ui_ctx);
 
         crate::bin_ui::gif_state::auto_register_gifs_from_messages(w.as_weak(), ui_ctx_gifs);
     });

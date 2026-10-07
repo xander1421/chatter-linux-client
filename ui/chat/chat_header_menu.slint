@@ -14,6 +14,8 @@ export component ChatHeaderMenu inherits Rectangle {
     in property <length> card-y;
     in property <bool> show-video-call;
     in property <bool> show-settings;
+    in property <bool> show-pinned;
+    callback pinned();
     out property <length> card-width: 240px;
     out property <length> card-height: menu.preferred-height;
 
@@ -41,6 +43,7 @@ export component ChatHeaderMenu inherits Rectangle {
         menu := VerticalLayout {
             padding-top: Spacing.xs;
             padding-bottom: Spacing.xs;
+            if root.show-pinned: MenuRow { icon: Icons.pin; label: "Pinned messages"; clicked => { root.pinned(); } }
             if root.show-video-call: MenuRow { icon: Icons.video; label: "Video call"; clicked => { root.video-call(); } }
             if root.show-settings: MenuRow { icon: Icons.settings; label: "Conversation settings"; clicked => { root.settings(); } }
         }

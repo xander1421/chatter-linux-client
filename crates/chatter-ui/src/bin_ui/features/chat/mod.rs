@@ -39,6 +39,23 @@ pub use send_message::{refresh_send_notice, show_send_notice};
 
 /// Wire chat callbacks.
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let weak = window.as_weak();
+    let client = ui_ctx.clone();
+    window.on_sender_profile_requested(move |value| {
+        let Some(w) = weak.upgrade() else { return };
+        let Ok(user_id) = value.parse::<chatter_core::domain::ids::UserId>() else {
+            return;
+        };
+        super::modals::open_user_profile_in_conversation(
+            &w,
+            &user_id,
+            client.auth_state(),
+            client.user_state(),
+            Some(&client),
+            client.chat_state().active_conversation(),
+        );
+        super::back::push(&w, "user-profile");
+    });
     send_message::wire_send(window, ui_ctx);
     typing::wire_typing_changed(window, ui_ctx);
     reactions::wire_reaction_selected(window, ui_ctx);

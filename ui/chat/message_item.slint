@@ -46,6 +46,7 @@ export component MessageItem inherits Rectangle {
     in property <bool> is-ai: false;
     in property <bool> is-pinned: false;
     in property <bool> show-sender: true;
+    in property <bool> is-anonymous: false;
     in property <bool> is-dm: false;  // When true, hide avatar/name - just bubbles
     in property <bool> can-thread: true;  // Threads are a channel feature
     in property <string> failure-reason: "";
@@ -63,6 +64,7 @@ export component MessageItem inherits Rectangle {
 
     // Call message
     in property <bool> is-call: false;
+    callback sender-profile-requested(string);
     in property <string> call-type: "";
     in property <string> call-duration: "";
 
@@ -190,7 +192,7 @@ export component MessageItem inherits Rectangle {
         root.anchor-y = menu-y;
         root.hold-tier = 0;
         if (root.mobile && !root.selection-mode
-            && !root.is-system && !root.is-deleted && !root.is-call) {
+            && (!root.is-system || root.is-call) && !root.is-deleted) {
             root.holding = true;
             tier1-timer.running = true;
         }
@@ -287,8 +289,17 @@ export component MessageItem inherits Rectangle {
 
             if !root.is-own && !root.is-dm && root.show-sender && !root.is-continuation: Avatar {
                 size: Spacing.avatar-sm;
+                anonymous: root.is-anonymous;
                 source: root.sender-avatar-source;
                 fallback-text: root.sender-initials;
+                TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        if root.selection-mode { root.selection-toggled(root.message-id); }
+                        else { root.sender-profile-requested(root.sender-id); }
+                    }
+                }
+
             }
 
             Rectangle {
@@ -413,7 +424,19 @@ export component MessageItem inherits Rectangle {
 
                 call-touch := TouchArea {
                     mouse-cursor: pointer;
+                    pointer-event(event) => {
+                        if event.button == PointerEventButton.right && event.kind == PointerEventKind.up {
+                            root.more-clicked(root.sender-id, root.timestamp-ns, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                        }
+                        if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
+                            root.begin-message-press(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y, self.absolute-position.x, self.absolute-position.y + self.height);
+                        }
+                        if event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel { root.cancel-hold(); }
+                    }
+                    moved => { root.move-message-press(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y); }
                     clicked => {
+                        if root.selection-mode { root.selection-toggled(root.message-id); return; }
+                        if root.hold-tier != 0 { root.hold-tier = 0; return; }
                         root.message-clicked(root.message-id);
                     }
                 }
@@ -442,8 +465,17 @@ export component MessageItem inherits Rectangle {
             // Avatar for others in channels (before bubble, hidden in continuations)
             if !root.is-own && !root.is-dm && root.show-sender && !root.is-continuation: Avatar {
                 size: Spacing.avatar-sm;
+                anonymous: root.is-anonymous;
                 source: root.sender-avatar-source;
                 fallback-text: root.sender-initials;
+                TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => {
+                        if root.selection-mode { root.selection-toggled(root.message-id); }
+                        else { root.sender-profile-requested(root.sender-id); }
+                    }
+                }
+
             }
 
             // Message bubble
