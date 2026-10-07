@@ -433,3 +433,9 @@ required-features = ["onion"]
 name = "shield_onboarding"
 path = "tests/shield_onboarding.rs"
 required-features = ["onion"]
+
+# Focused opt-in live own-avatar lifecycle proof; fixture users only.
+[[test]]
+name = "avatar_profile_live"
+path = "tests/avatar_profile_live.rs"
+required-features = ["testing", "dev-trust-root"]
