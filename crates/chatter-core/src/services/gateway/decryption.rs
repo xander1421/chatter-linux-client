@@ -883,7 +883,13 @@ impl MessageGateway {
             Some(content::Content::DataMessage(msg)) => {
                 // Check if this is a delete request
                 if let Some(delete) = msg.delete {
+                    if !msg.channel_id.is_empty() {
+                        return Err(ServiceError::Validation(
+                            "DM delete carries channel context".into(),
+                        ));
+                    }
                     return Ok(DmContent::DeleteForEveryone {
+                        target_author_aci: delete.target_author_aci,
                         target_sent_timestamp: delete.target_sent_timestamp,
                     });
                 }

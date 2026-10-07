@@ -601,7 +601,7 @@ impl ConversationHandle {
             ActiveConversation::AnonDm(id) => {
                 self.client
                     .anon_dms()
-                    .send_delete_for_everyone(id, target_sent_timestamp)
+                    .send_targeted_delete_for_everyone(id, target_author, target_sent_timestamp)
                     .await?;
                 let _ = self.client.anon_dms().delete_message_by_timestamp(
                     id,
@@ -613,7 +613,7 @@ impl ConversationHandle {
             ActiveConversation::AnonGroup(id) => {
                 self.client
                     .anon_groups()
-                    .send_delete_for_everyone(id, target_sent_timestamp)
+                    .send_targeted_delete_for_everyone(id, target_author, target_sent_timestamp)
                     .await?;
                 let _ = self.client.anon_groups().delete_message_by_timestamp(
                     id,
@@ -624,8 +624,9 @@ impl ConversationHandle {
             }
             ActiveConversation::None => Err(ConversationError::NoConversation),
             _ => {
-                let content = crate::services::build_delete_for_everyone_content_with_channel(
+                let content = crate::services::gateway::builders::build_targeted_delete_content(
                     target_sent_timestamp,
+                    Some(&target_author.to_string()),
                     self.active_channel_id().as_deref(),
                 );
                 self.dispatch_content(content).await?;

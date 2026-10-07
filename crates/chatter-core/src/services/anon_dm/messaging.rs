@@ -7,9 +7,8 @@ use crate::proto::content_v1::{
     anon_dm_presence,
 };
 use crate::services::gateway::builders::{
-    build_data_message_content_with_quote, build_delete_for_everyone_content,
-    build_delivery_receipt_content, build_edit_content, build_pin_content,
-    build_read_receipt_content, build_typing_content,
+    build_data_message_content_with_quote, build_delivery_receipt_content, build_edit_content,
+    build_pin_content, build_read_receipt_content, build_typing_content,
 };
 use crate::util::time::TimestampNanos;
 
@@ -657,7 +656,26 @@ impl AnonDmService {
         conversation_id: &AnonDmId,
         target_sent_timestamp: u64,
     ) -> Result<(), AnonDmError> {
-        let content = build_delete_for_everyone_content(target_sent_timestamp);
+        let author = self.current_user_id()?;
+        let content = crate::services::gateway::builders::build_targeted_delete_content(
+            target_sent_timestamp,
+            Some(&author.to_string()),
+            None,
+        );
+        self.send_message(conversation_id, content).await
+    }
+
+    pub async fn send_targeted_delete_for_everyone(
+        &self,
+        conversation_id: &AnonDmId,
+        author: &UserId,
+        timestamp: u64,
+    ) -> Result<(), AnonDmError> {
+        let content = crate::services::gateway::builders::build_targeted_delete_content(
+            timestamp,
+            Some(&author.to_string()),
+            None,
+        );
         self.send_message(conversation_id, content).await
     }
 

@@ -360,6 +360,13 @@ pub fn dispatch_common_content<B: AnonInboxBackend>(
         Some(ContentKind::DataMessage(data_msg)) => {
             // Delete-for-everyone wrapped inside DataMessage
             if let Some(delete) = &data_msg.delete {
+                if delete
+                    .target_author_aci
+                    .as_deref()
+                    .is_some_and(|author| author.parse::<UserId>().ok() != Some(*sender_id))
+                {
+                    return CommonDispatchOutcome::Dropped;
+                }
                 // Announce only a delete that removed a row: the backend
                 // matches (sender, timestamp), so a member naming someone
                 // else's message deletes nothing and must not blank it on
@@ -680,6 +687,7 @@ mod tests {
                 content_v1::DataMessage {
                     delete: Some(content_v1::Delete {
                         target_sent_timestamp: 42,
+                        target_author_aci: None,
                     }),
                     ..Default::default()
                 },
@@ -705,6 +713,27 @@ mod tests {
         assert_eq!(delete_events(true), 1);
         // A member naming someone else's timestamp deletes nothing.
         assert_eq!(delete_events(false), 0);
+    }
+
+    #[test]
+    fn group_delete_rejects_forged_author_even_when_sender_row_exists() {
+        let sender = UserId::new();
+        let wire = crate::services::gateway::builders::build_targeted_delete_content(
+            42,
+            Some(&UserId::new().to_string()),
+            None,
+        );
+        let bytes = prost::Message::encode_to_vec(&wire);
+        let content = <Content as prost::Message>::decode(bytes.as_slice()).unwrap();
+        assert!(matches!(
+            dispatch_common_content(
+                &AnonGroupId::new(),
+                &sender,
+                &content,
+                &DeleteOnly { row_matched: true }
+            ),
+            CommonDispatchOutcome::Dropped
+        ));
     }
 
     /// An anonymous-group edit goes through the one edit choke point: held

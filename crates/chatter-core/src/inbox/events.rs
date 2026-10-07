@@ -194,6 +194,7 @@ pub enum InboxEvent {
     },
     /// Delete for everyone received (peer wants us to delete).
     DmDeleteForEveryone {
+        target_author_aci: Option<String>,
         /// Peer user ID (who sent the delete request).
         peer_id: UserId,
         /// Target message timestamp.

@@ -1088,6 +1088,7 @@ mod sync_sent_copy_tests {
         let delete = DataMessage {
             delete: Some(Delete {
                 target_sent_timestamp: 3,
+                target_author_aci: None,
             }),
             ..Default::default()
         };

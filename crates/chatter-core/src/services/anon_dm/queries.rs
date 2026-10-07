@@ -1,7 +1,7 @@
+use crate::domain::UserId;
 use crate::domain::anon_dm::{AnonDm, AnonDmId, AnonDmMessageId};
 use crate::domain::ids::{ChannelId, MessageId};
 use crate::domain::message::{ConversationType, Message};
-use crate::domain::UserId;
 
 use super::{AnonDmError, AnonDmService};
 
@@ -184,11 +184,21 @@ impl AnonDmService {
     }
 
     /// Authenticated peer may delete either participant's message in this DM.
-    /// Missing targets keep both possible author keys because the wire is timestamp-only.
+    /// Legacy compatibility targets only the authenticated peer author.
     pub fn apply_received_delete(
         &self,
         conversation_id: &AnonDmId,
         peer: &UserId,
+        sent_timestamp: u64,
+    ) -> Result<Option<Message>, AnonDmError> {
+        self.apply_targeted_received_delete(conversation_id, peer, None, sent_timestamp)
+    }
+
+    pub fn apply_targeted_received_delete(
+        &self,
+        conversation_id: &AnonDmId,
+        peer: &UserId,
+        target_author: Option<&str>,
         sent_timestamp: u64,
     ) -> Result<Option<Message>, AnonDmError> {
         let Some(dm) = self.get_conversation(conversation_id)? else {
@@ -202,36 +212,40 @@ impl AnonDmService {
             return Ok(None);
         }
         let me = self.current_user_id()?;
-        let pending =
-            crate::storage::repositories::message_modifier_repo::MessageModifierRepository::new(
-                self.settings_repo.database().clone(),
-            );
-        let now = crate::util::time::TimestampNanos::now().as_u64();
-        for author in [*peer, me] {
-            if let Some(message) =
-                self.get_message_by_sender_timestamp(conversation_id, &author, sent_timestamp)?
-            {
-                pending.queue_typed_dm_delete(
-                    &author,
-                    sent_timestamp,
-                    Some((*conversation_id).into()),
-                    ConversationType::AnonDm,
-                    now,
-                )?;
-                self.message_repo.delete(&message.id)?;
-                return Ok(Some(message));
-            }
+        let author = match target_author {
+            Some(value) => match value.parse::<UserId>() {
+                Ok(author) => author,
+                Err(_) => return Ok(None),
+            },
+            None => *peer,
+        };
+        if author != *peer && author != me {
+            return Ok(None);
         }
-        for author in [*peer, me] {
-            pending.queue_typed_dm_delete(
-                &author,
-                sent_timestamp,
-                Some((*conversation_id).into()),
-                ConversationType::AnonDm,
-                now,
-            )?;
+        let target =
+            self.get_message_by_sender_timestamp(conversation_id, &author, sent_timestamp)?;
+        if target.is_none()
+            && self
+                .message_repo
+                .get_by_sender_timestamp(&author, sent_timestamp)?
+                .is_some()
+        {
+            return Ok(None);
         }
-        Ok(None)
+        crate::storage::repositories::message_modifier_repo::MessageModifierRepository::new(
+            self.settings_repo.database().clone(),
+        )
+        .queue_typed_dm_delete(
+            &author,
+            sent_timestamp,
+            Some((*conversation_id).into()),
+            ConversationType::AnonDm,
+            crate::util::time::TimestampNanos::now().as_u64(),
+        )?;
+        if let Some(message) = &target {
+            self.message_repo.delete(&message.id)?;
+        }
+        Ok(target)
     }
 
     /// Set pin state for a message by conversation_id and sent_at timestamp.

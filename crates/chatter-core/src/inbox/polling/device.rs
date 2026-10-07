@@ -2068,9 +2068,16 @@ pub fn dispatch_control_content(
                 if dm.channel_id.is_empty() {
                     // Empty channel_id => channel-free DM (ServerDm) delete-for-everyone.
                     let _ = event_tx.send(InboxEvent::DmDeleteForEveryone {
+                        target_author_aci: delete.target_author_aci,
                         peer_id: *sender_id,
                         target_sent_timestamp: delete.target_sent_timestamp,
                     });
+                } else if delete
+                    .target_author_aci
+                    .as_deref()
+                    .is_some_and(|author| author.parse::<UserId>().ok() != Some(*sender_id))
+                {
+                    return;
                 } else if let Ok(channel_id) = dm.channel_id.parse::<ChannelId>() {
                     tracing::debug!(
                         sender_id = %sender_id,

@@ -1,11 +1,11 @@
+use crate::domain::UserId;
 use crate::domain::anon_dm::{AnonDmId, AnonDmMessageId};
 use crate::domain::ids::{AttachmentId, ChannelId, MessageId};
 use crate::domain::message::ConversationType;
-use crate::domain::UserId;
-use crate::inbox::handlers::base_anon::{
-    dispatch_common_content, AnonInboxBackend, CommonDispatchOutcome, QuoteContext,
-};
 use crate::inbox::handlers::DomainEvent;
+use crate::inbox::handlers::base_anon::{
+    AnonInboxBackend, CommonDispatchOutcome, QuoteContext, dispatch_common_content,
+};
 use crate::proto::content_v1::{AttachmentPointer, Content};
 use crate::services::AttachmentService;
 
@@ -190,10 +190,14 @@ impl AnonDmService {
         // intentionally remains author-only. Emit the stored target's identity.
         if let Some(ContentType::DataMessage(data)) = &inner_content.content {
             if let Some(delete) = &data.delete {
+                if !data.channel_id.is_empty() {
+                    return Ok(vec![]);
+                }
                 return Ok(self
-                    .apply_received_delete(
+                    .apply_targeted_received_delete(
                         conversation_id,
                         sender_id,
+                        delete.target_author_aci.as_deref(),
                         delete.target_sent_timestamp,
                     )?
                     .into_iter()

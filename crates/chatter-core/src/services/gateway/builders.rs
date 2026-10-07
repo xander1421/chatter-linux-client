@@ -392,6 +392,15 @@ pub fn build_delete_for_everyone_content_with_channel(
     target_sent_timestamp: u64,
     channel_id: Option<&str>,
 ) -> Content {
+    build_targeted_delete_content(target_sent_timestamp, None, channel_id)
+}
+
+/// Exact author route for all production deletes. None is legacy sender-only.
+pub fn build_targeted_delete_content(
+    target_sent_timestamp: u64,
+    target_author_aci: Option<&str>,
+    channel_id: Option<&str>,
+) -> Content {
     let now = TimestampNanos::now().as_u64();
     Content {
         timestamp: now,
@@ -400,6 +409,7 @@ pub fn build_delete_for_everyone_content_with_channel(
             channel_id: channel_id.unwrap_or_default().to_string(),
             delete: Some(Delete {
                 target_sent_timestamp,
+                target_author_aci: target_author_aci.map(str::to_owned),
             }),
             ..Default::default()
         })),

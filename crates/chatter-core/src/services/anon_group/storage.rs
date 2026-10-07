@@ -228,6 +228,21 @@ impl AnonGroupService {
         timestamp_ns: u64,
     ) -> Result<bool, AnonGroupError> {
         let channel_id: ChannelId = (*group_id).into();
+        if self
+            .message_service
+            .message_repo
+            .get_by_reaction_scope(
+                &crate::domain::reaction::ReactionScope::new(
+                    channel_id,
+                    ConversationType::AnonGroup,
+                ),
+                sender_id,
+                timestamp_ns,
+            )?
+            .is_none()
+        {
+            return Ok(false);
+        }
         Ok(self
             .message_service
             .message_repo

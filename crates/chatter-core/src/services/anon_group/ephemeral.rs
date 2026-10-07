@@ -1,11 +1,9 @@
 //! Ephemeral message operations (reactions, typing, delete, pin, edit).
 
 use crate::domain::anon_group::AnonGroupId;
-use crate::domain::ids::ChannelId;
+use crate::domain::ids::{ChannelId, UserId};
 use crate::domain::message::ConversationType;
-use crate::services::{
-    build_delete_for_everyone_content, build_edit_content, build_pin_content, build_typing_content,
-};
+use crate::services::{build_edit_content, build_pin_content, build_typing_content};
 
 use super::{AnonGroupError, AnonGroupService};
 
@@ -87,7 +85,31 @@ impl AnonGroupService {
             return Ok(());
         }
 
-        let content = build_delete_for_everyone_content(target_sent_timestamp);
+        let author = self.current_user_id()?;
+        let content = crate::services::gateway::builders::build_targeted_delete_content(
+            target_sent_timestamp,
+            Some(&author.to_string()),
+            None,
+        );
+        self.send_ephemeral_message(group_id, content).await
+    }
+
+    pub async fn send_targeted_delete_for_everyone(
+        &self,
+        group_id: &AnonGroupId,
+        author: &UserId,
+        timestamp: u64,
+    ) -> Result<(), AnonGroupError> {
+        if *author != self.current_user_id()? {
+            return Err(AnonGroupError::InvalidData(
+                "Group deletes must target our own author".into(),
+            ));
+        }
+        let content = crate::services::gateway::builders::build_targeted_delete_content(
+            timestamp,
+            Some(&author.to_string()),
+            None,
+        );
         self.send_ephemeral_message(group_id, content).await
     }
 

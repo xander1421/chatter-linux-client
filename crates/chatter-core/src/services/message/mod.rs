@@ -978,14 +978,23 @@ impl MessageService {
         peer: &UserId,
         target_sent_at: u64,
     ) -> Result<Option<Message>, MessageError> {
-        let me = self.current_user_id()?;
-        let target = self.dm_delete_target(peer, &me, target_sent_at)?;
+        self.apply_targeted_dm_delete_received(peer, None, target_sent_at)
+            .await
+    }
+
+    pub async fn apply_targeted_dm_delete_received(
+        &self,
+        peer: &UserId,
+        target_author: Option<&str>,
+        target_sent_at: u64,
+    ) -> Result<Option<Message>, MessageError> {
+        let target = self.targeted_dm_delete_target(peer, target_author, target_sent_at)?;
         let token = target
             .as_ref()
             .map(|message| self.message_repo.deletion_token(&message.id))
             .transpose()?
             .flatten();
-        let deleted = self.apply_dm_delete(peer, target_sent_at)?;
+        let deleted = self.apply_targeted_dm_delete(peer, target_author, target_sent_at)?;
         if let (Some(message), Some(token)) = (&deleted, token) {
             if target
                 .as_ref()
@@ -1007,77 +1016,87 @@ impl MessageService {
         Ok(deleted)
     }
 
-    fn dm_delete_target(
+    fn admitted_dm_delete_author(
         &self,
         peer: &UserId,
-        me: &UserId,
-        target_sent_at: u64,
-    ) -> Result<Option<Message>, MessageError> {
-        for author in [*peer, *me] {
-            let message = if peer != me {
-                self.message_repo.get_by_reaction_scope(
-                    &crate::domain::reaction::ReactionScope::new(
-                        ChannelId::from(*peer),
-                        ConversationType::ServerDm,
-                    ),
-                    &author,
-                    target_sent_at,
-                )?
-            } else {
-                self.message_repo
-                    .get_by_sender_timestamp(&author, target_sent_at)?
-                    .filter(|message| message.conversation_type == ConversationType::ServerDm)
-            };
-            if message.is_some() {
-                return Ok(message);
-            }
-            if peer == me {
-                break;
-            }
+        target_author: Option<&str>,
+    ) -> Result<Option<UserId>, MessageError> {
+        let me = self.current_user_id()?;
+        // Self-device deletes need a destination claim; this route has none.
+        if *peer == me {
+            return Ok(None);
         }
-        Ok(None)
+        let author = match target_author {
+            Some(value) => match value.parse::<UserId>() {
+                Ok(author) => author,
+                Err(_) => return Ok(None),
+            },
+            None => *peer,
+        };
+        Ok((author == *peer || author == me).then_some(author))
     }
 
-    /// A friend DM delete-for-everyone from `peer` of its message sent at
-    /// `target_sent_at`; see [`apply_delete`](Self::apply_delete).
+    fn targeted_dm_delete_target(
+        &self,
+        peer: &UserId,
+        target_author: Option<&str>,
+        timestamp: u64,
+    ) -> Result<Option<Message>, MessageError> {
+        let Some(author) = self.admitted_dm_delete_author(peer, target_author)? else {
+            return Ok(None);
+        };
+        Ok(self.message_repo.get_by_reaction_scope(
+            &crate::domain::reaction::ReactionScope::new(
+                ChannelId::from(*peer),
+                ConversationType::ServerDm,
+            ),
+            &author,
+            timestamp,
+        )?)
+    }
+
+    /// Legacy compatibility: only the authenticated sender's message.
     pub fn apply_dm_delete(
         &self,
         peer: &UserId,
-        target_sent_at: u64,
+        timestamp: u64,
     ) -> Result<Option<Message>, MessageError> {
-        let me = self.current_user_id()?;
-        let conversation = if *peer == me {
-            None
-        } else {
-            Some(ChannelId::from(*peer))
+        self.apply_targeted_dm_delete(peer, None, timestamp)
+    }
+
+    /// Exact author and exact arrival conversation/type; never guess a second author.
+    pub fn apply_targeted_dm_delete(
+        &self,
+        peer: &UserId,
+        target_author: Option<&str>,
+        timestamp: u64,
+    ) -> Result<Option<Message>, MessageError> {
+        let Some(author) = self.admitted_dm_delete_author(peer, target_author)? else {
+            return Ok(None);
         };
-        // Resolve only inside the authenticated DM; the wire is timestamp-only.
-        if let Some(message) = self.dm_delete_target(peer, &me, target_sent_at)? {
-            let author = message.sender_id.expect("DM delete target is sender-keyed");
-            crate::storage::repositories::message_modifier_repo::MessageModifierRepository::new(
-                self.database.clone(),
-            )
-            .queue_dm_delete(
-                &author,
-                target_sent_at,
-                Some(message.conversation_id),
-                crate::util::time::TimestampNanos::now().as_u64(),
-            )?;
+        let target = self.targeted_dm_delete_target(peer, target_author, timestamp)?;
+        // A known target in another scope is refused, not queued.
+        if target.is_none()
+            && self
+                .message_repo
+                .get_by_sender_timestamp(&author, timestamp)?
+                .is_some()
+        {
+            return Ok(None);
+        }
+        crate::storage::repositories::message_modifier_repo::MessageModifierRepository::new(
+            self.database.clone(),
+        )
+        .queue_dm_delete(
+            &author,
+            timestamp,
+            Some(ChannelId::from(*peer)),
+            crate::util::time::TimestampNanos::now().as_u64(),
+        )?;
+        if let Some(message) = &target {
             self.message_repo.delete(&message.id)?;
-            return Ok(Some(message));
         }
-        // Keep both possible authors because the wire does not identify which
-        // participant authored a missing target. Typed tombstones stay in this DM.
-        let pending =
-            crate::storage::repositories::message_modifier_repo::MessageModifierRepository::new(
-                self.database.clone(),
-            );
-        let now = crate::util::time::TimestampNanos::now().as_u64();
-        pending.queue_dm_delete(peer, target_sent_at, conversation, now)?;
-        if *peer != me {
-            pending.queue_dm_delete(&me, target_sent_at, conversation, now)?;
-        }
-        Ok(None)
+        Ok(target)
     }
 
     /// A channel delete-for-everyone from `sender` of its message sent at
@@ -2014,7 +2033,7 @@ mod inbound_target_tests {
         let f = fixture();
         let svc = f.client.messages();
         let processor = InboxEventProcessor::from_client(&f.client);
-        for (author, ts) in [(f.me, 301), (f.carol, DM_TS)] {
+        for (author, ts) in [(f.me, DM_TS), (f.carol, DM_TS)] {
             let target = if author == f.me {
                 let msg = Message::new_text(
                     ChannelId::from(f.carol),
@@ -2034,9 +2053,19 @@ mod inbound_target_tests {
             let (tx, mut rx) = broadcast::channel(8);
             let stats = Arc::new(RwLock::new(InboxStats::default()));
             let mut domain = f.client.event_bus().subscribe_domain();
-            let content = crate::services::build_delete_for_everyone_content_with_channel(ts, None)
-                .content
-                .unwrap();
+            let wire = crate::services::gateway::builders::build_targeted_delete_content(
+                ts,
+                Some(&author.to_string()),
+                None,
+            );
+            let bytes = prost::Message::encode_to_vec(&wire);
+            let decoded =
+                <crate::proto::content_v1::Content as prost::Message>::decode(bytes.as_slice())
+                    .unwrap();
+            assert!(
+                matches!(crate::services::gateway::MessageGateway::parse_content(decoded.clone()).unwrap(), crate::services::gateway::DmContent::DeleteForEveryone { target_author_aci: Some(value), .. } if value == author.to_string())
+            );
+            let content = decoded.content.unwrap();
             dispatch_control_content(content, &f.carol, 1, "synthetic", 2, &tx, &stats);
             processor.process(&rx.try_recv().unwrap()).await;
             match domain.try_recv().unwrap() {
@@ -2068,7 +2097,11 @@ mod inbound_target_tests {
             303,
         );
         svc.message_repo.insert(&unrelated_own).unwrap();
-        assert!(svc.apply_dm_delete(&f.carol, 303).unwrap().is_none());
+        assert!(
+            svc.apply_targeted_dm_delete(&f.carol, Some(&f.me.to_string()), 303)
+                .unwrap()
+                .is_none()
+        );
         assert!(svc.message_repo.get(&unrelated_own.id).unwrap().is_some());
         // Bob cannot use Carol's timestamp to delete her DM or channel row.
         assert!(svc.apply_dm_delete(&f.bob, CH_TS).unwrap().is_none());
@@ -2085,7 +2118,11 @@ mod inbound_target_tests {
             302,
         );
         svc.message_repo.insert(&own_channel).unwrap();
-        assert!(svc.apply_dm_delete(&f.carol, 302).unwrap().is_none());
+        assert!(
+            svc.apply_targeted_dm_delete(&f.carol, Some(&f.me.to_string()), 302)
+                .unwrap()
+                .is_none()
+        );
         assert!(svc.apply_dm_delete(&f.me, 302).unwrap().is_none());
         assert!(svc.message_repo.get(&own_channel.id).unwrap().is_some());
         let handle = f
@@ -2105,7 +2142,11 @@ mod inbound_target_tests {
         let svc = f.client.messages();
         for author in [f.me, f.carol] {
             let ts = if author == f.me { 701 } else { 702 };
-            assert!(svc.apply_dm_delete(&f.carol, ts).unwrap().is_none());
+            assert!(
+                svc.apply_targeted_dm_delete(&f.carol, Some(&author.to_string()), ts)
+                    .unwrap()
+                    .is_none()
+            );
             let other_chat = Message::new_text(
                 ChannelId::from(f.bob),
                 ConversationType::ServerDm,
@@ -2126,6 +2167,15 @@ mod inbound_target_tests {
             svc.message_repo.insert(&channel).unwrap();
             assert!(svc.message_repo.get(&channel.id).unwrap().is_some());
             svc.message_repo.delete(&channel.id).unwrap();
+            let survivor = Message::new_text(
+                ChannelId::from(f.carol),
+                ConversationType::ServerDm,
+                Some(if author == f.me { f.carol } else { f.me }),
+                "collision survivor".into(),
+                ts,
+            );
+            svc.message_repo.insert(&survivor).unwrap();
+            assert!(svc.message_repo.get(&survivor.id).unwrap().is_some());
             let dm = Message::new_text(
                 ChannelId::from(f.carol),
                 ConversationType::ServerDm,
@@ -2141,6 +2191,108 @@ mod inbound_target_tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn channel_delete_rejects_forged_target_author_before_event() {
+        use crate::inbox::{polling::device::dispatch_control_content, state::InboxStats};
+        use parking_lot::RwLock;
+        use tokio::sync::broadcast;
+        let sender = UserId::new();
+        let victim = UserId::new();
+        let channel = ChannelId::new().to_string();
+        let (tx, mut rx) = broadcast::channel(8);
+        let stats = Arc::new(RwLock::new(InboxStats::default()));
+        let content = crate::services::gateway::builders::build_targeted_delete_content(
+            1,
+            Some(&victim.to_string()),
+            Some(&channel),
+        );
+        dispatch_control_content(
+            content.content.unwrap(),
+            &sender,
+            1,
+            "fixture",
+            1,
+            &tx,
+            &stats,
+        );
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[tokio::test]
+    async fn exact_dm_delete_legacy_and_forged_author_admission() {
+        let f = fixture();
+        let svc = f.client.messages();
+        let scope = ChannelId::from(f.carol);
+        // Legacy may queue only its authenticated sender, never our matching timestamp.
+        assert!(svc.apply_dm_delete(&f.carol, 910).unwrap().is_none());
+        let own = Message::new_text(
+            scope,
+            ConversationType::ServerDm,
+            Some(f.me),
+            "own".into(),
+            910,
+        );
+        svc.message_repo.insert(&own).unwrap();
+        assert!(svc.message_repo.get(&own.id).unwrap().is_some());
+        let peer = Message::new_text(
+            scope,
+            ConversationType::ServerDm,
+            Some(f.carol),
+            "peer".into(),
+            910,
+        );
+        svc.message_repo.insert(&peer).unwrap();
+        assert!(svc.message_repo.get(&peer.id).unwrap().is_none());
+        // Explicit missing own target queues only own, preserving the peer collision.
+        assert!(
+            svc.apply_targeted_dm_delete(&f.carol, Some(&f.me.to_string()), 911)
+                .unwrap()
+                .is_none()
+        );
+        let peer = Message::new_text(
+            scope,
+            ConversationType::ServerDm,
+            Some(f.carol),
+            "peer".into(),
+            911,
+        );
+        svc.message_repo.insert(&peer).unwrap();
+        assert!(svc.message_repo.get(&peer.id).unwrap().is_some());
+        let own = Message::new_text(
+            scope,
+            ConversationType::ServerDm,
+            Some(f.me),
+            "own".into(),
+            911,
+        );
+        svc.message_repo.insert(&own).unwrap();
+        assert!(svc.message_repo.get(&own.id).unwrap().is_none());
+        for author in [f.bob.to_string(), String::new(), "invalid".into()] {
+            assert!(
+                svc.apply_targeted_dm_delete(&f.carol, Some(&author), 912)
+                    .unwrap()
+                    .is_none()
+            );
+        }
+        let foreign = Message::new_text(
+            scope,
+            ConversationType::ServerDm,
+            Some(f.bob),
+            "forged".into(),
+            912,
+        );
+        svc.message_repo.insert(&foreign).unwrap();
+        assert!(svc.message_repo.get(&foreign.id).unwrap().is_some());
+        let legacy = svc
+            .get_by_sender_timestamp(&f.carol, DM_TS)
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            svc.apply_dm_delete(&f.carol, DM_TS).unwrap().unwrap().id,
+            legacy.id
+        );
     }
 
     #[tokio::test]
@@ -2213,16 +2365,30 @@ mod inbound_target_tests {
         dm.status = AnonDmStatus::Active;
         dm.peer_mailbox_pk = Some([7; 32]);
         anon.anon_dm_repo.insert_conversation(&dm).unwrap();
-        for (author, ts) in [(f.me, 801), (f.carol, 802)] {
-            let target = Message::new_text(
+        for author in [f.me, f.carol] {
+            let row = Message::new_text(
                 dm.id.into(),
                 ConversationType::AnonDm,
                 Some(author),
-                "anon target".into(),
-                ts,
+                "same timestamp".into(),
+                801,
             );
-            svc.message_repo.insert(&target).unwrap();
-            let content = crate::services::build_delete_for_everyone_content_with_channel(ts, None);
+            svc.message_repo.insert(&row).unwrap();
+        }
+        for (author, ts) in [(f.me, 801), (f.carol, 801)] {
+            let target = anon
+                .get_message_by_sender_timestamp(&dm.id, &author, ts)
+                .unwrap()
+                .unwrap();
+            let wire = crate::services::gateway::builders::build_targeted_delete_content(
+                ts,
+                Some(&author.to_string()),
+                None,
+            );
+            let bytes = prost::Message::encode_to_vec(&wire);
+            let content =
+                <crate::proto::content_v1::Content as prost::Message>::decode(bytes.as_slice())
+                    .unwrap();
             assert!(
                 anon.process_incoming_content(&dm.id, &f.bob, &content)
                     .unwrap()
@@ -2233,6 +2399,13 @@ mod inbound_target_tests {
                 .process_incoming_content(&dm.id, &f.carol, &content)
                 .unwrap();
             assert_eq!(events.len(), 1);
+            if author == f.me {
+                assert!(
+                    anon.get_message_by_sender_timestamp(&dm.id, &f.carol, ts)
+                        .unwrap()
+                        .is_some()
+                );
+            }
             match &events[0] {
                 crate::inbox::handlers::DomainEvent::MessageDeleted {
                     message_id,
@@ -2249,7 +2422,11 @@ mod inbound_target_tests {
             assert!(svc.message_repo.get(&target.id).unwrap().is_none());
         }
         for (author, ts) in [(f.me, 803), (f.carol, 804)] {
-            let content = crate::services::build_delete_for_everyone_content_with_channel(ts, None);
+            let content = crate::services::gateway::builders::build_targeted_delete_content(
+                ts,
+                Some(&author.to_string()),
+                None,
+            );
             assert!(
                 anon.process_incoming_content(&dm.id, &f.carol, &content)
                     .unwrap()
@@ -2276,6 +2453,89 @@ mod inbound_target_tests {
                 svc.message_repo.insert(&target).unwrap();
                 assert!(svc.message_repo.get(&target.id).unwrap().is_none());
             }
+        }
+        // Explicit and legacy missing deletes leave the other author's collision alive.
+        for (timestamp, explicit) in [(820, true), (821, false)] {
+            let content = crate::services::gateway::builders::build_targeted_delete_content(
+                timestamp,
+                explicit.then(|| f.me.to_string()).as_deref(),
+                None,
+            );
+            assert!(
+                anon.process_incoming_content(&dm.id, &f.carol, &content)
+                    .unwrap()
+                    .is_empty()
+            );
+            let survivor_author = if explicit { f.carol } else { f.me };
+            let survivor = Message::new_text(
+                dm.id.into(),
+                ConversationType::AnonDm,
+                Some(survivor_author),
+                "survivor".into(),
+                timestamp,
+            );
+            svc.message_repo.insert(&survivor).unwrap();
+            assert!(svc.message_repo.get(&survivor.id).unwrap().is_some());
+        }
+        let legacy = Message::new_text(
+            dm.id.into(),
+            ConversationType::AnonDm,
+            Some(f.carol),
+            "legacy author".into(),
+            822,
+        );
+        svc.message_repo.insert(&legacy).unwrap();
+        let content = crate::services::build_delete_for_everyone_content(822);
+        assert_eq!(
+            anon.process_incoming_content(&dm.id, &f.carol, &content)
+                .unwrap()
+                .len(),
+            1
+        );
+        for (author, channel) in [(f.bob, None), (f.me, Some("forged-channel"))] {
+            let target = Message::new_text(
+                dm.id.into(),
+                ConversationType::AnonDm,
+                Some(author),
+                "refused".into(),
+                823,
+            );
+            svc.message_repo.insert(&target).unwrap();
+            let content = crate::services::gateway::builders::build_targeted_delete_content(
+                823,
+                Some(&author.to_string()),
+                channel,
+            );
+            assert!(
+                anon.process_incoming_content(&dm.id, &f.carol, &content)
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(svc.message_repo.get(&target.id).unwrap().is_some());
+        }
+        for (timestamp, conversation, kind) in [
+            (824, ChannelId::new(), ConversationType::AnonDm),
+            (825, dm.id.into(), ConversationType::AnonGroup),
+        ] {
+            let target = Message::new_text(
+                conversation,
+                kind,
+                Some(f.me),
+                "other scope".into(),
+                timestamp,
+            );
+            svc.message_repo.insert(&target).unwrap();
+            let content = crate::services::gateway::builders::build_targeted_delete_content(
+                timestamp,
+                Some(&f.me.to_string()),
+                None,
+            );
+            assert!(
+                anon.process_incoming_content(&dm.id, &f.carol, &content)
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(svc.message_repo.get(&target.id).unwrap().is_some());
         }
         let catchup = crate::services::gateway::build_text_content("late peer", 804);
         let events = anon

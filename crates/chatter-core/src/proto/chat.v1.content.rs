@@ -298,12 +298,15 @@ pub mod data_message {
 }
 /// Delete: Request to delete a previously sent message
 /// Signal-compatible: targets message by timestamp (field #17 in DataMessage)
-#[derive(Clone, Copy, PartialEq, Eq, Hash, ::prost::Message)]
+#[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct Delete {
     /// Target message timestamp (nanoseconds since epoch)
     /// The message to delete is identified by (authorId, targetSentTimestamp) tuple
     #[prost(fixed64, tag="1")]
     pub target_sent_timestamp: u64,
+    /// Chatter extension: exact author; absent legacy deletes target the authenticated sender.
+    #[prost(string, optional, tag="101")]
+    pub target_author_aci: ::core::option::Option<::prost::alloc::string::String>,
 }
 /// Quote: Reference to a quoted/replied-to message
 /// Signal-compatible field numbers for potential interop

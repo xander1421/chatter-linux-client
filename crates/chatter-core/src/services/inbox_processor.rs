@@ -995,12 +995,17 @@ impl InboxEventProcessor {
             }
 
             InboxEvent::DmDeleteForEveryone {
+                target_author_aci,
                 peer_id,
                 target_sent_timestamp,
             } => {
                 match self
                     .message_service
-                    .apply_dm_delete_received(peer_id, *target_sent_timestamp)
+                    .apply_targeted_dm_delete_received(
+                        peer_id,
+                        target_author_aci.as_deref(),
+                        *target_sent_timestamp,
+                    )
                     .await
                 {
                     Ok(Some(msg)) => {
