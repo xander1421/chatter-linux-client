@@ -288,7 +288,10 @@ pub fn attachment_to_display_data(attachment: &Attachment) -> AttachmentDisplayD
         download_url: attachment.remote_url.clone().unwrap_or_default(),
         local_path: attachment.local_path.clone(),
         is_image: meta.is_image(),
-        is_video: meta.is_video(),
+        is_video: chatter_core::domain::attachment::FileCategory::from_mime_and_filename(
+            &meta.mime_type,
+            &meta.name,
+        ) == chatter_core::domain::attachment::FileCategory::Video,
         width: meta.width.unwrap_or(0) as i32,
         height: meta.height.unwrap_or(0) as i32,
         is_playing,

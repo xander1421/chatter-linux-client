@@ -8,7 +8,9 @@ use std::sync::Arc;
 use slint::{ComponentHandle, SharedString};
 
 use chatter_core::client::ChatterClient;
-use chatter_core::domain::attachment::{AttachmentStatus, ContentLocation, FileMetadata};
+use chatter_core::domain::attachment::{
+    AttachmentStatus, ContentLocation, FileCategory, FileMetadata,
+};
 use chatter_core::domain::ids::AttachmentId;
 use chatter_core::media::ImageProcessor;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -443,7 +445,7 @@ fn display_decrypted_content(
     }
     let is_audio = mime_type.starts_with("audio/");
     let is_image = FileMetadata::is_image_file(filename, mime_type);
-    let is_video = mime_type.starts_with("video/");
+    let is_video = FileCategory::from_mime_and_filename(mime_type, filename) == FileCategory::Video;
     let is_code = FileMetadata::is_code_file(filename, mime_type);
     let is_pdf = mime_type == "application/pdf" || filename.to_lowercase().ends_with(".pdf");
 
@@ -1011,7 +1013,13 @@ fn handle_download_attachment(
                 // Reuse the authenticated range path for downloaded videos;
                 // do not allocate a second whole-file plaintext buffer.
                 if crate::platform::video_source::use_video_ranges(
-                    &mime_type,
+                    if FileCategory::from_mime_and_filename(&mime_type, &file_name)
+                        == FileCategory::Video
+                    {
+                        "video/unknown"
+                    } else {
+                        &mime_type
+                    },
                     file_size,
                     cfg!(target_os = "android"),
                 ) {

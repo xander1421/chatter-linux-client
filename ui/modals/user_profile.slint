@@ -754,7 +754,7 @@ export component UserProfileModal inherits Rectangle {
                     }
 
                     // ── Safety number (non-self) ──────────────────────
-                    if !root.is-self: VerticalLayout {
+                    if !root.scoped-member && !root.is-self: VerticalLayout {
                         padding-left: Spacing.md;
                         padding-right: Spacing.md;
                         spacing: Spacing.sm;
