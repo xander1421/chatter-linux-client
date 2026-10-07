@@ -68,6 +68,60 @@ fn forwardable_attachments(
         .collect()
 }
 
+/// Resolve a UI channel to Saved storage only with authenticated own identity
+/// and matching local channel metadata. Never probe alternative message kinds.
+fn message_storage_scope(
+    conversation: &ActiveConversation,
+    own_user: Option<UserId>,
+    channel: Option<&crate::domain::channel::Channel>,
+) -> ConversationResult<crate::domain::reaction::ReactionScope> {
+    let (mut kind, id) = conversation
+        .routing_key()
+        .ok_or(ConversationError::NoConversation)?;
+    let id: ChannelId = id
+        .parse()
+        .map_err(|_| ConversationError::Other("Invalid conversation".into()))?;
+    if matches!(conversation, ActiveConversation::Channel(_))
+        && own_user.is_some_and(|own| ChannelId::from(own) == id)
+        && channel.is_some_and(|channel| {
+            channel.id == id
+                && channel.channel_type == crate::domain::channel::ChannelType::SavedMessages
+        })
+    {
+        kind = ConversationType::SavedMessages;
+    }
+    Ok(crate::domain::reaction::ReactionScope::new(id, kind))
+}
+
+fn scoped_stored_message(
+    repo: &crate::storage::MessageRepository,
+    scope: &crate::domain::reaction::ReactionScope,
+    author: &UserId,
+    sent_at: u64,
+) -> ConversationResult<crate::domain::Message> {
+    repo.get_by_reaction_scope(scope, author, sent_at)?
+        .ok_or_else(|| ConversationError::Other("Message not found".into()))
+}
+
+fn stored_message_menu(message: &crate::domain::Message, is_own: bool, now_ns: u64) -> MessageMenu {
+    let mut actions = message.actions(is_own, now_ns);
+    if !matches!(
+        message.conversation_type,
+        ConversationType::ServerDm | ConversationType::Channel
+    ) {
+        actions.resend = false;
+    }
+    // Saved records have only a local/own-device deletion path. Their UI
+    // Channel variant must never grant a public-channel remote delete.
+    if message.conversation_type == ConversationType::SavedMessages {
+        actions.delete_for_everyone = false;
+    }
+    MessageMenu {
+        actions,
+        pinned: message.is_pinned,
+    }
+}
+
 /// Persisted reaction presentation for one scoped message. Never a UI delta.
 #[derive(Clone, Debug)]
 pub struct ReactionSnapshot {
@@ -915,20 +969,7 @@ impl ConversationHandle {
         let message = self.stored_message(target_author, target_sent_timestamp)?;
         let is_own = message.sender_id == self.client.auth_state().get().current_user_id;
         let now_ns = crate::util::time::TimestampNanos::now().as_u64();
-        let mut actions = message.actions(is_own, now_ns);
-        // Resend reuses the server-DM and channel send pipelines. Other
-        // conversation types have no retry entry point, so the menu must not
-        // offer one.
-        if !matches!(
-            message.conversation_type,
-            ConversationType::ServerDm | ConversationType::Channel
-        ) {
-            actions.resend = false;
-        }
-        Ok(MessageMenu {
-            actions,
-            pinned: message.is_pinned,
-        })
+        Ok(stored_message_menu(&message, is_own, now_ns))
     }
 
     fn stored_message(
@@ -1538,20 +1579,21 @@ impl ConversationHandle {
         sender_id: &UserId,
         sent_timestamp: u64,
     ) -> ConversationResult<crate::domain::Message> {
-        let (kind, id) = self
+        let channel = self
             .conversation
-            .routing_key()
-            .ok_or(ConversationError::NoConversation)?;
-        let scope = crate::domain::reaction::ReactionScope::new(
-            id.parse()
-                .map_err(|_| ConversationError::Other("Invalid conversation".into()))?,
-            kind,
-        );
-        self.client
-            .messages()
-            .message_repo
-            .get_by_reaction_scope(&scope, sender_id, sent_timestamp)?
-            .ok_or_else(|| ConversationError::Other("Message not found".into()))
+            .channel_id()
+            .and_then(|id| self.client.get_channel_local(&id));
+        let scope = message_storage_scope(
+            &self.conversation,
+            self.client.auth_state().get().current_user_id,
+            channel.as_ref(),
+        )?;
+        scoped_stored_message(
+            &self.client.messages().message_repo,
+            &scope,
+            sender_id,
+            sent_timestamp,
+        )
     }
 
     /// Send content to a friend DM. The transport (Shield: mailbox; normal:
@@ -2231,3 +2273,7 @@ mod tests {
 #[cfg(test)]
 #[path = "reaction_dispatch_tests.rs"]
 mod reaction_dispatch_tests;
+
+#[cfg(test)]
+#[path = "saved_conversation_tests.rs"]
+mod saved_conversation_tests;
