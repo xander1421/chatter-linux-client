@@ -1,4 +1,4 @@
-//! RC71: exercise real pointer hit testing, including the floating list that
+//! RC73: exercise real pointer hit testing, including the floating list that
 //! extends behind the Calls header. Run with --features ui-test-debug.
 use chatter_ui::{CallHistoryRow, MainWindow};
 use i_slint_backend_testing as testing;
@@ -75,7 +75,17 @@ fn calls_overflow_uses_real_header_hit_target_and_card_anchor() {
     let observed = cleared.clone();
     w.on_call_history_clear(move || observed.set(true));
 
-    for (mobile, width, height) in [(true, 412.0, 891.0), (false, 1400.0, 900.0)] {
+    let row_actions = std::rc::Rc::new(std::cell::Cell::new(0));
+    let observed = row_actions.clone();
+    w.on_call_history_open(move |_, _| observed.set(observed.get() + 1));
+    let observed = row_actions.clone();
+    w.on_call_history_redial(move |_, _, _| observed.set(observed.get() + 1));
+
+    for (mobile, width, height) in [
+        (true, 360.0, 640.0),
+        (true, 412.0, 891.0),
+        (false, 1400.0, 900.0),
+    ] {
         w.set_active_tab("chats".into());
         settle(&w, width, height);
         w.set_is_mobile_platform(mobile);
@@ -146,8 +156,53 @@ fn calls_overflow_uses_real_header_hit_target_and_card_anchor() {
             !cleared.get(),
             "opening overflow/confirmation must not clear history"
         );
-        click(&w, &labelled(&w, "Cancel").unwrap());
+        let prompt = labelled(&w, "Delete every call in this list? This cannot be undone.")
+            .expect("confirmation prompt");
+        let screen = testing::ElementHandle::find_by_element_type_name(&w, "CallHistoryScreen")
+            .next()
+            .unwrap();
+        let mut list_bounds = None;
+        screen.visit_descendants(|e| {
+            if e.type_name().as_deref() == Some("Flickable") && e.size().height > 0.0 {
+                list_bounds = Some((e.absolute_position(), e.size()));
+            }
+            std::ops::ControlFlow::<()>::Continue(())
+        });
+        let (list_position, list_size) = list_bounds.expect("real call list viewport");
+        assert!(
+            list_position.y + list_size.height <= prompt.absolute_position().y,
+            "call rows paint through the confirmation: list bottom {} > prompt top {}",
+            list_position.y + list_size.height,
+            prompt.absolute_position().y,
+        );
+        // Probe text and empty space beside the buttons. With 24 real rows,
+        // these coordinates reach live rows/redials unless the confirmation
+        // reserves and shields its whole surface.
+        let before = row_actions.get();
+        click(&w, &prompt);
+        let cancel = labelled(&w, "Cancel").unwrap();
+        click_position(
+            &w,
+            slint::LogicalPosition::new(
+                list_position.x + 2.0,
+                cancel.absolute_position().y + cancel.size().height / 2.0,
+            ),
+        );
+        assert_eq!(
+            row_actions.get(),
+            before,
+            "confirmation leaked a row action"
+        );
+        assert!(labelled(&w, "Cancel").is_some());
+        click(&w, &cancel);
         settle(&w, width, height);
+
+        assert!(
+            labelled(&w, "Cancel").is_none(),
+            "Cancel dismisses confirmation"
+        );
+        assert!(!cleared.get(), "Cancel must never clear history");
+        assert_eq!(row_actions.get(), before, "Cancel leaked a row action");
 
         if !mobile {
             click(&w, &more);

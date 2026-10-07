@@ -184,7 +184,12 @@ export component CallHistoryScreen inherits Rectangle {
                     property <length> chrome-inset: parent.chrome-inset;
                     width: parent.width;
                     y: root.mobile-mode ? -parent.chrome-inset : 0px;
-                    height: root.mobile-mode ? root.height : parent.height;
+                    // Keep the usual floating list behind mobile chrome. When
+                    // confirmation is visible, end at the allocated list slot:
+                    // root.height would carry rows through the footer below it.
+                    height: root.mobile-mode
+                        ? (root.show-clear-confirm ? parent.height + parent.chrome-inset : root.height)
+                        : parent.height;
 
                     viewport-height: calls-list.preferred-height;
 
@@ -335,36 +340,44 @@ export component CallHistoryScreen inherits Rectangle {
             // Channel Settings uses for Leave and Delete — one destructive
             // vocabulary across the app, not one per screen. Reached from the
             // header ⋮ menu below.
-            if !root.loading && root.show-clear-confirm: VerticalLayout {
-                spacing: Spacing.sm;
-                padding-bottom: Spacing.sm;
+            if !root.loading && root.show-clear-confirm: Rectangle {
+                vertical-stretch: 0;
+                background: Colors.surface;
+                border-radius: Spacing.radius-lg;
+                // Shield whitespace as well as the controls from row actions.
+                TouchArea {}
 
-                Text {
-                    text: "Delete every call in this list? This cannot be undone.";
-                    color: Colors.error;
-                    font-size: Typography.sm;
-                    horizontal-alignment: center;
-                    wrap: word-wrap;
-                }
-
-                HorizontalLayout {
-                    alignment: center;
+                VerticalLayout {
                     spacing: Spacing.sm;
+                    padding: Spacing.sm;
 
-                    // Cancel first and non-danger: the safe answer is the one
-                    // the eye and the thumb land on.
-                    Button {
-                        text: "Cancel";
-                        variant: "secondary";
-                        clicked => { root.show-clear-confirm = false; }
+                    Text {
+                        text: "Delete every call in this list? This cannot be undone.";
+                        color: Colors.error;
+                        font-size: Typography.sm;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
                     }
 
-                    Button {
-                        text: "Clear history";
-                        variant: "destructive";
-                        clicked => {
-                            root.show-clear-confirm = false;
-                            root.clear-history();
+                    HorizontalLayout {
+                        alignment: center;
+                        spacing: Spacing.sm;
+
+                        // Cancel first and non-danger: the safe answer is the one
+                        // the eye and the thumb land on.
+                        Button {
+                            text: "Cancel";
+                            variant: "secondary";
+                            clicked => { root.show-clear-confirm = false; }
+                        }
+
+                        Button {
+                            text: "Clear history";
+                            variant: "destructive";
+                            clicked => {
+                                root.show-clear-confirm = false;
+                                root.clear-history();
+                            }
                         }
                     }
                 }
