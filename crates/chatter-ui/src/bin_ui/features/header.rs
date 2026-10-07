@@ -424,42 +424,50 @@ pub(crate) fn jump_to_message(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, messa
 /// is then jumped to. The oldest loaded row is the cursor — the list itself,
 /// not a copy of where it was last time. UI thread.
 fn load_older(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, until: Option<MessageId>) {
-    let Some(before) = w
+    let before = w
         .get_messages()
         .row_data(0)
-        .and_then(|m| m.message_id.parse::<MessageId>().ok())
-    else {
+        .and_then(|m| m.message_id.parse::<MessageId>().ok());
+    if before.is_none() && until.is_none() {
+        return;
+    }
+    // Bind this request before spawning; a later manual switch must never
+    // reinterpret the target as belonging to the newly opened conversation.
+    let conversation = ui_ctx.chat_state().active_conversation();
+    let Some(channel_id) = conversation.channel_id() else {
+        return;
+    };
+    let Some(conversation_type) = ui_ctx.active_conversation_type() else {
         return;
     };
     let weak = w.as_weak();
     let ui_ctx = ui_ctx.clone();
 
-    // Load messages in background thread (DB queries are sync)
     std::thread::spawn(move || {
-        let Some(channel_id) = ui_ctx.chat_state().get().active_channel_id else {
-            tracing::warn!("Cannot load more: no active channel");
-            return;
-        };
-        // Resolve conversation type via client helper so we pick up
-        // the correct variant for encrypted-vs-non-encrypted channels
-        // (cheap channel_repo lookup inside).
-        let Some(conversation_type) = ui_ctx.active_conversation_type() else {
-            tracing::warn!("Cannot load more: no active conversation type");
-            return;
-        };
-
         let message_state = ui_ctx.message_state();
         if message_state.is_loading(&channel_id) {
             tracing::trace!("Already loading messages for channel: {}", channel_id);
             return;
         }
         message_state.set_loading(channel_id, true);
-        let older_messages = ui_ctx.get_older_messages_local_asc(
-            &channel_id,
-            &conversation_type,
-            &before,
-            until.as_ref(),
-        );
+        let older_messages = match before.as_ref() {
+            Some(before) => ui_ctx.get_older_messages_local_asc(
+                &channel_id,
+                &conversation_type,
+                before,
+                until.as_ref(),
+            ),
+            None => Ok(until
+                .as_ref()
+                .and_then(|id| ui_ctx.get_message_local(id))
+                .filter(|m| {
+                    m.conversation_id == channel_id
+                        && m.conversation_type == conversation_type
+                        && !m.is_deleted
+                })
+                .into_iter()
+                .collect()),
+        };
         message_state.set_loading(channel_id, false);
         let older_messages = match older_messages {
             Ok(msgs) => msgs,
@@ -501,7 +509,7 @@ fn load_older(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, until: Option<Message
         let _ = slint::invoke_from_event_loop(move || {
             let Some(w) = weak.upgrade() else { return };
             // The conversation was switched while this loaded.
-            if ui_ctx.chat_state().get().active_channel_id != Some(channel_id) {
+            if ui_ctx.chat_state().active_conversation() != conversation {
                 return;
             }
             // Convert display data to Slint types (must be done on UI thread)
