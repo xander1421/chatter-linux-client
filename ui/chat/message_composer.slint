@@ -348,6 +348,10 @@ export component MessageComposer inherits GlassSurface {
 
     // Accessories retain their own material when the raised main row is transparent.
     accessory-surface := GlassSurface {
+        // Slint centers fixed-size children by default. Anchor the accessory
+        // material to its indicators, or an edit paints a full-width empty bar
+        // behind the raised action row instead of behind the edit indicator.
+        y: 0px;
         visible: root.raised-actions && !VoiceRecording.active && self.height > 0px;
         width: root.width;
         height: root.edit-bar-height + root.reply-bar-height + root.format-bar-height + root.send-status-height;

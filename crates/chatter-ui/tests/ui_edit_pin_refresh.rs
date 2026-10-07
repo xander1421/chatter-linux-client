@@ -37,8 +37,10 @@ fn edit_surfaces_and_pins_follow_current_conversation_without_reordering() {
     w.set_mobile_show_chat(true);
     w.set_composer_text("Edited plaintext".into());
     for width in [360.0, 412.0] {
-        for editing in [false, true, false] {
+        for (editing, replying) in [(false, false), (true, false), (false, true), (false, false)] {
             w.set_composer_is_editing(editing);
+            w.set_composer_is_replying(replying);
+            w.set_composer_reply_preview("Reply accessory material".into());
             pump(&w, width);
             let right = testing::ElementHandle::find_by_element_id(
                 &w,
@@ -70,6 +72,29 @@ fn edit_surfaces_and_pins_follow_current_conversation_without_reordering() {
             .next()
             .unwrap();
             assert!(left.size().width <= 64.0);
+            // Check painted descendants, not just the named action rectangles:
+            // a vertically centered accessory material passes button geometry.
+            let gap_x = left.absolute_position().x + left.size().width + 8.0;
+            let gap_y = left.absolute_position().y + left.size().height / 2.0;
+            let mut materials = 0;
+            for layer in testing::ElementHandle::find_by_element_type_name(&w, "Backdrop") {
+                let pos = layer.absolute_position();
+                let size = layer.size();
+                if size.width <= 0.0 || size.height <= 0.0 {
+                    continue;
+                }
+                if pos.y <= gap_y && pos.y + size.height > gap_y {
+                    materials += 1;
+                    assert!(
+                        !(pos.x <= gap_x && pos.x + size.width > gap_x),
+                        "Material paints the empty action center: {pos:?} {size:?}"
+                    );
+                }
+            }
+            assert!(
+                materials > 0,
+                "Regression must inspect actual material layers"
+            );
         }
     }
     let conversation = ActiveConversation::Channel(ChannelId::new());
@@ -173,9 +198,8 @@ fn edit_surfaces_and_pins_follow_current_conversation_without_reordering() {
         .set_active_conversation(ActiveConversation::Channel(ChannelId::new()));
     pump(&w, 360.0);
     assert_eq!(w.get_pinned_message_preview(), "Unloaded edit");
-    assert!(
-        w.get_pinned_items()
-            .iter()
-            .all(|p| p.preview != "Stale queued edit")
-    );
+    assert!(w
+        .get_pinned_items()
+        .iter()
+        .all(|p| p.preview != "Stale queued edit"));
 }
