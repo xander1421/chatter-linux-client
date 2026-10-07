@@ -871,6 +871,63 @@ mod session_tests {
     use chatter_core::domain::ids::UserId;
     use chatter_core::services::call_worker::{CallHandle, CallWorkerHandle, OrchestratedCallKind};
 
+    const CHILD_MARKER: &str = "CHATTER_UI_INCOMING_SESSION_TEST_CHILD";
+    const FIXTURE_COMPLETED: &str = "incoming session fixture completed";
+
+    fn run_isolated_session_test() {
+        use std::io::{Read, Seek, SeekFrom};
+        use std::process::{Command, Stdio};
+        use std::time::{Duration, Instant};
+
+        // Slint's integration backend may only be initialized once per process.
+        // Re-run this exact test alone, preserving the inherited no-keyring env.
+        let test_name = format!(
+            "{}::queued_projection_and_anonymous_completion_obey_session_and_active_identity",
+            module_path!().split_once("::").unwrap().1
+        );
+        // Files avoid pipe-buffer deadlocks even if the fixture logs heavily.
+        let mut stdout = tempfile::tempfile().expect("create child stdout capture");
+        let mut stderr = tempfile::tempfile().expect("create child stderr capture");
+        let mut child = Command::new(std::env::current_exe().expect("locate UI test executable"))
+            .args(["--exact", &test_name, "--nocapture", "--test-threads=1"])
+            .env(CHILD_MARKER, &test_name)
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(stdout.try_clone().unwrap()))
+            .stderr(Stdio::from(stderr.try_clone().unwrap()))
+            .spawn()
+            .expect("spawn isolated incoming session test");
+        let deadline = Instant::now() + Duration::from_secs(120);
+        let result = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break Ok(status),
+                Ok(None) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Ok(None) => break Err("child exceeded 120-second timeout".to_owned()),
+                Err(error) => break Err(format!("polling child failed: {error}")),
+            }
+        };
+        // Never signal another test or service; reap only the child we spawned.
+        let cleanup = if result.is_err() {
+            let killed = child.kill();
+            let reaped = child.wait();
+            format!("; child kill: {killed:?}; child wait: {reaped:?}")
+        } else {
+            String::new()
+        };
+        let mut stdout_text = String::new();
+        let mut stderr_text = String::new();
+        stdout.seek(SeekFrom::Start(0)).unwrap();
+        stderr.seek(SeekFrom::Start(0)).unwrap();
+        stdout.read_to_string(&mut stdout_text).unwrap();
+        stderr.read_to_string(&mut stderr_text).unwrap();
+        assert!(
+            matches!(&result, Ok(status) if status.success())
+                && stderr_text.lines().any(|line| line == FIXTURE_COMPLETED),
+            "isolated test {test_name}: {result:?}{cleanup}\nstdout:\n{stdout_text}\nstderr:\n{stderr_text}"
+        );
+    }
+
     fn pump(window: &MainWindow) {
         slint::Timer::single_shot(std::time::Duration::from_millis(50), || {
             slint::quit_event_loop().unwrap()
@@ -881,6 +938,14 @@ mod session_tests {
 
     #[test]
     fn queued_projection_and_anonymous_completion_obey_session_and_active_identity() {
+        let test_name = format!(
+            "{}::queued_projection_and_anonymous_completion_obey_session_and_active_identity",
+            module_path!().split_once("::").unwrap().1
+        );
+        if std::env::var(CHILD_MARKER).ok().as_deref() != Some(test_name.as_str()) {
+            run_isolated_session_test();
+            return;
+        }
         i_slint_backend_testing::init_integration_test_with_system_time();
         let runtime = super::super::timers::tests::runtime();
         let _entered = runtime.enter();
@@ -1117,5 +1182,6 @@ mod session_tests {
             }
         }
         worker.shutdown();
+        eprintln!("{FIXTURE_COMPLETED}");
     }
 }
