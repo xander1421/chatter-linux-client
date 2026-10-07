@@ -1,7 +1,7 @@
 //! Real phone layout: media actions remain reachable and mixed-height seeks land.
 use chatter_ui::{ConversationKind, MainWindow, MessageItemData};
 use i_slint_backend_testing as testing;
-use slint::{ComponentHandle, ModelRc, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 fn pump(w: &MainWindow, width: f32) {
     w.show().unwrap();
@@ -60,7 +60,7 @@ fn phone_media_actions_fit_and_mixed_height_pin_seek_lands_at_header() {
     client.chat_state().set_active_conversation(b);
     pump(&w, 412.0);
     assert_eq!(
-        slint::Model::row_count(&w.get_messages()),
+        w.get_messages().row_count(),
         1,
         "Queued old-chat delete must preserve the new chat"
     );
@@ -77,7 +77,7 @@ fn phone_media_actions_fit_and_mixed_height_pin_seek_lands_at_header() {
         .unwrap();
     pump(&w, 412.0);
     assert_eq!(
-        slint::Model::row_count(&w.get_messages()),
+        w.get_messages().row_count(),
         0,
         "Current-chat deletion must still remove the bubble"
     );
