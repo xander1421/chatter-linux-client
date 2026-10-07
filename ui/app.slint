@@ -1287,7 +1287,6 @@ export component MainWindow inherits Window {
     changed thread-panel-visible => { VoiceRecording.cancel(); }
     changed active-tab => { root.calls-more-menu-visible = false; root.cancel-composer-keyboard-handover(); VoiceRecording.cancel(); }
     changed current-view => { root.calls-more-menu-visible = false; root.cancel-composer-keyboard-handover(); VoiceRecording.cancel(); }
-    changed active-modal => { root.calls-more-menu-visible = false; }
     // Drop whatever text field holds focus (hiding the soft keyboard with it)
     // without leaving the window focus-less: Back keeps arriving at
     // back-scope. Called from Rust when Android's Back hid the keyboard
@@ -1371,6 +1370,7 @@ export component MainWindow inherits Window {
         }
     }
     changed active-modal => {
+        root.calls-more-menu-visible = false;
         root.cancel-composer-keyboard-handover();
         if root.active-modal != "" { VoiceRecording.cancel(); }
         root.secure-screen(root.active-modal == "recovery-codes");
