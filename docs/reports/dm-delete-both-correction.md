@@ -10,7 +10,7 @@ The friend-DM receive wrapper captures our sealed-message deletion token before 
 
 Anonymous DM `process_incoming_content` handles deletion before the common group dispatcher: it validates the active conversation, authenticated peer and block state, resolves either participant's scoped AnonDm message, and emits its actual message ID/author. Missing targets use typed AnonDm tombstones. The common group dispatcher is unchanged. Anonymous catchup processing filters reconstructed MessageReceived events whose rows were suppressed by pending deletion, preventing live ghost bubbles. Anonymous DM sender-keyed lookup and local timestamp deletion are now type-scoped.
 
-`latest_message` searches at most eight pages of 32 rows, skipping only typed `SystemMessage::DisappearingTimerChanged` notices. It preserves other system events and returns None if only notices remain inside the bounded search. Paging uses the existing strictly decreasing sent_at cursor and a progress guard.
+`latest_message` searches at most eight pages of 32 rows, skipping only typed `SystemMessage::DisappearingTimerChanged` notices. It preserves other system events and returns None if only notices remain inside the bounded search. Root follow-up3c972f7d corrected paging to the repository message-ID cursor with a repeated-ID guard and canonical typed-notice predicate; the initial timestamp cursor and missing test import failed actual compilation.
 
 ## Source regression tests added
 
@@ -20,3 +20,5 @@ Anonymous DM `process_incoming_content` handles deletion before the common group
 - `latest_preview_pages_past_typed_timer_notices_and_preserves_other_system_events`: more than one page of notices, valid older preview, other system notice, bounded all-notice search.
 
 Validation performed: rustfmt parsing/formatting for owned source with skip_children enabled, git diff --check, execution of actual pending upsert/type-matching/cleanup SQL in in-memory SQLite for both DM types and both authors, unrelated conversation/type refusal and retained replay tombstones. No Cargo, APK, or Gradle command was run while writers were active; Rust regression tests are added but not compiled/executed. Coordinator must run focused core tests and independently review before claiming integration GO. Unrelated writer files are excluded from this commit.
+
+Root follow-upcb3981fe also guards queued sender/receiver UI deletion at execution against the captured conversation. Its real event-queue regression is in ui_media_pin_layout; execution is pending until integrated checks finish. Independent final source review is GO on417ddf06/3c972f7d/cb3981fe and prior call policya2d244ba, with protocol/retention/remote-cleanup bounds retained.
