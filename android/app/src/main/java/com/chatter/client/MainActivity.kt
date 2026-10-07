@@ -32,6 +32,7 @@ import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import com.google.androidgamesdk.GameActivity
 import java.io.File
+import java.nio.file.Files
 import java.util.concurrent.Executors
 
 /**
@@ -489,6 +490,7 @@ class MainActivity : GameActivity() {
     }
 
     private fun copyToCache(uri: Uri): String? {
+        var copiedFile: File? = null
         return try {
             // The display name comes from another app's content provider, so it
             // is untrusted input on a path: "../../x" would resolve out of the
@@ -498,12 +500,22 @@ class MainActivity : GameActivity() {
                 ?.substringAfterLast('/')
                 ?.takeIf { it.isNotBlank() && it != "." && it != ".." }
                 ?: "attachment_${System.nanoTime()}"
-            val dir = File(cacheDir, "picked").apply { mkdirs() }
-            val out = File(dir, name)
             val input = contentResolver.openInputStream(uri) ?: return null
-            input.use { stream -> out.outputStream().use { stream.copyTo(it) } }
-            out.absolutePath
+            input.use { stream ->
+                val dir = File(cacheDir, "picked").apply { mkdirs() }
+                // Display names are not identities: two providers (or two
+                // successive picks) can both return "image.jpg". Keep the
+                // name for the attachment UI, but never overwrite a pending
+                // attachment's bytes with a later selection.
+                val selectionDir = Files.createTempDirectory(dir.toPath(), "selection_").toFile()
+                val out = File(selectionDir, name)
+                copiedFile = out
+                out.outputStream().use { stream.copyTo(it) }
+                out.absolutePath
+            }
         } catch (_: Exception) {
+            copiedFile?.delete()
+            copiedFile?.parentFile?.delete()
             // Provider URIs and exception messages can identify private files.
             Log.e(TAG, "Attachment copy failed")
             null

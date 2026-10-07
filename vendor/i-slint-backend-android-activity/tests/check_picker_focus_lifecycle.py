@@ -18,6 +18,9 @@ inbound_guard = source[start:end]
 start = source.index("            InputMethodRequest::Update(props) => {", source.index('#[cfg(not(feature = "native-activity"))]'))
 end = source.index("            InputMethodRequest::Disable => {", start)
 update = source[start:end]
+start = source.index("                if self.ime_client.borrow().as_ref() != Some(&focus)")
+end = source.index("                // Slint calls Enable again", start)
+enable_session = source[start:end]
 
 harness = r'''
 use std::cell::{Cell, RefCell};
@@ -52,6 +55,9 @@ struct AndroidWindowAdapter {
     updates: Cell<usize>,
 }
 impl AndroidWindowAdapter {
+    fn enable_session(&self, focus: usize) {
+ENABLE_SESSION
+    }
     fn disable(&self) {
         use android_activity::input::{TextInputState, TextSpan};
         match InputMethodRequest::Disable {
@@ -113,8 +119,39 @@ fn picker_cancel_selection_and_pause_do_not_publish_a_draft_erase() {
         }
     }
 }
+#[test]
+fn same_field_reenable_and_new_search_identity_reset_only_the_released_session() {
+    let adapter = AndroidWindowAdapter::default();
+    adapter.enable_session(42);
+    assert_eq!(adapter.forgets.get(), 1);
+    adapter.had_compose.set(true);
+    *adapter.deferred_ime_update.borrow_mut() = Some(());
+    adapter.enable_session(42); // repeated Enable while typing/selection
+    assert_eq!(adapter.forgets.get(), 1);
+    assert!(adapter.had_compose.get(), "same-field Enable wiped composition");
+    assert!(adapter.deferred_ime_update.borrow().is_none());
+
+    adapter.disable(); // SAF/pause detaches without publishing empty text
+    adapter.update(); // delayed Update must remain unowned
+    adapter.incoming(TextInputState {
+        text: "old draft".into(), selection: TextSpan { start: 0, end: 0 }, compose_region: None,
+    });
+    assert_eq!(adapter.updates.get(), 0);
+    assert!(adapter.delivered.borrow().is_empty());
+    adapter.enable_session(42); // same item, NEW session on resume
+    assert_eq!(adapter.forgets.get(), 3);
+    assert!(!adapter.had_compose.get());
+    adapter.had_compose.set(true);
+    adapter.enable_session(77); // drawer search takes ownership
+    assert_eq!(*adapter.ime_client.borrow(), Some(77));
+    assert_eq!(adapter.forgets.get(), 4);
+    assert!(!adapter.had_compose.get());
+    // This seam cannot label OEM reports queued before Enable: it deliberately
+    // makes no assertion that an old full-text event after Enable is rejected.
+    assert_eq!(adapter.app.pushes.get(), 0);
+}
 '''
-harness = harness.replace("DISABLE", disable).replace("GUARD", inbound_guard).replace("UPDATE", update)
+harness = harness.replace("DISABLE", disable).replace("GUARD", inbound_guard).replace("UPDATE", update).replace("ENABLE_SESSION", enable_session)
 with tempfile.TemporaryDirectory(prefix="chatter-picker-focus-") as tmp:
     tmp = Path(tmp)
     test = tmp / "picker_focus.rs"
