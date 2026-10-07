@@ -2099,8 +2099,8 @@ mod inbound_target_tests {
         assert!(channel_handle.message_menu(&f.carol, CH_TS).is_err());
     }
 
-    #[test]
-    fn queued_dm_deletes_block_either_author_catchup_without_crossing_type_or_chat() {
+    #[tokio::test]
+    async fn queued_dm_deletes_block_either_author_catchup_without_crossing_type_or_chat() {
         let f = fixture();
         let svc = f.client.messages();
         for author in [f.me, f.carol] {
@@ -2143,8 +2143,8 @@ mod inbound_target_tests {
         }
     }
 
-    #[test]
-    fn latest_preview_pages_past_typed_timer_notices_and_preserves_other_system_events() {
+    #[tokio::test]
+    async fn latest_preview_pages_past_typed_timer_notices_and_preserves_other_system_events() {
         use crate::domain::message::{MessageContent, SystemMessage};
         let f = fixture();
         let svc = f.client.messages();
@@ -2203,8 +2203,8 @@ mod inbound_target_tests {
         );
     }
 
-    #[test]
-    fn anonymous_dm_receiver_deletes_both_authors_and_queues_without_group_privilege() {
+    #[tokio::test]
+    async fn anonymous_dm_receiver_deletes_both_authors_and_queues_without_group_privilege() {
         use crate::domain::anon_dm::{AnonDm, AnonDmStatus};
         let f = fixture();
         let svc = f.client.messages();
