@@ -394,6 +394,7 @@ fn request_shared_page(
     w.set_profile_shared_loading(true);
     let weak = w.as_weak();
     let ui_ctx = ui_ctx.clone();
+    let revision = ui_ctx.auth_state().get().session_revision;
     tokio::spawn(async move {
         let page = ui_ctx
             .shared_content_page_scoped(
@@ -404,9 +405,34 @@ fn request_shared_page(
                 shared_sender(conversation, peer_id),
             )
             .await;
+        #[cfg(target_os = "android")]
+        let page = {
+            let client = ui_ctx.clone();
+            tokio::task::spawn_blocking(move || {
+                let mut page = page;
+                // At most four missing videos per requested page, with no remote download.
+                for item in page
+                    .iter_mut()
+                    .filter(|i| i.is_video && i.thumbnail.is_empty())
+                    .take(4)
+                {
+                    if let Ok(id) = item.attachment_id.parse() {
+                        if let Ok(result) = client.decrypt_and_extract_video_thumbnail(&id) {
+                            item.thumbnail = result.image_bytes;
+                        }
+                    }
+                }
+                page
+            })
+            .await
+            .unwrap_or_default()
+        };
         let short = page.len() < SHARED_PAGE_SIZE as usize;
         let count = page.len();
         let _ = slint::invoke_from_event_loop(move || {
+            if ui_ctx.auth_state().get().session_revision != revision {
+                return;
+            }
             let Some(w) = weak.upgrade() else { return };
             let current = SHARED_PAGE.with(|p| {
                 let mut p = p.borrow_mut();

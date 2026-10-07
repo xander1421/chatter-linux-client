@@ -120,6 +120,7 @@ fn android_main(app: i_slint_backend_android_activity::AndroidApp) {
     // The SQLCipher passphrase and mesh seal key are Keystore-sealed; the
     // wrapper must be in place before `app_init` builds the client.
     crate::platform::android::keystore::init();
+    crate::platform::android::video_thumbnail::init();
 
     // Two-phase startup (see desktop `app_main` for the same split):
     //   Phase 1: block_on(app_init) while the reactor is polling.

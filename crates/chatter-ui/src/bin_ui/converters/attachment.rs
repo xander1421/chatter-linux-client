@@ -44,6 +44,27 @@ pub struct AttachmentDisplayData {
 }
 
 impl AttachmentDisplayData {
+    /// Derive only from the client's authenticated encrypted attachment, off the UI thread.
+    pub fn derive_video_thumbnail(&mut self, client: &chatter_core::client::ChatterClient) {
+        #[cfg(target_os = "android")]
+        if self.is_video && self.thumbnail_bytes.is_empty() {
+            if let Ok(id) = self.id.parse() {
+                match client.decrypt_and_extract_video_thumbnail(&id) {
+                    Ok(result) => {
+                        self.thumbnail_bytes = result.image_bytes;
+                        self.width = result.width as i32;
+                        self.height = result.height as i32;
+                    }
+                    Err(_) => {
+                        tracing::debug!("Video preview unavailable; keeping play placeholder")
+                    }
+                }
+            }
+        }
+        #[cfg(not(target_os = "android"))]
+        let _ = client;
+    }
+
     /// Pre-decode thumbnail bytes to RGBA pixels (call this before invoke_from_event_loop).
     pub fn decode_thumbnail(&mut self) {
         if self.thumbnail_pixels.is_some() {
@@ -349,5 +370,38 @@ pub fn pending_attachment_to_slint(attachment: &PendingAttachment) -> PendingAtt
         is_ready: true, // Already uploaded
         has_thumbnail,
         thumbnail,
+    }
+}
+
+/// Off-thread history resolver: old downloaded videos also receive previews.
+/// Four attempts per page bound decoder work independently of history size.
+pub fn attachment_display_resolver(
+    client: &chatter_core::client::ChatterClient,
+) -> impl Fn(&chatter_core::domain::ids::AttachmentId) -> Option<Attachment> + '_ {
+    #[cfg(target_os = "android")]
+    let remaining = std::cell::Cell::new(4usize);
+    let revision = client.auth_state().get().session_revision;
+    move |id| {
+        if client.auth_state().get().session_revision != revision {
+            return None;
+        }
+        let attachment = client.get_attachment_metadata(id)?;
+        #[cfg(target_os = "android")]
+        let mut attachment = attachment;
+        #[cfg(target_os = "android")]
+        if attachment.metadata.is_video()
+            && attachment
+                .metadata
+                .thumbnail
+                .as_ref()
+                .is_none_or(|b| b.is_empty())
+            && remaining.get() > 0
+        {
+            remaining.set(remaining.get() - 1);
+            if let Ok(result) = client.decrypt_and_extract_video_thumbnail(id) {
+                attachment.metadata.thumbnail = Some(result.image_bytes);
+            }
+        }
+        (client.auth_state().get().session_revision == revision).then_some(attachment)
     }
 }

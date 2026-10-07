@@ -9,7 +9,10 @@ mod range_decrypt;
 mod sanitize;
 mod upload;
 
-pub use media::{GifDecodeResult, GifFullDecodeResult, ImageDecodeResult};
+pub use media::{
+    GifDecodeResult, GifFullDecodeResult, ImageDecodeResult, ThumbnailOwner,
+    register_video_thumbnail_extractor,
+};
 pub use range_decrypt::{CbcRangeDecryptor, CbcRangeReader};
 pub use sanitize::{SanitizeOutcome, sanitize_media, sanitize_media_file, validate_media};
 

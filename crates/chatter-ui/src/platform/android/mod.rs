@@ -24,3 +24,5 @@ pub use notifications::AndroidNotifications;
 pub mod media;
 
 pub mod media_export;
+
+pub mod video_thumbnail;

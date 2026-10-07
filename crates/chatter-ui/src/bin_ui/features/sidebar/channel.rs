@@ -247,7 +247,7 @@ pub async fn load_channel_into_ui(
         &messages,
         |ms| ui_ctx.message_sender_display_names(ms),
         |m| ui_ctx.message_sender_avatar(m),
-        |att_id| ui_ctx.get_attachment(att_id),
+        crate::bin_ui::converters::attachment_display_resolver(&ui_ctx),
         |m| ui_ctx.reply_author_display_name(m),
         |m| ui_ctx.reply_parent_missing_for(m),
         |m| ui_ctx.reply_parent_media(m),

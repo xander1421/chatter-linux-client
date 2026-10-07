@@ -134,6 +134,7 @@ fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let weak = weak_window.clone();
         let ui_ctx = ui_ctx_show.clone();
         let conversation = ui_ctx.chat_state().active_conversation();
+        let revision = ui_ctx.auth_state().get().session_revision;
         tokio::spawn(async move {
             let mut items = ui_ctx.pinned_display_items(conversation).await;
             for item in &mut items {
@@ -144,10 +145,26 @@ fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     &item.preview,
                 );
             }
+            #[cfg(target_os = "android")]
+            let items = {
+                let client = ui_ctx.clone();
+                tokio::task::spawn_blocking(move || {
+                    for item in items.iter_mut().filter(|i| i.thumbnail.is_empty()).take(4) {
+                        item.thumbnail =
+                            pinned_video_thumbnail(&client, conversation, &item.message_id);
+                    }
+                    items
+                })
+                .await
+                .unwrap_or_default()
+            };
             let _ = slint::invoke_from_event_loop(move || {
                 let Some(w) = weak.upgrade() else {
                     return;
                 };
+                if ui_ctx.auth_state().get().session_revision != revision {
+                    return;
+                }
                 if ui_ctx.chat_state().active_conversation() != conversation {
                     return;
                 }
@@ -214,6 +231,40 @@ fn pinned_plaintext_preview(
     )
 }
 
+/// Missing old video pins can derive a local frame before history has been loaded.
+#[cfg(target_os = "android")]
+fn pinned_video_thumbnail(
+    client: &ChatterClient,
+    conversation: ActiveConversation,
+    id: &MessageId,
+) -> Vec<u8> {
+    let message = match conversation {
+        ActiveConversation::AnonGroup(_) => client.get_anon_group_message(
+            &chatter_core::domain::anon_group::AnonGroupMessageId::from_string(id.to_string()),
+        ),
+        _ => client.get_message_local(id),
+    };
+    let Some(message) = message else {
+        return Vec::new();
+    };
+    for id in message.attachments.iter().take(16) {
+        let Some(attachment) = client.get_attachment_metadata(id) else {
+            continue;
+        };
+        if !attachment.metadata.is_video() {
+            continue;
+        }
+        if let Some(bytes) = attachment.metadata.thumbnail.filter(|b| !b.is_empty()) {
+            return bytes;
+        }
+        return client
+            .decrypt_and_extract_video_thumbnail(id)
+            .map(|result| result.image_bytes)
+            .unwrap_or_default();
+    }
+    Vec::new()
+}
+
 pub(crate) fn refresh_pinned_ui(w: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     update_pinned_ui_from_loaded_messages(
         w.as_weak(),
@@ -248,7 +299,8 @@ fn update_pinned_ui_from_loaded_messages(
                         let thumbnail = msg.attachments.iter()
                             .find(|a| (a.is_image || a.is_video) && a.has_thumbnail)
                             .map(|a| a.thumbnail).unwrap_or_default();
-                        return Some((preview, thumbnail));
+                        let missing_video = msg.attachments.iter().any(|a| a.is_video && !a.has_thumbnail);
+                        return Some((preview, thumbnail, missing_video));
                     }
                 }
             }
@@ -256,7 +308,9 @@ fn update_pinned_ui_from_loaded_messages(
         None
     });
 
-    if let Some((preview, thumbnail)) = ui_preview {
+    if let Some((preview, thumbnail, missing_video)) = ui_preview {
+        let derive_video =
+            cfg!(target_os = "android") && missing_video && thumbnail.size().width == 0;
         // Already have preview from UI, update directly (already on UI thread from callback)
         if let Some(w) = weak_window.upgrade() {
             w.set_pinned_current_index(current_index + 1);
@@ -265,10 +319,13 @@ fn update_pinned_ui_from_loaded_messages(
             w.set_pinned_thumbnail(thumbnail);
             w.set_has_pinned_messages(total_count > 0);
         }
-        return;
+        if !derive_video {
+            return;
+        }
     }
 
     // Fall back to DB lookup in background thread
+    let revision = ui_ctx.auth_state().get().session_revision;
     std::thread::spawn(move || {
         let preview = match current_msg_id {
             Some(msg_id) => pinned_plaintext_preview(
@@ -284,9 +341,20 @@ fn update_pinned_ui_from_loaded_messages(
             .and_then(|id| ui_ctx.get_pinned_message(&id))
             .map(|pin| pin.thumbnail)
             .unwrap_or_default();
+        #[cfg(target_os = "android")]
+        let thumbnail = if thumbnail.is_empty() {
+            current_msg_id
+                .map(|id| pinned_video_thumbnail(&ui_ctx, conversation, &id))
+                .unwrap_or_default()
+        } else {
+            thumbnail
+        };
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak_window.upgrade() {
-                if ui_ctx.chat_state().active_conversation() != conversation {
+                if ui_ctx.chat_state().active_conversation() != conversation
+                    || ui_ctx.chat_state().pinned_current_message_id() != current_msg_id
+                    || ui_ctx.auth_state().get().session_revision != revision
+                {
                     return;
                 }
                 w.set_pinned_thumbnail(
@@ -582,7 +650,7 @@ fn load_older(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, until: Option<Message
             &older_messages,
             |ms| ui_ctx.message_sender_display_names(ms),
             |m| ui_ctx.message_sender_avatar(m),
-            |att_id| ui_ctx.get_attachment(att_id),
+            crate::bin_ui::converters::attachment_display_resolver(&ui_ctx),
             |m| ui_ctx.reply_author_display_name(m),
             |m| ui_ctx.reply_parent_missing_for(m),
             |m| ui_ctx.reply_parent_media(m),

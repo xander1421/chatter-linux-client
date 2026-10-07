@@ -270,8 +270,8 @@ fn handle_image(
 ///
 /// Server-managed DMs strip the inline thumbnail before sealing (sealed
 /// envelope is padded to small buckets for metadata privacy), so the receiver
-/// derives one from the downloaded video. GStreamer decode is blocking → runs
-/// on a background thread.
+/// derives one from the downloaded video. Platform decode is blocking and runs
+/// on a background thread; Android persists the frame for pin/profile reuse.
 fn handle_video(
     ui_ctx: &Arc<chatter_core::client::ChatterClient>,
     att_id: &AttachmentId,
@@ -284,6 +284,7 @@ fn handle_video(
     let cdn_key = cdn_key.to_string();
     let weak = weak_window.clone();
     let conv_id = conversation_id.to_string();
+    let revision = ui_ctx.auth_state().get().session_revision;
 
     tokio::task::spawn_blocking(move || {
         let thumb = match ui_ctx_video.decrypt_and_extract_video_thumbnail(&att_id) {
@@ -294,23 +295,30 @@ fn handle_video(
             }
         };
 
+        if ui_ctx_video.auth_state().get().session_revision != revision {
+            return;
+        }
         let width = thumb.width;
         let height = thumb.height;
         let thumb_bytes = thumb.image_bytes;
 
         let _ = slint::invoke_from_event_loop(move || {
+            if ui_ctx_video.auth_state().get().session_revision != revision {
+                return;
+            }
             if let Some(window) = weak.upgrade() {
                 match crate::bin_ui::slint_conversions::memory_to_slint_image(&thumb_bytes) {
                     Ok(image) => {
                         update_attachment_thumbnail_with_dims(
                             &window,
                             &ui_ctx_video,
-                            &cdn_key,
+                            &att_id.to_string(),
                             image,
                             width as i32,
                             height as i32,
                             &conv_id,
                         );
+                        crate::bin_ui::features::header::refresh_pinned_ui(&window, &ui_ctx_video);
                     }
                     Err(e) => {
                         tracing::error!(cdn_key = %cdn_key, error = ?e, "Failed to create video thumbnail image");

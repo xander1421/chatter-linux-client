@@ -1042,7 +1042,7 @@ impl ChatterClient {
 
     /// Decrypt a video attachment and extract a thumbnail frame.
     ///
-    /// Blocking (GStreamer) — call from a background thread. Used to derive a
+    /// Blocking platform decode — call from a background thread. Used to derive a
     /// thumbnail for server-DM videos, which arrive without inline thumbnails.
     pub fn decrypt_and_extract_video_thumbnail(
         &self,
@@ -1051,8 +1051,22 @@ impl ChatterClient {
         crate::services::attachment::ImageDecodeResult,
         crate::services::attachment::AttachmentError,
     > {
-        self.attachments()
-            .decrypt_and_extract_video_thumbnail(attachment_id)
+        let revision = self.auth_state().get().session_revision;
+        let auth = self.auth_state().clone();
+        let result = self
+            .attachments()
+            .decrypt_and_extract_video_thumbnail_guarded(
+                attachment_id,
+                std::sync::Arc::new(move || auth.get().session_revision == revision),
+            );
+        if self.auth_state().get().session_revision != revision {
+            return Err(
+                crate::services::attachment::AttachmentError::InvalidAttachment(
+                    "video preview owner changed".into(),
+                ),
+            );
+        }
+        result
     }
 
     /// Decode every frame of a GIF from already-decrypted bytes.

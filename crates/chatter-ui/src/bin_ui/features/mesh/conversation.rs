@@ -86,7 +86,7 @@ pub fn open(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, id: &str) {
             },
             // No chatter profile behind a mesh sender.
             |_| None,
-            |att_id| ui_ctx.get_attachment(att_id),
+            crate::bin_ui::converters::attachment_display_resolver(&ui_ctx),
             |m| ui_ctx.reply_author_display_name(m),
             |m| ui_ctx.reply_parent_missing_for(m),
             |m| ui_ctx.reply_parent_media(m),
@@ -202,7 +202,7 @@ pub(super) fn append_incoming(
         // sender has no peer record (for example our own local echo).
         |ms| vec![nickname.clone(); ms.len()],
         |_| None,
-        |att_id| ui_ctx.get_attachment(att_id),
+        crate::bin_ui::converters::attachment_display_resolver(&ui_ctx),
         |m| ui_ctx.reply_author_display_name(m),
         |m| ui_ctx.reply_parent_missing_for(m),
         |m| ui_ctx.reply_parent_media(m),

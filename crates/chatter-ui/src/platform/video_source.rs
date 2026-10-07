@@ -32,9 +32,88 @@ impl VideoSource {
         })
     }
 }
+/// Independent thumbnail read budget, including empty reads and repeated seeks.
+pub struct ThumbnailSource {
+    video: VideoSource,
+    deadline: std::time::Instant,
+    remaining_bytes: usize,
+    remaining_reads: usize,
+    owner: Arc<dyn Fn() -> bool + Send + Sync>,
+}
+impl ThumbnailSource {
+    pub fn new(video: VideoSource, deadline: std::time::Instant) -> Self {
+        Self::new_guarded(video, deadline, Arc::new(|| true))
+    }
+    pub fn new_guarded(
+        video: VideoSource,
+        deadline: std::time::Instant,
+        owner: Arc<dyn Fn() -> bool + Send + Sync>,
+    ) -> Self {
+        Self {
+            video,
+            deadline,
+            remaining_bytes: 32 * 1024 * 1024,
+            remaining_reads: 4096,
+            owner,
+        }
+    }
+    pub fn len(&self) -> Option<usize> {
+        ((self.owner)() && std::time::Instant::now() < self.deadline).then(|| self.video.len())
+    }
+    pub fn read(&mut self, position: i64, count: usize) -> Option<Vec<u8>> {
+        if self.len().is_none() || self.remaining_reads == 0 || self.remaining_bytes == 0 {
+            return None;
+        }
+        self.remaining_reads -= 1;
+        let bytes = self.video.read(position, count.min(self.remaining_bytes))?;
+        self.remaining_bytes -= bytes.len();
+        Some(bytes)
+    }
+}
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn video_thumbnail_source_revokes_reads_when_owner_changes() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let alive = Arc::new(AtomicBool::new(true));
+        let guard = alive.clone();
+        let mut source = ThumbnailSource::new_guarded(
+            VideoSource::Memory(SecureBuffer::new(vec![1, 2])),
+            std::time::Instant::now() + std::time::Duration::from_secs(5),
+            Arc::new(move || guard.load(Ordering::SeqCst)),
+        );
+        assert_eq!(source.read(0, 1), Some(vec![1]));
+        alive.store(false, Ordering::SeqCst);
+        assert_eq!(source.len(), None);
+        assert_eq!(source.read(1, 1), None);
+    }
+    #[test]
+    fn video_thumbnail_source_deadline_byte_and_empty_read_budgets() {
+        use std::time::{Duration, Instant};
+        let mut expired = ThumbnailSource::new(
+            VideoSource::Memory(SecureBuffer::new(vec![1])),
+            Instant::now(),
+        );
+        assert_eq!(expired.len(), None);
+        assert_eq!(expired.read(0, 1), None);
+        let mut source = ThumbnailSource::new(
+            VideoSource::Memory(SecureBuffer::new(vec![7; 2 * 1024 * 1024])),
+            Instant::now() + Duration::from_secs(5),
+        );
+        for _ in 0..32 {
+            assert_eq!(source.read(0, usize::MAX).unwrap().len(), 1024 * 1024);
+        }
+        assert_eq!(source.read(0, 1), None);
+        let mut empty = ThumbnailSource::new(
+            VideoSource::Memory(SecureBuffer::new(vec![1])),
+            Instant::now() + Duration::from_secs(5),
+        );
+        for _ in 0..4096 {
+            assert_eq!(empty.read(0, 0), Some(vec![]));
+        }
+        assert_eq!(empty.read(0, 0), None);
+    }
     #[test]
     fn random_reads_seek_eof_and_invalid_offsets() {
         let source = VideoSource::Memory(SecureBuffer::new(vec![1, 2, 3, 4]));

@@ -32,6 +32,19 @@ pub struct AttachmentRepository {
 }
 
 impl AttachmentRepository {
+    /// Cache a derived preview without modifying status, paths or encryption material.
+    pub fn cache_video_thumbnail(
+        &self,
+        source: &Attachment,
+        bytes: &[u8],
+    ) -> Result<bool, StorageError> {
+        let conn = self.db.connection()?;
+        Ok(conn.execute(
+            "UPDATE attachments SET thumbnail_bytes = ?1 WHERE id = ?2 AND encryption_key = ?3 AND encryption_iv = ?4",
+            params![bytes, source.id.to_string(), source.encryption_key, source.encryption_iv],
+        )? == 1)
+    }
+
     /// Create a new AttachmentRepository.
     pub fn new(db: Arc<Database>) -> Self {
         Self { db }

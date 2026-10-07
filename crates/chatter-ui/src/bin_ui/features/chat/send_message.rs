@@ -589,6 +589,22 @@ pub async fn deliver(
         .iter()
         .map(attachment_to_display_data)
         .collect();
+    #[cfg(target_os = "android")]
+    {
+        let client = ui_ctx.clone();
+        attachment_display = tokio::task::spawn_blocking(move || {
+            for (index, att) in attachment_display.iter_mut().enumerate() {
+                if index < 4 {
+                    att.derive_video_thumbnail(&client);
+                }
+                att.decode_thumbnail();
+            }
+            attachment_display
+        })
+        .await
+        .unwrap_or_default();
+    }
+    #[cfg(not(target_os = "android"))]
     for att in &mut attachment_display {
         att.decode_thumbnail();
     }
