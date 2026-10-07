@@ -282,6 +282,8 @@ impl PushListener {
 
         loop {
             tokio::select! {
+                // A queued Shield/sign-out shutdown wins before dialing.
+                biased;
                 _ = shutdown.recv() => {
                     tracing::debug!("Push listener shutting down");
                     return;
@@ -1089,5 +1091,22 @@ mod log_redaction_tests {
         ] {
             assert!(!captured.contains(secret));
         }
+    }
+}
+
+#[cfg(test)]
+mod shutdown_admission_tests {
+    #[tokio::test]
+    async fn queued_shutdown_prevents_opening_a_socket() {
+        let server = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let config = super::PushListenerConfig::new(
+            format!("https://127.0.0.1:{}", server.local_addr().unwrap().port()),
+            "fixture-topic".into(),
+        );
+        let listener = super::PushListener::new(config);
+        let (shutdown, rx) = tokio::sync::broadcast::channel(1);
+        shutdown.send(()).unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(1), listener.listen(rx)).await.unwrap();
+        assert!(tokio::time::timeout(std::time::Duration::from_millis(30), server.accept()).await.is_err());
     }
 }

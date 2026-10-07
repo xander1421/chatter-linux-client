@@ -65,6 +65,7 @@ mod notification;
 mod pin;
 mod profile;
 mod profile_visibility;
+mod push_config;
 mod shared_content;
 
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -187,7 +188,7 @@ impl ClientBuilder {
             #[cfg(feature = "media")]
             call_notification_bridge: Mutex::new(None),
             notif_stream_handle: Mutex::new(None),
-            push_url: Mutex::new(None),
+            push_url: Mutex::new(push_config::configured_push_url()),
             transport_switch_lock: tokio::sync::Mutex::new(()),
             server_monitor_started: AtomicBool::new(false),
             server_contact_deferred: AtomicBool::new(false),
@@ -2028,6 +2029,13 @@ impl ChatterClient {
     /// presentation concern, not a chatter-core state change.
     pub fn set_anon_mode_enabled(self: &Arc<Self>, enabled: bool) {
         self.anon_mode.store(enabled, Ordering::Release);
+        // Suspend direct SSE synchronously at Shield entry, before queuing
+        // transport rebuild. configure_push holds this same admission lock.
+        if enabled {
+            if let Some(tx) = self.push_shutdown.lock().take() {
+                let _ = tx.send(());
+            }
+        }
 
         // Anon mode also routes the network transport over Tor (onion): enabling
         // it switches the whole pool to the pinned .onion, disabling it switches
@@ -2109,16 +2117,17 @@ impl ChatterClient {
         //    the old channel) and re-spawn so it connects over the new one.
         self.respawn_notification_stream();
 
-        // 2. ntfy push SSE listener — egresses to the ntfy server over plain
-        //    HTTP (no Tor). PRODUCT DECISION: push is OFF while anon mode is on;
+        // 2. ntfy push SSE listener — uses a direct private-CA HTTPS
+        //    connection (no Tor). PRODUCT DECISION: push is OFF while anon mode is on;
         //    delivery falls back to mailbox polling (the primary path anyway).
         //    Restore the previously-configured push on exit.
+        let remembered_push_url = self.push_url.lock().clone();
         if anon {
             if let Some(tx) = self.push_shutdown.lock().take() {
                 let _ = tx.send(());
                 tracing::info!("anon mode: ntfy push suspended (poll-only delivery)");
             }
-        } else if let Some(url) = self.push_url.lock().clone() {
+        } else if let Some(url) = remembered_push_url {
             if let Err(e) = self.configure_push(&url) {
                 tracing::warn!(error = %e, "anon mode: failed to restore ntfy push on exit");
             } else {
@@ -2722,6 +2731,10 @@ impl ChatterClient {
             }
         }
 
+        drop(tasks);
+        // Startup after session restore, login, registration and device linking
+        // all converge here after credentials/topic and inbox are ready.
+        self.start_configured_push();
         Ok(())
     }
 
@@ -4433,7 +4446,8 @@ impl ChatterClient {
         // Always shut down the previous listener first — this is the
         // "disable push" path when `ntfy_url` is empty, and also ensures
         // a reconfigure doesn't leak tasks.
-        if let Some(tx) = self.push_shutdown.lock().take() {
+        let mut push_slot = self.push_shutdown.lock();
+        if let Some(tx) = push_slot.take() {
             let _ = tx.send(());
         }
 
@@ -4449,19 +4463,23 @@ impl ChatterClient {
         // and restore this exact config on exit.
         *self.push_url.lock() = Some(ntfy_url.to_string());
 
-        // ntfy is reached over plain HTTP, never Tor. In Shield — including a
+        // ntfy SSE is direct private-CA HTTPS. In Shield — including a
         // session that signed in with Shield on — only remember the URL;
         // `rebuild_transport_loops` starts the listener when Shield goes off.
-        if self.anon_mode_enabled() {
+        if self.anon_mode_enabled()
+            || self.services.grpc_pool.transport_mode() == crate::network::grpc::client_pool::TransportMode::Onion
+        {
             tracing::info!("Push listener deferred: Shield is on (poll-only delivery)");
             return Ok(());
         }
 
-        if self.services.auth_state.get().current_user_id.is_none() {
+        let auth = self.services.auth_state.get();
+        if auth.current_user_id.is_none() {
             return Err(ClientError::Validation(
                 "configure_push requires an authenticated user".into(),
             ));
         }
+        let push_revision = auth.session_revision;
 
         // Use the opaque topic the server issued in AuthResponse (persisted at
         // login), not a locally-derived chatter_{user_id}. Empty means push is
@@ -4487,20 +4505,29 @@ impl ChatterClient {
 
         // Fresh shutdown channel for this listener instance.
         let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel::<()>(1);
-        *self.push_shutdown.lock() = Some(shutdown_tx);
+        *push_slot = Some(shutdown_tx);
 
         let listener = std::sync::Arc::new(
             crate::network::streaming::push_listener::PushListener::new(config),
         );
         let wake_rx = listener.subscribe();
-        let event_bus = self.services.event_bus.clone();
-        let ui = self.services.clone();
+        let client = Arc::downgrade(self);
 
         // Task A: SSE consumer. Runs the listener's reconnect loop; exits
         // when shutdown fires.
         let listen_listener = listener.clone();
         let listen_shutdown = shutdown_rx;
+        let listen_client = client.clone();
         let h_sse = tokio::spawn(async move {
+            // A reconfigure racing sign-out must not open an old account's
+            // subscription after teardown. Admission waits for auth transitions.
+            {
+                let Some(client) = listen_client.upgrade() else { return };
+                let _lifecycle = client.auth_lifecycle_lock.lock().await;
+                if !client.push_wakeup_allowed(push_revision) {
+                    return;
+                }
+            }
             listen_listener.listen(listen_shutdown).await;
         });
 
@@ -4513,21 +4540,9 @@ impl ChatterClient {
             loop {
                 match wake_rx.recv().await {
                     Ok(event) => {
-                        // (1) Fan out on the domain event bus — narrow
-                        // payload, no body text leaks.
-                        let kind = event.kind();
-                        let _ = event_bus.domain_sender().send(
-                            crate::events::DomainEvent::PushWakeup {
-                                topic: router_topic.clone(),
-                                kind,
-                            },
-                        );
-
-                        // Resume a stopped provider, then coalesce a wake for
-                        // its normal polling cycle (including all validation).
-                        let _ = ui.start_inbox_provider().await;
-                        if let Some(provider) = ui.device_inbox_provider.get() {
-                            provider.wake();
+                        let Some(client) = client.upgrade() else { break };
+                        if !client.route_push_wakeup(push_revision, &router_topic, event.kind()).await {
+                            break;
                         }
                     }
                     Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
