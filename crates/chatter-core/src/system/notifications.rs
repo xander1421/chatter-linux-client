@@ -29,7 +29,14 @@ pub struct DesktopNotifications {
     conversations:
         std::sync::Mutex<std::collections::HashMap<String, notify_rust::NotificationHandle>>,
     #[cfg(target_os = "linux")]
-    calls: std::sync::Mutex<std::collections::HashMap<String, notify_rust::NotificationHandle>>,
+    calls: std::sync::Mutex<std::collections::HashMap<String, LinuxCallNotification>>,
+}
+
+#[cfg(target_os = "linux")]
+struct LinuxCallNotification {
+    connection: zbus::Connection,
+    daemon: String,
+    id: u32,
 }
 
 impl DesktopNotifications {
@@ -224,21 +231,59 @@ impl super::notification_sink::NotificationSink for DesktopNotifications {
         // must not dismiss its ringing call, and ending one call must not
         // close a newer invitation from the same conversation.
         let mut calls = self.calls.lock().unwrap_or_else(|e| e.into_inner());
-        let mut notif = DesktopNotif::new();
-        notif
-            .appname(APP_DISPLAY_NAME)
-            .summary(title)
-            .body(body)
-            .icon("call-start")
-            .urgency(Urgency::Critical)
-            .timeout(crate::services::call_worker::RING_TIMEOUT.as_millis() as i32);
-        if let Some(previous) = calls.get(call_id) {
-            notif.id(previous.id());
-        }
-        self.apply_sound(&mut notif);
-        let handle = notif
-            .show()
-            .map_err(|e| SystemError::NotificationSend(e.to_string()))?;
+        let previous = calls.get(call_id);
+        let handle = futures::executor::block_on(async {
+            let connection = match previous {
+                Some(previous) => previous.connection.clone(),
+                None => zbus::Connection::session().await?,
+            };
+            // Address the exact daemon instance. If it restarts and reuses
+            // numeric ids, an old call's cancellation must not target it.
+            let owner = connection
+                .call_method(
+                    Some("org.freedesktop.DBus"),
+                    "/org/freedesktop/DBus",
+                    Some("org.freedesktop.DBus"),
+                    "GetNameOwner",
+                    &("org.freedesktop.Notifications",),
+                )
+                .await?;
+            let daemon: String = owner.body().deserialize()?;
+            let replaces = previous.filter(|p| p.daemon == daemon).map_or(0, |p| p.id);
+            let mut hints: std::collections::HashMap<&str, zbus::zvariant::Value<'_>> =
+                std::collections::HashMap::new();
+            hints.insert("urgency", 2u8.into());
+            if self.sound.load(std::sync::atomic::Ordering::Relaxed) {
+                hints.insert("sound-name", "message-new-instant".into());
+            } else {
+                hints.insert("suppress-sound", true.into());
+            }
+            let reply = connection
+                .call_method(
+                    Some(daemon.as_str()),
+                    "/org/freedesktop/Notifications",
+                    Some("org.freedesktop.Notifications"),
+                    "Notify",
+                    &(
+                        APP_DISPLAY_NAME,
+                        replaces,
+                        "call-start",
+                        title,
+                        body,
+                        Vec::<&str>::new(),
+                        hints,
+                        crate::services::call_worker::RING_TIMEOUT.as_millis() as i32,
+                    ),
+                )
+                .await?;
+            let id = reply.body().deserialize()?;
+            Ok::<_, zbus::Error>(LinuxCallNotification {
+                connection,
+                daemon,
+                id,
+            })
+        })
+        .map_err(|e| SystemError::NotificationSend(e.to_string()))?;
         calls.insert(call_id.to_owned(), handle);
         Ok(())
     }
@@ -247,8 +292,16 @@ impl super::notification_sink::NotificationSink for DesktopNotifications {
     fn cancel_incoming_call(&self, call_id: &str) -> Result<(), SystemError> {
         // Serialize cancellation with posting/replacement of this identity.
         let mut calls = self.calls.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some(handle) = calls.remove(call_id) {
-            handle.close();
+        if let Some(handle) = calls.get(call_id) {
+            futures::executor::block_on(handle.connection.call_method(
+                Some(handle.daemon.as_str()),
+                "/org/freedesktop/Notifications",
+                Some("org.freedesktop.Notifications"),
+                "CloseNotification",
+                &(handle.id,),
+            ))
+            .map_err(|e| SystemError::NotificationSend(e.to_string()))?;
+            calls.remove(call_id);
         }
         Ok(())
     }
