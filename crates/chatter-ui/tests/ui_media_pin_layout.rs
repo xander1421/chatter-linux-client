@@ -6,6 +6,7 @@ use i_slint_backend_testing as testing;
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 fn pump(w: &MainWindow, width: f32) {
+    w.window().set_size(slint::LogicalSize::new(width, 891.0));
     w.show().unwrap();
     for _ in 0..20 {
         w.window()
@@ -16,6 +17,7 @@ fn pump(w: &MainWindow, width: f32) {
             slint::quit_event_loop().unwrap();
         });
         w.run().unwrap();
+        std::thread::sleep(std::time::Duration::from_millis(20));
     }
 }
 fn visible(w: &MainWindow, label: &str) -> testing::ElementHandle {
