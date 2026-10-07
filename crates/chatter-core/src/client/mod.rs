@@ -182,6 +182,10 @@ impl ClientBuilder {
             link_device_service: std::sync::OnceLock::new(),
             anon_mode,
             authed_notif_started: AtomicBool::new(false),
+            auth_lifecycle_lock: tokio::sync::Mutex::new(()),
+            authed_notif_session: Mutex::new(None),
+            #[cfg(feature = "media")]
+            call_notification_bridge: Mutex::new(None),
             notif_stream_handle: Mutex::new(None),
             push_url: Mutex::new(None),
             transport_switch_lock: tokio::sync::Mutex::new(()),
@@ -358,6 +362,15 @@ pub struct ChatterClient {
     /// can't start at boot like the consumer because there's no authenticated
     /// user / call service yet — see `start_authed_notification_streams`.
     authed_notif_started: AtomicBool,
+    auth_lifecycle_lock: tokio::sync::Mutex<()>,
+    authed_notif_session: Mutex<Option<u64>>,
+    #[cfg(feature = "media")]
+    call_notification_bridge: Mutex<
+        Option<(
+            u64,
+            crate::services::call_notification_bridge::SessionBridge,
+        )>,
+    >,
     /// Handle to the long-lived gRPC notification-stream consumer, held apart
     /// from the `tasks` bag so a transport switch (anon mode toggle) can abort
     /// and re-spawn just that loop — forcing it to re-dial over the new
@@ -2515,6 +2528,15 @@ impl ChatterClient {
         self.ctx.init_group_fanout();
         #[cfg(feature = "media")]
         self.ctx.init_call_service();
+        #[cfg(feature = "media")]
+        if let Some(worker) = self.call_service().get() {
+            let auth = self.auth_state().get();
+            if auth.current_user_id.is_some() {
+                worker
+                    .incoming_presentation_state()
+                    .begin_session(auth.session_revision);
+            }
+        }
 
         // ── Event handling ──────────────────────────────────────────
         let h_events = self.ctx.spawn_event_handlers();
@@ -3915,12 +3937,14 @@ impl ChatterClient {
             return None;
         }
         let me = self.session_current_user_id()?;
+        let revision = self.auth_state().get().session_revision;
         match self.users().refresh_profile_if_stale(&me).await {
             Ok(Some(profile)) => {
-                if let Some(device_id) = self.auth_state().get().device_id {
-                    self.auth_state()
-                        .set_logged_in(me, device_id, profile.display_name.clone());
-                }
+                self.auth_state().update_display_name_if_current(
+                    revision,
+                    me,
+                    profile.display_name.clone(),
+                );
                 Some(profile)
             }
             Ok(None) => None,
@@ -4226,6 +4250,43 @@ impl ChatterClient {
 
     /// Graceful shutdown. Stops inbox, aborts background tasks, disconnects.
     pub async fn shutdown(&self) {
+        let revision = self.auth_state().get().session_revision;
+        let _lifecycle = self.auth_lifecycle_lock.lock().await;
+        if self.auth_state().get().session_revision != revision {
+            return;
+        }
+        self.auth_state().invalidate_session();
+        self.shutdown_session(self.auth_state().get().session_revision)
+            .await;
+    }
+
+    async fn shutdown_session(&self, revision: u64) {
+        if self.auth_state().get().session_revision != revision {
+            return;
+        }
+        let handles = std::mem::take(&mut *self.tasks.lock());
+        for handle in handles {
+            handle.abort();
+        }
+        let retired = self.authed_notif_session.lock().unwrap_or(revision);
+        self.stop_authed_notification_streams(retired).await;
+        #[cfg(feature = "media")]
+        if let Some(worker) = self.call_service().get() {
+            let actor_revision = worker
+                .incoming_presentation_state()
+                .session_revision()
+                .unwrap_or(retired);
+            match worker.reset_presentation_session(actor_revision).await {
+                Ok(incoming) => {
+                    if self.auth_state().get().session_revision == revision {
+                        if let Some(signaling) = self.call_signaling.get() {
+                            signaling.clear_call_session(&incoming);
+                        }
+                    }
+                }
+                Err(error) => tracing::error!(%error, "call session reset failed"),
+            }
+        }
         // Leave any active call first. The call worker holds capture
         // threads (audio, video, screen) and a LiveKit Room whose
         // RoomManager pumps frames into `SharedVideoFrames`, which in

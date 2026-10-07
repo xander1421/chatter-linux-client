@@ -57,6 +57,14 @@ impl ChatterClient {
         device_name: &str,
         pin: Option<&str>,
     ) -> Result<LoginResult, ClientError> {
+        let _lifecycle = self.auth_lifecycle_lock.lock().await;
+        if self.started.load(std::sync::atomic::Ordering::SeqCst)
+            || (self.auth_state().is_logged_in()
+                && *self.authed_notif_session.lock()
+                    == Some(self.auth_state().get().session_revision))
+        {
+            return Err(ClientError::AlreadyStarted);
+        }
         // If startup `connect()` failed (or hasn't run yet), the gRPC
         // pool will reject auth RPCs with "Not connected to server".
         // Self-heal here so callers don't have to remember to retry —
@@ -300,6 +308,14 @@ impl ChatterClient {
         avatar: Option<&[u8]>,
         pin: Option<&str>,
     ) -> Result<LoginResult, ClientError> {
+        let _lifecycle = self.auth_lifecycle_lock.lock().await;
+        if self.started.load(std::sync::atomic::Ordering::SeqCst)
+            || (self.auth_state().is_logged_in()
+                && *self.authed_notif_session.lock()
+                    == Some(self.auth_state().get().session_revision))
+        {
+            return Err(ClientError::AlreadyStarted);
+        }
         if let Some(p) = pin {
             crate::crypto::svr::validate_pin(p)
                 .map_err(|e| ClientError::Validation(e.to_string()))?;
@@ -892,10 +908,50 @@ impl ChatterClient {
     /// background loop. The teardown runs even if the first step fails, so a
     /// signed-out client never keeps syncing and a later login can `start()`.
     pub async fn logout(&self) -> Result<(), ClientError> {
+        let expected = self.auth_state().get().session_revision;
+        let _lifecycle = self.auth_lifecycle_lock.lock().await;
+        if self.auth_state().get().session_revision != expected {
+            return Ok(());
+        }
+        // Invalidate queued UI work immediately, then retire the old call owner
+        // using its captured revision, before new credentials can be installed.
         self.clear_composer_session();
+        let teardown_revision = self.auth_state().get().session_revision;
+        let handles = std::mem::take(&mut *self.tasks.lock());
+        for handle in handles {
+            handle.abort();
+        }
+        let retired = self.authed_notif_session.lock().unwrap_or(expected);
+        self.stop_authed_notification_streams(retired).await;
+        #[cfg(feature = "media")]
+        if let Some(worker) = self.call_service().get() {
+            let actor_revision = worker
+                .incoming_presentation_state()
+                .session_revision()
+                .unwrap_or(expected);
+            let incoming = match worker.reset_presentation_session(actor_revision).await {
+                Ok(incoming) => incoming,
+                Err(error) => {
+                    tracing::error!(%error, "call session reset failed during logout");
+                    Vec::new()
+                }
+            };
+            if self.auth_state().get().session_revision != teardown_revision {
+                return Ok(());
+            }
+            if let Some(signaling) = self.call_signaling.get() {
+                signaling.clear_call_session(&incoming);
+            }
+        }
+        if self.auth_state().get().session_revision != teardown_revision {
+            return Ok(());
+        }
         let result = self.auth().do_logout().await;
-        self.shutdown().await;
-        self.auth_state().set_logged_out();
+        if self.auth_state().get().session_revision == teardown_revision {
+            self.shutdown_session(teardown_revision).await;
+            self.auth_state()
+                .set_logged_out_if_current(teardown_revision);
+        }
         result?;
         Ok(())
     }

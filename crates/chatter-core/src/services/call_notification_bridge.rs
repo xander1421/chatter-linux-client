@@ -22,6 +22,58 @@ use crate::services::call_worker::CallOrchestratorEvent;
 #[cfg(feature = "media")]
 use crate::services::notification_service::NotificationService;
 
+#[cfg(feature = "media")]
+#[derive(Clone)]
+pub struct SessionBridge {
+    stop: tokio::sync::watch::Sender<bool>,
+    done: tokio::sync::watch::Receiver<bool>,
+}
+
+#[cfg(feature = "media")]
+impl SessionBridge {
+    pub async fn wait_drained(&self) -> bool {
+        let mut done = self.done.clone();
+        while !*done.borrow_and_update() {
+            if done.changed().await.is_err() {
+                return false;
+            }
+        }
+        true
+    }
+
+    pub async fn stop(&self) -> bool {
+        self.stop.send_replace(true);
+        tokio::time::timeout(std::time::Duration::from_secs(2), self.wait_drained())
+            .await
+            .unwrap_or(false)
+    }
+}
+
+#[cfg(feature = "media")]
+pub fn spawn_session_call_notification_bridge(
+    worker: crate::services::call_worker::CallWorkerHandle,
+    notifications: Arc<NotificationService>,
+) -> SessionBridge {
+    let rx = worker.subscribe_call_events();
+    let state = worker.incoming_presentation_state().capture_session();
+    let changes = state.subscribe_changes();
+    let (stop, stop_rx) = tokio::sync::watch::channel(false);
+    let (done_tx, done) = tokio::sync::watch::channel(false);
+    tokio::spawn(async move {
+        run_bridge(
+            rx,
+            state,
+            changes,
+            notifications,
+            Default::default(),
+            Some(stop_rx),
+        )
+        .await;
+        done_tx.send_replace(true);
+    });
+    SessionBridge { stop, done }
+}
+
 /// Subscribe before reading presentation authority. Broadcast events only
 /// invalidate the projection; their buffered payloads are never replayed.
 #[cfg(feature = "media")]
@@ -38,6 +90,7 @@ pub fn spawn_call_notification_bridge(
         changes,
         notifications,
         Default::default(),
+        None,
     ))
 }
 
@@ -48,18 +101,42 @@ async fn run_bridge(
     mut changes: tokio::sync::watch::Receiver<u64>,
     notifications: Arc<NotificationService>,
     mut posted: std::collections::HashSet<String>,
+    mut stop: Option<tokio::sync::watch::Receiver<bool>>,
 ) {
     // A watch receiver repairs transitions that emit no broadcast (acceptance).
     // Mark the generation seen before reading, so a racing update wakes us again.
     changes.borrow_and_update();
     reconcile(&state, &notifications, &mut posted);
+    let mut retry = tokio::time::interval(std::time::Duration::from_millis(100));
     loop {
         tokio::select! {
+            biased;
+            _ = async {
+                match &mut stop {
+                    Some(rx) => {
+                        while !*rx.borrow_and_update() {
+                            if rx.changed().await.is_err() { break; }
+                        }
+                    }
+                    None => std::future::pending::<()>().await,
+                }
+            } => {
+                // Keep ownership until native cancellation succeeds. A
+                // transient sink failure cannot be converted to an abort.
+                while !posted.is_empty() {
+                    posted.retain(|call| notifications.cancel_incoming_call(call).is_err());
+                    if !posted.is_empty() {
+                        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                    }
+                }
+                break;
+            }
             result = changes.changed() => {
                 if result.is_err() { break; }
                 changes.borrow_and_update();
                 reconcile(&state, &notifications, &mut posted);
             }
+            _ = retry.tick(), if !posted.is_empty() => reconcile(&state, &notifications, &mut posted),
             result = rx.recv() => {
                 if !recover_event(result, &state, &notifications, &mut posted) { break; }
             }
@@ -285,6 +362,152 @@ mod tests {
         changes.changed().await.unwrap();
         reconcile(&state, &notifications, &mut posted);
         assert_eq!(*log.0.lock(), ["show startup", "cancel startup"]);
+        worker.shutdown();
+    }
+
+    async fn wait_for(log: &Log, entry: &str) {
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            loop {
+                if log.0.lock().iter().any(|item| item == entry) {
+                    break;
+                }
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+    }
+
+    #[tokio::test]
+    async fn spawned_session_bridge_recovers_startup_and_watch_only_accept() {
+        let worker = worker();
+        worker.incoming_presentation_state().begin_session(1);
+        let scoped = worker.for_presentation_session(1);
+        present(&scoped, "startup-spawned").await;
+        let log = Arc::new(Log::default());
+        let bridge = spawn_session_call_notification_bridge(
+            scoped.clone(),
+            Arc::new(NotificationService::new(log.clone())),
+        );
+        wait_for(&log, "show startup-spawned").await;
+        scoped
+            .orch_accept_incoming(CallHandle::from("startup-spawned"))
+            .await
+            .unwrap();
+        wait_for(&log, "cancel startup-spawned").await;
+        assert!(bridge.stop().await);
+        assert_eq!(
+            *log.0.lock(),
+            ["show startup-spawned", "cancel startup-spawned"]
+        );
+        worker.shutdown();
+    }
+
+    struct RetryLog {
+        log: Log,
+        fails: std::sync::atomic::AtomicBool,
+        attempts: std::sync::atomic::AtomicUsize,
+    }
+    impl NotificationSink for RetryLog {
+        fn show(&self, _: &str, _: &str, _: NotificationPriority) -> Result<(), SystemError> {
+            Ok(())
+        }
+        fn show_incoming_call(&self, call: &str, _: &str, _: &str) -> Result<(), SystemError> {
+            self.log.0.lock().push(format!("show {call}"));
+            Ok(())
+        }
+        fn cancel_incoming_call(&self, call: &str) -> Result<(), SystemError> {
+            self.attempts
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            if self.fails.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err(SystemError::NotificationSend("fixture failure".into()));
+            }
+            self.log.0.lock().push(format!("cancel {call}"));
+            Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn spawned_bridge_retries_watch_accept_cancellation_without_another_event() {
+        let worker = worker();
+        worker.incoming_presentation_state().begin_session(10);
+        let scoped = worker.for_presentation_session(10);
+        present(&scoped, "retry-accept").await;
+        let log = Arc::new(RetryLog {
+            log: Log::default(),
+            fails: true.into(),
+            attempts: 0.into(),
+        });
+        let bridge = spawn_session_call_notification_bridge(
+            scoped.clone(),
+            Arc::new(NotificationService::new(log.clone())),
+        );
+        wait_for(&log.log, "show retry-accept").await;
+        scoped
+            .orch_accept_incoming(CallHandle::from("retry-accept"))
+            .await
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            while log.attempts.load(std::sync::atomic::Ordering::SeqCst) == 0 {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        log.fails.store(false, std::sync::atomic::Ordering::SeqCst);
+        wait_for(&log.log, "cancel retry-accept").await;
+        assert!(bridge.stop().await);
+        assert_eq!(
+            *log.log.0.lock(),
+            ["show retry-accept", "cancel retry-accept"]
+        );
+        worker.shutdown();
+    }
+
+    #[tokio::test]
+    async fn spawned_bridge_bounded_teardown_retains_failed_cancel_and_retries() {
+        let worker = worker();
+        worker.incoming_presentation_state().begin_session(11);
+        let scoped = worker.for_presentation_session(11);
+        present(&scoped, "old-session").await;
+        let log = Arc::new(RetryLog {
+            log: Log::default(),
+            fails: true.into(),
+            attempts: 0.into(),
+        });
+        let bridge = spawn_session_call_notification_bridge(
+            scoped,
+            Arc::new(NotificationService::new(log.clone())),
+        );
+        wait_for(&log.log, "show old-session").await;
+        let began = std::time::Instant::now();
+        assert!(!bridge.stop().await);
+        assert!(began.elapsed() < std::time::Duration::from_secs(3));
+        let attempts = log.attempts.load(std::sync::atomic::Ordering::SeqCst);
+        worker.reset_presentation_session(11).await.unwrap();
+        worker.incoming_presentation_state().begin_session(12);
+        present(&worker.for_presentation_session(12), "new-session").await;
+        tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        assert!(log.attempts.load(std::sync::atomic::Ordering::SeqCst) > attempts);
+        assert_eq!(*log.log.0.lock(), ["show old-session"]);
+        log.fails.store(false, std::sync::atomic::Ordering::SeqCst);
+        assert!(bridge.stop().await);
+        assert_eq!(
+            *log.log.0.lock(),
+            ["show old-session", "cancel old-session"]
+        );
+        let next = spawn_session_call_notification_bridge(
+            worker.for_presentation_session(12),
+            Arc::new(NotificationService::new(log.clone())),
+        );
+        wait_for(&log.log, "show new-session").await;
+        worker
+            .for_presentation_session(12)
+            .orch_accept_incoming(CallHandle::from("new-session"))
+            .await
+            .unwrap();
+        wait_for(&log.log, "cancel new-session").await;
+        assert!(next.stop().await);
         worker.shutdown();
     }
 

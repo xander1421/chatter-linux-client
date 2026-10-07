@@ -518,13 +518,32 @@ impl ChatterClient {
         call_id: &str,
         replaces_active: bool,
     ) -> Result<AcceptedIncomingCall, ClientError> {
+        self.accept_presented_incoming_call_in_session(
+            call_id,
+            replaces_active,
+            self.auth_state().get().session_revision,
+        )
+        .await
+    }
+
+    #[cfg(feature = "media")]
+    pub async fn accept_presented_incoming_call_in_session(
+        &self,
+        call_id: &str,
+        replaces_active: bool,
+        revision: u64,
+    ) -> Result<AcceptedIncomingCall, ClientError> {
+        let _lifecycle = self.auth_lifecycle_lock.lock().await;
+        if !self.call_session_is_current(revision) {
+            return Err(ClientError::Inbox("Call session expired".into()));
+        }
         use crate::services::call_worker::{CallEndReason, CallHandle, OrchestratedCallKind};
 
         let worker = self
             .call_service()
             .get()
             .ok_or_else(|| ClientError::Inbox("Call service not initialized".into()))?
-            .clone();
+            .for_presentation_session(revision);
 
         let handle = CallHandle::from(call_id);
         let snapshot = worker
@@ -570,12 +589,15 @@ impl ChatterClient {
                     let setup = self
                         .accept_dm_call(ephemeral, call_id, &peer_id, user_id)
                         .await?;
-                    worker.orch_mark_connected(
-                        CallHandle::from(setup.call_id.to_string()),
-                        kind,
-                        peer_id,
-                        is_video,
-                    );
+                    worker
+                        .orch_mark_connected_reliably(
+                            CallHandle::from(setup.call_id.to_string()),
+                            kind,
+                            peer_id,
+                            is_video,
+                        )
+                        .await
+                        .map_err(|e| ClientError::Inbox(e.to_string()))?;
                     AcceptedIncomingCall::Dm {
                         setup,
                         peer_id,
@@ -585,22 +607,28 @@ impl ChatterClient {
                 }
                 OrchestratedCallKind::AnonDm | OrchestratedCallKind::AnonGroup => {
                     let setup = self.accept_anon_call(call_id).await?;
-                    worker.orch_mark_connected(
-                        CallHandle::from(setup.room_name.clone()),
-                        kind,
-                        peer_id,
-                        setup.is_video,
-                    );
+                    worker
+                        .orch_mark_connected_reliably(
+                            CallHandle::from(setup.room_name.clone()),
+                            kind,
+                            peer_id,
+                            setup.is_video,
+                        )
+                        .await
+                        .map_err(|e| ClientError::Inbox(e.to_string()))?;
                     AcceptedIncomingCall::Anon { setup, peer_id }
                 }
                 OrchestratedCallKind::GroupChannel => {
                     let setup = self.join_group_call(&worker, call_id).await?;
-                    worker.orch_mark_connected(
-                        CallHandle::from(call_id),
-                        kind,
-                        peer_id,
-                        setup.is_video,
-                    );
+                    worker
+                        .orch_mark_connected_reliably(
+                            CallHandle::from(call_id),
+                            kind,
+                            peer_id,
+                            setup.is_video,
+                        )
+                        .await
+                        .map_err(|e| ClientError::Inbox(e.to_string()))?;
                     AcceptedIncomingCall::Group {
                         setup,
                         title: snapshot.channel_context.unwrap_or_default(),
@@ -826,6 +854,10 @@ impl ChatterClient {
         }
     }
 
+    pub fn call_session_is_current(&self, revision: u64) -> bool {
+        self.auth_state().session_is_current(revision)
+    }
+
     /// Authoritative incoming modal/notification state. Never contains signaling keys.
     #[cfg(feature = "media")]
     pub fn incoming_call_presentation_state(
@@ -895,6 +927,23 @@ impl ChatterClient {
     /// wire-level decline on the appropriate transport.
     #[cfg(feature = "media")]
     pub async fn decline_presented_incoming_call(&self, call_id: &str) -> Result<(), ClientError> {
+        self.decline_presented_incoming_call_in_session(
+            call_id,
+            self.auth_state().get().session_revision,
+        )
+        .await
+    }
+
+    #[cfg(feature = "media")]
+    pub async fn decline_presented_incoming_call_in_session(
+        &self,
+        call_id: &str,
+        revision: u64,
+    ) -> Result<(), ClientError> {
+        let _lifecycle = self.auth_lifecycle_lock.lock().await;
+        if !self.call_session_is_current(revision) {
+            return Err(ClientError::Inbox("Call session expired".into()));
+        }
         use crate::services::call_worker::{CallHandle, OrchestratedCallKind};
 
         let worker = self
@@ -972,7 +1021,15 @@ impl ChatterClient {
     ) -> bool {
         use crate::domain::call::GroupCallSignal;
 
-        let Some(worker) = self.call_service().get().cloned() else {
+        let revision = self.auth_state().get().session_revision;
+        if !self.call_session_is_current(revision) {
+            return false;
+        }
+        let Some(worker) = self
+            .call_service()
+            .get()
+            .map(|w| w.for_presentation_session(revision))
+        else {
             return false;
         };
         let Ok(call) = call_id.parse::<crate::domain::ids::CallId>() else {
@@ -1245,6 +1302,13 @@ impl ChatterClient {
             );
             return;
         }
+        if !worker.presentation_session_is_current()
+            || worker.incoming_presentation_state().session_revision()
+                != Some(self.auth_state().get().session_revision)
+            || !self.auth_state().is_logged_in()
+        {
+            return;
+        }
         if !self.call_signaling().store_group_call_invite(&call_id) {
             return;
         }
@@ -1445,7 +1509,7 @@ impl ChatterClient {
             .call_service()
             .get()
             .ok_or_else(|| ClientError::Inbox("Call service not initialized".into()))?
-            .clone();
+            .for_presentation_session(self.auth_state().get().session_revision);
         self.call_signaling()
             .accept_anon_call(room_name, &call_worker)
             .await

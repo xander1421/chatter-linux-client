@@ -219,6 +219,7 @@ pub struct AnonCallConnectedInfo {
 /// Bookkeeping for a presented incoming call waiting for the user to decide.
 #[derive(Debug, Clone)]
 struct PendingIncoming {
+    session_revision: Option<u64>,
     call: CallHandle,
     kind: OrchestratedCallKind,
     peer_id: UserId,
@@ -234,6 +235,7 @@ struct PendingIncoming {
 /// Bookkeeping for an outgoing call dialed but not yet connected.
 #[derive(Debug, Clone)]
 struct PendingOutgoing {
+    session_revision: Option<u64>,
     call: CallHandle,
     kind: OrchestratedCallKind,
     peer_id: UserId,
@@ -247,6 +249,7 @@ struct PendingOutgoing {
 /// the right slot to clear.
 #[derive(Debug, Clone)]
 struct OrchestratedActive {
+    session_revision: Option<u64>,
     call: CallHandle,
     kind: OrchestratedCallKind,
 }
@@ -275,6 +278,7 @@ impl OrchestratorState {
 /// No signaling keys leave the actor. Events are ordered oldest to newest.
 #[derive(Debug, Clone)]
 pub struct IncomingCallPresentationSnapshot {
+    pub session_revision: Option<u64>,
     pub generation: u64,
     pub presentations: Vec<CallOrchestratorEvent>,
 }
@@ -285,16 +289,23 @@ pub struct IncomingCallPresentationSnapshot {
 pub struct IncomingCallPresentationState {
     snapshot: Arc<RwLock<IncomingCallPresentationSnapshot>>,
     changes: tokio::sync::watch::Sender<u64>,
+    requires_session: Arc<std::sync::atomic::AtomicBool>,
+    view_session: Option<u64>,
+    active_identity: Arc<RwLock<Option<CallHandle>>>,
 }
 
 impl IncomingCallPresentationState {
     fn new() -> Self {
         Self {
             snapshot: Arc::new(RwLock::new(IncomingCallPresentationSnapshot {
+                session_revision: None,
                 generation: 0,
                 presentations: Vec::new(),
             })),
             changes: tokio::sync::watch::channel(0).0,
+            requires_session: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            view_session: None,
+            active_identity: Arc::new(RwLock::new(None)),
         }
     }
 
@@ -304,17 +315,93 @@ impl IncomingCallPresentationState {
         &self,
         apply: impl FnOnce(&IncomingCallPresentationSnapshot) -> R,
     ) -> R {
-        apply(&self.snapshot.read())
+        let current = self.snapshot.read();
+        if self.view_session.is_some() && self.view_session != current.session_revision {
+            return apply(&IncomingCallPresentationSnapshot {
+                session_revision: self.view_session,
+                generation: current.generation,
+                presentations: Vec::new(),
+            });
+        }
+        apply(&current)
     }
 
     pub fn subscribe_changes(&self) -> tokio::sync::watch::Receiver<u64> {
         self.changes.subscribe()
     }
 
-    fn publish(&self, orchestrator: &OrchestratorState) {
-        let snapshot = orchestrator.incoming_snapshot();
-        let generation = snapshot.generation;
+    /// A retired bridge can cancel its own posts, but can never post for the
+    /// next owner even while its graceful drain is still completing.
+    pub fn for_session(&self, revision: u64) -> Self {
+        let mut state = self.clone();
+        state.view_session = Some(revision);
+        state
+    }
+
+    pub(crate) fn capture_session(mut self) -> Self {
+        if self.view_session.is_none() {
+            self.view_session = self.session_revision();
+        }
+        self
+    }
+
+    pub fn begin_session(&self, revision: u64) {
+        self.requires_session
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         let mut current = self.snapshot.write();
+        if current.session_revision == Some(revision) {
+            return;
+        }
+        current.session_revision = Some(revision);
+        current.presentations.clear();
+        *self.active_identity.write() = None;
+        current.generation += 1;
+        self.changes.send_replace(current.generation);
+    }
+
+    fn end_session(&self, revision: u64) {
+        let mut current = self.snapshot.write();
+        if current.session_revision != Some(revision) {
+            return;
+        }
+        current.session_revision = None;
+        current.presentations.clear();
+        *self.active_identity.write() = None;
+        current.generation += 1;
+        self.changes.send_replace(current.generation);
+    }
+
+    pub fn session_revision(&self) -> Option<u64> {
+        self.snapshot.read().session_revision
+    }
+
+    fn accepts_session(&self, revision: Option<u64>) -> bool {
+        let current = self.session_revision();
+        revision == current
+            && (revision.is_some()
+                || !self
+                    .requires_session
+                    .load(std::sync::atomic::Ordering::SeqCst))
+    }
+
+    fn publish(&self, orchestrator: &OrchestratorState) {
+        let mut current = self.snapshot.write();
+        *self.active_identity.write() = if current.session_revision.is_some()
+            || !self
+                .requires_session
+                .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            orchestrator
+                .active
+                .as_ref()
+                .filter(|a| a.session_revision == current.session_revision)
+                .map(|a| a.call.clone())
+        } else {
+            None
+        };
+        let mut snapshot = orchestrator.incoming_snapshot_for(current.session_revision);
+        snapshot.generation = current.generation + 1;
+        let generation = snapshot.generation;
         if current.presentations == snapshot.presentations {
             return;
         }
@@ -325,9 +412,20 @@ impl IncomingCallPresentationState {
 
 impl OrchestratorState {
     fn incoming_snapshot(&self) -> IncomingCallPresentationSnapshot {
-        let mut incoming: Vec<_> = self.incoming.values().collect();
+        self.incoming_snapshot_for(None)
+    }
+    fn incoming_snapshot_for(
+        &self,
+        session_revision: Option<u64>,
+    ) -> IncomingCallPresentationSnapshot {
+        let mut incoming: Vec<_> = self
+            .incoming
+            .values()
+            .filter(|p| p.session_revision == session_revision)
+            .collect();
         incoming.sort_by_key(|p| self.incoming_order.get(&p.call).copied().unwrap_or(0));
         IncomingCallPresentationSnapshot {
+            session_revision,
             generation: self.generation,
             presentations: incoming
                 .into_iter()
@@ -412,6 +510,7 @@ enum CallCommand {
     },
     /// Join an existing call.
     JoinCall {
+        session_revision: Option<u64>,
         call_id: CallId,
         /// `None`: a channel group call, joined holding no key. We connect
         /// under a random key of our own that is never sent, and publish
@@ -428,6 +527,7 @@ enum CallCommand {
     },
     /// End the current call (creator only).
     EndCall {
+        session_revision: Option<u64>,
         reason: Option<String>,
         response: oneshot::Sender<Result<(), CallError>>,
     },
@@ -436,6 +536,7 @@ enum CallCommand {
     /// active call — a hangup names its call, and one for another call must
     /// not end this one.
     DisconnectLocal {
+        session_revision: Option<u64>,
         call: Option<CallHandle>,
         reason: CallEndReason,
         response: oneshot::Sender<()>,
@@ -558,6 +659,7 @@ enum CallCommand {
     },
     /// Connect directly to LiveKit with a pre-made access token (for anonymous calls).
     ConnectWithToken {
+        session_revision: Option<u64>,
         access_token: String,
         livekit_url: String,
         encryption_key: Vec<u8>,
@@ -584,10 +686,15 @@ enum CallCommand {
         response: Option<oneshot::Sender<()>>,
     },
     /// Register an outgoing call that was just dialed.
-    OrchRegisterOutgoing { outgoing: PendingOutgoing },
+    OrchRegisterOutgoing {
+        outgoing: PendingOutgoing,
+        session_revision: Option<u64>,
+    },
     /// Notify the orchestrator that a pending (incoming or outgoing) call
     /// has connected and should be installed as the active call.
     OrchMarkConnected {
+        session_revision: Option<u64>,
+        response: Option<oneshot::Sender<Result<(), CallError>>>,
         call: CallHandle,
         kind: OrchestratedCallKind,
         peer_id: UserId,
@@ -596,6 +703,7 @@ enum CallCommand {
     /// Notify the orchestrator that the active call has been torn down
     /// locally or remotely. Clears the slot and emits `ActiveEnded`.
     OrchMarkEnded {
+        session_revision: Option<u64>,
         call: CallHandle,
         reason: CallEndReason,
     },
@@ -639,6 +747,10 @@ enum CallCommand {
         response: oneshot::Sender<Option<OrchestratedCallKind>>,
     },
 
+    ResetPresentationSession {
+        revision: u64,
+        response: oneshot::Sender<Vec<String>>,
+    },
     /// Serialize presentation recovery with acceptance and withdrawal.
     OrchIncomingSnapshot {
         response: oneshot::Sender<IncomingCallPresentationSnapshot>,
@@ -666,6 +778,7 @@ pub struct CallWorkerHandle {
     /// subscribers can call `subscribe_call_events` any number of times.
     call_events_tx: broadcast::Sender<CallOrchestratorEvent>,
     incoming_presentation: IncomingCallPresentationState,
+    presentation_session: Option<u64>,
 }
 
 impl CallWorkerHandle {
@@ -707,6 +820,7 @@ impl CallWorkerHandle {
             shared_video_frames,
             call_events_tx,
             incoming_presentation,
+            presentation_session: None,
         }
     }
 
@@ -737,8 +851,79 @@ impl CallWorkerHandle {
         self.call_events_tx.subscribe()
     }
 
+    pub fn for_presentation_session(&self, revision: u64) -> Self {
+        let mut worker = self.clone();
+        worker.presentation_session = Some(revision);
+        worker
+    }
+
+    pub fn presentation_session_is_current(&self) -> bool {
+        self.incoming_presentation
+            .accepts_session(self.presentation_session)
+    }
+
+    /// Synchronous session lease for secret restoration; logout fences this write.
+    pub fn with_current_presentation_session<R>(&self, apply: impl FnOnce() -> R) -> Option<R> {
+        let state = self.incoming_presentation.snapshot.read();
+        if state.session_revision != self.presentation_session
+            || (self.presentation_session.is_none()
+                && self
+                    .incoming_presentation
+                    .requires_session
+                    .load(std::sync::atomic::Ordering::SeqCst))
+        {
+            return None;
+        }
+        Some(apply())
+    }
+
+    pub fn is_current_active_presentation(&self, revision: u64, call: &str) -> bool {
+        let state = self.incoming_presentation.snapshot.read();
+        state.session_revision == Some(revision)
+            && self
+                .incoming_presentation
+                .active_identity
+                .read()
+                .as_ref()
+                .is_some_and(|id| id.as_str() == call)
+    }
+
+    pub fn with_current_active_presentation<R>(
+        &self,
+        revision: u64,
+        call: &str,
+        apply: impl FnOnce() -> R,
+    ) -> Option<R> {
+        let session = self.incoming_presentation.snapshot.read();
+        let active = self.incoming_presentation.active_identity.read();
+        if session.session_revision != Some(revision)
+            || !active.as_ref().is_some_and(|id| id.as_str() == call)
+        {
+            return None;
+        }
+        Some(apply())
+    }
+
+    pub async fn reset_presentation_session(
+        &self,
+        revision: u64,
+    ) -> Result<Vec<String>, CallError> {
+        // Synchronously fence old producers and queued UI callbacks before
+        // waiting for the actor queue; reset removes only the retired owner.
+        self.incoming_presentation.end_session(revision);
+        let (response, rx) = oneshot::channel();
+        self.cmd_tx
+            .send(CallCommand::ResetPresentationSession { revision, response })
+            .await
+            .map_err(|_| CallError::WorkerShutdown)?;
+        rx.await.map_err(|_| CallError::WorkerShutdown)
+    }
+
     pub fn incoming_presentation_state(&self) -> IncomingCallPresentationState {
-        self.incoming_presentation.clone()
+        match self.presentation_session {
+            Some(revision) => self.incoming_presentation.for_session(revision),
+            None => self.incoming_presentation.clone(),
+        }
     }
 
     /// Subscribe before reading this snapshot. Buffered presentation events are
@@ -779,6 +964,7 @@ impl CallWorkerHandle {
         conversation_id: String,
     ) {
         let incoming = PendingIncoming {
+            session_revision: self.presentation_session,
             call,
             kind,
             peer_id,
@@ -875,15 +1061,17 @@ impl CallWorkerHandle {
         is_video: bool,
     ) {
         let outgoing = PendingOutgoing {
+            session_revision: self.presentation_session.or_else(|| self.incoming_presentation.session_revision()),
             call,
             kind,
             peer_id,
             peer_name,
             is_video,
         };
-        let _ = self
-            .cmd_tx
-            .try_send(CallCommand::OrchRegisterOutgoing { outgoing });
+        let _ = self.cmd_tx.try_send(CallCommand::OrchRegisterOutgoing {
+            outgoing,
+            session_revision: self.presentation_session,
+        });
     }
 
     /// Notify the orchestrator that a pending call has connected.
@@ -895,6 +1083,8 @@ impl CallWorkerHandle {
         is_video: bool,
     ) {
         let _ = self.cmd_tx.try_send(CallCommand::OrchMarkConnected {
+            response: None,
+            session_revision: self.presentation_session,
             call,
             kind,
             peer_id,
@@ -902,11 +1092,35 @@ impl CallWorkerHandle {
         });
     }
 
+    pub async fn orch_mark_connected_reliably(
+        &self,
+        call: CallHandle,
+        kind: OrchestratedCallKind,
+        peer_id: UserId,
+        is_video: bool,
+    ) -> Result<(), CallError> {
+        let (response, done) = oneshot::channel();
+        self.cmd_tx
+            .send(CallCommand::OrchMarkConnected {
+                session_revision: self.presentation_session,
+                response: Some(response),
+                call,
+                kind,
+                peer_id,
+                is_video,
+            })
+            .await
+            .map_err(|_| CallError::WorkerShutdown)?;
+        done.await.map_err(|_| CallError::WorkerShutdown)?
+    }
+
     /// Notify the orchestrator that the active call ended.
     pub fn orch_mark_ended(&self, call: CallHandle, reason: CallEndReason) {
-        let _ = self
-            .cmd_tx
-            .try_send(CallCommand::OrchMarkEnded { call, reason });
+        let _ = self.cmd_tx.try_send(CallCommand::OrchMarkEnded {
+            call,
+            reason,
+            session_revision: self.presentation_session,
+        });
     }
 
     /// Accept a presented incoming call. Returns the pending incoming record
@@ -1009,9 +1223,13 @@ impl CallWorkerHandle {
         encryption_root_key: &[u8; 32],
         joiner_id: UserId,
     ) -> Result<Call, CallError> {
+        if self.presentation_session.is_some() && !self.presentation_session_is_current() {
+            return Err(CallError::WorkerShutdown);
+        }
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
             .try_send(CallCommand::JoinCall {
+                session_revision: self.presentation_session,
                 call_id,
                 encryption_root_key: Some(*encryption_root_key),
                 joiner_id,
@@ -1033,6 +1251,7 @@ impl CallWorkerHandle {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
             .try_send(CallCommand::JoinCall {
+                session_revision: self.presentation_session,
                 call_id,
                 encryption_root_key: None,
                 joiner_id,
@@ -1056,9 +1275,13 @@ impl CallWorkerHandle {
         channel_id: ChannelId,
         is_video: bool,
     ) -> Result<(), CallError> {
+        if self.presentation_session.is_some() && !self.presentation_session_is_current() {
+            return Err(CallError::WorkerShutdown);
+        }
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
             .try_send(CallCommand::ConnectWithToken {
+                session_revision: self.presentation_session,
                 access_token: access_token.to_string(),
                 livekit_url: livekit_url.to_string(),
                 encryption_key,
@@ -1087,9 +1310,13 @@ impl CallWorkerHandle {
 
     /// End the current call (creator only).
     pub async fn end_call(&self, reason: Option<&str>) -> Result<(), CallError> {
+        if self.presentation_session.is_some() && !self.presentation_session_is_current() {
+            return Err(CallError::WorkerShutdown);
+        }
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
             .try_send(CallCommand::EndCall {
+                session_revision: self.presentation_session,
                 reason: reason.map(|s| s.to_string()),
                 response: tx,
             })
@@ -1102,6 +1329,7 @@ impl CallWorkerHandle {
     pub async fn disconnect_local(&self, reason: CallEndReason) {
         let (tx, rx) = oneshot::channel();
         let _ = self.cmd_tx.try_send(CallCommand::DisconnectLocal {
+            session_revision: self.presentation_session,
             call: None,
             reason,
             response: tx,
@@ -1118,6 +1346,7 @@ impl CallWorkerHandle {
     pub fn disconnect_local_nonblocking(&self, call: Option<CallHandle>, reason: CallEndReason) {
         let (tx, _rx) = oneshot::channel();
         let _ = self.cmd_tx.try_send(CallCommand::DisconnectLocal {
+            session_revision: self.presentation_session,
             call,
             reason,
             response: tx,
@@ -1601,11 +1830,16 @@ fn run_call_worker(
                 }
 
                 CallCommand::JoinCall {
+                    session_revision,
                     call_id,
                     encryption_root_key,
                     joiner_id,
                     response,
                 } => {
+                    if session_revision.is_some() && !incoming_presentation.accepts_session(session_revision) {
+                        let _ = response.send(Err(CallError::WorkerShutdown));
+                        continue;
+                    }
                     tracing::info!(stage = "join_call_handler_start", %call_id, elapsed_us = 0u64, "Call stage");
                     let result = join_call_impl(
                         &call_client,
@@ -1617,6 +1851,12 @@ fn run_call_worker(
                     )
                     .await;
 
+                    if session_revision.is_some() && !incoming_presentation.accepts_session(session_revision) {
+                        room_manager.disconnect().await;
+                        *active_call.borrow_mut() = None;
+                        let _ = response.send(Err(CallError::WorkerShutdown));
+                        continue;
+                    }
                     if result.is_ok() {
                         start_key_ratchet_timer(&room_manager, &ratchet_cancel, &active_call);
                         let is_video = result
@@ -1634,6 +1874,7 @@ fn run_call_worker(
                 }
 
                 CallCommand::ConnectWithToken {
+                    session_revision,
                     access_token,
                     livekit_url,
                     encryption_key,
@@ -1643,6 +1884,10 @@ fn run_call_worker(
                     is_video,
                     response,
                 } => {
+                    if session_revision.is_some() && !incoming_presentation.accepts_session(session_revision) {
+                        let _ = response.send(Err(CallError::WorkerShutdown));
+                        continue;
+                    }
                     let result = connect_with_token_impl(
                         &room_manager,
                         &active_call,
@@ -1655,6 +1900,12 @@ fn run_call_worker(
                     )
                     .await;
 
+                    if session_revision.is_some() && !incoming_presentation.accepts_session(session_revision) {
+                        room_manager.disconnect().await;
+                        *active_call.borrow_mut() = None;
+                        let _ = response.send(Err(CallError::WorkerShutdown));
+                        continue;
+                    }
                     if result.is_ok() {
                         start_key_ratchet_timer(&room_manager, &ratchet_cancel, &active_call);
                         auto_publish_media(&room_manager, is_video).await;
@@ -1688,7 +1939,8 @@ fn run_call_worker(
                     let _ = response.send(result);
                 }
 
-                CallCommand::EndCall { reason, response } => {
+                CallCommand::EndCall { reason, response, session_revision } => {
+                    if session_revision.is_some() && !incoming_presentation.accepts_session(session_revision) { let _ = response.send(Err(CallError::WorkerShutdown)); continue; }
                     // Cancel key ratchet timer
                     stop_key_ratchet_timer(&ratchet_cancel);
 
@@ -1712,7 +1964,8 @@ fn run_call_worker(
                     let _ = response.send(result);
                 }
 
-                CallCommand::DisconnectLocal { call, reason, response } => {
+                CallCommand::DisconnectLocal { call, reason, response, session_revision } => {
+                    if session_revision.is_some() && !incoming_presentation.accepts_session(session_revision) { let _ = response.send(()); continue; }
                     let handle = active_call.borrow().as_ref().map(derive_call_handle);
                     if call.is_some() && call != handle {
                         tracing::info!(
@@ -1951,6 +2204,7 @@ fn run_call_worker(
                 // ============================================================
 
                 CallCommand::OrchPresentIncoming { incoming } => {
+                    if !incoming_presentation.accepts_session(incoming.session_revision) { continue; }
                     let replaces_active = orchestrator.active.is_some();
                     let snapshot = incoming.clone();
                     orchestrator.incoming_order.insert(
@@ -1990,7 +2244,10 @@ fn run_call_worker(
                     }
                 }
 
-                CallCommand::OrchRegisterOutgoing { outgoing } => {
+                CallCommand::OrchRegisterOutgoing { outgoing, session_revision } => {
+                    let session_lease = incoming_presentation.snapshot.read();
+                    if session_revision.is_some() && session_lease.session_revision != session_revision { continue; }
+                    if outgoing.session_revision.is_some() && outgoing.session_revision != session_lease.session_revision { continue; }
                     let snapshot = outgoing.clone();
                     orchestrator.outgoing.insert(outgoing.call.clone(), outgoing);
                     let _ = call_events_tx.send(CallOrchestratorEvent::OutgoingStarted {
@@ -2002,7 +2259,9 @@ fn run_call_worker(
                     });
                 }
 
-                CallCommand::OrchMarkConnected { call, kind, peer_id, is_video } => {
+                CallCommand::OrchMarkConnected { call, kind, peer_id, is_video, session_revision, response } => {
+                    let session_lease = incoming_presentation.snapshot.read();
+                    if session_revision.is_some() && session_lease.session_revision != session_revision { if let Some(response) = response { let _ = response.send(Err(CallError::WorkerShutdown)); } continue; }
                     if let Some(state) = active_call.borrow_mut().as_mut() {
                         if derive_call_handle(state) == call && state.call.connected_at.is_none() {
                             state.call.start();
@@ -2013,6 +2272,7 @@ fn run_call_worker(
                     orchestrator.outgoing.remove(&call);
                     orchestrator.incoming.remove(&call);
                     orchestrator.active = Some(OrchestratedActive {
+                        session_revision: session_revision.or(session_lease.session_revision),
                         call: call.clone(),
                         kind,
                     });
@@ -2022,9 +2282,14 @@ fn run_call_worker(
                         peer_id,
                         is_video,
                     });
+                    drop(session_lease);
+                    incoming_presentation.publish(&orchestrator);
+                    if let Some(response) = response { let _ = response.send(Ok(())); }
                 }
 
-                CallCommand::OrchMarkEnded { call, reason } => {
+                CallCommand::OrchMarkEnded { call, reason, session_revision } => {
+                    let session_lease = incoming_presentation.snapshot.read();
+                    if session_revision.is_some() && session_lease.session_revision != session_revision { continue; }
                     let matched_active = orchestrator
                         .active
                         .as_ref()
@@ -2153,12 +2418,27 @@ fn run_call_worker(
                     let _ = response.send(orchestrator.call_kind());
                 }
 
+                CallCommand::ResetPresentationSession { revision, response } => {
+                    orchestrator.outgoing.retain(|_, pending| pending.session_revision != Some(revision));
+                    let retired: Vec<_> = orchestrator.incoming.iter()
+                        .filter(|(_, p)| p.session_revision == Some(revision))
+                        .map(|(id, _)| id.clone()).collect();
+                    let retired_ids = retired.iter().map(|call| call.as_str().to_owned()).collect();
+                    for call in retired {
+                        orchestrator.incoming.remove(&call);
+                        let _ = call_events_tx.send(CallOrchestratorEvent::IncomingWithdrawn {
+                            call, reason: CallEndReason::LocalHangup,
+                        });
+                    }
+                    incoming_presentation.publish(&orchestrator);
+                    let _ = response.send(retired_ids);
+                }
                 CallCommand::OrchIncomingSnapshot { response } => {
                     // Prune withdrawn identities; ordering metadata contains no keys.
                     orchestrator.incoming_order.retain(
                         |call, _| orchestrator.incoming.contains_key(call),
                     );
-                    let _ = response.send(orchestrator.incoming_snapshot());
+                    let _ = response.send(orchestrator.incoming_snapshot_for(incoming_presentation.session_revision()));
                 }
 
                 CallCommand::Shutdown => {
@@ -3379,12 +3659,26 @@ pub fn spawn_call_orchestrator_bridge(
     use tokio::sync::broadcast::error::RecvError;
     let mut rx = bus.subscribe_domain();
     let mut room_rx = worker.subscribe_room_events();
+    let bus = bus.clone();
+    let mut sessions = worker.incoming_presentation.subscribe_changes();
+    let mut owner = worker.incoming_presentation.session_revision();
     tokio::spawn(async move {
         tracing::info!("Call orchestrator EventBus bridge started");
         loop {
             tokio::select! {
+                biased;
+                changed = sessions.changed() => {
+                    if changed.is_err() { break; }
+                    let now = worker.incoming_presentation.session_revision();
+                    if now != owner { owner = now; rx = bus.subscribe_domain(); }
+                }
                 event = rx.recv() => match event {
-                    Ok(event) => handle_domain_event(&worker, &signaling, event),
+                    Ok(event) => {
+                        let now = worker.incoming_presentation.session_revision();
+                        if now != owner { owner = now; rx = bus.subscribe_domain(); continue; }
+                        let scoped = match owner { Some(rev) => worker.for_presentation_session(rev), None => worker.clone() };
+                        if scoped.presentation_session_is_current() { handle_domain_event(&scoped, &signaling, event); }
+                    },
                     Err(RecvError::Lagged(n)) => {
                         tracing::warn!(
                             skipped = n,
@@ -3839,12 +4133,22 @@ fn spawn_anon_call_answer_task(
                 // offers find the slot. Anon peers have no stable UserId, so
                 // we use nil — the orchestrator only uses peer_id for
                 // replace-active policy, which anon calls don't participate in.
-                worker.orch_mark_connected(
-                    handle.clone(),
-                    kind,
-                    UserId(uuid::Uuid::nil()),
-                    setup.is_video,
-                );
+                if worker
+                    .orch_mark_connected_reliably(
+                        handle.clone(),
+                        kind,
+                        UserId(uuid::Uuid::nil()),
+                        setup.is_video,
+                    )
+                    .await
+                    .is_err()
+                {
+                    return;
+                }
+                let _ = worker.orch_active_kind().await; // actor barrier: connected publication precedes UI event
+                if !worker.presentation_session_is_current() {
+                    return;
+                }
                 let _ = worker
                     .call_events_tx
                     .send(CallOrchestratorEvent::AnonCallConnected {
@@ -3932,6 +4236,7 @@ mod orchestrator_kind_tests {
         orch.outgoing.insert(
             call.clone(),
             PendingOutgoing {
+                session_revision: None,
                 call: call.clone(),
                 kind: K::DmStandard,
                 peer_id: UserId::new(),
@@ -3944,6 +4249,7 @@ mod orchestrator_kind_tests {
         // Connected: the active slot is what counts.
         orch.outgoing.remove(&call);
         orch.active = Some(OrchestratedActive {
+            session_revision: None,
             call,
             kind: K::DmStandard,
         });
@@ -4829,6 +5135,7 @@ mod verification_snapshot_tests {
     fn orchestrator(state: &ActiveCallState, kind: OrchestratedCallKind) -> OrchestratorState {
         OrchestratorState {
             active: Some(OrchestratedActive {
+                session_revision: None,
                 call: derive_call_handle(state),
                 kind,
             }),
@@ -5032,6 +5339,100 @@ mod group_ring_cancel_tests {
             events.recv().await.unwrap(),
             CallOrchestratorEvent::IncomingPresented { .. }
         ));
+    }
+
+    #[tokio::test]
+    async fn real_actor_rejects_retired_completion_and_reset_across_a_b_a_sessions() {
+        let auth = crate::state::AuthState::new();
+        let worker = worker();
+        let alice = UserId::new();
+        let bob = UserId::new();
+        auth.set_logged_in(alice, 1, "Alice".into());
+        let a = auth.get().session_revision;
+        worker.incoming_presentation_state().begin_session(a);
+        let old = worker.for_presentation_session(a);
+        present(&old, &CallHandle::from("old-ring")).await;
+        auth.invalidate_session();
+        worker.reset_presentation_session(a).await.unwrap();
+        auth.set_logged_in(bob, 1, "Bob".into());
+        let b = auth.get().session_revision;
+        worker.incoming_presentation_state().begin_session(b);
+        let current = worker.for_presentation_session(b);
+        present(&current, &CallHandle::from("new-ring")).await;
+        current.orch_mark_connected(
+            CallHandle::from("new-active"),
+            OrchestratedCallKind::AnonDm,
+            bob,
+            false,
+        );
+        worker.orch_active_kind().await;
+        // Deliberately enqueue after teardown: actor execution must reject it,
+        // regardless of what an earlier detached future checked before await.
+        old.orch_mark_connected(
+            CallHandle::from("old-active"),
+            OrchestratedCallKind::AnonDm,
+            alice,
+            false,
+        );
+        old.orch_mark_ended(CallHandle::from("new-active"), CallEndReason::RemoteHangup);
+        worker.orch_active_kind().await;
+        assert!(matches!(
+            old.orch_mark_connected_reliably(
+                CallHandle::from("late-ack"),
+                OrchestratedCallKind::AnonDm,
+                alice,
+                false
+            )
+            .await,
+            Err(CallError::WorkerShutdown)
+        ));
+        let mut restored = false;
+        assert!(current
+            .with_current_presentation_session(|| {
+                restored = true;
+            })
+            .is_some());
+        assert!(restored);
+        assert!(worker.is_current_active_presentation(b, "new-active"));
+        assert_eq!(
+            worker.reset_presentation_session(a).await.unwrap(),
+            Vec::<String>::new()
+        );
+        assert_eq!(
+            worker
+                .incoming_presentation_snapshot()
+                .await
+                .unwrap()
+                .presentations
+                .len(),
+            1
+        );
+        auth.invalidate_session();
+        worker.reset_presentation_session(b).await.unwrap();
+        auth.set_logged_in(alice, 1, "Alice again".into());
+        let again = auth.get().session_revision;
+        assert_ne!(again, a);
+        worker.incoming_presentation_state().begin_session(again);
+        assert!(!auth.session_is_current(a));
+        assert!(old
+            .with_current_presentation_session(|| panic!("stale secret restore"))
+            .is_none());
+        present(
+            &worker.for_presentation_session(again),
+            &CallHandle::from("alice-new-ring"),
+        )
+        .await;
+        worker.reset_presentation_session(a).await.unwrap();
+        assert_eq!(
+            worker
+                .incoming_presentation_snapshot()
+                .await
+                .unwrap()
+                .presentations
+                .len(),
+            1
+        );
+        worker.shutdown();
     }
 
     #[tokio::test]

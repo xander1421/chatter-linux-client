@@ -26,6 +26,20 @@ use super::timers::{
     start_call_timer, start_video_frame_timer, stop_call_timer, stop_video_frame_timer,
 };
 
+thread_local! {
+    // Only a user's tap dismisses an identity. Unrelated async rendering is
+    // never inferred to be dismissal merely because the modal is hidden.
+    static DISMISSED_INCOMING: std::cell::RefCell<std::collections::HashSet<(u64, String)>> = Default::default();
+}
+
+fn dismiss_incoming(revision: u64, call: &str) {
+    DISMISSED_INCOMING.with(|dismissed| {
+        let mut dismissed = dismissed.borrow_mut();
+        dismissed.retain(|(owner, _)| *owner == revision);
+        dismissed.insert((revision, call.to_owned()));
+    });
+}
+
 /// Wire incoming call accept/decline callbacks.
 pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak = window.as_weak();
@@ -38,6 +52,8 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let call_id_str = call_id.to_string();
             let weak = weak.clone();
             let ui_ctx = ctx_for_accept.clone();
+            let revision = ui_ctx.auth_state().get().session_revision;
+            dismiss_incoming(revision, &call_id_str);
 
             let replaces_active = weak
                 .upgrade()
@@ -71,14 +87,24 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     }
                     permissions::ensure(&perms).await;
                     if !permissions::has(permissions::RECORD_AUDIO) {
-                        super::outgoing::fail_call(&weak, super::outgoing::MIC_DENIED);
+                        if ui_ctx.call_session_is_current(revision) {
+                            fail_incoming_call(
+                                &weak,
+                                &ui_ctx,
+                                revision,
+                                &call_id_str,
+                                super::outgoing::MIC_DENIED,
+                            );
+                        }
                         tokio::spawn(async move {
-                            let _ = ui_ctx.decline_presented_incoming_call(&call_id_str).await;
+                            let _ = ui_ctx
+                                .decline_presented_incoming_call_in_session(&call_id_str, revision)
+                                .await;
                         });
                         return;
                     }
                 }
-                tokio::spawn(accept(weak, ui_ctx, call_id_str, replaces_active));
+                tokio::spawn(accept(weak, ui_ctx, call_id_str, replaces_active, revision));
             })
             .unwrap();
         }
@@ -89,6 +115,8 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         move |call_id| {
             let call_id_str = call_id.to_string();
             let ui_ctx = ctx_for_decline.clone();
+            let revision = ui_ctx.auth_state().get().session_revision;
+            dismiss_incoming(revision, &call_id_str);
 
             if let Some(w) = weak.upgrade() {
                 w.set_incoming_call_visible(false);
@@ -96,7 +124,10 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             }
 
             tokio::spawn(async move {
-                if let Err(e) = ui_ctx.decline_presented_incoming_call(&call_id_str).await {
+                if let Err(e) = ui_ctx
+                    .decline_presented_incoming_call_in_session(&call_id_str, revision)
+                    .await
+                {
                     tracing::debug!(error = %e, "Decline call notification failed");
                 }
             });
@@ -109,20 +140,50 @@ async fn accept(
     ui_ctx: Arc<ChatterClient>,
     call_id: String,
     replaces_active: bool,
+    revision: u64,
 ) {
+    if !ui_ctx.call_session_is_current(revision) {
+        return;
+    }
     match ui_ctx
-        .accept_presented_incoming_call(&call_id, replaces_active)
+        .accept_presented_incoming_call_in_session(&call_id, replaces_active, revision)
         .await
     {
-        Ok(accepted) => render_accepted_call(&weak, &ui_ctx, accepted),
+        Ok(accepted) => render_accepted_call(&weak, &ui_ctx, accepted, revision),
         Err(e) => {
             tracing::error!(error = %e, "Failed to accept incoming call");
             // The answering view went up on the tap; take it down and say why.
-            let _ = slint::invoke_from_event_loop(move || {
-                super::outgoing::fail_call(&weak, super::outgoing::CALL_FAILED);
-            });
+            fail_incoming_call(
+                &weak,
+                &ui_ctx,
+                revision,
+                &call_id,
+                super::outgoing::CALL_FAILED,
+            );
         }
     }
+}
+
+fn fail_incoming_call(
+    weak: &slint::Weak<MainWindow>,
+    ui_ctx: &Arc<ChatterClient>,
+    revision: u64,
+    call_id: &str,
+    message: &'static str,
+) {
+    let weak = weak.clone();
+    let ui_ctx = ui_ctx.clone();
+    let expected = call_id.to_owned();
+    let _ = slint::invoke_from_event_loop(move || {
+        if !ui_ctx.call_session_is_current(revision) {
+            return;
+        }
+        let Some(w) = weak.upgrade() else { return };
+        if w.get_active_call_data().call_id.as_str() != expected {
+            return;
+        }
+        super::outgoing::fail_call(&weak, message);
+    });
 }
 
 /// Paint the Slint active-call view from the client's accept result.
@@ -130,6 +191,7 @@ fn render_accepted_call(
     weak: &slint::Weak<MainWindow>,
     ui_ctx: &Arc<ChatterClient>,
     accepted: AcceptedIncomingCall,
+    revision: u64,
 ) {
     // Timers use a cheap Arc-backed handle to shared video frames.
     let shared_frames = match ui_ctx.call_video_frames() {
@@ -168,6 +230,12 @@ fn render_accepted_call(
             let ui_ctx = ui_ctx.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 let Some(w) = weak.upgrade() else { return };
+                if !ui_ctx.call_session_is_current(revision) {
+                    return;
+                }
+                if w.get_active_call_data().call_id.as_str() != setup.call_id.to_string() {
+                    return;
+                }
                 let local_initials = initials_from_name(&my_display_name);
                 let remote_initials = initials_from_name(&peer_name);
                 let remote_avatar = peer_avatar_bytes
@@ -239,6 +307,12 @@ fn render_accepted_call(
             let ui_ctx = ui_ctx.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 let Some(w) = weak.upgrade() else { return };
+                if !ui_ctx.call_session_is_current(revision) {
+                    return;
+                }
+                if w.get_active_call_data().call_id.as_str() != setup.call_id.to_string() {
+                    return;
+                }
                 // Keep the remote tiles already up: the answering view's
                 // caller tile, and any `ParticipantJoined` for the people
                 // already in the room that landed before this repaint. Each
@@ -293,18 +367,26 @@ fn render_accepted_call(
                 weak,
                 ui_ctx,
                 shared_frames,
-                setup.room_name,
+                setup.room_name.clone(),
                 setup.channel_id.to_string(),
                 setup.peer_display_name,
                 setup.is_video,
                 setup.verification_emojis,
                 setup.peer_avatar,
+                revision,
             );
+            let accepted_identity = setup.room_name.clone();
             // Queued after the render above (the event loop runs them in order).
             let weak = weak.clone();
+            let ui_ctx = ui_ctx.clone();
             let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak.upgrade() {
-                    open_call_screen(&w);
+                if !ui_ctx.call_session_is_current(revision) {
+                    return;
+                }
+                if let (Some(w), Some(worker)) = (weak.upgrade(), ui_ctx.call_service().get()) {
+                    worker.with_current_active_presentation(revision, &accepted_identity, || {
+                        open_call_screen(&w)
+                    });
                 }
             });
         }
@@ -419,95 +501,112 @@ fn render_active_anon_call(
     is_video: bool,
     verification_emojis: [String; 4],
     peer_avatar: Option<Vec<u8>>,
+    revision: u64,
 ) {
     let weak = weak.clone();
     let frames = shared_frames.clone();
     let ui_ctx = ui_ctx.clone();
     let _ = slint::invoke_from_event_loop(move || {
         let Some(w) = weak.upgrade() else { return };
-        // If `LiveKitRoomEvent::ParticipantJoined` already landed on the UI
-        // thread (it races AnonCallConnected via two independent
-        // `invoke_from_event_loop` dispatches), the remote slot already
-        // carries the server-assigned identity (e.g. "anon-c1954f…").
-        // Re-stamping a placeholder here clobbers it, and subsequent
-        // `TrackSubscribed` events can't match the identity back to a
-        // participant — the screen-share tile then stays in
-        // is_video_enabled=false until the user does pause+unpause.
-        //
-        // Otherwise the remote tile starts with an EMPTY user_id: the peer's
-        // LiveKit identity is derived by the server from the ephemeral key it
-        // joins with ("anon-" + sha256(pk)[..8], mailbox handlers.go), so
-        // nobody knows it before the join. `ParticipantJoined` adopts the
-        // empty-id tile (room_events.rs); the old literal "Anonymous" matched
-        // no identity, so a join after this render added a second remote
-        // tile and the peer's frames never reached this one.
-        let existing = w.get_active_call_data().participants;
-        let preserved_remote_user_id: Option<slint::SharedString> = existing
-            .iter()
-            .find(|p| {
-                let uid = p.user_id.as_str();
-                !uid.is_empty() && uid != "You"
-            })
-            .map(|p| p.user_id);
+        if !ui_ctx.call_session_is_current(revision) {
+            return;
+        }
+        let Some(worker) = ui_ctx.call_service().get() else {
+            return;
+        };
+        let identity = room_name.clone();
+        worker.with_current_active_presentation(revision, &identity, || {
+            // If `LiveKitRoomEvent::ParticipantJoined` already landed on the UI
+            // thread (it races AnonCallConnected via two independent
+            // `invoke_from_event_loop` dispatches), the remote slot already
+            // carries the server-assigned identity (e.g. "anon-c1954f…").
+            // Re-stamping a placeholder here clobbers it, and subsequent
+            // `TrackSubscribed` events can't match the identity back to a
+            // participant — the screen-share tile then stays in
+            // is_video_enabled=false until the user does pause+unpause.
+            //
+            // Otherwise the remote tile starts with an EMPTY user_id: the peer's
+            // LiveKit identity is derived by the server from the ephemeral key it
+            // joins with ("anon-" + sha256(pk)[..8], mailbox handlers.go), so
+            // nobody knows it before the join. `ParticipantJoined` adopts the
+            // empty-id tile (room_events.rs); the old literal "Anonymous" matched
+            // no identity, so a join after this render added a second remote
+            // tile and the peer's frames never reached this one.
+            let existing = w.get_active_call_data().participants;
+            let preserved_remote_user_id: Option<slint::SharedString> = existing
+                .iter()
+                .find(|p| {
+                    let uid = p.user_id.as_str();
+                    !uid.is_empty() && uid != "You"
+                })
+                .map(|p| p.user_id);
 
-        let local_participant = CallParticipantData {
-            user_id: "You".into(),
-            display_name: "You".into(),
-            initials: "Y".into(),
-            avatar_source: w.get_user_avatar_source(),
-            is_muted: false,
-            is_video_enabled: is_video,
-            is_screen_sharing: false,
-            is_speaking: false,
-            is_audio_muted_locally: false,
-            is_video_paused_locally: false,
-        };
-        let remote_initials = initials_from_name(&peer_display_name);
-        let remote_avatar_source = peer_avatar
-            .as_deref()
-            .and_then(avatar_bytes_to_image)
-            .unwrap_or_default();
-        let remote_participant = CallParticipantData {
-            user_id: preserved_remote_user_id.unwrap_or_default(),
-            display_name: peer_display_name.into(),
-            initials: remote_initials.into(),
-            avatar_source: remote_avatar_source,
-            is_muted: false,
-            is_video_enabled: is_video,
-            is_screen_sharing: false,
-            is_speaking: false,
-            is_audio_muted_locally: false,
-            is_video_paused_locally: false,
-        };
-        let call_data = ActiveCallData {
-            call_id: room_name.into(),
-            channel_id: channel_id.into(),
-            title: "Anonymous Call".into(),
-            is_video_call: is_video,
-            is_anonymous_call: true,
-            is_encrypted: true,
-            // An anonymous peer has no identity to have verified; `true` here
-            // would be a false "verified" badge the moment one is drawn.
-            is_identity_verified: false,
-            identity_warning: "".into(),
-            participant_count: 2,
-            duration_seconds: 0,
-            is_connected: true,
-            participants: ModelRc::new(VecModel::from(vec![remote_participant, local_participant])),
-            verification_key_version: "".into(),
-            verification_emoji_1: verification_emojis[0].clone().into(),
-            verification_emoji_2: verification_emojis[1].clone().into(),
-            verification_emoji_3: verification_emojis[2].clone().into(),
-            verification_emoji_4: verification_emojis[3].clone().into(),
-        };
-        w.set_active_call_data(call_data);
-        w.set_call_is_muted(false);
-        w.set_call_is_video_enabled(is_video);
-        w.set_call_is_screen_sharing(false);
-        w.set_active_call_visible(true);
-        super::super::auth::initial_data::hide_incoming_call(&w);
-        start_call_timer(&w, ui_ctx.clone());
-        start_video_frame_timer(&w, frames);
+            let local_participant = CallParticipantData {
+                user_id: "You".into(),
+                display_name: "You".into(),
+                initials: "Y".into(),
+                avatar_source: w.get_user_avatar_source(),
+                is_muted: false,
+                is_video_enabled: is_video,
+                is_screen_sharing: false,
+                is_speaking: false,
+                is_audio_muted_locally: false,
+                is_video_paused_locally: false,
+            };
+            let remote_initials = initials_from_name(&peer_display_name);
+            let remote_avatar_source = peer_avatar
+                .as_deref()
+                .and_then(avatar_bytes_to_image)
+                .unwrap_or_default();
+            let remote_participant = CallParticipantData {
+                user_id: preserved_remote_user_id.unwrap_or_default(),
+                display_name: peer_display_name.into(),
+                initials: remote_initials.into(),
+                avatar_source: remote_avatar_source,
+                is_muted: false,
+                is_video_enabled: is_video,
+                is_screen_sharing: false,
+                is_speaking: false,
+                is_audio_muted_locally: false,
+                is_video_paused_locally: false,
+            };
+            let accepted_identity = room_name.clone();
+            let call_data = ActiveCallData {
+                call_id: room_name.into(),
+                channel_id: channel_id.into(),
+                title: "Anonymous Call".into(),
+                is_video_call: is_video,
+                is_anonymous_call: true,
+                is_encrypted: true,
+                // An anonymous peer has no identity to have verified; `true` here
+                // would be a false "verified" badge the moment one is drawn.
+                is_identity_verified: false,
+                identity_warning: "".into(),
+                participant_count: 2,
+                duration_seconds: 0,
+                is_connected: true,
+                participants: ModelRc::new(VecModel::from(vec![
+                    remote_participant,
+                    local_participant,
+                ])),
+                verification_key_version: "".into(),
+                verification_emoji_1: verification_emojis[0].clone().into(),
+                verification_emoji_2: verification_emojis[1].clone().into(),
+                verification_emoji_3: verification_emojis[2].clone().into(),
+                verification_emoji_4: verification_emojis[3].clone().into(),
+            };
+            w.set_active_call_data(call_data);
+            w.set_call_is_muted(false);
+            w.set_call_is_video_enabled(is_video);
+            w.set_call_is_screen_sharing(false);
+            w.set_active_call_visible(true);
+            if w.get_incoming_call_data().call_id.as_str() == accepted_identity {
+                super::super::auth::initial_data::hide_incoming_call(&w);
+                w.set_incoming_call_replaces_active(false);
+            }
+            start_call_timer(&w, ui_ctx.clone());
+            start_video_frame_timer(&w, frames);
+        });
     });
     // Media is auto-published by the call worker after connect — no UI-side
     // publish needed.
@@ -530,26 +629,46 @@ pub fn wire_orchestrator_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
 
         let Some(state) = ui_ctx.incoming_call_presentation_state() else { return };
         let mut changes = state.subscribe_changes();
+        let mut auth_events = ui_ctx.auth_state().subscribe();
+        let mut revision = ui_ctx.auth_state().get().session_revision;
         changes.borrow_and_update();
-        reconcile_incoming_modal(&weak, &ui_ctx, &state);
-        tracing::info!("Call orchestrator UI subscriber started");
+        reconcile_incoming_modal(&weak, &ui_ctx, &state, revision);
         loop {
             tokio::select! {
+                biased;
+                auth = auth_events.recv() => {
+                    if matches!(auth, Err(tokio::sync::broadcast::error::RecvError::Closed)) { break; }
+                    let next = ui_ctx.auth_state().get().session_revision;
+                    if next != revision {
+                        revision = next;
+                        rx = rx.resubscribe();
+                        let reset_ctx = ui_ctx.clone(); let reset_weak = weak.clone();
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if reset_ctx.auth_state().get().session_revision != next { return; }
+                            if let Some(w) = reset_weak.upgrade() {
+                                super::super::auth::initial_data::hide_incoming_call(&w);
+                                w.set_incoming_call_replaces_active(false);
+                                w.set_active_call_visible(false);
+                            }
+                        });
+                    }
+                    reconcile_incoming_modal(&weak, &ui_ctx, &state, revision);
+                }
                 changed = changes.changed() => {
                     if changed.is_err() { break; }
                     changes.borrow_and_update();
-                    reconcile_incoming_modal(&weak, &ui_ctx, &state);
+                    reconcile_incoming_modal(&weak, &ui_ctx, &state, revision);
                 }
                 event = rx.recv() => match event {
-                    Ok(CallOrchestratorEvent::IncomingPresented { .. }
-                        | CallOrchestratorEvent::IncomingWithdrawn { .. }) => {
-                        reconcile_incoming_modal(&weak, &ui_ctx, &state);
+                    Ok(CallOrchestratorEvent::IncomingPresented { .. } | CallOrchestratorEvent::IncomingWithdrawn { .. }) => {
+                        reconcile_incoming_modal(&weak, &ui_ctx, &state, revision);
                     }
-                    Ok(event) => handle_orchestrator_event(&weak, &ui_ctx, event),
-                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                        tracing::warn!(skipped = n, "Call orchestrator UI subscriber recovering from lag");
-                        reconcile_incoming_modal(&weak, &ui_ctx, &state);
+                    Ok(event) => {
+                        if ui_ctx.call_session_is_current(revision) && state.session_revision() == Some(revision) {
+                            handle_orchestrator_event(&weak, &ui_ctx, event, revision);
+                        }
                     }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => reconcile_incoming_modal(&weak, &ui_ctx, &state, revision),
                     Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
             }
@@ -565,13 +684,20 @@ fn reconcile_incoming_modal(
     weak: &slint::Weak<MainWindow>,
     ui_ctx: &Arc<ChatterClient>,
     state: &chatter_core::services::call_worker::IncomingCallPresentationState,
+    revision: u64,
 ) {
     let weak = weak.clone();
     let ui_ctx = ui_ctx.clone();
     let state = state.clone();
     let _ = slint::invoke_from_event_loop(move || {
         let Some(w) = weak.upgrade() else { return };
+        if !ui_ctx.call_session_is_current(revision) {
+            return;
+        }
         state.with_snapshot(|snapshot| {
+            if snapshot.session_revision != Some(revision) {
+                return;
+            }
             let Some(CallOrchestratorEvent::IncomingPresented {
                 call,
                 kind,
@@ -589,12 +715,17 @@ fn reconcile_incoming_modal(
                 w.set_incoming_call_replaces_active(false);
                 return;
             };
-            // A tap hides this identity before permission/signaling completes.
-            // Another invalidation must not reopen the same dismissed modal.
-            if w.get_incoming_call_data().call_id.as_str() == call.as_str() {
-                if w.get_incoming_call_visible() {
-                    w.set_incoming_call_replaces_active(*replaces_active);
-                }
+            if DISMISSED_INCOMING.with(|dismissed| {
+                dismissed
+                    .borrow()
+                    .contains(&(revision, call.as_str().to_owned()))
+            }) {
+                return;
+            }
+            if w.get_incoming_call_visible()
+                && w.get_incoming_call_data().call_id.as_str() == call.as_str()
+            {
+                w.set_incoming_call_replaces_active(*replaces_active);
                 return;
             }
             let peer_id_str = peer_id.to_string();
@@ -628,6 +759,7 @@ fn handle_orchestrator_event(
     weak: &slint::Weak<MainWindow>,
     ui_ctx: &Arc<ChatterClient>,
     event: CallOrchestratorEvent,
+    revision: u64,
 ) {
     match event {
         // Presentation payloads are hints only; subscriber reconciles authority.
@@ -655,8 +787,10 @@ fn handle_orchestrator_event(
                 CallEndReason::Error(_) => Some((super::outgoing::CALL_FAILED, "error")),
             };
             let weak = weak.clone();
+            let ui_ctx = ui_ctx.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 let Some(w) = weak.upgrade() else { return };
+                if !ui_ctx.call_session_is_current(revision) { return; }
                 if w.get_active_call_data().call_id.as_str() != call.as_str() { return; }
                 w.set_active_call_visible(false);
                 if let Some((message, variant)) = notice {
@@ -680,6 +814,7 @@ fn handle_orchestrator_event(
             let ui_ctx = ui_ctx.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 let Some(w) = weak.upgrade() else { return };
+                if !ui_ctx.call_session_is_current(revision) { return; }
                 let mut data = w.get_active_call_data();
                 if data.call_id.as_str() != call.as_str() {
                     return;
@@ -709,7 +844,139 @@ fn handle_orchestrator_event(
                 info.is_video,
                 info.verification_emojis,
                 info.peer_avatar,
+                revision,
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod session_tests {
+    use super::*;
+    use chatter_core::domain::ids::UserId;
+    use chatter_core::services::call_worker::{CallHandle, CallWorkerHandle, OrchestratedCallKind};
+
+    fn pump(window: &MainWindow) {
+        slint::Timer::single_shot(std::time::Duration::from_millis(50), || {
+            slint::quit_event_loop().unwrap()
+        });
+        window.show().unwrap();
+        slint::run_event_loop().unwrap();
+    }
+
+    #[test]
+    fn queued_projection_and_anonymous_completion_obey_session_and_active_identity() {
+        i_slint_backend_testing::init_integration_test_with_system_time();
+        let runtime = super::super::timers::tests::runtime();
+        let _entered = runtime.enter();
+        let dir = tempfile::tempdir().unwrap();
+        let db = chatter_core::system::Directories::with_base_dir(dir.path().to_owned())
+            .unwrap()
+            .database_path();
+        std::fs::write(
+            db.parent()
+                .unwrap()
+                .join(chatter_core::system::keyring::NO_KEYRING_MARKER),
+            b"",
+        )
+        .unwrap();
+        let client = ChatterClient::builder()
+            .data_dir(dir.path().to_string_lossy())
+            .build()
+            .unwrap();
+        let pool = chatter_core::network::grpc::GrpcClientPool::new("https://localhost:1").unwrap();
+        let worker = CallWorkerHandle::spawn(pool.call_client());
+        assert!(client.call_service().set(worker.clone()).is_ok());
+        let window = MainWindow::new().unwrap();
+        let alice = UserId::new();
+        client.auth_state().set_logged_in(alice, 1, "Alice".into());
+        let old = client.auth_state().get().session_revision;
+        let state = worker.incoming_presentation_state();
+        state.begin_session(old);
+        reconcile_incoming_modal(&window.as_weak(), &client, &state, old);
+        client.auth_state().invalidate_session();
+        runtime
+            .block_on(worker.reset_presentation_session(old))
+            .unwrap();
+        client
+            .auth_state()
+            .set_logged_in(UserId::new(), 1, "Bob".into());
+        client
+            .auth_state()
+            .set_logged_in(alice, 1, "Alice again".into());
+        let revision = client.auth_state().get().session_revision;
+        state.begin_session(revision);
+        let current = worker.for_presentation_session(revision);
+        current.orch_present_incoming(
+            CallHandle::from("B"),
+            OrchestratedCallKind::GroupChannel,
+            alice,
+            "Current ring".into(),
+            false,
+            false,
+            String::new(),
+            None,
+            None,
+            String::new(),
+        );
+        runtime
+            .block_on(current.incoming_presentation_snapshot())
+            .unwrap();
+        pump(&window);
+        assert!(
+            !window.get_incoming_call_visible(),
+            "old queued owner cannot render the new ring"
+        );
+        reconcile_incoming_modal(&window.as_weak(), &client, &state, revision);
+        pump(&window);
+        assert!(window.get_incoming_call_visible());
+        assert_eq!(window.get_incoming_call_data().call_id.as_str(), "B");
+        // Accepted A mounts while B rings, and cannot dismiss B by accident.
+        current.orch_mark_connected(
+            CallHandle::from("A"),
+            OrchestratedCallKind::AnonDm,
+            alice,
+            false,
+        );
+        runtime.block_on(current.orch_active_kind());
+        render_active_anon_call(
+            &window.as_weak(),
+            &client,
+            worker.video_frames().clone(),
+            "A".into(),
+            String::new(),
+            "Peer".into(),
+            false,
+            Default::default(),
+            None,
+            revision,
+        );
+        pump(&window);
+        assert_eq!(window.get_active_call_data().call_id.as_str(), "A");
+        assert!(window.get_incoming_call_visible());
+        assert_eq!(window.get_incoming_call_data().call_id.as_str(), "B");
+        // A completion queued before its terminal actor transition cannot resurrect A.
+        render_active_anon_call(
+            &window.as_weak(),
+            &client,
+            worker.video_frames().clone(),
+            "A".into(),
+            String::new(),
+            "Late peer".into(),
+            false,
+            Default::default(),
+            None,
+            revision,
+        );
+        current.orch_mark_ended(
+            CallHandle::from("A"),
+            chatter_core::services::call_worker::CallEndReason::RemoteHangup,
+        );
+        runtime.block_on(current.orch_active_kind());
+        window.set_active_call_visible(false);
+        pump(&window);
+        assert!(!window.get_active_call_visible());
+        assert!(window.get_incoming_call_visible());
+        worker.shutdown();
     }
 }

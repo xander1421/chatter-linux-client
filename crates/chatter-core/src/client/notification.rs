@@ -36,36 +36,94 @@ impl ChatterClient {
     /// ringing OS notification, cancelled when the ring ends). Call after login
     /// (e.g. from initial-data load). Idempotent — runs its spawns once.
     pub fn start_authed_notification_streams(self: &Arc<Self>) {
-        let user_id = match self.auth_state().get().current_user_id {
-            Some(id) => id,
-            None => {
-                tracing::debug!("skipping authed notification streams — no authenticated user yet");
-                return;
+        let revision = self.auth_state().get().session_revision;
+        let client = self.clone();
+        tokio::spawn(async move {
+            let _lifecycle = client.auth_lifecycle_lock.lock().await;
+            if client.auth_state().session_is_current(revision) {
+                client.start_authed_notification_streams_locked();
             }
+        });
+    }
+
+    fn start_authed_notification_streams_locked(self: &Arc<Self>) {
+        let auth = self.auth_state().get();
+        let Some(user_id) = auth.current_user_id else {
+            return;
         };
-        // Only spawn once; guarded so a re-login / repeated initial-data load
-        // doesn't stack duplicate streams.
-        if self
-            .authed_notif_started
-            .swap(true, std::sync::atomic::Ordering::SeqCst)
-        {
+        let revision = auth.session_revision;
+        let mut owner = self.authed_notif_session.lock();
+        if *owner == Some(revision) {
             return;
         }
-
+        // A retired session must be drained by logout/shutdown before restart.
+        if let Some(retired) = *owner {
+            let client = self.clone();
+            tokio::spawn(async move {
+                {
+                    let _lifecycle = client.auth_lifecycle_lock.lock().await;
+                    if !client.auth_state().session_is_current(revision) {
+                        return;
+                    }
+                    client.stop_authed_notification_streams(retired).await;
+                    #[cfg(feature = "media")]
+                    if let Some(worker) = client.call_service().get() {
+                        let _ = worker.reset_presentation_session(retired).await;
+                    }
+                    if client.authed_notif_session.lock().is_none() {
+                        client.start_authed_notification_streams_locked();
+                        return;
+                    }
+                }
+                // Retain exact old cancellation ownership, but never keep
+                // authentication serialization locked during an unbounded retry.
+                #[cfg(feature = "media")]
+                {
+                    let bridge = client
+                        .call_notification_bridge
+                        .lock()
+                        .as_ref()
+                        .filter(|(owner, _)| *owner == retired)
+                        .map(|(_, bridge)| bridge.clone());
+                    if let Some(bridge) = bridge {
+                        if !bridge.wait_drained().await {
+                            return;
+                        }
+                    } else {
+                        return;
+                    }
+                    let _lifecycle = client.auth_lifecycle_lock.lock().await;
+                    if !client.auth_state().session_is_current(revision) {
+                        return;
+                    }
+                    client.stop_authed_notification_streams(retired).await;
+                    if client.authed_notif_session.lock().is_none() {
+                        client.start_authed_notification_streams_locked();
+                    }
+                }
+            });
+            return;
+        }
+        *owner = Some(revision);
+        self.authed_notif_started
+            .store(true, std::sync::atomic::Ordering::SeqCst);
         // The gRPC notification stream is held in its own slot (not the `tasks`
         // bag) so an anon-mode transport switch can abort + re-spawn just this
-        // loop. The call → notification bridge below carries no server
-        // connection, so it stays a one-time spawn in `tasks`.
+        // loop. The call bridge owns its revision separately so its native
+        // cancellation can drain reliably before the next owner starts.
         self.spawn_notification_stream(user_id);
 
         #[cfg(feature = "media")]
         if let Some(call_worker) = self.services.call_service.get() {
-            let bridge_handle =
-                crate::services::call_notification_bridge::spawn_call_notification_bridge(
-                    call_worker.clone(),
+            call_worker
+                .incoming_presentation_state()
+                .begin_session(revision);
+            let bridge =
+                crate::services::call_notification_bridge::spawn_session_call_notification_bridge(
+                    call_worker.for_presentation_session(revision),
                     self.services.notification_service.clone(),
                 );
-            self.tasks.lock().push(bridge_handle);
+            *self.call_notification_bridge.lock() = Some((revision, bridge));
             tracing::info!("call → notification bridge started");
         } else {
             tracing::warn!(
@@ -91,6 +149,51 @@ impl ChatterClient {
         *slot = Some(handle);
     }
 
+    pub(crate) async fn stop_authed_notification_streams(&self, revision: u64) {
+        // Reserve the old lifecycle until graceful cancellation completes.
+        // Starting the next owner is forbidden while this slot is occupied.
+        if *self.authed_notif_session.lock() != Some(revision) {
+            return;
+        }
+        if let Some(handle) = self.notif_stream_handle.lock().take() {
+            handle.abort();
+        }
+        #[cfg(feature = "media")]
+        {
+            let bridge = {
+                let mut slot = self.call_notification_bridge.lock();
+                if slot.as_ref().is_some_and(|(owner, _)| *owner == revision) {
+                    slot.as_ref().map(|(_, bridge)| bridge.clone())
+                } else {
+                    None
+                }
+            };
+            if let Some(bridge) = bridge {
+                if !bridge.stop().await {
+                    tracing::error!(
+                        revision,
+                        "call notification drain failed; retaining session ownership"
+                    );
+                    return;
+                }
+            }
+            let mut slot = self.call_notification_bridge.lock();
+            if slot.as_ref().is_some_and(|(owner, _)| *owner == revision) {
+                slot.take();
+            }
+        }
+        let mut owner = self.authed_notif_session.lock();
+        if *owner != Some(revision) {
+            return;
+        }
+        if let Some(handle) = self.notif_stream_handle.lock().take() {
+            handle.abort();
+        }
+        *owner = None;
+        self.authed_notif_started
+            .store(false, std::sync::atomic::Ordering::SeqCst);
+    }
+
     /// Re-spawn the gRPC notification stream so it re-dials over the currently
     /// active transport (anon mode toggles the pool between direct and onion).
     /// No-op before login — the stream hasn't started, and the normal
@@ -98,6 +201,10 @@ impl ChatterClient {
     /// right transport. Idempotent: aborts the previous stream before spawning,
     /// so repeated toggles never stack or leak a task.
     pub fn respawn_notification_stream(self: &Arc<Self>) {
+        let owner = self.authed_notif_session.lock();
+        if *owner != Some(self.auth_state().get().session_revision) {
+            return;
+        }
         if !self
             .authed_notif_started
             .load(std::sync::atomic::Ordering::SeqCst)
@@ -186,5 +293,243 @@ impl ChatterClient {
             .notification_service
             .set_sound_enabled(enabled);
         Ok(())
+    }
+}
+
+#[cfg(all(test, feature = "media"))]
+mod session_tests {
+    use super::*;
+    use crate::services::call_worker::{CallHandle, CallWorkerHandle, OrchestratedCallKind};
+    use crate::system::notification_sink::NotificationSink;
+    use parking_lot::Mutex;
+
+    #[derive(Default)]
+    struct Sink {
+        log: Mutex<Vec<String>>,
+        fails: std::sync::atomic::AtomicBool,
+    }
+    impl NotificationSink for Sink {
+        fn show(
+            &self,
+            _: &str,
+            _: &str,
+            _: crate::domain::notification::NotificationPriority,
+        ) -> Result<(), crate::error::SystemError> {
+            Ok(())
+        }
+        fn show_incoming_call(
+            &self,
+            id: &str,
+            _: &str,
+            _: &str,
+        ) -> Result<(), crate::error::SystemError> {
+            self.log.lock().push(format!("show {id}"));
+            Ok(())
+        }
+        fn cancel_incoming_call(&self, id: &str) -> Result<(), crate::error::SystemError> {
+            if self.fails.load(std::sync::atomic::Ordering::SeqCst) {
+                return Err(crate::error::SystemError::NotificationSend(
+                    "fixture failure".into(),
+                ));
+            }
+            self.log.lock().push(format!("cancel {id}"));
+            Ok(())
+        }
+    }
+    #[tokio::test]
+    async fn real_client_session_stop_and_relogin_starts_one_bridge() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = crate::system::Directories::with_base_dir(dir.path().to_owned())
+            .unwrap()
+            .database_path();
+        std::fs::write(
+            db.parent()
+                .unwrap()
+                .join(crate::system::keyring::NO_KEYRING_MARKER),
+            b"",
+        )
+        .unwrap();
+        let sink = Arc::new(Sink::default());
+        let client = ChatterClient::builder()
+            .server_url("https://localhost:1")
+            .data_dir(dir.path().to_string_lossy())
+            .notification_sink(sink.clone())
+            .build()
+            .unwrap();
+        let channel = tonic::transport::Endpoint::from_static("http://127.0.0.1:9").connect_lazy();
+        let worker = CallWorkerHandle::spawn(crate::network::grpc::CallClient::new(
+            channel.into(),
+            crate::network::grpc::interceptors::AuthInterceptor::new(),
+        ));
+        assert!(client.call_service().set(worker.clone()).is_ok());
+        let user = crate::domain::ids::UserId::new();
+        for id in ["first", "same-user-new-session"] {
+            client.auth_state().set_logged_in(user, 1, "Alice".into());
+            let revision = client.auth_state().get().session_revision;
+            client.start_authed_notification_streams();
+            client.start_authed_notification_streams();
+            tokio::time::timeout(std::time::Duration::from_secs(3), async {
+                while *client.authed_notif_session.lock() != Some(revision) {
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+            let before = client.auth_state().get().session_revision;
+            assert!(matches!(
+                client.login("other", "unused", "fixture", None).await,
+                Err(super::super::ClientError::AlreadyStarted)
+            ));
+            assert!(matches!(
+                client
+                    .register("other", "unused", "Other", "fixture", None, None)
+                    .await,
+                Err(super::super::ClientError::AlreadyStarted)
+            ));
+            assert_eq!(client.auth_state().get().session_revision, before);
+            assert_eq!(client.auth_state().get().current_user_id, Some(user));
+            let scoped = worker.for_presentation_session(revision);
+            scoped.orch_present_incoming(
+                CallHandle::from(id),
+                OrchestratedCallKind::GroupChannel,
+                user,
+                "Caller".into(),
+                false,
+                false,
+                String::new(),
+                None,
+                None,
+                String::new(),
+            );
+            scoped.incoming_presentation_snapshot().await.unwrap();
+            tokio::time::timeout(std::time::Duration::from_secs(3), async {
+                while !sink.log.lock().contains(&format!("show {id}")) {
+                    tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                }
+            })
+            .await
+            .unwrap();
+            let _ = client.logout().await; // no server session; teardown still must complete
+            assert!(client.authed_notif_session.lock().is_none());
+            assert!(!client
+                .authed_notif_started
+                .load(std::sync::atomic::Ordering::SeqCst));
+            assert!(client.call_notification_bridge.lock().is_none());
+            assert!(client.notif_stream_handle.lock().is_none());
+            client.auth_state().set_logged_out();
+        }
+        assert_eq!(
+            *sink.log.lock(),
+            [
+                "show first",
+                "cancel first",
+                "show same-user-new-session",
+                "cancel same-user-new-session"
+            ]
+        );
+        // Permanent native errors retain cancellation ownership without
+        // retaining authenticated producer or rejecting the next auth attempt.
+        client.auth_state().set_logged_in(user, 1, "Alice".into());
+        let retired = client.auth_state().get().session_revision;
+        client.start_authed_notification_streams();
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            while *client.authed_notif_session.lock() != Some(retired) {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        worker
+            .for_presentation_session(retired)
+            .orch_present_incoming(
+                CallHandle::from("permanent"),
+                OrchestratedCallKind::GroupChannel,
+                user,
+                "Caller".into(),
+                false,
+                false,
+                String::new(),
+                None,
+                None,
+                String::new(),
+            );
+        worker.incoming_presentation_snapshot().await.unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            while !sink.log.lock().contains(&"show permanent".to_owned()) {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        sink.fails.store(true, std::sync::atomic::Ordering::SeqCst);
+        tokio::time::timeout(std::time::Duration::from_secs(6), client.logout())
+            .await
+            .unwrap()
+            .ok();
+        assert!(client.notif_stream_handle.lock().is_none());
+        assert!(client.call_notification_bridge.lock().is_some());
+        assert_eq!(*client.authed_notif_session.lock(), Some(retired));
+        assert!(!client.auth_state().is_logged_in());
+        assert!(worker
+            .incoming_presentation_snapshot()
+            .await
+            .unwrap()
+            .presentations
+            .is_empty());
+        // Invalid PIN is handled before any connection attempt, proving the
+        // real registration entry passes its guard despite retained cleanup.
+        assert!(matches!(
+            client
+                .register("unused", "unused", "Unused", "fixture", None, Some("x"))
+                .await,
+            Err(super::super::ClientError::Validation(_))
+        ));
+        client
+            .auth_state()
+            .set_logged_in(user, 1, "New auth while cleanup retries".into());
+        let next_revision = client.auth_state().get().session_revision;
+        worker
+            .incoming_presentation_state()
+            .begin_session(next_revision);
+        client.start_authed_notification_streams(); // exactly one external start
+        worker
+            .for_presentation_session(next_revision)
+            .orch_present_incoming(
+                CallHandle::from("auto-recovered"),
+                OrchestratedCallKind::GroupChannel,
+                user,
+                "Caller".into(),
+                false,
+                false,
+                String::new(),
+                None,
+                None,
+                String::new(),
+            );
+        worker.incoming_presentation_snapshot().await.unwrap();
+        tokio::time::sleep(std::time::Duration::from_millis(2200)).await;
+        assert_eq!(*client.authed_notif_session.lock(), Some(retired));
+        assert!(client.notif_stream_handle.lock().is_none());
+        sink.fails.store(false, std::sync::atomic::Ordering::SeqCst);
+        tokio::time::timeout(std::time::Duration::from_secs(3), async {
+            while !sink.log.lock().contains(&"show auto-recovered".to_owned()) {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(*client.authed_notif_session.lock(), Some(next_revision));
+        assert!(client.notif_stream_handle.lock().is_some());
+        assert_eq!(
+            sink.log
+                .lock()
+                .iter()
+                .filter(|entry| entry.as_str() == "show auto-recovered")
+                .count(),
+            1
+        );
+        let _ = client.logout().await;
+        assert!(client.call_notification_bridge.lock().is_none());
+        worker.shutdown();
     }
 }

@@ -229,6 +229,7 @@ pub struct CallSignalingService {
     group_key_wait: Arc<Mutex<Option<String>>>,
     /// The last rotated key we sent: call, when, and to whom.
     last_key_sent: Arc<Mutex<Option<KeySent>>>,
+    owned_anon_rooms: Arc<Mutex<std::collections::HashSet<String>>>,
 }
 
 /// One rotated key's send ([`CallSignalingService::recently_keyed`]).
@@ -284,6 +285,7 @@ impl CallSignalingService {
             group_call_invites: Arc::new(GroupCallInvites::default()),
             group_key_wait: Arc::new(Mutex::new(None)),
             last_key_sent: Arc::new(Mutex::new(None)),
+            owned_anon_rooms: Arc::new(Mutex::new(Default::default())),
         }
     }
 
@@ -321,6 +323,19 @@ impl CallSignalingService {
     }
 
     /// Store a pending outgoing DM call.
+    /// Called only after the client has serialized credential teardown and
+    /// stopped old producers. Dropping invite buffers zeroizes retained keys.
+    pub(crate) fn clear_call_session(&self, incoming: &[String]) {
+        self.pending_dm_call.lock().take();
+        self.group_call_invites.lock().clear();
+        self.group_key_wait.lock().take();
+        self.last_key_sent.lock().take();
+        let rooms = std::mem::take(&mut *self.owned_anon_rooms.lock());
+        for room in rooms.iter().chain(incoming.iter()) {
+            self.anon_dm_service.clear_pending_anon_call(room);
+        }
+    }
+
     pub fn set_pending_dm_call(&self, pending: PendingDmCall) {
         *self.pending_dm_call.lock() = Some(pending);
     }
@@ -1063,6 +1078,9 @@ impl CallSignalingService {
         );
 
         // Store pending call state
+        self.owned_anon_rooms
+            .lock()
+            .insert(offer_result.room_name.clone());
         self.anon_dm_service.store_pending_anon_call(
             offer_result.room_name.clone(),
             crate::services::anon_dm::PendingAnonCall {
@@ -1117,6 +1135,9 @@ impl CallSignalingService {
         let conversation_id = crate::domain::anon_dm::AnonDmId::try_from_slice(group_id.as_bytes())
             .expect("AnonGroupId is 16 bytes like AnonDmId");
 
+        self.owned_anon_rooms
+            .lock()
+            .insert(offer_result.room_name.clone());
         self.anon_dm_service.store_pending_anon_call(
             offer_result.room_name.clone(),
             crate::services::anon_dm::PendingAnonCall {
@@ -1207,8 +1228,10 @@ impl CallSignalingService {
         // Acquire a fresh token for joining
         let token = self.acquire_call_room_token().map_err(|e| {
             // Put pending call back so user can retry
-            self.anon_dm_service
-                .store_pending_anon_call(room_name.to_string(), pending.clone());
+            call_worker.with_current_presentation_session(|| {
+                self.anon_dm_service
+                    .store_pending_anon_call(room_name.to_string(), pending.clone())
+            });
             e
         })?;
 
@@ -1311,10 +1334,16 @@ impl CallSignalingService {
         };
 
         // Re-store pending call so end_anon_call can find it for hangup/history
-        let mut active_pending = pending;
-        active_pending.started_at = Some(chrono::Utc::now());
-        self.anon_dm_service
-            .store_pending_anon_call(room_name.to_string(), active_pending);
+        let restored = call_worker.with_current_presentation_session(|| {
+            self.owned_anon_rooms.lock().insert(room_name.to_string());
+            let mut active_pending = pending;
+            active_pending.started_at = Some(chrono::Utc::now());
+            self.anon_dm_service
+                .store_pending_anon_call(room_name.to_string(), active_pending);
+        });
+        if restored.is_none() {
+            return Err(CallSignalingError::NoPendingCall);
+        }
 
         Ok(result)
     }
@@ -1425,10 +1454,16 @@ impl CallSignalingService {
         };
 
         // Re-store pending call so end_anon_call can find it for hangup/history
-        let mut active_pending = pending;
-        active_pending.started_at = Some(chrono::Utc::now());
-        self.anon_dm_service
-            .store_pending_anon_call(room_name.clone(), active_pending);
+        let restored = call_worker.with_current_presentation_session(|| {
+            self.owned_anon_rooms.lock().insert(room_name.to_string());
+            let mut active_pending = pending;
+            active_pending.started_at = Some(chrono::Utc::now());
+            self.anon_dm_service
+                .store_pending_anon_call(room_name.clone(), active_pending);
+        });
+        if restored.is_none() {
+            return Err(CallSignalingError::NoPendingCall);
+        }
 
         Ok(AnonCallAnswerOutcome::Connected(result))
     }

@@ -129,6 +129,35 @@ impl AuthState {
         });
     }
 
+    pub fn update_display_name_if_current(&self, revision: u64, user: UserId, name: String) {
+        self.store.update(|state| {
+            if state.session_revision == revision && state.current_user_id == Some(user) {
+                state.display_name = Some(name);
+            }
+        });
+    }
+
+    /// A user ID alone cannot fence A -> B -> A or a fresh login of A.
+    pub fn session_is_current(&self, revision: u64) -> bool {
+        let state = self.get();
+        state.current_user_id.is_some() && state.session_revision == revision
+    }
+
+    pub fn set_logged_out_if_current(&self, revision: u64) -> bool {
+        let mut cleared = false;
+        self.store.update(|state| {
+            if state.session_revision == revision {
+                state.session_revision = state.session_revision.wrapping_add(1);
+                state.current_user_id = None;
+                state.device_id = None;
+                state.display_name = None;
+                state.is_logging_in = false;
+                cleared = true;
+            }
+        });
+        cleared
+    }
+
     /// Quick check if user is currently logged in.
     #[must_use]
     pub fn is_logged_in(&self) -> bool {
