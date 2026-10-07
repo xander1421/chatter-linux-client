@@ -139,6 +139,8 @@ pub struct MessageDisplayData {
     // Call message fields
     pub is_pinned: bool,
     pub is_call: bool,
+    /// Channel phase events keep their phase label; DM records show direction/result.
+    pub is_channel_call: bool,
     pub call_message_type: String, // "started", "ended", "missed", "declined" (raw from domain)
     pub call_initiator_id: String, // User ID of who initiated the call
     pub call_duration: String,     // "1 min 30 s" or empty
@@ -176,9 +178,10 @@ impl MessageDisplayData {
         let slint_attachments: Vec<crate::MessageAttachmentData> =
             self.attachments.iter().map(|a| a.to_slint()).collect();
 
-        // Determine call type based on who initiated
+        // Preserve channel event phases; DM records display direction/result.
         let call_type = if self.is_call {
             match self.call_message_type.as_str() {
+                "started" | "ended" if self.is_channel_call => self.call_message_type.clone(),
                 "missed" => "missed".to_string(),
                 "declined" => "declined".to_string(),
                 _ => {
@@ -424,6 +427,10 @@ pub fn message_to_display_data_with_replies(
         failure_reason: msg.failure_reason.clone().unwrap_or_default(),
         is_pinned: msg.is_pinned,
         is_call,
+        is_channel_call: matches!(
+            msg.conversation_type,
+            chatter_core::domain::message::ConversationType::Channel
+        ),
         call_message_type,
         call_initiator_id,
         call_duration,
@@ -598,6 +605,62 @@ mod tests {
     use slint::Model;
 
     use super::*;
+
+    #[test]
+    fn channel_call_phases_preserve_direction_and_action_identity_without_changing_dm_labels() {
+        use chatter_core::domain::ids::{ChannelId, UserId};
+        use chatter_core::domain::message::{CallMessage, CallMessageType, ConversationType};
+        let caller = UserId::new();
+        let reporter = UserId::new();
+        for kind in [
+            ConversationType::Channel,
+            ConversationType::ServerDm,
+            ConversationType::AnonDm,
+        ] {
+            for phase in [
+                CallMessageType::Started,
+                CallMessageType::Ended,
+                CallMessageType::Missed,
+                CallMessageType::Declined,
+            ] {
+                let mut msg = Message::new_text(
+                    ChannelId::new(),
+                    kind.clone(),
+                    Some(reporter),
+                    String::new(),
+                    123,
+                );
+                let mut call =
+                    CallMessage::started(uuid::Uuid::new_v4().to_string(), caller, String::new());
+                call.call_type = phase;
+                call.duration = Some(chrono::Duration::seconds(95));
+                msg.content = MessageContent::Call(call);
+                msg.reply_to = Some(chatter_core::domain::ids::MessageId::new());
+                let display = message_to_display_data(&msg, "Caller", &[], None);
+                for viewer in [caller, reporter] {
+                    let row = display.to_slint_with_user(&viewer.to_string());
+                    let expected = match phase {
+                        CallMessageType::Started if kind == ConversationType::Channel => "started",
+                        CallMessageType::Ended if kind == ConversationType::Channel => "ended",
+                        CallMessageType::Missed => "missed",
+                        CallMessageType::Declined => "declined",
+                        _ if viewer == caller => "outgoing",
+                        _ => "incoming",
+                    };
+                    assert_eq!(row.call_type.as_str(), expected);
+                    assert_eq!(row.is_own, viewer == caller);
+                    assert_eq!(row.message_id.as_str(), msg.id.to_string());
+                    assert_eq!(row.sender_id.as_str(), reporter.to_string());
+                    assert_eq!(row.timestamp_ns.as_str(), "123");
+                    assert_eq!(
+                        row.reply_to_message_id.as_str(),
+                        msg.reply_to.unwrap().to_string()
+                    );
+                    assert_eq!(row.call_duration.as_str(), display.call_duration);
+                }
+            }
+        }
+    }
 
     #[test]
     fn call_display_identity_tracks_initiator_instead_of_end_event_sender() {

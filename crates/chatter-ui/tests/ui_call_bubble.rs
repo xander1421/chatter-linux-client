@@ -39,8 +39,16 @@ fn call_clock_is_below_status_and_icon_with_channel_identity_only() {
             (false, true, true),
             (false, false, false),
         ] {
-            for (status, duration) in [("incoming", "1 min 30 s"), ("missed", ""), ("declined", "")]
-            {
+            for (status, duration) in [
+                ("incoming", "1 min 30 s"),
+                ("missed", ""),
+                ("declined", ""),
+                ("started", ""),
+                ("ended", "1 min 30 s"),
+            ] {
+                if kind != ConversationKind::Channel && matches!(status, "started" | "ended") {
+                    continue;
+                }
                 let row = MessageItemData {
                     message_id: "call-geometry".into(),
                     sender_id: "caller-fixture".into(),
@@ -59,6 +67,10 @@ fn call_clock_is_below_status_and_icon_with_channel_identity_only() {
                 pump(&w);
                 let clock = visible(&w, "17:42").into_iter().next().expect("call clock");
                 let label = match status {
+                    "started" if own => "Outgoing call started",
+                    "started" => "Incoming call started",
+                    "ended" if own => "Outgoing call ended",
+                    "ended" => "Incoming call ended",
                     "missed" => "Missed call",
                     "declined" => "Declined call",
                     _ if own => "Outgoing call",

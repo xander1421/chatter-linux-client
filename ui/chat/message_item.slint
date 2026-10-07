@@ -371,7 +371,13 @@ export component MessageItem inherits Rectangle {
                                 Text {
                                     text: is-missed ? "Missed call"
                                         : root.call-type == "declined" ? "Declined call"
+                                        : root.call-type == "started" ? "Call started"
+                                        : root.call-type == "ended" ? "Call ended"
                                         : is-outgoing ? "Outgoing call" : "Incoming call";
+                                    accessible-role: text;
+                                    accessible-label: root.call-type == "started" || root.call-type == "ended"
+                                        ? (is-outgoing ? "Outgoing call " : "Incoming call ") + root.call-type
+                                        : self.text;
                                     color: is-missed ? Colors.error : Colors.text-primary;
                                     font-size: Typography.sm;
                                     font-weight: Typography.medium;
