@@ -16,7 +16,7 @@ export component ChatHeaderMenu inherits Rectangle {
     in property <bool> show-settings;
     in property <bool> show-pinned;
     callback pinned();
-    out property <length> card-width: 240px;
+    out property <length> card-width: min(288px, root.width - 2 * Spacing.sm);
     out property <length> card-height: menu.preferred-height;
 
     callback close();

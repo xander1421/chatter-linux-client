@@ -45,6 +45,8 @@ export component SettingsScreen inherits Rectangle {
     // Room left for the mobile tab bar drawn over the bottom of the screen.
     in property <length> bottom-inset: 0px;
     in property <bool> mobile-platform: false;
+    // Mobile has no save-document adapter; disclose before requesting a secret.
+    property <bool> file-backup-available: !root.mobile-platform;
     in property <image> avatar;
     in property <int> session-count: 0;
 
@@ -891,13 +893,20 @@ export component SettingsScreen inherits Rectangle {
                                         wrap: word-wrap;
                                     }
 
-                                    Input {
+                                    if !root.file-backup-available: Text {
+                                        text: "File backup is unavailable on this device. Use server backup below.";
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                        wrap: word-wrap;
+                                    }
+
+                                    if root.file-backup-available: Input {
                                         placeholder: "Backup passphrase (for file backup)";
                                         password: true;
                                         text <=> root.message-backup-passphrase;
                                     }
 
-                                    HorizontalLayout {
+                                    if root.file-backup-available: HorizontalLayout {
                                         spacing: Spacing.sm;
                                         alignment: end;
 
@@ -2896,7 +2905,16 @@ export component SettingsScreen inherits Rectangle {
                             // Selected tab = the neutral raised pill every other tab bar uses
                             // (bottom nav, Calls, Contacts); teal fill is for actions.
                             variant: root.active-section == item.id ? "secondary" : "ghost";
-                            clicked => { root.active-section = item.id; }
+                            clicked => {
+                                root.active-section = item.id;
+                                // Bring the selected pill fully clear of the fixed Back
+                                // button and the scrolling strip's faded edges.
+                                if self.x + tabs.viewport-x < Spacing.sm {
+                                    tabs.viewport-x = min(0px, max(tabs.width - tabs.viewport-width, Spacing.sm - self.x));
+                                } else if self.x + self.width + tabs.viewport-x > tabs.width - Spacing.sm {
+                                    tabs.viewport-x = min(0px, max(tabs.width - tabs.viewport-width, tabs.width - Spacing.sm - self.x - self.width));
+                                }
+                            }
                         }
                     }
                 }

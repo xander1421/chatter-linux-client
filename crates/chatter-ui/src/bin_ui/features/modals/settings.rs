@@ -56,14 +56,50 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
 
     // Read receipts toggle
     let ui_ctx_read = ui_ctx.clone();
+    let weak_read = window.as_weak();
+    let saved_read = std::cell::Cell::new(
+        ui_ctx_read
+            .read_receipts_enabled()
+            .unwrap_or(window.get_settings_read_receipts()),
+    );
     window.on_settings_read_receipts_changed(move |enabled: bool| {
-        let _ = ui_ctx_read.set_read_receipts_enabled(enabled);
+        if let Err(error) = ui_ctx_read.set_read_receipts_enabled(enabled) {
+            if let Some(w) = weak_read.upgrade() {
+                w.set_settings_read_receipts(
+                    ui_ctx_read
+                        .read_receipts_enabled()
+                        .unwrap_or(saved_read.get()),
+                );
+                saved_read.set(w.get_settings_read_receipts());
+                privacy_save_error(&w, "read receipts", &error.to_string());
+            }
+        } else {
+            saved_read.set(enabled);
+        }
     });
 
     // Typing indicators toggle
     let ui_ctx_typing = ui_ctx.clone();
+    let weak_typing = window.as_weak();
+    let saved_typing = std::cell::Cell::new(
+        ui_ctx_typing
+            .typing_indicators_enabled()
+            .unwrap_or(window.get_settings_typing_indicators()),
+    );
     window.on_settings_typing_indicators_changed(move |enabled: bool| {
-        let _ = ui_ctx_typing.set_typing_indicators_enabled(enabled);
+        if let Err(error) = ui_ctx_typing.set_typing_indicators_enabled(enabled) {
+            if let Some(w) = weak_typing.upgrade() {
+                w.set_settings_typing_indicators(
+                    ui_ctx_typing
+                        .typing_indicators_enabled()
+                        .unwrap_or(saved_typing.get()),
+                );
+                saved_typing.set(w.get_settings_typing_indicators());
+                privacy_save_error(&w, "typing indicators", &error.to_string());
+            }
+        } else {
+            saved_typing.set(enabled);
+        }
     });
 
     // Notification content selector (Signal's "Show: Name and message /
@@ -1190,4 +1226,10 @@ fn update_notification_delivery(
             }
         });
     });
+}
+
+fn privacy_save_error(w: &MainWindow, setting: &str, error: &str) {
+    w.set_toast_message(format!("Couldn't save {setting}. {error}").into());
+    w.set_toast_variant("error".into());
+    w.set_toast_visible(true);
 }

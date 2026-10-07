@@ -591,7 +591,12 @@ export component ChatLayout inherits Rectangle {
                     HorizontalLayout {
                         padding-left: Spacing.sm;
                         padding-right: Spacing.sm;
-                        Image { source: Icons.search; width: 20px; height: 20px; colorize: Colors.text-muted; }
+                        spacing: Spacing.sm;
+                        VerticalLayout {
+                            horizontal-stretch: 0;
+                            alignment: center;
+                            Image { source: Icons.search; width: 20px; height: 20px; colorize: Colors.text-muted; }
+                        }
                         Rectangle {
                             horizontal-stretch: 1;
                             if drawer-search.text == "" && drawer-search.preedit-text == "": Text {
@@ -604,6 +609,7 @@ export component ChatLayout inherits Rectangle {
                                 text <=> root.drawer-search-text;
                                 color: Colors.text-primary;
                                 single-line: true;
+                                vertical-alignment: center;
                                 accessible-label: "Search emoji and GIFs";
                                 changed has-focus => { root.drawer-search-focused = self.has-focus; }
                                 edited => {
@@ -662,6 +668,7 @@ export component ChatLayout inherits Rectangle {
                         accessible-label: tab;
                         Text { text: tab; color: Colors.text-primary; horizontal-alignment: center; vertical-alignment: center; }
                         TouchArea { clicked => {
+                            if (index == 0 && root.emoji-picker-visible) || (index == 1 && root.gif-picker-visible) { return; }
                             // Open the destination first: switching tabs keeps
                             // the unified drawer alive and its search focused.
                             if index == 0 {

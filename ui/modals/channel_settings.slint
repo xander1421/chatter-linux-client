@@ -59,6 +59,9 @@ export component ChannelSettingsModal inherits Rectangle {
     // Save reads icon-path to upload. Reset by Rust on open.
     in-out property <image> channel-icon-preview;
     in-out property <bool> channel-has-icon-preview: false;
+    // The current conversation's already privacy-shaped configured avatar.
+    in property <image> channel-avatar-source;
+    in property <bool> channel-has-avatar: false;
     in property <string> channel-type: "public";  // "public", "private", "dm"
     in property <bool> is-archived: false;
     in property <string> created-at: "";
@@ -162,17 +165,6 @@ export component ChannelSettingsModal inherits Rectangle {
         }
     }
 
-    // Helper to get channel type icon
-    pure function type-icon(t: string) -> string {
-        if t == "private" {
-            return "\u{1F512}";  // Lock
-        } else if t == "dm" {
-            return "\u{1F4AC}";  // Speech bubble
-        } else {
-            return "#";
-        }
-    }
-
     // Channels with a signed membership log get the Access pane.
     property <bool> has-access-pane: root.channel-type == "public" || root.channel-type == "private";
     // Approval toggle for the next link created.
@@ -185,7 +177,7 @@ export component ChannelSettingsModal inherits Rectangle {
 
     Modal {
         show: root.show-modal;
-        title: "Channel Settings";
+        title: root.is-private-group ? "Group Settings" : "Channel Settings";
         modal-width: 800px;
         max-modal-height: 820px;
         // Expand the card to the available height (capped at max-modal-height)
@@ -281,7 +273,9 @@ export component ChannelSettingsModal inherits Rectangle {
                     }
 
                     // Members section — Neo nav item
-                    if root.can-manage-members: Rectangle {
+                    if root.can-manage-members || root.members.length > 0: Rectangle {
+                        accessible-role: button;
+                        accessible-label: "Members";
                         height: root.narrow ? Spacing.touch-target-min : Spacing.button-height;
                         background: root.active-section == "members" ? Colors.surface-hover : transparent;
                         border-radius: Spacing.radius-sm;
@@ -409,10 +403,19 @@ export component ChannelSettingsModal inherits Rectangle {
                                 spacing: Spacing.sm;
                                 alignment: start;
 
-                                Text {
-                                    text: root.type-icon(root.channel-type);
-                                    font-size: Typography.xl;
-                                    vertical-alignment: center;
+                                if root.channel-has-icon-preview || root.channel-has-avatar: Avatar {
+                                    source: root.channel-has-icon-preview ? root.channel-icon-preview : root.channel-avatar-source;
+                                    name: root.channel-name;
+                                    size: 40px;
+                                }
+                                if !root.channel-has-icon-preview && !root.channel-has-avatar: Image {
+                                    source: root.is-private-group ? Icons.users
+                                        : root.channel-type == "private" ? Icons.lock
+                                        : root.channel-type == "dm" ? Icons.message-circle : Icons.hash;
+                                    width: 24px; height: 24px;
+                                    colorize: Colors.text-primary;
+                                    accessible-label: root.is-private-group ? "Group icon"
+                                        : root.channel-type == "private" ? "Private channel icon" : "Channel icon";
                                 }
 
                                 VerticalLayout {
@@ -431,7 +434,9 @@ export component ChannelSettingsModal inherits Rectangle {
                                     Text {
                                         // No count once we left: the roster is no longer ours to see,
                                         // and "0 members" contradicted the header.
-                                        text: (root.member-count == 0 ? "" : root.member-count + (root.member-count == 1 ? " member" : " members") + " • ") + "Created " + root.created-at;
+                                        text: (root.member-count == 0 ? "" : root.member-count + (root.member-count == 1 ? " member" : " members"))
+                                            + (root.member-count > 0 && root.created-at != "" ? " • " : "")
+                                            + (root.created-at == "" ? "" : "Created " + root.created-at);
                                         color: Colors.text-muted;
                                         font-size: Typography.xs;
                                         wrap: word-wrap;
@@ -471,7 +476,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                 spacing: Spacing.xs;
 
                                 Text {
-                                    text: "Channel Name";
+                                    text: root.is-private-group ? "Group Name" : "Channel Name";
                                     color: Colors.text-secondary;
                                     font-size: Typography.sm;
                                     font-weight: Typography.medium;

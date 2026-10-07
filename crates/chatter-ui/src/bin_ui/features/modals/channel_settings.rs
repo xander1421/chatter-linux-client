@@ -13,6 +13,108 @@ use chatter_core::state::ActiveConversation;
 
 use crate::{BannedMemberData, ChannelMemberData, InviteUser, MainWindow, PrivateGroupFriend};
 
+// UI-thread owned staging. Native picker cache files are never uploaded until Save.
+// Model identity retires a picker after any modal navigation, including closing
+// and reopening the same conversation; the sequence retires competing pickers.
+#[derive(Clone)]
+struct IconRequest {
+    generation: u64,
+    modal_stack: ModelRc<slint::SharedString>,
+    conversation: ActiveConversation,
+    session_revision: u64,
+    settings_id: String,
+}
+#[derive(Default)]
+struct IconState {
+    generation: u64,
+    pending: Option<IconRequest>,
+    staged: Option<(IconRequest, Vec<u8>)>,
+}
+thread_local! {
+    static ICON_STATE: std::cell::RefCell<IconState> = Default::default();
+    static SETTINGS_EPOCH: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
+}
+
+fn icon_draft_current(w: &MainWindow, ctx: &ChatterClient, request: &IconRequest) -> bool {
+    w.get_active_modal() == "channel-settings"
+        && w.get_channel_settings_can_edit()
+        && w.get_channel_settings_id().as_str() == request.settings_id
+        && ctx.active_conversation() == request.conversation
+        && ctx.composer_session_is_current(request.session_revision)
+}
+
+fn icon_request_current(w: &MainWindow, ctx: &ChatterClient, request: &IconRequest) -> bool {
+    icon_draft_current(w, ctx, request) && w.get_modal_stack() == request.modal_stack
+}
+
+fn begin_icon_request(w: &MainWindow, ctx: &ChatterClient) -> Option<u64> {
+    if w.get_active_modal() != "channel-settings" || !w.get_channel_settings_can_edit() {
+        return None;
+    }
+    if !matches!(ctx.active_conversation(), ActiveConversation::Channel(id)
+        if id.to_string() == w.get_channel_settings_id().as_str())
+    {
+        return None;
+    }
+    Some(ICON_STATE.with(|state| {
+        let mut state = state.borrow_mut();
+        state.generation = state.generation.wrapping_add(1);
+        let generation = state.generation;
+        state.pending = Some(IconRequest {
+            generation,
+            modal_stack: w.get_modal_stack(),
+            conversation: ctx.active_conversation(),
+            session_revision: ctx.auth_state().get().session_revision,
+            settings_id: w.get_channel_settings_id().to_string(),
+        });
+        generation
+    }))
+}
+
+fn finish_icon_request(
+    w: &MainWindow,
+    ctx: &ChatterClient,
+    generation: u64,
+    result: Result<Option<(std::path::PathBuf, Vec<u8>)>, String>,
+) {
+    ICON_STATE.with(|state| {
+        let mut state = state.borrow_mut();
+        let Some(request) = state.pending.as_ref() else {
+            return;
+        };
+        if request.generation != generation || !icon_request_current(w, ctx, request) {
+            return;
+        }
+        let request = state.pending.take().unwrap();
+        match result {
+            Ok(Some((path, data))) => {
+                match crate::bin_ui::slint_conversions::memory_to_slint_image(&data) {
+                    Ok(image) => {
+                        w.set_channel_settings_icon_path(path.to_string_lossy().as_ref().into());
+                        w.set_channel_settings_icon_preview(image);
+                        w.set_channel_settings_has_icon_preview(true);
+                        w.set_channel_settings_error("".into());
+                        state.staged = Some((request, data));
+                    }
+                    Err(error) => w.set_channel_settings_error(
+                        format!("Couldn't open channel icon: {error}").into(),
+                    ),
+                }
+            }
+            Ok(None) => {
+                // The native adapter reports both cancellation and launch failure
+                // as no selection. Give truthful feedback without inventing a cause.
+                w.set_toast_message("No icon selected. Your draft is kept.".into());
+                w.set_toast_variant("info".into());
+                w.set_toast_visible(true);
+            }
+            Err(error) => {
+                w.set_channel_settings_error(format!("Couldn't open channel icon: {error}").into())
+            }
+        }
+    });
+}
+
 /// Wire channel settings modal callbacks.
 pub fn wire_channel_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     wire_save_settings(window, ui_ctx);
@@ -62,6 +164,12 @@ fn settings_on_stack(w: &MainWindow) -> bool {
 /// Show the settings screen before any local or network read. Destructive
 /// actions stay off until the channel row says the user may take them.
 pub(crate) fn show_channel_settings_shell(w: &MainWindow, id: &str, kind: &str) {
+    SETTINGS_EPOCH.with(|epoch| epoch.set(epoch.get().wrapping_add(1)));
+    ICON_STATE.with(|state| {
+        let mut state = state.borrow_mut();
+        state.pending = None;
+        state.staged = None;
+    });
     w.set_channel_settings_id(id.into());
     w.set_channel_settings_type(kind.into());
     w.set_channel_settings_name("".into());
@@ -565,6 +673,16 @@ fn wire_save_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             .upgrade()
             .map(|w| w.get_channel_settings_icon_path().to_string())
             .unwrap_or_default();
+        let epoch = SETTINGS_EPOCH.with(|epoch| epoch.get());
+        let staged_icon = weak.upgrade().and_then(|w| {
+            ICON_STATE.with(|state| {
+                state.borrow().staged.as_ref().and_then(|(request, bytes)| {
+                    icon_draft_current(&w, &ui_ctx, request).then(|| bytes.clone())
+                })
+            })
+        });
+        let opened = ui_ctx.active_conversation();
+        let session_revision = ui_ctx.auth_state().get().session_revision;
         tokio::spawn(async move {
             if channel_id.is_empty() {
                 return;
@@ -574,14 +692,22 @@ fn wire_save_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 Err(_) => return,
             };
 
-            let icon_bytes: Option<Vec<u8>> = if icon_path.is_empty() {
+            let icon_bytes: Option<Vec<u8>> = if staged_icon.is_some() {
+                staged_icon
+            } else if icon_path.is_empty() {
                 None
             } else {
                 match std::fs::read(&icon_path) {
                     Ok(b) => Some(b),
                     Err(e) => {
-                        tracing::warn!(error = %e, "failed to read picked channel icon");
-                        None
+                        paint_if_current(weak, ui_ctx, opened, channel_id, move |w| {
+                            if SETTINGS_EPOCH.with(|current| current.get() == epoch) {
+                                w.set_channel_settings_error(
+                                    format!("Couldn't read channel icon: {e}").into(),
+                                );
+                            }
+                        });
+                        return;
                     }
                 }
             };
@@ -591,78 +717,79 @@ fn wire_save_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             } else {
                 Some(desc_str.as_str())
             };
-            match ui_ctx
+            let result = ui_ctx
                 .update_channel(
                     &channel_uuid,
                     Some(&name_str),
                     desc_opt,
                     icon_bytes.as_deref(),
                 )
-                .await
-            {
-                Ok(_) => {
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            crate::bin_ui::features::back::close(&w, "channel-settings");
-                        }
-                    });
-                }
-                Err(e) => {
-                    let err_msg = e.to_string();
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_channel_settings_error(err_msg.into());
-                        }
-                    });
-                }
+                .await;
+            if !ui_ctx.composer_session_is_current(session_revision) {
+                return;
             }
+            paint_if_current(weak, ui_ctx, opened, channel_id, move |w| {
+                if !SETTINGS_EPOCH.with(|current| current.get() == epoch)
+                    || w.get_active_modal() != "channel-settings"
+                {
+                    return;
+                }
+                match result {
+                    Ok(_) => {
+                        ICON_STATE.with(|state| {
+                            let mut state = state.borrow_mut();
+                            state.pending = None;
+                            state.staged = None;
+                        });
+                        crate::bin_ui::features::back::close(w, "channel-settings");
+                    }
+                    Err(e) => w.set_channel_settings_error(e.to_string().into()),
+                }
+            });
         });
     });
 }
 
-// Native file picker for the channel icon. Mirrors create_channel's picker:
-// stash the chosen path on `channel-settings-icon-path` (Save reads it to
-// upload) and decode a preview for the modal. File dialogs can't run headless,
-// so this wire is proven statically (ui_wiring) + the upload round-trip by V30.
-fn wire_pick_icon(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
+// Reuse the native avatar/photo picker adapter, with modal-owned staging.
+fn wire_pick_icon(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
+    let ctx = ui_ctx.clone();
     window.on_channel_settings_pick_icon(move || {
-        #[cfg(not(target_os = "android"))]
-        {
-            let weak = weak_window.clone();
-            tokio::spawn(async move {
+        let Some(w) = weak_window.upgrade() else {
+            return;
+        };
+        let Some(generation) = begin_icon_request(&w, &ctx) else {
+            return;
+        };
+        let weak = w.as_weak();
+        let ctx = ctx.clone();
+        tokio::spawn(async move {
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            let picked = {
                 let config = chatter_core::media::FilePickerConfig::new()
                     .with_title("Select Channel Icon")
                     .with_filter(chatter_core::media::FileFilter::images());
-                let Some(path) = chatter_core::media::FilePicker::pick_file(config).await else {
-                    return;
-                };
-                let data = match std::fs::read(&path) {
-                    Ok(d) => d,
-                    Err(e) => {
-                        tracing::error!(error = %e, "failed to read picked channel icon");
-                        return;
-                    }
-                };
-                let path_string = path.to_string_lossy().to_string();
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(w) = weak.upgrade() {
-                        w.set_channel_settings_icon_path(path_string.into());
-                        if let Ok(img) =
-                            crate::bin_ui::slint_conversions::memory_to_slint_image(&data)
-                        {
-                            w.set_channel_settings_icon_preview(img);
-                            w.set_channel_settings_has_icon_preview(true);
-                        }
-                    }
-                });
+                chatter_core::media::FilePicker::pick_file(config).await
+            };
+            #[cfg(target_os = "android")]
+            let picked = crate::platform::android::file_picker::pick_files(&["image/*"])
+                .await
+                .into_iter()
+                .next();
+            #[cfg(target_os = "ios")]
+            let picked: Option<std::path::PathBuf> = None;
+            let result = match picked {
+                Some(path) => std::fs::read(&path)
+                    .map(|data| Some((path, data)))
+                    .map_err(|e| e.to_string()),
+                None => Ok(None),
+            };
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak.upgrade() {
+                    finish_icon_request(&w, &ctx, generation, result);
+                }
             });
-        }
-        #[cfg(target_os = "android")]
-        {
-            let _ = &weak_window;
-            tracing::warn!("File picker not supported on Android");
-        }
+        });
     });
 }
 
@@ -1615,6 +1742,144 @@ mod deletion_tests {
                 && stderr_text.lines().any(|line| line == FIXTURE_COMPLETED),
             "isolated test {test_name}: {result:?}{cleanup}\nstdout:\n{stdout_text}\nstderr:\n{stderr_text}"
         );
+    }
+
+    #[test]
+    fn icon_picker_stages_bytes_preserves_drafts_and_rejects_obsolete_completions() {
+        let test_name = format!(
+            "{}::icon_picker_stages_bytes_preserves_drafts_and_rejects_obsolete_completions",
+            module_path!().split_once("::").unwrap().1
+        );
+        if std::env::var(CHILD_MARKER).ok().as_deref() != Some(test_name.as_str()) {
+            run_isolated_delete_test(&test_name);
+            return;
+        }
+        unsafe {
+            std::env::set_var("CHATTER_NO_KEYRING", "1");
+            std::env::set_var("CHATTER_DB_PASSPHRASE", "icon-picker-fixture");
+            std::env::set_var("CHATTER_HEADLESS", "1");
+        }
+        i_slint_backend_testing::init_integration_test_with_system_time();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _entered = runtime.enter();
+        let fixture = tempfile::tempdir().unwrap();
+        let client = ChatterClient::builder()
+            .data_dir(fixture.path().to_string_lossy().into_owned())
+            .build()
+            .unwrap();
+        let w = MainWindow::new().unwrap();
+        let id = ChannelId::new();
+        client
+            .chat_state()
+            .set_active_conversation(ActiveConversation::Channel(id));
+        show_channel_settings_shell(&w, &id.to_string(), "private");
+        w.set_channel_settings_can_edit(true);
+        w.set_channel_settings_name_draft("Unsaved name".into());
+        w.set_channel_settings_description_draft("Unsaved description".into());
+        let mut encoded = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgba8(2, 2)
+            .write_to(&mut encoded, image::ImageFormat::Png)
+            .unwrap();
+        let bytes = encoded.into_inner();
+        let picked = || {
+            Ok(Some((
+                std::path::PathBuf::from("staged-icon.png"),
+                bytes.clone(),
+            )))
+        };
+        let first = begin_icon_request(&w, &client).unwrap();
+        let latest = begin_icon_request(&w, &client).unwrap();
+        finish_icon_request(&w, &client, first, picked());
+        assert!(!w.get_channel_settings_has_icon_preview());
+        finish_icon_request(&w, &client, latest, picked());
+        assert!(w.get_channel_settings_has_icon_preview());
+        ICON_STATE.with(|s| assert_eq!(s.borrow().staged.as_ref().unwrap().1, bytes));
+        assert_eq!(w.get_channel_settings_name_draft().as_str(), "Unsaved name");
+        assert_eq!(
+            w.get_channel_settings_description_draft().as_str(),
+            "Unsaved description"
+        );
+
+        // The path intentionally does not exist: Save must use the frozen bytes,
+        // then show core's offline failure and preserve the editable draft.
+        wire_save_settings(&w, &client);
+        w.invoke_channel_settings_save("Unsaved name".into(), "Unsaved description".into());
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while w.get_channel_settings_error().is_empty() && std::time::Instant::now() < deadline {
+            slint::Timer::single_shot(std::time::Duration::from_millis(25), || {
+                slint::quit_event_loop().unwrap();
+            });
+            w.run().unwrap();
+        }
+        assert!(
+            !w.get_channel_settings_error().is_empty(),
+            "offline Save must report a failure"
+        );
+        assert!(
+            !w.get_channel_settings_error()
+                .contains("Couldn't read channel icon"),
+            "Save must use staged bytes, not re-read the native cache file"
+        );
+        assert_eq!(w.get_active_modal().as_str(), "channel-settings");
+        assert_eq!(w.get_channel_settings_name_draft().as_str(), "Unsaved name");
+        assert_eq!(
+            w.get_channel_settings_description_draft().as_str(),
+            "Unsaved description"
+        );
+
+        let cancelled = begin_icon_request(&w, &client).unwrap();
+        finish_icon_request(&w, &client, cancelled, Ok(None));
+        assert!(w.get_channel_settings_has_icon_preview());
+        let invalid = begin_icon_request(&w, &client).unwrap();
+        finish_icon_request(
+            &w,
+            &client,
+            invalid,
+            Ok(Some(("bad.png".into(), vec![1, 2, 3]))),
+        );
+        assert!(
+            w.get_channel_settings_error()
+                .contains("Couldn't open channel icon")
+        );
+        assert_eq!(w.get_channel_settings_name_draft().as_str(), "Unsaved name");
+        ICON_STATE.with(|s| assert_eq!(s.borrow().staged.as_ref().unwrap().1, bytes));
+
+        let dismissed = begin_icon_request(&w, &client).unwrap();
+        crate::bin_ui::features::back::close(&w, "channel-settings");
+        show_channel_settings_shell(&w, &id.to_string(), "private");
+        w.set_channel_settings_can_edit(true);
+        finish_icon_request(&w, &client, dismissed, picked());
+        assert!(!w.get_channel_settings_has_icon_preview());
+
+        // Even direct navigation that bypasses the shell changes stack identity.
+        let reopened = begin_icon_request(&w, &client).unwrap();
+        crate::bin_ui::features::back::close(&w, "channel-settings");
+        crate::bin_ui::features::back::push(&w, "channel-settings");
+        finish_icon_request(&w, &client, reopened, picked());
+        assert!(!w.get_channel_settings_has_icon_preview());
+        let switched = begin_icon_request(&w, &client).unwrap();
+        client
+            .chat_state()
+            .set_active_conversation(ActiveConversation::Channel(ChannelId::new()));
+        finish_icon_request(&w, &client, switched, picked());
+        assert!(!w.get_channel_settings_has_icon_preview());
+        client
+            .chat_state()
+            .set_active_conversation(ActiveConversation::Channel(id));
+        let read_error = begin_icon_request(&w, &client).unwrap();
+        finish_icon_request(&w, &client, read_error, Err("fixture read failed".into()));
+        assert!(
+            w.get_channel_settings_error()
+                .contains("fixture read failed")
+        );
+        let old_session = begin_icon_request(&w, &client).unwrap();
+        client.clear_composer_session();
+        client
+            .chat_state()
+            .set_active_conversation(ActiveConversation::Channel(id));
+        finish_icon_request(&w, &client, old_session, picked());
+        assert!(!w.get_channel_settings_has_icon_preview());
+        eprintln!("{FIXTURE_COMPLETED}");
     }
 
     #[test]
