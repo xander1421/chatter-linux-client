@@ -2029,8 +2029,8 @@ mod deletion_tests {
         assert_eq!(w.get_topic().as_str(), "Saved description");
         assert!(w.get_channel_has_avatar());
         assert_eq!(
-            w.get_channel_avatar_source().size(),
-            slint::PhysicalSize::new(3, 2)
+            (w.get_channel_avatar_source().size().width, w.get_channel_avatar_source().size().height),
+            (3, 2)
         );
         let row = w
             .get_chat_rows()
@@ -2039,7 +2039,7 @@ mod deletion_tests {
             .unwrap();
         assert_eq!(row.display_name.as_str(), "Saved name");
         assert!(row.has_avatar);
-        assert_eq!(row.avatar_source.size(), slint::PhysicalSize::new(3, 2));
+        assert_eq!((row.avatar_source.size().width, row.avatar_source.size().height), (3, 2));
         assert_ne!(w.get_active_modal().as_str(), "channel-settings");
 
         show_channel_settings_shell(&w, &id.to_string(), "private");

@@ -366,7 +366,7 @@ mod tests {
     use super::*;
     const MARKER: &str = "CHATTER_CALL_HISTORY_FIXTURE_CHILD";
     fn isolated_fixture(name: &str) -> bool {
-        if std::env::var(MARKER).ok().as_deref() != Some(name.as_str()) {
+        if std::env::var(MARKER).ok().as_deref() != Some(name) {
             use std::io::{Read, Seek, SeekFrom};
             use std::process::{Command, Stdio};
             use std::time::{Duration, Instant};
@@ -582,7 +582,7 @@ mod tests {
             .iter()
             .find(|r| r.id == "channel")
             .unwrap();
-        assert_eq!(row.avatar_source.size(), slint::PhysicalSize::new(3, 2));
+        assert_eq!((row.avatar_source.size().width, row.avatar_source.size().height), (3, 2));
         assert_eq!(row.name.as_str(), "Name at call time");
         for id in ["deleted", "anonymous-group"] {
             let row = w
@@ -590,7 +590,7 @@ mod tests {
                 .iter()
                 .find(|r| r.id == id)
                 .unwrap();
-            assert_eq!(row.avatar_source.size(), slint::PhysicalSize::new(0, 0));
+            assert_eq!((row.avatar_source.size().width, row.avatar_source.size().height), (0, 0));
         }
         // Byte-keyed cache must observe a configured icon changed between loads.
         channel.icon = Some(png(5, [255, 255, 0, 255]));
@@ -604,7 +604,7 @@ mod tests {
             .iter()
             .find(|r| r.id == "channel")
             .unwrap();
-        assert_eq!(row.avatar_source.size(), slint::PhysicalSize::new(5, 2));
+        assert_eq!((row.avatar_source.size().width, row.avatar_source.size().height), (5, 2));
         channel.icon = Some(vec![1, 2, 3]);
         channels.update(&channel).unwrap();
         let prepared = runtime
@@ -616,7 +616,7 @@ mod tests {
             .iter()
             .find(|r| r.id == "channel")
             .unwrap();
-        assert_eq!(row.avatar_source.size(), slint::PhysicalSize::new(0, 0));
+        assert_eq!((row.avatar_source.size().width, row.avatar_source.size().height), (0, 0));
         println!("history fixture completed");
     }
 
