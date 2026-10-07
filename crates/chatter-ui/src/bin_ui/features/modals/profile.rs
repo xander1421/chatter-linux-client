@@ -461,7 +461,7 @@ fn request_shared_page(
                     message_id: item.message_id.clone().into(),
                     attachment_id: item.attachment_id.clone().into(),
                     category: item.category.clone().into(),
-                    title: item.title.clone().into(),
+                    title: shared_content_display_title(&item.category, &item.title).into(),
                     subtitle: item.subtitle.clone().into(),
                     thumbnail,
                     has_thumbnail,
@@ -471,6 +471,23 @@ fn request_shared_page(
             w.set_profile_shared_items(ModelRc::new(VecModel::from(rows)));
         });
     });
+}
+
+/// Only the painted profile title changes; indexed filenames and jump IDs stay intact.
+fn shared_content_display_title<'a>(category: &str, title: &'a str) -> &'a str {
+    if category == "voice" {
+        // Recorded labels have appeared with spaces and underscores. Reuse the
+        // attachment predicate after normalizing those separators for display only.
+        let normalized = title
+            .split(|c: char| c.is_whitespace() || c == '_')
+            .filter(|part| !part.is_empty())
+            .collect::<Vec<_>>()
+            .join(" ");
+        if chatter_core::domain::attachment::is_generic_voice_note_filename(&normalized) {
+            return "Voice message";
+        }
+    }
+    title
 }
 
 /// Wire the shared-content drawer: tab switches, paging, and opening an item.
@@ -1282,4 +1299,42 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             });
         }
     });
+}
+
+#[cfg(test)]
+mod shared_content_title_tests {
+    use super::shared_content_display_title;
+
+    #[test]
+    fn recorded_profile_voice_titles_hide_generated_extensions() {
+        for filename in [
+            "Voice message.wav",
+            "VOICE MESSAGE.WAV",
+            "voice_message.wav",
+            "  Voice   message.wav  ",
+            "Voice__message.wav",
+        ] {
+            assert_eq!(
+                shared_content_display_title("voice", filename),
+                "Voice message"
+            );
+        }
+    }
+
+    #[test]
+    fn authored_audio_and_non_voice_titles_remain_exact() {
+        for filename in [
+            "interview.wav",
+            " My recording.wav ",
+            "Voice message remix.wav",
+        ] {
+            assert_eq!(shared_content_display_title("voice", filename), filename);
+        }
+        for category in ["music", "file", "media", "link"] {
+            assert_eq!(
+                shared_content_display_title(category, "Voice message.wav"),
+                "Voice message.wav"
+            );
+        }
+    }
 }
