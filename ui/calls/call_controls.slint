@@ -11,6 +11,7 @@ export component CallControls inherits GlassSurface {
     elevation: 3;
     border-radius: self.height / 2;
 
+    in property <bool> is-connected: false;
     in property <bool> is-muted: false;
     in property <bool> is-video-enabled: true;
     in property <bool> is-screen-sharing: false;
@@ -80,6 +81,7 @@ export component CallControls inherits GlassSurface {
         // the neutral state; teal means it is on.
         IconAction {
             size: button-size;
+            enabled: root.is-connected;
             icon: root.is-video-enabled ? Icons.video : Icons.video-off;
             label: root.is-video-enabled ? "Turn camera off" : "Turn camera on";
             active: is-video-enabled;

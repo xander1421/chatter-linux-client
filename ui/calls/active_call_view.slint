@@ -599,6 +599,7 @@ export component ActiveCallView inherits Rectangle {
                 width: min(296px, root.width - 2 * Spacing.md);
                 height: controls-height;
                 button-size: root.button-size;
+                is-connected: root.call-data.is-connected;
                 is-muted: is-muted;
                 is-video-enabled: is-video-enabled;
                 is-screen-sharing: is-screen-sharing;

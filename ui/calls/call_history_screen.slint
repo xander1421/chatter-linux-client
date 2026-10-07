@@ -28,6 +28,8 @@ export component CallHistoryScreen inherits Rectangle {
     in property <bool> root-screen: false;
     in property <[CallHistoryRow]> rows: [];
     in property <bool> loading: false;
+    in property <string> error-message: "";
+    callback retry();
     in property <string> active-filter: "all";  // "all" or "missed"
 
     property <length> row-height: root.mobile-mode ? Spacing.row-height-touch : 56px * Appearance.text-grow;
@@ -146,7 +148,7 @@ export component CallHistoryScreen inherits Rectangle {
                 }
             }
 
-            if !root.loading && root.rows.length == 0: VerticalLayout {
+            if !root.loading && root.error-message == "" && root.rows.length == 0: VerticalLayout {
                 alignment: center;
                 vertical-stretch: 1;
                 spacing: Spacing.sm;
@@ -175,6 +177,12 @@ export component CallHistoryScreen inherits Rectangle {
                     font-size: Typography.sm;
                     horizontal-alignment: center;
                 }
+            }
+
+            if root.error-message != "": VerticalLayout {
+                spacing: Spacing.sm;
+                Text { text: root.error-message; color: Colors.text-muted; horizontal-alignment: center; }
+                Button { text: "Retry"; disabled: root.loading; clicked => { root.retry(); } }
             }
 
             if !root.loading && root.rows.length > 0: Rectangle {

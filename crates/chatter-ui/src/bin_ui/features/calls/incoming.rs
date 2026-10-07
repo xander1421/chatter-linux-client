@@ -527,6 +527,7 @@ fn render_active_anon_call(
             return;
         };
         let identity = room_name.clone();
+        if ui_ctx.call_start_was_cancelled(&identity) { return; }
         worker.with_current_active_presentation(revision, &identity, || {
             // If `LiveKitRoomEvent::ParticipantJoined` already landed on the UI
             // thread (it races AnonCallConnected via two independent

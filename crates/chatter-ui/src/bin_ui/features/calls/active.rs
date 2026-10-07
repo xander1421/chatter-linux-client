@@ -120,6 +120,7 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     // outgoing "Calling…" state there's no room yet.
                     if !ui_ctx.call_is_connected().await {
                         tracing::info!("Video unavailable — call not connected yet");
+                        camera_error(&weak, "Camera is available once the call connects.");
                         return;
                     }
                     // Android: a call that started as voice never requested the
@@ -130,12 +131,17 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         use crate::platform::android::permissions;
                         if !permissions::ensure(&[permissions::CAMERA]).await {
                             tracing::info!("CAMERA permission refused — video stays off");
+                            camera_error(&weak, "Camera access was denied. Audio stays on.");
                             return;
                         }
                     }
                     // Publishes a fresh camera track + starts capture.
                     if let Err(e) = ui_ctx.call_publish_camera(None).await {
                         tracing::error!("Failed to enable camera: {}", e);
+                        camera_error(
+                            &weak,
+                            "Could not enable the camera. Audio stays on; try again.",
+                        );
                         return;
                     }
                     tracing::info!("Camera enabled");
@@ -272,6 +278,11 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let ui_ctx = ui_ctx.clone();
             let weak = weak.clone();
             tracing::info!("End call");
+            let pending = super::outgoing::cancel_pending_start();
+            let named = weak.upgrade().map(|w| w.get_active_call_data());
+            let cancelled_outgoing = named.as_ref().is_some_and(|data| {
+                !data.is_connected && ui_ctx.cancel_call_start(data.call_id.as_str())
+            });
 
             slint::spawn_local(async move {
                 // Update UI immediately BEFORE async operations so the modal
@@ -282,6 +293,23 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     w.set_active_call_visible(false);
                 }
 
+                if pending {
+                    return;
+                }
+                if cancelled_outgoing {
+                    if let Some(data) = named {
+                        let ctx = ui_ctx.clone();
+                        tokio::spawn(async move {
+                            ctx.end_cancelled_call(
+                                data.call_id.to_string(),
+                                data.channel_id.to_string(),
+                                data.is_video_call,
+                            )
+                            .await;
+                        });
+                    }
+                    return;
+                }
                 // Core resolves call kind (anon/DM/group) from orchestrator state.
                 let ctx = ui_ctx.clone();
                 tokio::spawn(async move {
@@ -359,4 +387,12 @@ pub fn wire_call_hangup_handler(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
         }
     })
     .unwrap();
+}
+
+fn camera_error(weak: &slint::Weak<MainWindow>, message: &str) {
+    if let Some(w) = weak.upgrade() {
+        w.set_toast_message(message.into());
+        w.set_toast_variant("error".into());
+        w.set_toast_visible(true);
+    }
 }

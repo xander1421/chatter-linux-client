@@ -20,6 +20,28 @@ use chatter_core::ui::initials_from_name;
 
 use super::timers::{start_call_timer, start_video_frame_timer};
 
+thread_local! {
+    static START: std::cell::RefCell<(u64, Option<chatter_core::client::calls::CallStartAttempt>)> = const { std::cell::RefCell::new((0, None)) };
+}
+/// End invalidates the pending start synchronously, before another click can run.
+pub(super) fn cancel_pending_start() -> bool {
+    START.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        if let Some(attempt) = slot.1.take() {
+            attempt.cancel();
+            true
+        } else {
+            false
+        }
+    })
+}
+fn current_start(generation: u64) -> bool {
+    START.with(|slot| {
+        let slot = slot.borrow();
+        slot.0 == generation && slot.1.is_some()
+    })
+}
+
 /// Wire start call callbacks.
 pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak = window.as_weak();
@@ -143,6 +165,15 @@ fn spawn_start(
     call_type: CallType,
     ui_ctx: Arc<ChatterClient>,
 ) {
+    cancel_pending_start();
+    let revision = ui_ctx.auth_state().get().session_revision;
+    let attempt = chatter_core::client::calls::CallStartAttempt::default();
+    let generation = START.with(|slot| {
+        let mut slot = slot.borrow_mut();
+        slot.0 += 1;
+        slot.1 = Some(attempt.clone());
+        slot.0
+    });
     show_dialling(&weak, call_type, &ui_ctx);
     slint::spawn_local(async move {
         // Mic (+ camera for video) is asked for here, on demand, and the call
@@ -160,21 +191,37 @@ fn spawn_start(
             // Only the microphone is required: a refused camera still leaves a
             // working call, and the video button asks again on demand.
             permissions::ensure(&perms).await;
+            if !current_start(generation) {
+                return;
+            }
             if !permissions::has(permissions::RECORD_AUDIO) {
                 fail_call(&weak, MIC_DENIED);
                 return;
             }
         }
-        if tokio::time::timeout(
-            std::time::Duration::from_secs(30),
-            start_call_impl(weak.clone(), call_type, conversation, ui_ctx),
-        )
-        .await
-        .is_err()
-        {
-            tracing::error!("Call setup timed out");
-            fail_call(&weak, CALL_FAILED);
+        if !current_start(generation) {
+            return;
         }
+        if ui_ctx.auth_state().get().session_revision != revision {
+            attempt.cancel();
+            fail_call(&weak, "Your session changed. Start the call again.");
+            return;
+        }
+        start_call_impl(
+            weak.clone(),
+            call_type,
+            conversation,
+            ui_ctx,
+            attempt,
+            generation,
+        )
+        .await;
+        START.with(|slot| {
+            let mut slot = slot.borrow_mut();
+            if slot.0 == generation {
+                slot.1 = None;
+            }
+        });
     })
     .unwrap();
 }
@@ -184,6 +231,8 @@ async fn start_call_impl(
     call_type: CallType,
     conversation: ActiveConversation,
     ui_ctx: Arc<ChatterClient>,
+    attempt: chatter_core::client::calls::CallStartAttempt,
+    generation: u64,
 ) {
     let user_id = match ui_ctx.session_current_user_id() {
         Some(id) => id,
@@ -209,8 +258,32 @@ async fn start_call_impl(
     // panic in the LiveKit/gRPC start path into a panic on the event loop and
     // took the whole app down — including the mesh, which had nothing to do with
     // the call. A failed call should close the call view, not the process.
-    let joined =
-        tokio::spawn(async move { ctx.start_call(conversation, call_type, &dn).await }).await;
+    let revision = ui_ctx.auth_state().get().session_revision;
+    let task_attempt = attempt.clone();
+    let mut task = tokio::spawn(async move {
+        ctx.start_call_attempt(conversation, call_type, &dn, task_attempt)
+            .await
+    });
+    let joined = tokio::select! {
+        result = &mut task => result,
+        _ = attempt.cancelled() => task.await,
+        _ = tokio::time::sleep(std::time::Duration::from_secs(30)) => {
+            attempt.cancel();
+            if current_start(generation) { fail_call(&weak, CALL_FAILED); }
+            // Keep ownership: dropping this JoinHandle would detach setup.
+            task.await
+        }
+    };
+    if !current_start(generation)
+        || attempt.is_cancelled()
+        || ui_ctx.auth_state().get().session_revision != revision
+    {
+        attempt.cancel();
+        if let Ok(Ok(start)) = joined {
+            ui_ctx.rollback_call_start(&start).await;
+        }
+        return;
+    }
     let start = match joined {
         Ok(Ok(s)) => s,
         Ok(Err(e)) => {

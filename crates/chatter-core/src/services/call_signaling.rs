@@ -222,6 +222,7 @@ pub struct CallSignalingService {
     anon_group_service: Arc<AnonGroupService>,
     /// Pending outgoing DM call state (waiting for answer with peer's ephemeral key).
     pending_dm_call: Arc<Mutex<Option<PendingDmCall>>>,
+    pub(crate) start_gate: Arc<tokio::sync::Mutex<()>>,
     /// Channel group calls we were rung for, by call id.
     pub(crate) group_call_invites: Arc<GroupCallInvites>,
     /// The call a task is waiting for (and requesting) a key in, so a burst
@@ -230,6 +231,24 @@ pub struct CallSignalingService {
     /// The last rotated key we sent: call, when, and to whom.
     last_key_sent: Arc<Mutex<Option<KeySent>>>,
     owned_anon_rooms: Arc<Mutex<std::collections::HashSet<String>>>,
+    #[cfg(feature = "media")]
+    start_groups: Arc<Mutex<std::collections::HashSet<String>>>,
+    #[cfg(feature = "media")]
+    inflight_start: Arc<Mutex<Option<crate::client::calls::CallStartAttempt>>>,
+    #[cfg(feature = "media")]
+    start_attempts:
+        Arc<Mutex<std::collections::HashMap<String, crate::client::calls::CallStartAttempt>>>,
+}
+
+/// The setup gate serializes these owners; dropping one can never remove a
+/// replacement's token. Session teardown can cancel it before a call id exists.
+#[cfg(feature = "media")]
+pub(crate) struct StartAttemptOwner(Arc<Mutex<Option<crate::client::calls::CallStartAttempt>>>);
+#[cfg(feature = "media")]
+impl Drop for StartAttemptOwner {
+    fn drop(&mut self) {
+        self.0.lock().take();
+    }
 }
 
 /// One rotated key's send ([`CallSignalingService::recently_keyed`]).
@@ -286,7 +305,203 @@ impl CallSignalingService {
             group_key_wait: Arc::new(Mutex::new(None)),
             last_key_sent: Arc::new(Mutex::new(None)),
             owned_anon_rooms: Arc::new(Mutex::new(Default::default())),
+            start_gate: Arc::new(tokio::sync::Mutex::new(())),
+            #[cfg(feature = "media")]
+            start_groups: Arc::new(Mutex::new(Default::default())),
+            #[cfg(feature = "media")]
+            inflight_start: Arc::new(Mutex::new(None)),
+            #[cfg(feature = "media")]
+            start_attempts: Arc::new(Mutex::new(Default::default())),
         }
+    }
+
+    #[cfg(feature = "media")]
+    pub(crate) fn own_start(
+        &self,
+        attempt: crate::client::calls::CallStartAttempt,
+    ) -> StartAttemptOwner {
+        *self.inflight_start.lock() = Some(attempt);
+        StartAttemptOwner(self.inflight_start.clone())
+    }
+    #[cfg(feature = "media")]
+    pub(crate) async fn rollback_registered_attempt(
+        &self,
+        attempt: &crate::client::calls::CallStartAttempt,
+        worker: &CallWorkerHandle,
+    ) {
+        let ids: Vec<String> = self
+            .start_attempts
+            .lock()
+            .iter()
+            .filter(|(_, token)| token.same_owner(attempt))
+            .map(|(id, _)| id.clone())
+            .collect();
+        for id in ids {
+            self.rollback_start(
+                &crate::client::calls::OutgoingCallStart {
+                    is_anonymous: id.starts_with("anon-"),
+                    call_id: id,
+                    channel_id: String::new(),
+                    is_video: false,
+                    verification_emojis: None,
+                    title: String::new(),
+                    peer: None,
+                },
+                worker,
+            )
+            .await;
+        }
+    }
+
+    #[cfg(feature = "media")]
+    pub(crate) fn register_start_attempt(&self, id: &str) {
+        if let Ok(attempt) = crate::client::calls::START_ATTEMPT.try_with(Clone::clone) {
+            let mut attempts = self.start_attempts.lock();
+            attempts.retain(|_, a| a.is_cancelled());
+            self.start_groups
+                .lock()
+                .retain(|id| attempts.contains_key(id));
+            attempts.insert(id.to_string(), attempt);
+        }
+    }
+    #[cfg(feature = "media")]
+    pub(crate) fn register_group_start_attempt(&self, id: &str) {
+        self.register_start_attempt(id);
+        self.start_groups.lock().insert(id.to_string());
+    }
+    #[cfg(feature = "media")]
+    pub(crate) fn start_was_cancelled(&self, id: &str) -> bool {
+        self.start_attempts
+            .lock()
+            .get(id)
+            .is_some_and(|a| a.is_cancelled())
+    }
+
+    #[cfg(feature = "media")]
+    pub(crate) fn cancel_start(&self, id: &str) -> bool {
+        if let Some(attempt) = self.start_attempts.lock().get(id) {
+            attempt.cancel();
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Roll back only the named setup; delayed cleanup cannot disconnect a
+    /// replacement room. Signaling and server notification are best effort.
+    #[cfg(feature = "media")]
+    pub(crate) async fn rollback_start(
+        &self,
+        start: &crate::client::calls::OutgoingCallStart,
+        worker: &CallWorkerHandle,
+    ) {
+        let id = &start.call_id;
+        if start.is_anonymous {
+            if let Some(pending) = self.anon_dm_service.take_pending_anon_call(id) {
+                let reason = crate::proto::content_v1::anon_call_hangup::Reason::Normal;
+                let send = async {
+                    if self
+                        .anon_dm_service
+                        .get_conversation(&pending.conversation_id)
+                        .ok()
+                        .flatten()
+                        .is_some()
+                    {
+                        let _ = self
+                            .anon_dm_service
+                            .send_call_hangup(
+                                &pending.conversation_id,
+                                &pending.call_room_id,
+                                reason,
+                            )
+                            .await;
+                    } else if let Some(group) =
+                        AnonGroupId::try_from_slice(pending.conversation_id.as_bytes())
+                    {
+                        let _ = self
+                            .anon_group_service
+                            .send_call_hangup(&group, &pending.call_room_id, reason)
+                            .await;
+                    }
+                };
+                let _ = tokio::time::timeout(std::time::Duration::from_secs(3), send).await;
+            }
+            self.owned_anon_rooms.lock().remove(id);
+        } else {
+            let pending = {
+                let mut slot = self.pending_dm_call.lock();
+                if slot.as_ref().is_some_and(|p| p.call_id.to_string() == *id) {
+                    slot.take()
+                } else {
+                    None
+                }
+            };
+            if let Some(pending) = pending {
+                let _ = tokio::time::timeout(
+                    std::time::Duration::from_secs(3),
+                    self.send_call_hangup_to(&pending.peer_id, id, CallHangupReason::Normal),
+                )
+                .await;
+            } else if !self.start_groups.lock().contains(id) {
+                if let Some(call) = worker
+                    .active_call()
+                    .await
+                    .filter(|c| c.id.to_string() == *id)
+                {
+                    let _ = tokio::time::timeout(
+                        std::time::Duration::from_secs(3),
+                        self.send_call_hangup(&call.channel_id, id, CallHangupReason::Normal),
+                    )
+                    .await;
+                }
+            }
+        }
+        // A channel host may already have sent some rings before cancellation.
+        // Cancel those named rings without advertising any later STARTED event.
+        if !start.is_anonymous && self.start_groups.lock().contains(id) {
+            if let Some(call) = worker
+                .active_call()
+                .await
+                .filter(|c| c.id.to_string() == *id)
+            {
+                if self.is_current_user(&call.initiator_id) {
+                    let notify = async {
+                        if let Ok(members) = self
+                            .channel_service
+                            .get_all_channel_members(&call.channel_id)
+                            .await
+                        {
+                            for member in members {
+                                if member.user_id != call.initiator_id {
+                                    let _ = self
+                                        .send_call_hangup_to(
+                                            &member.user_id,
+                                            id,
+                                            CallHangupReason::Normal,
+                                        )
+                                        .await;
+                                }
+                            }
+                        }
+                        let _ = self
+                            .message_service
+                            .post_channel_call_event(
+                                &call.channel_id,
+                                id,
+                                crate::services::message::ChannelCallPhase::Ended,
+                                0,
+                                start.is_video,
+                            )
+                            .await;
+                    };
+                    let _ = tokio::time::timeout(std::time::Duration::from_secs(3), notify).await;
+                }
+            }
+        }
+        worker.rollback_setup(CallHandle::from(id.as_str())).await;
+        self.start_attempts.lock().remove(id);
+        self.start_groups.lock().remove(id);
+        worker.orch_mark_ended(CallHandle::from(id.as_str()), CallEndReason::LocalHangup);
     }
 
     /// Whether we sent `peer` a rotation for `call_id` within `window`: its
@@ -327,6 +542,19 @@ impl CallSignalingService {
     /// stopped old producers. Dropping invite buffers zeroizes retained keys.
     pub(crate) fn clear_call_session(&self, incoming: &[String]) {
         self.pending_dm_call.lock().take();
+        #[cfg(feature = "media")]
+        {
+            if let Some(attempt) = self.inflight_start.lock().take() {
+                attempt.cancel();
+            }
+            let mut attempts = self.start_attempts.lock();
+            for attempt in attempts.values() {
+                attempt.cancel();
+            }
+            attempts.clear();
+        }
+        #[cfg(feature = "media")]
+        self.start_groups.lock().clear();
         self.group_call_invites.lock().clear();
         self.group_key_wait.lock().take();
         self.last_key_sent.lock().take();
@@ -627,6 +855,9 @@ impl CallSignalingService {
 
         let mut sent_count = 0;
         for member in members.iter().filter(|m| m.user_id != current_user) {
+            if crate::client::calls::start_cancelled() {
+                break;
+            }
             let content = build_group_call_signal_content(
                 call_id,
                 &channel_id_str,
@@ -717,6 +948,15 @@ impl CallSignalingService {
             .await
             .map_err(|e| CallSignalingError::CallWorker(e.to_string()))?;
 
+        if crate::client::calls::start_cancelled() {
+            call_worker
+                .rollback_setup(CallHandle::from(call.id.to_string().as_str()))
+                .await;
+            return Err(CallSignalingError::CallWorker(
+                "call start cancelled".into(),
+            ));
+        }
+
         tracing::info!(
             "Created call on server: {:?}, waiting for peer's ephemeral key",
             call.id
@@ -742,7 +982,7 @@ impl CallSignalingService {
         {
             tracing::error!(error = %e, call_id = %call.id, "Call offer send failed — rolling back call");
             call_worker
-                .disconnect_local(CallEndReason::Error(format!("call offer not sent: {e}")))
+                .rollback_setup(CallHandle::from(call_id_str.as_str()))
                 .await;
             return Err(e);
         }
@@ -753,6 +993,7 @@ impl CallSignalingService {
             "Call offer sent, storing pending state"
         );
 
+        self.register_start_attempt(&call_id_str);
         // Ringing from here on: register it so `end_active_call` can cancel
         // it (hangup + leave) before it connects. Registered before the
         // pending state is stored, so it precedes any answer's mark-connected
@@ -784,6 +1025,9 @@ impl CallSignalingService {
         let call_id = call.id;
         tokio::spawn(async move {
             tokio::time::sleep(RING_TIMEOUT).await;
+            if signaling.start_was_cancelled(&call_id.to_string()) {
+                return;
+            }
             if signaling.pending_dm_call.lock().as_ref().map(|p| p.call_id) != Some(call_id) {
                 return;
             }
@@ -812,6 +1056,10 @@ impl CallSignalingService {
         signal_service: &SignalService,
         call_worker: &CallWorkerHandle,
     ) -> Result<CallSetupResult, CallSignalingError> {
+        let _ownership = self.start_gate.lock().await;
+        if self.start_was_cancelled(call_id) {
+            return Err(CallSignalingError::NoPendingCall);
+        }
         // Take pending call state
         let pending = self
             .take_pending_dm_call()
@@ -851,6 +1099,10 @@ impl CallSignalingService {
             .await
             .map_err(|e| CallSignalingError::KeyDerivationFailed(e.to_string()))?;
 
+        if self.start_was_cancelled(call_id) {
+            call_worker.with_current_presentation_session(|| self.set_pending_dm_call(pending));
+            return Err(CallSignalingError::NoPendingCall);
+        }
         // Ephemeral key dropped here (zeroized)
         drop(pending);
         tracing::debug!("Ephemeral private key zeroized");
@@ -862,6 +1114,16 @@ impl CallSignalingService {
 
         // Update LiveKit encryption key
         let key_installed = call_worker.set_encryption_key(call_key.to_vec()).await;
+
+        if self.start_was_cancelled(call_id) {
+            let _ = tokio::time::timeout(
+                std::time::Duration::from_secs(3),
+                self.send_call_hangup_to(peer_id, call_id, CallHangupReason::Normal),
+            )
+            .await;
+            call_worker.rollback_setup(CallHandle::from(call_id)).await;
+            return Err(CallSignalingError::NoPendingCall);
+        }
 
         // the DM caller's auto-publish was deferred at initiate time
         // (media would otherwise have leaked under the all-zero placeholder
@@ -1077,6 +1339,7 @@ impl CallSignalingService {
             "Sent anonymous DM call offer"
         );
 
+        self.register_start_attempt(&offer_result.room_name);
         // Store pending call state
         self.owned_anon_rooms
             .lock()
@@ -1131,6 +1394,7 @@ impl CallSignalingService {
             "Sent anonymous group call offer"
         );
 
+        self.register_start_attempt(&offer_result.room_name);
         // Store pending call state (reuse anon DM pending call infrastructure)
         let conversation_id = crate::domain::anon_dm::AnonDmId::try_from_slice(group_id.as_bytes())
             .expect("AnonGroupId is 16 bytes like AnonDmId");
@@ -1191,6 +1455,9 @@ impl CallSignalingService {
         let room_name = room_name.to_string();
         tokio::spawn(async move {
             tokio::time::sleep(RING_TIMEOUT).await;
+            if signaling.start_was_cancelled(&room_name) {
+                return;
+            }
             let Some(pending) = signaling
                 .anon_dm_service
                 .take_ringing_anon_call(Some(&room_name))
@@ -1362,6 +1629,7 @@ impl CallSignalingService {
         answer_timestamp_ns: u64,
         call_worker: &CallWorkerHandle,
     ) -> Result<AnonCallAnswerOutcome, CallSignalingError> {
+        let _ownership = self.start_gate.lock().await;
         // Skip if already in a call — this handles the callee's own echo coming
         // back from the group mailbox, or another participant's answer in a
         // multi-party group call. Distinct from `Declined` so the UI can ignore
@@ -1381,6 +1649,11 @@ impl CallSignalingService {
             ))
         })?;
         let room_name = format!("anon-{}", uuid::Uuid::from_bytes(id_bytes));
+
+        let attempt = self.start_attempts.lock().get(&room_name).cloned();
+        if attempt.as_ref().is_some_and(|a| a.is_cancelled()) {
+            return Err(CallSignalingError::NoPendingCall);
+        }
 
         let pending = self
             .anon_dm_service
@@ -1413,6 +1686,14 @@ impl CallSignalingService {
             .await
             .map_err(|e| CallSignalingError::AnonCall(format!("Failed to join room: {}", e)))?;
 
+        if attempt.as_ref().is_some_and(|a| a.is_cancelled()) {
+            call_worker.with_current_presentation_session(|| {
+                self.anon_dm_service
+                    .store_pending_anon_call(room_name.clone(), pending)
+            });
+            return Err(CallSignalingError::NoPendingCall);
+        }
+
         // Connect to LiveKit
         let call_id = CallId::new();
         let channel_id = ChannelId::new();
@@ -1429,6 +1710,17 @@ impl CallSignalingService {
             )
             .await
             .map_err(|e| CallSignalingError::CallWorker(e.to_string()))?;
+
+        if attempt.as_ref().is_some_and(|a| a.is_cancelled()) {
+            call_worker
+                .rollback_setup(CallHandle::from(room_name.as_str()))
+                .await;
+            call_worker.with_current_presentation_session(|| {
+                self.anon_dm_service
+                    .store_pending_anon_call(room_name.clone(), pending)
+            });
+            return Err(CallSignalingError::NoPendingCall);
+        }
 
         tracing::info!(room_name = %room_name, "Connected to LiveKit for anonymous call (caller side)");
 

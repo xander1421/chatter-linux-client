@@ -501,6 +501,7 @@ pub struct CallVerificationSnapshot {
 enum CallCommand {
     /// Initiate a new call.
     InitiateCall {
+        attempt: Option<crate::client::calls::CallStartAttempt>,
         channel_id: ChannelId,
         title: String,
         call_type: CallType,
@@ -536,6 +537,7 @@ enum CallCommand {
     /// active call — a hangup names its call, and one for another call must
     /// not end this one.
     DisconnectLocal {
+        notify_server: bool,
         session_revision: Option<u64>,
         call: Option<CallHandle>,
         reason: CallEndReason,
@@ -693,6 +695,7 @@ enum CallCommand {
     /// Notify the orchestrator that a pending (incoming or outgoing) call
     /// has connected and should be installed as the active call.
     OrchMarkConnected {
+        require_media_match: bool,
         session_revision: Option<u64>,
         response: Option<oneshot::Sender<Result<(), CallError>>>,
         call: CallHandle,
@@ -720,6 +723,13 @@ enum CallCommand {
     OrchAcceptIncomingReplacingActive {
         call: CallHandle,
         response: oneshot::Sender<Result<PendingIncoming, CallError>>,
+    },
+    /// Seed media-independent state for actor ownership regressions; never
+    /// creates a room, publishes tracks, reads credentials or touches storage.
+    #[cfg(test)]
+    TestPrimeCall {
+        call: Call,
+        response: oneshot::Sender<()>,
     },
     #[cfg(test)]
     TestPause {
@@ -1061,7 +1071,9 @@ impl CallWorkerHandle {
         is_video: bool,
     ) {
         let outgoing = PendingOutgoing {
-            session_revision: self.presentation_session.or_else(|| self.incoming_presentation.session_revision()),
+            session_revision: self
+                .presentation_session
+                .or_else(|| self.incoming_presentation.session_revision()),
             call,
             kind,
             peer_id,
@@ -1083,6 +1095,7 @@ impl CallWorkerHandle {
         is_video: bool,
     ) {
         let _ = self.cmd_tx.try_send(CallCommand::OrchMarkConnected {
+            require_media_match: false,
             response: None,
             session_revision: self.presentation_session,
             call,
@@ -1102,6 +1115,7 @@ impl CallWorkerHandle {
         let (response, done) = oneshot::channel();
         self.cmd_tx
             .send(CallCommand::OrchMarkConnected {
+                require_media_match: true,
                 session_revision: self.presentation_session,
                 response: Some(response),
                 call,
@@ -1205,6 +1219,9 @@ impl CallWorkerHandle {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
             .try_send(CallCommand::InitiateCall {
+                attempt: crate::client::calls::START_ATTEMPT
+                    .try_with(Clone::clone)
+                    .ok(),
                 channel_id,
                 title: title.to_string(),
                 call_type,
@@ -1329,6 +1346,7 @@ impl CallWorkerHandle {
     pub async fn disconnect_local(&self, reason: CallEndReason) {
         let (tx, rx) = oneshot::channel();
         let _ = self.cmd_tx.try_send(CallCommand::DisconnectLocal {
+            notify_server: false,
             session_revision: self.presentation_session,
             call: None,
             reason,
@@ -1346,11 +1364,31 @@ impl CallWorkerHandle {
     pub fn disconnect_local_nonblocking(&self, call: Option<CallHandle>, reason: CallEndReason) {
         let (tx, _rx) = oneshot::channel();
         let _ = self.cmd_tx.try_send(CallCommand::DisconnectLocal {
+            notify_server: false,
             session_revision: self.presentation_session,
             call,
             reason,
             response: tx,
         });
+    }
+
+    /// Actor-atomic rollback: compare identity, notify server, disconnect media.
+    pub async fn rollback_setup(&self, call: CallHandle) {
+        let (tx, rx) = oneshot::channel();
+        if self
+            .cmd_tx
+            .send(CallCommand::DisconnectLocal {
+                notify_server: true,
+                session_revision: self.presentation_session,
+                call: Some(call),
+                reason: CallEndReason::LocalHangup,
+                response: tx,
+            })
+            .await
+            .is_ok()
+        {
+            let _ = rx.await;
+        }
     }
 
     /// Get the currently active call.
@@ -1782,6 +1820,7 @@ fn run_call_worker(
                 .expect("call generation exhausted");
             match cmd {
                 CallCommand::InitiateCall {
+                    attempt,
                     channel_id,
                     title,
                     call_type,
@@ -1789,10 +1828,11 @@ fn run_call_worker(
                     initiator_id,
                     response,
                 } => {
-                    let result = initiate_call_impl(
+                    let mut result = initiate_call_impl(
                         &call_client,
                         &room_manager,
                         &active_call,
+                        attempt.as_ref(),
                         channel_id,
                         &title,
                         call_type,
@@ -1805,7 +1845,7 @@ fn run_call_worker(
                     // call initiation. Media publish was previously driven by UI
                     // glue — folding it into the worker keeps all call
                     // lifecycle side-effects in one place.
-                    if result.is_ok() {
+                    if result.is_ok() && !attempt.as_ref().is_some_and(|a| a.is_cancelled()) {
                         start_key_ratchet_timer(&room_manager, &ratchet_cancel, &active_call);
                         // the DM caller connects under an all-zero
                         // placeholder key — its real ECDH key only lands later
@@ -1826,6 +1866,11 @@ fn run_call_worker(
                         }
                     }
 
+                    if result.is_ok() && attempt.as_ref().is_some_and(|a| a.is_cancelled()) {
+                        stop_key_ratchet_timer(&ratchet_cancel);
+                        let _ = leave_call_impl(&call_client, &room_manager, &active_call).await;
+                        result = Err(CallError::CallEnded);
+                    }
                     let _ = response.send(result);
                 }
 
@@ -1964,7 +2009,7 @@ fn run_call_worker(
                     let _ = response.send(result);
                 }
 
-                CallCommand::DisconnectLocal { call, reason, response, session_revision } => {
+                CallCommand::DisconnectLocal { call, reason, response, session_revision, notify_server } => {
                     if session_revision.is_some() && !incoming_presentation.accepts_session(session_revision) { let _ = response.send(()); continue; }
                     let handle = active_call.borrow().as_ref().map(derive_call_handle);
                     if call.is_some() && call != handle {
@@ -1975,6 +2020,14 @@ fn run_call_worker(
                         );
                         let _ = response.send(());
                         continue;
+                    }
+
+                    if notify_server {
+                        let id = active_call.borrow().as_ref().filter(|s| !s.room_name.starts_with("anon-")).map(|s| s.call.id.to_string());
+                        if let Some(id) = id {
+                            let mut client = call_client.lock().await;
+                            let _ = tokio::time::timeout(std::time::Duration::from_secs(3), client.leave_call(&id)).await;
+                        }
                     }
 
                     // Cancel key ratchet timer
@@ -2259,9 +2312,13 @@ fn run_call_worker(
                     });
                 }
 
-                CallCommand::OrchMarkConnected { call, kind, peer_id, is_video, session_revision, response } => {
+                CallCommand::OrchMarkConnected { call, kind, peer_id, is_video, session_revision, response, require_media_match } => {
                     let session_lease = incoming_presentation.snapshot.read();
                     if session_revision.is_some() && session_lease.session_revision != session_revision { if let Some(response) = response { let _ = response.send(Err(CallError::WorkerShutdown)); } continue; }
+                    if require_media_match && active_call.borrow().as_ref().map(derive_call_handle).as_ref() != Some(&call) {
+                        if let Some(response) = response { let _ = response.send(Err(CallError::CallEnded)); }
+                        continue;
+                    }
                     if let Some(state) = active_call.borrow_mut().as_mut() {
                         if derive_call_handle(state) == call && state.call.connected_at.is_none() {
                             state.call.start();
@@ -2329,6 +2386,20 @@ fn run_call_worker(
                     }
                 }
 
+                #[cfg(test)]
+                CallCommand::TestPrimeCall { call, response } => {
+                    let handle = CallHandle::from(call.id.to_string().as_str());
+                    let key_state = CallKeyState::new(&[8; 32], handle.as_str()).unwrap();
+                    *active_call.borrow_mut() = Some(ActiveCallState {
+                        reconnect_media: None, call, key_state,
+                        room_name: handle.as_str().to_string(), livekit_url: String::new(),
+                        publish_gate: PublishGate::default(),
+                    });
+                    orchestrator.active = Some(OrchestratedActive {
+                        session_revision: None, call: handle, kind: OrchestratedCallKind::DmStandard,
+                    });
+                    let _ = response.send(());
+                }
                 #[cfg(test)]
                 CallCommand::TestPause { entered, resume } => {
                     let _ = entered.send(());
@@ -2827,12 +2898,16 @@ async fn initiate_call_impl(
     call_client: &Arc<TokioMutex<CallClient>>,
     room_manager: &Arc<RoomManager>,
     active_call: &Rc<RefCell<Option<ActiveCallState>>>,
+    attempt: Option<&crate::client::calls::CallStartAttempt>,
     channel_id: ChannelId,
     title: &str,
     call_type: CallType,
     encryption_root_key: &[u8; 32],
     initiator_id: UserId,
 ) -> Result<Call, CallError> {
+    if attempt.is_some_and(|a| a.is_cancelled()) {
+        return Err(CallError::CallEnded);
+    }
     // Check if already in a call
     if active_call.borrow().is_some() {
         return Err(CallError::AlreadyInCall);
@@ -2854,21 +2929,41 @@ async fn initiate_call_impl(
             .map_err(|e| CallError::ServerError(e.to_string()))?
     };
 
-    // Derive E2EE key
-    let key_state = CallKeyState::new(encryption_root_key, &response.call_id)
-        .map_err(|e| CallError::CryptoError(e.to_string()))?;
-
-    // Connect to LiveKit room
-    room_manager
-        .connect(
-            &response.livekit_url,
-            &response.livekit_token,
-            key_state.current_key_vec(),
-        )
-        .await?;
-
-    // Create domain call object
-    let call_id = CallId::from_str(&response.call_id).map_err(|_| CallError::InvalidCallId)?;
+    // Once the server returns an identity, all subsequent errors/cancellation
+    // have enough information to undo membership and partial media setup.
+    let prepared = async {
+        if attempt.is_some_and(|a| a.is_cancelled()) {
+            return Err(CallError::CallEnded);
+        }
+        let call_id = CallId::from_str(&response.call_id).map_err(|_| CallError::InvalidCallId)?;
+        let key_state = CallKeyState::new(encryption_root_key, &response.call_id)
+            .map_err(|e| CallError::CryptoError(e.to_string()))?;
+        room_manager
+            .connect(
+                &response.livekit_url,
+                &response.livekit_token,
+                key_state.current_key_vec(),
+            )
+            .await?;
+        if attempt.is_some_and(|a| a.is_cancelled()) {
+            return Err(CallError::CallEnded);
+        }
+        Ok((call_id, key_state))
+    }
+    .await;
+    let (call_id, key_state) = match prepared {
+        Ok(prepared) => prepared,
+        Err(error) => {
+            room_manager.disconnect().await;
+            let mut client = call_client.lock().await;
+            let _ = tokio::time::timeout(
+                std::time::Duration::from_secs(3),
+                client.leave_call(&response.call_id),
+            )
+            .await;
+            return Err(error);
+        }
+    };
 
     // `CreateCall` hands back a group channel's live call when there is one:
     // then its creator is someone else and we have joined it, holding none of
@@ -4119,6 +4214,12 @@ fn spawn_anon_call_answer_task(
             .await
         {
             Ok(crate::domain::call::AnonCallAnswerOutcome::Connected(setup)) => {
+                let _ownership = signaling.start_gate.lock().await;
+                if signaling.start_was_cancelled(&setup.room_name)
+                    || worker.get_room_name().await.as_deref() != Some(setup.room_name.as_str())
+                {
+                    return;
+                }
                 let info = AnonCallConnectedInfo {
                     room_name: setup.room_name.clone(),
                     channel_id: setup.channel_id,
@@ -5387,11 +5488,13 @@ mod group_ring_cancel_tests {
             Err(CallError::WorkerShutdown)
         ));
         let mut restored = false;
-        assert!(current
-            .with_current_presentation_session(|| {
-                restored = true;
-            })
-            .is_some());
+        assert!(
+            current
+                .with_current_presentation_session(|| {
+                    restored = true;
+                })
+                .is_some()
+        );
         assert!(restored);
         assert!(worker.is_current_active_presentation(b, "new-active"));
         assert_eq!(
@@ -5414,9 +5517,10 @@ mod group_ring_cancel_tests {
         assert_ne!(again, a);
         worker.incoming_presentation_state().begin_session(again);
         assert!(!auth.session_is_current(a));
-        assert!(old
-            .with_current_presentation_session(|| panic!("stale secret restore"))
-            .is_none());
+        assert!(
+            old.with_current_presentation_session(|| panic!("stale secret restore"))
+                .is_none()
+        );
         present(
             &worker.for_presentation_session(again),
             &CallHandle::from("alice-new-ring"),
@@ -5744,6 +5848,72 @@ mod group_ring_cancel_tests {
         assert!(
             events.try_recv().is_err(),
             "no terminal orchestrator event after accepting"
+        );
+    }
+}
+
+#[cfg(test)]
+mod setup_cancellation_actor_tests {
+    use super::*;
+    fn worker() -> CallWorkerHandle {
+        let channel = tonic::transport::Endpoint::from_static("http://127.0.0.1:9").connect_lazy();
+        CallWorkerHandle::spawn(crate::network::grpc::CallClient::new(
+            channel.into(),
+            crate::network::grpc::interceptors::AuthInterceptor::new(),
+        ))
+    }
+    #[tokio::test]
+    async fn cancelled_setup_command_never_enters_server_or_media_setup() {
+        let worker = worker();
+        let attempt = crate::client::calls::CallStartAttempt::default();
+        attempt.cancel();
+        let result = crate::client::calls::START_ATTEMPT
+            .scope(
+                attempt,
+                worker.initiate_call(
+                    ChannelId::new(),
+                    "fixture",
+                    CallType::Voice,
+                    &[0; 32],
+                    UserId::new(),
+                ),
+            )
+            .await;
+        assert!(matches!(result, Err(CallError::CallEnded)));
+        assert!(worker.active_call().await.is_none());
+    }
+    #[tokio::test]
+    async fn late_cancelled_setup_rollback_cannot_disconnect_replacement() {
+        let worker = worker();
+        let old = CallHandle::from(CallId::new().to_string().as_str());
+        let replacement = Call::new(ChannelId::new(), UserId::new(), CallType::Voice);
+        let replacement_id = replacement.id;
+        let (tx, rx) = oneshot::channel();
+        worker
+            .cmd_tx
+            .send(CallCommand::TestPrimeCall {
+                call: replacement,
+                response: tx,
+            })
+            .await
+            .unwrap();
+        rx.await.unwrap();
+        worker.rollback_setup(old.clone()).await;
+        assert!(matches!(
+            worker
+                .orch_mark_connected_reliably(
+                    old,
+                    OrchestratedCallKind::AnonDm,
+                    UserId::new(),
+                    false
+                )
+                .await,
+            Err(CallError::CallEnded)
+        ));
+        assert_eq!(worker.active_call().await.unwrap().id, replacement_id);
+        assert_eq!(
+            worker.orch_active_kind().await,
+            Some(OrchestratedCallKind::DmStandard)
         );
     }
 }

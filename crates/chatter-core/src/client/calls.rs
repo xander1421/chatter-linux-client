@@ -64,6 +64,80 @@ pub fn room_roster_keeps_screen(
             .any(|id| crate::calls::screen_share_frame_id(id, true) == tile_id)
 }
 
+/// Cancellation is cooperative: never drop a worker command's response future.
+/// The owner drains dispatched setup and rolls it back before releasing its gate.
+#[cfg(feature = "media")]
+#[derive(Clone, Default)]
+pub struct CallStartAttempt {
+    cancelled: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    notify: std::sync::Arc<tokio::sync::Notify>,
+}
+#[cfg(feature = "media")]
+impl CallStartAttempt {
+    pub fn cancel(&self) {
+        self.cancelled
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        self.notify.notify_one();
+    }
+    pub fn is_cancelled(&self) -> bool {
+        self.cancelled.load(std::sync::atomic::Ordering::SeqCst)
+    }
+    pub(crate) fn same_owner(&self, other: &Self) -> bool {
+        std::sync::Arc::ptr_eq(&self.cancelled, &other.cancelled)
+    }
+    pub async fn cancelled(&self) {
+        loop {
+            let notified = self.notify.notified();
+            if self.is_cancelled() {
+                return;
+            }
+            notified.await;
+        }
+    }
+}
+#[cfg(feature = "media")]
+tokio::task_local! { pub(crate) static START_ATTEMPT: CallStartAttempt; }
+pub(crate) fn start_cancelled() -> bool {
+    #[cfg(feature = "media")]
+    {
+        START_ATTEMPT
+            .try_with(CallStartAttempt::is_cancelled)
+            .unwrap_or(false)
+    }
+    #[cfg(not(feature = "media"))]
+    {
+        false
+    }
+}
+
+/// Shared production ownership boundary, also exercised with delayed resources
+/// in tests. Cancellation never drops `setup`; it drains and rolls back it.
+#[cfg(feature = "media")]
+async fn owned_setup<T, F, R, RF>(
+    gate: &tokio::sync::Mutex<()>,
+    attempt: CallStartAttempt,
+    setup: F,
+    rollback: R,
+) -> Result<T, ClientError>
+where
+    F: std::future::Future<Output = Result<T, ClientError>>,
+    R: FnOnce(T) -> RF,
+    RF: std::future::Future<Output = ()>,
+{
+    let _owner = gate.lock().await;
+    if attempt.is_cancelled() {
+        return Err(ClientError::Validation("call start cancelled".into()));
+    }
+    let result = START_ATTEMPT.scope(attempt.clone(), setup).await;
+    match result {
+        Ok(start) if attempt.is_cancelled() => {
+            rollback(start).await;
+            Err(ClientError::Validation("call start cancelled".into()))
+        }
+        other => other,
+    }
+}
+
 impl ChatterClient {
     // ── DM Call Orchestration ──────────────────────────────────────────
 
@@ -96,11 +170,103 @@ impl ChatterClient {
         call_type: crate::domain::call::CallType,
         display_name: &str,
     ) -> Result<OutgoingCallStart, ClientError> {
-        let start = self
-            .dispatch_start_call(conversation, call_type, display_name)
-            .await?;
-        self.open_outgoing_history_row(conversation, &start).await;
-        Ok(start)
+        self.start_call_attempt(
+            conversation,
+            call_type,
+            display_name,
+            CallStartAttempt::default(),
+        )
+        .await
+    }
+
+    /// Owned setup entry point. A cancelled request remains owned until any
+    /// in-flight worker/server operation has returned and rollback has completed.
+    #[cfg(feature = "media")]
+    pub async fn start_call_attempt(
+        &self,
+        conversation: crate::state::ActiveConversation,
+        call_type: crate::domain::call::CallType,
+        display_name: &str,
+        attempt: CallStartAttempt,
+    ) -> Result<OutgoingCallStart, ClientError> {
+        let revision = self.auth_state().get().session_revision;
+        owned_setup(
+            &self.call_signaling().start_gate,
+            attempt.clone(),
+            async {
+                if self.auth_state().get().session_revision != revision {
+                    attempt.cancel();
+                    return Err(ClientError::Validation("call session changed".into()));
+                }
+                let _attempt_owner = self.call_signaling().own_start(attempt.clone());
+                if self.auth_state().get().session_revision != revision {
+                    attempt.cancel();
+                    return Err(ClientError::Validation("call session changed".into()));
+                }
+                let start = match self
+                    .dispatch_start_call(conversation, call_type, display_name)
+                    .await
+                {
+                    Ok(start) => start,
+                    Err(error) => {
+                        attempt.cancel();
+                        if let Some(worker) = self.call_service().get() {
+                            self.call_signaling()
+                                .rollback_registered_attempt(&attempt, worker)
+                                .await;
+                        }
+                        return Err(error);
+                    }
+                };
+                if self.auth_state().get().session_revision != revision {
+                    attempt.cancel();
+                }
+                if !attempt.is_cancelled() {
+                    self.open_outgoing_history_row(conversation, &start).await;
+                }
+                if self.auth_state().get().session_revision != revision {
+                    attempt.cancel();
+                }
+                Ok(start)
+            },
+            |start| async move {
+                if let Some(worker) = self.call_service().get() {
+                    self.call_signaling().rollback_start(&start, worker).await;
+                }
+            },
+        )
+        .await
+    }
+
+    #[cfg(feature = "media")]
+    pub fn cancel_call_start(&self, call_id: &str) -> bool {
+        self.call_signaling().cancel_start(call_id)
+    }
+    #[cfg(feature = "media")]
+    pub async fn end_cancelled_call(&self, call_id: String, channel_id: String, is_video: bool) {
+        let start = OutgoingCallStart {
+            is_anonymous: call_id.starts_with("anon-"),
+            call_id,
+            channel_id,
+            is_video,
+            verification_emojis: None,
+            title: String::new(),
+            peer: None,
+        };
+        self.rollback_call_start(&start).await;
+    }
+
+    #[cfg(feature = "media")]
+    pub fn call_start_was_cancelled(&self, call_id: &str) -> bool {
+        self.call_signaling().start_was_cancelled(call_id)
+    }
+
+    #[cfg(feature = "media")]
+    pub async fn rollback_call_start(&self, start: &OutgoingCallStart) {
+        let _ownership = self.call_signaling().start_gate.lock().await;
+        if let Some(worker) = self.call_service().get() {
+            self.call_signaling().rollback_start(start, worker).await;
+        }
     }
 
     /// Record the "we placed a call" row.
@@ -345,6 +511,17 @@ impl ChatterClient {
             .await
             .map_err(|e| ClientError::Inbox(e.to_string()))?;
         drop(own_key);
+        if start_cancelled() {
+            call_worker
+                .rollback_setup(crate::services::call_worker::CallHandle::from(
+                    call.id.to_string().as_str(),
+                ))
+                .await;
+            return Err(ClientError::Validation("call start cancelled".into()));
+        }
+
+        self.call_signaling()
+            .register_group_start_attempt(&call.id.to_string());
 
         // Register the active call so the orchestrator can resolve its kind on
         // hangup. A group/channel call has no single peer, so we use a nil
@@ -401,25 +578,25 @@ impl ChatterClient {
             // returning for the host. The worker owns that attempt and logs
             // failures; publishing again here would restart an active capture.
 
-            // Ring the channel (no key in it; fire-and-forget).
+            // Keep ring/STARTED signaling inside the owned attempt: no detached
+            // producer may advertise this call after cancellation rolled it back.
             let call_id_str = call.id.to_string();
-            let signaling = self.call_signaling().clone();
-            tokio::spawn(async move {
-                if let Err(e) = signaling.ring_group_call(&channel_id, &call_id_str).await {
+            if !start_cancelled() {
+                if let Err(e) = self
+                    .call_signaling()
+                    .ring_group_call(&channel_id, &call_id_str)
+                    .await
+                {
                     tracing::error!(call_id = %call_id_str, error = %e, "Failed to ring the group call");
                 }
-            });
-
-            // Tell the channel a call started (O9): every member device files the
-            // Call row, joined or not. Fire-and-forget like the ring.
-            let messages = self.messages().clone();
-            let started_id = call.id.to_string();
-            tokio::spawn(async move {
+            }
+            if !start_cancelled() {
                 use crate::services::message::ChannelCallPhase;
-                if let Err(e) = messages
+                if let Err(e) = self
+                    .messages()
                     .post_channel_call_event(
                         &channel_id,
-                        &started_id,
+                        &call_id_str,
                         ChannelCallPhase::Started,
                         0,
                         is_video,
@@ -428,7 +605,7 @@ impl ChatterClient {
                 {
                     tracing::warn!(error = %e, "Channel call STARTED not posted");
                 }
-            });
+            }
         }
 
         Ok(crate::domain::call::CallSetupResult {
@@ -1555,20 +1732,38 @@ impl ChatterClient {
         filter: crate::domain::call::CallHistoryFilter,
         limit: u32,
     ) -> Result<CallHistoryPage, ClientError> {
+        let auth = self.auth_state().clone();
+        let revision = auth.get().session_revision;
         let repo = self.call_history_repo();
         let mut page = tokio::task::spawn_blocking(move || {
             let entries = repo
                 .list(filter, limit, None)
                 .map_err(|e| ClientError::Inbox(format!("call history list: {}", e)))?;
-            if let Err(e) = repo.mark_missed_seen() {
-                tracing::warn!(error = %e, "call history: mark missed seen failed");
+            if auth.get().session_revision != revision {
+                return Err(ClientError::Validation(
+                    "call history session changed".into(),
+                ));
             }
+            let previous_missed = repo
+                .missed_count()
+                .map_err(|e| ClientError::Inbox(format!("call history count: {e}")))?
+                as u32;
+            let missed_count = match repo.mark_missed_seen() {
+                Ok(()) => repo
+                    .missed_count()
+                    .map_err(|e| ClientError::Inbox(format!("call history count: {e}")))?
+                    as u32,
+                Err(e) => {
+                    tracing::warn!(error = %e, "call history: mark missed seen failed");
+                    previous_missed
+                }
+            };
             Ok::<_, ClientError>(CallHistoryPage {
                 rows: entries
                     .iter()
                     .map(crate::ui::CallHistoryRowData::from)
                     .collect(),
-                missed_count: repo.missed_count().unwrap_or(0) as u32,
+                missed_count,
             })
         })
         .await
@@ -1624,6 +1819,18 @@ impl ChatterClient {
         tokio::task::spawn_blocking(move || repo.missed_count().unwrap_or(0) as u32)
             .await
             .unwrap_or(0)
+    }
+
+    /// Fallible badge read; UI callers retain their last successful badge on error.
+    pub async fn try_missed_call_count(&self) -> Result<u32, ClientError> {
+        let repo = self.call_history_repo();
+        tokio::task::spawn_blocking(move || {
+            repo.missed_count()
+                .map(|count| count as u32)
+                .map_err(|e| ClientError::Inbox(format!("call history count: {e}")))
+        })
+        .await
+        .map_err(|e| ClientError::Inbox(format!("call history count task: {e}")))?
     }
 
     /// Resolve a Calls-screen row back to the conversation it happened in,
@@ -2433,5 +2640,113 @@ mod group_call_key_tests {
         assert!(!gate.finish(), "then it idles");
         assert!(gate.request(), "a later join rotates again at once");
         assert!(!gate.finish());
+    }
+}
+
+#[cfg(all(test, feature = "media"))]
+mod start_ownership_tests {
+    use super::*;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+
+    #[tokio::test]
+    async fn delayed_setup_end_drains_rolls_back_before_replacement() {
+        let gate = Arc::new(tokio::sync::Mutex::new(()));
+        let resource = Arc::new(AtomicUsize::new(0));
+        let attempt = CallStartAttempt::default();
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let (finish_tx, finish_rx) = tokio::sync::oneshot::channel();
+        let owner = {
+            let gate = gate.clone();
+            let resource = resource.clone();
+            let attempt = attempt.clone();
+            tokio::spawn(async move {
+                let setup_resource = resource.clone();
+                owned_setup(
+                    &gate,
+                    attempt,
+                    async move {
+                        // A server/media command has acquired a partial resource.
+                        setup_resource.store(1, Ordering::SeqCst);
+                        entered_tx.send(()).unwrap();
+                        finish_rx.await.unwrap();
+                        Ok(1usize)
+                    },
+                    |id| async move {
+                        assert_eq!(resource.swap(0, Ordering::SeqCst), id);
+                    },
+                )
+                .await
+            })
+        };
+        entered_rx.await.unwrap();
+        attempt.cancel();
+        let replacement = {
+            let gate = gate.clone();
+            let resource = resource.clone();
+            tokio::spawn(async move {
+                owned_setup(
+                    &gate,
+                    CallStartAttempt::default(),
+                    async move {
+                        assert_eq!(
+                            resource.swap(2, Ordering::SeqCst),
+                            0,
+                            "rollback must precede replacement"
+                        );
+                        Ok(2usize)
+                    },
+                    |_| async {},
+                )
+                .await
+            })
+        };
+        tokio::task::yield_now().await;
+        assert!(!owner.is_finished());
+        assert_eq!(resource.load(Ordering::SeqCst), 1);
+        finish_tx.send(()).unwrap();
+        assert!(owner.await.unwrap().is_err());
+        assert_eq!(replacement.await.unwrap().unwrap(), 2);
+        assert_eq!(resource.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn setup_timeout_keeps_owner_until_cleanup() {
+        let gate = Arc::new(tokio::sync::Mutex::new(()));
+        let attempt = CallStartAttempt::default();
+        let cleaned = Arc::new(AtomicUsize::new(0));
+        let (release, delayed) = tokio::sync::oneshot::channel();
+        let mut task = {
+            let gate = gate.clone();
+            let attempt = attempt.clone();
+            let cleaned = cleaned.clone();
+            tokio::spawn(async move {
+                owned_setup(
+                    &gate,
+                    attempt,
+                    async {
+                        delayed.await.unwrap();
+                        Ok(7usize)
+                    },
+                    |_| async move {
+                        cleaned.store(1, Ordering::SeqCst);
+                    },
+                )
+                .await
+            })
+        };
+        // The timeout borrows, rather than dropping, the production owner.
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(5), &mut task)
+                .await
+                .is_err()
+        );
+        attempt.cancel();
+        assert!(!task.is_finished());
+        release.send(()).unwrap();
+        assert!(task.await.unwrap().is_err());
+        assert_eq!(cleaned.load(Ordering::SeqCst), 1);
     }
 }
