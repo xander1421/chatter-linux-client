@@ -66,12 +66,19 @@ export component CallHistoryScreen inherits Rectangle {
         full-screen: root.mobile-mode;
         root-screen: root.root-screen;
         bottom-inset: root.bottom-inset;
-        fill-height: root.mobile-mode;
+        // The scrollable list needs a viewport on desktop too. Its overlay
+        // wrapper cannot supply a content-sized preferred height to Modal.
+        fill-height: true;
         show-more: !root.loading && root.rows.length > 0;
         more-clicked => { root.show-more-menu = !root.show-more-menu; }
 
         close => {
-            root.close();
+            // Backdrop taps and Escape dismiss the topmost surface first.
+            if root.show-more-menu {
+                root.show-more-menu = false;
+            } else {
+                root.close();
+            }
         }
 
         Rectangle {

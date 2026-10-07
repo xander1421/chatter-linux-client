@@ -81,6 +81,16 @@ fn calls_overflow_uses_real_header_hit_target_and_card_anchor() {
         w.set_is_mobile_platform(mobile);
         w.set_active_tab("calls".into());
         settle(&w, width, height);
+        if !mobile {
+            let card = labelled(&w, "Modal dialog").expect("Calls desktop card");
+            let position = card.absolute_position();
+            let size = card.size();
+            assert!(
+                (size.height - 800.0_f32.min(height - 96.0)).abs() < 1.0,
+                "desktop call list must fill its capped viewport"
+            );
+            assert!(position.y >= 0.0 && position.y + size.height <= height);
+        }
         let more = labelled(&w, "More options").expect("Calls header action");
         let p = more.absolute_position();
         let s = more.size();
@@ -138,5 +148,19 @@ fn calls_overflow_uses_real_header_hit_target_and_card_anchor() {
         );
         click(&w, &labelled(&w, "Cancel").unwrap());
         settle(&w, width, height);
+
+        if !mobile {
+            click(&w, &more);
+            settle(&w, width, height);
+            assert!(labelled(&w, "Clear call history").is_some());
+            // The shared modal backdrop must dismiss overflow before Calls.
+            click_position(&w, slint::LogicalPosition::new(8.0, 8.0));
+            settle(&w, width, height);
+            assert!(labelled(&w, "Clear call history").is_none());
+            assert_eq!(w.get_active_tab().as_str(), "calls");
+            click_position(&w, slint::LogicalPosition::new(8.0, 8.0));
+            settle(&w, width, height);
+            assert_eq!(w.get_active_tab().as_str(), "chats");
+        }
     }
 }
