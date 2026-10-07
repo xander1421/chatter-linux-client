@@ -123,11 +123,13 @@ export component MessageList inherits Rectangle {
     private property <int> jump-row: -1;
     private property <bool> jump-measured: false;
     private property <length> jump-bubble-y: 0px;
+    private property <int> jump-measurement-serial: 0;
     callback measured-jump-row(int, length);
     measured-jump-row(index, y) => {
         if (index == root.jump-row) {
             root.jump-bubble-y = y;
             root.jump-measured = true;
+            root.jump-measurement-serial += 1;
         }
     }
     // Older history is requested once per approach to the top.
@@ -447,20 +449,29 @@ export component MessageList inherits Rectangle {
             // MessageItem position produced by the same layout that renders it:
             // dividers, call/media/emoji/system heights need no parallel formula.
             property <length> row-y;
-            property <length> target-bubble-y: root.jump-bubble-y;
-            property <bool> target-measured: root.jump-measured;
-            changed target-bubble-y => { self.pursue(); }
-            changed target-measured => { self.pursue(); }
+            property <int> target-measurement: root.jump-measurement-serial;
+            changed target-measurement => {
+                if (root.jump-row >= 0 && root.jump-measured) {
+                    // Confirm only from a fresh post-layout measurement, never
+                    // from the viewport setter's own synchronous callback.
+                    self.row-y = Math.min(0px, Math.max(
+                        Math.min(0px, self.height - self.viewport-height),
+                        root.top-inset - root.jump-bubble-y));
+                    if (Math.abs((self.row-y - self.viewport-y) / 1px) < 1) {
+                        root.jump-row = -1;
+                        self.read-position();
+                    } else {
+                        self.seek-row(root.jump-row);
+                    }
+                }
+            }
             function seek-row(i: int) {
                 if (root.messages.length > 0 && self.measured) {
                     if (root.jump-measured) {
                         self.row-y = Math.min(0px, Math.max(
                             Math.min(0px, self.height - self.viewport-height),
                             root.top-inset - root.jump-bubble-y));
-                        if (Math.abs((self.row-y - self.viewport-y) / 1px) < 1) {
-                            root.jump-row = -1;
-                            self.read-position();
-                        } else {
+                        if (Math.abs((self.row-y - self.viewport-y) / 1px) >= 1) {
                             self.viewport-y = self.row-y;
                         }
                     } else {
@@ -608,11 +619,17 @@ export component MessageList inherits Rectangle {
             for item[idx] in root.messages: message-row := VerticalLayout {
                 property <bool> jump-target: idx == root.jump-row;
                 property <length> bubble-position: self.y + message-bubble.y;
-                changed bubble-position => {
-                    if (self.jump-target) { root.measured-jump-row(idx, self.bubble-position); }
-                }
-                changed jump-target => {
-                    if (self.jump-target) { root.measured-jump-row(idx, self.bubble-position); }
+                // The target's only timer is active while navigating. Deferring
+                // to the next frame avoids reporting freshly-created delegates'
+                // default y=0 before the virtualizer has positioned them.
+                Timer {
+                    interval: 16ms;
+                    running: message-row.jump-target;
+                    triggered => {
+                        if (message-bubble.height > 0px) {
+                            root.measured-jump-row(idx, message-row.bubble-position);
+                        }
+                    }
                 }
                 width: root.width;
                 height: self.preferred-height;
