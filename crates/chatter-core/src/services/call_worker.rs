@@ -238,8 +238,8 @@ impl PendingIncoming {
     fn retire_anon(&self) {
         if let Some(lease) = &self.anon_lease { lease.retire(self.call.as_str(), self.peer_id); }
     }
-    fn seal_anon(&self) {
-        if let Some(lease) = &self.anon_lease { lease.seal(self.call.as_str()); }
+    fn seal_anon(&self) -> bool {
+        self.anon_lease.as_ref().is_none_or(|lease| lease.seal(self.call.as_str()))
     }
 }
 
@@ -2492,6 +2492,10 @@ fn run_call_worker(
                         }
                         continue; // never renew or re-announce an existing ring
                     }
+                    if incoming.anon_lease.as_ref().is_some_and(|lease| !lease.admit(incoming.call.as_str(), incoming.peer_id)) {
+                        incoming.retire_anon();
+                        continue; // never expose a visible offer without its matching keys
+                    }
                     let replaces_active = orchestrator.active.is_some();
                     let snapshot = incoming.clone();
                     orchestrator.incoming_order.insert(
@@ -2660,8 +2664,9 @@ fn run_call_worker(
                         Err(CallError::NotInCall)
                     } else if !replaces_active && orchestrator.active.is_some() {
                         Err(CallError::AlreadyInCall)
+                    } else if orchestrator.incoming.get(&call).is_some_and(|p| !p.seal_anon()) {
+                        Err(CallError::AwaitingKey)
                     } else if let Some(p) = orchestrator.incoming.remove(&call) {
-                        p.seal_anon();
                         // No await or reply can expose worker success before key ownership.
                         if is_group {
                             invites.get_mut(call.as_str()).unwrap().accepted = true;
@@ -2687,8 +2692,9 @@ fn run_call_worker(
                     // chosen to end their current call.
                     let result = if orchestrator.active.is_some() {
                         Err(CallError::AlreadyInCall)
+                    } else if orchestrator.incoming.get(&call).is_some_and(|p| !p.seal_anon()) {
+                        Err(CallError::AwaitingKey)
                     } else if let Some(p) = orchestrator.incoming.remove(&call) {
-                        p.seal_anon();
                         Ok(p)
                     } else {
                         Err(CallError::NotInCall)
@@ -2698,9 +2704,9 @@ fn run_call_worker(
                 }
 
                 CallCommand::OrchAcceptIncomingReplacingActive { call, response } => {
-                    let pending = orchestrator.incoming.remove(&call);
-                    if let Some(p) = &pending { p.seal_anon(); }
-                    let result = match pending {
+                    let result = if orchestrator.incoming.get(&call).is_some_and(|p| !p.seal_anon()) {
+                        Err(CallError::AwaitingKey)
+                    } else { match orchestrator.incoming.remove(&call) {
                         Some(p) => {
                             if let Some(prev) = orchestrator.active.take() {
                                 let _ = call_events_tx.send(
@@ -2713,16 +2719,17 @@ fn run_call_worker(
                             Ok(p)
                         }
                         None => Err(CallError::NotInCall),
-                    };
+                    } };
                     incoming_presentation.publish(&orchestrator);
                     let _ = response.send(result);
                 }
 
                 CallCommand::OrchDeclineIncoming { call, response } => {
-                    let result = match orchestrator.incoming.remove(&call) {
+                    let result = if orchestrator.incoming.get(&call).is_some_and(|p| !p.seal_anon()) {
+                        Err(CallError::AwaitingKey)
+                    } else { match orchestrator.incoming.remove(&call) {
                         Some(p) => {
                             // The decline sender still needs the pending room/caller record.
-                            p.seal_anon();
                             let _ = call_events_tx.send(
                                 CallOrchestratorEvent::IncomingWithdrawn {
                                     call: p.call.clone(),
@@ -2732,7 +2739,7 @@ fn run_call_worker(
                             Ok(p)
                         }
                         None => Err(CallError::NotInCall),
-                    };
+                    } };
                     incoming_presentation.publish(&orchestrator);
                     let _ = response.send(result);
                 }
@@ -4148,6 +4155,23 @@ fn elsewhere_reason(reason: crate::services::gateway::CallHangupReason) -> Optio
     }
 }
 
+#[allow(clippy::too_many_arguments)]
+fn stage_incoming_anon_offer(
+    lease: &Arc<crate::services::anon_dm::IncomingAnonOfferLease>, room: &str,
+    sender: UserId, conversation: crate::domain::anon_dm::AnonDmId, room_id: &[u8],
+    key: Vec<u8>, display_name: String, video: bool,
+) {
+    let mut id = [0; 16];
+    let len = room_id.len().min(id.len());
+    id[..len].copy_from_slice(&room_id[..len]);
+    lease.stage(crate::services::anon_dm::PendingAnonCall {
+        call_room_id: id, room_name: room.to_owned(), conversation_id: conversation,
+        token: crate::mailbox::CallRoomToken { id: String::new(), public_key: vec![], private_key: vec![], signature: vec![], randomizer: None },
+        is_video_call: video, is_outgoing: false, display_name, encryption_key: key,
+        sender_id: Some(sender), started_at: None,
+    });
+}
+
 fn handle_domain_event(
     worker: &CallWorkerHandle,
     signaling: &crate::services::call_signaling::CallSignalingService,
@@ -4234,6 +4258,8 @@ fn handle_domain_event(
             conversation_id,
             timestamp,
             incoming_lease,
+            call_room_id,
+            call_encryption_key,
             ..
         } => {
             let is_video = call_type == 2;
@@ -4256,6 +4282,8 @@ fn handle_domain_event(
                 );
                 return;
             }
+            stage_incoming_anon_offer(&incoming_lease, &room_name, sender_id, conversation_id,
+                &call_room_id, call_encryption_key, peer_name.clone(), is_video);
             worker.orch_present_incoming_offer(
                 CallHandle::from(room_name),
                 OrchestratedCallKind::AnonDm,
@@ -4325,6 +4353,8 @@ fn handle_domain_event(
             group_id,
             timestamp,
             incoming_lease,
+            call_room_id,
+            call_encryption_key,
             ..
         } => {
             let is_video = call_type == 2;
@@ -4344,6 +4374,8 @@ fn handle_domain_event(
                 );
                 return;
             }
+            stage_incoming_anon_offer(&incoming_lease, &room_name, sender_id, crate::domain::anon_dm::AnonDmId::try_from_slice(group_id.as_bytes()).expect("AnonGroupId is 16 bytes"),
+                &call_room_id, call_encryption_key, peer_name.clone(), is_video);
             worker.orch_present_incoming_offer(
                 CallHandle::from(room_name),
                 OrchestratedCallKind::AnonGroup,
@@ -6204,6 +6236,94 @@ mod incoming_expiry_tests {
             true, String::new(), None, None, "conversation".into(), timestamp, None);
         // FIFO snapshot is an actor barrier, not a wall-clock sleep.
         worker.incoming_presentation_snapshot().await.unwrap();
+    }
+
+    async fn present_ready_anon(worker: &CallWorkerHandle, room: &str, kind: OrchestratedCallKind)
+        -> (Arc<crate::services::anon_dm::IncomingAnonOfferLease>, crate::services::anon_dm::PendingAnonCall) {
+        let lease = crate::services::anon_dm::IncomingAnonOfferLease::new();
+        let caller = UserId::new();
+        let pending = crate::services::anon_dm::PendingAnonCall {
+            call_room_id: [7; 16], room_name: room.into(), conversation_id: crate::domain::anon_dm::AnonDmId::new(),
+            token: crate::mailbox::CallRoomToken { id: String::new(), public_key: vec![], private_key: vec![], signature: vec![], randomizer: None },
+            is_video_call: false, is_outgoing: false, display_name: "Caller".into(), encryption_key: vec![37; 32],
+            sender_id: Some(caller), started_at: None,
+        };
+        // The real offer consumer stages the same complete key record before
+        // queuing admission; the independent general store consumer is delayed.
+        stage_incoming_anon_offer(&lease, room, caller, pending.conversation_id, &pending.call_room_id,
+            pending.encryption_key.clone(), pending.display_name.clone(), false);
+        worker.orch_present_incoming_offer(CallHandle::from(room), kind, caller, "Caller".into(), false,
+            true, String::new(), None, None, pending.conversation_id.to_string(), 0, Some(lease.clone()));
+        assert_eq!(worker.incoming_presentation_snapshot().await.unwrap().presentations.len(), 1);
+        (lease, pending)
+    }
+
+    #[tokio::test]
+    async fn incoming_expiry_readiness_delayed_store_accept_replace_decline_keep_keys() {
+        for kind in [OrchestratedCallKind::AnonDm, OrchestratedCallKind::AnonGroup] {
+            for action in ["accept", "replace", "decline", "legacy-accept", "legacy-replace"] {
+                let worker = worker();
+                let room = format!("ready-{}", uuid::Uuid::new_v4());
+                let mut events = worker.subscribe_call_events();
+                if action.contains("replace") {
+                    worker.orch_mark_connected(CallHandle::from("original-active"), OrchestratedCallKind::DmStandard, UserId::new(), false);
+                }
+                let (lease, delayed) = present_ready_anon(&worker, &room, kind).await;
+                let handle = CallHandle::from(room.as_str());
+                match action {
+                    "accept" | "replace" => { worker.orch_accept_presented(handle.clone(), action == "replace",
+                        Arc::new(Default::default())).await.unwrap(); }
+                    "legacy-accept" => { worker.orch_accept_incoming(handle.clone()).await.unwrap(); }
+                    "legacy-replace" => { worker.orch_accept_incoming_replacing_active(handle.clone()).await.unwrap(); }
+                    _ => { worker.orch_decline_incoming(handle.clone()).await.unwrap(); }
+                }
+                // Same production map consumption used by accept_anon_call and
+                // decline_anon_call: visible admission must have made it ready.
+                assert!(crate::services::anon_dm::take_incoming_anon_call_state(&room, delayed.sender_id.unwrap()).is_none(), "remote ring cleanup stole claimed keys");
+                let owned = crate::services::anon_dm::take_pending_anon_call_state(&room).expect("claimed signaling keys");
+                assert_eq!(owned.encryption_key, vec![37; 32]);
+                assert_eq!(owned.call_room_id, [7; 16]);
+                assert_eq!(owned.sender_id, delayed.sender_id);
+                crate::services::anon_dm::store_incoming_anon_offer_state(room.clone(), delayed, lease);
+                assert!(crate::services::anon_dm::take_pending_anon_call_state(&room).is_none(), "delayed handler resurrected claimed state");
+                expire(&worker, Duration::from_secs(120)).await;
+                assert!(worker.incoming_presentation_snapshot().await.unwrap().presentations.is_empty());
+                let events: Vec<_> = std::iter::from_fn(|| events.try_recv().ok()).collect();
+                assert!(!events.iter().any(|e| matches!(e, CallOrchestratorEvent::IncomingWithdrawn { reason: CallEndReason::NoAnswer, .. })));
+                assert_eq!(events.iter().filter(|e| matches!(e, CallOrchestratorEvent::IncomingWithdrawn { reason: CallEndReason::Declined, .. })).count(), usize::from(action == "decline"));
+                assert_eq!(events.iter().filter(|e| matches!(e, CallOrchestratorEvent::ActiveEnded { reason: CallEndReason::ReplacedByIncoming, .. })).count(), usize::from(action.contains("replace")));
+                worker.shutdown();
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn incoming_expiry_readiness_failed_claim_retains_offer_active_and_can_retry() {
+        for action in ["accept", "replace", "decline"] {
+            let worker = worker();
+            let room = format!("recover-{}", uuid::Uuid::new_v4());
+            if action == "replace" {
+                worker.orch_mark_connected(CallHandle::from("original-active"), OrchestratedCallKind::DmStandard, UserId::new(), false);
+            }
+            let (lease, delayed) = present_ready_anon(&worker, &room, OrchestratedCallKind::AnonDm).await;
+            // Simulate the map disappearing after admission, before the claim.
+            crate::services::anon_dm::take_pending_anon_call_state(&room).unwrap();
+            let mut events = worker.subscribe_call_events();
+            let handle = CallHandle::from(room.as_str());
+            let claim = if action == "decline" { worker.orch_decline_incoming(handle.clone()).await }
+                else { worker.orch_accept_presented(handle.clone(), action == "replace", Arc::new(Default::default())).await };
+            assert!(matches!(claim, Err(CallError::AwaitingKey)));
+            assert_eq!(worker.incoming_presentation_snapshot().await.unwrap().presentations.len(), 1);
+            if action == "replace" { assert_eq!(worker.orch_active_kind().await, Some(OrchestratedCallKind::DmStandard)); }
+            assert!(events.try_recv().is_err(), "failed readiness mutated presentation or active call");
+            // A failed claim must not retire the delivery lease. The original
+            // storage consumer can still complete and the user can retry.
+            crate::services::anon_dm::store_incoming_anon_offer_state(room.clone(), delayed, lease);
+            if action == "decline" { worker.orch_decline_incoming(handle.clone()).await.unwrap(); }
+            else { worker.orch_accept_presented(handle, action == "replace", Arc::new(Default::default())).await.unwrap(); }
+            assert_eq!(crate::services::anon_dm::take_pending_anon_call_state(&room).unwrap().encryption_key, vec![37; 32]);
+            worker.shutdown();
+        }
     }
 
     struct NotificationProbe(tokio::sync::mpsc::UnboundedSender<String>);

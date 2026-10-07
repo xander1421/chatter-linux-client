@@ -137,9 +137,11 @@ mod ringing_room_tests {
         assert_eq!(PENDING_ANON_CALLS.lock().unwrap()[&room].encryption_key, vec![42; 32]);
         PENDING_ANON_CALLS.lock().unwrap().remove(&room);
         let claimed = IncomingAnonOfferLease::new();
-        claimed.seal(&room); // accept claims ownership before a delayed handler stores
-        store_incoming_anon_offer_state(room.clone(), pending, claimed);
-        assert!(!PENDING_ANON_CALLS.lock().unwrap().contains_key(&room));
+        assert!(!claimed.seal(&room)); // storage not ready: ownership stays live
+        pending.started_at = None;
+        store_incoming_anon_offer_state(room.clone(), pending, claimed.clone());
+        assert!(claimed.seal(&room));
+        assert!(take_pending_anon_call_state(&room).is_some());
     }
 
     #[test]
@@ -242,12 +244,36 @@ static PENDING_ANON_CALLS: std::sync::LazyLock<Mutex<HashMap<String, PendingAnon
 
 /// One delivery's ownership of unaccepted anonymous signaling state.
 /// Shared by the store handler and orchestrator so expiry before storage is safe.
-#[derive(Debug, Default)]
-pub struct IncomingAnonOfferLease(std::sync::atomic::AtomicBool);
+#[derive(Default)]
+pub struct IncomingAnonOfferLease(std::sync::atomic::AtomicBool, Mutex<Option<PendingAnonCall>>);
+
+impl std::fmt::Debug for IncomingAnonOfferLease {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("IncomingAnonOfferLease").finish_non_exhaustive()
+    }
+}
 
 impl IncomingAnonOfferLease {
     pub fn new() -> std::sync::Arc<Self> {
-        std::sync::Arc::new(Self(std::sync::atomic::AtomicBool::new(true)))
+        std::sync::Arc::new(Self(std::sync::atomic::AtomicBool::new(true), Mutex::new(None)))
+    }
+
+    /// Retain the producer's key record until the actor establishes admission.
+    pub(crate) fn stage(&self, pending: PendingAnonCall) {
+        let mut staged = self.1.lock().unwrap();
+        if self.0.load(std::sync::atomic::Ordering::SeqCst) { *staged = Some(pending); }
+    }
+
+    pub(crate) fn admit(self: &std::sync::Arc<Self>, room: &str, sender: crate::domain::UserId) -> bool {
+        let staged = self.1.lock().unwrap().take();
+        if let Some(pending) = staged {
+            store_incoming_anon_offer_state(room.to_owned(), pending, self.clone());
+        }
+        let leases = INCOMING_ANON_LEASES.lock().unwrap();
+        let calls = PENDING_ANON_CALLS.lock().unwrap();
+        self.0.load(std::sync::atomic::Ordering::SeqCst)
+            && leases.get(room).is_some_and(|lease| std::sync::Arc::ptr_eq(lease, self))
+            && calls.get(room).is_some_and(|call| rings_us(call, sender))
     }
 
     /// Duplicate storage may win the race with the first handler. Transfer its
@@ -260,10 +286,20 @@ impl IncomingAnonOfferLease {
         duplicate.0.store(false, std::sync::atomic::Ordering::SeqCst);
     }
 
-    pub(crate) fn seal(self: &std::sync::Arc<Self>, room: &str) {
+    pub(crate) fn seal(self: &std::sync::Arc<Self>, room: &str) -> bool {
         let mut leases = INCOMING_ANON_LEASES.lock().unwrap();
-        if leases.get(room).is_some_and(|lease| std::sync::Arc::ptr_eq(lease, self)) { leases.remove(room); }
+        let calls = PENDING_ANON_CALLS.lock().unwrap();
+        if !self.0.load(std::sync::atomic::Ordering::SeqCst)
+            || !leases.get(room).is_some_and(|lease| std::sync::Arc::ptr_eq(lease, self))
+            || !calls.get(room).is_some_and(|call| !call.is_outgoing && call.started_at.is_none()) {
+            return false;
+        }
+        leases.remove(room);
         self.0.store(false, std::sync::atomic::Ordering::SeqCst);
+        drop(calls);
+        drop(leases);
+        self.1.lock().unwrap().take();
+        true
     }
 
     pub(crate) fn retire(self: &std::sync::Arc<Self>, room: &str, sender: crate::domain::UserId) {
@@ -276,13 +312,15 @@ impl IncomingAnonOfferLease {
             }
             leases.remove(room);
         }
+        drop(leases);
+        self.1.lock().unwrap().take();
     }
 }
 
 static INCOMING_ANON_LEASES: std::sync::LazyLock<Mutex<HashMap<String, std::sync::Arc<IncomingAnonOfferLease>>>> =
     std::sync::LazyLock::new(|| Mutex::new(HashMap::new()));
 
-fn store_incoming_anon_offer_state(room: String, call: PendingAnonCall, lease: std::sync::Arc<IncomingAnonOfferLease>) {
+pub(crate) fn store_incoming_anon_offer_state(room: String, call: PendingAnonCall, lease: std::sync::Arc<IncomingAnonOfferLease>) {
         let mut leases = INCOMING_ANON_LEASES.lock().unwrap();
         let mut calls = PENDING_ANON_CALLS.lock().unwrap();
         if !lease.0.load(std::sync::atomic::Ordering::SeqCst) || calls.contains_key(&room) {
@@ -290,6 +328,24 @@ fn store_incoming_anon_offer_state(room: String, call: PendingAnonCall, lease: s
         }
         leases.insert(room.clone(), lease);
         calls.insert(room, call);
+}
+
+pub(crate) fn take_incoming_anon_call_state(room: &str, sender: crate::domain::UserId) -> Option<PendingAnonCall> {
+    let mut leases = INCOMING_ANON_LEASES.lock().unwrap();
+    let mut calls = PENDING_ANON_CALLS.lock().unwrap();
+    // A sealed record belongs to the accept/decline sender, even before it
+    // consumes the keys or marks media started. Remote ring cleanup cannot take it.
+    if !leases.get(room).is_some_and(|lease| lease.0.load(std::sync::atomic::Ordering::SeqCst)) { return None; }
+    calls.get(room).filter(|call| rings_us(call, sender))?;
+    leases.remove(room);
+    calls.remove(room)
+}
+
+pub(crate) fn take_pending_anon_call_state(room: &str) -> Option<PendingAnonCall> {
+    let mut leases = INCOMING_ANON_LEASES.lock().unwrap();
+    let mut calls = PENDING_ANON_CALLS.lock().unwrap();
+    leases.remove(room);
+    calls.remove(room)
 }
 
 impl AnonDmService {
@@ -314,9 +370,7 @@ impl AnonDmService {
 
     /// Take a pending anonymous call by room name (consumes and removes).
     pub fn take_pending_anon_call(&self, room_name: &str) -> Option<PendingAnonCall> {
-        let mut leases = INCOMING_ANON_LEASES.lock().unwrap();
-        let mut calls = PENDING_ANON_CALLS.lock().unwrap();
-        { leases.remove(room_name); calls.remove(room_name) }
+        take_pending_anon_call_state(room_name)
     }
 
     /// Take our outgoing call that is still ringing — dialed, not yet
@@ -338,10 +392,7 @@ impl AnonDmService {
         room_name: &str,
         sender: crate::domain::UserId,
     ) -> Option<PendingAnonCall> {
-        let mut leases = INCOMING_ANON_LEASES.lock().unwrap();
-        let mut calls = PENDING_ANON_CALLS.lock().unwrap();
-        calls.get(room_name).filter(|c| rings_us(c, sender))?;
-        { leases.remove(room_name); calls.remove(room_name) }
+        take_incoming_anon_call_state(room_name, sender)
     }
 
     /// Clear a pending anonymous call by room name.
