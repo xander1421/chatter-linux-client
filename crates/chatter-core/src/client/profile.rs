@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use super::ChatterClient;
 use crate::domain::message::ConversationType;
+use crate::services::current_user::CurrentUserProvider;
 use crate::state::ActiveConversation;
 
 /// One Friends › Blocked row (`blocked_users`). `anon` marks an anon-DM peer
@@ -256,39 +257,248 @@ impl ChatterClient {
         display_name: Option<String>,
         status_message: Option<crate::domain::user::StatusMessage>,
     ) -> Result<crate::domain::user::Profile, crate::services::UserError> {
+        let auth = self.auth_state().get();
+        let user = auth
+            .current_user_id
+            .ok_or(crate::services::UserError::NotLoggedIn)?;
+        let alive = std::sync::atomic::AtomicBool::new(true);
         let profile = self
-            .users()
-            .update_user_profile(display_name, status_message)
+            .with_profile_owner(user, auth.session_revision, &alive, || async {
+                let profile = self
+                    .bounded_profile_operation(
+                        user,
+                        auth.session_revision,
+                        &alive,
+                        std::time::Duration::from_secs(30),
+                        self.users()
+                            .update_user_profile(display_name, status_message),
+                    )
+                    .await?;
+                self.profile_response_in_session(profile, user, auth.session_revision, false)
+            })
             .await?;
+        self.propagate_profile_in_session(user, auth.session_revision, &profile);
+        Ok(profile)
+    }
 
-        let display_name = Some(profile.display_name.clone());
-        let bio = profile.status_message.as_ref().map(|m| m.text.clone());
-        for conv in self
-            .list_anon_dm_conversations()
-            .into_iter()
-            .filter(|c| c.is_ready())
-        {
-            let client = self.clone();
-            let (display_name, bio) = (display_name.clone(), bio.clone());
-            tokio::spawn(async move {
-                // The avatar rides inside the update as encrypted bytes; there
-                // is no plaintext avatar URL to send.
-                if let Err(e) = client
-                    .send_anon_dm_profile_update(&conv.id, display_name, None, bio)
-                    .await
-                {
-                    tracing::warn!(conversation = %conv.id, error = %e, "profile update to anon DM failed");
+    /// Save one admitted own-profile edit. Serialize storage/RPC and propagation
+    /// against login/logout, not merely its eventual UI repaint.
+    pub async fn save_own_profile_in_session(
+        self: &Arc<Self>,
+        user: crate::domain::ids::UserId,
+        revision: u64,
+        edit_alive: Arc<std::sync::atomic::AtomicBool>,
+        avatar: Option<Vec<u8>>,
+        display_name: String,
+        status: Option<crate::domain::user::StatusMessage>,
+    ) -> Result<crate::domain::user::Profile, crate::services::UserError> {
+        use crate::services::UserError;
+        use crate::storage::repositories::settings_repo::keys;
+        let profile = self
+            .with_profile_owner(user, revision, &edit_alive, || async {
+                // The encrypted profile blob adds a 12-byte nonce and 16-byte tag.
+                if avatar.as_ref().is_some_and(|b| {
+                    b.is_empty()
+                        || b.len()
+                            .checked_add(28)
+                            .is_none_or(|n| n > crate::domain::anon_dm_init::MAX_AVATAR_SIZE)
+                }) {
+                    return Err(UserError::InvalidInput(
+                        "Avatar exceeds encrypted wire budget".into(),
+                    ));
                 }
-            });
+                let repositories = self.messages();
+                let settings = &repositories.settings_repo;
+                let previous = if avatar.is_some() {
+                    settings.get_bytes(keys::AVATAR)?
+                } else {
+                    None
+                };
+                if let Some(bytes) = &avatar {
+                    self.set_avatar_bytes(bytes)
+                        .map_err(|e| UserError::InvalidInput(e.to_string()))?;
+                }
+                let result = self
+                    .bounded_profile_operation(
+                        user,
+                        revision,
+                        &edit_alive,
+                        std::time::Duration::from_secs(30),
+                        self.users().update_user_profile(Some(display_name), status),
+                    )
+                    .await
+                    .and_then(|profile| {
+                        self.profile_response_in_session(profile, user, revision, avatar.is_some())
+                    });
+                if result.is_err() && avatar.is_some() && self.profile_owner_current(user, revision)
+                {
+                    // Restore only this owner's previous local selection. A cancelled
+                    // already-submitted RPC may still commit remotely; this isn't a
+                    // distributed transaction, and no success/propagation is claimed.
+                    match previous {
+                        Some(bytes) => settings.set_bytes(keys::AVATAR, &bytes)?,
+                        None => {
+                            settings.delete(keys::AVATAR)?;
+                        }
+                    }
+                }
+                result
+            })
+            .await?;
+        self.auth_state().update_display_name_if_current(
+            revision,
+            user,
+            profile.display_name.clone(),
+        );
+        self.propagate_profile_in_session(user, revision, &profile);
+        Ok(profile)
+    }
+
+    fn profile_response_in_session(
+        &self,
+        profile: crate::domain::user::Profile,
+        user: crate::domain::ids::UserId,
+        revision: u64,
+        avatar_expected: bool,
+    ) -> Result<crate::domain::user::Profile, crate::services::UserError> {
+        if !self.profile_owner_current(user, revision)
+            || profile.user_id != user
+            || (avatar_expected && profile.avatar_bytes.is_none())
+        {
+            return Err(crate::services::UserError::InvalidInput(
+                "Profile response was not confirmed for the originating account/session".into(),
+            ));
         }
+        Ok(profile)
+    }
+
+    fn profile_owner_current(&self, user: crate::domain::ids::UserId, revision: u64) -> bool {
+        let auth = self.auth_state().get();
+        auth.current_user_id == Some(user)
+            && auth.session_revision == revision
+            && self.messages().settings_repo.current_user_id().ok() == Some(user)
+    }
+
+    async fn with_profile_owner<T, F, Fut>(
+        &self,
+        user: crate::domain::ids::UserId,
+        revision: u64,
+        alive: &std::sync::atomic::AtomicBool,
+        operation: F,
+    ) -> Result<T, crate::services::UserError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<T, crate::services::UserError>>,
+    {
+        let _lifecycle = tokio::select! {
+            biased;
+            _ = self.profile_operation_cancelled(user, revision, alive) => {
+                return Err(crate::services::UserError::InvalidInput("Profile edit session expired".into()));
+            }
+            guard = tokio::time::timeout(std::time::Duration::from_secs(30), self.auth_lifecycle_lock.lock()) => {
+                guard.map_err(|_| crate::services::UserError::InvalidInput("Profile update waiting for account operation timed out".into()))?
+            }
+        };
+        if !alive.load(std::sync::atomic::Ordering::SeqCst)
+            || !self.profile_owner_current(user, revision)
+        {
+            return Err(crate::services::UserError::InvalidInput(
+                "Profile edit session expired".into(),
+            ));
+        }
+        operation().await
+    }
+
+    async fn bounded_profile_operation<T>(
+        &self,
+        user: crate::domain::ids::UserId,
+        revision: u64,
+        alive: &std::sync::atomic::AtomicBool,
+        budget: std::time::Duration,
+        operation: impl std::future::Future<Output = Result<T, crate::services::UserError>>,
+    ) -> Result<T, crate::services::UserError> {
+        tokio::select! {
+            biased;
+            _ = self.profile_operation_cancelled(user, revision, alive) => Err(crate::services::UserError::InvalidInput("Profile edit cancelled; submitted update may still reach the server".into())),
+            result = tokio::time::timeout(budget, operation) => result.unwrap_or_else(|_| Err(
+                crate::services::UserError::InvalidInput("Profile update timed out; submitted update may still reach the server".into()))),
+        }
+    }
+
+    async fn profile_operation_cancelled(
+        &self,
+        user: crate::domain::ids::UserId,
+        revision: u64,
+        alive: &std::sync::atomic::AtomicBool,
+    ) {
+        loop {
+            if !alive.load(std::sync::atomic::Ordering::SeqCst)
+                || !self.profile_owner_current(user, revision)
+            {
+                return;
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+        }
+    }
+
+    async fn with_profile_snapshot<T, F, Fut>(
+        &self,
+        user: crate::domain::ids::UserId,
+        revision: u64,
+        alive: &std::sync::atomic::AtomicBool,
+        profile: &crate::domain::user::Profile,
+        operation: F,
+    ) -> Result<T, crate::services::UserError>
+    where
+        F: FnOnce() -> Fut,
+        Fut: std::future::Future<Output = Result<T, crate::services::UserError>>,
+    {
+        self.with_profile_owner(user, revision, alive, || async {
+            let current = self.get_profile_local(&user);
+            if current.as_ref().is_none_or(|p| {
+                p.display_name != profile.display_name
+                    || p.status_message != profile.status_message
+                    || p.avatar_bytes != profile.avatar_bytes
+            }) {
+                return Err(crate::services::UserError::InvalidInput(
+                    "Profile propagation superseded by a newer edit".into(),
+                ));
+            }
+            operation().await
+        })
+        .await
+    }
+
+    fn propagate_profile_in_session(
+        self: &Arc<Self>,
+        user: crate::domain::ids::UserId,
+        revision: u64,
+        profile: &crate::domain::user::Profile,
+    ) {
         let client = self.clone();
+        let profile = profile.clone();
+        let display_name = profile.display_name.clone();
+        let bio = profile.status_message.as_ref().map(|m| m.text.clone());
         tokio::spawn(async move {
-            if let Err(e) = client.broadcast_profile_to_owned_groups().await {
-                tracing::warn!(error = %e, "profile update to owned anon groups failed");
+            let alive = std::sync::atomic::AtomicBool::new(true);
+            // Capture/re-read conversations only after acquiring the auth lock.
+            // One bounded job prevents queued propagation adopting new credentials.
+            let result = client.with_profile_snapshot(user, revision, &alive, &profile, || async {
+                client.bounded_profile_operation(user, revision, &alive, std::time::Duration::from_secs(30), async {
+                    for conv in client.list_anon_dm_conversations().into_iter().filter(|c| c.is_ready()) {
+                        if let Err(error) = client.send_anon_dm_profile_update(&conv.id,
+                            Some(display_name.clone()), None, bio.clone()).await {
+                            tracing::warn!(%error, "session-owned anonymous profile update failed");
+                        }
+                    }
+                    client.broadcast_profile_to_owned_groups().await
+                        .map_err(|e| crate::services::UserError::InvalidInput(e.to_string()))
+                }).await
+            }).await;
+            if let Err(error) = result {
+                tracing::warn!(%error, "profile propagation retired or failed");
             }
         });
-
-        Ok(profile)
     }
 
     pub fn list_anon_dm_conversations(&self) -> Vec<crate::domain::anon_dm::AnonDm> {
@@ -980,6 +1190,318 @@ mod tests {
             .build()
             .expect("build client");
         (client, dir)
+    }
+
+    fn avatar_owner_fixture(client: &ChatterClient) -> (UserId, u64) {
+        use crate::storage::repositories::settings_repo::keys;
+        let user = UserId::new();
+        client
+            .messages()
+            .settings_repo
+            .set_string(keys::CURRENT_USER_ID, &user.to_string())
+            .unwrap();
+        client
+            .auth_state()
+            .set_logged_in(user, 1, "Avatar fixture".into());
+        (user, client.auth_state().get().session_revision)
+    }
+
+    #[tokio::test]
+    async fn avatar_profile_save_refuses_stale_owner_cancelled_queue_and_wire_overflow_before_write()
+     {
+        use crate::storage::repositories::settings_repo::keys;
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let (client, _dir) = test_client();
+        let (user, revision) = avatar_owner_fixture(&client);
+        client
+            .messages()
+            .settings_repo
+            .set_bytes(keys::AVATAR, b"old fixture")
+            .unwrap();
+        let alive = Arc::new(AtomicBool::new(true));
+        let save = |owner, revision, alive, bytes| {
+            client.save_own_profile_in_session(
+                owner,
+                revision,
+                alive,
+                Some(bytes),
+                "Fixture name".into(),
+                None,
+            )
+        };
+        assert!(
+            save(UserId::new(), revision, alive.clone(), vec![1])
+                .await
+                .is_err()
+        );
+        assert!(
+            save(user, revision + 1, alive.clone(), vec![1])
+                .await
+                .is_err()
+        );
+        assert!(
+            save(
+                user,
+                revision,
+                alive.clone(),
+                vec![0; crate::domain::anon_dm_init::MAX_AVATAR_SIZE - 27]
+            )
+            .await
+            .is_err()
+        );
+        let blocker = client.auth_lifecycle_lock.lock().await;
+        let queued_client = client.clone();
+        let queued_alive = alive.clone();
+        let queued = tokio::spawn(async move {
+            queued_client
+                .save_own_profile_in_session(
+                    user,
+                    revision,
+                    queued_alive,
+                    Some(vec![1]),
+                    "Queued fixture".into(),
+                    None,
+                )
+                .await
+        });
+        tokio::task::yield_now().await;
+        alive.store(false, Ordering::SeqCst);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(1), queued)
+                .await
+                .unwrap()
+                .unwrap()
+                .is_err()
+        );
+        drop(blocker);
+        assert_eq!(
+            client
+                .messages()
+                .settings_repo
+                .get_bytes(keys::AVATAR)
+                .unwrap()
+                .unwrap(),
+            b"old fixture"
+        );
+    }
+
+    #[tokio::test]
+    async fn avatar_profile_session_lock_and_bounded_cancellation_fence_propagation_operations() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let (client, _dir) = test_client();
+        let (user, revision) = avatar_owner_fixture(&client);
+        let alive = Arc::new(AtomicBool::new(true));
+        let (entered_tx, entered_rx) = tokio::sync::oneshot::channel();
+        let worker_client = client.clone();
+        let worker_alive = alive.clone();
+        let operation = tokio::spawn(async move {
+            worker_client
+                .with_profile_owner(user, revision, &worker_alive, || async {
+                    entered_tx.send(()).unwrap();
+                    worker_client
+                        .bounded_profile_operation::<()>(
+                            user,
+                            revision,
+                            &worker_alive,
+                            std::time::Duration::from_secs(10),
+                            std::future::pending(),
+                        )
+                        .await
+                })
+                .await
+        });
+        entered_rx.await.unwrap();
+        assert!(
+            client.auth_lifecycle_lock.try_lock().is_err(),
+            "owner remains locked during RPC"
+        );
+        alive.store(false, Ordering::SeqCst);
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_secs(1), operation)
+                .await
+                .unwrap()
+                .unwrap()
+                .is_err()
+        );
+        assert!(
+            client.auth_lifecycle_lock.try_lock().is_ok(),
+            "cancel releases auth serialization"
+        );
+        let live = AtomicBool::new(true);
+        let expired = client
+            .with_profile_owner(user, revision, &live, || async {
+                client
+                    .bounded_profile_operation::<()>(
+                        user,
+                        revision,
+                        &live,
+                        std::time::Duration::from_millis(10),
+                        std::future::pending(),
+                    )
+                    .await
+            })
+            .await;
+        assert!(expired.unwrap_err().to_string().contains("timed out"));
+        client
+            .auth_state()
+            .set_logged_in(user, 1, "Same account new session".into());
+        let ran = AtomicBool::new(false);
+        let refused = client
+            .with_profile_owner(user, revision, &live, || async {
+                ran.store(true, Ordering::SeqCst);
+                Ok(())
+            })
+            .await;
+        assert!(refused.is_err());
+        assert!(
+            !ran.load(Ordering::SeqCst),
+            "the production propagation guard must not execute under replacement credentials"
+        );
+    }
+
+    #[tokio::test]
+    async fn avatar_profile_propagation_does_not_mix_an_old_edit_with_new_avatar() {
+        use std::sync::atomic::{AtomicBool, Ordering};
+        let (client, _dir) = test_client();
+        let (user, revision) = avatar_owner_fixture(&client);
+        let repositories = client.messages();
+        let repository = &repositories.user_repo;
+        repository.ensure_user_exists(&user).unwrap();
+        let mut old = crate::domain::user::Profile::new(user, "Old fixture".into());
+        old.avatar_bytes = Some(b"old generated fixture".to_vec());
+        repository.upsert_profile(&old).unwrap();
+        let live = AtomicBool::new(true);
+        let ran = AtomicBool::new(false);
+        client
+            .with_profile_snapshot(user, revision, &live, &old, || async {
+                ran.store(true, Ordering::SeqCst);
+                Ok(())
+            })
+            .await
+            .unwrap();
+        assert!(ran.swap(false, Ordering::SeqCst));
+        let mut newer = old.clone();
+        newer.avatar_bytes = Some(b"new generated fixture".to_vec());
+        repository.upsert_profile(&newer).unwrap();
+        assert!(
+            client
+                .with_profile_snapshot(user, revision, &live, &old, || async {
+                    ran.store(true, Ordering::SeqCst);
+                    Ok(())
+                })
+                .await
+                .is_err()
+        );
+        assert!(!ran.load(Ordering::SeqCst));
+        client
+            .auth_state()
+            .set_logged_in(user, 1, "Replacement fixture session".into());
+        assert!(
+            client
+                .with_profile_snapshot(user, revision, &live, &newer, || async {
+                    ran.store(true, Ordering::SeqCst);
+                    Ok(())
+                })
+                .await
+                .is_err()
+        );
+        assert!(!ran.load(Ordering::SeqCst));
+    }
+
+    #[tokio::test]
+    async fn avatar_profile_legacy_response_cannot_adopt_replacement_account_or_session() {
+        let (client, _dir) = test_client();
+        let (user, revision) = avatar_owner_fixture(&client);
+        let profile = crate::domain::user::Profile::new(user, "Old owner result".into());
+        assert!(
+            client
+                .profile_response_in_session(profile.clone(), user, revision, false)
+                .is_ok()
+        );
+        assert!(
+            client
+                .profile_response_in_session(profile.clone(), user, revision, true)
+                .is_err()
+        );
+        client
+            .auth_state()
+            .set_logged_in(UserId::new(), 1, "New fixture account".into());
+        assert!(
+            client
+                .profile_response_in_session(profile.clone(), user, revision, false)
+                .is_err()
+        );
+        client
+            .auth_state()
+            .set_logged_in(user, 1, "Same fixture account re-login".into());
+        assert!(
+            client
+                .profile_response_in_session(profile, user, revision, false)
+                .is_err()
+        );
+    }
+
+    #[tokio::test]
+    async fn avatar_profile_rpc_failure_restores_previous_local_selection_and_does_not_publish_success()
+     {
+        use crate::storage::repositories::settings_repo::keys;
+        use std::sync::atomic::AtomicBool;
+        let (client, _dir) = test_client();
+        let (user, revision) = avatar_owner_fixture(&client);
+        let repositories = client.messages();
+        repositories.user_repo.ensure_user_exists(&user).unwrap();
+        repositories
+            .user_repo
+            .upsert_profile(&crate::domain::user::Profile::new(user, "Fixture".into()))
+            .unwrap();
+        repositories
+            .settings_repo
+            .set_bytes(keys::PROFILE_KEY, &[7; 32])
+            .unwrap();
+        repositories
+            .settings_repo
+            .set_bytes(keys::AVATAR, b"previous owned bytes")
+            .unwrap();
+        let image = image::DynamicImage::new_rgba8(2, 2);
+        let mut encoded = std::io::Cursor::new(Vec::new());
+        image
+            .write_to(&mut encoded, image::ImageFormat::Png)
+            .unwrap();
+        let normalized =
+            crate::media::ImageProcessor::process_avatar_from_memory(&encoded.into_inner())
+                .unwrap();
+        let result = client
+            .save_own_profile_in_session(
+                user,
+                revision,
+                Arc::new(AtomicBool::new(true)),
+                Some(normalized),
+                "New fixture name".into(),
+                None,
+            )
+            .await;
+        assert!(result.is_err(), "offline fixture RPC must fail");
+        assert_eq!(
+            repositories
+                .settings_repo
+                .get_bytes(keys::AVATAR)
+                .unwrap()
+                .unwrap(),
+            b"previous owned bytes"
+        );
+        assert_eq!(
+            client.auth_state().get().display_name.as_deref(),
+            Some("Avatar fixture")
+        );
+        assert_eq!(
+            repositories
+                .user_repo
+                .get_profile(&user)
+                .unwrap()
+                .unwrap()
+                .display_name,
+            "Fixture"
+        );
     }
 
     #[tokio::test]

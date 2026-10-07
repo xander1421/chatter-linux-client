@@ -93,6 +93,12 @@ fn stack(w: &MainWindow) -> Vec<SharedString> {
 }
 
 fn set_stack(w: &MainWindow, stack: Vec<SharedString>) {
+    if w.get_modal_stack().iter().any(|s| s == "edit-profile")
+        && !stack.iter().any(|s| s == "edit-profile")
+    {
+        crate::bin_ui::features::modals::profile::retire_avatar_edit();
+        w.set_edit_profile_loading(false);
+    }
     // Settings stays mounted under what it opens, so Slint needs "anywhere on
     // the stack", which it cannot compute from an array itself.
     w.set_settings_open(stack.iter().any(|x| x.as_str() == "settings"));

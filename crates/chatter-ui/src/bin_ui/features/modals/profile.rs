@@ -3,7 +3,6 @@
 //! Uses UserService for all profile operations - no direct network calls.
 
 use std::cell::RefCell;
-use std::path::PathBuf;
 use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
@@ -14,20 +13,13 @@ use chatter_core::domain::ids::UserId;
 use crate::{MainWindow, SharedContentItem, SharedTab};
 use chatter_core::ui::initials_from_name;
 
-/// Bytes of an avatar picked in the Edit Profile modal, held until Save.
-///
-/// NOT a `thread_local!`: the picker runs on a tokio worker and Save runs on
-/// another, so a thread-local would race-lose the value (the same reason
-/// `create_channel.rs` stashes its icon path on a Slint property).
-///
-/// The picker used to call `set_avatar_bytes` directly, which wrote
-/// `keys::AVATAR` immediately — so Cancel left the new avatar in place and the
-/// next profile update uploaded it. Verified on device: pick, Cancel, and the
-/// bottom-nav avatar had already changed (§112v).
-static PENDING_AVATAR_BYTES: std::sync::Mutex<Option<Vec<u8>>> = std::sync::Mutex::new(None);
+mod avatar_edit;
+
+pub(crate) fn retire_avatar_edit() {
+    avatar_edit::retire();
+}
 
 thread_local! {
-    static PENDING_AVATAR_PATH: RefCell<Option<PathBuf>> = const { RefCell::new(None) };
     /// Paging cursor for the profile's shared-content drawer. UI-thread only —
     /// every reader and writer runs inside the Slint event loop.
     static SHARED_PAGE: RefCell<SharedPage> = RefCell::new(SharedPage::default());
@@ -1007,173 +999,7 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         w.invoke_dm_selected(dm_id.into());
     });
 
-    // Edit profile actions
-    let weak_window = window.as_weak();
-    window.on_profile_edit_profile(move || {
-        let weak = weak_window.clone();
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(w) = weak.upgrade() {
-                w.set_edit_profile_display_name(w.get_profile_display_name());
-                w.set_edit_profile_bio(w.get_profile_bio());
-                w.set_edit_profile_avatar(w.get_user_avatar_source());
-
-                // Clear any pending avatar
-                PENDING_AVATAR_PATH.with(|p| *p.borrow_mut() = None);
-                *PENDING_AVATAR_BYTES.lock().unwrap() = None;
-
-                crate::bin_ui::features::back::push(&w, "edit-profile");
-            }
-        });
-    });
-
-    let weak_window = window.as_weak();
-    let ui_ctx_save = ui_ctx.clone();
-    window.on_edit_profile_save(
-        move |display_name: slint::SharedString, bio: slint::SharedString| {
-            let weak = weak_window.clone();
-            let ui_ctx = ui_ctx_save.clone();
-            let display_name = display_name.to_string();
-            let bio = bio.to_string();
-
-            tokio::spawn(async move {
-                // Set loading state
-                let weak_loading = weak.clone();
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(w) = weak_loading.upgrade() {
-                        w.set_edit_profile_loading(true);
-                        w.set_edit_profile_error("".into());
-                    }
-                });
-
-                // Map bio to status message
-                let status_msg = if !bio.is_empty() {
-                    Some(chatter_core::domain::user::StatusMessage::new(bio))
-                } else {
-                    None
-                };
-
-                // Update profile
-                tracing::info!(
-                    "Updating user profile - display_name: {}, bio: {:?}",
-                    display_name,
-                    status_msg.as_ref().map(|m| &m.text)
-                );
-
-                // Persist the picked avatar HERE, not at pick time: Save is what
-                // commits the edit, and `update_user_profile` re-reads
-                // `keys::AVATAR` to build the upload (§112v).
-                if let Some(bytes) = PENDING_AVATAR_BYTES.lock().unwrap().take() {
-                    if let Err(e) = ui_ctx.set_avatar_bytes(&bytes) {
-                        tracing::error!(error = %e, "Failed to persist picked avatar bytes");
-                    }
-                }
-
-                match ui_ctx
-                    .update_user_profile(Some(display_name.clone()), status_msg.clone())
-                    .await
-                {
-                    Ok(profile) => {
-                        tracing::info!(
-                            "Profile updated - display_name: {}, bio: {:?}",
-                            profile.display_name,
-                            profile.status_message.as_ref().map(|m| &m.text)
-                        );
-                        let _ = slint::invoke_from_event_loop(move || {
-                            if let Some(w) = weak.upgrade() {
-                                w.set_edit_profile_loading(false);
-                                // Back to the profile page it was opened from (its
-                                // only entry point), like Cancel — not the chat list.
-                                crate::bin_ui::features::back::close(&w, "edit-profile");
-
-                                // Update UI with new profile info
-                                w.set_profile_display_name(profile.display_name.clone().into());
-                                if let Some(msg) = &profile.status_message {
-                                    w.set_profile_bio(msg.text.clone().into());
-                                } else {
-                                    w.set_profile_bio("".into());
-                                }
-
-                                // Update sidebar name too
-                                w.set_user_display_name(profile.display_name.into());
-
-                                // Clear pending avatar
-                                PENDING_AVATAR_PATH.with(|p| *p.borrow_mut() = None);
-                            }
-                        });
-                    }
-                    Err(e) => {
-                        let error_msg = e.to_string();
-                        let _ = slint::invoke_from_event_loop(move || {
-                            if let Some(w) = weak.upgrade() {
-                                w.set_edit_profile_loading(false);
-                                w.set_edit_profile_error(error_msg.into());
-                            }
-                        });
-                    }
-                }
-            });
-        },
-    );
-
-    // Change avatar with file picker
-    let weak_window = window.as_weak();
-    window.on_edit_profile_change_avatar(move || {
-        let weak = weak_window.clone();
-
-        tokio::spawn(async move {
-            #[cfg(not(any(target_os = "android", target_os = "ios")))]
-            let picked = {
-                let config = chatter_core::media::FilePickerConfig::new()
-                    .with_title("Select Profile Picture")
-                    .with_filter(chatter_core::media::FileFilter::images());
-                chatter_core::media::FilePicker::pick_file(config).await
-            };
-            // Android has no `rfd` backend; go through the SAF bridge instead,
-            // otherwise "Change Avatar" is a dead button on the phone.
-            #[cfg(target_os = "android")]
-            let picked = crate::platform::android::file_picker::pick_files(&["image/*"])
-                .await
-                .into_iter()
-                .next();
-            #[cfg(target_os = "ios")]
-            let picked: Option<std::path::PathBuf> = {
-                tracing::warn!("File picker not supported on iOS");
-                None
-            };
-
-            let Some(path) = picked else { return };
-            match std::fs::read(&path) {
-                Ok(data) => {
-                    // PERSIST the picked avatar into the local `keys::AVATAR`
-                    // store NOW (the F-UI / MISSING-FEATURES #3 fix). Before,
-                    // the picked file went ONLY into the write-never-read
-                    // PENDING_AVATAR_PATH + a Slint preview, so Save's
-                    // `update_user_profile` re-read the STALE avatar and the
-                    // change never uploaded. Writing keys::AVATAR here means
-                    // Save encrypts + uploads THESE bytes as `encrypted_avatar`
-                    // (and broadcasts to anon DMs), so the change actually
-                    // persists server-side and reaches friends.
-                    *PENDING_AVATAR_BYTES.lock().unwrap() = Some(data.clone());
-                    // Store the path for later use
-                    PENDING_AVATAR_PATH.with(|p| *p.borrow_mut() = Some(path.clone()));
-
-                    // Create the image on the UI thread
-                    let _ = slint::invoke_from_event_loop(move || {
-                        // Process image on UI thread where it's safe
-                        match crate::bin_ui::slint_conversions::memory_to_slint_image(&data) {
-                            Ok(slint_img) => {
-                                if let Some(w) = weak.upgrade() {
-                                    w.set_edit_profile_avatar(slint_img);
-                                }
-                            }
-                            Err(e) => tracing::error!("Failed to decode avatar image: {}", e),
-                        }
-                    });
-                }
-                Err(e) => tracing::error!("Failed to read avatar file: {}", e),
-            }
-        });
-    });
+    avatar_edit::wire(window, ui_ctx);
 
     // View safety number — generates and displays the 60-digit fingerprint
     let weak_window = window.as_weak();
