@@ -251,7 +251,8 @@ impl MessageService {
         // Every message states the timer with its version, so the peer
         // orders it against changes it has already seen.
         let timer = crate::services::disappearing::server_dm_state(&self.settings_repo, peer_id);
-        let disappearing_ttl_secs: Option<u32> = Some(timer.seconds).filter(|s| *s > 0);
+        let disappearing_ttl_secs: Option<u32> =
+            Some(timer.effective_seconds(sent_at)).filter(|s| *s > 0);
         let mut content = content;
         if let Some(crate::proto::content_v1::content::Content::DataMessage(dm)) =
             content.content.as_mut()
@@ -409,14 +410,29 @@ impl MessageService {
         peer_id: &UserId,
         seconds: u32,
     ) -> Result<Option<Message>, MessageError> {
+        self.set_server_dm_disappearing_window(
+            peer_id,
+            seconds,
+            crate::services::disappearing::DEFAULT_ACTIVATION_SECONDS,
+        )
+        .await
+    }
+
+    pub async fn set_server_dm_disappearing_window(
+        &self,
+        peer_id: &UserId,
+        seconds: u32,
+        activation_seconds: u32,
+    ) -> Result<Option<Message>, MessageError> {
         let me = self.settings_repo.current_user_id()?;
         let sent_at = crate::util::time::TimestampNanos::now().as_u64();
-        let Some((notice, timer)) = crate::services::disappearing::change_server_dm_timer(
+        let Some((notice, timer)) = crate::services::disappearing::change_server_dm_window(
             &self.settings_repo,
             &self.message_repo,
             peer_id,
             &me,
             seconds,
+            activation_seconds,
             sent_at,
         )?
         else {

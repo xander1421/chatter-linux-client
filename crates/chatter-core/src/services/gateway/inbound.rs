@@ -131,10 +131,9 @@ pub enum DmContent {
         /// not carry one (the legacy fallbacks), which must not be read as
         /// "off".
         expire_timer: Option<u32>,
-        /// The version at which it states that ttl as the conversation's
-        /// timer (`DataMessage.expire_timer_version`); `0` = it states none
-        /// (a resend of an old message), so the timer is not adopted from it.
-        timer_version: u32,
+        /// Conversation configuration, including its version and absolute
+        /// activation window. Independent of this message's actual TTL.
+        stated_timer: Option<crate::services::disappearing::DmTimer>,
         /// A timer-update announcement (Signal's `EXPIRATION_TIMER_UPDATE`):
         /// nothing to show but the timer change.
         timer_update: bool,

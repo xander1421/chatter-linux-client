@@ -1,5 +1,5 @@
-//! Disappearing messages: the timer beside the chat header's name, and the
-//! picker on a DM's settings screen (the contact profile).
+//! Disappearing messages: live status below the chat header, and independent
+//! message lifetime / activation controls on the contact profile.
 //!
 //! Everything shown comes from `chatter_core::services::disappearing` and the
 //! client facade (`disappearing_timer`, `set_disappearing_timer`); this module
@@ -21,6 +21,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         .global::<DisappearingGlobal>()
         .set_options(ModelRc::new(VecModel::from(options())));
     wire_set_dm_timer(window, ui_ctx);
+    wire_set_dm_window(window, ui_ctx);
     wire_refresh(window, ui_ctx);
     wire_expired(window, ui_ctx);
 }
@@ -77,6 +78,15 @@ pub fn show_for_profile(
     g.set_dm_can_set(can_set);
     g.set_dm_seconds(seconds as i32);
     g.set_dm_label(disappearing::timer_label(seconds).into());
+    let state = ui_ctx.disappearing_state(ActiveConversation::ServerDm { peer_id: *peer_id });
+    g.set_dm_activation_label(
+        disappearing::timer_label(if state.activation_seconds == 0 {
+            disappearing::DEFAULT_ACTIVATION_SECONDS
+        } else {
+            state.activation_seconds
+        })
+        .into(),
+    );
 }
 
 /// Hide the DM-settings row (the contact screen is showing ourselves).
@@ -86,10 +96,13 @@ pub fn hide_for_profile(w: &MainWindow) {
 
 /// The open conversation's timer onto the header.
 fn refresh_header(w: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    let seconds = ui_ctx.disappearing_timer(ui_ctx.chat_state().active_conversation());
+    let state = ui_ctx.disappearing_state(ui_ctx.chat_state().active_conversation());
+    let now = chatter_core::util::time::TimestampNanos::now().as_u64();
+    let seconds = state.effective_seconds(now);
     let g = w.global::<DisappearingGlobal>();
     g.set_header_label(disappearing::timer_short_label(seconds).into());
     g.set_active_label(disappearing::timer_label(seconds).into());
+    g.set_status_label(state.status_label(now).into());
 }
 
 /// Re-read everything that shows a timer: the header, and the contact screen
@@ -140,6 +153,37 @@ fn wire_set_dm_timer(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     });
 }
 
+fn wire_set_dm_window(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let weak = window.as_weak();
+    let ctx = ui_ctx.clone();
+    window.global::<DisappearingGlobal>().on_set_dm_window(move |peer, seconds, minutes| {
+        let Ok(peer_id) = peer.parse::<UserId>() else { return };
+        let Ok(seconds) = u32::try_from(seconds) else { return };
+        let Some(activation_seconds) = (if seconds == 0 { Some(0) } else { disappearing::activation_minutes(&minutes) }) else {
+            if let Some(w) = weak.upgrade() {
+                w.set_toast_message("Enter a whole number of minutes from 1 to 525600.".into());
+                w.set_toast_variant("error".into());
+                w.set_toast_visible(true);
+            }
+            return;
+        };
+        let (ctx, weak) = (ctx.clone(), weak.clone());
+        tokio::spawn(async move {
+            let result = ctx.set_disappearing_window(ActiveConversation::ServerDm { peer_id }, seconds, activation_seconds).await;
+            let _ = slint::invoke_from_event_loop(move || {
+                let Some(w) = weak.upgrade() else { return };
+                refresh_all(&w, &ctx);
+                if let Err(e) = result {
+                    tracing::warn!(%peer_id, error = %e, "disappearing: activation change not announced");
+                    w.set_toast_message("Timer changed here. Your friend receives it with your next message.".into());
+                    w.set_toast_variant("error".into());
+                    w.set_toast_visible(true);
+                }
+            });
+        });
+    });
+}
+
 /// Refresh on every conversation switch and on every timer change (ours from
 /// another device, or the friend's).
 fn wire_refresh(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
@@ -153,8 +197,11 @@ fn wire_refresh(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ctx = ui_ctx.clone();
     tokio::spawn(async move {
         use tokio::sync::broadcast::error::RecvError;
+        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(1));
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
         loop {
             tokio::select! {
+                _ = ticker.tick() => {},
                 snap = switches.recv() => match snap {
                     Ok(snap) => {
                         let entering = key(&snap);

@@ -1368,6 +1368,48 @@ impl ConversationHandle {
         }
     }
 
+    /// Persisted activation state; channels have an indefinite server-held TTL.
+    pub fn disappearing_state(&self) -> crate::services::disappearing::DmTimer {
+        match &self.conversation {
+            ActiveConversation::ServerDm { peer_id } => {
+                crate::services::disappearing::server_dm_state(
+                    &self.client.channels().settings_repo,
+                    peer_id,
+                )
+            }
+            _ => crate::services::disappearing::DmTimer {
+                seconds: self.disappearing_timer(),
+                version: crate::services::disappearing::INITIAL_TIMER_VERSION,
+                enabled_until: 0,
+                activation_seconds: 0,
+            },
+        }
+    }
+
+    pub async fn set_disappearing_window(
+        &self,
+        seconds: u32,
+        activation_seconds: u32,
+    ) -> ConversationResult {
+        let ActiveConversation::ServerDm { peer_id } = &self.conversation else {
+            return Err(ConversationError::Other(
+                "activation windows are available for friend DMs".into(),
+            ));
+        };
+        let notice = self
+            .client
+            .messages()
+            .set_server_dm_disappearing_window(peer_id, seconds, activation_seconds)
+            .await
+            .map_err(ConversationError::Message)?;
+        if let Some(message) = notice {
+            self.client
+                .event_bus()
+                .emit_domain(crate::inbox::handlers::DomainEvent::MessageReceived { message });
+        }
+        Ok(())
+    }
+
     /// Whether this user can change the timer here: friend DMs only. A
     /// channel's timer is fixed when it is created (the server refuses to
     /// change it after), and anonymous conversations do not carry one.

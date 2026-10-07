@@ -9,11 +9,13 @@ export struct DisappearingOption {
 }
 
 export global DisappearingGlobal {
-    // The open conversation's timer, compact ("1h", "4w"); "" = off. Drawn
-    // next to the name in the chat header.
+    // The open conversation's active TTL, compact ("1h", "4w"); "" = off.
     in property <string> header-label: "";
     // The open conversation's timer in words ("1 hour"); "Off" when off.
     in property <string> active-label: "Off";
+    in property <string> status-label: "";
+    in property <string> dm-activation-label: "5 minutes";
+    callback set-dm-window(string /* peer-id */, int /* message TTL */, string /* activation minutes */);
 
     // Contact screen (the DM's settings): whether this user can change the
     // timer of the DM with the profile shown (friends only), its current

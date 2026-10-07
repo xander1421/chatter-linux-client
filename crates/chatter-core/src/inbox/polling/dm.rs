@@ -319,18 +319,15 @@ pub async fn poll_dm_mailboxes(
                                 // is a timer update, is a visible message).
                                 let disappearing = match &dm_content {
                                     DmContent::Text {
-                                        expire_timer: Some(secs),
-                                        timer_version,
+                                        stated_timer,
+                                        expire_timer: Some(ttl),
                                         timer_update,
                                         body,
                                         attachments,
                                         timestamp,
                                         ..
                                     } => Some((
-                                        crate::services::disappearing::DmTimer {
-                                            seconds: *secs,
-                                            version: *timer_version,
-                                        },
+                                        *stated_timer,
                                         if *timestamp > 0 {
                                             *timestamp
                                         } else {
@@ -338,16 +335,14 @@ pub async fn poll_dm_mailboxes(
                                         },
                                         *timer_update,
                                         !body.is_empty() || !attachments.is_empty(),
+                                        *ttl,
                                     )),
                                     _ => None,
                                 };
-                                if let Some((timer, sent_at, update, visible)) = disappearing {
+                                if let Some((timer, sent_at, update, visible, _)) = disappearing {
                                     if update || visible {
                                         let notice = message_gateway.adopt_server_dm_timer(
-                                            &peer_id,
-                                            &sender_id,
-                                            Some(timer),
-                                            sent_at,
+                                            &peer_id, &sender_id, timer, sent_at,
                                         );
                                         if let (Some(notice), Some(tx)) = (notice, domain_tx) {
                                             let _ = tx.send(DomainEvent::MessageReceived {
@@ -375,8 +370,7 @@ pub async fn poll_dm_mailboxes(
                                 // Arm the copy just stored (filed under the
                                 // sender's (id, sent_at) key) so the reaper
                                 // removes it when the timer runs out.
-                                if let Some((timer, sent_at, _, true)) = disappearing {
-                                    let secs = timer.seconds;
+                                if let Some((_, sent_at, _, true, secs)) = disappearing {
                                     if secs > 0 {
                                         if let Ok(Some(stored)) = message_repo
                                             .get_by_sender_timestamp(&sender_id, sent_at)
@@ -1563,7 +1557,7 @@ mod tests {
             quote: None,
             thread_id: None,
             expire_timer: None,
-            timer_version: 0,
+            stated_timer: None,
             timer_update: false,
         };
         for (content, id) in [(text("via mailbox", 2), "m-1"), (text("", 3), "m-2")] {

@@ -889,7 +889,7 @@ impl MessageGateway {
                 }
 
                 let expire_timer = Some(crate::services::disappearing::message_ttl(&msg));
-                let timer_version = msg.expire_timer_version;
+                let stated_timer = crate::services::disappearing::stated_timer(&msg);
                 let timer_update = crate::services::disappearing::is_timer_update(&msg);
                 // Extract profile key if present (32 bytes for display_name decryption)
                 let profile_key = msg.profile_key.filter(|k| k.len() == 32);
@@ -915,7 +915,7 @@ impl MessageGateway {
                     quote: msg.quote,
                     thread_id,
                     expire_timer,
-                    timer_version,
+                    stated_timer,
                     timer_update,
                 })
             }
