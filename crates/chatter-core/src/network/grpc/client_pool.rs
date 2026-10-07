@@ -36,25 +36,23 @@ pub enum QuicProbeState {
     Failed,
 }
 
-/// Connect timeout for an endpoint URL.
-///
-/// Onion cold-start is slow: Arti bootstraps, then may retry a dead HS
-/// descriptor/rendezvous circuit before one holds (~24s observed). A 10s
-/// connect timeout kills it mid-retry. Direct TCP keeps the tight 10s.
+/// Tonic applies this budget to custom connectors too. Onion allows 120s
+/// bootstrap + 90s dial + 10s scheduling slack; the connector enforces its own
+/// 210s total cap. Direct TCP retains its existing 10s limit.
 fn connect_timeout_for(server_url: &str) -> Duration {
     if server_url.contains(".onion") {
-        Duration::from_secs(60)
+        Duration::from_secs(220)
     } else {
         Duration::from_secs(10)
     }
 }
 
 /// Ceiling on one `call_with_retry` sequence, retries and backoff included.
-///
-/// Generous enough that a slow server on a bad link still completes, short
-/// enough that a user who tapped something while the server was gone gets an
-/// answer rather than a spinner. It has to exceed the 60s onion connect timeout
-/// or onion cold-start would be cut off mid-bootstrap.
+/// Preserved for direct and onion RPC responsiveness. A cold lazy onion RPC
+/// may exhaust this 75s caller budget before bootstrap completes; callers that
+/// need the full cold-start allowance must explicitly connect first. Endpoint
+/// request limits (30s for non-streaming pools) and explicit caller timeouts
+/// can be shorter still. They never extend the connector's 210s total cap.
 const UNARY_DEADLINE: Duration = Duration::from_secs(75);
 
 /// gRPC connection pool with shared channel and authentication.
@@ -1111,16 +1109,15 @@ mod tests {
 
     #[test]
     fn test_connect_timeout_onion_gets_long_deadline() {
-        // Onion cold-start (~24s observed) must outlast the connect timeout,
-        // otherwise the dial is killed mid HS-circuit retry.
+        // Tonic's outer timeout must admit both full connector phases.
         assert_eq!(
             connect_timeout_for("http://abc123.onion:443"),
-            Duration::from_secs(60)
+            Duration::from_secs(220)
         );
         // The scheme-less / bare-host forms both still route to the long path.
         assert_eq!(
             connect_timeout_for("nxpu2qh2eewzufrs.onion"),
-            Duration::from_secs(60)
+            Duration::from_secs(220)
         );
         // Direct TCP stays tight.
         assert_eq!(
@@ -1131,6 +1128,16 @@ mod tests {
             connect_timeout_for("https://api.example.com:443"),
             Duration::from_secs(10)
         );
+    }
+
+    #[cfg(feature = "onion")]
+    #[test]
+    fn onion_endpoint_admits_full_phase_budgets_but_unary_stays_bounded() {
+        use super::super::onion_transport::{BOOTSTRAP_TIMEOUT, CONNECT_TIMEOUT, DIAL_TIMEOUT};
+        assert_eq!(CONNECT_TIMEOUT, BOOTSTRAP_TIMEOUT + DIAL_TIMEOUT);
+        assert!(connect_timeout_for("http://example.onion:443") > CONNECT_TIMEOUT);
+        assert_eq!(UNARY_DEADLINE, Duration::from_secs(75));
+        assert!(UNARY_DEADLINE < BOOTSTRAP_TIMEOUT);
     }
 
     #[test]

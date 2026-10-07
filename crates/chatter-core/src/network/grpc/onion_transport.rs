@@ -22,7 +22,7 @@ use std::pin::Pin;
 use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll};
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use arti_client::{DataStream, TorClient, TorClientConfig};
 use http::Uri;
@@ -30,6 +30,88 @@ use hyper_util::rt::TokioIo;
 use tokio::sync::OnceCell;
 use tor_rtcompat::PreferredRuntime;
 use tower::Service;
+
+/// Phase budgets: 120s bootstrap (including shared-initializer wait), then
+/// 90s hidden-service dial. The total cap also bounds OnceCell contention.
+pub(crate) const BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(120);
+pub(crate) const DIAL_TIMEOUT: Duration = Duration::from_secs(90);
+pub(crate) const CONNECT_TIMEOUT: Duration = Duration::from_secs(210);
+
+/// Dropping a JoinHandle detaches its task. Keep ownership until completion so
+/// phase timeout, overall timeout, and caller cancellation all request abort.
+/// Tokio drops the task future on its next poll; no detached bootstrap/dial
+/// can later return a client/stream. Arti's cached client's internal reactors
+/// remain client-owned, intentionally reusable across successful reconnects.
+struct AbortOnDrop<T>(tokio::task::JoinHandle<T>);
+
+impl<T> Drop for AbortOnDrop<T> {
+    fn drop(&mut self) {
+        self.0.abort();
+    }
+}
+
+/// Logs phase metadata only: never hosts, identities, RPC data or Arti errors.
+struct PhaseTrace {
+    phase: &'static str,
+    started: Instant,
+    outcome: &'static str,
+}
+
+impl PhaseTrace {
+    fn new(phase: &'static str) -> Self {
+        tracing::info!(phase, "onion connector phase started");
+        Self {
+            phase,
+            started: Instant::now(),
+            outcome: "cancelled",
+        }
+    }
+}
+
+impl Drop for PhaseTrace {
+    fn drop(&mut self) {
+        tracing::info!(
+            phase = self.phase,
+            outcome = self.outcome,
+            elapsed_ms = self.started.elapsed().as_millis() as u64,
+            "onion connector phase ended"
+        );
+    }
+}
+
+async fn await_tor_task<T, E: std::fmt::Display>(
+    task: tokio::task::JoinHandle<Result<T, E>>,
+    limit: Duration,
+    phase: &'static str,
+) -> Result<T, std::io::Error> {
+    let mut task = AbortOnDrop(task);
+    let mut trace = PhaseTrace::new(phase);
+    match tokio::time::timeout(limit, &mut task.0).await {
+        Err(_) => {
+            trace.outcome = "timeout";
+            Err(io_err(format!(
+                "onion transport: {phase} timed out after {}s",
+                limit.as_secs()
+            )))
+        }
+        Ok(Err(join)) => {
+            trace.outcome = "task_failed";
+            Err(io_err(format!(
+                "onion transport: {phase} task failed: {join}"
+            )))
+        }
+        Ok(Ok(Err(error))) => {
+            trace.outcome = "failed";
+            // Preserve diagnostic errors for the caller; phase tracing above
+            // deliberately never emits the Arti error or its source chain.
+            Err(io_err(format!("onion transport: {phase} failed: {error}")))
+        }
+        Ok(Ok(Ok(value))) => {
+            trace.outcome = "completed";
+            Ok(value)
+        }
+    }
+}
 
 /// Dedicated multi-thread runtime that owns ALL Arti work — bootstrap, the
 /// directory manager, and every circuit reactor.
@@ -140,106 +222,207 @@ impl Service<Uri> for OnionConnector {
         let tor = self.tor.clone();
         let isolated = self.isolated.clone();
         Box::pin(async move {
-            // The endpoint is built from `http://<onion>:443`, so host+port come
-            // straight off the URI. Default to 443 to match the pinned form.
-            let host = uri
-                .host()
-                .ok_or_else(|| io_err("onion transport: endpoint URI has no host"))?
-                .to_string();
-            // This connector exists to reach the pinned hidden service and
-            // nothing else. A clearnet host here would mean the pool's endpoint
-            // and transport disagree; carrying it out through a Tor exit would
-            // quietly "work" while bypassing the onion service, so refuse.
-            if !host.to_ascii_lowercase().ends_with(".onion") {
-                return Err(io_err(format!(
-                    "onion transport: refusing non-.onion host {host}"
-                )));
-            }
-            let port = uri.port_u16().unwrap_or(443);
+            let mut trace = PhaseTrace::new("connector");
+            let result = tokio::time::timeout(CONNECT_TIMEOUT, async move {
+                // The endpoint is built from `http://<onion>:443`, so host+port come
+                // straight off the URI. Default to 443 to match the pinned form.
+                let host = uri
+                    .host()
+                    .ok_or_else(|| io_err("onion transport: endpoint URI has no host"))?
+                    .to_string();
+                // This connector exists to reach the pinned hidden service and
+                // nothing else. A clearnet host here would mean the pool's endpoint
+                // and transport disagree; carrying it out through a Tor exit would
+                // quietly "work" while bypassing the onion service, so refuse.
+                if !host.to_ascii_lowercase().ends_with(".onion") {
+                    return Err(io_err(format!(
+                        "onion transport: refusing non-.onion host {host}"
+                    )));
+                }
+                let port = uri.port_u16().unwrap_or(443);
 
-            // Lazily bootstrap the Tor client on the first dial, then reuse it.
-            // The bootstrap is SPAWNED onto the dedicated Tor runtime (not awaited
-            // inline) so Arti binds to that runtime's threads — see [`tor_runtime`].
-            // The app runtime only awaits the JoinHandle. A 120s ceiling turns a
-            // stalled bootstrap (censored/blocked directory) into a retryable error
-            // instead of a permanent wedge — `get_or_try_init` caches only Ok, so a
-            // failed attempt is re-tried on the next dial.
-            let base = tor
-                .get_or_try_init(|| async {
-                    let config =
-                        tor_client_config().map_err(|e| io_err(format!("onion transport: {e}")))?;
-                    let jh = tor_runtime().spawn(async {
-                        // Arti's rustls runtime needs a process-wide default rustls
-                        // CryptoProvider. Without it, guard/HS-descriptor/rendezvous
-                        // TLS silently fails ("no CryptoProvider is installed").
-                        // Idempotent — Err means another init already installed one.
-                        let _ = tokio_rustls::rustls::crypto::ring::default_provider()
-                            .install_default();
-                        TorClient::create_bootstrapped(config).await
-                    });
-                    match tokio::time::timeout(Duration::from_secs(120), jh).await {
-                        Err(_) => Err(io_err(
-                            "onion transport: Tor bootstrap timed out after 120s",
-                        )),
-                        Ok(Err(join)) => Err(io_err(format!(
-                            "onion transport: Tor bootstrap task panicked: {join}"
-                        ))),
-                        Ok(Ok(Err(e))) => Err(io_err(format!(
-                            "onion transport: Tor bootstrap failed: {e}"
-                        ))),
-                        Ok(Ok(Ok(c))) => Ok(c),
-                    }
-                })
-                .await?;
+                // Lazily bootstrap the Tor client on the first dial, then reuse it.
+                // The bootstrap is SPAWNED onto the dedicated Tor runtime (not awaited
+                // inline) so Arti binds to that runtime's threads — see [`tor_runtime`].
+                // The app runtime only awaits the JoinHandle. A 120s ceiling turns a
+                // stalled bootstrap (censored/blocked directory) into a retryable error
+                // instead of a permanent wedge — `get_or_try_init` caches only Ok, so a
+                // failed attempt is re-tried on the next dial.
+                tracing::info!(
+                    initialized = tor.initialized(),
+                    "onion bootstrap cache state"
+                );
+                let mut bootstrap_trace = PhaseTrace::new("bootstrap_wait");
+                let base_result = tokio::time::timeout(
+                    BOOTSTRAP_TIMEOUT,
+                    tor.get_or_try_init(|| async {
+                        let config = tor_client_config()
+                            .map_err(|e| io_err(format!("onion transport: {e}")))?;
+                        let jh = tor_runtime().spawn(async {
+                            // Arti's rustls runtime needs a process-wide default rustls
+                            // CryptoProvider. Without it, guard/HS-descriptor/rendezvous
+                            // TLS silently fails ("no CryptoProvider is installed").
+                            // Idempotent — Err means another init already installed one.
+                            let _ = tokio_rustls::rustls::crypto::ring::default_provider()
+                                .install_default();
+                            TorClient::create_bootstrapped(config).await
+                        });
+                        await_tor_task(jh, BOOTSTRAP_TIMEOUT, "bootstrap").await
+                    }),
+                )
+                .await;
+                bootstrap_trace.outcome = match &base_result {
+                    Err(_) => "timeout",
+                    Ok(Err(_)) => "failed",
+                    Ok(Ok(_)) => "completed",
+                };
+                drop(bootstrap_trace);
+                let base = base_result.map_err(|_| {
+                    io_err("onion transport: shared Tor bootstrap timed out after 120s")
+                })??;
+                // get_or_try_init publishes only success. Cancellation drops the
+                // initializer and releases its permit, so the next waiter retries;
+                // await_tor_task's guard aborts the initializer's spawned work.
 
-            // Circuit isolation: the anon connector dials over a separate isolated
-            // client (its own circuit-group), so the server can't correlate anon
-            // mailbox ops with authenticated RPCs by circuit. The auth connector
-            // uses the base client directly. Cloning a TorClient is cheap (Arc) and
-            // keeps the client bound to the Tor runtime.
-            let client = match &isolated {
-                Some(cell) => cell
-                    .get_or_init(|| async { base.isolated_client() })
-                    .await
-                    .clone(),
-                None => base.clone(),
+                // Circuit isolation: the anon connector dials over a separate isolated
+                // client (its own circuit-group), so the server can't correlate anon
+                // mailbox ops with authenticated RPCs by circuit. The auth connector
+                // uses the base client directly. Cloning a TorClient is cheap (Arc) and
+                // keeps the client bound to the Tor runtime.
+                let client = match &isolated {
+                    Some(cell) => cell
+                        .get_or_init(|| async { base.isolated_client() })
+                        .await
+                        .clone(),
+                    None => base.clone(),
+                };
+
+                // tonic DOES wrap custom connectors in connect_timeout. Its
+                // endpoint budget allows our 120s + 90s phases plus scheduling slack.
+                // The inner 210s cap bounds this connector even for lazy channels.
+                let jh =
+                    tor_runtime().spawn(async move { client.connect((host.as_str(), port)).await });
+                let stream = await_tor_task(jh, DIAL_TIMEOUT, "dial").await?;
+
+                Ok(TokioIo::new(stream))
+            })
+            .await;
+            trace.outcome = match &result {
+                Err(_) => "timeout",
+                Ok(Err(_)) => "failed",
+                Ok(Ok(_)) => "completed",
             };
-
-            // Dial the HS on the dedicated Tor runtime too, so the connect
-            // coordination can't be starved by app-side worker parking either.
-            // Bound it: Arti's `connect()` has no internal deadline, and tonic's
-            // `Endpoint::connect_timeout` does NOT wrap a custom
-            // `connect_with_connector` future — so without this a stuck rendezvous
-            // (dead HSDir/intro circuit) hangs forever. 90s covers a cold HS connect
-            // with one circuit retry (~24s observed) plus generous slack.
-            let dial_host = host.clone();
-            let jh = tor_runtime()
-                .spawn(async move { client.connect((dial_host.as_str(), port)).await });
-            let stream = match tokio::time::timeout(Duration::from_secs(90), jh).await {
-                Err(_) => {
-                    tracing::error!(host = %host, port, "onion transport: Tor connect timed out after 90s");
-                    return Err(io_err(format!(
-                        "onion transport: Tor connect to {host}:{port} timed out after 90s"
-                    )));
-                }
-                Ok(Err(join)) => {
-                    return Err(io_err(format!(
-                        "onion transport: Tor connect task panicked: {join}"
-                    )));
-                }
-                Ok(Ok(Err(e))) => {
-                    // Surface the real Arti error — tonic otherwise collapses it
-                    // into an opaque "Unknown"/"server unavailable". `{e:?}` gives
-                    // the full source chain (descriptor fetch / rendezvous / etc).
-                    tracing::error!(host = %host, port, error = ?e, "onion transport: Tor connect failed");
-                    return Err(io_err(format!(
-                        "onion transport: Tor connect to {host}:{port} failed: {e}"
-                    )));
-                }
-                Ok(Ok(Ok(s))) => s,
-            };
-
-            Ok(TokioIo::new(stream))
+            result.map_err(|_| io_err("onion transport: connector timed out after 210s"))?
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use tokio::sync::oneshot;
+
+    struct DropSignal(Option<oneshot::Sender<()>>);
+    impl Drop for DropSignal {
+        fn drop(&mut self) {
+            let _ = self.0.take().unwrap().send(());
+        }
+    }
+
+    /// Use the production dedicated runtime: cancellation must cross runtimes.
+    fn pending_task() -> (
+        tokio::task::JoinHandle<Result<(), &'static str>>,
+        oneshot::Receiver<()>,
+        oneshot::Receiver<()>,
+    ) {
+        let (started_tx, started) = oneshot::channel();
+        let (dropped_tx, dropped) = oneshot::channel();
+        let task = tor_runtime().spawn(async move {
+            let _signal = DropSignal(Some(dropped_tx));
+            let _ = started_tx.send(());
+            std::future::pending::<Result<(), &'static str>>().await
+        });
+        (task, started, dropped)
+    }
+
+    async fn signal(rx: oneshot::Receiver<()>) {
+        tokio::time::timeout(Duration::from_secs(2), rx)
+            .await
+            .expect("task lifecycle signal timed out")
+            .expect("task lifecycle signal lost");
+    }
+
+    #[tokio::test]
+    async fn phase_timeout_aborts_remote_work() {
+        let (task, started, dropped) = pending_task();
+        signal(started).await;
+        let error = await_tor_task(task, Duration::from_millis(10), "dial")
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("dial timed out"));
+        signal(dropped).await;
+    }
+
+    #[tokio::test]
+    async fn caller_cancellation_aborts_remote_work_and_allows_cell_retry() {
+        let cell = Arc::new(OnceCell::<()>::new());
+        let init_cell = cell.clone();
+        let (task, started, dropped) = pending_task();
+        let (owned_tx, owned) = oneshot::channel();
+        let initializer = tokio::spawn(async move {
+            init_cell
+                .get_or_try_init(|| async move {
+                    // Establish task ownership before announcing the cancellation
+                    // point; the JoinHandle must never be dropped unguarded.
+                    let mut wait = Box::pin(await_tor_task(task, BOOTSTRAP_TIMEOUT, "bootstrap"));
+                    assert!(
+                        std::future::poll_fn(|cx| {
+                            Poll::Ready(wait.as_mut().poll(cx).is_pending())
+                        })
+                        .await
+                    );
+                    let _ = owned_tx.send(());
+                    wait.await
+                })
+                .await
+                .map(|_| ())
+        });
+        signal(started).await;
+        signal(owned).await;
+        initializer.abort();
+        assert!(initializer.await.unwrap_err().is_cancelled());
+        signal(dropped).await;
+        assert!(!cell.initialized());
+        cell.get_or_try_init(|| async { Ok::<(), std::io::Error>(()) })
+            .await
+            .unwrap();
+        assert!(cell.initialized());
+    }
+
+    #[tokio::test]
+    async fn failed_initializer_is_retryable_and_success_is_cached() {
+        let cell = OnceCell::new();
+        assert!(cell
+            .get_or_try_init(|| async {
+                await_tor_task(
+                    tor_runtime().spawn(async { Err::<(), _>("synthetic bootstrap failure") }),
+                    BOOTSTRAP_TIMEOUT,
+                    "bootstrap",
+                )
+                .await
+            })
+            .await
+            .is_err());
+        assert!(!cell.initialized());
+        cell.get_or_try_init(|| async { Ok::<(), std::io::Error>(()) })
+            .await
+            .unwrap();
+        cell.get_or_try_init(|| async {
+            panic!("successful bootstrap must be reused");
+            #[allow(unreachable_code)]
+            Ok::<(), std::io::Error>(())
+        })
+        .await
+        .unwrap();
     }
 }

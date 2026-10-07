@@ -42,7 +42,7 @@ use chatter_core::client::ChatterClient;
 use chatter_core::crypto::{auth_crypto, opaque};
 use chatter_core::network::grpc::client_pool::TransportMode;
 use chatter_core::network::grpc::{AuthClient, GrpcClientPool};
-use chatter_core::proto::chat_v1::{RegisterRequest, auth_service_client::AuthServiceClient};
+use chatter_core::proto::chat_v1::{auth_service_client::AuthServiceClient, RegisterRequest};
 use rand::RngCore;
 
 const SERVER_URL: &str = "https://localhost:50051";
@@ -213,10 +213,21 @@ async fn onion_register_solves_the_onion_pow() {
         "client pool did not switch to onion"
     );
 
-    tokio::time::timeout(ONION_TIMEOUT, client.connect())
-        .await
-        .expect("client onion connect timed out")
-        .expect("client onion connect");
+    // Match the preliminary pool's bounded initial-connect retries. Keep the
+    // 180s caller cutoff and all registration/PoW assertions strict: retry only
+    // connection establishment, never registration or a failed PoW assertion.
+    let mut connected = false;
+    for attempt in 1..=3 {
+        match tokio::time::timeout(ONION_TIMEOUT, client.connect()).await {
+            Ok(Ok(())) => {
+                connected = true;
+                break;
+            }
+            Ok(Err(e)) => eprintln!("client onion connect attempt {attempt} failed: {e}"),
+            Err(_) => eprintln!("client onion connect attempt {attempt} timed out"),
+        }
+    }
+    assert!(connected, "client could not reach onion in 3 attempts");
     let nick = unique_nickname();
     let t = Instant::now();
     // The server refuses an onion Register without valid work (the negative
