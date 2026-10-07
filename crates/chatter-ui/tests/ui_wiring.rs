@@ -741,9 +741,13 @@ fn channel_settings_icon_picker_is_wired() {
     let pick_idx = src
         .find("on_channel_settings_pick_icon")
         .expect("pick-icon handler present");
+    let finish_idx = src
+        .find("fn finish_icon_request(")
+        .expect("guarded picker completion helper present");
     assert!(
-        src[pick_idx..].contains(".set_channel_settings_icon_path("),
-        "the pick handler must stash the chosen path on channel-settings-icon-path"
+        src[pick_idx..].contains("finish_icon_request(&w, &ctx, generation, result)")
+            && src[finish_idx..pick_idx].contains(".set_channel_settings_icon_path("),
+        "the pick handler must route its result through the guarded path-staging helper"
     );
     let save_idx = src
         .find("on_channel_settings_save")
@@ -5255,8 +5259,10 @@ fn floating_chrome_keeps_content_insets_and_clear_materials() {
     // Calls reserves space for its confirmation footer. Its actual floating
     // viewport and footer hit isolation are checked by ui_calls_menu; an
     // unconditional full-height source rule would require the native overlap.
-    assert!(include_str!("../../../ui/modals/friends.slint")
-        .contains("height: root.mobile-mode ? root.height : parent.height;"));
+    assert!(
+        include_str!("../../../ui/modals/friends.slint")
+            .contains("height: root.mobile-mode ? root.height : parent.height;")
+    );
     assert!(material.contains("Appearance.glass-effects"));
     assert!(material.contains("blur-regular:") && material.contains("blur-thick:"));
     assert!(material.contains("<physical-length> glass-edge-width:"));
