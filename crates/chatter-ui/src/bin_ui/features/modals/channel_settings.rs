@@ -1305,10 +1305,10 @@ fn wire_channel_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let weak = weak_window.clone();
         let ui_ctx = ui_ctx_delete.clone();
         // Read on the UI thread: a Slint Weak never upgrades inside tokio::spawn.
-        let channel_id = weak
-            .upgrade()
-            .map(|w| w.get_channel_settings_id().to_string())
-            .unwrap_or_default();
+        let Some(w) = weak.upgrade() else { return };
+        let channel_id = w.get_channel_settings_id().to_string();
+        let settings_epoch = SETTINGS_EPOCH.with(|epoch| epoch.get());
+        let session_revision = ui_ctx.auth_state().get().session_revision;
         tokio::spawn(async move {
             if channel_id.is_empty() {
                 return;
@@ -1318,7 +1318,14 @@ fn wire_channel_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 Err(_) => return,
             };
             let result = ui_ctx.delete_channel(&channel_uuid).await;
-            finish_channel_delete(weak, ui_ctx, channel_uuid, result);
+            finish_channel_delete(
+                weak,
+                ui_ctx,
+                channel_uuid,
+                session_revision,
+                settings_epoch,
+                result,
+            );
         });
     });
 }
@@ -1328,8 +1335,13 @@ fn finish_channel_delete(
     weak: slint::Weak<MainWindow>,
     ui_ctx: Arc<ChatterClient>,
     channel_id: ChannelId,
+    session_revision: u64,
+    settings_epoch: u64,
     result: Result<(), chatter_core::services::channel::ChannelError>,
 ) {
+    if !ui_ctx.composer_session_is_current(session_revision) {
+        return;
+    }
     if result.is_ok() {
         crate::bin_ui::features::sidebar::conversation_removed(
             &weak,
@@ -1339,10 +1351,15 @@ fn finish_channel_delete(
     }
     let _ = slint::invoke_from_event_loop(move || {
         let Some(w) = weak.upgrade() else { return };
+        if !ui_ctx.composer_session_is_current(session_revision) {
+            return;
+        }
         match result {
             Ok(()) => {
                 // A late completion must not close a different settings screen.
-                if w.get_channel_settings_id() == channel_id.to_string().as_str() {
+                if w.get_channel_settings_id() == channel_id.to_string().as_str()
+                    && SETTINGS_EPOCH.with(|epoch| epoch.get() == settings_epoch)
+                {
                     crate::bin_ui::features::back::close(&w, "channel-settings");
                 }
                 crate::bin_ui::features::sidebar::refresh_selection(&w, &ui_ctx);
@@ -1350,7 +1367,9 @@ fn finish_channel_delete(
             Err(e) => {
                 tracing::warn!(%channel_id, error = %e, "Channel deletion failed");
                 let message = format!("Couldn't delete channel: {}", e.user_message());
-                if w.get_channel_settings_id() == channel_id.to_string().as_str() {
+                if w.get_channel_settings_id() == channel_id.to_string().as_str()
+                    && SETTINGS_EPOCH.with(|epoch| epoch.get() == settings_epoch)
+                {
                     w.set_channel_settings_error(message.clone().into());
                 }
                 w.set_toast_message(message.into());
@@ -2123,6 +2142,8 @@ mod deletion_tests {
         }
         let w = MainWindow::new().unwrap();
         w.set_current_view("main".into());
+        w.set_is_mobile_platform(true);
+        w.set_mobile_show_chat(true);
         w.set_channel_settings_id(deleted.to_string().into());
         crate::bin_ui::features::back::push(&w, "channel-settings");
         w.set_channel_name("Delete fixture".into());
@@ -2149,6 +2170,8 @@ mod deletion_tests {
             w.as_weak(),
             client.clone(),
             deleted,
+            client.auth_state().get().session_revision,
+            SETTINGS_EPOCH.with(|epoch| epoch.get()),
             Err(ChannelError::NotAuthorized),
         );
         pump();
@@ -2163,11 +2186,19 @@ mod deletion_tests {
                 .contains("Couldn't delete channel")
         );
         assert!(w.get_toast_visible());
+        assert!(w.get_mobile_show_chat());
 
         // Simulate the successful awaited service's local row removal. This
         // exercises the production result handler, without a server or device.
         repo.remove_confirmed_deleted_channel(&deleted).unwrap();
-        finish_channel_delete(w.as_weak(), client.clone(), deleted, Ok(()));
+        finish_channel_delete(
+            w.as_weak(),
+            client.clone(),
+            deleted,
+            client.auth_state().get().session_revision,
+            SETTINGS_EPOCH.with(|epoch| epoch.get()),
+            Ok(()),
+        );
         pump();
         assert_eq!(w.get_chat_rows().row_count(), 1);
         assert_eq!(
@@ -2183,21 +2214,133 @@ mod deletion_tests {
         assert_eq!(w.get_messages().row_count(), 0);
         assert_ne!(w.get_active_modal().as_str(), "channel-settings");
         assert!(repo.get(&other).unwrap().is_some());
+        assert!(!w.get_mobile_show_chat());
+        assert_eq!(w.get_active_tab().as_str(), "chats");
 
         // A late result for the deleted channel must preserve a newly opened chat.
         client
             .chat_state()
             .set_active_conversation(ActiveConversation::Channel(other));
+        w.set_mobile_show_chat(true);
+        w.set_active_tab("contacts".into());
         w.set_channel_name("Keep fixture".into());
         w.set_channel_settings_id(other.to_string().into());
         crate::bin_ui::features::back::push(&w, "channel-settings");
-        finish_channel_delete(w.as_weak(), client.clone(), deleted, Ok(()));
+        finish_channel_delete(
+            w.as_weak(),
+            client.clone(),
+            deleted,
+            client.auth_state().get().session_revision,
+            SETTINGS_EPOCH.with(|epoch| epoch.get()),
+            Ok(()),
+        );
         pump();
         assert_eq!(
             client.active_conversation(),
             ActiveConversation::Channel(other)
         );
         assert_eq!(w.get_channel_name().as_str(), "Keep fixture");
+        assert_eq!(w.get_active_modal().as_str(), "channel-settings");
+        assert!(w.get_mobile_show_chat());
+        assert_eq!(w.get_active_tab().as_str(), "contacts");
+        // Equal UUIDs across kinds must not remove a replacement group.
+        let group = AnonGroupId::from_uuid(*other.as_uuid());
+        client
+            .chat_state()
+            .set_active_conversation(ActiveConversation::AnonGroup(group));
+        crate::bin_ui::features::sidebar::conversation_removed(
+            &w.as_weak(),
+            &client,
+            ActiveConversation::Channel(other),
+        );
+        pump();
+        assert_eq!(
+            client.active_conversation(),
+            ActiveConversation::AnonGroup(group)
+        );
+        assert!(w.get_mobile_show_chat());
+        assert_eq!(w.get_active_tab().as_str(), "contacts");
+
+        // The exact open group reveals Chats and leaves its modal owner intact.
+        crate::bin_ui::features::sidebar::conversation_removed(
+            &w.as_weak(),
+            &client,
+            ActiveConversation::AnonGroup(group),
+        );
+        pump();
+        assert_eq!(client.active_conversation(), ActiveConversation::None);
+        assert!(!w.get_mobile_show_chat());
+        assert_eq!(w.get_active_tab().as_str(), "chats");
+        assert_eq!(w.get_active_modal().as_str(), "channel-settings");
+
+        // Desktop retains its current tab and empty detail pane.
+        w.set_is_mobile_platform(false);
+        w.set_active_tab("contacts".into());
+        w.set_mobile_show_chat(true);
+        client
+            .chat_state()
+            .set_active_conversation(ActiveConversation::Channel(other));
+        crate::bin_ui::features::sidebar::conversation_removed(
+            &w.as_weak(),
+            &client,
+            ActiveConversation::Channel(other),
+        );
+        pump();
+        assert_eq!(client.active_conversation(), ActiveConversation::None);
+        assert!(w.get_channel_name().is_empty());
+        assert_eq!(w.get_active_tab().as_str(), "contacts");
+        assert!(w.get_mobile_show_chat());
+
+        // The same settings ID reopened after dispatch is a new screen.
+        client
+            .chat_state()
+            .set_active_conversation(ActiveConversation::Channel(other));
+        let old_epoch = SETTINGS_EPOCH.with(|epoch| epoch.get());
+        show_channel_settings_shell(&w, &deleted.to_string(), "channel");
+        finish_channel_delete(
+            w.as_weak(),
+            client.clone(),
+            deleted,
+            client.auth_state().get().session_revision,
+            old_epoch,
+            Ok(()),
+        );
+        pump();
+        assert_eq!(w.get_active_modal().as_str(), "channel-settings");
+        assert_eq!(
+            client.active_conversation(),
+            ActiveConversation::Channel(other)
+        );
+
+        // Session replacement retires an awaited delete and a queued removal.
+        w.set_is_mobile_platform(true);
+        w.set_channel_name("Replacement session".into());
+        let old_session = client.auth_state().get().session_revision;
+        crate::bin_ui::features::sidebar::conversation_removed(
+            &w.as_weak(),
+            &client,
+            ActiveConversation::Channel(other),
+        );
+        client.clear_composer_session();
+        client
+            .chat_state()
+            .set_active_conversation(ActiveConversation::Channel(other));
+        finish_channel_delete(
+            w.as_weak(),
+            client.clone(),
+            other,
+            old_session,
+            SETTINGS_EPOCH.with(|epoch| epoch.get()),
+            Ok(()),
+        );
+        pump();
+        assert_eq!(
+            client.active_conversation(),
+            ActiveConversation::Channel(other)
+        );
+        assert_eq!(w.get_channel_name().as_str(), "Replacement session");
+        assert!(w.get_mobile_show_chat());
+        assert_eq!(w.get_active_tab().as_str(), "contacts");
         assert_eq!(w.get_active_modal().as_str(), "channel-settings");
         eprintln!("{FIXTURE_COMPLETED}");
     }

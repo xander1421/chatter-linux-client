@@ -404,8 +404,11 @@ pub(crate) fn conversation_removed(
     conv: chatter_core::state::ActiveConversation,
 ) {
     let ui_ctx_ui = ui_ctx.clone();
+    let session_revision = ui_ctx.auth_state().get().session_revision;
     run_ui!(weak, |w| {
-        if ui_ctx_ui.active_conversation() == conv {
+        if ui_ctx_ui.composer_session_is_current(session_revision)
+            && ui_ctx_ui.active_conversation() == conv
+        {
             ui_ctx_ui
                 .chat_state()
                 .set_active_conversation(chatter_core::state::ActiveConversation::None);
@@ -414,6 +417,13 @@ pub(crate) fn conversation_removed(
             ));
             // No name = nothing open: the pane shows "Select a conversation".
             w.set_channel_name("".into());
+            // The empty detail pane is useful on desktop; on a phone the
+            // removed conversation must reveal the list without another Back.
+            // Keep pushed screens intact: their owners close them separately.
+            if w.get_is_mobile_platform() {
+                w.set_mobile_show_chat(false);
+                w.set_active_tab("chats".into());
+            }
         }
     });
     sections::refresh_sections_ui(weak, ui_ctx);
