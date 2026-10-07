@@ -158,3 +158,55 @@ pub(crate) fn end_edit(w: &MainWindow) {
     w.set_composer_edit_message_id("".into());
     w.set_composer_is_editing(false);
 }
+
+/// Apply a persisted edit without changing message or pin identity/order.
+#[doc(hidden)]
+pub fn apply_message_edit_in_conversation(
+    w: &MainWindow,
+    ui_ctx: &Arc<ChatterClient>,
+    conversation: ActiveConversation,
+    message_id: &str,
+    author: &str,
+    timestamp: u64,
+    new_text: &str,
+) {
+    use slint::{Model, ModelRc, VecModel};
+    if ui_ctx.chat_state().active_conversation() != conversation {
+        return;
+    }
+    let mut pin_id = message_id.to_string();
+    let mut preview_row = crate::MessageItemData::default();
+    crate::bin_ui::converters::apply_edit(&mut preview_row, new_text);
+    super::edit_messages(w, |model| {
+        for i in 0..model.row_count() {
+            let Some(mut row) = model.row_data(i) else {
+                continue;
+            };
+            if row.sender_id.as_str() == author
+                && row.timestamp_ns.as_str() == timestamp.to_string()
+            {
+                pin_id = row.message_id.to_string();
+                crate::bin_ui::converters::apply_edit(&mut row, new_text);
+                preview_row = row.clone();
+                model.set_row_data(i, row);
+                break;
+            }
+        }
+    });
+    let preview =
+        crate::bin_ui::features::auth::inbox::utils::generate_preview_from_ui_message(&preview_row);
+    let mut pins: Vec<_> = w.get_pinned_items().iter().collect();
+    for pin in &mut pins {
+        if pin.message_id.as_str() == pin_id {
+            pin.preview = preview.clone().into();
+        }
+    }
+    w.set_pinned_items(ModelRc::new(VecModel::from(pins)));
+    if ui_ctx
+        .chat_state()
+        .pinned_current_message_id()
+        .is_some_and(|id| id.to_string() == pin_id)
+    {
+        w.set_pinned_message_preview(preview.into());
+    }
+}

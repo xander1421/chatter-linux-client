@@ -415,10 +415,14 @@ pub(super) fn handle_message_edit(
     }
     let message_id = message_id.to_string();
     let author = author_id.to_string();
-    let ts_str = target_sent_timestamp.to_string();
     let new_text = new_text.to_string();
 
+    let conversation = ui_ctx.chat_state().active_conversation();
+    let ui_ctx = ui_ctx.clone();
     crate::run_ui!(window, |w| {
+        if ui_ctx.chat_state().active_conversation() != conversation {
+            return;
+        }
         crate::bin_ui::features::thread::apply_thread_edit(
             &w,
             &message_id,
@@ -426,22 +430,15 @@ pub(super) fn handle_message_edit(
             target_sent_timestamp,
             &new_text,
         );
-        let messages = w.get_messages();
-        for i in 0..messages.row_count() {
-            if let Some(msg) = messages.row_data(i) {
-                if msg.sender_id.as_str() == author && msg.timestamp_ns.as_str() == ts_str {
-                    let mut updated = msg.clone();
-                    crate::bin_ui::converters::apply_edit(&mut updated, &new_text);
-                    if let Some(model) = messages
-                        .as_any()
-                        .downcast_ref::<VecModel<MessageItemData>>()
-                    {
-                        model.set_row_data(i, updated);
-                    }
-                    return;
-                }
-            }
-        }
+        crate::bin_ui::features::chat::apply_message_edit_in_conversation(
+            &w,
+            &ui_ctx,
+            conversation,
+            &message_id,
+            &author,
+            target_sent_timestamp,
+            &new_text,
+        );
     });
 }
 

@@ -724,11 +724,10 @@ export component MessageComposer inherits GlassSurface {
                 elevation: root.elevation;
                 backdrop-paused: root.backdrop-paused;
             }
-            right-action-surface := GlassSurface {
+            if root.raised-actions && root.show-attachment-action: right-action-surface := GlassSurface {
                 y: 0px;
-                visible: root.raised-actions && root.show-attachment-action;
                 x: parent.width - self.width;
-                width: root.show-attachment-action ? Spacing.touch-target-min + root.row-padding * 2 : 0px;
+                width: Spacing.touch-target-min + root.row-padding * 2;
                 height: Spacing.touch-target-min + root.row-padding * 2;
                 material-level: root.material-level;
                 elevation: root.elevation;
@@ -748,7 +747,7 @@ export component MessageComposer inherits GlassSurface {
             if root.has-attachments: attachment-strip := Rectangle {
                 x: left-action-surface.width + Spacing.xs;
                 y: 0px;
-                width: max(0px, right-action-surface.x - self.x - Spacing.xs);
+                width: max(0px, parent.width - (root.show-attachment-action ? Spacing.touch-target-min + root.row-padding * 2 : 0px) - self.x - Spacing.xs);
                 height: Spacing.touch-target-min + root.row-padding * 2;
                 clip: true;
                 background: transparent;
