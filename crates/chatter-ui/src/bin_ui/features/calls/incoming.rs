@@ -827,7 +827,10 @@ fn handle_orchestrator_event(
             let ui_ctx = ui_ctx.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 let Some(w) = weak.upgrade() else { return };
-                if !ui_ctx.call_session_is_current(revision) { return; }
+                if !w.get_active_call_visible()
+                    || !ui_ctx.call_session_is_current(revision)
+                    || ui_ctx.call_start_was_cancelled(call.as_str())
+                { return; }
                 let Some(worker) = ui_ctx.call_service().get() else { return };
                 worker.with_current_active_presentation(revision, call.as_str(), || {
                 let mut data = w.get_active_call_data();
@@ -1090,14 +1093,10 @@ mod session_tests {
                     }
                 }
             };
-            runtime
-                .block_on(current.orch_mark_connected_reliably(
-                    CallHandle::from(id.to_string()),
-                    kind,
-                    alice,
-                    false,
-                ))
-                .unwrap();
+            // This fixture supplies presentation authority, without a media room.
+            // The query is a FIFO actor barrier; production completion still requires media match.
+            current.orch_mark_connected(CallHandle::from(id.to_string()), kind, alice, false);
+            runtime.block_on(current.orch_active_kind());
             let mut data = window.get_active_call_data();
             data.call_id = id.to_string().into();
             data.is_connected = false;
@@ -1115,17 +1114,46 @@ mod session_tests {
             );
             assert_eq!(window.get_incoming_call_data().call_id.as_str(), "B");
 
+            // Hidden End retains this exact identity and session. Actor authority
+            // alone must not restart its timer or mark the retained view connected.
+            let mut hidden = window.get_active_call_data();
+            hidden.is_connected = false;
+            window.set_active_call_data(hidden);
+            window.set_active_call_visible(false);
+            handle_orchestrator_event(
+                &window.as_weak(),
+                &client,
+                CallOrchestratorEvent::ActiveConnected {
+                    call: CallHandle::from(id.to_string()),
+                    kind,
+                    peer_id: alice,
+                    is_video: false,
+                },
+                revision,
+            );
+            pump(&window);
+            assert!(!window.get_active_call_visible());
+            assert!(!window.get_active_call_data().is_connected);
+            window.set_active_call_visible(true);
+            handle_orchestrator_event(
+                &window.as_weak(),
+                &client,
+                CallOrchestratorEvent::ActiveConnected {
+                    call: CallHandle::from(id.to_string()),
+                    kind,
+                    peer_id: alice,
+                    is_video: false,
+                },
+                revision,
+            );
+            pump(&window);
+            assert!(window.get_active_call_data().is_connected);
+
             for replaced in [false, true] {
                 // Restore authority for A, then queue its paint before the
                 // terminal/replacement actor transition and before UI dispatch.
-                runtime
-                    .block_on(current.orch_mark_connected_reliably(
-                        CallHandle::from(id.to_string()),
-                        kind,
-                        alice,
-                        false,
-                    ))
-                    .unwrap();
+                current.orch_mark_connected(CallHandle::from(id.to_string()), kind, alice, false);
+                runtime.block_on(current.orch_active_kind());
                 let mut retained = window.get_active_call_data();
                 retained.call_id = id.to_string().into();
                 retained.is_connected = false;
@@ -1148,14 +1176,13 @@ mod session_tests {
                     revision,
                 );
                 if replaced {
-                    runtime
-                        .block_on(current.orch_mark_connected_reliably(
-                            CallHandle::from("replacement-active"),
-                            OrchestratedCallKind::AnonDm,
-                            alice,
-                            false,
-                        ))
-                        .unwrap();
+                    current.orch_mark_connected(
+                        CallHandle::from("replacement-active"),
+                        OrchestratedCallKind::AnonDm,
+                        alice,
+                        false,
+                    );
+                    runtime.block_on(current.orch_active_kind());
                 } else {
                     current.orch_mark_ended(
                         CallHandle::from(id.to_string()),

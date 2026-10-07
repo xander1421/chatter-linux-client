@@ -632,12 +632,35 @@ impl ChatterClient {
         call_id: &str,
         peer_id: &crate::domain::ids::UserId,
     ) -> Result<crate::domain::call::CallSetupResult, ClientError> {
+        let revision = self.auth_state().get().session_revision;
+        self.complete_dm_call_for_session(peer_ephemeral_pk, call_id, peer_id, revision)
+            .await
+    }
+
+    /// Retain answer ownership before UI dispatch, even if logout clears its registry.
+    #[cfg(feature = "media")]
+    pub fn call_completion_attempt(&self, call_id: &str) -> Option<CallStartAttempt> {
+        self.call_signaling().completion_attempt(call_id)
+    }
+
+    #[cfg(feature = "media")]
+    pub async fn complete_dm_call_for_session(
+        &self,
+        peer_ephemeral_pk: [u8; 32],
+        call_id: &str,
+        peer_id: &crate::domain::ids::UserId,
+        revision: u64,
+    ) -> Result<crate::domain::call::CallSetupResult, ClientError> {
+        if !self.call_session_is_current(revision) {
+            return Err(ClientError::Validation("call session changed".into()));
+        }
         let call_worker = self
             .call_service()
             .get()
             .ok_or_else(|| ClientError::Inbox("Call service not initialized".into()))?
-            .clone();
-        self.call_signaling()
+            .for_presentation_session(revision);
+        let result = self
+            .call_signaling()
             .complete_dm_call(
                 peer_ephemeral_pk,
                 call_id,
@@ -646,7 +669,11 @@ impl ChatterClient {
                 &call_worker,
             )
             .await
-            .map_err(|e| ClientError::Inbox(e.to_string()))
+            .map_err(|e| ClientError::Inbox(e.to_string()));
+        if !self.call_session_is_current(revision) {
+            return Err(ClientError::Validation("call session changed".into()));
+        }
+        result
     }
 
     /// Accept an incoming DM call: generate ephemeral key, derive shared secret, join call.

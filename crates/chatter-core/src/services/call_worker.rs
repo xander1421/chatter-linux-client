@@ -583,11 +583,13 @@ enum CallCommand {
     },
     /// Publish microphone.
     PublishMicrophone {
+        answer_scope: Option<DmAnswerScope>,
         device_id: Option<String>,
         response: oneshot::Sender<Result<(), CallError>>,
     },
     /// Publish camera.
     PublishCamera {
+        answer_scope: Option<DmAnswerScope>,
         device_path: Option<String>,
         config: Option<VideoCaptureConfig>,
         response: oneshot::Sender<Result<(), CallError>>,
@@ -631,6 +633,7 @@ enum CallCommand {
     },
     /// Set encryption key externally (from CallKeyState ratchet).
     SetEncryptionKey {
+        answer_scope: Option<DmAnswerScope>,
         key: Vec<u8>,
         response: oneshot::Sender<bool>,
     },
@@ -695,6 +698,7 @@ enum CallCommand {
     /// Notify the orchestrator that a pending (incoming or outgoing) call
     /// has connected and should be installed as the active call.
     OrchMarkConnected {
+        answer_scope: Option<DmAnswerScope>,
         require_media_match: bool,
         session_revision: Option<u64>,
         response: Option<oneshot::Sender<Result<(), CallError>>>,
@@ -735,6 +739,15 @@ enum CallCommand {
     TestPause {
         entered: oneshot::Sender<()>,
         resume: oneshot::Receiver<()>,
+    },
+    #[cfg(test)]
+    TestDmAnswerBackend {
+        publish: Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>,
+        response: oneshot::Sender<()>,
+    },
+    #[cfg(test)]
+    TestDmAnswerEffects {
+        response: oneshot::Sender<(usize, usize)>,
     },
     /// Actor acceptance and signaling ownership transfer share the invite lock.
     OrchAcceptPresented {
@@ -789,9 +802,83 @@ pub struct CallWorkerHandle {
     call_events_tx: broadcast::Sender<CallOrchestratorEvent>,
     incoming_presentation: IncomingCallPresentationState,
     presentation_session: Option<u64>,
+    answer_scope: Option<DmAnswerScope>,
+}
+
+/// Retained answer ownership travels with each queued mutation.
+#[derive(Clone)]
+struct DmAnswerScope {
+    call: CallHandle,
+    session_revision: Option<u64>,
+    attempt: Option<crate::client::calls::CallStartAttempt>,
+}
+
+impl DmAnswerScope {
+    fn accepts(
+        &self,
+        presentation: &IncomingCallPresentationState,
+        active: &Rc<RefCell<Option<ActiveCallState>>>,
+    ) -> bool {
+        presentation.accepts_session(self.session_revision)
+            && !self.attempt.as_ref().is_some_and(|a| a.is_cancelled())
+            && active.borrow().as_ref().map(derive_call_handle).as_ref() == Some(&self.call)
+    }
 }
 
 impl CallWorkerHandle {
+    #[cfg(test)]
+    pub(crate) async fn test_prime_call(&self, call: Call) {
+        let (response, done) = oneshot::channel();
+        self.cmd_tx
+            .send(CallCommand::TestPrimeCall { call, response })
+            .await
+            .unwrap();
+        done.await.unwrap();
+    }
+    #[cfg(test)]
+    pub(crate) async fn test_queue_prime_call(&self, call: Call) -> oneshot::Receiver<()> {
+        let (response, done) = oneshot::channel();
+        self.cmd_tx
+            .send(CallCommand::TestPrimeCall { call, response })
+            .await
+            .unwrap();
+        done
+    }
+    #[cfg(test)]
+    pub(crate) async fn test_dm_answer_backend(
+        &self,
+        publish: Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>,
+    ) {
+        let (response, done) = oneshot::channel();
+        self.cmd_tx
+            .send(CallCommand::TestDmAnswerBackend { publish, response })
+            .await
+            .unwrap();
+        done.await.unwrap();
+    }
+    #[cfg(test)]
+    pub(crate) async fn test_dm_answer_effects(&self) -> (usize, usize) {
+        let (response, done) = oneshot::channel();
+        self.cmd_tx
+            .send(CallCommand::TestDmAnswerEffects { response })
+            .await
+            .unwrap();
+        done.await.unwrap()
+    }
+    pub(crate) fn for_dm_answer(
+        &self,
+        call: CallHandle,
+        attempt: Option<crate::client::calls::CallStartAttempt>,
+    ) -> Self {
+        let mut worker = self.clone();
+        worker.answer_scope = Some(DmAnswerScope {
+            call,
+            attempt,
+            session_revision: self.presentation_session,
+        });
+        worker
+    }
+
     /// Spawn a new call worker on a dedicated thread.
     pub fn spawn(call_client: CallClient) -> Self {
         let (cmd_tx, cmd_rx) = mpsc::channel(256);
@@ -831,6 +918,7 @@ impl CallWorkerHandle {
             call_events_tx,
             incoming_presentation,
             presentation_session: None,
+            answer_scope: None,
         }
     }
 
@@ -1095,6 +1183,7 @@ impl CallWorkerHandle {
         is_video: bool,
     ) {
         let _ = self.cmd_tx.try_send(CallCommand::OrchMarkConnected {
+            answer_scope: self.answer_scope.clone(),
             require_media_match: false,
             response: None,
             session_revision: self.presentation_session,
@@ -1115,6 +1204,7 @@ impl CallWorkerHandle {
         let (response, done) = oneshot::channel();
         self.cmd_tx
             .send(CallCommand::OrchMarkConnected {
+                answer_scope: self.answer_scope.clone(),
                 require_media_match: true,
                 session_revision: self.presentation_session,
                 response: Some(response),
@@ -1487,6 +1577,7 @@ impl CallWorkerHandle {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
             .try_send(CallCommand::PublishMicrophone {
+                answer_scope: self.answer_scope.clone(),
                 device_id: device_id.map(|s| s.to_string()),
                 response: tx,
             })
@@ -1499,6 +1590,7 @@ impl CallWorkerHandle {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
             .try_send(CallCommand::PublishCamera {
+                answer_scope: self.answer_scope.clone(),
                 device_path: device_path.map(|s| s.to_string()),
                 config: None,
                 response: tx,
@@ -1672,7 +1764,11 @@ impl CallWorkerHandle {
         let (tx, rx) = oneshot::channel();
         if self
             .cmd_tx
-            .try_send(CallCommand::SetEncryptionKey { key, response: tx })
+            .try_send(CallCommand::SetEncryptionKey {
+                key,
+                response: tx,
+                answer_scope: self.answer_scope.clone(),
+            })
             .is_err()
         {
             return false;
@@ -1790,6 +1886,12 @@ fn run_call_worker(
         // Orchestrator state (single source of truth for incoming/outgoing/active
         // call presentation policy).
         let mut orchestrator = OrchestratorState::default();
+        // Controlled SDK boundary: production guards and actor queue remain real.
+        #[cfg(test)]
+        let mut answer_backend: Option<Option<(oneshot::Sender<()>, oneshot::Receiver<()>)>> = None;
+        #[cfg(test)]
+        let mut answer_effects = (0usize, 0usize);
+
 
         // Forward room events to the handle (UI via mpsc) and fan out to any
         // core-side policy subscribers (e.g. key rotation) via broadcast.
@@ -2116,7 +2218,21 @@ fn run_call_worker(
                     let _ = response.send(status);
                 }
 
-                CallCommand::PublishMicrophone { device_id, response } => {
+                CallCommand::PublishMicrophone { device_id, response, answer_scope } => {
+                    if answer_scope.as_ref().is_some_and(|scope| !scope.accepts(&incoming_presentation, &active_call)) {
+                        let _ = response.send(Err(CallError::CallEnded));
+                        continue;
+                    }
+                    #[cfg(test)]
+                    if answer_scope.is_some() && answer_backend.is_some() {
+                        answer_effects.1 += 1;
+                        if let Some((entered, resume)) = answer_backend.as_mut().unwrap().take() {
+                            let _ = entered.send(());
+                            let _ = resume.await;
+                        }
+                        let _ = response.send(Ok(()));
+                        continue;
+                    }
                     let result = if gate_defers(&active_call, |g| g.defer_mic(device_id.clone())) {
                         tracing::info!("Microphone held back until the call's key arrives");
                         Ok(())
@@ -2127,10 +2243,22 @@ fn run_call_worker(
                 }
 
                 CallCommand::PublishCamera {
+                    answer_scope,
                     device_path,
                     config,
                     response,
                 } => {
+                    if answer_scope.as_ref().is_some_and(|scope| !scope.accepts(&incoming_presentation, &active_call)) {
+                        let _ = response.send(Err(CallError::CallEnded));
+                        continue;
+                    }
+                    if answer_scope.is_some() {
+                        // Drain named-answer publication before processing End/replacement.
+                        // Ownership is rechecked by completion before any next mutation.
+                        let result = room_manager.publish_camera(device_path.as_deref(), config).await;
+                        let _ = response.send(result);
+                        continue;
+                    }
                     if gate_defers(&active_call, PublishGate::defer_camera) {
                         tracing::info!("Camera held back until the call's key arrives");
                         let _ = response.send(Ok(()));
@@ -2225,7 +2353,20 @@ fn run_call_worker(
                     let _ = response.send(epoch);
                 }
 
-                CallCommand::SetEncryptionKey { key, response } => {
+                CallCommand::SetEncryptionKey { key, response, answer_scope } => {
+                    if answer_scope.as_ref().is_some_and(|scope| !scope.accepts(&incoming_presentation, &active_call)) {
+                        let _ = response.send(false);
+                        continue;
+                    }
+                    #[cfg(test)]
+                    if answer_scope.is_some() && answer_backend.is_some() {
+                        let mut state = active_call.borrow_mut();
+                        let state = state.as_mut().unwrap();
+                        state.key_state = CallKeyState::new(&<[u8; 32]>::try_from(key.as_slice()).unwrap(), state.key_state.call_id()).unwrap();
+                        answer_effects.0 += 1;
+                        let _ = response.send(true);
+                        continue;
+                    }
                     let success = reset_dm_media_key(&active_call, &room_manager, key);
                     let _ = response.send(success);
                 }
@@ -2312,7 +2453,11 @@ fn run_call_worker(
                     });
                 }
 
-                CallCommand::OrchMarkConnected { call, kind, peer_id, is_video, session_revision, response, require_media_match } => {
+                CallCommand::OrchMarkConnected { call, kind, peer_id, is_video, session_revision, response, require_media_match, answer_scope } => {
+                    if answer_scope.as_ref().is_some_and(|scope| !scope.accepts(&incoming_presentation, &active_call)) {
+                        if let Some(response) = response { let _ = response.send(Err(CallError::CallEnded)); }
+                        continue;
+                    }
                     let session_lease = incoming_presentation.snapshot.read();
                     if session_revision.is_some() && session_lease.session_revision != session_revision { if let Some(response) = response { let _ = response.send(Err(CallError::WorkerShutdown)); } continue; }
                     if require_media_match && active_call.borrow().as_ref().map(derive_call_handle).as_ref() != Some(&call) {
@@ -2386,6 +2531,13 @@ fn run_call_worker(
                     }
                 }
 
+                #[cfg(test)]
+                CallCommand::TestDmAnswerBackend { publish, response } => {
+                    answer_backend = Some(publish);
+                    let _ = response.send(());
+                }
+                #[cfg(test)]
+                CallCommand::TestDmAnswerEffects { response } => { let _ = response.send(answer_effects); }
                 #[cfg(test)]
                 CallCommand::TestPrimeCall { call, response } => {
                     let handle = CallHandle::from(call.id.to_string().as_str());

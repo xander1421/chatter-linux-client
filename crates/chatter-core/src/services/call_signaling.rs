@@ -378,6 +378,14 @@ impl CallSignalingService {
     }
 
     #[cfg(feature = "media")]
+    pub(crate) fn completion_attempt(
+        &self,
+        id: &str,
+    ) -> Option<crate::client::calls::CallStartAttempt> {
+        self.start_attempts.lock().get(id).cloned()
+    }
+
+    #[cfg(feature = "media")]
     pub(crate) fn cancel_start(&self, id: &str) -> bool {
         if let Some(attempt) = self.start_attempts.lock().get(id) {
             attempt.cancel();
@@ -1056,8 +1064,42 @@ impl CallSignalingService {
         signal_service: &SignalService,
         call_worker: &CallWorkerHandle,
     ) -> Result<CallSetupResult, CallSignalingError> {
+        self.complete_dm_call_with_crypto(call_id, peer_id, call_worker, |priv_key| async move {
+            signal_service
+                .actor
+                .complete_call_key_exchange(
+                    priv_key,
+                    peer_ephemeral_pk,
+                    *peer_id,
+                    call_id.to_string(),
+                    true,
+                )
+                .await
+                .map_err(|e| CallSignalingError::KeyDerivationFailed(e.to_string()))
+        })
+        .await
+    }
+
+    #[cfg(feature = "media")]
+    async fn complete_dm_call_with_crypto<F, Fut>(
+        &self,
+        call_id: &str,
+        peer_id: &UserId,
+        call_worker: &CallWorkerHandle,
+        derive: F,
+    ) -> Result<CallSetupResult, CallSignalingError>
+    where
+        F: FnOnce([u8; 32]) -> Fut,
+        Fut: std::future::Future<Output = Result<[u8; 32], CallSignalingError>>,
+    {
         let _ownership = self.start_gate.lock().await;
-        if self.start_was_cancelled(call_id) {
+        let attempt = self.start_attempts.lock().get(call_id).cloned();
+        let call_worker = &call_worker.for_dm_answer(CallHandle::from(call_id), attempt.clone());
+        let cancelled = || {
+            attempt.as_ref().is_some_and(|a| a.is_cancelled())
+                || !call_worker.presentation_session_is_current()
+        };
+        if cancelled() {
             return Err(CallSignalingError::NoPendingCall);
         }
         // Take pending call state
@@ -1069,7 +1111,7 @@ impl CallSignalingService {
         if pending.call_id.to_string() != call_id {
             let expected = pending.call_id.to_string();
             // Put it back since this wasn't for us
-            self.set_pending_dm_call(pending);
+            call_worker.with_current_presentation_session(|| self.set_pending_dm_call(pending));
             return Err(CallSignalingError::CallIdMismatch {
                 expected,
                 actual: call_id.to_string(),
@@ -1087,20 +1129,10 @@ impl CallSignalingService {
 
         // Delegate all crypto to the Signal service (ECDH + identity lookup + HKDF)
         let priv_key = pending.ephemeral_key.private_key_bytes();
-        let call_key = signal_service
-            .actor
-            .complete_call_key_exchange(
-                priv_key,
-                peer_ephemeral_pk,
-                *peer_id,
-                call_id.to_string(),
-                true, // we_are_caller
-            )
-            .await
-            .map_err(|e| CallSignalingError::KeyDerivationFailed(e.to_string()))?;
+        let call_key = derive(priv_key).await?;
 
-        if self.start_was_cancelled(call_id) {
-            call_worker.with_current_presentation_session(|| self.set_pending_dm_call(pending));
+        if cancelled() {
+            call_worker.rollback_setup(CallHandle::from(call_id)).await;
             return Err(CallSignalingError::NoPendingCall);
         }
         // Ephemeral key dropped here (zeroized)
@@ -1115,12 +1147,15 @@ impl CallSignalingService {
         // Update LiveKit encryption key
         let key_installed = call_worker.set_encryption_key(call_key.to_vec()).await;
 
-        if self.start_was_cancelled(call_id) {
-            let _ = tokio::time::timeout(
-                std::time::Duration::from_secs(3),
-                self.send_call_hangup_to(peer_id, call_id, CallHangupReason::Normal),
-            )
-            .await;
+        if cancelled() {
+            // A retired session must not notify peers through replacement credentials.
+            if call_worker.presentation_session_is_current() {
+                let _ = tokio::time::timeout(
+                    std::time::Duration::from_secs(3),
+                    self.send_call_hangup_to(peer_id, call_id, CallHangupReason::Normal),
+                )
+                .await;
+            }
             call_worker.rollback_setup(CallHandle::from(call_id)).await;
             return Err(CallSignalingError::NoPendingCall);
         }
@@ -1133,7 +1168,7 @@ impl CallSignalingService {
         // the placeholder key, so we must not publish.
         if key_installed {
             call_worker.publish_microphone(None).await.ok();
-            if is_video {
+            if is_video && !cancelled() {
                 call_worker.publish_camera(None).await.ok();
             }
         } else {
@@ -1141,17 +1176,32 @@ impl CallSignalingService {
                 call_id = %call_id,
                 "Real call key install failed — not publishing media to avoid placeholder-key leak"
             );
+            call_worker.rollback_setup(CallHandle::from(call_id)).await;
+            return Err(CallSignalingError::CallWorker(
+                "call key installation failed".into(),
+            ));
         }
 
         // Promote the ringing outgoing call (registered in `start_dm_call`) to
         // the orchestrator's active slot. The callee registers its slot via
         // `accept_presented_incoming_call`; this is the caller's equivalent.
-        call_worker.orch_mark_connected(
-            crate::services::call_worker::CallHandle::from(call_id),
-            crate::services::call_worker::OrchestratedCallKind::DmStandard,
-            *peer_id,
-            is_video,
-        );
+        if cancelled() {
+            call_worker.rollback_setup(CallHandle::from(call_id)).await;
+            return Err(CallSignalingError::NoPendingCall);
+        }
+        call_worker
+            .orch_mark_connected_reliably(
+                crate::services::call_worker::CallHandle::from(call_id),
+                crate::services::call_worker::OrchestratedCallKind::DmStandard,
+                *peer_id,
+                is_video,
+            )
+            .await
+            .map_err(|e| CallSignalingError::CallWorker(e.to_string()))?;
+        if cancelled() {
+            call_worker.rollback_setup(CallHandle::from(call_id)).await;
+            return Err(CallSignalingError::NoPendingCall);
+        }
 
         // Derive verification emojis
         let verification = CallVerification::derive_verification_emojis(&call_key, call_id);
@@ -2366,5 +2416,219 @@ mod rotation_recipient_tests {
         }
         assert_eq!(held.len(), MAX_BUFFERED_KEY_SENDERS);
         assert!(held.contains_key(&rotator), "held senders keep their slot");
+    }
+}
+
+#[cfg(all(test, feature = "media", feature = "testing"))]
+mod named_dm_completion_tests {
+    use super::*;
+    use crate::{
+        client::{calls::CallStartAttempt, ChatterClient},
+        domain::call::{Call, CallType},
+        services::call_worker::CallOrchestratorEvent,
+    };
+    use tokio::sync::oneshot;
+
+    fn fixture() -> (tempfile::TempDir, Arc<ChatterClient>, CallWorkerHandle, u64) {
+        let dir = tempfile::tempdir().unwrap();
+        let dirs = crate::system::Directories::with_base_dir(dir.path().to_owned()).unwrap();
+        std::fs::write(
+            dirs.database_path()
+                .parent()
+                .unwrap()
+                .join(crate::system::keyring::NO_KEYRING_MARKER),
+            b"",
+        )
+        .unwrap();
+        let client = ChatterClient::builder()
+            .data_dir(dir.path().to_string_lossy())
+            .build()
+            .unwrap();
+        client
+            .auth_state()
+            .set_logged_in(UserId::new(), 1, "Fixture".into());
+        let revision = client.auth_state().get().session_revision;
+        let channel = tonic::transport::Endpoint::from_static("http://127.0.0.1:9").connect_lazy();
+        let worker = CallWorkerHandle::spawn(crate::network::grpc::CallClient::new(
+            channel.into(),
+            crate::network::grpc::interceptors::AuthInterceptor::new(),
+        ));
+        worker.incoming_presentation_state().begin_session(revision);
+        (dir, client, worker, revision)
+    }
+
+    fn pending(service: &CallSignalingService, call: &Call, attempt: &CallStartAttempt) {
+        service
+            .start_attempts
+            .lock()
+            .insert(call.id.to_string(), attempt.clone());
+        service.set_pending_dm_call(PendingDmCall {
+            call_id: call.id,
+            channel_id: call.channel_id,
+            ephemeral_key: EphemeralCallKey::generate(),
+            peer_id: call.initiator_id,
+            call_type: "voice".into(),
+            is_video: false,
+        });
+    }
+
+    fn no_connected(events: &mut tokio::sync::broadcast::Receiver<CallOrchestratorEvent>) {
+        while let Ok(event) = events.try_recv() {
+            assert!(
+                !matches!(event, CallOrchestratorEvent::ActiveConnected { .. }),
+                "retired answer advertised connected"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn named_dm_crypto_wait_session_reset_cannot_uncancel_or_touch_replacement() {
+        let (_dir, client, worker, revision) = fixture();
+        let service = client.call_signaling().clone();
+        let call = Call::new(ChannelId::new(), UserId::new(), CallType::Voice);
+        let id = call.id.to_string();
+        let peer = call.initiator_id;
+        let attempt = CallStartAttempt::default();
+        pending(&service, &call, &attempt);
+        worker.test_prime_call(call).await;
+        worker.test_dm_answer_backend(None).await;
+        let mut events = worker.subscribe_call_events();
+        let (entered, entered_rx) = oneshot::channel();
+        let (resume, resume_rx) = oneshot::channel();
+        let old_worker = worker.for_presentation_session(revision);
+        let completion = tokio::spawn({
+            let service = service.clone();
+            let id = id.clone();
+            async move {
+                service
+                    .complete_dm_call_with_crypto(&id, &peer, &old_worker, |_| async {
+                        entered.send(()).unwrap();
+                        resume_rx.await.unwrap();
+                        Ok([3; 32])
+                    })
+                    .await
+            }
+        });
+        entered_rx.await.unwrap();
+        client.auth_state().invalidate_session();
+        service.clear_call_session(&[]);
+        worker.reset_presentation_session(revision).await.unwrap();
+        assert!(service.start_attempts.lock().is_empty());
+        assert!(attempt.is_cancelled());
+        client
+            .auth_state()
+            .set_logged_in(UserId::new(), 1, "Replacement".into());
+        worker
+            .incoming_presentation_state()
+            .begin_session(client.auth_state().get().session_revision);
+        let replacement = Call::new(ChannelId::new(), UserId::new(), CallType::Voice);
+        let replacement_id = replacement.id;
+        worker.test_prime_call(replacement).await;
+        resume.send(()).unwrap();
+        assert!(matches!(
+            completion.await.unwrap(),
+            Err(CallSignalingError::NoPendingCall)
+        ));
+        assert_eq!(worker.test_dm_answer_effects().await, (0, 0));
+        assert_eq!(worker.active_call().await.unwrap().id, replacement_id);
+        assert!(service.take_pending_dm_call().is_none());
+        no_connected(&mut events);
+        worker.shutdown();
+    }
+
+    #[tokio::test]
+    async fn named_dm_end_during_publish_drains_and_preserves_replacement() {
+        let (_dir, client, worker, revision) = fixture();
+        let service = client.call_signaling().clone();
+        let call = Call::new(ChannelId::new(), UserId::new(), CallType::Voice);
+        let id = call.id.to_string();
+        let peer = call.initiator_id;
+        let attempt = CallStartAttempt::default();
+        pending(&service, &call, &attempt);
+        worker.test_prime_call(call).await;
+        let (entered, entered_rx) = oneshot::channel();
+        let (resume, resume_rx) = oneshot::channel();
+        worker
+            .test_dm_answer_backend(Some((entered, resume_rx)))
+            .await;
+        let mut events = worker.subscribe_call_events();
+        let old_worker = worker.for_presentation_session(revision);
+        let completion = tokio::spawn({
+            let service = service.clone();
+            let id = id.clone();
+            let old_worker = old_worker.clone();
+            async move {
+                service
+                    .complete_dm_call_with_crypto(&id, &peer, &old_worker, |_| {
+                        std::future::ready(Ok([3; 32]))
+                    })
+                    .await
+            }
+        });
+        entered_rx.await.unwrap();
+        assert!(service.cancel_start(&id)); // same synchronous End cancellation boundary
+        let replacement = Call::new(ChannelId::new(), UserId::new(), CallType::Voice);
+        let replacement_id = replacement.id;
+        let installed = worker.test_queue_prime_call(replacement).await;
+        let incoming = CallHandle::from("replacement-incoming");
+        old_worker.orch_present_incoming(
+            incoming.clone(),
+            OrchestratedCallKind::DmStandard,
+            UserId::new(),
+            "New caller".into(),
+            false,
+            false,
+            String::new(),
+            None,
+            None,
+            String::new(),
+        );
+        resume.send(()).unwrap();
+        installed.await.unwrap();
+        assert!(matches!(
+            completion.await.unwrap(),
+            Err(CallSignalingError::NoPendingCall)
+        ));
+        assert_eq!(worker.test_dm_answer_effects().await, (1, 1));
+        let late = old_worker.for_dm_answer(CallHandle::from(id.as_str()), Some(attempt));
+        assert!(!late.set_encryption_key(vec![9; 32]).await);
+        assert!(late.publish_microphone(None).await.is_err());
+        assert!(late.publish_camera(None).await.is_err());
+        assert!(late
+            .orch_mark_connected_reliably(
+                CallHandle::from(id.as_str()),
+                OrchestratedCallKind::DmStandard,
+                peer,
+                false
+            )
+            .await
+            .is_err());
+        // An uncancelled late answer must still fail the exact media identity fence.
+        let wrong_identity = old_worker.for_dm_answer(
+            CallHandle::from(id.as_str()),
+            Some(CallStartAttempt::default()),
+        );
+        assert!(!wrong_identity.set_encryption_key(vec![7; 32]).await);
+        assert!(wrong_identity.publish_microphone(None).await.is_err());
+        assert!(wrong_identity.publish_camera(None).await.is_err());
+        assert!(wrong_identity
+            .orch_mark_connected_reliably(
+                CallHandle::from(id.as_str()),
+                OrchestratedCallKind::DmStandard,
+                peer,
+                false
+            )
+            .await
+            .is_err());
+        assert_eq!(worker.test_dm_answer_effects().await, (1, 1));
+        assert_eq!(worker.active_call().await.unwrap().id, replacement_id);
+        let presentations = worker
+            .incoming_presentation_snapshot()
+            .await
+            .unwrap()
+            .presentations;
+        assert!(presentations.iter().any(|p| matches!(p, CallOrchestratorEvent::IncomingPresented { call, .. } if call == &incoming)));
+        no_connected(&mut events);
+        worker.shutdown();
     }
 }
