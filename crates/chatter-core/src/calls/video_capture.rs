@@ -433,7 +433,8 @@ impl VideoCapture {
         }
 
         #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
-        let _ = local_preview; // android/fallback: self-preview tee not wired
+        #[cfg(not(target_os = "android"))]
+        let _ = local_preview;
 
         #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
         {
@@ -453,6 +454,7 @@ impl VideoCapture {
                     height,
                     fps,
                     &device_path,
+                    local_preview,
                 ) {
                     tracing::info!("Video capture loop ended");
                     return;
@@ -1230,3 +1232,9 @@ mod reconnect_selection_tests {
         assert_eq!(capture.reconnect_selection(), before);
     }
 }
+
+// Exercise the Android JNI producer on the host with synthetic camera frames.
+#[cfg(all(test, not(target_os = "android")))]
+#[path = "android_camera.rs"]
+#[allow(dead_code)]
+mod android_camera_producer_tests;
