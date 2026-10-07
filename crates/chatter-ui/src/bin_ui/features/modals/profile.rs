@@ -527,35 +527,21 @@ fn wire_shared_content(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     // retry.
     let weak_window = window.as_weak();
     let ui_ctx_jump = ui_ctx.clone();
-    window.on_profile_open_shared_item(move |message_id, _attachment_id, category| {
+    window.on_profile_open_shared_item(move |message_id, attachment_id, category, selected_url| {
         let Some(w) = weak_window.upgrade() else {
             return;
         };
         if category.as_str() == "link" {
-            // For a link the title IS the URL; find it in the painted model
-            // rather than re-querying.
-            let items = w.get_profile_shared_items();
-            let url = items
-                .iter()
-                .find(|i| i.message_id == message_id)
-                .map(|i| i.subtitle.to_string());
-            if let Some(url) = url {
-                // `ExternalOpener` is desktop-only (chatter-core/src/system/mod.rs
-                // gates it on `not(android/ios)`), which is why every other caller
-                // — pdf_preview.rs, code_preview.rs, attachment_view.rs — guards
-                // the import the same way. Unguarded it compiles on the host and
-                // breaks only the Android build, where `cargo check` never looks.
-                #[cfg(not(any(target_os = "android", target_os = "ios")))]
-                if let Err(e) = chatter_core::system::ExternalOpener.open_url(&url) {
-                    tracing::warn!(error = %e, %url, "Failed to open shared link");
-                }
-                #[cfg(any(target_os = "android", target_os = "ios"))]
-                tracing::warn!(
-                    %url,
-                    "Opening a shared link needs a platform intent on mobile; \
-                     no opener is wired yet"
-                );
-            }
+            // Preserve the clicked row identity, including two URLs in one
+            // message. The message-link callback owns validation and the
+            // platform opener (Android intent or desktop browser).
+            open_shared_link(
+                w.get_profile_shared_items().iter(),
+                message_id.as_str(),
+                attachment_id.as_str(),
+                selected_url.as_str(),
+                |url| w.invoke_open_message_link(url.into()),
+            );
             return;
         }
         let Some(conversation) = SHARED_PAGE.with(|p| p.borrow().conversation) else {
@@ -1336,5 +1322,65 @@ mod shared_content_title_tests {
                 "Voice message.wav"
             );
         }
+    }
+}
+
+/// Resolve a click against the currently painted rows before delegating to the
+/// existing safe message-link action. Injecting the action keeps regressions
+/// independent of real browsers and platform intents.
+fn open_shared_link(
+    items: impl IntoIterator<Item = SharedContentItem>,
+    message_id: &str,
+    attachment_id: &str,
+    selected_url: &str,
+    open: impl FnOnce(&str),
+) -> bool {
+    let selected = items.into_iter().find(|item| {
+        item.category.as_str() == "link"
+            && item.message_id.as_str() == message_id
+            && item.attachment_id.as_str() == attachment_id
+            && item.subtitle.as_str() == selected_url
+    });
+    if let Some(item) = selected {
+        open(item.subtitle.as_str());
+        true
+    } else {
+        false
+    }
+}
+
+#[cfg(test)]
+mod shared_link_tests {
+    use super::*;
+
+    #[test]
+    fn selected_second_url_uses_injected_message_link_opener() {
+        let rows = [
+            "https://example.invalid/first",
+            "https://example.invalid/second",
+        ]
+        .map(|url| SharedContentItem {
+            message_id: "same-message".into(),
+            attachment_id: "".into(),
+            category: "link".into(),
+            subtitle: url.into(),
+            ..Default::default()
+        });
+        let mut opened = String::new();
+        assert!(open_shared_link(
+            rows.clone(),
+            "same-message",
+            "",
+            rows[1].subtitle.as_str(),
+            |url| opened = url.to_owned()
+        ));
+        assert_eq!(opened, "https://example.invalid/second");
+        assert!(!open_shared_link(
+            rows,
+            "same-message",
+            "",
+            "https://example.invalid/stale",
+            |_| panic!("stale row must not invoke opener")
+        ));
     }
 }

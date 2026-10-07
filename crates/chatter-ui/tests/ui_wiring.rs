@@ -1643,7 +1643,7 @@ fn profile_shared_content_drawer_is_wired() {
     // guard being asserted.
     w.invoke_profile_shared_tab_selected("file".into());
     w.invoke_profile_shared_load_more();
-    w.invoke_profile_open_shared_item("msg-1".into(), "".into(), "media".into());
+    w.invoke_profile_open_shared_item("msg-1".into(), "".into(), "media".into(), "".into());
     w.invoke_profile_toggle_mute();
 
     // L2: static — handlers reach core; Slint fires the callbacks.

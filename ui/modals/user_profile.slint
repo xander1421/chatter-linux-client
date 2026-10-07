@@ -132,7 +132,7 @@ export component UserProfileModal inherits Rectangle {
     callback start-call(bool /* is-video */);
     callback shared-tab-selected(string /* category */);
     callback shared-load-more();
-    callback open-shared-item(string /* message-id */, string /* attachment-id */, string /* category */);
+    callback open-shared-item(string /* message-id */, string /* attachment-id */, string /* category */, string /* selected-url */);
 
     // Helper to get presence color from string
     pure function presence-color(p: string) -> color {
@@ -999,7 +999,7 @@ export component UserProfileModal inherits Rectangle {
                             TouchArea {
                                 mouse-cursor: pointer;
                                 clicked => {
-                                    root.open-shared-item(item.message-id, item.attachment-id, item.category);
+                                    root.open-shared-item(item.message-id, item.attachment-id, item.category, item.subtitle);
                                 }
                             }
                         }
@@ -1073,7 +1073,7 @@ export component UserProfileModal inherits Rectangle {
                             list-touch := TouchArea {
                                 mouse-cursor: pointer;
                                 clicked => {
-                                    root.open-shared-item(item.message-id, item.attachment-id, item.category);
+                                    root.open-shared-item(item.message-id, item.attachment-id, item.category, item.subtitle);
                                 }
                             }
                         }

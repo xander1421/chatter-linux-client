@@ -3,22 +3,25 @@
 //!
 //! Subsumes the former `quick_switcher.rs` and the search half of `header.rs`.
 
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
-use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use chatter_core::client::ChatterClient;
 
-use crate::{MainWindow, QuickSwitcherItem, SearchResult, run_ui};
+use crate::{MainWindow, QuickSwitcherItem, SearchResult};
 
 /// Wire all unified-search callbacks.
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    wire_opened(window, ui_ctx);
-    wire_changed(window, ui_ctx);
-    wire_conversation_selected(window);
-    wire_message_selected(window, ui_ctx);
-    wire_resolve(window, ui_ctx);
-    wire_person_selected(window, ui_ctx);
+    let requests = Arc::new(Mutex::new(SearchRequests::default()));
+    wire_session(window, ui_ctx, requests.clone());
+    wire_opened(window, ui_ctx, requests.clone());
+    wire_closed(window, ui_ctx, requests.clone());
+    wire_changed(window, ui_ctx, requests.clone());
+    wire_conversation_selected(window, ui_ctx, requests.clone());
+    wire_message_selected(window, ui_ctx, requests.clone());
+    wire_resolve(window, ui_ctx, requests.clone());
+    wire_person_selected(window, ui_ctx, requests);
 }
 
 /// The person-lookup form of a query: trimmed, one leading `@` dropped.
@@ -37,28 +40,120 @@ fn resolvable_person_query(q: &str) -> bool {
 }
 
 /// On open: populate conversations (empty query → recent), clear messages.
-fn wire_opened(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+fn wire_opened(
+    window: &MainWindow,
+    ui_ctx: &Arc<ChatterClient>,
+    requests: Arc<Mutex<SearchRequests>>,
+) {
     let weak = window.as_weak();
     let ui_ctx = ui_ctx.clone();
     window.on_unified_search_opened(move || {
         if let Some(w) = weak.upgrade() {
+            requests
+                .lock()
+                .unwrap()
+                .invalidate(ui_ctx.auth_state().get().session_revision, "");
+            clear_search_rows(&w);
             let convs = conversation_items(&ui_ctx, "");
             set_conversations(&w, convs);
-            w.set_unified_search_messages(ModelRc::new(VecModel::default()));
         }
     });
 }
 
+/// Account transitions retire both pending requests and already painted rows.
+/// Subscribe before spawning so an immediate logout cannot be missed.
+fn wire_session(
+    window: &MainWindow,
+    ui_ctx: &Arc<ChatterClient>,
+    requests: Arc<Mutex<SearchRequests>>,
+) {
+    let weak = window.as_weak();
+    let auth = ui_ctx.auth_state().clone();
+    let mut events = auth.subscribe();
+    let mut revision = auth.get().session_revision;
+    tokio::spawn(async move {
+        loop {
+            if matches!(
+                events.recv().await,
+                Err(tokio::sync::broadcast::error::RecvError::Closed)
+            ) {
+                break;
+            }
+            let next = auth.get().session_revision;
+            if revision == next {
+                continue;
+            }
+            revision = next;
+            // Invalidate immediately, even before the UI processes the reset.
+            requests.lock().unwrap().invalidate(next, "");
+            let requests = requests.clone();
+            let weak = weak.clone();
+            let auth = auth.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                if auth.get().session_revision != next {
+                    return;
+                }
+                if let Some(w) = weak.upgrade() {
+                    requests.lock().unwrap().invalidate(next, "");
+                    clear_search_rows(&w);
+                    w.set_unified_search_conversations(ModelRc::new(VecModel::default()));
+                    w.set_unified_search_open(false);
+                }
+            });
+        }
+    });
+}
+
+/// Closing invalidates requests even if the same query is reopened later.
+fn wire_closed(
+    window: &MainWindow,
+    ui_ctx: &Arc<ChatterClient>,
+    requests: Arc<Mutex<SearchRequests>>,
+) {
+    let weak = window.as_weak();
+    let ui_ctx = ui_ctx.clone();
+    window.on_unified_search_closed(move || {
+        requests
+            .lock()
+            .unwrap()
+            .invalidate(ui_ctx.auth_state().get().session_revision, "");
+        if let Some(w) = weak.upgrade() {
+            clear_search_rows(&w);
+        }
+    });
+}
+
+fn clear_search_rows(w: &MainWindow) {
+    w.set_unified_search_messages(ModelRc::new(VecModel::default()));
+    w.set_unified_search_searching(false);
+    w.set_unified_search_selected_index(0);
+    w.set_unified_search_person_status("".into());
+    w.set_unified_search_person_id("".into());
+    w.set_unified_search_person_name("".into());
+    w.set_unified_search_person_handle("".into());
+    w.set_unified_search_person_error("".into());
+    w.set_unified_search_query_is_handle(false);
+}
+
 /// On query change: filter conversations (sync, core) + search messages (bg).
-fn wire_changed(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+fn wire_changed(
+    window: &MainWindow,
+    ui_ctx: &Arc<ChatterClient>,
+    requests: Arc<Mutex<SearchRequests>>,
+) {
     let weak = window.as_weak();
     let ui_ctx = ui_ctx.clone();
     window.on_unified_search_changed(move |query: SharedString| {
         let query_str = query.to_string();
+        let ticket = requests
+            .lock()
+            .unwrap()
+            .invalidate(ui_ctx.auth_state().get().session_revision, &query_str);
 
         // People: flag handle-shaped queries (enables the resolve-on-Enter
         // prompt) and invalidate any prior resolution for the new query.
         if let Some(w) = weak.upgrade() {
+            clear_search_rows(&w);
             let person = person_query(&query_str);
             w.set_unified_search_query_is_handle(resolvable_person_query(person));
             w.set_unified_search_person_handle(person.into());
@@ -85,12 +180,25 @@ fn wire_changed(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         }
         let weak_bg = weak.clone();
         let ui_ctx = ui_ctx.clone();
+        let requests = requests.clone();
         std::thread::spawn(move || {
             let results = search_messages(&ui_ctx, &query_str);
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak_bg.upgrade() {
-                    w.set_unified_search_messages(ModelRc::new(VecModel::from(results)));
-                    w.set_unified_search_searching(false);
+                    let ids = results
+                        .iter()
+                        .map(|row| row.message_id.to_string())
+                        .collect();
+                    requests.lock().unwrap().complete_messages(
+                        ticket,
+                        ui_ctx.auth_state().get().session_revision,
+                        w.get_unified_search_open(),
+                        ids,
+                        || {
+                            w.set_unified_search_messages(ModelRc::new(VecModel::from(results)));
+                            w.set_unified_search_searching(false);
+                        },
+                    );
                 }
             });
         });
@@ -101,7 +209,11 @@ fn wire_changed(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 /// `chatter://u/…` username link: exact resolution to a single account.
 /// Privacy: exact-match only (no enumeration); a username link decrypts
 /// LOCALLY (core `resolve_username_link`) and names its owner directly.
-fn wire_resolve(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+fn wire_resolve(
+    window: &MainWindow,
+    ui_ctx: &Arc<ChatterClient>,
+    requests: Arc<Mutex<SearchRequests>>,
+) {
     let weak = window.as_weak();
     let ui_ctx = ui_ctx.clone();
     window.on_unified_search_resolve(move |query: SharedString| {
@@ -109,12 +221,25 @@ fn wire_resolve(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         if !resolvable_person_query(&handle) {
             return;
         }
-        if let Some(w) = weak.upgrade() {
+        let Some(w) = weak.upgrade() else { return };
+        if !w.get_unified_search_open() || person_query(&w.get_unified_search_query()) != handle {
+            return;
+        }
+        let ticket = requests
+            .lock()
+            .unwrap()
+            .begin_person(ui_ctx.auth_state().get().session_revision, &query);
+        {
+            w.set_unified_search_person_status("".into());
+            w.set_unified_search_person_id("".into());
+            w.set_unified_search_person_name("".into());
+            w.set_unified_search_person_error("".into());
             w.set_unified_search_person_handle(handle.clone().into());
             w.set_unified_search_person_status("searching".into());
         }
         let weak_bg = weak.clone();
         let ui_ctx = ui_ctx.clone();
+        let requests = requests.clone();
         tokio::spawn(async move {
             // Username link → (decrypted handle, owner account); plain handle
             // → hashed lookup, which a Nobody account answers as "no match".
@@ -152,10 +277,29 @@ fn wire_resolve(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             };
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak_bg.upgrade() {
-                    w.set_unified_search_person_id(id.into());
-                    w.set_unified_search_person_name(name.into());
-                    w.set_unified_search_person_error(error.into());
-                    w.set_unified_search_person_status(status.into());
+                    let row = PersonRow {
+                        id,
+                        handle: shown_handle,
+                        name,
+                        status,
+                        error,
+                    };
+                    requests.lock().unwrap().complete_person(
+                        ticket,
+                        ui_ctx.auth_state().get().session_revision,
+                        w.get_unified_search_open(),
+                        row,
+                        |row| {
+                            // Status publishes the row last; all identity fields
+                            // belong to this one lookup and this one UI turn.
+                            w.set_unified_search_person_status("".into());
+                            w.set_unified_search_person_id(row.id.clone().into());
+                            w.set_unified_search_person_handle(row.handle.clone().into());
+                            w.set_unified_search_person_name(row.name.clone().into());
+                            w.set_unified_search_person_error(row.error.clone().into());
+                            w.set_unified_search_person_status(row.status.clone().into());
+                        },
+                    );
                 }
             });
         });
@@ -164,10 +308,22 @@ fn wire_resolve(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
 /// On selecting a resolved person: open their profile modal (where the
 /// add-friend / safety-number actions live).
-fn wire_person_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+fn wire_person_selected(
+    window: &MainWindow,
+    ui_ctx: &Arc<ChatterClient>,
+    requests: Arc<Mutex<SearchRequests>>,
+) {
     let weak = window.as_weak();
     let ui_ctx = ui_ctx.clone();
     window.on_unified_search_person_selected(move |uid: SharedString| {
+        let Some(w) = weak.upgrade() else { return };
+        if !requests.lock().unwrap().person_selectable(
+            uid.as_str(),
+            ui_ctx.auth_state().get().session_revision,
+            w.get_unified_search_open(),
+        ) {
+            return;
+        }
         let user_id = match uid.to_string().parse::<chatter_core::domain::ids::UserId>() {
             Ok(id) => id,
             Err(_) => return,
@@ -186,11 +342,26 @@ fn wire_person_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 }
 
 /// On conversation pick: navigate (channel/dm/private group).
-fn wire_conversation_selected(window: &MainWindow) {
+fn wire_conversation_selected(
+    window: &MainWindow,
+    ui_ctx: &Arc<ChatterClient>,
+    requests: Arc<Mutex<SearchRequests>>,
+) {
     let weak = window.as_weak();
+    let ui_ctx = ui_ctx.clone();
     window.on_unified_search_conversation_selected(
         move |id: SharedString, conv_type: SharedString| {
             if let Some(w) = weak.upgrade() {
+                if !requests.lock().unwrap().session_current(
+                    ui_ctx.auth_state().get().session_revision,
+                    w.get_unified_search_open(),
+                ) || !w
+                    .get_unified_search_conversations()
+                    .iter()
+                    .any(|row| row.id == id && row.conv_type == conv_type)
+                {
+                    return;
+                }
                 open_conversation(&w, id, conv_type.as_str());
             }
         },
@@ -219,39 +390,44 @@ fn open_conversation(w: &MainWindow, id: SharedString, conv_type: &str) {
 }
 
 /// On message pick: navigate to the message (port of header.rs search_result_clicked).
-fn wire_message_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+fn wire_message_selected(
+    window: &MainWindow,
+    ui_ctx: &Arc<ChatterClient>,
+    requests: Arc<Mutex<SearchRequests>>,
+) {
     let weak = window.as_weak();
     let ui_ctx = ui_ctx.clone();
     window.on_unified_search_message_selected(move |message_id: SharedString| {
-        let message_id_str = message_id.to_string();
-        let weak = weak.clone();
-        let ui_ctx = ui_ctx.clone();
-        if let Some(w) = weak.upgrade() {
-            w.set_loading_messages(true);
+        let Some(w) = weak.upgrade() else { return };
+        let session = ui_ctx.auth_state().get().session_revision;
+        if !requests.lock().unwrap().message_selectable(
+            message_id.as_str(),
+            session,
+            w.get_unified_search_open(),
+        ) {
+            return;
         }
-        tokio::spawn(async move {
-            let msg_id = match message_id_str.parse::<chatter_core::domain::ids::MessageId>() {
-                Ok(id) => id,
-                Err(e) => {
-                    tracing::error!("Invalid message ID: {}", e);
-                    run_ui!(weak, |w| w.set_loading_messages(false));
-                    return;
-                }
-            };
-            let message = match ui_ctx.get_message_local(&msg_id) {
-                Some(m) => m,
-                None => {
-                    tracing::error!("Message {} not found locally", msg_id);
-                    run_ui!(weak, |w| w.set_loading_messages(false));
-                    return;
-                }
-            };
-            let (conv_type, conv_id) = ui_ctx.search_hit_target(&message);
-            run_ui!(weak, |w| {
-                open_conversation(&w, conv_id.into(), conv_type);
-                jump_once_open(w.as_weak(), ui_ctx, message_id_str, 50);
-            });
-        });
+        // Local lookup and target selection are synchronous: an edit/clear
+        // cannot overtake a queued navigation task after the row was clicked.
+        let Ok(msg_id) = message_id
+            .as_str()
+            .parse::<chatter_core::domain::ids::MessageId>()
+        else {
+            return;
+        };
+        let Some(message) = ui_ctx.get_message_local(&msg_id) else {
+            return;
+        };
+        let (conv_type, conv_id) = ui_ctx.search_hit_target(&message);
+        w.set_loading_messages(true);
+        open_conversation(&w, conv_id.into(), conv_type);
+        jump_once_open(
+            w.as_weak(),
+            ui_ctx.clone(),
+            message_id.to_string(),
+            session,
+            50,
+        );
     });
 }
 
@@ -262,17 +438,25 @@ fn jump_once_open(
     weak: slint::Weak<MainWindow>,
     ui_ctx: Arc<ChatterClient>,
     message_id: String,
+    session: u64,
     tries: u32,
 ) {
     slint::Timer::single_shot(std::time::Duration::from_millis(100), move || {
         let Some(w) = weak.upgrade() else { return };
+        if ui_ctx.auth_state().get().session_revision != session {
+            return;
+        }
         if !w.get_loading_messages() {
             crate::bin_ui::features::header::jump_to_message(&w, &ui_ctx, &message_id);
         } else if tries > 0 {
-            jump_once_open(weak, ui_ctx, message_id, tries - 1);
+            jump_once_open(weak, ui_ctx, message_id, session, tries - 1);
         }
     });
 }
+
+#[path = "unified_search_requests.rs"]
+mod requests;
+use requests::{PersonRow, SearchRequests};
 
 // ---- helpers ----
 

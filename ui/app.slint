@@ -194,6 +194,7 @@ export component MainWindow inherits Window {
     // Loaded from SettingsRepository at startup: "k" | "f" | "both".
     in-out property <string> search-shortcut-pref: "both";
     callback unified-search-opened();
+    callback unified-search-closed();
     callback unified-search-changed(string);
     callback unified-search-conversation-selected(string, string);
     callback unified-search-message-selected(string);
@@ -1066,8 +1067,8 @@ export component MainWindow inherits Window {
     callback profile-start-call(bool /* is-video */);
     callback profile-shared-tab-selected(string /* category */);
     callback profile-shared-load-more();
-    // message-id, attachment-id, category
-    callback profile-open-shared-item(string, string, string);
+    // message-id, attachment-id, category, selected-url
+    callback profile-open-shared-item(string, string, string, string);
     callback profile-generate-share-link();
     callback profile-copy-share-link();
     callback profile-reset-share-link();
@@ -1192,12 +1193,14 @@ export component MainWindow inherits Window {
     // Call history (Calls screen). Rows come from core pre-formatted.
     in property <[CallHistoryRow]> call-history-rows: [];
     in property <bool> call-history-loading: false;
+    in-out property <string> call-history-error: "";
     in-out property <string> call-history-filter: "all";  // "all" | "missed"
     in property <int> missed-call-count: 0;
     callback call-history-filter-changed(string);
     callback call-history-open(string, string);        // conversation-id, conversation-type
     callback call-history-redial(string, string, bool); // conversation-id, conversation-type, is-video
     callback call-history-clear();
+    callback call-history-retry();
     callback accept-incoming-call(string);  // call_id
     callback decline-incoming-call(string); // call_id
     callback call-toggle-mute();
@@ -1359,6 +1362,7 @@ export component MainWindow inherits Window {
     // (RC20, 3/3). Back from that chat returns to the list, like the header ←.
     changed unified-search-open => {
         if (!root.unified-search-open) {
+            root.unified-search-closed();
             back-scope.focus();
         }
     }
@@ -2329,8 +2333,8 @@ export component MainWindow inherits Window {
             shared-load-more => {
                 root.profile-shared-load-more();
             }
-            open-shared-item(message-id, attachment-id, category) => {
-                root.profile-open-shared-item(message-id, attachment-id, category);
+            open-shared-item(message-id, attachment-id, category, selected-url) => {
+                root.profile-open-shared-item(message-id, attachment-id, category, selected-url);
             }
             change-status(mode) => {
                 root.user-presence-mode = mode;
@@ -2506,7 +2510,9 @@ export component MainWindow inherits Window {
             show-modal: true;
             rows: root.call-history-rows;
             loading: root.call-history-loading;
+            error-message: root.call-history-error;
             active-filter: root.call-history-filter;
+            retry => { root.call-history-retry(); }
 
             close => {
                 root.active-tab = "chats";
@@ -2695,16 +2701,22 @@ export component MainWindow inherits Window {
             person-selected(uid) => {
                 root.unified-search-person-selected(uid);
                 root.unified-search-open = false;
+                root.unified-search-closed();
             }
             conversation-selected(id, t) => {
                 root.unified-search-conversation-selected(id, t);
                 root.unified-search-open = false;
+                root.unified-search-closed();
             }
             message-selected(id) => {
                 root.unified-search-message-selected(id);
                 root.unified-search-open = false;
+                root.unified-search-closed();
             }
-            close => { root.unified-search-open = false; }
+            close => {
+                root.unified-search-open = false;
+                root.unified-search-closed();
+            }
         }
 
         if root.active-modal == "channel-settings": ChannelSettingsModal {
@@ -2724,6 +2736,8 @@ export component MainWindow inherits Window {
             channel-description-draft <=> root.channel-settings-description-draft;
             channel-icon-preview <=> root.channel-settings-icon-preview;
             channel-has-icon-preview <=> root.channel-settings-has-icon-preview;
+            channel-avatar-source: root.channel-avatar-source;
+            channel-has-avatar: root.channel-settings-id == root.channel-id && root.channel-has-avatar;
             pick-channel-icon => { root.channel-settings-pick-icon(); }
             channel-type: root.channel-settings-type;
             is-archived: root.channel-settings-archived;
