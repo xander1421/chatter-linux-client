@@ -5,7 +5,7 @@ import { Icons } from "../theme/icons.slint";
 import { DisappearingGlobal } from "disappearing_global.slint";
 
 export component DisappearingStatus inherits Rectangle {
-    background: Colors.primary.with-alpha(0.08);
+    background: Colors.primary.mix(Colors.background, 0.08);
     min-height: 32px;
     HorizontalLayout {
         padding-left: Spacing.md;
