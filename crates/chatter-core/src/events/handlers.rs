@@ -648,7 +648,7 @@ impl EventHandlers {
 
             DomainEvent::AnonCallOfferReceived {
                 conversation_id, sender_id, call_room_id, room_name,
-                call_type, caller_display_name, call_encryption_key, ..
+                call_type, caller_display_name, call_encryption_key, incoming_lease, ..
             } => {
                 // Store pending call state so it's ready when UI accepts/declines
                 if let Some(ref svc) = self.anon_dm_service {
@@ -673,7 +673,7 @@ impl EventHandlers {
                         sender_id: Some(sender_id),
                         started_at: None,
                     };
-                    svc.store_pending_anon_call(room_name.clone(), pending);
+                    svc.store_incoming_anon_offer(room_name.clone(), pending, incoming_lease);
                     debug!(?conversation_id, ?room_name, "Stored pending anon call offer");
                 }
             }
@@ -690,7 +690,7 @@ impl EventHandlers {
 
             DomainEvent::AnonGroupCallOfferReceived {
                 group_id, sender_id, call_room_id, room_name,
-                call_type, caller_display_name, call_encryption_key, ..
+                call_type, caller_display_name, call_encryption_key, incoming_lease, ..
             } => {
                 // Store pending call state (reuse anon DM pending call infra)
                 if let Some(ref svc) = self.anon_dm_service {
@@ -718,7 +718,7 @@ impl EventHandlers {
                         sender_id: Some(sender_id),
                         started_at: None,
                     };
-                    svc.store_pending_anon_call(room_name.clone(), pending);
+                    svc.store_incoming_anon_offer(room_name.clone(), pending, incoming_lease);
                     debug!(?group_id, ?room_name, "Stored pending anon group call offer");
                 }
             }

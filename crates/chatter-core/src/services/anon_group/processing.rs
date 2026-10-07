@@ -230,6 +230,7 @@ impl AnonGroupService {
                     caller_display_name: offer.caller_display_name.clone(),
                     call_encryption_key: offer.call_encryption_key.clone(),
                     timestamp: offer.timestamp,
+                    incoming_lease: crate::services::anon_dm::IncomingAnonOfferLease::new(),
                 });
             }
             Some(ContentType::AnonCallAnswer(answer)) => {

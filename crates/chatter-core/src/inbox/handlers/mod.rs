@@ -415,6 +415,7 @@ pub enum DomainEvent {
         /// E2EE encryption key (32 bytes).
         call_encryption_key: Vec<u8>,
         timestamp: u64,
+        incoming_lease: std::sync::Arc<crate::services::anon_dm::IncomingAnonOfferLease>,
     },
 
     AnonCallAnswerReceived {
@@ -443,6 +444,7 @@ pub enum DomainEvent {
         caller_display_name: String,
         call_encryption_key: Vec<u8>,
         timestamp: u64,
+        incoming_lease: std::sync::Arc<crate::services::anon_dm::IncomingAnonOfferLease>,
     },
 
     AnonGroupCallAnswerReceived {

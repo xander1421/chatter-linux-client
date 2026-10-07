@@ -449,3 +449,32 @@ mod dm_call_bubble_tests {
         }
     }
 }
+
+#[cfg(test)]
+mod incoming_expiry_history_tests {
+    use super::*;
+    use crate::services::call_worker::OrchestratedCallKind;
+
+    #[test]
+    fn incoming_expiry_no_answer_finishes_one_missed_history_row() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = Arc::new(crate::storage::Database::open(&directory.path().join("expiry.db"), "fixture-passphrase").unwrap());
+        db.run_migrations().unwrap();
+        let history = CallHistoryRepository::new(db);
+        for kind in [OrchestratedCallKind::DmStandard, OrchestratedCallKind::AnonDm, OrchestratedCallKind::AnonGroup] {
+            let call = CallHandle::new(uuid::Uuid::new_v4().to_string());
+            history.insert_entry(&CallHistoryEntry {
+                id: call.as_str().into(), conversation_id: "fixture-peer".into(),
+                conversation_type: kind.conversation_type(), peer_name: "Fixture".into(),
+                started_at: chrono::Utc::now(), ended_at: None,
+                direction: CallDirection::Incoming, result: CallResult::Missed,
+                duration_secs: None, has_video: false,
+            }).unwrap();
+            finish(&history, &call, None, &CallEndReason::NoAnswer);
+            let row = history.get(call.as_str()).unwrap().unwrap();
+            assert_eq!(row.result, CallResult::Missed);
+            assert!(row.ended_at.is_some());
+            assert_eq!(row.duration_secs, None);
+        }
+    }
+}

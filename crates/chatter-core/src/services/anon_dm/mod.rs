@@ -24,7 +24,7 @@ mod queries;
 
 // Re-export call types for external use
 pub use calls::{
-    AnonCallOfferResult, AnonCallRoomCredentials, PendingAnonCall, ReceivedCallAnswer,
+    IncomingAnonOfferLease, AnonCallOfferResult, AnonCallRoomCredentials, PendingAnonCall, ReceivedCallAnswer,
     ReceivedCallOffer,
 };
 

@@ -1450,7 +1450,7 @@ impl ChatterClient {
     ) {
         use crate::proto::chat_v1::CallType as ProtoCallType;
         use crate::services::call_worker::{
-            CallEndReason, CallHandle, OrchestratedCallKind, RING_TIMEOUT, offer_is_stale_now,
+            CallEndReason, CallHandle, OrchestratedCallKind, incoming_ring_budget, offer_is_stale_now,
         };
 
         use crate::services::call_signaling::CALL_POLICY_RPC_TIMEOUT;
@@ -1516,7 +1516,9 @@ impl ChatterClient {
         if !self.call_signaling().store_group_call_invite(&call_id) {
             return;
         }
-        worker.orch_present_incoming(
+        let deadline = tokio::time::Instant::now() + incoming_ring_budget(
+            info.created_at, crate::util::time::TimestampNanos::now().as_u64());
+        worker.orch_present_incoming_offer(
             handle.clone(),
             OrchestratedCallKind::GroupChannel,
             sender_id,
@@ -1527,6 +1529,7 @@ impl ChatterClient {
             None,
             channel_name,
             channel_id.to_string(),
+            info.created_at, None,
         );
 
         // Watch the authoritative call, not the initiator's departure: other
@@ -1541,7 +1544,6 @@ impl ChatterClient {
             use crate::proto::chat_v1::{CallEventType, call_event};
             use futures::StreamExt;
 
-            let deadline = tokio::time::Instant::now() + RING_TIMEOUT;
             let mut events: Option<
                 futures::stream::BoxStream<
                     'static,

@@ -219,6 +219,8 @@ pub struct AnonCallConnectedInfo {
 /// Bookkeeping for a presented incoming call waiting for the user to decide.
 #[derive(Debug, Clone)]
 struct PendingIncoming {
+    deadline: tokio::time::Instant,
+    anon_lease: Option<Arc<crate::services::anon_dm::IncomingAnonOfferLease>>,
     session_revision: Option<u64>,
     call: CallHandle,
     kind: OrchestratedCallKind,
@@ -230,6 +232,15 @@ struct PendingIncoming {
     ephemeral_public_key: Option<[u8; 32]>,
     channel_context: Option<String>,
     conversation_id: String,
+}
+
+impl PendingIncoming {
+    fn retire_anon(&self) {
+        if let Some(lease) = &self.anon_lease { lease.retire(self.call.as_str(), self.peer_id); }
+    }
+    fn seal_anon(&self) {
+        if let Some(lease) = &self.anon_lease { lease.seal(self.call.as_str()); }
+    }
 }
 
 /// Bookkeeping for an outgoing call dialed but not yet connected.
@@ -265,6 +276,24 @@ struct OrchestratorState {
 }
 
 impl OrchestratorState {
+    fn withdraw_expired(&mut self, now: tokio::time::Instant, presentation: &IncomingCallPresentationState, events: &broadcast::Sender<CallOrchestratorEvent>) {
+        for pending in self.expire_incoming(now) {
+            pending.retire_anon();
+            if presentation.accepts_session(pending.session_revision) {
+                let _ = events.send(CallOrchestratorEvent::IncomingWithdrawn {
+                    call: pending.call, reason: CallEndReason::NoAnswer,
+                });
+            }
+        }
+        self.incoming_order.retain(|call, _| self.incoming.contains_key(call));
+        presentation.publish(self);
+    }
+
+    fn expire_incoming(&mut self, now: tokio::time::Instant) -> Vec<PendingIncoming> {
+        let expired: Vec<_> = self.incoming.iter().filter(|(_, p)| p.deadline <= now)
+            .map(|(call, _)| call.clone()).collect();
+        expired.into_iter().filter_map(|call| self.incoming.remove(&call)).collect()
+    }
     /// The connected call's kind, else a dialed call's that is still ringing.
     fn call_kind(&self) -> Option<OrchestratedCallKind> {
         self.active
@@ -731,6 +760,16 @@ enum CallCommand {
     /// Seed media-independent state for actor ownership regressions; never
     /// creates a room, publishes tracks, reads credentials or touches storage.
     #[cfg(test)]
+    TestAdvanceIncomingClock {
+        elapsed: std::time::Duration,
+        response: oneshot::Sender<()>,
+    },
+    #[cfg(test)]
+    TestExpireIncoming {
+        elapsed: std::time::Duration,
+        response: oneshot::Sender<()>,
+    },
+    #[cfg(test)]
     TestPrimeCall {
         call: Call,
         response: oneshot::Sender<()>,
@@ -1061,7 +1100,22 @@ impl CallWorkerHandle {
         channel_context: Option<String>,
         conversation_id: String,
     ) {
+        self.orch_present_incoming_offer(call, kind, peer_id, peer_name, is_video,
+            is_identity_verified, identity_warning, ephemeral_public_key, channel_context,
+            conversation_id, 0, None);
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn orch_present_incoming_offer(
+        &self, call: CallHandle, kind: OrchestratedCallKind, peer_id: UserId,
+        peer_name: String, is_video: bool, is_identity_verified: bool,
+        identity_warning: String, ephemeral_public_key: Option<[u8; 32]>,
+        channel_context: Option<String>, conversation_id: String, timestamp: u64,
+        anon_lease: Option<Arc<crate::services::anon_dm::IncomingAnonOfferLease>>,
+    ) {
         let incoming = PendingIncoming {
+            deadline: tokio::time::Instant::now() + incoming_ring_budget(timestamp, crate::util::time::TimestampNanos::now().as_u64()),
+            anon_lease,
             session_revision: self.presentation_session,
             call,
             kind,
@@ -1074,9 +1128,9 @@ impl CallWorkerHandle {
             channel_context,
             conversation_id,
         };
-        let _ = self
-            .cmd_tx
-            .try_send(CallCommand::OrchPresentIncoming { incoming });
+        if let Err(error) = self.cmd_tx.try_send(CallCommand::OrchPresentIncoming { incoming }) {
+            if let CallCommand::OrchPresentIncoming { incoming } = error.into_inner() { incoming.retire_anon(); }
+        }
     }
 
     /// Record an incoming call whose offer is too old to ring. Touches no
@@ -1913,9 +1967,19 @@ fn run_call_worker(
 
         // Process commands
         loop {
-            let cmd = match cmd_rx.recv().await {
-                Some(cmd) => cmd,
-                None => break, // Channel closed
+            let deadline = orchestrator.incoming.values().map(|p| p.deadline).min();
+            let cmd = tokio::select! {
+                biased;
+                _ = async {
+                    match deadline {
+                        Some(deadline) => tokio::time::sleep_until(deadline).await,
+                        None => std::future::pending::<()>().await,
+                    }
+                } => {
+                    orchestrator.withdraw_expired(tokio::time::Instant::now(), &incoming_presentation, &call_events_tx);
+                    continue;
+                }
+                cmd = cmd_rx.recv() => match cmd { Some(cmd) => cmd, None => break },
             };
 
             orchestrator.generation = orchestrator.generation.checked_add(1)
@@ -2397,8 +2461,37 @@ fn run_call_worker(
                 // Orchestrator commands
                 // ============================================================
 
+                #[cfg(test)]
+                CallCommand::TestAdvanceIncomingClock { elapsed, response } => {
+                    tokio::time::pause();
+                    tokio::time::advance(elapsed).await;
+                    let _ = response.send(());
+                }
+                #[cfg(test)]
+                CallCommand::TestExpireIncoming { elapsed, response } => {
+                    orchestrator.withdraw_expired(tokio::time::Instant::now() + elapsed, &incoming_presentation, &call_events_tx);
+                    let _ = response.send(());
+                }
                 CallCommand::OrchPresentIncoming { incoming } => {
-                    if !incoming_presentation.accepts_session(incoming.session_revision) { continue; }
+                    if !incoming_presentation.accepts_session(incoming.session_revision) {
+                        incoming.retire_anon();
+                        continue;
+                    }
+                    if orchestrator.incoming.get(&incoming.call).is_some_and(|old| old.session_revision != incoming.session_revision) {
+                        if let Some(old) = orchestrator.incoming.remove(&incoming.call) { old.retire_anon(); }
+                    }
+                    if let Some(original) = orchestrator.incoming.get(&incoming.call) {
+                        if let Some(duplicate) = &incoming.anon_lease {
+                            if let Some(first) = &original.anon_lease {
+                                if original.peer_id != incoming.peer_id || original.kind != incoming.kind {
+                                    incoming.retire_anon();
+                                    continue;
+                                }
+                                if !Arc::ptr_eq(first, duplicate) { first.absorb(duplicate, incoming.call.as_str()); }
+                            } else { incoming.retire_anon(); }
+                        }
+                        continue; // never renew or re-announce an existing ring
+                    }
                     let replaces_active = orchestrator.active.is_some();
                     let snapshot = incoming.clone();
                     orchestrator.incoming_order.insert(
@@ -2421,7 +2514,8 @@ fn run_call_worker(
                 }
 
                 CallCommand::OrchWithdrawIncoming { call, reason, response } => {
-                    if orchestrator.incoming.remove(&call).is_some() {
+                    if let Some(pending) = orchestrator.incoming.remove(&call) {
+                        pending.retire_anon();
                         let _ = call_events_tx.send(CallOrchestratorEvent::IncomingWithdrawn {
                             call,
                             reason,
@@ -2472,7 +2566,7 @@ fn run_call_worker(
                     // Clear from pending maps regardless of whether it was
                     // incoming or outgoing — either way it's now connected.
                     orchestrator.outgoing.remove(&call);
-                    orchestrator.incoming.remove(&call);
+                    if let Some(pending) = orchestrator.incoming.remove(&call) { pending.seal_anon(); }
                     orchestrator.active = Some(OrchestratedActive {
                         session_revision: session_revision.or(session_lease.session_revision),
                         call: call.clone(),
@@ -2508,7 +2602,8 @@ fn run_call_worker(
                             call,
                             reason,
                         });
-                    } else if orchestrator.incoming.remove(&call).is_some() {
+                    } else if let Some(pending) = orchestrator.incoming.remove(&call) {
+                        pending.retire_anon();
                         let _ = call_events_tx.send(CallOrchestratorEvent::IncomingWithdrawn {
                             call,
                             reason,
@@ -2566,6 +2661,7 @@ fn run_call_worker(
                     } else if !replaces_active && orchestrator.active.is_some() {
                         Err(CallError::AlreadyInCall)
                     } else if let Some(p) = orchestrator.incoming.remove(&call) {
+                        p.seal_anon();
                         // No await or reply can expose worker success before key ownership.
                         if is_group {
                             invites.get_mut(call.as_str()).unwrap().accepted = true;
@@ -2592,6 +2688,7 @@ fn run_call_worker(
                     let result = if orchestrator.active.is_some() {
                         Err(CallError::AlreadyInCall)
                     } else if let Some(p) = orchestrator.incoming.remove(&call) {
+                        p.seal_anon();
                         Ok(p)
                     } else {
                         Err(CallError::NotInCall)
@@ -2602,6 +2699,7 @@ fn run_call_worker(
 
                 CallCommand::OrchAcceptIncomingReplacingActive { call, response } => {
                     let pending = orchestrator.incoming.remove(&call);
+                    if let Some(p) = &pending { p.seal_anon(); }
                     let result = match pending {
                         Some(p) => {
                             if let Some(prev) = orchestrator.active.take() {
@@ -2623,6 +2721,8 @@ fn run_call_worker(
                 CallCommand::OrchDeclineIncoming { call, response } => {
                     let result = match orchestrator.incoming.remove(&call) {
                         Some(p) => {
+                            // The decline sender still needs the pending room/caller record.
+                            p.seal_anon();
                             let _ = call_events_tx.send(
                                 CallOrchestratorEvent::IncomingWithdrawn {
                                     call: p.call.clone(),
@@ -2648,7 +2748,7 @@ fn run_call_worker(
                         .map(|(id, _)| id.clone()).collect();
                     let retired_ids = retired.iter().map(|call| call.as_str().to_owned()).collect();
                     for call in retired {
-                        orchestrator.incoming.remove(&call);
+                        if let Some(pending) = orchestrator.incoming.remove(&call) { pending.retire_anon(); }
                         let _ = call_events_tx.send(CallOrchestratorEvent::IncomingWithdrawn {
                             call, reason: CallEndReason::LocalHangup,
                         });
@@ -2665,6 +2765,7 @@ fn run_call_worker(
                 }
 
                 CallCommand::Shutdown => {
+                    for pending in orchestrator.incoming.values() { pending.retire_anon(); }
                     tracing::info!("Call worker shutting down");
                     break;
                 }
@@ -4023,8 +4124,13 @@ pub const RING_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60)
 /// (Signal's rule; the inbox falls back to the caller's clock only when the
 /// server gave none). `0` means nothing was stamped: ring rather than silently
 /// drop a live call. A clock ahead of ours saturates to age 0 and rings.
+pub(crate) fn incoming_ring_budget(sent_ns: u64, now_ns: u64) -> std::time::Duration {
+    let age = if sent_ns == 0 { 0 } else { now_ns.saturating_sub(sent_ns) };
+    RING_TIMEOUT.saturating_sub(std::time::Duration::from_nanos(age))
+}
+
 pub(crate) fn offer_is_stale(sent_ns: u64, now_ns: u64) -> bool {
-    sent_ns != 0 && now_ns.saturating_sub(sent_ns) > RING_TIMEOUT.as_nanos() as u64
+    sent_ns != 0 && now_ns.saturating_sub(sent_ns) >= RING_TIMEOUT.as_nanos() as u64
 }
 
 pub(crate) fn offer_is_stale_now(sent_ns: u64) -> bool {
@@ -4072,7 +4178,7 @@ fn handle_domain_event(
                 );
                 return;
             }
-            worker.orch_present_incoming(
+            worker.orch_present_incoming_offer(
                 CallHandle::from(call_id),
                 OrchestratedCallKind::DmStandard,
                 peer_id,
@@ -4085,6 +4191,7 @@ fn handle_domain_event(
                 None,
                 // DMs are channel-free: the conversation key IS the peer.
                 peer_id.to_string(),
+                timestamp, None,
             );
         }
 
@@ -4126,6 +4233,7 @@ fn handle_domain_event(
             caller_display_name,
             conversation_id,
             timestamp,
+            incoming_lease,
             ..
         } => {
             let is_video = call_type == 2;
@@ -4138,6 +4246,7 @@ fn handle_domain_event(
                 .or_else(|| (!caller_display_name.is_empty()).then_some(caller_display_name))
                 .unwrap_or_else(|| "Anonymous".to_string());
             if offer_is_stale_now(timestamp) {
+                incoming_lease.retire(&room_name, sender_id);
                 worker.orch_missed_incoming(
                     CallHandle::from(room_name),
                     OrchestratedCallKind::AnonDm,
@@ -4147,7 +4256,7 @@ fn handle_domain_event(
                 );
                 return;
             }
-            worker.orch_present_incoming(
+            worker.orch_present_incoming_offer(
                 CallHandle::from(room_name),
                 OrchestratedCallKind::AnonDm,
                 sender_id,
@@ -4159,6 +4268,7 @@ fn handle_domain_event(
                 // 1:1 anon DM — no channel name.
                 None,
                 conversation_id.to_string(),
+                timestamp, Some(incoming_lease),
             );
         }
 
@@ -4214,6 +4324,7 @@ fn handle_domain_event(
             caller_display_name,
             group_id,
             timestamp,
+            incoming_lease,
             ..
         } => {
             let is_video = call_type == 2;
@@ -4223,6 +4334,7 @@ fn handle_domain_event(
                 caller_display_name
             };
             if offer_is_stale_now(timestamp) {
+                incoming_lease.retire(&room_name, sender_id);
                 worker.orch_missed_incoming(
                     CallHandle::from(room_name),
                     OrchestratedCallKind::AnonGroup,
@@ -4232,7 +4344,7 @@ fn handle_domain_event(
                 );
                 return;
             }
-            worker.orch_present_incoming(
+            worker.orch_present_incoming_offer(
                 CallHandle::from(room_name),
                 OrchestratedCallKind::AnonGroup,
                 sender_id,
@@ -4246,6 +4358,7 @@ fn handle_domain_event(
                 // resolved name here when a group-name lookup exists.
                 None,
                 group_id.to_string(),
+                timestamp, Some(incoming_lease),
             );
         }
 
@@ -4442,7 +4555,7 @@ mod ring_timeout_tests {
         let now = 1_800_000_000_000_000_000u64;
         let timeout = RING_TIMEOUT.as_nanos() as u64;
         assert!(!offer_is_stale(now - 5_000_000_000, now));
-        assert!(!offer_is_stale(now - timeout, now));
+        assert!(offer_is_stale(now - timeout, now));
         assert!(offer_is_stale(now - timeout - 1, now));
         // The F56 case: an offer from 40 minutes ago, drained on app start.
         assert!(offer_is_stale(now - 40 * 60 * 1_000_000_000, now));
@@ -6067,5 +6180,142 @@ mod setup_cancellation_actor_tests {
             worker.orch_active_kind().await,
             Some(OrchestratedCallKind::DmStandard)
         );
+    }
+}
+
+#[cfg(test)]
+mod incoming_expiry_tests {
+    use super::*;
+    use std::time::Duration;
+
+    fn worker() -> CallWorkerHandle {
+        let channel = tonic::transport::Endpoint::from_static("http://127.0.0.1:9").connect_lazy();
+        CallWorkerHandle::spawn(CallClient::new(channel.into(), crate::network::grpc::interceptors::AuthInterceptor::new()))
+    }
+
+    async fn expire(worker: &CallWorkerHandle, elapsed: Duration) {
+        let (response, rx) = oneshot::channel();
+        worker.cmd_tx.send(CallCommand::TestExpireIncoming { elapsed, response }).await.unwrap();
+        rx.await.unwrap();
+    }
+
+    async fn present(worker: &CallWorkerHandle, call: &str, kind: OrchestratedCallKind, timestamp: u64) {
+        worker.orch_present_incoming_offer(CallHandle::from(call), kind, UserId::new(), "Caller".into(), false,
+            true, String::new(), None, None, "conversation".into(), timestamp, None);
+        // FIFO snapshot is an actor barrier, not a wall-clock sleep.
+        worker.incoming_presentation_snapshot().await.unwrap();
+    }
+
+    struct NotificationProbe(tokio::sync::mpsc::UnboundedSender<String>);
+    impl crate::system::notification_sink::NotificationSink for NotificationProbe {
+        fn show(&self, _: &str, _: &str, _: crate::domain::notification::NotificationPriority) -> Result<(), crate::error::SystemError> { Ok(()) }
+        fn show_incoming_call(&self, call: &str, _: &str, _: &str) -> Result<(), crate::error::SystemError> {
+            let _ = self.0.send(format!("show {call}")); Ok(())
+        }
+        fn cancel_incoming_call(&self, call: &str) -> Result<(), crate::error::SystemError> {
+            let _ = self.0.send(format!("cancel {call}")); Ok(())
+        }
+    }
+
+    #[tokio::test]
+    async fn incoming_expiry_snapshot_cancels_native_notification() {
+        let worker = worker();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let bridge = crate::services::call_notification_bridge::spawn_call_notification_bridge(
+            worker.clone(), Arc::new(crate::services::notification_service::NotificationService::new(Arc::new(NotificationProbe(tx)))));
+        present(&worker, "notification", OrchestratedCallKind::DmStandard, 0).await;
+        assert_eq!(tokio::time::timeout(Duration::from_secs(5), rx.recv()).await.unwrap().unwrap(), "show notification");
+        expire(&worker, Duration::from_secs(60)).await;
+        assert_eq!(tokio::time::timeout(Duration::from_secs(5), rx.recv()).await.unwrap().unwrap(), "cancel notification");
+        assert!(worker.incoming_presentation_snapshot().await.unwrap().presentations.is_empty());
+        bridge.abort();
+        worker.shutdown();
+    }
+
+    #[test]
+    fn incoming_expiry_budget_bounds_clock_skew_and_boundary() {
+        let now = 1_800_000_000_000_000_000;
+        assert_eq!(incoming_ring_budget(now - 59_000_000_000, now), Duration::from_secs(1));
+        assert_eq!(incoming_ring_budget(now - 60_000_000_000, now), Duration::ZERO);
+        assert_eq!(incoming_ring_budget(now - 61_000_000_000, now), Duration::ZERO);
+        for stamp in [0, now, now + 1, u64::MAX] {
+            assert_eq!(incoming_ring_budget(stamp, now), RING_TIMEOUT);
+        }
+    }
+
+    #[tokio::test]
+    async fn incoming_expiry_real_actor_all_transports_missing_cancel_exactly_once() {
+        for kind in [OrchestratedCallKind::DmStandard, OrchestratedCallKind::AnonDm, OrchestratedCallKind::AnonGroup] {
+            let worker = worker();
+            let mut events = worker.subscribe_call_events();
+            present(&worker, "missing-cancel", kind, 0).await;
+            assert!(matches!(events.recv().await.unwrap(), CallOrchestratorEvent::IncomingPresented { .. }));
+            expire(&worker, Duration::from_secs(59)).await;
+            assert_eq!(worker.incoming_presentation_snapshot().await.unwrap().presentations.len(), 1);
+            let (response, advanced) = oneshot::channel();
+            worker.cmd_tx.send(CallCommand::TestAdvanceIncomingClock { elapsed: Duration::from_secs(60), response }).await.unwrap();
+            advanced.await.unwrap();
+            // Exercise the real sleep_until/select branch on the worker's own
+            // paused clock, rather than invoking only the expiration helper.
+            assert!(matches!(events.recv().await.unwrap(), CallOrchestratorEvent::IncomingWithdrawn { call, reason: CallEndReason::NoAnswer } if call.as_str() == "missing-cancel"));
+            assert!(worker.incoming_presentation_snapshot().await.unwrap().presentations.is_empty());
+            expire(&worker, Duration::from_secs(120)).await;
+            assert!(events.try_recv().is_err(), "expiry must not record a second missed call");
+            worker.shutdown();
+        }
+    }
+
+    #[tokio::test]
+    async fn incoming_expiry_age_duplicate_and_unrelated_active_are_preserved() {
+        let worker = worker();
+        let mut events = worker.subscribe_call_events();
+        let active = CallHandle::from("active");
+        worker.orch_mark_connected(active.clone(), OrchestratedCallKind::DmStandard, UserId::new(), false);
+        let now = crate::util::time::TimestampNanos::now().as_u64();
+        present(&worker, "old", OrchestratedCallKind::DmStandard, now - 59_000_000_000).await;
+        present(&worker, "fresh", OrchestratedCallKind::AnonDm, 0).await;
+        // Re-delivery with an unstamped/future clock cannot renew the old slot.
+        present(&worker, "old", OrchestratedCallKind::DmStandard, u64::MAX).await;
+        expire(&worker, Duration::from_secs(2)).await;
+        let snapshot = worker.incoming_presentation_snapshot().await.unwrap();
+        assert_eq!(snapshot.presentations.len(), 1);
+        assert!(matches!(&snapshot.presentations[0], CallOrchestratorEvent::IncomingPresented { call, .. } if call.as_str() == "fresh"));
+        assert_eq!(worker.orch_active_kind().await, Some(OrchestratedCallKind::DmStandard));
+        let observed: Vec<_> = std::iter::from_fn(|| events.try_recv().ok()).collect();
+        assert_eq!(observed.iter().filter(|e| matches!(e, CallOrchestratorEvent::IncomingPresented { call, .. } if call.as_str() == "old")).count(), 1);
+        assert_eq!(observed.iter().filter(|e| matches!(e, CallOrchestratorEvent::IncomingWithdrawn { call, reason: CallEndReason::NoAnswer } if call.as_str() == "old")).count(), 1);
+        assert!(!observed.iter().any(|e| matches!(e, CallOrchestratorEvent::ActiveEnded { .. })));
+        // Reusing the removed handle creates a new instance. The old short
+        // deadline cannot target it because deadlines live in current slots.
+        present(&worker, "old", OrchestratedCallKind::DmStandard, 0).await;
+        expire(&worker, Duration::from_secs(2)).await;
+        assert_eq!(worker.incoming_presentation_snapshot().await.unwrap().presentations.len(), 2);
+        worker.shutdown();
+    }
+
+    #[tokio::test]
+    async fn incoming_expiry_accept_decline_hangup_and_session_reset_fence_old_slots() {
+        let worker = worker();
+        let mut events = worker.subscribe_call_events();
+        for call in ["accepted", "declined", "hung-up"] { present(&worker, call, OrchestratedCallKind::AnonGroup, 0).await; }
+        worker.orch_accept_incoming(CallHandle::from("accepted")).await.unwrap();
+        worker.orch_decline_incoming(CallHandle::from("declined")).await.unwrap();
+        worker.orch_withdraw_incoming_reliably(CallHandle::from("hung-up"), CallEndReason::RemoteHangup).await.unwrap();
+        expire(&worker, Duration::from_secs(120)).await;
+        assert!(!std::iter::from_fn(|| events.try_recv().ok()).any(|e| matches!(e, CallOrchestratorEvent::IncomingWithdrawn { reason: CallEndReason::NoAnswer, .. })));
+        worker.incoming_presentation_state().begin_session(1);
+        let old = worker.for_presentation_session(1);
+        present(&old, "reused", OrchestratedCallKind::DmStandard, 0).await;
+        worker.reset_presentation_session(1).await.unwrap();
+        worker.incoming_presentation_state().begin_session(2);
+        let next = worker.for_presentation_session(2);
+        present(&next, "reused", OrchestratedCallKind::DmStandard, 0).await;
+        // An old session's queued presentation cannot replace/renew the new slot.
+        present(&old, "reused", OrchestratedCallKind::DmStandard, u64::MAX).await;
+        expire(&worker, Duration::from_secs(59)).await;
+        assert_eq!(next.incoming_presentation_snapshot().await.unwrap().presentations.len(), 1);
+        expire(&worker, Duration::from_secs(60)).await;
+        assert!(next.incoming_presentation_snapshot().await.unwrap().presentations.is_empty());
+        worker.shutdown();
     }
 }
