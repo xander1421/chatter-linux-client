@@ -1564,14 +1564,75 @@ mod deletion_tests {
         settings_repo::{SettingsRepository, keys},
     };
 
+    const CHILD_MARKER: &str = "CHATTER_UI_CHANNEL_DELETE_TEST_CHILD";
+    const FIXTURE_COMPLETED: &str = "channel deletion fixture completed";
+
+    fn run_isolated_delete_test(test_name: &str) {
+        use std::io::{Read, Seek, SeekFrom};
+        use std::process::{Command, Stdio};
+        use std::time::{Duration, Instant};
+
+        // Slint's integration backend may only be initialized once per process.
+        // Re-run this exact test alone, preserving the inherited no-keyring env.
+        // Files avoid pipe-buffer deadlocks even if the fixture logs heavily.
+        let mut stdout = tempfile::tempfile().expect("create child stdout capture");
+        let mut stderr = tempfile::tempfile().expect("create child stderr capture");
+        let mut child = Command::new(std::env::current_exe().expect("locate UI test executable"))
+            .args(["--exact", test_name, "--nocapture", "--test-threads=1"])
+            .env(CHILD_MARKER, test_name)
+            .stdin(Stdio::null())
+            .stdout(Stdio::from(stdout.try_clone().unwrap()))
+            .stderr(Stdio::from(stderr.try_clone().unwrap()))
+            .spawn()
+            .expect("spawn isolated channel deletion test");
+        let deadline = Instant::now() + Duration::from_secs(45);
+        let result = loop {
+            match child.try_wait() {
+                Ok(Some(status)) => break Ok(status),
+                Ok(None) if Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(20));
+                }
+                Ok(None) => break Err("child exceeded 45-second timeout".to_owned()),
+                Err(error) => break Err(format!("polling child failed: {error}")),
+            }
+        };
+        // Never signal another test or service; reap only the child we spawned.
+        let cleanup = if result.is_err() {
+            let killed = child.kill();
+            let reaped = child.wait();
+            format!("; child kill: {killed:?}; child wait: {reaped:?}")
+        } else {
+            String::new()
+        };
+        let mut stdout_text = String::new();
+        let mut stderr_text = String::new();
+        stdout.seek(SeekFrom::Start(0)).unwrap();
+        stderr.seek(SeekFrom::Start(0)).unwrap();
+        stdout.read_to_string(&mut stdout_text).unwrap();
+        stderr.read_to_string(&mut stderr_text).unwrap();
+        assert!(
+            matches!(&result, Ok(status) if status.success())
+                && stderr_text.lines().any(|line| line == FIXTURE_COMPLETED),
+            "isolated test {test_name}: {result:?}{cleanup}\nstdout:\n{stdout_text}\nstderr:\n{stderr_text}"
+        );
+    }
+
     #[test]
     fn delete_result_refreshes_rows_reports_errors_and_preserves_a_new_selection() {
+        let test_name = format!(
+            "{}::delete_result_refreshes_rows_reports_errors_and_preserves_a_new_selection",
+            module_path!().split_once("::").unwrap().1
+        );
+        if std::env::var(CHILD_MARKER).ok().as_deref() != Some(test_name.as_str()) {
+            run_isolated_delete_test(&test_name);
+            return;
+        }
         unsafe {
             std::env::set_var("CHATTER_NO_KEYRING", "1");
             std::env::set_var("CHATTER_DB_PASSPHRASE", "channel-delete-fixture");
             std::env::set_var("CHATTER_HEADLESS", "1");
         }
-        crate::init_ui_test_backend();
+        i_slint_backend_testing::init_integration_test_with_system_time();
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let _entered = runtime.enter();
         let fixture = tempfile::tempdir().unwrap();
@@ -1680,5 +1741,6 @@ mod deletion_tests {
         );
         assert_eq!(w.get_channel_name().as_str(), "Keep fixture");
         assert_eq!(w.get_active_modal().as_str(), "channel-settings");
+        eprintln!("{FIXTURE_COMPLETED}");
     }
 }

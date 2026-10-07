@@ -704,7 +704,7 @@ pub(super) mod tests {
     #[test]
     fn call_presentation_restores_roster_and_refreshes_timer_with_identity_and_cancellation_guards()
     {
-        crate::init_ui_test_backend();
+        i_slint_backend_testing::init_integration_test_with_system_time();
         let _runtime = runtime();
         verification_tracks_snapshot_with_identity_fences();
         room_roster_restores_mount_overwrite_and_tracks_departures_and_rejoin();
