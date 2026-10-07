@@ -595,29 +595,35 @@ pub async fn handle_domain_event(
             }
         }
 
-        // Channel metadata (name/icon) was changed by an admin. Core already
-        // persisted the new values to the channel repo; live-refresh the header
-        // title if this is the active conversation.
-        DomainEvent::ChannelUpdated {
-            channel_id,
-            name,
-            icon: _,
-        } => {
-            let is_active = ui_ctx
-                .chat_state()
-                .get()
-                .active_channel_id
-                .map(|id| id == channel_id)
-                .unwrap_or(false);
-            if is_active {
-                let weak = window.clone();
-                let new_name = name.clone();
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(w) = weak.upgrade() {
-                        w.set_channel_name(new_name.into());
-                    }
-                });
+        // Core persisted this event. Reload the same metadata/sidebar paths
+        // used by Save, including icon and description, with UI-time guards.
+        DomainEvent::ChannelUpdated { channel_id, .. } => {
+            let session_revision = ui_ctx.auth_state().get().session_revision;
+            let opened = ui_ctx.active_conversation();
+            let metadata = ui_ctx
+                .get_channel_local(&channel_id)
+                .as_ref()
+                .map(crate::bin_ui::features::sidebar::channel::ChannelMetadata::from_channel);
+            let mut rows = ui_ctx.sidebar_rows();
+            for row in &mut rows {
+                row.pre_decode_avatar();
             }
+            let weak = window.clone();
+            let ctx = ui_ctx.clone();
+            let _ = slint::invoke_from_event_loop(move || {
+                let Some(w) = weak.upgrade() else { return };
+                if !ctx.composer_session_is_current(session_revision) {
+                    return;
+                }
+                crate::bin_ui::features::sidebar::apply_chat_list(&w, &ctx, rows);
+                if opened == chatter_core::state::ActiveConversation::Channel(channel_id)
+                    && ctx.active_conversation() == opened
+                {
+                    if let Some(metadata) = metadata {
+                        metadata.apply(&w);
+                    }
+                }
+            });
         }
 
         // A member's role or moderator mute changed (server `MemberUpdated`).

@@ -126,6 +126,56 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     });
 }
 
+/// Metadata-only reload shared by channel opens, settings Save, and inbox events.
+/// Read/decode off the UI thread; apply only after the caller's ownership guard.
+pub(crate) struct ChannelMetadata {
+    name: String,
+    topic: String,
+    icon: Option<(Vec<u8>, u32, u32)>,
+}
+
+impl ChannelMetadata {
+    pub(crate) fn from_channel(channel: &chatter_core::domain::channel::Channel) -> Self {
+        let is_saved = matches!(channel.channel_type, ChannelType::SavedMessages);
+        Self {
+            name: if is_saved {
+                "Saved Messages".into()
+            } else {
+                channel.name.clone()
+            },
+            topic: if is_saved {
+                String::new()
+            } else {
+                channel.description.clone().unwrap_or_default()
+            },
+            icon: channel
+                .icon
+                .as_deref()
+                .filter(|b| !b.is_empty())
+                .and_then(|bytes| image::load_from_memory(bytes).ok())
+                .map(|img| {
+                    let rgba = img.to_rgba8();
+                    let (width, height) = rgba.dimensions();
+                    (rgba.into_raw(), width, height)
+                }),
+        }
+    }
+
+    pub(crate) fn apply(self, w: &MainWindow) {
+        w.set_channel_name(self.name.into());
+        w.set_topic(self.topic.into());
+        if let Some((rgba, width, height)) = self.icon {
+            w.set_channel_avatar_source(crate::bin_ui::slint_conversions::rgba_to_slint_image(
+                &rgba, width, height,
+            ));
+            w.set_channel_has_avatar(true);
+        } else {
+            w.set_channel_avatar_source(slint::Image::default());
+            w.set_channel_has_avatar(false);
+        }
+    }
+}
+
 /// Load a channel into the UI.
 ///
 /// `anchor` is the unread boundary the open captured on its way in (see
@@ -208,17 +258,7 @@ pub async fn load_channel_into_ui(
     );
 
     // 4. Update UI
-    let is_saved = matches!(channel.channel_type, ChannelType::SavedMessages);
-    let group_name = if is_saved {
-        "Saved Messages".to_string()
-    } else {
-        channel.name.clone()
-    };
-    let topic = if is_saved {
-        String::new()
-    } else {
-        channel.description.clone().unwrap_or_default()
-    };
+    let metadata = ChannelMetadata::from_channel(&channel);
     let conversation_type = channel.conversation_type();
     let private_channel = matches!(channel.channel_type, ChannelType::Private);
     let member_count = channel.member_count as i32;
@@ -228,42 +268,15 @@ pub async fn load_channel_into_ui(
         .unwrap_or_default();
     let ui_ctx_gifs = ui_ctx.clone();
 
-    // Channel icon (raw bytes stored on the Channel record). Decode on the
-    // worker thread — `slint::Image` is `!Send`, so we carry the RGBA
-    // across the thread-hop and build the `Image` inside `run_ui!`.
-    let channel_icon_pixels = channel
-        .icon
-        .as_deref()
-        .filter(|b| !b.is_empty())
-        .and_then(|bytes| image::load_from_memory(bytes).ok())
-        .map(|img| {
-            let rgba = img.to_rgba8();
-            let (w, h) = rgba.dimensions();
-            (rgba.into_raw(), w, h)
-        });
-
     let anchor_page = messages.clone();
     run_ui!(weak, |w| {
         super::apply_unread_anchor(&w, anchor, &anchor_page);
-        w.set_channel_name(group_name.into());
+        metadata.apply(&w);
         crate::bin_ui::converters::set_conversation_kind(&w, &conversation_type, private_channel);
         w.set_is_dm(false);
         w.set_member_count(member_count);
-        w.set_topic(topic.into());
-        w.set_header_presence_status("offline".into());
-        match channel_icon_pixels {
-            Some((rgba, w_px, h_px)) => {
-                w.set_channel_avatar_source(crate::bin_ui::slint_conversions::rgba_to_slint_image(
-                    &rgba, w_px, h_px,
-                ));
-                w.set_channel_has_avatar(true);
-            }
-            None => {
-                w.set_channel_avatar_source(slint::Image::default());
-                w.set_channel_has_avatar(false);
-            }
-        }
 
+        w.set_header_presence_status("offline".into());
         let slint_messages: Vec<_> = display_messages
             .iter()
             .map(|m| m.to_slint_with_user(&current_user_id))

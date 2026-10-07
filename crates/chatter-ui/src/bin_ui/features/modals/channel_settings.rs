@@ -32,6 +32,7 @@ struct IconState {
 }
 thread_local! {
     static ICON_STATE: std::cell::RefCell<IconState> = Default::default();
+    static SAVE_REQUEST: std::cell::RefCell<Option<IconRequest>> = const { std::cell::RefCell::new(None) };
     static SETTINGS_EPOCH: std::cell::Cell<u64> = const { std::cell::Cell::new(0) };
 }
 
@@ -652,6 +653,64 @@ pub fn apply_private_group_roster(w: &MainWindow, roster: PrivateGroupRoster) {
     w.set_channel_settings_members(ModelRc::new(VecModel::from(rows)));
 }
 
+fn begin_settings_save(w: &MainWindow, ctx: &ChatterClient) -> Option<u64> {
+    let opened = ctx.active_conversation();
+    if !matches!(opened, ActiveConversation::Channel(id)
+        if id.to_string() == w.get_channel_settings_id().as_str())
+        || w.get_active_modal() != "channel-settings"
+        || !w.get_channel_settings_can_edit()
+    {
+        return None;
+    }
+    // Freeze exact modal identity and session; competing Saves retire old ones.
+    let epoch = SETTINGS_EPOCH.with(|epoch| {
+        epoch.set(epoch.get().wrapping_add(1));
+        epoch.get()
+    });
+    SAVE_REQUEST.with(|request| {
+        *request.borrow_mut() = Some(IconRequest {
+            generation: epoch,
+            modal_stack: w.get_modal_stack(),
+            conversation: opened,
+            session_revision: ctx.auth_state().get().session_revision,
+            settings_id: w.get_channel_settings_id().to_string(),
+        });
+    });
+    Some(epoch)
+}
+
+fn save_request_current(w: &MainWindow, ctx: &ChatterClient, epoch: u64) -> bool {
+    SETTINGS_EPOCH.with(|current| current.get() == epoch)
+        && SAVE_REQUEST.with(|request| {
+            request.borrow().as_ref().is_some_and(|request| {
+                request.generation == epoch && icon_request_current(w, ctx, request)
+            })
+        })
+}
+
+/// Production Save-success paint; the service has already persisted metadata.
+/// One guarded UI turn replaces both snapshots before closing the owned modal.
+fn apply_saved_channel(
+    w: &MainWindow,
+    ctx: &Arc<ChatterClient>,
+    epoch: u64,
+    metadata: crate::bin_ui::features::sidebar::channel::ChannelMetadata,
+    rows: Vec<chatter_core::ui::sidebar_data::ChatRowSendData>,
+) {
+    if !save_request_current(w, ctx, epoch) {
+        return;
+    }
+    metadata.apply(w);
+    crate::bin_ui::features::sidebar::apply_chat_list(w, ctx, rows);
+    ICON_STATE.with(|state| {
+        let mut state = state.borrow_mut();
+        state.pending = None;
+        state.staged = None;
+    });
+    SAVE_REQUEST.with(|request| *request.borrow_mut() = None);
+    crate::bin_ui::features::back::close(w, "channel-settings");
+}
+
 fn wire_save_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let ui_ctx = ui_ctx.clone();
@@ -673,7 +732,12 @@ fn wire_save_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             .upgrade()
             .map(|w| w.get_channel_settings_icon_path().to_string())
             .unwrap_or_default();
-        let epoch = SETTINGS_EPOCH.with(|epoch| epoch.get());
+        let Some(w) = weak.upgrade() else { return };
+        let opened = ui_ctx.active_conversation();
+        let Some(epoch) = begin_settings_save(&w, &ui_ctx) else {
+            return;
+        };
+        let session_revision = ui_ctx.auth_state().get().session_revision;
         let staged_icon = weak.upgrade().and_then(|w| {
             ICON_STATE.with(|state| {
                 state.borrow().staged.as_ref().and_then(|(request, bytes)| {
@@ -681,8 +745,6 @@ fn wire_save_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 })
             })
         });
-        let opened = ui_ctx.active_conversation();
-        let session_revision = ui_ctx.auth_state().get().session_revision;
         tokio::spawn(async move {
             if channel_id.is_empty() {
                 return;
@@ -700,8 +762,9 @@ fn wire_save_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 match std::fs::read(&icon_path) {
                     Ok(b) => Some(b),
                     Err(e) => {
+                        let ctx_for_error = ui_ctx.clone();
                         paint_if_current(weak, ui_ctx, opened, channel_id, move |w| {
-                            if SETTINGS_EPOCH.with(|current| current.get() == epoch) {
+                            if save_request_current(w, &ctx_for_error, epoch) {
                                 w.set_channel_settings_error(
                                     format!("Couldn't read channel icon: {e}").into(),
                                 );
@@ -728,20 +791,25 @@ fn wire_save_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             if !ui_ctx.composer_session_is_current(session_revision) {
                 return;
             }
+            let result = result.map(|channel| {
+                let metadata =
+                    crate::bin_ui::features::sidebar::channel::ChannelMetadata::from_channel(
+                        &channel,
+                    );
+                let mut rows = ui_ctx.sidebar_rows();
+                for row in &mut rows {
+                    row.pre_decode_avatar();
+                }
+                (metadata, rows)
+            });
+            let ctx_for_paint = ui_ctx.clone();
             paint_if_current(weak, ui_ctx, opened, channel_id, move |w| {
-                if !SETTINGS_EPOCH.with(|current| current.get() == epoch)
-                    || w.get_active_modal() != "channel-settings"
-                {
+                if !save_request_current(w, &ctx_for_paint, epoch) {
                     return;
                 }
                 match result {
-                    Ok(_) => {
-                        ICON_STATE.with(|state| {
-                            let mut state = state.borrow_mut();
-                            state.pending = None;
-                            state.staged = None;
-                        });
-                        crate::bin_ui::features::back::close(w, "channel-settings");
+                    Ok((metadata, rows)) => {
+                        apply_saved_channel(w, &ctx_for_paint, epoch, metadata, rows)
                     }
                     Err(e) => w.set_channel_settings_error(e.to_string().into()),
                 }
@@ -1879,6 +1947,131 @@ mod deletion_tests {
             .set_active_conversation(ActiveConversation::Channel(id));
         finish_icon_request(&w, &client, old_session, picked());
         assert!(!w.get_channel_settings_has_icon_preview());
+        eprintln!("{FIXTURE_COMPLETED}");
+    }
+
+    #[test]
+    fn save_success_reloads_metadata_and_sidebar_and_rejects_replacement_owners() {
+        let test_name = format!(
+            "{}::save_success_reloads_metadata_and_sidebar_and_rejects_replacement_owners",
+            module_path!().split_once("::").unwrap().1
+        );
+        if std::env::var(CHILD_MARKER).ok().as_deref() != Some(test_name.as_str()) {
+            run_isolated_delete_test(&test_name);
+            return;
+        }
+        unsafe {
+            std::env::set_var("CHATTER_NO_KEYRING", "1");
+            std::env::set_var("CHATTER_DB_PASSPHRASE", "channel-save-fixture");
+            std::env::set_var("CHATTER_HEADLESS", "1");
+        }
+        i_slint_backend_testing::init_integration_test_with_system_time();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _entered = runtime.enter();
+        let fixture = tempfile::tempdir().unwrap();
+        let client = ChatterClient::builder()
+            .data_dir(fixture.path().to_string_lossy().into_owned())
+            .build()
+            .unwrap();
+        let path = chatter_core::system::Directories::with_base_dir(fixture.path().to_path_buf())
+            .unwrap()
+            .database_path();
+        let db =
+            Arc::new(chatter_core::storage::Database::open(&path, "channel-save-fixture").unwrap());
+        let me = UserId::new();
+        SettingsRepository::new(db.clone())
+            .set_string(keys::CURRENT_USER_ID, &me.to_string())
+            .unwrap();
+        let repo = ChannelRepository::new(db);
+        let id = ChannelId::new();
+        let mut channel = chatter_core::domain::channel::Channel::new(
+            id,
+            "Old name".into(),
+            ChannelType::Private,
+            me,
+        );
+        repo.insert(&channel).unwrap();
+        repo.mark_former(&id, false).unwrap();
+        let w = MainWindow::new().unwrap();
+        client
+            .chat_state()
+            .set_active_conversation(ActiveConversation::Channel(id));
+        show_channel_settings_shell(&w, &id.to_string(), "private");
+        w.set_channel_settings_can_edit(true);
+        w.set_channel_name("Old name".into());
+        w.set_topic("Old description".into());
+        let epoch = begin_settings_save(&w, &client).unwrap();
+        let mut encoded = std::io::Cursor::new(Vec::new());
+        image::DynamicImage::new_rgba8(3, 2)
+            .write_to(&mut encoded, image::ImageFormat::Png)
+            .unwrap();
+        channel.name = "Saved name".into();
+        channel.description = Some("Saved description".into());
+        channel.icon = Some(encoded.into_inner());
+        // Simulate the real service's confirmed local write, then call the
+        // exact production Save-success handler; no transport/keyring/device.
+        repo.update(&channel).unwrap();
+        let complete = |epoch| {
+            let mut rows = client.sidebar_rows();
+            for row in &mut rows {
+                row.pre_decode_avatar();
+            }
+            apply_saved_channel(
+                &w,
+                &client,
+                epoch,
+                crate::bin_ui::features::sidebar::channel::ChannelMetadata::from_channel(&channel),
+                rows,
+            );
+        };
+        complete(epoch);
+        assert_eq!(w.get_channel_name().as_str(), "Saved name");
+        assert_eq!(w.get_topic().as_str(), "Saved description");
+        assert!(w.get_channel_has_avatar());
+        assert_eq!(
+            w.get_channel_avatar_source().size(),
+            slint::PhysicalSize::new(3, 2)
+        );
+        let row = w
+            .get_chat_rows()
+            .iter()
+            .find(|r| r.conversation_id.as_str() == id.to_string())
+            .unwrap();
+        assert_eq!(row.display_name.as_str(), "Saved name");
+        assert!(row.has_avatar);
+        assert_eq!(row.avatar_source.size(), slint::PhysicalSize::new(3, 2));
+        assert_ne!(w.get_active_modal().as_str(), "channel-settings");
+
+        show_channel_settings_shell(&w, &id.to_string(), "private");
+        w.set_channel_settings_can_edit(true);
+        let stale = begin_settings_save(&w, &client).unwrap();
+        crate::bin_ui::features::back::close(&w, "channel-settings");
+        crate::bin_ui::features::back::push(&w, "channel-settings");
+        w.set_channel_name("Replacement modal".into());
+        w.set_chat_rows(ModelRc::default());
+        complete(stale);
+        assert_eq!(w.get_channel_name().as_str(), "Replacement modal");
+        assert_eq!(w.get_chat_rows().row_count(), 0);
+        assert_eq!(w.get_active_modal().as_str(), "channel-settings");
+        let older = begin_settings_save(&w, &client).unwrap();
+        let current = begin_settings_save(&w, &client).unwrap();
+        complete(older);
+        assert_eq!(w.get_chat_rows().row_count(), 0);
+        client
+            .chat_state()
+            .set_active_conversation(ActiveConversation::Channel(ChannelId::new()));
+        complete(current);
+        assert_eq!(w.get_chat_rows().row_count(), 0);
+        client
+            .chat_state()
+            .set_active_conversation(ActiveConversation::Channel(id));
+        client.clear_composer_session();
+        client
+            .chat_state()
+            .set_active_conversation(ActiveConversation::Channel(id));
+        complete(current);
+        assert_eq!(w.get_chat_rows().row_count(), 0);
+        assert_eq!(w.get_channel_name().as_str(), "Replacement modal");
         eprintln!("{FIXTURE_COMPLETED}");
     }
 

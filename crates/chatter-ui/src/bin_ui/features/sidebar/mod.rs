@@ -362,18 +362,27 @@ fn update_sidebar_row(
 /// open conversation and recomputes the Chats-tab badge, which counts the
 /// same rows.
 pub(crate) fn rebuild_chat_list(weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<ChatterClient>) {
-    use crate::bin_ui::converters::ChatRowExt;
     let mut rows = ui_ctx.sidebar_rows();
     for row in rows.iter_mut() {
         row.pre_decode_avatar();
     }
     let ui_ctx = ui_ctx.clone();
     run_ui!(weak, |w| {
-        let rows: Vec<_> = rows.into_iter().map(|r| r.to_slint()).collect();
-        w.set_chat_rows(slint::ModelRc::new(slint::VecModel::from(rows)));
-        refresh_selection(&w, &ui_ctx);
-        crate::bin_ui::features::auth::inbox::domain_handler::recompute_total_unread(&w, &ui_ctx);
+        apply_chat_list(&w, &ui_ctx, rows);
     });
+}
+
+/// Apply a core sidebar snapshot on the UI thread after the caller's guards.
+pub(crate) fn apply_chat_list(
+    window: &MainWindow,
+    ui_ctx: &Arc<ChatterClient>,
+    rows: Vec<chatter_core::ui::sidebar_data::ChatRowSendData>,
+) {
+    use crate::bin_ui::converters::ChatRowExt;
+    let rows: Vec<_> = rows.into_iter().map(|r| r.to_slint()).collect();
+    window.set_chat_rows(slint::ModelRc::new(slint::VecModel::from(rows)));
+    refresh_selection(window, ui_ctx);
+    crate::bin_ui::features::auth::inbox::domain_handler::recompute_total_unread(window, ui_ctx);
 }
 
 /// A conversation's stored history changed without a new message arriving —
