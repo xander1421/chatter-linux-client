@@ -28,6 +28,8 @@ pub struct DesktopNotifications {
     #[cfg(target_os = "linux")]
     conversations:
         std::sync::Mutex<std::collections::HashMap<String, notify_rust::NotificationHandle>>,
+    #[cfg(target_os = "linux")]
+    calls: std::sync::Mutex<std::collections::HashMap<String, notify_rust::NotificationHandle>>,
 }
 
 impl DesktopNotifications {
@@ -38,6 +40,8 @@ impl DesktopNotifications {
             sound: std::sync::atomic::AtomicBool::new(true),
             #[cfg(target_os = "linux")]
             conversations: Default::default(),
+            #[cfg(target_os = "linux")]
+            calls: Default::default(),
         }
     }
 
@@ -207,6 +211,46 @@ impl super::notification_sink::NotificationSink for DesktopNotifications {
     fn set_sound(&self, enabled: bool) {
         self.sound
             .store(enabled, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    #[cfg(all(target_os = "linux", feature = "media"))]
+    fn show_incoming_call(
+        &self,
+        call_id: &str,
+        title: &str,
+        body: &str,
+    ) -> Result<(), SystemError> {
+        // Keep call handles separate from conversation handles: reading chat
+        // must not dismiss its ringing call, and ending one call must not
+        // close a newer invitation from the same conversation.
+        let mut calls = self.calls.lock().unwrap_or_else(|e| e.into_inner());
+        let mut notif = DesktopNotif::new();
+        notif
+            .appname(APP_DISPLAY_NAME)
+            .summary(title)
+            .body(body)
+            .icon("call-start")
+            .urgency(Urgency::Critical)
+            .timeout(crate::services::call_worker::RING_TIMEOUT.as_millis() as i32);
+        if let Some(previous) = calls.get(call_id) {
+            notif.id(previous.id());
+        }
+        self.apply_sound(&mut notif);
+        let handle = notif
+            .show()
+            .map_err(|e| SystemError::NotificationSend(e.to_string()))?;
+        calls.insert(call_id.to_owned(), handle);
+        Ok(())
+    }
+
+    #[cfg(target_os = "linux")]
+    fn cancel_incoming_call(&self, call_id: &str) -> Result<(), SystemError> {
+        // Serialize cancellation with posting/replacement of this identity.
+        let mut calls = self.calls.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some(handle) = calls.remove(call_id) {
+            handle.close();
+        }
+        Ok(())
     }
 
     #[cfg(target_os = "linux")]

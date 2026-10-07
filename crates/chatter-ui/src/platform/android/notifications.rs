@@ -22,6 +22,9 @@ use chatter_core::system::notification_sink::NotificationSink;
 use jni::JNIEnv;
 use jni::objects::{JObject, JString, JValue};
 
+#[path = "call_notification_identity.rs"]
+mod call_identity;
+
 pub(crate) const CHANNEL_ID: &str = "chatter_messages";
 const CHANNEL_NAME: &str = "Messages";
 
@@ -45,8 +48,8 @@ const FLAG_IMMUTABLE: i32 = 0x0400_0000; // 67108864
 const IC_CALL: i32 = 17301507; // ic_menu_call
 const IC_CLOSE: i32 = 17301560; // ic_menu_close_clear_cancel
 
-/// Stable notification id for a call: all events for one call share this id so
-/// the ring can be cancelled / replaced. Derived from the call_id string.
+/// A stable request code. Full call/action categories also participate in
+/// PendingIntent identity, so a hash collision cannot retarget another call.
 fn call_notification_id(call_id: &str) -> i32 {
     // FNV-1a → positive i32. Stable across show/cancel for the same call_id.
     let mut h: u32 = 2166136261;
@@ -359,11 +362,16 @@ impl AndroidNotifications {
             .l()
             .map_err(nerr)?;
         let manager = get_notification_manager(&mut env, &context)?;
+        let tag = env.new_string(call_identity::tag(call_id)).map_err(nerr)?;
         env.call_method(
             &manager,
             "notify",
-            "(ILandroid/app/Notification;)V",
-            &[JValue::Int(id), JValue::Object(&notification)],
+            "(Ljava/lang/String;ILandroid/app/Notification;)V",
+            &[
+                JValue::Object(&tag),
+                JValue::Int(id),
+                JValue::Object(&notification),
+            ],
         )
         .map_err(nerr)?;
 
@@ -376,8 +384,14 @@ impl AndroidNotifications {
         let mut env = get_jni_env()?;
         let context = get_app_context(&mut env)?;
         let manager = get_notification_manager(&mut env, &context)?;
-        env.call_method(&manager, "cancel", "(I)V", &[JValue::Int(id)])
-            .map_err(nerr)?;
+        let tag = env.new_string(call_identity::tag(call_id)).map_err(nerr)?;
+        env.call_method(
+            &manager,
+            "cancel",
+            "(Ljava/lang/String;I)V",
+            &[JValue::Object(&tag), JValue::Int(id)],
+        )
+        .map_err(nerr)?;
         Ok(())
     }
 
@@ -599,14 +613,8 @@ fn nerr<E: std::fmt::Display>(e: E) -> SystemError {
 /// outside the sink (e.g. the `CallActionReceiver` JNI bridge after the user
 /// taps Accept/Decline).
 pub fn cancel_call_notification(call_id: &str) {
-    let id = call_notification_id(call_id);
-    if let Ok(mut env) = get_jni_env() {
-        if let Ok(context) = get_app_context(&mut env) {
-            if let Ok(manager) = get_notification_manager(&mut env, &context) {
-                let _ = env.call_method(&manager, "cancel", "(I)V", &[JValue::Int(id)]);
-            }
-        }
-    }
+    // Use the same full-identity dismissal as the notification sink.
+    let _ = AndroidNotifications::new().cancel_call_raw(call_id);
 }
 
 /// Build a `Notification.Action` whose PendingIntent broadcasts `action` (with
@@ -644,6 +652,7 @@ fn build_action<'a>(
         &[JValue::Object(&j_action)],
     )
     .map_err(nerr)?;
+    add_call_intent_identity(env, &intent, call_id, action)?;
     let k = env.new_string("call_id").map_err(nerr)?;
     let v = env.new_string(call_id).map_err(nerr)?;
     env.call_method(
@@ -730,6 +739,12 @@ fn build_activity_intent<'a>(
         &[JValue::Object(context), JValue::Object(&cls_name)],
     )
     .map_err(nerr)?;
+    add_call_intent_identity(
+        env,
+        &intent,
+        call_id,
+        if auto_accept { "accept" } else { "open" },
+    )?;
     // FLAG_ACTIVITY_NEW_TASK | FLAG_ACTIVITY_SINGLE_TOP
     env.call_method(
         &intent,
@@ -774,6 +789,28 @@ fn build_activity_intent<'a>(
         .l()
         .map_err(nerr)?;
     Ok(pi)
+}
+
+/// Extras do not distinguish Android PendingIntents. Explicit components stay
+/// unchanged, while this category distinguishes the full call and action on
+/// every supported API level, including when request-code hashes collide.
+fn add_call_intent_identity(
+    env: &mut JNIEnv<'_>,
+    intent: &JObject<'_>,
+    call_id: &str,
+    action: &str,
+) -> Result<(), SystemError> {
+    let category = env
+        .new_string(call_identity::category(call_id, action))
+        .map_err(nerr)?;
+    env.call_method(
+        intent,
+        "addCategory",
+        "(Ljava/lang/String;)Landroid/content/Intent;",
+        &[JValue::Object(&category)],
+    )
+    .map_err(nerr)?;
+    Ok(())
 }
 
 fn get_jni_env() -> Result<JNIEnv<'static>, SystemError> {
