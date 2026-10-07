@@ -3,6 +3,25 @@
 use super::ChatterClient;
 
 impl ChatterClient {
+    /// Every stored pin, newest pin-added first, regardless of loaded history.
+    pub async fn pinned_display_items(
+        &self,
+        conversation: crate::state::ActiveConversation,
+    ) -> Vec<crate::services::pin_service::PinnedMessageData> {
+        let Some((mut kind, id)) = conversation.routing_key() else {
+            return Vec::new();
+        };
+        if let crate::state::ActiveConversation::Channel(channel_id) = conversation {
+            kind = self.channel_conversation_type(&channel_id);
+        }
+        let Ok(id) = id.parse() else {
+            return Vec::new();
+        };
+        self.load_pinned_for_channel(&id, &kind)
+            .await
+            .unwrap_or_default()
+    }
+
     // ── Pin / pinned messages façade ────────────────────────────────────
 
     pub async fn load_pinned_for_channel(

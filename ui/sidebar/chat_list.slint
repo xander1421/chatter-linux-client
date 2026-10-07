@@ -48,6 +48,7 @@ export component ChatRow inherits VerticalLayout {
 
     if root.data.conversation-type == ConversationKind.server-dm || root.data.conversation-type == ConversationKind.anon-dm: DMListItem {
         display-name: root.data.display-name;
+        anonymous: root.data.conversation-type == ConversationKind.anon-dm;
         avatar-source: root.data.avatar-source;
         initials: root.data.initials;
         presence-status: root.data.presence-status;
@@ -81,6 +82,7 @@ export component ChatRow inherits VerticalLayout {
     if root.data.conversation-type == ConversationKind.anon-group: PrivateGroupListItem {
         name: root.data.display-name;
         member-count: root.data.member-count;
+        avatar-source: root.data.avatar-source;
         unread-count: root.data.unread-count;
         last-message: root.data.last-message;
         timestamp: root.data.timestamp;

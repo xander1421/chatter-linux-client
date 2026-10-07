@@ -111,8 +111,8 @@ export component MessageList inherits Rectangle {
     }
 
     // ── Navigation targets ──────────────────────────────────────────────────
-    // Row positions are the runtime's estimates until a row is live, so a
-    // target is re-issued over a few layout passes (bounded) until it holds.
+    // Virtualization estimates materialize rows; navigation completes only
+    // against geometry from the rendered message bubble.
     private property <bool> end-pending: false;
     private property <int> end-passes: 0;
     // Sitting exactly on the newest message, as of the last layout pass.
@@ -121,7 +121,15 @@ export component MessageList inherits Rectangle {
     // seek goes by the average row height, the next ones walk the rows that
     // seek made live and close on the exact row.
     private property <int> jump-row: -1;
-    private property <int> jump-passes: 0;
+    private property <bool> jump-measured: false;
+    private property <length> jump-bubble-y: 0px;
+    callback measured-jump-row(int, length);
+    measured-jump-row(index, y) => {
+        if (index == root.jump-row) {
+            root.jump-bubble-y = y;
+            root.jump-measured = true;
+        }
+    }
     // Older history is requested once per approach to the top.
     private property <bool> load-more-armed: true;
     // The user is scrolling: a finger, the wheel, or the fling either leaves
@@ -176,8 +184,8 @@ export component MessageList inherits Rectangle {
         root.end-pending = false;
         root.at-end = false;
         root.is-at-bottom = false;
+        root.jump-measured = false;
         root.jump-row = i;
-        root.jump-passes = 0;
         root.nav-serial += 1;
     }
 
@@ -191,6 +199,7 @@ export component MessageList inherits Rectangle {
     callback selection-toggled(string);
     callback open-message-link(string);
     callback message-clicked(string);
+    callback sender-profile-requested(string);
     callback reply-clicked(string, string);  // (sender_id, timestamp_ns)
     callback react-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
     callback reaction-toggled(string, string, string);  // (sender_id, timestamp_ns, emoji)
@@ -434,30 +443,32 @@ export component MessageList inherits Rectangle {
                 }
             }
 
-            // Land row `i` below the floating header. The runtime seeks by its average
-            // row height: more than 1.5 screens from the live rows it places
-            // row `i` at the requested top inset; nearer, it walks measured rows from
-            // the current anchor and lands within a row — so the seek is
-            // issued again from there, where the walk is a row long and
-            // exact. Needs an estimate to seek by, so before the first
-            // layout this waits.
+            // Estimates only materialize a distant row. Landing uses the actual
+            // MessageItem position produced by the same layout that renders it:
+            // dividers, call/media/emoji/system heights need no parallel formula.
             property <length> row-y;
+            property <length> target-bubble-y: root.jump-bubble-y;
+            property <bool> target-measured: root.jump-measured;
+            changed target-bubble-y => { self.pursue(); }
+            changed target-measured => { self.pursue(); }
             function seek-row(i: int) {
                 if (root.messages.length > 0 && self.measured) {
-                    // 1px past the row's estimated top so the runtime's
-                    // floor() picks `i`, not `i - 1`; and no further than the
-                    // list can scroll, or a row of the last screen (or of a
-                    // conversation shorter than one) is a target that is
-                    // never reached.
-                    self.row-y = Math.min(0px, Math.max(
-                        Math.min(0px, self.height - self.viewport-height),
-                        -(i * self.viewport-height / root.messages.length) + (i == 0 ? 0px : root.top-inset) - 1px));
-                    if (root.jump-passes >= 3 || Math.abs((self.row-y - self.viewport-y) / 1px) < 1) {
-                        root.jump-row = -1;
-                        self.read-position();
+                    if (root.jump-measured) {
+                        self.row-y = Math.min(0px, Math.max(
+                            Math.min(0px, self.height - self.viewport-height),
+                            root.top-inset - root.jump-bubble-y));
+                        if (Math.abs((self.row-y - self.viewport-y) / 1px) < 1) {
+                            root.jump-row = -1;
+                            self.read-position();
+                        } else {
+                            self.viewport-y = self.row-y;
+                        }
                     } else {
-                        root.jump-passes += 1;
-                        self.viewport-y = self.row-y;
+                        // Bootstrap virtualization only; never count an estimated
+                        // offset as a completed jump.
+                        self.viewport-y = Math.min(0px, Math.max(
+                            Math.min(0px, self.height - self.viewport-height),
+                            -(i * self.viewport-height / root.messages.length) - 1px));
                     }
                 }
             }
@@ -594,7 +605,15 @@ export component MessageList inherits Rectangle {
                 self.pursue();
             }
 
-            for item[idx] in root.messages: VerticalLayout {
+            for item[idx] in root.messages: message-row := VerticalLayout {
+                property <bool> jump-target: idx == root.jump-row;
+                property <length> bubble-position: self.y + message-bubble.y;
+                changed bubble-position => {
+                    if (self.jump-target) { root.measured-jump-row(idx, self.bubble-position); }
+                }
+                changed jump-target => {
+                    if (self.jump-target) { root.measured-jump-row(idx, self.bubble-position); }
+                }
                 width: root.width;
                 height: self.preferred-height;
                 padding-left: Spacing.md;
@@ -694,10 +713,11 @@ export component MessageList inherits Rectangle {
                     }
                 }
 
-                MessageItem {
+                message-bubble := MessageItem {
                     width: 100%;
                     message-id: item.message-id;
                     sender-id: item.sender-id;
+                    sender-profile-requested(user-id) => { root.sender-profile-requested(user-id); }
                     timestamp-ns: item.timestamp-ns;
                     sender-name: item.sender-name;
                     sender-initials: item.sender-initials;

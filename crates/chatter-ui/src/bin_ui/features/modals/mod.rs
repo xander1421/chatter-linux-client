@@ -39,7 +39,7 @@ pub use channel_settings::{
     apply_private_group_roster, load_private_group_roster, open_channel_settings,
     open_invite_member_modal, refresh_members_if_open, wire_channel_settings,
 };
-pub use forward::wire_forward_message;
+pub use forward::{target_avatar, wire_forward_message};
 pub use friends::wire_friends_modal;
 pub use profile::open_user_profile;
 pub(crate) use sessions::session_to_slint;

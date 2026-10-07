@@ -3,6 +3,7 @@
 // Displays a single private group in the sidebar list.
 // Neo states: flat default, highlight hover, inset active with purple glow.
 
+import { Avatar } from "../components/avatar.slint";
 import { Colors } from "../theme/colors.slint";
 import { HoldArea } from "../components/hold_area.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -11,6 +12,7 @@ import { Icons } from "../theme/icons.slint";
 import { TooltipArea } from "../components/tooltip.slint";
 
 export component PrivateGroupListItem inherits Rectangle {
+    in property <image> avatar-source;
     in property <string> group-id;
     in property <string> name;
     in property <int> member-count: 0;
@@ -98,21 +100,11 @@ export component PrivateGroupListItem inherits Rectangle {
         // timestamp and badge sit on the right edge like every DM row's do.
         alignment: stretch;
 
-        // Shield icon with purple background
-        Rectangle {
-            width: 32px;
-            height: 32px;
-            border-radius: Spacing.radius-sm;
-            background: accent-color.with-alpha(0.15);
-
-            Image {
-                source: Icons.shield;
-                width: 16px;
-                height: 16px;
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-                colorize: accent-color;
-            }
+        Avatar {
+            size: root.mobile-mode ? Spacing.row-avatar-touch : Spacing.row-avatar-desktop;
+            source: root.avatar-source;
+            name: root.name;
+            anonymous: true;
         }
 
         // Text content
@@ -226,18 +218,7 @@ export component PrivateGroupListItem inherits Rectangle {
             }
         }
 
-        // Encryption indicator on the far-right — purple shield marks a
-        // private (anonymous) group. Sits after the unread badge so the
-        // presence of a badge doesn't push it out of sight.
-        VerticalLayout {
-            alignment: center;
-            Image {
-                source: Icons.shield;
-                width: 12px;
-                height: 12px;
-                colorize: accent-color;
-            }
-        }
+
     }
 
     // Collapsed layout — one rail slot, self-contained tooltip. The purple
@@ -270,13 +251,13 @@ export component PrivateGroupListItem inherits Rectangle {
                       : touch.has-hover ? Colors.fill-secondary
                       : Colors.surface-hover;
 
-            Image {
-                source: Icons.shield;
-                width: root.slot-glyph;
-                height: root.slot-glyph;
+            Avatar {
+                size: 40px;
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
-                colorize: root.selected ? Colors.text-primary : accent-color;
+                source: root.avatar-source;
+                name: root.name;
+                anonymous: true;
             }
 
             // Unread badge overlay — ringed in the sidebar surface so it reads

@@ -46,6 +46,8 @@ const SHARED_PAGE_SIZE: u32 = 60;
 #[derive(Default)]
 struct SharedPage {
     peer: Option<UserId>,
+    conversation: Option<chatter_core::state::ActiveConversation>,
+    generation: u64,
     tab: String,
     loaded: usize,
     exhausted: bool,
@@ -65,9 +67,29 @@ pub fn open_user_profile(
     user_state: &chatter_core::state::UserState,
     ui_ctx: Option<&Arc<ChatterClient>>,
 ) {
+    open_user_profile_in_conversation(
+        w,
+        user_id,
+        auth_state,
+        user_state,
+        ui_ctx,
+        dm_conversation(user_id),
+    );
+}
+
+/// Open a sender profile while keeping shared content scoped to its source chat.
+pub fn open_user_profile_in_conversation(
+    w: &MainWindow,
+    user_id: &UserId,
+    auth_state: &chatter_core::state::AuthState,
+    user_state: &chatter_core::state::UserState,
+    ui_ctx: Option<&Arc<ChatterClient>>,
+    conversation: chatter_core::state::ActiveConversation,
+) {
     let is_self = auth_state.get().current_user_id.as_ref() == Some(user_id);
 
     w.set_profile_user_id(user_id.to_string().into());
+    w.set_profile_is_anonymous(conversation.is_anon());
     // Reset safety number state for fresh modal
     w.set_profile_safety_number("".into());
     w.set_profile_show_safety_number(false);
@@ -171,8 +193,7 @@ pub fn open_user_profile(
         // Render the peer's avatar from their decrypted server-profile bytes
         // (no URL); falls back to initials when we have none.
         let avatar_source = ui_ctx
-            .and_then(|ctx| ctx.get_profile_local(user_id))
-            .and_then(|p| p.avatar_bytes)
+            .and_then(|ctx| ctx.user_avatar(user_id))
             .as_deref()
             .and_then(crate::bin_ui::converters::avatar_bytes_to_image)
             .unwrap_or_default();
@@ -206,8 +227,11 @@ pub fn open_user_profile(
     w.set_profile_last_seen("".into());
     w.set_profile_is_muted(false);
     SHARED_PAGE.with(|p| {
+        let generation = p.borrow().generation.wrapping_add(1);
         *p.borrow_mut() = SharedPage {
+            generation,
             peer: Some(*user_id),
+            conversation: Some(conversation),
             ..Default::default()
         }
     });
@@ -228,7 +252,7 @@ pub fn open_user_profile(
                 ctx.is_conversation_muted(dm_conversation(user_id))
                     .unwrap_or(false),
             );
-            load_shared_tabs(w.as_weak(), ctx.clone(), *user_id);
+            load_shared_tabs(w.as_weak(), ctx.clone(), *user_id, conversation);
         }
     }
 }
@@ -244,9 +268,15 @@ fn dm_conversation(peer_id: &UserId) -> chatter_core::state::ActiveConversation 
 ///
 /// Core decides which tabs exist and in what order — an empty strip means
 /// nothing has ever been shared, and the UI renders the empty state.
-fn load_shared_tabs(weak: slint::Weak<MainWindow>, ui_ctx: Arc<ChatterClient>, peer_id: UserId) {
+fn load_shared_tabs(
+    weak: slint::Weak<MainWindow>,
+    ui_ctx: Arc<ChatterClient>,
+    peer_id: UserId,
+    conversation: chatter_core::state::ActiveConversation,
+) {
+    let generation = SHARED_PAGE.with(|p| p.borrow().generation);
     tokio::spawn(async move {
-        let tabs = ui_ctx.shared_content_tabs(dm_conversation(&peer_id)).await;
+        let tabs = ui_ctx.shared_content_tabs(conversation).await;
         let first = tabs.first().map(|t| t.id.clone());
         let rows: Vec<SharedTab> = tabs
             .into_iter()
@@ -260,7 +290,14 @@ fn load_shared_tabs(weak: slint::Weak<MainWindow>, ui_ctx: Arc<ChatterClient>, p
             let Some(w) = weak.upgrade() else { return };
             // A different profile may have been opened while this was in
             // flight — do not paint its tabs over the current one.
-            if SHARED_PAGE.with(|p| p.borrow().peer) != Some(peer_id) {
+            if SHARED_PAGE.with(|p| {
+                (
+                    p.borrow().peer,
+                    p.borrow().conversation,
+                    p.borrow().generation,
+                )
+            }) != (Some(peer_id), Some(conversation), generation)
+            {
                 return;
             }
             w.set_profile_shared_tabs(ModelRc::new(VecModel::from(rows)));
@@ -289,43 +326,63 @@ fn request_shared_page(
     tab: String,
     append: bool,
 ) {
+    let Some(conversation) = SHARED_PAGE.with(|p| p.borrow().conversation) else {
+        return;
+    };
     let offset = SHARED_PAGE.with(|p| {
         let mut p = p.borrow_mut();
         if append && (p.exhausted || p.in_flight || p.tab != tab) {
             return None;
         }
         if !append {
+            p.generation = p.generation.wrapping_add(1);
             p.tab = tab.clone();
             p.loaded = 0;
             p.exhausted = false;
         }
         p.in_flight = true;
-        Some(p.loaded as u32)
+        Some((p.loaded as u32, p.generation))
     });
-    let Some(offset) = offset else { return };
+    let Some((offset, generation)) = offset else {
+        return;
+    };
 
     w.set_profile_shared_loading(true);
     let weak = w.as_weak();
     let ui_ctx = ui_ctx.clone();
     tokio::spawn(async move {
         let page = ui_ctx
-            .shared_content_page(dm_conversation(&peer_id), &tab, SHARED_PAGE_SIZE, offset)
+            .shared_content_page(conversation, &tab, SHARED_PAGE_SIZE, offset)
             .await;
         let short = page.len() < SHARED_PAGE_SIZE as usize;
         let count = page.len();
         let _ = slint::invoke_from_event_loop(move || {
             let Some(w) = weak.upgrade() else { return };
-            SHARED_PAGE.with(|p| {
+            let current = SHARED_PAGE.with(|p| {
                 let mut p = p.borrow_mut();
-                p.in_flight = false;
-                // Stale response (profile closed, or tab switched underneath).
-                if p.peer != Some(peer_id) || p.tab != tab {
-                    return;
+                if p.peer != Some(peer_id)
+                    || p.conversation != Some(conversation)
+                    || p.tab != tab
+                    || p.generation != generation
+                {
+                    return false;
                 }
+                p.in_flight = false;
                 p.loaded += count;
                 p.exhausted = short;
+                true
             });
-            if SHARED_PAGE.with(|p| p.borrow().peer) != Some(peer_id) {
+            if !current {
+                return;
+            }
+            if SHARED_PAGE.with(|p| {
+                (
+                    p.borrow().peer,
+                    p.borrow().conversation,
+                    p.borrow().generation,
+                )
+            }) != (Some(peer_id), Some(conversation), generation)
+            {
                 return;
             }
             w.set_profile_shared_loading(false);
@@ -339,15 +396,17 @@ fn request_shared_page(
                 Vec::new()
             };
             rows.extend(page.iter().map(|item| {
+                let thumbnail = crate::bin_ui::converters::avatar_bytes_to_image(&item.thumbnail)
+                    .unwrap_or_default();
+                let has_thumbnail = thumbnail.size().width > 0;
                 SharedContentItem {
                     message_id: item.message_id.clone().into(),
                     attachment_id: item.attachment_id.clone().into(),
                     category: item.category.clone().into(),
                     title: item.title.clone().into(),
                     subtitle: item.subtitle.clone().into(),
-                    thumbnail: crate::bin_ui::converters::avatar_bytes_to_image(&item.thumbnail)
-                        .unwrap_or_default(),
-                    has_thumbnail: item.has_thumbnail,
+                    thumbnail,
+                    has_thumbnail,
                     is_video: item.is_video,
                 }
             }));
@@ -392,6 +451,7 @@ fn wire_shared_content(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     // quote-click path, including its "not loaded yet, fetch older history"
     // retry.
     let weak_window = window.as_weak();
+    let ui_ctx_jump = ui_ctx.clone();
     window.on_profile_open_shared_item(move |message_id, _attachment_id, category| {
         let Some(w) = weak_window.upgrade() else {
             return;
@@ -423,12 +483,16 @@ fn wire_shared_content(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             }
             return;
         }
-        let Some(peer) = SHARED_PAGE.with(|p| p.borrow().peer) else {
+        let Some(conversation) = SHARED_PAGE.with(|p| p.borrow().conversation) else {
             return;
         };
         crate::bin_ui::features::back::reset_to_chats(&w);
-        w.invoke_dm_selected(peer.to_string().into());
-        w.invoke_quote_clicked(message_id);
+        crate::bin_ui::features::header::jump_to_conversation_message(
+            &w,
+            &ui_ctx_jump,
+            conversation,
+            &message_id,
+        );
     });
 }
 

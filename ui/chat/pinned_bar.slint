@@ -13,6 +13,7 @@ import { Icons } from "../theme/icons.slint";
 export component PinnedBar inherits GlassSurface {
     // Properties
     in property <string> message-preview: "";
+    in property <image> thumbnail;
     in property <int> current-index: 1;  // 1-based for display
     in property <int> total-count: 1;
     in property <bool> has-multiple: false;
@@ -98,6 +99,15 @@ export component PinnedBar inherits GlassSurface {
             y: (parent.height - self.height) / 2;
             background: Colors.primary;
             border-radius: 1.5px;
+        }
+
+        if root.thumbnail.width > 0: Rectangle {
+            width: 36px;
+            height: 36px;
+            border-radius: Spacing.radius-sm;
+            clip: true;
+            Image { source: root.thumbnail; width: 100%; height: 100%; image-fit: cover; }
+            TouchArea { clicked => { root.go-to-message(); } }
         }
 
         // Clickable content area (go to message)

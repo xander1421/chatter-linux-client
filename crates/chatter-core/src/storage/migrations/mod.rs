@@ -86,6 +86,7 @@ mod v085_reaction_receive_journal;
 mod v086_channel_message_clocks;
 mod v087_single_reaction;
 mod v088_reaction_normalization;
+mod v089_pin_added_order;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -175,6 +176,7 @@ pub use v085_reaction_receive_journal::V085ReactionReceiveJournal;
 pub use v086_channel_message_clocks::V086ChannelMessageClocks;
 pub use v087_single_reaction::V087SingleReaction;
 pub use v088_reaction_normalization::V088ReactionNormalization;
+pub use v089_pin_added_order::V089PinAddedOrder;
 
 /// Trait for database migrations.
 ///
@@ -395,4 +397,5 @@ pub fn default_migrations() -> MigrationRunner {
         .register(V086ChannelMessageClocks)
         .register(V087SingleReaction)
         .register(V088ReactionNormalization)
+        .register(V089PinAddedOrder)
 }

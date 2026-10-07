@@ -12,6 +12,7 @@ export global AvatarText {
 
 export component Avatar inherits Rectangle {
     in property <image> source;
+    in property <bool> anonymous: false;
     // A display name: the fallback shows its initials. Prefer this over
     // `fallback-text`, which is rendered verbatim.
     in property <string> name: "";
@@ -56,6 +57,18 @@ export component Avatar inherits Rectangle {
             horizontal-alignment: center;
             vertical-alignment: center;
         }
+    }
+
+    // Anonymous identities keep their purple ring around real images or initials.
+    if root.anonymous: Rectangle {
+        x: -2px;
+        y: -2px;
+        width: root.size + 4px;
+        height: root.size + 4px;
+        border-radius: self.width / 2;
+        border-width: 2px;
+        border-color: Colors.group-accent;
+        background: transparent;
     }
 
     // Presence indicator dot — bottom-left, sitting just outside the circle

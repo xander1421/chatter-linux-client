@@ -159,6 +159,9 @@ pub fn wire_pin_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             // Update UI (unified across all conversation types)
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
+                    if ui_ctx.chat_state().active_conversation() != conversation {
+                        return;
+                    }
                     super::edit_messages(&w, |model| {
                         for i in 0..model.row_count() {
                             let Some(mut m) = model.row_data(i) else {
@@ -183,6 +186,7 @@ pub fn wire_pin_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             w.set_pinned_message_preview("".into());
                         }
                     }
+                    crate::bin_ui::features::header::refresh_pinned_ui(&w, &ui_ctx);
                 }
             });
         });

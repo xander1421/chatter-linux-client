@@ -13,6 +13,8 @@ import { Avatar } from "../components/avatar.slint";
 export struct ForwardTarget {
     id: string,
     name: string,
+    avatar-source: image,
+    is-anonymous: bool,
     target-type: string,  // "channel", "group", "dm", or "anon-dm"
 }
 
@@ -122,6 +124,8 @@ export component ForwardMessageModal inherits Rectangle {
                                 Avatar {
                                     size: 32px;
                                     name: target.name;
+                                    source: target.avatar-source;
+                                    anonymous: target.is-anonymous;
                                 }
 
                                 // Name and type

@@ -16,6 +16,7 @@ export component DMListItem inherits Rectangle {
     in property <string> user-id: "";
     in property <string> display-name: "User";
     in property <image> avatar-source;
+    in property <bool> anonymous: false;
     in property <string> initials: "";
     in property <string> presence-status: "offline"; // "online", "away", "dnd", "offline"
     in property <string> last-message: "";
@@ -118,6 +119,7 @@ export component DMListItem inherits Rectangle {
                 Avatar {
                     size: root.avatar-size;
                     source: root.avatar-source;
+                    anonymous: root.anonymous;
                     fallback-text: root.initials;
                     show-presence: true;
                     presence-color: root.presence-status == "online" ? Colors.online
@@ -280,6 +282,7 @@ export component DMListItem inherits Rectangle {
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
                 source: root.avatar-source;
+                anonymous: root.anonymous;
                 fallback-text: root.initials;
                 show-presence: true;
                 presence-color: root.presence-status == "online" ? Colors.online

@@ -13,6 +13,59 @@ use chatter_core::state::ActiveConversation;
 use crate::MainWindow;
 use crate::bin_ui::converters::messages_to_display_batch;
 
+thread_local! {
+    static PENDING_JUMP: std::cell::RefCell<Option<(ActiveConversation, String)>> = const { std::cell::RefCell::new(None) };
+}
+
+/// Queue navigation until the source conversation's model has been installed.
+pub(crate) fn jump_to_conversation_message(
+    w: &MainWindow,
+    ui_ctx: &Arc<ChatterClient>,
+    conversation: ActiveConversation,
+    message_id: &str,
+) {
+    if ui_ctx.chat_state().active_conversation() == conversation && !w.get_loading_messages() {
+        jump_to_message(w, ui_ctx, message_id);
+        return;
+    }
+    PENDING_JUMP
+        .with(|pending| *pending.borrow_mut() = Some((conversation, message_id.to_owned())));
+    super::sidebar::select_conversation(w, conversation);
+}
+
+/// Call after installing a conversation's messages and clearing loading.
+pub(crate) fn finish_pending_jump(w: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    if w.get_loading_messages() {
+        return;
+    }
+    let target = PENDING_JUMP.with(|pending| {
+        let mut pending = pending.borrow_mut();
+        if pending.as_ref().is_some_and(|(conversation, _)| {
+            *conversation == ui_ctx.chat_state().active_conversation()
+        }) {
+            pending.take()
+        } else {
+            None
+        }
+    });
+    if let Some((_, message_id)) = target {
+        jump_to_message(w, ui_ctx, &message_id);
+    }
+}
+
+/// A manual switch away cancels pending navigation rather than resurrecting it.
+pub(crate) fn cancel_pending_jump_for(conversation: ActiveConversation) {
+    PENDING_JUMP.with(|pending| {
+        let mut pending = pending.borrow_mut();
+        if pending
+            .as_ref()
+            .is_some_and(|(target, _)| *target != conversation)
+        {
+            *pending = None;
+        }
+    });
+}
+
 /// Wire header callbacks.
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     wire_pinned_navigation(window, ui_ctx);
@@ -74,25 +127,46 @@ fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         tracing::debug!("Pinned bar dismissed");
     });
 
-    // Re-show dismissed pinned bar (pin button in header)
-    let chat_state_show = ui_ctx.chat_state().clone();
+    // Header menu opens the complete core-ordered pin list, not just loaded rows.
     let weak_window = window.as_weak();
     let ui_ctx_show = ui_ctx.clone();
-    let chat_state = ui_ctx.chat_state().clone();
-
     window.on_pinned_show_clicked(move || {
-        if chat_state_show.pinned_total_count() == 0 {
+        let weak = weak_window.clone();
+        let ui_ctx = ui_ctx_show.clone();
+        let conversation = ui_ctx.chat_state().active_conversation();
+        tokio::spawn(async move {
+            let items = ui_ctx.pinned_display_items(conversation).await;
+            let _ = slint::invoke_from_event_loop(move || {
+                let Some(w) = weak.upgrade() else {
+                    return;
+                };
+                if ui_ctx.chat_state().active_conversation() != conversation {
+                    return;
+                }
+                let rows: Vec<crate::PinnedItem> = items
+                    .into_iter()
+                    .map(|item| crate::PinnedItem {
+                        message_id: item.message_id.to_string().into(),
+                        preview: item.preview.into(),
+                        thumbnail: crate::bin_ui::converters::avatar_bytes_to_image(
+                            &item.thumbnail,
+                        )
+                        .unwrap_or_default(),
+                    })
+                    .collect();
+                w.set_pinned_items(ModelRc::new(slint::VecModel::from(rows)));
+                super::back::push(&w, "pinned-messages");
+            });
+        });
+    });
+    let weak_window = window.as_weak();
+    let ui_ctx_selected = ui_ctx.clone();
+    window.on_pinned_item_selected(move |message_id| {
+        let Some(w) = weak_window.upgrade() else {
             return;
-        }
-        // Un-dismiss and reset to first pinned message
-        chat_state_show.pinned_navigate_to(0);
-        chat_state_show.pinned_undismiss();
-        update_pinned_ui_from_loaded_messages(
-            weak_window.clone(),
-            chat_state_show.clone(),
-            ui_ctx_show.clone(),
-            chat_state.active_conversation(),
-        );
+        };
+        super::back::close(&w, "pinned-messages");
+        jump_to_message(&w, &ui_ctx_selected, &message_id);
     });
 
     // Go to pinned message (scroll to it in chat)
@@ -108,6 +182,15 @@ fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             jump_to_message(&w, &ui_ctx_goto, &message_id.to_string());
         }
     });
+}
+
+pub(crate) fn refresh_pinned_ui(w: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    update_pinned_ui_from_loaded_messages(
+        w.as_weak(),
+        ui_ctx.chat_state().clone(),
+        ui_ctx.clone(),
+        ui_ctx.chat_state().active_conversation(),
+    );
 }
 
 /// Update pinned UI by reading the preview from loaded UI messages first,
@@ -132,7 +215,10 @@ fn update_pinned_ui_from_loaded_messages(
                 if msg.message_id.as_str() == msg_id_str {
                     let preview = crate::bin_ui::features::auth::inbox::utils::generate_preview_from_ui_message(&msg);
                     if !preview.is_empty() {
-                        return Some(preview);
+                        let thumbnail = msg.attachments.iter()
+                            .find(|a| (a.is_image || a.is_video) && a.has_thumbnail)
+                            .map(|a| a.thumbnail).unwrap_or_default();
+                        return Some((preview, thumbnail));
                     }
                 }
             }
@@ -140,12 +226,13 @@ fn update_pinned_ui_from_loaded_messages(
         None
     });
 
-    if let Some(preview) = ui_preview {
+    if let Some((preview, thumbnail)) = ui_preview {
         // Already have preview from UI, update directly (already on UI thread from callback)
         if let Some(w) = weak_window.upgrade() {
             w.set_pinned_current_index(current_index + 1);
             w.set_pinned_total_count(total_count);
             w.set_pinned_message_preview(preview.into());
+            w.set_pinned_thumbnail(thumbnail);
             w.set_has_pinned_messages(total_count > 0);
         }
         return;
@@ -158,8 +245,19 @@ fn update_pinned_ui_from_loaded_messages(
             None => String::new(),
         };
 
+        let thumbnail = current_msg_id
+            .and_then(|id| ui_ctx.get_pinned_message(&id))
+            .map(|pin| pin.thumbnail)
+            .unwrap_or_default();
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak_window.upgrade() {
+                if ui_ctx.chat_state().active_conversation() != conversation {
+                    return;
+                }
+                w.set_pinned_thumbnail(
+                    crate::bin_ui::converters::avatar_bytes_to_image(&thumbnail)
+                        .unwrap_or_default(),
+                );
                 w.set_pinned_current_index(current_index + 1);
                 w.set_pinned_total_count(total_count);
                 w.set_pinned_message_preview(preview.into());
@@ -375,6 +473,10 @@ fn load_older(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, until: Option<Message
             return;
         }
 
+        let older_messages: Vec<_> = older_messages
+            .into_iter()
+            .filter(|m| !chatter_core::services::disappearing::is_timer_notice(m))
+            .collect();
         // Convert older messages to display data
         let mut display_messages = messages_to_display_batch(
             &older_messages,

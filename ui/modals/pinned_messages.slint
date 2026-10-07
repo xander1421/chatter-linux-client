@@ -1,0 +1,61 @@
+import { Modal } from "../components/modal.slint";
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+
+export struct PinnedItem {
+    message-id: string,
+    preview: string,
+    thumbnail: image,
+}
+
+// Core supplies every pin in pin-added order, independent of loaded history.
+export component PinnedMessagesModal inherits Rectangle {
+    in property <bool> show-modal: false;
+    in property <[PinnedItem]> items: [];
+    callback close();
+    callback selected(string);
+    Modal {
+        show: root.show-modal;
+        title: "Pinned messages";
+        close => { root.close(); }
+        VerticalLayout {
+            if root.items.length == 0: Text {
+                text: "No pinned messages";
+                color: Colors.text-muted;
+                font-size: Typography.sm;
+            }
+            Flickable {
+                min-height: 180px;
+                max-height: 480px;
+                viewport-height: rows.preferred-height;
+                rows := VerticalLayout {
+                    spacing: Spacing.xs;
+                    for item in root.items: Rectangle {
+                        height: max(56px, content.preferred-height + Spacing.md * 2);
+                        background: touch.has-hover ? Colors.surface-hover : Colors.surface;
+                        border-radius: Spacing.radius-md;
+                        content := HorizontalLayout {
+                            padding: Spacing.md;
+                            spacing: Spacing.sm;
+                            if item.thumbnail.width > 0: Image {
+                                source: item.thumbnail;
+                                width: 40px;
+                                height: 40px;
+                                image-fit: cover;
+                            }
+                            Text {
+                                text: item.preview;
+                                color: Colors.text-primary;
+                                font-size: Typography.sm;
+                                wrap: word-wrap;
+                                horizontal-stretch: 1;
+                            }
+                        }
+                        touch := TouchArea { clicked => { root.selected(item.message-id); } }
+                    }
+                }
+            }
+        }
+    }
+}

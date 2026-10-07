@@ -227,6 +227,17 @@ impl UnifiedMessageRepository {
             ],
         )?;
         if rows > 0 {
+            // Includes a held pin applied by take_on_arrival: timestamp when
+            // this client first observes it, not an invented remote pin clock.
+            if message.is_pinned {
+                tx.execute(
+                    "UPDATE messages SET pinned_at=?1 WHERE id=?2",
+                    params![
+                        Utc::now().timestamp_nanos_opt().unwrap_or_default(),
+                        message.id.to_string()
+                    ],
+                )?;
+            }
             index_shared_content(&tx, message);
             self.apply_held_reactions(&tx, message, &reactions)?;
         }
@@ -496,6 +507,7 @@ impl UnifiedMessageRepository {
             "UPDATE messages SET
                 content_type = ?1, content_json = ?2, encrypted_content = ?3,
                 thread_id = ?4, reply_to = COALESCE(?5, reply_to), attachments_blob = ?6,
+                pinned_at = CASE WHEN ?7 = 0 THEN NULL WHEN is_pinned = 0 THEN ?24 ELSE pinned_at END,
                 is_pinned = ?7, is_edited = ?8, is_deleted = ?9, is_read = ?10,
                 updated_at = ?11, edited_at = ?12,
                 reaction_counts_blob = CASE WHEN EXISTS(SELECT 1 FROM reaction_scope_unresolved r WHERE r.conversation_id=messages.conversation_id AND r.conversation_type=messages.conversation_type AND r.sender_id=messages.sender_id AND r.sent_at_ns=messages.sent_at) THEN reaction_counts_blob ELSE ?13 END,
@@ -532,6 +544,7 @@ impl UnifiedMessageRepository {
                 message.reply_to_thumbnail_mime.as_deref(),
                 message.failure_reason.as_deref(),
                 message.id.to_string(),
+                Utc::now().timestamp_nanos_opt().unwrap_or_default(),
             ],
         )?;
         if rows == 0 {
@@ -691,8 +704,8 @@ impl UnifiedMessageRepository {
     pub fn pin(&self, id: &MessageId) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
         let rows = conn.execute(
-            "UPDATE messages SET is_pinned = 1, updated_at = ?1 WHERE id = ?2 AND is_deleted = 0",
-            params![Utc::now().to_rfc3339(), id.to_string()],
+            "UPDATE messages SET pinned_at = CASE WHEN is_pinned = 0 THEN ?3 ELSE pinned_at END, is_pinned = 1, updated_at = ?1 WHERE id = ?2 AND is_deleted = 0",
+            params![Utc::now().to_rfc3339(), id.to_string(), Utc::now().timestamp_nanos_opt().unwrap_or_default()],
         )?;
         if rows == 0 {
             return Err(StorageError::NotFound(format!("Message {}", id)));
@@ -704,7 +717,7 @@ impl UnifiedMessageRepository {
     pub fn unpin(&self, id: &MessageId) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
         let rows = conn.execute(
-            "UPDATE messages SET is_pinned = 0, updated_at = ?1 WHERE id = ?2",
+            "UPDATE messages SET is_pinned = 0, pinned_at = NULL, updated_at = ?1 WHERE id = ?2",
             params![Utc::now().to_rfc3339(), id.to_string()],
         )?;
         if rows == 0 {
@@ -724,7 +737,7 @@ impl UnifiedMessageRepository {
             "SELECT {} FROM messages \
              WHERE conversation_id = ?1 AND conversation_type = ?2 \
                AND is_pinned = 1 AND is_deleted = 0 \
-             ORDER BY sent_at DESC",
+             ORDER BY COALESCE(pinned_at, 0) DESC, id DESC",
             message_columns("messages")
         ))?;
         let mut rows = stmt.query(params![
@@ -1875,7 +1888,7 @@ impl UnifiedMessageRepository {
     ) -> Result<bool, StorageError> {
         let conn = self.db.connection()?;
         let rows = conn.execute(
-            "UPDATE messages SET is_pinned = ?1, updated_at = ?2
+            "UPDATE messages SET pinned_at = CASE WHEN ?1 = 0 THEN NULL WHEN is_pinned = 0 THEN ?6 ELSE pinned_at END, is_pinned = ?1, updated_at = ?2
              WHERE conversation_id = ?3 AND conversation_type = ?4 AND sent_at = ?5 AND is_deleted = 0",
             params![
                 pinned as i32,
@@ -1883,6 +1896,7 @@ impl UnifiedMessageRepository {
                 conversation_id.to_string(),
                 conversation_type.as_str(),
                 sent_at as i64,
+                Utc::now().timestamp_nanos_opt().unwrap_or_default(),
             ],
         )?;
         Ok(rows > 0)
@@ -2332,7 +2346,7 @@ impl UnifiedMessageRepository {
             "SELECT {} FROM messages \
              WHERE conversation_id = ?1 AND conversation_type = ?2 \
                AND is_pinned = 1 AND is_deleted = 0 \
-             ORDER BY sent_at DESC",
+             ORDER BY COALESCE(pinned_at, 0) DESC, id DESC",
             message_columns("messages"),
         ))?;
         let mut rows = stmt.query(params![channel_id.to_string(), conversation_type.as_str()])?;
@@ -2674,6 +2688,69 @@ fn collect_messages(rows: &mut rusqlite::Rows<'_>) -> Result<Vec<Message>, Stora
 mod tests {
     use super::*;
     use crate::domain::message::{EncryptedContent, EncryptedMessageType};
+
+    #[test]
+    fn pin_added_order_survives_duplicate_pin_and_message_edits() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(Database::open(&dir.path().join("pins.db"), "fixture-only").unwrap());
+        db.run_migrations().unwrap();
+        let repo = UnifiedMessageRepository::new(db.clone());
+        for kind in [
+            ConversationType::Channel,
+            ConversationType::ServerDm,
+            ConversationType::AnonDm,
+            ConversationType::AnonGroup,
+            ConversationType::SavedMessages,
+        ] {
+            let conversation = ChannelId::new();
+            let newer_message = Message::new_text(
+                conversation,
+                kind.clone(),
+                Some(UserId::new()),
+                "newer original".into(),
+                200,
+            );
+            let older_message = Message::new_text(
+                conversation,
+                kind.clone(),
+                Some(UserId::new()),
+                "older original".into(),
+                100,
+            );
+            repo.insert(&newer_message).unwrap();
+            repo.insert(&older_message).unwrap();
+            repo.pin(&newer_message.id).unwrap();
+            repo.set_pinned_by_timestamp(&conversation, &kind, 100, true)
+                .unwrap();
+            let order = || {
+                repo.list_pinned(&conversation, &kind)
+                    .unwrap()
+                    .into_iter()
+                    .map(|m| m.id)
+                    .collect::<Vec<_>>()
+            };
+            assert_eq!(order(), vec![older_message.id, newer_message.id]);
+            let clock = |id: MessageId| {
+                db.read_connection()
+                    .unwrap()
+                    .query_row(
+                        "SELECT pinned_at FROM messages WHERE id=?1",
+                        [id.to_string()],
+                        |r| r.get::<_, i64>(0),
+                    )
+                    .unwrap()
+            };
+            let original_clock = clock(newer_message.id);
+            repo.pin(&newer_message.id).unwrap();
+            let pinned = repo.get(&newer_message.id).unwrap().unwrap();
+            repo.update(&pinned).unwrap();
+            assert_eq!(clock(newer_message.id), original_clock);
+            assert_eq!(order(), vec![older_message.id, newer_message.id]);
+            repo.unpin(&newer_message.id).unwrap();
+            repo.pin(&newer_message.id).unwrap();
+            assert_eq!(order(), vec![newer_message.id, older_message.id]);
+        }
+    }
 
     #[test]
     fn stored_timestamp_quote_resolves_when_parent_arrives_in_same_conversation() {

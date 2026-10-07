@@ -9,6 +9,20 @@ use chatter_core::domain::ids::UserId;
 
 use crate::MainWindow;
 
+/// Decode the already-shaped sidebar avatar for a forwarding destination.
+/// Missing or malformed cached bytes leave Avatar's honest initials fallback.
+pub fn target_avatar(
+    ui_ctx: &ChatterClient,
+    kind: &chatter_core::domain::message::ConversationType,
+    id: &str,
+) -> slint::Image {
+    ui_ctx
+        .forward_destination_avatar(kind, id)
+        .as_deref()
+        .and_then(crate::bin_ui::converters::avatar_bytes_to_image)
+        .unwrap_or_default()
+}
+
 pub fn wire_forward_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     // Forward message: look up the selected target's type in the populated
     // targets model, map to an ActiveConversation, and forward via core.
