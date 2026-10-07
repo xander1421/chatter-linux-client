@@ -236,13 +236,15 @@ pub fn open_user_profile_in_conversation(
         }
     });
 
-    if !is_self {
+    if !is_self || shared_sender(conversation, *user_id).is_some() {
         if let Some(ctx) = ui_ctx {
             // A peer's name/bio/avatar edit is not pushed reliably; refetch on
             // open (throttled in core) so the modal catches up via
             // UserProfileUpdated.
-            let (refresh_ctx, peer) = (ctx.clone(), *user_id);
-            tokio::spawn(async move { refresh_ctx.refresh_profile_if_stale(&peer).await });
+            if !is_self {
+                let (refresh_ctx, peer) = (ctx.clone(), *user_id);
+                tokio::spawn(async move { refresh_ctx.refresh_profile_if_stale(&peer).await });
+            }
             // Loading from the first frame: an empty strip is also what "no
             // tabs" looks like, and flashing "Nothing shared yet" for the
             // length of one query reads as a bug.
@@ -264,6 +266,19 @@ fn dm_conversation(peer_id: &UserId) -> chatter_core::state::ActiveConversation 
     chatter_core::state::ActiveConversation::ServerDm { peer_id: *peer_id }
 }
 
+/// Group/channel avatar profiles show that sender's contributions only.
+/// DMs retain their existing two-participant shared history.
+fn shared_sender(
+    conversation: chatter_core::state::ActiveConversation,
+    peer: UserId,
+) -> Option<UserId> {
+    use chatter_core::state::ActiveConversation;
+    match conversation {
+        ActiveConversation::Channel(_) | ActiveConversation::AnonGroup(_) => Some(peer),
+        _ => None,
+    }
+}
+
 /// Load the tab strip, then open whichever tab comes first.
 ///
 /// Core decides which tabs exist and in what order — an empty strip means
@@ -276,7 +291,9 @@ fn load_shared_tabs(
 ) {
     let generation = SHARED_PAGE.with(|p| p.borrow().generation);
     tokio::spawn(async move {
-        let tabs = ui_ctx.shared_content_tabs(conversation).await;
+        let tabs = ui_ctx
+            .shared_content_tabs_scoped(conversation, shared_sender(conversation, peer_id))
+            .await;
         let first = tabs.first().map(|t| t.id.clone());
         let rows: Vec<SharedTab> = tabs
             .into_iter()
@@ -352,7 +369,13 @@ fn request_shared_page(
     let ui_ctx = ui_ctx.clone();
     tokio::spawn(async move {
         let page = ui_ctx
-            .shared_content_page(conversation, &tab, SHARED_PAGE_SIZE, offset)
+            .shared_content_page_scoped(
+                conversation,
+                &tab,
+                SHARED_PAGE_SIZE,
+                offset,
+                shared_sender(conversation, peer_id),
+            )
             .await;
         let short = page.len() < SHARED_PAGE_SIZE as usize;
         let count = page.len();

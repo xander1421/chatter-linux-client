@@ -31,6 +31,19 @@ impl ChatterClient {
         limit: u32,
         offset: u32,
     ) -> Vec<SharedContentItemData> {
+        self.shared_content_page_scoped(conv, category, limit, offset, None)
+            .await
+    }
+
+    /// Shared content optionally restricted to the selected sender in this chat.
+    pub async fn shared_content_page_scoped(
+        self: &Arc<Self>,
+        conv: ActiveConversation,
+        category: &str,
+        limit: u32,
+        offset: u32,
+        sender: Option<crate::domain::ids::UserId>,
+    ) -> Vec<SharedContentItemData> {
         let Some(category) = SharedCategory::from_str_value(category) else {
             return Vec::new();
         };
@@ -39,7 +52,14 @@ impl ChatterClient {
         };
         let repo = self.shared_content_repo();
         tokio::task::spawn_blocking(move || {
-            match repo.list(&conv_type, &conv_id, category, limit, offset) {
+            match repo.list_scoped(
+                &conv_type,
+                &conv_id,
+                category,
+                limit,
+                offset,
+                sender.as_ref(),
+            ) {
                 Ok(rows) => rows.iter().map(SharedContentItemData::from).collect(),
                 Err(e) => {
                     tracing::error!(error = %e, "shared content page");
@@ -62,6 +82,15 @@ impl ChatterClient {
         self: &Arc<Self>,
         conv: ActiveConversation,
     ) -> Vec<SharedTabData> {
+        self.shared_content_tabs_scoped(conv, None).await
+    }
+
+    /// Counts use the same conversation and sender scope as paged results.
+    pub async fn shared_content_tabs_scoped(
+        self: &Arc<Self>,
+        conv: ActiveConversation,
+        sender: Option<crate::domain::ids::UserId>,
+    ) -> Vec<SharedTabData> {
         let Some((conv_type, conv_id)) = conv.routing_key() else {
             return Vec::new();
         };
@@ -69,7 +98,11 @@ impl ChatterClient {
         let db = self.services.database.clone();
         tokio::task::spawn_blocking(move || {
             backfill_once(&repo, &db, &conv_type, &conv_id);
-            crate::ui::shared_tabs(&repo.counts(&conv_type, &conv_id).unwrap_or_default())
+            crate::ui::shared_tabs(
+                &repo
+                    .counts_scoped(&conv_type, &conv_id, sender.as_ref())
+                    .unwrap_or_default(),
+            )
         })
         .await
         .unwrap_or_default()
