@@ -12,6 +12,7 @@ import { DismissButton } from "dismiss_button.slint";
 import { Typography } from "../theme/typography.slint";
 
 export component VideoPlayer inherits Rectangle {
+    private property <bool> compact-layout: root.width < 600px;
     // Properties
     in property <bool> show: false;
     in property <image> frame;  // Current video frame
@@ -48,7 +49,7 @@ export component VideoPlayer inherits Rectangle {
 
     // Content container - blocks clicks from reaching backdrop
     Rectangle {
-        x: root.width < 600px ? 0px : 32px;
+        x: root.compact-layout ? 0px : 32px;
         y: 0;
         width: parent.width - self.x * 2;
         height: parent.height;
@@ -60,7 +61,7 @@ export component VideoPlayer inherits Rectangle {
         // Main layout
         VerticalLayout {
             alignment: center;
-            padding: root.width < 600px ? Spacing.sm : Spacing.lg;
+            padding: root.compact-layout ? Spacing.sm : Spacing.lg;
 
         // Header with filename and close button
         GlassSurface {

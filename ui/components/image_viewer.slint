@@ -12,6 +12,7 @@ import { DismissButton } from "dismiss_button.slint";
 import { Typography } from "../theme/typography.slint";
 
 export component ImageViewer inherits Rectangle {
+    private property <bool> compact-layout: root.width < 600px;
     // Properties
     in property <bool> show: false;
     in property <image> source;
@@ -43,7 +44,7 @@ export component ImageViewer inherits Rectangle {
     // Image container - centered
     VerticalLayout {
         alignment: center;
-        padding: root.width < 600px ? Spacing.sm : Spacing.xl;
+        padding: root.compact-layout ? Spacing.sm : Spacing.xl;
 
         // Header with filename and close button
         GlassSurface {
