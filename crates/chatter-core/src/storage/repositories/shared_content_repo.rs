@@ -18,14 +18,14 @@
 //! the caller's already-open write connection rather than taking the write
 //! lock twice.
 
-use crate::domain::attachment::{extract_links, FileMetadata, SharedCategory};
+use crate::domain::attachment::{FileMetadata, SharedCategory, extract_links};
 use crate::domain::ids::AttachmentId;
 use crate::domain::message::{ConversationType, Message};
 use crate::error::StorageError;
-use crate::storage::serialization::db_deserialize;
 use crate::storage::Database;
+use crate::storage::serialization::db_deserialize;
 use crate::ui::chat_data::extract_content_text;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use std::sync::Arc;
 
 /// One row of a shared-content tab, straight off the index.
@@ -418,12 +418,15 @@ mod tests {
             let other = UserId::new();
             // Interleave another sender; the highest timestamp is in another chat.
             // All supported attachment tabs must apply the identical scope.
-            for (name, mime, waveform, category) in [
+            for (category_index, (name, mime, waveform, category)) in [
                 ("photo.jpg", "image/jpeg", false, SharedCategory::Media),
                 ("spec.pdf", "application/pdf", false, SharedCategory::File),
                 ("voice.ogg", "audio/ogg", true, SharedCategory::Voice),
                 ("wave.gif", "image/gif", false, SharedCategory::Gif),
-            ] {
+            ]
+            .into_iter()
+            .enumerate()
+            {
                 let mut expected = Vec::new();
                 for (chat, sender, timestamp) in [
                     (conv, selected, 100),
@@ -436,7 +439,7 @@ mod tests {
                     atts.insert(&att).unwrap();
                     let mut msg = message(
                         &chat,
-                        timestamp,
+                        timestamp + category_index as u64 * 1000,
                         MessageContent::Mixed(MixedContent::attachments_only(vec![att.id])),
                         vec![att.id],
                     );
@@ -455,10 +458,12 @@ mod tests {
                     .unwrap();
                 assert_eq!(first[0].message_id, expected[1]);
                 assert_eq!(second[0].message_id, expected[0]);
-                assert!(shared
-                    .list_scoped(&kind, &conv.to_string(), category, 1, 2, Some(&selected))
-                    .unwrap()
-                    .is_empty());
+                assert!(
+                    shared
+                        .list_scoped(&kind, &conv.to_string(), category, 1, 2, Some(&selected))
+                        .unwrap()
+                        .is_empty()
+                );
                 assert_eq!(
                     shared
                         .list(&kind, &conv.to_string(), category, 10, 0)
@@ -472,23 +477,29 @@ mod tests {
                 .unwrap();
             assert_eq!(counts.len(), 4);
             assert!(counts.iter().all(|(_, count)| *count == 2));
-            assert!(shared
-                .counts(&kind, &conv.to_string())
-                .unwrap()
-                .iter()
-                .all(|(_, count)| *count == 4));
-            assert!(shared
-                .counts_scoped(&kind, &conv.to_string(), Some(&UserId::new()))
-                .unwrap()
-                .is_empty());
-            assert!(shared
-                .counts_scoped(
-                    &ConversationType::ServerDm,
-                    &conv.to_string(),
-                    Some(&selected)
-                )
-                .unwrap()
-                .is_empty());
+            assert!(
+                shared
+                    .counts(&kind, &conv.to_string())
+                    .unwrap()
+                    .iter()
+                    .all(|(_, count)| *count == 4)
+            );
+            assert!(
+                shared
+                    .counts_scoped(&kind, &conv.to_string(), Some(&UserId::new()))
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(
+                shared
+                    .counts_scoped(
+                        &ConversationType::ServerDm,
+                        &conv.to_string(),
+                        Some(&selected)
+                    )
+                    .unwrap()
+                    .is_empty()
+            );
         }
     }
 
@@ -709,16 +720,18 @@ mod tests {
             .unwrap()
             .execute("DELETE FROM shared_content", [])
             .unwrap();
-        assert!(shared
-            .list(
-                &ConversationType::ServerDm,
-                &conv.to_string(),
-                SharedCategory::Media,
-                10,
-                0
-            )
-            .unwrap()
-            .is_empty());
+        assert!(
+            shared
+                .list(
+                    &ConversationType::ServerDm,
+                    &conv.to_string(),
+                    SharedCategory::Media,
+                    10,
+                    0
+                )
+                .unwrap()
+                .is_empty()
+        );
 
         assert_eq!(
             shared
