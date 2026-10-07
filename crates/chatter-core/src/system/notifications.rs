@@ -239,16 +239,20 @@ impl super::notification_sink::NotificationSink for DesktopNotifications {
             };
             // Address the exact daemon instance. If it restarts and reuses
             // numeric ids, an old call's cancellation must not target it.
-            let owner = connection
-                .call_method(
-                    Some("org.freedesktop.DBus"),
-                    "/org/freedesktop/DBus",
-                    Some("org.freedesktop.DBus"),
-                    "GetNameOwner",
-                    &("org.freedesktop.Notifications",),
-                )
-                .await?;
-            let daemon: String = owner.body().deserialize()?;
+            let bus = zbus::fdo::DBusProxy::new(&connection).await?;
+            let name = zbus::names::WellKnownName::try_from("org.freedesktop.Notifications")?;
+            let owner = match bus.get_name_owner(name.clone().into()).await {
+                Ok(owner) => owner,
+                Err(zbus::fdo::Error::NameHasNoOwner(_)) => {
+                    // GetNameOwner does not activate a cold notification service.
+                    // Resolve its unique owner only after successful activation;
+                    // owner loss during this sequence remains a fallible outcome.
+                    bus.start_service_by_name(name.clone(), 0).await?;
+                    bus.get_name_owner(name.into()).await?
+                }
+                Err(error) => return Err(error.into()),
+            };
+            let daemon = owner.to_string();
             let replaces = previous.filter(|p| p.daemon == daemon).map_or(0, |p| p.id);
             let mut hints: std::collections::HashMap<&str, zbus::zvariant::Value<'_>> =
                 std::collections::HashMap::new();
