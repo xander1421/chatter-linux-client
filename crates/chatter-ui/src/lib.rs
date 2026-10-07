@@ -664,23 +664,9 @@ fn dev_auto_register(
     // (was "123456", then "12345678" — both rejected now.)
     let pin = "devpin123";
 
-    // Android dev defaults to localhost via `adb reverse` tunnels (50051 gRPC,
-    // 9000 RustFS, 7880/7881 LiveKit). For tunnel-free LAN testing (needed for
-    // WebRTC UDP media), build with CHATTER_ANDROID_SERVER=https://<host-lan-ip>:50051
-    // and point the server's LIVEKIT_URL + S3 endpoint at the same LAN IP. TLS is
-    // required — the server has no plaintext mode.
-    #[cfg(target_os = "android")]
-    let server_url: String = option_env!("CHATTER_ANDROID_SERVER")
-        .unwrap_or("https://localhost:50051")
-        .to_string();
-
-    // Desktop dev: override the gRPC server at runtime with CHATTER_SERVER_URL
-    // (e.g. https://192.168.122.1:50051 to reach the host from a VM guest),
-    // otherwise default to localhost. TLS is required in every environment now
-    // — there is no plaintext server mode.
-    #[cfg(not(target_os = "android"))]
-    let server_url: String = std::env::var("CHATTER_SERVER_URL")
-        .unwrap_or_else(|_| "https://localhost:50051".to_string());
+    // Use the same endpoint as startup and the normal authentication screens.
+    // Build-time Android overrides are resolved by core, including production.
+    let server_url = ui_ctx.endpoint();
 
     window.set_register_username(username.clone().into());
     window.set_register_display_name(display_name.clone().into());

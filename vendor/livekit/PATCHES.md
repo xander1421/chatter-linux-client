@@ -10,9 +10,11 @@ This matches the previously locked crates.io checksum. Workspace
 `[patch.crates-io] livekit = { path = "vendor/livekit" }` selects this copy;
 Cargo.lock's LiveKit source/checksum lines are removed because a local path
 package has no registry checksum. All dependency versions remain unchanged.
-The only upstream files modified are `src/room/e2ee/manager.rs` and
-`src/room/e2ee/key_provider.rs`. This document is additional. No native WebRTC,
-libwebrtc, signaling, codec or transport implementation is vendored or changed.
+The RC64 upstream files modified are `src/room/e2ee/manager.rs` and
+`src/room/e2ee/key_provider.rs`. Runtime configuration additionally modifies
+`src/room/mod.rs` to forward an explicit private CA through RoomOptions to
+SignalOptions; see `../livekit-api/PATCHES.md`. This document is additional. No native WebRTC,
+libwebrtc or codec implementation is changed by these patches.
 Vendoring the package is necessary for Cargo's reproducible path patch; editing
 an installed registry cache would neither persist nor define the shipped build.
 

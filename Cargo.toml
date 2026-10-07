@@ -267,6 +267,8 @@ lto = "thin"
 h3-quinn = { path = "vendor/h3-quinn" }
 # Locked LiveKit media sender key-index lifecycle patch; see vendor/livekit/PATCHES.md.
 livekit = { path = "vendor/livekit" }
+# Explicit private-PKI signaling connector; see vendor/livekit-api/PATCHES.md.
+livekit-api = { path = "vendor/livekit-api" }
 i-slint-backend-android-activity = { path = "vendor/i-slint-backend-android-activity" }
 
 # Slint 1.17.1 Backdrop builtin and Skia backdrop image filters.

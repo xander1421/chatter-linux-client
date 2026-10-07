@@ -398,6 +398,8 @@ impl From<RoomSdkOptions> for SignalSdkOptions {
 #[derive(Debug, Clone)]
 #[non_exhaustive]
 pub struct RoomOptions {
+    /// Optional private CA for WSS signaling and validation; replaces default roots.
+    pub tls_root_ca_pem: Option<String>,
     pub auto_subscribe: bool,
     pub adaptive_stream: bool,
     pub dynacast: bool,
@@ -419,6 +421,7 @@ pub struct RoomOptions {
 impl Default for RoomOptions {
     fn default() -> Self {
         Self {
+            tls_root_ca_pem: None,
             auto_subscribe: true,
             adaptive_stream: false,
             dynacast: false,
@@ -541,6 +544,7 @@ impl Room {
         signal_options.adaptive_stream = options.adaptive_stream;
         signal_options.single_peer_connection = options.single_peer_connection;
         signal_options.connect_timeout = options.connect_timeout;
+        signal_options.tls_root_ca_pem = options.tls_root_ca_pem.clone();
         let (rtc_engine, join_response, engine_events) = RtcEngine::connect(
             url,
             token,

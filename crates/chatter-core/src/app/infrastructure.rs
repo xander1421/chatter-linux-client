@@ -3,7 +3,6 @@
 //! Low-level dependencies: storage, crypto, network. These are implementation
 //! details that services depend on but UI should never access directly.
 
-use std::env;
 use std::sync::Arc;
 
 use zeroize::Zeroize;
@@ -27,23 +26,7 @@ use crate::system::{Directories, Keyring};
 
 use super::ContextError;
 
-/// Default server URL if CHATTER_SERVER_URL is not set. Must be `https://`:
-/// the server has no plaintext fallback (TLS is mandatory in every
-/// environment), and Android app processes never inherit shell env vars, so
-/// this default is always what an Android build actually connects with.
-pub(crate) const DEFAULT_SERVER_URL: &str = "https://localhost:50051";
-
-/// Environment variable for server URL.
-const SERVER_URL_ENV: &str = "CHATTER_SERVER_URL";
-
-/// The server URL to use: `explicit` if given, else `CHATTER_SERVER_URL`,
-/// else [`DEFAULT_SERVER_URL`]. Only reads the environment; the chosen URL is
-/// then passed down explicitly, never written back into it.
-pub(crate) fn resolve_server_url(explicit: Option<String>) -> String {
-    explicit
-        .or_else(|| env::var(SERVER_URL_ENV).ok())
-        .unwrap_or_else(|| DEFAULT_SERVER_URL.to_string())
-}
+pub(crate) use super::server_endpoint::resolve_server_url;
 
 /// Infrastructure container holding low-level dependencies.
 ///

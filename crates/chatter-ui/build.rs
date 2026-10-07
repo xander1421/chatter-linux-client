@@ -1,4 +1,11 @@
 fn main() {
+    // Enforce this for every Cargo release entry point, not just the APK script.
+    if std::env::var_os("CARGO_FEATURE_DEV_AUTO_REGISTER").is_some()
+        && std::env::var("PROFILE").as_deref() == Ok("release")
+    {
+        panic!("dev-auto-register uses publicly-known credentials and is forbidden in release builds; remove the feature");
+    }
+
     let target_os = std::env::var("CARGO_CFG_TARGET_OS").unwrap_or_default();
     if target_os == "macos" {
         // webrtc-sys links a static WebRTC lib containing Objective-C

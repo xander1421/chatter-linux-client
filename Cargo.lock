@@ -7912,8 +7912,6 @@ dependencies = [
 [[package]]
 name = "livekit-api"
 version = "0.5.5"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "1006f7c009369fe5f16f2eb6e93d6d0dcb2b427306a2f61b26ff5d2e440ec282"
 dependencies = [
  "base64 0.21.7",
  "bytes",
@@ -7939,6 +7937,7 @@ dependencies = [
  "signature 2.2.0",
  "thiserror 2.0.20",
  "tokio",
+ "tokio-rustls",
  "tokio-tungstenite 0.29.0",
  "url",
 ]

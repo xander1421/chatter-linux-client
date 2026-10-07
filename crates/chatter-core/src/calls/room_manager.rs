@@ -927,6 +927,19 @@ impl RoomManager {
             Option<chrono::DateTime<chrono::Utc>>,
         )>,
     ) -> Result<(), CallError> {
+        // Signaling uses the same private CA as gRPC/storage, not the SDK's
+        // default public root store. Validate before changing room state.
+        let parsed = url::Url::parse(url)
+            .map_err(|_| CallError::ConnectionFailed("invalid LiveKit endpoint".into()))?;
+        let tls_root_ca_pem = match parsed.scheme() {
+            "wss" | "https" => Some(
+                crate::config::TLS_ROOT_CA_PEM
+                    .ok_or_else(|| CallError::ConnectionFailed("missing pinned LiveKit TLS CA".into()))?
+                    .to_owned(),
+            ),
+            "ws" | "http" if cfg!(any(test, feature = "dev-trust-root")) => None,
+            _ => return Err(CallError::ConnectionFailed("LiveKit signaling requires WSS".into())),
+        };
         replace_timing_slot(&self.timing, timing.clone());
         timing.mark("room_connect_begin");
         self.set_state(RoomState::Connecting);
@@ -941,6 +954,7 @@ impl RoomManager {
         // Configure room with E2EE
         let mut room_options = RoomOptions::default();
         room_options.auto_subscribe = true;
+        room_options.tls_root_ca_pem = tls_root_ca_pem;
         room_options.encryption = Some(E2eeOptions {
             encryption_type: EncryptionType::Gcm,
             key_provider,
