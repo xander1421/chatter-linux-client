@@ -366,6 +366,16 @@ export component MessageList inherits Rectangle {
             }
         }
 
+        // Bootstrap after layout has completed, rather than from the runtime's
+        // synchronous viewport callbacks. Its height and scroll estimates are
+        // updated separately; feeding one transient value straight back into
+        // the other can repeatedly materialize the wrong mixed-height rows.
+        Timer {
+            interval: 16ms;
+            running: root.jump-row >= 0 && !root.jump-measured;
+            triggered => { list.seek-row(root.jump-row); }
+        }
+
         list := ListView {
             width: 100%;
             height: 100%;
@@ -449,6 +459,9 @@ export component MessageList inherits Rectangle {
             // Estimates only materialize a distant row. Landing uses the actual
             // MessageItem position produced by the same layout that renders it:
             // dividers, call/media/emoji/system heights need no parallel formula.
+            // Slint rebases content coordinates whenever its live-row average
+            // changes. Apply each deferred measurement only once: viewport
+            // callbacks must not reuse geometry from the previous layout.
             property <length> row-y;
             property <int> target-measurement: root.jump-measurement-serial;
             changed target-measurement => {
@@ -462,20 +475,13 @@ export component MessageList inherits Rectangle {
                         root.jump-row = -1;
                         self.read-position();
                     } else {
-                        self.seek-row(root.jump-row);
+                        self.viewport-y = self.row-y;
                     }
                 }
             }
             function seek-row(i: int) {
                 if (root.messages.length > 0 && self.measured) {
-                    if (root.jump-measured) {
-                        self.row-y = Math.min(0px, Math.max(
-                            Math.min(0px, self.height - self.viewport-height),
-                            root.top-inset - root.jump-bubble-y));
-                        if (Math.abs((self.row-y - self.viewport-y) / 1px) >= 1) {
-                            self.viewport-y = self.row-y;
-                        }
-                    } else {
+                    if (!root.jump-measured) {
                         // Bootstrap virtualization only; never count an estimated
                         // offset as a completed jump.
                         self.viewport-y = Math.min(0px, Math.max(
@@ -540,7 +546,8 @@ export component MessageList inherits Rectangle {
                         self.seek-end();
                     }
                 } else if (root.jump-row >= 0) {
-                    self.seek-row(root.jump-row);
+                    // The bootstrap timer or a fresh delegate measurement owns
+                    // navigation; this callback's coordinates may be transient.
                 } else if (self.grown != 0 && root.is-at-bottom && root.should-auto-scroll) {
                     // A message arrived (or left) under a reader who was on
                     // the newest one. Decided on where they were, not on the

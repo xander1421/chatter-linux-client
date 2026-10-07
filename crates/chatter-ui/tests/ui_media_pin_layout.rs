@@ -212,18 +212,26 @@ fn phone_media_actions_fit_and_mixed_height_pin_seek_lands_at_header() {
         .collect();
     w.set_messages(ModelRc::new(VecModel::from(rows)));
     pump(&w, 412.0);
-    for index in [62, 14, 102, 30] {
-        w.set_scroll_to_message_index(index);
-        pump(&w, 412.0);
-        let bubble = visible(&w, &format!("Fixture says: target-{index}"));
-        let header = testing::ElementHandle::find_by_element_type_name(&w, "ChatHeader")
-            .find(|e| e.size().height > 0.0)
-            .unwrap();
-        let expected = header.absolute_position().y + header.size().height;
-        let landed = bubble.absolute_position().y;
-        assert!(
-            landed >= expected - 1.0 && landed <= expected + 24.0,
-            "Seek {index} landed at {landed}, header bottom {expected}"
-        );
+    // Alternate distant forward/backward seeks at both phone widths. The
+    // mixed delegates force Slint to rebase its live-row height estimate.
+    for width in [360.0, 412.0] {
+        for index in [62, 14, 102, 30] {
+            w.set_scroll_to_message_index(index);
+            // Check again after settling: an estimate or a stale delegate
+            // coordinate must not appear to land and then move the target away.
+            for _ in 0..2 {
+                pump(&w, width);
+                let bubble = visible(&w, &format!("Fixture says: target-{index}"));
+                let header = testing::ElementHandle::find_by_element_type_name(&w, "ChatHeader")
+                    .find(|e| e.size().height > 0.0)
+                    .unwrap();
+                let expected = header.absolute_position().y + header.size().height;
+                let landed = bubble.absolute_position().y;
+                assert!(
+                    landed >= expected - 1.0 && landed <= expected + 24.0,
+                    "Seek {index} at {width}px landed at {landed}, header bottom {expected}"
+                );
+            }
+        }
     }
 }
