@@ -5248,11 +5248,15 @@ fn floating_chrome_keeps_content_insets_and_clear_materials() {
         include_str!("../../../ui/calls/call_history_screen.slint"),
     ] {
         assert!(src.contains("floating-content: root.mobile-mode;"));
-        assert!(src.contains("height: root.mobile-mode ? root.height : parent.height;"));
         assert!(src.contains(
             "padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : Spacing.none;"
         ));
     }
+    // Calls reserves space for its confirmation footer. Its actual floating
+    // viewport and footer hit isolation are checked by ui_calls_menu; an
+    // unconditional full-height source rule would require the native overlap.
+    assert!(include_str!("../../../ui/modals/friends.slint")
+        .contains("height: root.mobile-mode ? root.height : parent.height;"));
     assert!(material.contains("Appearance.glass-effects"));
     assert!(material.contains("blur-regular:") && material.contains("blur-thick:"));
     assert!(material.contains("<physical-length> glass-edge-width:"));
