@@ -315,7 +315,7 @@ mod tests {
     /// Exercise the real actor against a native post paused inside the
     /// production projection. Accept cannot reply/cancel until the post is
     /// ordered before publication, and a buffered offer cannot post afterward.
-    #[tokio::test]
+    #[tokio::test(flavor = "multi_thread", worker_threads = 2)]
     async fn acceptance_cannot_be_overtaken_by_a_paused_native_post() {
         let worker = worker();
         present(&worker, "race").await;
