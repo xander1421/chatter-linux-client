@@ -1,7 +1,7 @@
-use crate::domain::UserId;
 use crate::domain::anon_dm::{AnonDm, AnonDmId, AnonDmMessageId};
 use crate::domain::ids::{ChannelId, MessageId};
 use crate::domain::message::{ConversationType, Message};
+use crate::domain::UserId;
 
 use super::{AnonDmError, AnonDmService};
 
@@ -108,7 +108,8 @@ impl AnonDmService {
         let channel_id: ChannelId = (*conversation_id).into();
         Ok(self
             .message_repo
-            .get_by_conversation_timestamp(&channel_id, timestamp_ns)?)
+            .get_by_conversation_timestamp(&channel_id, timestamp_ns)?
+            .filter(|message| message.conversation_type == ConversationType::AnonDm))
     }
 
     pub fn get_message_by_sender_timestamp(
@@ -118,8 +119,8 @@ impl AnonDmService {
         timestamp_ns: u64,
     ) -> Result<Option<Message>, AnonDmError> {
         let channel_id: ChannelId = (*conversation_id).into();
-        Ok(self.message_repo.get_by_conversation_sender_timestamp(
-            &channel_id,
+        Ok(self.message_repo.get_by_reaction_scope(
+            &crate::domain::reaction::ReactionScope::new(channel_id, ConversationType::AnonDm),
             sender_id,
             timestamp_ns,
         )?)
@@ -163,12 +164,74 @@ impl AnonDmService {
         sender_id: &UserId,
         sent_timestamp: u64,
     ) -> Result<bool, AnonDmError> {
-        let channel_id: ChannelId = (*conversation_id).into();
-        Ok(self.message_repo.mark_deleted_by_sender_timestamp(
-            &channel_id,
+        let Some(message) =
+            self.get_message_by_sender_timestamp(conversation_id, sender_id, sent_timestamp)?
+        else {
+            return Ok(false);
+        };
+        crate::storage::repositories::message_modifier_repo::MessageModifierRepository::new(
+            self.settings_repo.database().clone(),
+        )
+        .queue_typed_dm_delete(
             sender_id,
             sent_timestamp,
-        )?)
+            Some((*conversation_id).into()),
+            ConversationType::AnonDm,
+            crate::util::time::TimestampNanos::now().as_u64(),
+        )?;
+        self.message_repo.delete(&message.id)?;
+        Ok(true)
+    }
+
+    /// Authenticated peer may delete either participant's message in this DM.
+    /// Missing targets keep both possible author keys because the wire is timestamp-only.
+    pub fn apply_received_delete(
+        &self,
+        conversation_id: &AnonDmId,
+        peer: &UserId,
+        sent_timestamp: u64,
+    ) -> Result<Option<Message>, AnonDmError> {
+        let Some(dm) = self.get_conversation(conversation_id)? else {
+            return Ok(None);
+        };
+        if dm.peer_id != *peer
+            || !dm.is_ready()
+            || self.is_user_blocked(peer)?
+            || self.is_conversation_blocked(conversation_id)?
+        {
+            return Ok(None);
+        }
+        let me = self.current_user_id()?;
+        let pending =
+            crate::storage::repositories::message_modifier_repo::MessageModifierRepository::new(
+                self.settings_repo.database().clone(),
+            );
+        let now = crate::util::time::TimestampNanos::now().as_u64();
+        for author in [*peer, me] {
+            if let Some(message) =
+                self.get_message_by_sender_timestamp(conversation_id, &author, sent_timestamp)?
+            {
+                pending.queue_typed_dm_delete(
+                    &author,
+                    sent_timestamp,
+                    Some((*conversation_id).into()),
+                    ConversationType::AnonDm,
+                    now,
+                )?;
+                self.message_repo.delete(&message.id)?;
+                return Ok(Some(message));
+            }
+        }
+        for author in [*peer, me] {
+            pending.queue_typed_dm_delete(
+                &author,
+                sent_timestamp,
+                Some((*conversation_id).into()),
+                ConversationType::AnonDm,
+                now,
+            )?;
+        }
+        Ok(None)
     }
 
     /// Set pin state for a message by conversation_id and sent_at timestamp.

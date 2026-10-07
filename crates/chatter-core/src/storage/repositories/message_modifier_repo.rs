@@ -14,15 +14,15 @@
 use std::borrow::Cow;
 use std::sync::Arc;
 
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{params, Connection, OptionalExtension};
 
-use crate::domain::UserId;
 use crate::domain::ids::ChannelId;
 use crate::domain::message::{ConversationType, Message, MessageContent};
 use crate::domain::reaction::ReactionScope;
+use crate::domain::UserId;
 use crate::error::StorageError;
-use crate::storage::Database;
 use crate::storage::repositories::MessageRepository;
+use crate::storage::Database;
 
 /// How long a modifier waits for its target: the server keeps a queued
 /// message for 30 days, so a target can arrive that late and no later.
@@ -183,6 +183,57 @@ impl MessageModifierRepository {
             "",
             conversation,
             None,
+            0,
+            false,
+            now,
+        )
+    }
+
+    /// Typed DM tombstone: author is one of the authenticated DM participants.
+    /// The existing body field carries the type; emoji namespaces distinct DMs
+    /// in the legacy uniqueness key without changing the schema.
+    pub fn queue_dm_delete(
+        &self,
+        author: &UserId,
+        target_sent_at: u64,
+        conversation: Option<ChannelId>,
+        now: u64,
+    ) -> Result<(), StorageError> {
+        self.queue_typed_dm_delete(
+            author,
+            target_sent_at,
+            conversation,
+            ConversationType::ServerDm,
+            now,
+        )
+    }
+
+    pub fn queue_typed_dm_delete(
+        &self,
+        author: &UserId,
+        target_sent_at: u64,
+        conversation: Option<ChannelId>,
+        kind: ConversationType,
+        now: u64,
+    ) -> Result<(), StorageError> {
+        if !matches!(kind, ConversationType::ServerDm | ConversationType::AnonDm) {
+            return Err(StorageError::InvalidData(
+                "Delete scope must be a one-to-one DM".into(),
+            ));
+        }
+        let scope_key = format!(
+            "dm-delete:{}:{}",
+            kind.as_str(),
+            conversation.map(|id| id.to_string()).unwrap_or_default()
+        );
+        self.upsert(
+            author,
+            target_sent_at,
+            "delete",
+            None,
+            &scope_key,
+            conversation,
+            Some(kind.as_str()),
             0,
             false,
             now,
@@ -413,13 +464,13 @@ pub(crate) fn take_on_arrival<'a>(
     let key = params![author, message.sent_at as i64, conversation];
 
     let deleted: bool = conn.query_row(
-        &format!("SELECT EXISTS(SELECT 1 FROM pending_message_modifiers WHERE kind = 'delete' AND {matching})"),
-        key,
+        &format!("SELECT EXISTS(SELECT 1 FROM pending_message_modifiers WHERE kind = 'delete' AND {matching} AND (body IS NULL OR body = ?4))"),
+        params![author, message.sent_at as i64, conversation, message.conversation_type.as_str()],
         |row| row.get(0),
     )?;
     if deleted {
         conn.execute(
-            &format!("DELETE FROM pending_message_modifiers WHERE {matching}"),
+            &format!("DELETE FROM pending_message_modifiers WHERE {matching} AND (kind != 'delete' OR body IS NULL)"),
             key,
         )?;
         return Ok(Arrival::Deleted);
@@ -453,7 +504,7 @@ pub(crate) fn take_on_arrival<'a>(
         }
     }
     conn.execute(
-        &format!("DELETE FROM pending_message_modifiers WHERE {matching}"),
+        &format!("DELETE FROM pending_message_modifiers WHERE {matching} AND (kind != 'delete' OR body IS NULL)"),
         key,
     )?;
 
@@ -603,11 +654,9 @@ mod tests {
             .queue_edit(&peer, 100, scope, "first", 200, now)
             .unwrap();
 
-        assert!(
-            messages
-                .insert_or_ignore(&dm(peer, "original", 100))
-                .unwrap()
-        );
+        assert!(messages
+            .insert_or_ignore(&dm(peer, "original", 100))
+            .unwrap());
         let stored = messages
             .get_by_sender_timestamp(&peer, 100)
             .unwrap()
@@ -637,12 +686,10 @@ mod tests {
             !messages.insert_or_ignore(&message).unwrap(),
             "deleted before it arrived"
         );
-        assert!(
-            messages
-                .get_by_sender_timestamp(&peer, 100)
-                .unwrap()
-                .is_none()
-        );
+        assert!(messages
+            .get_by_sender_timestamp(&peer, 100)
+            .unwrap()
+            .is_none());
         assert!(
             messages.is_tombstoned(&message.id).unwrap(),
             "a re-fetch stays deleted"
@@ -689,11 +736,9 @@ mod tests {
         modifiers
             .queue_delete(&peer, 2, None, now + MAX_AGE_NS)
             .unwrap();
-        assert!(
-            messages
-                .insert_or_ignore(&dm(peer, "arrived late", 1))
-                .unwrap()
-        );
+        assert!(messages
+            .insert_or_ignore(&dm(peer, "arrived late", 1))
+            .unwrap());
 
         for i in 0..=MAX_PENDING as u64 {
             modifiers
@@ -706,11 +751,9 @@ mod tests {
                 .unwrap(),
             "oldest evicted"
         );
-        assert!(
-            !messages
-                .insert_or_ignore(&dm(peer, "deleted", 1_001))
-                .unwrap()
-        );
+        assert!(!messages
+            .insert_or_ignore(&dm(peer, "deleted", 1_001))
+            .unwrap());
     }
 
     /// A `MessageService` on a fresh store, logged in as `me`.
@@ -745,11 +788,10 @@ mod tests {
         let window = crate::services::message::MessageService::EDIT_MAX_AGE_NS;
 
         // Early: held, then applied when the message arrives.
-        assert!(
-            m.apply_dm_edit(&peer, sent, "early", sent + 10, sent + 10)
-                .unwrap()
-                .is_none()
-        );
+        assert!(m
+            .apply_dm_edit(&peer, sent, "early", sent + 10, sent + 10)
+            .unwrap()
+            .is_none());
         m.message_repo.insert(&dm(peer, "original", sent)).unwrap();
         let text = |m: &crate::services::message::MessageService| {
             m.message_repo
@@ -796,22 +838,20 @@ mod tests {
             "past 48h"
         );
         assert_eq!(text(m), MessageContent::Text("newer".into()));
-        assert!(
-            m.apply_dm_edit(&peer, sent, "in time", sent + window, 0)
-                .unwrap()
-                .is_some()
-        );
+        assert!(m
+            .apply_dm_edit(&peer, sent, "in time", sent + window, 0)
+            .unwrap()
+            .is_some());
 
         // Someone else's DM cannot name it.
         assert!(m.apply_dm_delete(&UserId::new(), sent).unwrap().is_none());
         assert!(m.apply_dm_delete(&peer, sent).unwrap().is_some());
         // Deleted before it is announced, not by a later event subscriber.
-        assert!(
-            m.message_repo
-                .get_by_sender_timestamp(&peer, sent)
-                .unwrap()
-                .is_none()
-        );
+        assert!(m
+            .message_repo
+            .get_by_sender_timestamp(&peer, sent)
+            .unwrap()
+            .is_none());
     }
 
     /// What a receive path announces is the row as stored: an early edit
@@ -833,12 +873,10 @@ mod tests {
             .expect("stored");
         assert_eq!(stored.content, MessageContent::Text("edited".into()));
         assert!(stored.is_edited);
-        assert!(
-            messages
-                .insert_received(&dm(peer, "regret", 200))
-                .unwrap()
-                .is_none()
-        );
+        assert!(messages
+            .insert_received(&dm(peer, "regret", 200))
+            .unwrap()
+            .is_none());
 
         let fresh = messages
             .insert_or_ignore_received(&dm(peer, "plain", 300))
@@ -877,31 +915,26 @@ mod tests {
 
         // The peer's 👍, removed (sent at 20) before the add (sent at 10)
         // reached us: the remove is newer and wins.
-        assert!(
-            !m.record_inbound_reaction(&reaction_scope, &peer, &peer, 100, "a", true, 20)
-                .unwrap()
-        );
-        assert!(
-            !m.record_inbound_reaction(&reaction_scope, &peer, &peer, 100, "a", false, 10)
-                .unwrap()
-        );
+        assert!(!m
+            .record_inbound_reaction(&reaction_scope, &peer, &peer, 100, "a", true, 20)
+            .unwrap());
+        assert!(!m
+            .record_inbound_reaction(&reaction_scope, &peer, &peer, 100, "a", false, 10)
+            .unwrap());
         // Added (30) after a remove (25) that arrived later: the add stands.
-        assert!(
-            !m.record_inbound_reaction(&reaction_scope, &peer, &peer, 100, "b", false, 30)
-                .unwrap()
-        );
-        assert!(
-            !m.record_inbound_reaction(&reaction_scope, &peer, &peer, 100, "b", true, 25)
-                .unwrap()
-        );
+        assert!(!m
+            .record_inbound_reaction(&reaction_scope, &peer, &peer, 100, "b", false, 30)
+            .unwrap());
+        assert!(!m
+            .record_inbound_reaction(&reaction_scope, &peer, &peer, 100, "b", true, 25)
+            .unwrap());
         // Ours, from another of our devices.
-        assert!(
-            !m.record_inbound_reaction(&reaction_scope, &me, &peer, 100, "c", false, 5)
-                .unwrap()
-        );
+        assert!(!m
+            .record_inbound_reaction(&reaction_scope, &me, &peer, 100, "c", false, 5)
+            .unwrap());
         // A stranger, from their own DM, naming the peer's message.
-        assert!(
-            !m.record_inbound_reaction(
+        assert!(!m
+            .record_inbound_reaction(
                 &ReactionScope::new(ChannelId::from(stranger), ConversationType::ServerDm),
                 &stranger,
                 &peer,
@@ -910,8 +943,7 @@ mod tests {
                 false,
                 5
             )
-            .unwrap()
-        );
+            .unwrap());
 
         let stored = m
             .message_repo
@@ -936,10 +968,9 @@ mod tests {
         assert_eq!(stored.current_user_reactions, vec!["c".to_string()]);
 
         // Once the message is here, a reaction applies directly.
-        assert!(
-            m.record_inbound_reaction(&reaction_scope, &peer, &peer, 100, "e", false, 40)
-                .unwrap()
-        );
+        assert!(m
+            .record_inbound_reaction(&reaction_scope, &peer, &peer, 100, "e", false, 40)
+            .unwrap());
     }
 
     /// An early pin is applied on arrival — the latest action winning — and a
@@ -988,16 +1019,14 @@ mod tests {
         // DM: pinned at 10, unpinned at 20 but delivered first.
         let dm_with_peer = ChannelId::from(peer);
         let reaction_scope = ReactionScope::new(dm_with_peer, ConversationType::ServerDm);
-        assert!(
-            m.resolve_inbound_pin(&dm_with_peer, &peer, &peer, 100, true, 20)
-                .unwrap()
-                .is_none()
-        );
-        assert!(
-            m.resolve_inbound_pin(&dm_with_peer, &peer, &peer, 100, false, 10)
-                .unwrap()
-                .is_none()
-        );
+        assert!(m
+            .resolve_inbound_pin(&dm_with_peer, &peer, &peer, 100, true, 20)
+            .unwrap()
+            .is_none());
+        assert!(m
+            .resolve_inbound_pin(&dm_with_peer, &peer, &peer, 100, false, 10)
+            .unwrap()
+            .is_none());
         assert!(
             !m.message_repo
                 .insert_received(&dm(peer, "x", 100))
@@ -1005,11 +1034,10 @@ mod tests {
                 .unwrap()
                 .is_pinned
         );
-        assert!(
-            m.resolve_inbound_pin(&dm_with_peer, &peer, &peer, 101, false, 10)
-                .unwrap()
-                .is_none()
-        );
+        assert!(m
+            .resolve_inbound_pin(&dm_with_peer, &peer, &peer, 101, false, 10)
+            .unwrap()
+            .is_none());
         assert!(
             m.message_repo
                 .insert_received(&dm(peer, "y", 101))
@@ -1019,11 +1047,10 @@ mod tests {
         );
 
         // Channel: an outsider's pin is refused when the message arrives; a member's lands.
-        assert!(
-            m.resolve_inbound_pin(&channel, &outsider, &peer, 200, false, 10)
-                .unwrap()
-                .is_none()
-        );
+        assert!(m
+            .resolve_inbound_pin(&channel, &outsider, &peer, 200, false, 10)
+            .unwrap()
+            .is_none());
         assert!(
             !m.message_repo
                 .insert_received(&in_channel(200))
@@ -1031,11 +1058,10 @@ mod tests {
                 .unwrap()
                 .is_pinned
         );
-        assert!(
-            m.resolve_inbound_pin(&channel, &member, &peer, 201, false, 10)
-                .unwrap()
-                .is_none()
-        );
+        assert!(m
+            .resolve_inbound_pin(&channel, &member, &peer, 201, false, 10)
+            .unwrap()
+            .is_none());
         assert!(
             m.message_repo
                 .insert_received(&in_channel(201))
@@ -1044,11 +1070,10 @@ mod tests {
                 .is_pinned
         );
         // A pin naming another conversation than the message's does not apply.
-        assert!(
-            m.resolve_inbound_pin(&dm_with_peer, &peer, &peer, 202, false, 10)
-                .unwrap()
-                .is_none()
-        );
+        assert!(m
+            .resolve_inbound_pin(&dm_with_peer, &peer, &peer, 202, false, 10)
+            .unwrap()
+            .is_none());
         assert!(
             !m.message_repo
                 .insert_received(&in_channel(202))

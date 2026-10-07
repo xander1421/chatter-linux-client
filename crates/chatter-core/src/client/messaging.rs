@@ -399,9 +399,34 @@ impl ChatterClient {
         conversation_id: &crate::domain::ids::ChannelId,
         conversation_type: &crate::domain::message::ConversationType,
     ) -> Option<crate::domain::message::Message> {
-        self.get_messages_local(conversation_id, conversation_type, None, 1)
-            .ok()
-            .and_then(|msgs| msgs.into_iter().next())
+        // Bound the work even if a chat contains only timer-update notices.
+        const PAGE: u32 = 32;
+        const MAX_PAGES: usize = 8;
+        let mut before = None;
+        for _ in 0..MAX_PAGES {
+            let messages = self
+                .get_messages_local(conversation_id, conversation_type, before, PAGE)
+                .ok()?;
+            if let Some(message) = messages.iter().find(|message| {
+                !matches!(
+                    message.content,
+                    crate::domain::message::MessageContent::System(
+                        crate::domain::message::SystemMessage::DisappearingTimerChanged { .. }
+                    )
+                )
+            }) {
+                return Some(message.clone());
+            }
+            if messages.len() < PAGE as usize {
+                return None;
+            }
+            let next = messages.last()?.sent_at;
+            if before.is_some_and(|cursor| next >= cursor) {
+                return None;
+            }
+            before = Some(next);
+        }
+        None
     }
 
     /// Typed label for a message's attachments — "🎤 Voice message",
@@ -653,7 +678,7 @@ impl ChatterClient {
     /// UI must not merge two separate lists (that races and drops fresh DMs).
     pub fn list_dm_sidebar(&self) -> Vec<crate::ui::sidebar_data::ChatRowSendData> {
         use crate::domain::anon_dm::AnonDmStatus;
-        use crate::domain::message::{ConversationType, truncate_preview_text};
+        use crate::domain::message::{truncate_preview_text, ConversationType};
         use crate::ui::chat_data::initials_from_name;
         use crate::ui::sidebar_data::ChatRowSendData;
 
@@ -1855,8 +1880,8 @@ impl MentionSuggestionKind {
 mod shield_mode_tests {
     //! Shield (anon) mode is enforced in core: identity-revealing calls refuse
     //! or take the anon path themselves, whatever the UI offers.
-    use std::sync::Arc;
     use std::sync::atomic::Ordering;
+    use std::sync::Arc;
 
     use crate::client::ChatterClient;
     use crate::domain::ids::UserId;
@@ -1930,12 +1955,10 @@ mod shield_mode_tests {
         assert!(client.visible_in_mode(&ConversationType::ServerDm));
         assert!(!client.visible_in_mode(&ConversationType::SavedMessages));
         assert!(client.visible_in_mode(&ConversationType::AnonDm));
-        assert!(
-            client
-                .quick_switcher_entries("")
-                .iter()
-                .all(|e| e.conv_type != "saved_messages")
-        );
+        assert!(client
+            .quick_switcher_entries("")
+            .iter()
+            .all(|e| e.conv_type != "saved_messages"));
 
         client.anon_mode.store(false, Ordering::Release);
         assert_eq!(
@@ -2551,12 +2574,10 @@ mod section_row_tests {
         let (client, _dir) = client();
         let channel = ChannelId::new();
         let started = std::time::Instant::now();
-        assert!(
-            client
-                .search_channel_invite_candidates(&channel, "alice.4711", || true)
-                .await
-                .is_none()
-        );
+        assert!(client
+            .search_channel_invite_candidates(&channel, "alice.4711", || true)
+            .await
+            .is_none());
         assert!(started.elapsed() >= ChatterClient::INVITE_LOOKUP_PAUSE);
 
         // Not a complete handle: no pause, so nothing to supersede.

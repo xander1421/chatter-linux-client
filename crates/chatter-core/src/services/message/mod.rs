@@ -43,13 +43,13 @@ use crate::services::current_user::CurrentUserError;
 use crate::services::ephemeral_service::EphemeralService;
 use crate::services::mailbox_manager::MailboxManager;
 use crate::services::signal::SignalService;
-use crate::storage::Database;
 use crate::storage::repositories::attachment_repo::AttachmentRepository;
 use crate::storage::repositories::channel_repo::ChannelRepository;
 use crate::storage::repositories::search_index::{SearchIndex, SearchResult};
 use crate::storage::repositories::settings_repo::SettingsRepository;
 use crate::storage::repositories::user_repo::UserRepository;
 use crate::storage::repositories::{MessageRepository, PendingDmRepository};
+use crate::storage::Database;
 
 use crate::domain::channel::ChannelType;
 
@@ -787,7 +787,7 @@ impl MessageService {
         conversation_type: &ConversationType,
         read: Vec<(UserId, u64)>,
     ) {
-        use crate::proto::content_v1::{Content, ReadSync, ReadSyncEntry, content};
+        use crate::proto::content_v1::{content, Content, ReadSync, ReadSyncEntry};
 
         if !matches!(
             conversation_type,
@@ -971,6 +971,73 @@ impl MessageService {
         )
     }
 
+    /// Receive path captures our server deletion capability before deleting
+    /// its source row. Cleanup failure leaves the scoped local tombstone intact.
+    pub async fn apply_dm_delete_received(
+        &self,
+        peer: &UserId,
+        target_sent_at: u64,
+    ) -> Result<Option<Message>, MessageError> {
+        let me = self.current_user_id()?;
+        let target = self.dm_delete_target(peer, &me, target_sent_at)?;
+        let token = target
+            .as_ref()
+            .map(|message| self.message_repo.deletion_token(&message.id))
+            .transpose()?
+            .flatten();
+        let deleted = self.apply_dm_delete(peer, target_sent_at)?;
+        if let (Some(message), Some(token)) = (&deleted, token) {
+            if target
+                .as_ref()
+                .is_some_and(|target| target.id == message.id)
+            {
+                let mut remote = self.message_client();
+                let (message_id, conversation_id) =
+                    (message.id.to_string(), message.conversation_id.to_string());
+                tokio::spawn(async move {
+                    if let Err(error) = remote
+                        .delete_message(&message_id, &conversation_id, token.to_vec())
+                        .await
+                    {
+                        tracing::warn!(message_id = %message_id, error = %error, "Peer DM deletion: server copy cleanup failed");
+                    }
+                });
+            }
+        }
+        Ok(deleted)
+    }
+
+    fn dm_delete_target(
+        &self,
+        peer: &UserId,
+        me: &UserId,
+        target_sent_at: u64,
+    ) -> Result<Option<Message>, MessageError> {
+        for author in [*peer, *me] {
+            let message = if peer != me {
+                self.message_repo.get_by_reaction_scope(
+                    &crate::domain::reaction::ReactionScope::new(
+                        ChannelId::from(*peer),
+                        ConversationType::ServerDm,
+                    ),
+                    &author,
+                    target_sent_at,
+                )?
+            } else {
+                self.message_repo
+                    .get_by_sender_timestamp(&author, target_sent_at)?
+                    .filter(|message| message.conversation_type == ConversationType::ServerDm)
+            };
+            if message.is_some() {
+                return Ok(message);
+            }
+            if peer == me {
+                break;
+            }
+        }
+        Ok(None)
+    }
+
     /// A friend DM delete-for-everyone from `peer` of its message sent at
     /// `target_sent_at`; see [`apply_delete`](Self::apply_delete).
     pub fn apply_dm_delete(
@@ -978,21 +1045,39 @@ impl MessageService {
         peer: &UserId,
         target_sent_at: u64,
     ) -> Result<Option<Message>, MessageError> {
-        let scope = self.dm_modifier_scope(peer);
-        if let Some(message) = self.take_delete_target(peer, scope, target_sent_at)? {
+        let me = self.current_user_id()?;
+        let conversation = if *peer == me {
+            None
+        } else {
+            Some(ChannelId::from(*peer))
+        };
+        // Resolve only inside the authenticated DM; the wire is timestamp-only.
+        if let Some(message) = self.dm_delete_target(peer, &me, target_sent_at)? {
+            let author = message.sender_id.expect("DM delete target is sender-keyed");
+            crate::storage::repositories::message_modifier_repo::MessageModifierRepository::new(
+                self.database.clone(),
+            )
+            .queue_dm_delete(
+                &author,
+                target_sent_at,
+                Some(message.conversation_id),
+                crate::util::time::TimestampNanos::now().as_u64(),
+            )?;
+            self.message_repo.delete(&message.id)?;
             return Ok(Some(message));
         }
-        // Either 1:1 participant may delete the other's message. The sealed
-        // sender is `peer`; if they named our timestamp, take our row.
-        let Ok(me) = self.current_user_id() else {
-            return self.apply_delete(peer, scope, target_sent_at);
-        };
-        if me != *peer {
-            if let Some(message) = self.take_delete_target(&me, scope, target_sent_at)? {
-                return Ok(Some(message));
-            }
+        // Keep both possible authors because the wire does not identify which
+        // participant authored a missing target. Typed tombstones stay in this DM.
+        let pending =
+            crate::storage::repositories::message_modifier_repo::MessageModifierRepository::new(
+                self.database.clone(),
+            );
+        let now = crate::util::time::TimestampNanos::now().as_u64();
+        pending.queue_dm_delete(peer, target_sent_at, conversation, now)?;
+        if *peer != me {
+            pending.queue_dm_delete(&me, target_sent_at, conversation, now)?;
         }
-        self.apply_delete(peer, scope, target_sent_at)
+        Ok(None)
     }
 
     /// A channel delete-for-everyone from `sender` of its message sent at
@@ -1023,7 +1108,10 @@ impl MessageService {
             .message_repo
             .get_by_sender_timestamp(author, target_sent_at)?
         {
-            Some(message) if conversation.is_none_or(|c| c == message.conversation_id) => {
+            Some(message)
+                if message.conversation_type == ConversationType::Channel
+                    && conversation.is_some_and(|c| c == message.conversation_id) =>
+            {
                 self.message_repo.delete(&message.id)?;
                 Ok(Some(message))
             }
@@ -1917,6 +2005,317 @@ mod inbound_target_tests {
         }
     }
 
+    #[tokio::test]
+    async fn dm_delete_connected_processor_emits_actual_author_and_rejects_other_scope() {
+        use crate::inbox::{polling::device::dispatch_control_content, state::InboxStats};
+        use crate::services::inbox_processor::InboxEventProcessor;
+        use parking_lot::RwLock;
+        use tokio::sync::broadcast;
+        let f = fixture();
+        let svc = f.client.messages();
+        let processor = InboxEventProcessor::from_client(&f.client);
+        for (author, ts) in [(f.me, 301), (f.carol, DM_TS)] {
+            let target = if author == f.me {
+                let msg = Message::new_text(
+                    ChannelId::from(f.carol),
+                    ConversationType::ServerDm,
+                    Some(author),
+                    "own".into(),
+                    ts,
+                );
+                svc.message_repo.insert(&msg).unwrap();
+                svc.message_repo
+                    .set_deletion_token(&msg.id, &[9; 32])
+                    .unwrap();
+                msg
+            } else {
+                svc.get_by_sender_timestamp(&author, ts).unwrap().unwrap()
+            };
+            let (tx, mut rx) = broadcast::channel(8);
+            let stats = Arc::new(RwLock::new(InboxStats::default()));
+            let mut domain = f.client.event_bus().subscribe_domain();
+            let content = crate::services::build_delete_for_everyone_content_with_channel(ts, None)
+                .content
+                .unwrap();
+            dispatch_control_content(content, &f.carol, 1, "synthetic", 2, &tx, &stats);
+            processor.process(&rx.try_recv().unwrap()).await;
+            match domain.try_recv().unwrap() {
+                crate::inbox::handlers::DomainEvent::MessageDeleted {
+                    message_id,
+                    author_id,
+                    channel_id,
+                    target_sent_timestamp,
+                } => {
+                    assert_eq!(message_id, target.id);
+                    assert_eq!(author_id, author);
+                    assert_eq!(channel_id, Some(ChannelId::from(f.carol)));
+                    assert_eq!(target_sent_timestamp, ts);
+                }
+                event => panic!("unexpected event: {event:?}"),
+            }
+            assert!(svc.message_repo.get(&target.id).unwrap().is_none());
+            svc.message_repo.insert(&target).unwrap();
+            assert!(
+                svc.message_repo.get(&target.id).unwrap().is_none(),
+                "history replay cannot resurrect live deletion"
+            );
+        }
+        let unrelated_own = Message::new_text(
+            ChannelId::from(f.bob),
+            ConversationType::ServerDm,
+            Some(f.me),
+            "unrelated own".into(),
+            303,
+        );
+        svc.message_repo.insert(&unrelated_own).unwrap();
+        assert!(svc.apply_dm_delete(&f.carol, 303).unwrap().is_none());
+        assert!(svc.message_repo.get(&unrelated_own.id).unwrap().is_some());
+        // Bob cannot use Carol's timestamp to delete her DM or channel row.
+        assert!(svc.apply_dm_delete(&f.bob, CH_TS).unwrap().is_none());
+        assert!(svc
+            .get_by_sender_timestamp(&f.carol, CH_TS)
+            .unwrap()
+            .is_some());
+        let own_channel = Message::new_text(
+            ChannelId::from(f.carol),
+            ConversationType::Channel,
+            Some(f.me),
+            "collision".into(),
+            302,
+        );
+        svc.message_repo.insert(&own_channel).unwrap();
+        assert!(svc.apply_dm_delete(&f.carol, 302).unwrap().is_none());
+        assert!(svc.apply_dm_delete(&f.me, 302).unwrap().is_none());
+        assert!(svc.message_repo.get(&own_channel.id).unwrap().is_some());
+        let handle = f
+            .client
+            .conversation(crate::state::ActiveConversation::ServerDm { peer_id: f.bob });
+        assert!(handle.message_menu(&f.carol, CH_TS).is_err());
+        assert!(handle.is_own_message(&f.carol, CH_TS).is_err());
+        let channel_handle = f
+            .client
+            .conversation(crate::state::ActiveConversation::Channel(ChannelId::new()));
+        assert!(channel_handle.message_menu(&f.carol, CH_TS).is_err());
+    }
+
+    #[test]
+    fn queued_dm_deletes_block_either_author_catchup_without_crossing_type_or_chat() {
+        let f = fixture();
+        let svc = f.client.messages();
+        for author in [f.me, f.carol] {
+            let ts = if author == f.me { 701 } else { 702 };
+            assert!(svc.apply_dm_delete(&f.carol, ts).unwrap().is_none());
+            let other_chat = Message::new_text(
+                ChannelId::from(f.bob),
+                ConversationType::ServerDm,
+                Some(author),
+                "other".into(),
+                ts,
+            );
+            svc.message_repo.insert(&other_chat).unwrap();
+            assert!(svc.message_repo.get(&other_chat.id).unwrap().is_some());
+            svc.message_repo.delete(&other_chat.id).unwrap();
+            let channel = Message::new_text(
+                ChannelId::from(f.carol),
+                ConversationType::Channel,
+                Some(author),
+                "channel collision".into(),
+                ts,
+            );
+            svc.message_repo.insert(&channel).unwrap();
+            assert!(svc.message_repo.get(&channel.id).unwrap().is_some());
+            svc.message_repo.delete(&channel.id).unwrap();
+            let dm = Message::new_text(
+                ChannelId::from(f.carol),
+                ConversationType::ServerDm,
+                Some(author),
+                "catchup".into(),
+                ts,
+            );
+            for _ in 0..2 {
+                svc.message_repo.insert(&dm).unwrap();
+                assert!(
+                    svc.message_repo.get(&dm.id).unwrap().is_none(),
+                    "redelivery must not resurrect deleted DM"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn latest_preview_pages_past_typed_timer_notices_and_preserves_other_system_events() {
+        use crate::domain::message::SystemMessage;
+        let f = fixture();
+        let svc = f.client.messages();
+        for ts in 1000..1040 {
+            let mut notice = Message::new_text(
+                ChannelId::from(f.carol),
+                ConversationType::ServerDm,
+                Some(f.carol),
+                String::new(),
+                ts,
+            );
+            notice.content =
+                MessageContent::System(SystemMessage::DisappearingTimerChanged { seconds: 60 });
+            svc.message_repo.insert(&notice).unwrap();
+        }
+        assert_eq!(
+            f.client
+                .latest_message(&ChannelId::from(f.carol), &ConversationType::ServerDm)
+                .unwrap()
+                .sent_at,
+            DM_TS
+        );
+        let mut system = Message::new_text(
+            ChannelId::from(f.carol),
+            ConversationType::ServerDm,
+            Some(f.carol),
+            String::new(),
+            1041,
+        );
+        system.content = MessageContent::System(SystemMessage::ChannelCreated);
+        svc.message_repo.insert(&system).unwrap();
+        assert_eq!(
+            f.client
+                .latest_message(&ChannelId::from(f.carol), &ConversationType::ServerDm)
+                .unwrap()
+                .id,
+            system.id
+        );
+        let empty_chat = ChannelId::new();
+        for ts in 2000..2300 {
+            let mut notice = Message::new_text(
+                empty_chat,
+                ConversationType::ServerDm,
+                Some(f.carol),
+                String::new(),
+                ts,
+            );
+            notice.content =
+                MessageContent::System(SystemMessage::DisappearingTimerChanged { seconds: 0 });
+            svc.message_repo.insert(&notice).unwrap();
+        }
+        assert!(f
+            .client
+            .latest_message(&empty_chat, &ConversationType::ServerDm)
+            .is_none());
+    }
+
+    #[test]
+    fn anonymous_dm_receiver_deletes_both_authors_and_queues_without_group_privilege() {
+        use crate::domain::anon_dm::{AnonDm, AnonDmStatus};
+        let f = fixture();
+        let svc = f.client.messages();
+        let anon = f.client.anon_dms();
+        let mut dm = AnonDm::new_initiated(f.carol);
+        dm.status = AnonDmStatus::Active;
+        dm.peer_mailbox_pk = Some([7; 32]);
+        anon.anon_dm_repo.insert_conversation(&dm).unwrap();
+        for (author, ts) in [(f.me, 801), (f.carol, 802)] {
+            let target = Message::new_text(
+                dm.id.into(),
+                ConversationType::AnonDm,
+                Some(author),
+                "anon target".into(),
+                ts,
+            );
+            svc.message_repo.insert(&target).unwrap();
+            let content = crate::services::build_delete_for_everyone_content_with_channel(ts, None);
+            assert!(anon
+                .process_incoming_content(&dm.id, &f.bob, &content)
+                .unwrap()
+                .is_empty());
+            assert!(svc.message_repo.get(&target.id).unwrap().is_some());
+            let events = anon
+                .process_incoming_content(&dm.id, &f.carol, &content)
+                .unwrap();
+            assert_eq!(events.len(), 1);
+            match &events[0] {
+                crate::inbox::handlers::DomainEvent::MessageDeleted {
+                    message_id,
+                    author_id,
+                    ..
+                } => {
+                    assert_eq!(*message_id, target.id);
+                    assert_eq!(*author_id, author);
+                }
+                _ => panic!("expected deletion event"),
+            }
+            assert!(svc.message_repo.get(&target.id).unwrap().is_none());
+            svc.message_repo.insert(&target).unwrap();
+            assert!(svc.message_repo.get(&target.id).unwrap().is_none());
+        }
+        for (author, ts) in [(f.me, 803), (f.carol, 804)] {
+            let content = crate::services::build_delete_for_everyone_content_with_channel(ts, None);
+            assert!(anon
+                .process_incoming_content(&dm.id, &f.carol, &content)
+                .unwrap()
+                .is_empty());
+            let wrong_type = Message::new_text(
+                dm.id.into(),
+                ConversationType::AnonGroup,
+                Some(author),
+                "group".into(),
+                ts,
+            );
+            svc.message_repo.insert(&wrong_type).unwrap();
+            assert!(svc.message_repo.get(&wrong_type.id).unwrap().is_some());
+            svc.message_repo.delete(&wrong_type.id).unwrap();
+            let target = Message::new_text(
+                dm.id.into(),
+                ConversationType::AnonDm,
+                Some(author),
+                "late".into(),
+                ts,
+            );
+            for _ in 0..2 {
+                svc.message_repo.insert(&target).unwrap();
+                assert!(svc.message_repo.get(&target.id).unwrap().is_none());
+            }
+        }
+        let catchup = crate::services::gateway::build_text_content("late peer", 804);
+        let events = anon
+            .process_incoming_content(&dm.id, &f.carol, &catchup)
+            .unwrap();
+        assert!(
+            !events.iter().any(|event| matches!(
+                event,
+                crate::inbox::handlers::DomainEvent::MessageReceived { .. }
+            )),
+            "deleted catchup cannot emit a live bubble"
+        );
+        // The common group backend keeps the author-only lookup.
+        let group_id = crate::domain::anon_group::AnonGroupId::new();
+        let own = Message::new_text(
+            group_id.into(),
+            ConversationType::AnonGroup,
+            Some(f.me),
+            "own group".into(),
+            805,
+        );
+        svc.message_repo.insert(&own).unwrap();
+        assert!(!f
+            .client
+            .anon_groups()
+            .delete_message_by_timestamp(&group_id, &f.carol, 805)
+            .unwrap());
+        assert!(svc.message_repo.get(&own.id).unwrap().is_some());
+        // Likewise the channel receiver cannot borrow the DM peer permission.
+        let channel = Message::new_text(
+            f.channel,
+            ConversationType::Channel,
+            Some(f.me),
+            "own channel".into(),
+            806,
+        );
+        svc.message_repo.insert(&channel).unwrap();
+        assert!(svc
+            .apply_channel_delete(&f.channel, &f.carol, 806)
+            .unwrap()
+            .is_none());
+        assert!(svc.message_repo.get(&channel.id).unwrap().is_some());
+    }
+
     fn reactors(f: &Fixture, ts: u64) -> Vec<UserId> {
         f.client
             .messages()
@@ -1979,10 +2378,9 @@ mod inbound_target_tests {
                     .map(|r| r.user_id)
                     .collect::<Vec<_>>()
             };
-            assert!(
-                svc.record_reaction_at(&scope, &f.carol, CH_TS, &f.me, "👍", false, 1)
-                    .unwrap()
-            );
+            assert!(svc
+                .record_reaction_at(&scope, &f.carol, CH_TS, &f.me, "👍", false, 1)
+                .unwrap());
             let processor = InboxEventProcessor::from_client(&f.client);
             let (tx, mut rx) = broadcast::channel(8);
             let mut domain = f.client.event_bus().subscribe_domain();
@@ -2054,8 +2452,8 @@ mod inbound_target_tests {
         let svc = f.client.messages();
 
         // Bob, from his own DM, targets Carol's DM message and her channel message.
-        assert!(
-            !svc.record_inbound_reaction(
+        assert!(!svc
+            .record_inbound_reaction(
                 &crate::domain::reaction::ReactionScope::new(
                     ChannelId::from(f.bob),
                     ConversationType::ServerDm
@@ -2067,10 +2465,9 @@ mod inbound_target_tests {
                 false,
                 1
             )
-            .unwrap()
-        );
-        assert!(
-            !svc.record_inbound_reaction(
+            .unwrap());
+        assert!(!svc
+            .record_inbound_reaction(
                 &crate::domain::reaction::ReactionScope::new(
                     ChannelId::from(f.bob),
                     ConversationType::ServerDm
@@ -2082,11 +2479,10 @@ mod inbound_target_tests {
                 false,
                 1
             )
-            .unwrap()
-        );
+            .unwrap());
         // Bob claims the channel he is not a member of.
-        assert!(
-            !svc.record_inbound_reaction(
+        assert!(!svc
+            .record_inbound_reaction(
                 &crate::domain::reaction::ReactionScope::new(f.channel, ConversationType::Channel),
                 &f.bob,
                 &f.carol,
@@ -2095,11 +2491,10 @@ mod inbound_target_tests {
                 false,
                 1
             )
-            .unwrap()
-        );
+            .unwrap());
         // Carol, a channel member, aims a channel reaction at her DM message.
-        assert!(
-            !svc.record_inbound_reaction(
+        assert!(!svc
+            .record_inbound_reaction(
                 &crate::domain::reaction::ReactionScope::new(f.channel, ConversationType::Channel),
                 &f.carol,
                 &f.carol,
@@ -2108,13 +2503,12 @@ mod inbound_target_tests {
                 false,
                 1
             )
-            .unwrap()
-        );
+            .unwrap());
         assert!(reactors(&f, DM_TS).is_empty() && reactors(&f, CH_TS).is_empty());
 
         // The legitimate ones land.
-        assert!(
-            svc.record_inbound_reaction(
+        assert!(svc
+            .record_inbound_reaction(
                 &crate::domain::reaction::ReactionScope::new(
                     ChannelId::from(f.carol),
                     ConversationType::ServerDm
@@ -2126,10 +2520,9 @@ mod inbound_target_tests {
                 false,
                 1
             )
-            .unwrap()
-        );
-        assert!(
-            svc.record_inbound_reaction(
+            .unwrap());
+        assert!(svc
+            .record_inbound_reaction(
                 &crate::domain::reaction::ReactionScope::new(f.channel, ConversationType::Channel),
                 &f.carol,
                 &f.carol,
@@ -2138,8 +2531,7 @@ mod inbound_target_tests {
                 false,
                 1
             )
-            .unwrap()
-        );
+            .unwrap());
         assert_eq!(reactors(&f, DM_TS), vec![f.carol]);
         assert_eq!(reactors(&f, CH_TS), vec![f.carol]);
 
@@ -2156,8 +2548,8 @@ mod inbound_target_tests {
             false,
         )
         .unwrap();
-        assert!(
-            !svc.record_inbound_reaction(
+        assert!(!svc
+            .record_inbound_reaction(
                 &crate::domain::reaction::ReactionScope::new(
                     ChannelId::from(f.bob),
                     ConversationType::ServerDm
@@ -2169,11 +2561,10 @@ mod inbound_target_tests {
                 true,
                 1
             )
-            .unwrap()
-        );
+            .unwrap());
         assert!(reactors(&f, DM_TS).contains(&f.bob));
-        assert!(
-            svc.record_inbound_reaction(
+        assert!(svc
+            .record_inbound_reaction(
                 &crate::domain::reaction::ReactionScope::new(
                     ChannelId::from(f.carol),
                     ConversationType::ServerDm
@@ -2185,8 +2576,7 @@ mod inbound_target_tests {
                 true,
                 2
             )
-            .unwrap()
-        );
+            .unwrap());
     }
 
     #[tokio::test]
@@ -2229,40 +2619,33 @@ mod inbound_target_tests {
                 .0,
             dm_scope
         );
-        assert!(
-            svc.record_inbound_reaction(&admitted, &f.me, &author, DM_TS, "👍", false, 1)
-                .unwrap()
-        );
-        assert!(
-            !svc.record_inbound_reaction(&admitted, &f.me, &author, DM_TS, "👍", false, 1)
-                .unwrap()
-        );
-        assert!(
-            svc.message_repo
-                .get_reactions(&encrypted_scope, &author, DM_TS)
-                .unwrap()
-                .is_empty()
-        );
-        assert!(
-            svc.record_inbound_reaction(&encrypted_scope, &f.carol, &author, DM_TS, "👍", false, 1)
-                .unwrap()
-        );
-        assert!(
-            svc.record_inbound_reaction(&dm_scope, &f.me, &author, DM_TS, "👍", true, 2)
-                .unwrap()
-        );
-        assert!(
-            !svc.record_inbound_reaction(&dm_scope, &f.me, &author, DM_TS, "👍", true, 2)
-                .unwrap()
-        );
-        assert!(
-            svc.message_repo
-                .get_by_reaction_scope(&dm_scope, &author, DM_TS)
-                .unwrap()
-                .unwrap()
-                .reaction_counts
-                .is_empty()
-        );
+        assert!(svc
+            .record_inbound_reaction(&admitted, &f.me, &author, DM_TS, "👍", false, 1)
+            .unwrap());
+        assert!(!svc
+            .record_inbound_reaction(&admitted, &f.me, &author, DM_TS, "👍", false, 1)
+            .unwrap());
+        assert!(svc
+            .message_repo
+            .get_reactions(&encrypted_scope, &author, DM_TS)
+            .unwrap()
+            .is_empty());
+        assert!(svc
+            .record_inbound_reaction(&encrypted_scope, &f.carol, &author, DM_TS, "👍", false, 1)
+            .unwrap());
+        assert!(svc
+            .record_inbound_reaction(&dm_scope, &f.me, &author, DM_TS, "👍", true, 2)
+            .unwrap());
+        assert!(!svc
+            .record_inbound_reaction(&dm_scope, &f.me, &author, DM_TS, "👍", true, 2)
+            .unwrap());
+        assert!(svc
+            .message_repo
+            .get_by_reaction_scope(&dm_scope, &author, DM_TS)
+            .unwrap()
+            .unwrap()
+            .reaction_counts
+            .is_empty());
         assert_eq!(
             svc.message_repo
                 .get_by_reaction_scope(&encrypted_scope, &author, DM_TS)
@@ -2272,18 +2655,16 @@ mod inbound_target_tests {
                 .count,
             1
         );
-        assert!(
-            svc.record_inbound_reaction(&encrypted_scope, &f.carol, &author, DM_TS, "👍", true, 2)
-                .unwrap()
-        );
-        assert!(
-            svc.message_repo
-                .get_by_reaction_scope(&encrypted_scope, &author, DM_TS)
-                .unwrap()
-                .unwrap()
-                .reaction_counts
-                .is_empty()
-        );
+        assert!(svc
+            .record_inbound_reaction(&encrypted_scope, &f.carol, &author, DM_TS, "👍", true, 2)
+            .unwrap());
+        assert!(svc
+            .message_repo
+            .get_by_reaction_scope(&encrypted_scope, &author, DM_TS)
+            .unwrap()
+            .unwrap()
+            .reaction_counts
+            .is_empty());
     }
 
     /// Pins resolve their target through the same binding.

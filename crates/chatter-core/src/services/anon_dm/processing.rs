@@ -1,11 +1,11 @@
-use crate::domain::UserId;
 use crate::domain::anon_dm::{AnonDmId, AnonDmMessageId};
 use crate::domain::ids::{AttachmentId, ChannelId, MessageId};
 use crate::domain::message::ConversationType;
-use crate::inbox::handlers::DomainEvent;
+use crate::domain::UserId;
 use crate::inbox::handlers::base_anon::{
-    AnonInboxBackend, CommonDispatchOutcome, QuoteContext, dispatch_common_content,
+    dispatch_common_content, AnonInboxBackend, CommonDispatchOutcome, QuoteContext,
 };
+use crate::inbox::handlers::DomainEvent;
 use crate::proto::content_v1::{AttachmentPointer, Content};
 use crate::services::AttachmentService;
 
@@ -186,9 +186,40 @@ impl AnonDmService {
             }
         }
 
+        // DM deletes allow both participants; the common group dispatcher
+        // intentionally remains author-only. Emit the stored target's identity.
+        if let Some(ContentType::DataMessage(data)) = &inner_content.content {
+            if let Some(delete) = &data.delete {
+                return Ok(self
+                    .apply_received_delete(
+                        conversation_id,
+                        sender_id,
+                        delete.target_sent_timestamp,
+                    )?
+                    .into_iter()
+                    .map(|message| DomainEvent::MessageDeleted {
+                        message_id: message.id,
+                        author_id: message.sender_id.unwrap_or(*sender_id),
+                        channel_id: Some(message.conversation_id),
+                        target_sent_timestamp: delete.target_sent_timestamp,
+                    })
+                    .collect());
+            }
+        }
+
         // Common content types (identical between DM and Group).
         match dispatch_common_content(conversation_id, sender_id, inner_content, self) {
-            CommonDispatchOutcome::Handled(events) => return Ok(events),
+            CommonDispatchOutcome::Handled(mut events) => {
+                // A pending delete suppresses storage; do not reconstruct a
+                // phantom live bubble from the successful insert call.
+                events.retain(|event| match event {
+                    DomainEvent::MessageReceived { message } => {
+                        self.message_repo.get(&message.id).ok().flatten().is_some()
+                    }
+                    _ => true,
+                });
+                return Ok(events);
+            }
             CommonDispatchOutcome::Dropped => return Ok(vec![]),
             CommonDispatchOutcome::NotHandled => {}
             CommonDispatchOutcome::Failed(error) => return Err(error.into()),

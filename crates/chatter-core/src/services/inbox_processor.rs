@@ -1000,12 +1000,13 @@ impl InboxEventProcessor {
             } => {
                 match self
                     .message_service
-                    .apply_dm_delete(peer_id, *target_sent_timestamp)
+                    .apply_dm_delete_received(peer_id, *target_sent_timestamp)
+                    .await
                 {
                     Ok(Some(msg)) => {
                         self.event_bus.emit_domain(DomainEvent::MessageDeleted {
                             message_id: msg.id,
-                            author_id: *peer_id,
+                            author_id: msg.sender_id.unwrap_or(*peer_id),
                             channel_id: Some(msg.conversation_id),
                             target_sent_timestamp: *target_sent_timestamp,
                         });

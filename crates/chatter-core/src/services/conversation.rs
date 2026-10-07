@@ -591,6 +591,7 @@ impl ConversationHandle {
         target_author: &UserId,
         target_sent_timestamp: u64,
     ) -> ConversationResult {
+        let target = self.stored_message(target_author, target_sent_timestamp)?;
         if !self.can_delete_for_everyone(target_author, target_sent_timestamp)? {
             return Err(ConversationError::Other(
                 "cannot delete this message for everyone".into(),
@@ -631,21 +632,22 @@ impl ConversationHandle {
                 // The server keeps an authorless copy of a sealed-sender
                 // message; take it down too, or a device fetching history
                 // gets it back. Best-effort: the E2E delete already went out.
-                if let Some(msg) = self
+                if let Err(e) = self
                     .client
                     .messages()
-                    .get_by_sender_timestamp(target_author, target_sent_timestamp)
-                    .ok()
-                    .flatten()
+                    .delete_sealed_server_copy(&target)
+                    .await
                 {
-                    if let Err(e) = self.client.messages().delete_sealed_server_copy(&msg).await {
-                        tracing::warn!(message_id = %msg.id, error = %e,
-                            "delete-for-everyone: server copy of sealed message not deleted");
-                    }
-                    let _ = self.client.messages().delete_message_local(&msg.id);
-                } else {
-                    self.delete_local_by_timestamp(target_sent_timestamp);
+                    tracing::warn!(message_id = %target.id, error = %e,
+                        "delete-for-everyone: server copy of sealed message not deleted");
                 }
+                if target.conversation_type == ConversationType::ServerDm {
+                    if let Some(author) = target.sender_id {
+                        crate::storage::repositories::message_modifier_repo::MessageModifierRepository::new(self.client.messages().database.clone())
+                            .queue_dm_delete(&author, target.sent_at, Some(target.conversation_id), crate::util::time::TimestampNanos::now().as_u64())?;
+                    }
+                }
+                self.client.messages().delete_message_local(&target.id)?;
                 Ok(())
             }
         }
@@ -1481,11 +1483,7 @@ impl ConversationHandle {
     /// Persist an edit to local DB (for sender's own edits).
     fn persist_edit(&self, sent_timestamp: u64, new_text: &str) {
         if let Some(user_id) = self.client.auth_state().get().current_user_id {
-            if let Ok(Some(msg)) = self
-                .client
-                .messages()
-                .get_by_sender_timestamp(&user_id, sent_timestamp)
-            {
+            if let Ok(msg) = self.lookup_message(&user_id, sent_timestamp) {
                 let new_content =
                     crate::domain::message::MessageContent::Text(new_text.to_string());
                 let _ = self
@@ -1496,27 +1494,24 @@ impl ConversationHandle {
         }
     }
 
-    fn delete_local_by_timestamp(&self, sent_timestamp: u64) {
-        if let Some(user_id) = self.client.auth_state().get().current_user_id {
-            if let Ok(Some(msg)) = self
-                .client
-                .messages()
-                .get_by_sender_timestamp(&user_id, sent_timestamp)
-            {
-                let _ = self.client.messages().delete_message_local(&msg.id);
-            }
-        }
-    }
-
     fn lookup_message(
         &self,
         sender_id: &UserId,
         sent_timestamp: u64,
     ) -> ConversationResult<crate::domain::Message> {
+        let (kind, id) = self
+            .conversation
+            .routing_key()
+            .ok_or(ConversationError::NoConversation)?;
+        let scope = crate::domain::reaction::ReactionScope::new(
+            id.parse()
+                .map_err(|_| ConversationError::Other("Invalid conversation".into()))?,
+            kind,
+        );
         self.client
             .messages()
-            .get_by_sender_timestamp(sender_id, sent_timestamp)
-            .map_err(|e| ConversationError::Message(e))?
+            .message_repo
+            .get_by_reaction_scope(&scope, sender_id, sent_timestamp)?
             .ok_or_else(|| ConversationError::Other("Message not found".into()))
     }
 
@@ -1949,21 +1944,17 @@ mod tests {
             .delete_conversation(ActiveConversation::AnonDm(dm.id))
             .unwrap();
 
-        assert!(
-            client
-                .anon_dms()
-                .get_conversation(&dm.id)
-                .unwrap()
-                .is_none()
-        );
-        assert!(
-            client
-                .messages()
-                .message_repo
-                .get(&msg.id)
-                .unwrap()
-                .is_none()
-        );
+        assert!(client
+            .anon_dms()
+            .get_conversation(&dm.id)
+            .unwrap()
+            .is_none());
+        assert!(client
+            .messages()
+            .message_repo
+            .get(&msg.id)
+            .unwrap()
+            .is_none());
         assert!(attachments.get(&only_here).unwrap().is_none());
         assert!(
             !only_here_path.exists(),
@@ -1974,14 +1965,12 @@ mod tests {
             forwarded_path.exists(),
             "a file another chat still shows was deleted"
         );
-        assert!(
-            client
-                .messages()
-                .message_repo
-                .get(&fwd.id)
-                .unwrap()
-                .is_some()
-        );
+        assert!(client
+            .messages()
+            .message_repo
+            .get(&fwd.id)
+            .unwrap()
+            .is_some());
         assert_eq!(client.display_name(&peer), "Robin");
         assert!(client.is_profile_user_blocked(&peer));
     }
@@ -2036,14 +2025,12 @@ mod tests {
             .delete_conversation(ActiveConversation::ServerDm { peer_id: peer })
             .unwrap();
 
-        assert!(
-            client
-                .messages()
-                .message_repo
-                .get(&msg.id)
-                .unwrap()
-                .is_none()
-        );
+        assert!(client
+            .messages()
+            .message_repo
+            .get(&msg.id)
+            .unwrap()
+            .is_none());
         assert!(attachments.get(&only_here).unwrap().is_none());
         assert!(
             !only_here_path.exists(),
@@ -2054,14 +2041,12 @@ mod tests {
             forwarded_path.exists(),
             "a file another chat still shows was deleted"
         );
-        assert!(
-            client
-                .messages()
-                .message_repo
-                .get(&fwd.id)
-                .unwrap()
-                .is_some()
-        );
+        assert!(client
+            .messages()
+            .message_repo
+            .get(&fwd.id)
+            .unwrap()
+            .is_some());
     }
     #[tokio::test]
     async fn reaction_snapshot_is_scoped_and_repairs_persisted_add_remove_duplicates() {
@@ -2163,31 +2148,25 @@ mod tests {
             let snapshot = handle.reaction_snapshot(&author, sent_at).unwrap().unwrap();
             assert!(snapshot.counts.is_empty());
             assert!(snapshot.summary.is_empty());
-            assert!(
-                client
-                    .conversation(ActiveConversation::Channel(ChannelId::new()))
-                    .reaction_snapshot(&author, sent_at)
-                    .unwrap()
-                    .is_none()
-            );
+            assert!(client
+                .conversation(ActiveConversation::Channel(ChannelId::new()))
+                .reaction_snapshot(&author, sent_at)
+                .unwrap()
+                .is_none());
             assert!(handle.reaction_snapshot(&other, sent_at).unwrap().is_none());
-            assert!(
-                handle
-                    .reaction_snapshot(&author, sent_at + 100)
-                    .unwrap()
-                    .is_none()
-            );
+            assert!(handle
+                .reaction_snapshot(&author, sent_at + 100)
+                .unwrap()
+                .is_none());
         }
         // Same UUID does not make an anonymous group into a friend DM.
-        assert!(
-            client
-                .conversation(ActiveConversation::ServerDm {
-                    peer_id: encrypted_channel.to_string().parse().unwrap()
-                })
-                .reaction_snapshot(&author, 401)
-                .unwrap()
-                .is_none()
-        );
+        assert!(client
+            .conversation(ActiveConversation::ServerDm {
+                peer_id: encrypted_channel.to_string().parse().unwrap()
+            })
+            .reaction_snapshot(&author, 401)
+            .unwrap()
+            .is_none());
     }
 
     #[tokio::test]
