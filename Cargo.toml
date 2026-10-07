@@ -262,6 +262,9 @@ lto = "thin"
 # panel's top refresh rate only while the UI moves.
 # See vendor/i-slint-backend-android-activity/PATCHES.md.
 [patch.crates-io]
+# Keep Quinn receive streams accessible during pending HTTP/3 reads.
+# See vendor/h3-quinn/PATCHES.md.
+h3-quinn = { path = "vendor/h3-quinn" }
 # Locked LiveKit media sender key-index lifecycle patch; see vendor/livekit/PATCHES.md.
 livekit = { path = "vendor/livekit" }
 i-slint-backend-android-activity = { path = "vendor/i-slint-backend-android-activity" }
