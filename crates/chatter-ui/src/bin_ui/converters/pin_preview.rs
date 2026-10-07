@@ -10,7 +10,7 @@ pub(crate) fn text_preview(text: &str) -> String {
 
 /// Only actual text is markdown. Attachment filenames/captions are literal.
 pub(crate) fn preview_or_caption(text: Option<&str>, caption: &str) -> String {
-    text.filter(|text| !text.is_empty())
+    text.filter(|text| !text.trim().is_empty())
         .map(text_preview)
         .unwrap_or_else(|| caption.to_owned())
 }
@@ -68,6 +68,7 @@ mod tests {
         ] {
             assert_eq!(preview_or_caption(None, caption), caption);
             assert_eq!(preview_or_caption(Some(""), caption), caption);
+            assert_eq!(preview_or_caption(Some(" \n\t"), caption), caption);
         }
         assert_eq!(
             preview_or_caption(Some("**caption**"), "📷 Photo"),
