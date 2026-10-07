@@ -236,67 +236,73 @@ fn render_accepted_call(
                 if w.get_active_call_data().call_id.as_str() != setup.call_id.to_string() {
                     return;
                 }
-                let local_initials = initials_from_name(&my_display_name);
-                let remote_initials = initials_from_name(&peer_name);
-                let remote_avatar = peer_avatar_bytes
-                    .as_deref()
-                    .and_then(avatar_bytes_to_image)
-                    .unwrap_or_default();
-                let local_participant = CallParticipantData {
-                    user_id: current_user_id.clone().into(),
-                    display_name: my_display_name.clone().into(),
-                    initials: local_initials.into(),
-                    avatar_source: w.get_user_avatar_source(),
-                    is_muted: false,
-                    is_video_enabled: is_video,
-                    is_screen_sharing: false,
-                    is_speaking: false,
-                    is_audio_muted_locally: false,
-                    is_video_paused_locally: false,
+                let Some(worker) = ui_ctx.call_service().get() else {
+                    return;
                 };
-                let remote_participant = CallParticipantData {
-                    user_id: peer_id.to_string().into(),
-                    display_name: peer_name.clone().into(),
-                    initials: remote_initials.into(),
-                    avatar_source: remote_avatar,
-                    is_muted: false,
-                    is_video_enabled: is_video,
-                    is_screen_sharing: false,
-                    is_speaking: false,
-                    is_audio_muted_locally: false,
-                    is_video_paused_locally: false,
-                };
-                let call_data = ActiveCallData {
-                    call_id: setup.call_id.to_string().into(),
-                    channel_id: setup.channel_id.to_string().into(),
-                    // Who the call is with — what the return-to-call bar shows.
-                    title: peer_name.clone().into(),
-                    is_video_call: is_video,
-                    is_anonymous_call: false,
-                    is_encrypted: true,
-                    is_identity_verified: false,
-                    identity_warning: "".into(),
-                    participant_count: 2,
-                    duration_seconds: 0,
-                    is_connected: true,
-                    participants: ModelRc::new(VecModel::from(vec![
-                        remote_participant,
-                        local_participant,
-                    ])),
-                    verification_key_version: "".into(),
-                    verification_emoji_1: setup.verification_emojis[0].clone().into(),
-                    verification_emoji_2: setup.verification_emojis[1].clone().into(),
-                    verification_emoji_3: setup.verification_emojis[2].clone().into(),
-                    verification_emoji_4: setup.verification_emojis[3].clone().into(),
-                };
-                w.set_active_call_data(call_data);
-                w.set_call_is_muted(false);
-                w.set_call_is_video_enabled(is_video);
-                w.set_call_is_screen_sharing(false);
-                w.set_active_call_visible(true);
-                start_call_timer(&w, ui_ctx.clone());
-                start_video_frame_timer(&w, frames);
-                open_call_screen(&w);
+                let identity = setup.call_id.to_string();
+                worker.with_current_active_presentation(revision, &identity, || {
+                    let local_initials = initials_from_name(&my_display_name);
+                    let remote_initials = initials_from_name(&peer_name);
+                    let remote_avatar = peer_avatar_bytes
+                        .as_deref()
+                        .and_then(avatar_bytes_to_image)
+                        .unwrap_or_default();
+                    let local_participant = CallParticipantData {
+                        user_id: current_user_id.clone().into(),
+                        display_name: my_display_name.clone().into(),
+                        initials: local_initials.into(),
+                        avatar_source: w.get_user_avatar_source(),
+                        is_muted: false,
+                        is_video_enabled: is_video,
+                        is_screen_sharing: false,
+                        is_speaking: false,
+                        is_audio_muted_locally: false,
+                        is_video_paused_locally: false,
+                    };
+                    let remote_participant = CallParticipantData {
+                        user_id: peer_id.to_string().into(),
+                        display_name: peer_name.clone().into(),
+                        initials: remote_initials.into(),
+                        avatar_source: remote_avatar,
+                        is_muted: false,
+                        is_video_enabled: is_video,
+                        is_screen_sharing: false,
+                        is_speaking: false,
+                        is_audio_muted_locally: false,
+                        is_video_paused_locally: false,
+                    };
+                    let call_data = ActiveCallData {
+                        call_id: setup.call_id.to_string().into(),
+                        channel_id: setup.channel_id.to_string().into(),
+                        // Who the call is with — what the return-to-call bar shows.
+                        title: peer_name.clone().into(),
+                        is_video_call: is_video,
+                        is_anonymous_call: false,
+                        is_encrypted: true,
+                        is_identity_verified: false,
+                        identity_warning: "".into(),
+                        participant_count: 2,
+                        duration_seconds: 0,
+                        is_connected: true,
+                        participants: ModelRc::new(VecModel::from(vec![
+                            remote_participant,
+                            local_participant,
+                        ])),
+                        verification_key_version: "".into(),
+                        verification_emoji_1: setup.verification_emojis[0].clone().into(),
+                        verification_emoji_2: setup.verification_emojis[1].clone().into(),
+                        verification_emoji_3: setup.verification_emojis[2].clone().into(),
+                        verification_emoji_4: setup.verification_emojis[3].clone().into(),
+                    };
+                    w.set_active_call_data(call_data);
+                    w.set_call_is_muted(false);
+                    w.set_call_is_video_enabled(is_video);
+                    w.set_call_is_screen_sharing(false);
+                    w.set_active_call_visible(true);
+                    start_call_timer(&w, ui_ctx.clone());
+                    start_video_frame_timer(&w, frames);
+                    open_call_screen(&w);
+                });
             });
             // Media is auto-published by the call worker after connect.
         }
@@ -313,52 +319,58 @@ fn render_accepted_call(
                 if w.get_active_call_data().call_id.as_str() != setup.call_id.to_string() {
                     return;
                 }
-                // Keep the remote tiles already up: the answering view's
-                // caller tile, and any `ParticipantJoined` for the people
-                // already in the room that landed before this repaint. Each
-                // later joiner adds its own tile (room_events.rs).
-                let existing = w.get_active_call_data().participants;
-                let mut participants: Vec<CallParticipantData> = existing.iter().collect();
-                participants.pop(); // the local tile, pinned last; rebuilt below
-                participants.push(CallParticipantData {
-                    user_id: current_user_id.clone().into(),
-                    display_name: my_display_name.clone().into(),
-                    initials: initials_from_name(&my_display_name).into(),
-                    avatar_source: w.get_user_avatar_source(),
-                    is_muted: false,
-                    is_video_enabled: setup.is_video,
-                    is_screen_sharing: false,
-                    is_speaking: false,
-                    is_audio_muted_locally: false,
-                    is_video_paused_locally: false,
-                });
-                let call_data = ActiveCallData {
-                    call_id: setup.call_id.to_string().into(),
-                    channel_id: setup.channel_id.to_string().into(),
-                    title: title.into(),
-                    is_video_call: setup.is_video,
-                    is_anonymous_call: false,
-                    is_encrypted: true,
-                    is_identity_verified: false,
-                    identity_warning: "".into(),
-                    participant_count: participants.len() as i32,
-                    duration_seconds: 0,
-                    is_connected: true,
-                    participants: ModelRc::new(VecModel::from(participants)),
-                    verification_key_version: "".into(),
-                    verification_emoji_1: setup.verification_emojis[0].clone().into(),
-                    verification_emoji_2: setup.verification_emojis[1].clone().into(),
-                    verification_emoji_3: setup.verification_emojis[2].clone().into(),
-                    verification_emoji_4: setup.verification_emojis[3].clone().into(),
+                let Some(worker) = ui_ctx.call_service().get() else {
+                    return;
                 };
-                w.set_active_call_data(call_data);
-                w.set_call_is_muted(false);
-                w.set_call_is_video_enabled(setup.is_video);
-                w.set_call_is_screen_sharing(false);
-                w.set_active_call_visible(true);
-                start_call_timer(&w, ui_ctx.clone());
-                start_video_frame_timer(&w, frames);
-                open_call_screen(&w);
+                let identity = setup.call_id.to_string();
+                worker.with_current_active_presentation(revision, &identity, || {
+                    // Keep the remote tiles already up: the answering view's
+                    // caller tile, and any `ParticipantJoined` for the people
+                    // already in the room that landed before this repaint. Each
+                    // later joiner adds its own tile (room_events.rs).
+                    let existing = w.get_active_call_data().participants;
+                    let mut participants: Vec<CallParticipantData> = existing.iter().collect();
+                    participants.pop(); // the local tile, pinned last; rebuilt below
+                    participants.push(CallParticipantData {
+                        user_id: current_user_id.clone().into(),
+                        display_name: my_display_name.clone().into(),
+                        initials: initials_from_name(&my_display_name).into(),
+                        avatar_source: w.get_user_avatar_source(),
+                        is_muted: false,
+                        is_video_enabled: setup.is_video,
+                        is_screen_sharing: false,
+                        is_speaking: false,
+                        is_audio_muted_locally: false,
+                        is_video_paused_locally: false,
+                    });
+                    let call_data = ActiveCallData {
+                        call_id: setup.call_id.to_string().into(),
+                        channel_id: setup.channel_id.to_string().into(),
+                        title: title.into(),
+                        is_video_call: setup.is_video,
+                        is_anonymous_call: false,
+                        is_encrypted: true,
+                        is_identity_verified: false,
+                        identity_warning: "".into(),
+                        participant_count: participants.len() as i32,
+                        duration_seconds: 0,
+                        is_connected: true,
+                        participants: ModelRc::new(VecModel::from(participants)),
+                        verification_key_version: "".into(),
+                        verification_emoji_1: setup.verification_emojis[0].clone().into(),
+                        verification_emoji_2: setup.verification_emojis[1].clone().into(),
+                        verification_emoji_3: setup.verification_emojis[2].clone().into(),
+                        verification_emoji_4: setup.verification_emojis[3].clone().into(),
+                    };
+                    w.set_active_call_data(call_data);
+                    w.set_call_is_muted(false);
+                    w.set_call_is_video_enabled(setup.is_video);
+                    w.set_call_is_screen_sharing(false);
+                    w.set_active_call_visible(true);
+                    start_call_timer(&w, ui_ctx.clone());
+                    start_video_frame_timer(&w, frames);
+                    open_call_screen(&w);
+                });
             });
         }
 
@@ -815,13 +827,16 @@ fn handle_orchestrator_event(
             let _ = slint::invoke_from_event_loop(move || {
                 let Some(w) = weak.upgrade() else { return };
                 if !ui_ctx.call_session_is_current(revision) { return; }
+                let Some(worker) = ui_ctx.call_service().get() else { return };
+                worker.with_current_active_presentation(revision, call.as_str(), || {
                 let mut data = w.get_active_call_data();
                 if data.call_id.as_str() != call.as_str() {
                     return;
                 }
                 data.is_connected = true;
                 w.set_active_call_data(data);
-                start_call_timer(&w, ui_ctx);
+                start_call_timer(&w, ui_ctx.clone());
+                });
             });
         }
 
@@ -977,6 +992,130 @@ mod session_tests {
         pump(&window);
         assert!(!window.get_active_call_visible());
         assert!(window.get_incoming_call_visible());
+        // Both non-anonymous accept branches must consult actor lifecycle,
+        // even when the hidden UI retains the accepted call's exact identity.
+        for group in [false, true] {
+            let id = chatter_core::domain::ids::CallId::new();
+            let channel = chatter_core::domain::ids::ChannelId::new();
+            let kind = if group {
+                OrchestratedCallKind::GroupChannel
+            } else {
+                OrchestratedCallKind::DmStandard
+            };
+            let accepted = || {
+                let setup = chatter_core::domain::call::CallSetupResult {
+                    call_id: id,
+                    channel_id: channel,
+                    verification_emojis: Default::default(),
+                    is_video: false,
+                    started_at_ns: 0,
+                };
+                if group {
+                    AcceptedIncomingCall::Group {
+                        setup,
+                        title: "Valid group".into(),
+                    }
+                } else {
+                    AcceptedIncomingCall::Dm {
+                        setup,
+                        peer_id: alice,
+                        peer_name: "Valid peer".into(),
+                        is_video: false,
+                    }
+                }
+            };
+            runtime
+                .block_on(current.orch_mark_connected_reliably(
+                    CallHandle::from(id.to_string()),
+                    kind,
+                    alice,
+                    false,
+                ))
+                .unwrap();
+            let mut data = window.get_active_call_data();
+            data.call_id = id.to_string().into();
+            data.is_connected = false;
+            window.set_active_call_data(data);
+            render_accepted_call(&window.as_weak(), &client, accepted(), revision);
+            pump(&window);
+            assert!(
+                window.get_active_call_visible(),
+                "current accepted identity must render"
+            );
+            assert!(window.get_active_call_data().is_connected);
+            assert!(
+                window.get_incoming_call_visible(),
+                "newer B ring must survive accepted render"
+            );
+            assert_eq!(window.get_incoming_call_data().call_id.as_str(), "B");
+
+            for replaced in [false, true] {
+                // Restore authority for A, then queue its paint before the
+                // terminal/replacement actor transition and before UI dispatch.
+                runtime
+                    .block_on(current.orch_mark_connected_reliably(
+                        CallHandle::from(id.to_string()),
+                        kind,
+                        alice,
+                        false,
+                    ))
+                    .unwrap();
+                let mut retained = window.get_active_call_data();
+                retained.call_id = id.to_string().into();
+                retained.is_connected = false;
+                window.set_active_call_data(retained);
+                window.set_active_call_visible(false);
+                window.set_mobile_show_chat(false);
+                window.set_active_call_fullscreen(false);
+                stop_call_timer();
+                stop_video_frame_timer();
+                render_accepted_call(&window.as_weak(), &client, accepted(), revision);
+                handle_orchestrator_event(
+                    &window.as_weak(),
+                    &client,
+                    CallOrchestratorEvent::ActiveConnected {
+                        call: CallHandle::from(id.to_string()),
+                        kind,
+                        peer_id: alice,
+                        is_video: false,
+                    },
+                    revision,
+                );
+                if replaced {
+                    runtime
+                        .block_on(current.orch_mark_connected_reliably(
+                            CallHandle::from("replacement-active"),
+                            OrchestratedCallKind::AnonDm,
+                            alice,
+                            false,
+                        ))
+                        .unwrap();
+                } else {
+                    current.orch_mark_ended(
+                        CallHandle::from(id.to_string()),
+                        chatter_core::services::call_worker::CallEndReason::RemoteHangup,
+                    );
+                    runtime.block_on(current.orch_active_kind());
+                }
+                pump(&window);
+                assert!(
+                    !window.get_active_call_visible(),
+                    "stale accepted paint cannot resurrect ended/replaced A"
+                );
+                assert!(
+                    !window.get_active_call_data().is_connected,
+                    "stale connected callback cannot mutate retained A"
+                );
+                assert!(
+                    !super::super::timers::tests::timer_started(),
+                    "stale connected callback cannot restart the timer"
+                );
+                assert!(!window.get_mobile_show_chat());
+                assert!(!window.get_active_call_fullscreen());
+                assert!(window.get_incoming_call_visible());
+                assert_eq!(window.get_incoming_call_data().call_id.as_str(), "B");
+            }
+        }
         worker.shutdown();
     }
 }
