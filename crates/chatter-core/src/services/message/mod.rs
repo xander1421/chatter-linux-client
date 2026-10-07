@@ -43,13 +43,13 @@ use crate::services::current_user::CurrentUserError;
 use crate::services::ephemeral_service::EphemeralService;
 use crate::services::mailbox_manager::MailboxManager;
 use crate::services::signal::SignalService;
+use crate::storage::Database;
 use crate::storage::repositories::attachment_repo::AttachmentRepository;
 use crate::storage::repositories::channel_repo::ChannelRepository;
 use crate::storage::repositories::search_index::{SearchIndex, SearchResult};
 use crate::storage::repositories::settings_repo::SettingsRepository;
 use crate::storage::repositories::user_repo::UserRepository;
 use crate::storage::repositories::{MessageRepository, PendingDmRepository};
-use crate::storage::Database;
 
 use crate::domain::channel::ChannelType;
 
@@ -787,7 +787,7 @@ impl MessageService {
         conversation_type: &ConversationType,
         read: Vec<(UserId, u64)>,
     ) {
-        use crate::proto::content_v1::{content, Content, ReadSync, ReadSyncEntry};
+        use crate::proto::content_v1::{Content, ReadSync, ReadSyncEntry, content};
 
         if !matches!(
             conversation_type,
@@ -2072,10 +2072,11 @@ mod inbound_target_tests {
         assert!(svc.message_repo.get(&unrelated_own.id).unwrap().is_some());
         // Bob cannot use Carol's timestamp to delete her DM or channel row.
         assert!(svc.apply_dm_delete(&f.bob, CH_TS).unwrap().is_none());
-        assert!(svc
-            .get_by_sender_timestamp(&f.carol, CH_TS)
-            .unwrap()
-            .is_some());
+        assert!(
+            svc.get_by_sender_timestamp(&f.carol, CH_TS)
+                .unwrap()
+                .is_some()
+        );
         let own_channel = Message::new_text(
             ChannelId::from(f.carol),
             ConversationType::Channel,
@@ -2144,7 +2145,7 @@ mod inbound_target_tests {
 
     #[test]
     fn latest_preview_pages_past_typed_timer_notices_and_preserves_other_system_events() {
-        use crate::domain::message::SystemMessage;
+        use crate::domain::message::{MessageContent, SystemMessage};
         let f = fixture();
         let svc = f.client.messages();
         for ts in 1000..1040 {
@@ -2195,10 +2196,11 @@ mod inbound_target_tests {
                 MessageContent::System(SystemMessage::DisappearingTimerChanged { seconds: 0 });
             svc.message_repo.insert(&notice).unwrap();
         }
-        assert!(f
-            .client
-            .latest_message(&empty_chat, &ConversationType::ServerDm)
-            .is_none());
+        assert!(
+            f.client
+                .latest_message(&empty_chat, &ConversationType::ServerDm)
+                .is_none()
+        );
     }
 
     #[test]
@@ -2221,10 +2223,11 @@ mod inbound_target_tests {
             );
             svc.message_repo.insert(&target).unwrap();
             let content = crate::services::build_delete_for_everyone_content_with_channel(ts, None);
-            assert!(anon
-                .process_incoming_content(&dm.id, &f.bob, &content)
-                .unwrap()
-                .is_empty());
+            assert!(
+                anon.process_incoming_content(&dm.id, &f.bob, &content)
+                    .unwrap()
+                    .is_empty()
+            );
             assert!(svc.message_repo.get(&target.id).unwrap().is_some());
             let events = anon
                 .process_incoming_content(&dm.id, &f.carol, &content)
@@ -2247,10 +2250,11 @@ mod inbound_target_tests {
         }
         for (author, ts) in [(f.me, 803), (f.carol, 804)] {
             let content = crate::services::build_delete_for_everyone_content_with_channel(ts, None);
-            assert!(anon
-                .process_incoming_content(&dm.id, &f.carol, &content)
-                .unwrap()
-                .is_empty());
+            assert!(
+                anon.process_incoming_content(&dm.id, &f.carol, &content)
+                    .unwrap()
+                    .is_empty()
+            );
             let wrong_type = Message::new_text(
                 dm.id.into(),
                 ConversationType::AnonGroup,
@@ -2294,11 +2298,12 @@ mod inbound_target_tests {
             805,
         );
         svc.message_repo.insert(&own).unwrap();
-        assert!(!f
-            .client
-            .anon_groups()
-            .delete_message_by_timestamp(&group_id, &f.carol, 805)
-            .unwrap());
+        assert!(
+            !f.client
+                .anon_groups()
+                .delete_message_by_timestamp(&group_id, &f.carol, 805)
+                .unwrap()
+        );
         assert!(svc.message_repo.get(&own.id).unwrap().is_some());
         // Likewise the channel receiver cannot borrow the DM peer permission.
         let channel = Message::new_text(
@@ -2309,10 +2314,11 @@ mod inbound_target_tests {
             806,
         );
         svc.message_repo.insert(&channel).unwrap();
-        assert!(svc
-            .apply_channel_delete(&f.channel, &f.carol, 806)
-            .unwrap()
-            .is_none());
+        assert!(
+            svc.apply_channel_delete(&f.channel, &f.carol, 806)
+                .unwrap()
+                .is_none()
+        );
         assert!(svc.message_repo.get(&channel.id).unwrap().is_some());
     }
 
@@ -2378,9 +2384,10 @@ mod inbound_target_tests {
                     .map(|r| r.user_id)
                     .collect::<Vec<_>>()
             };
-            assert!(svc
-                .record_reaction_at(&scope, &f.carol, CH_TS, &f.me, "👍", false, 1)
-                .unwrap());
+            assert!(
+                svc.record_reaction_at(&scope, &f.carol, CH_TS, &f.me, "👍", false, 1)
+                    .unwrap()
+            );
             let processor = InboxEventProcessor::from_client(&f.client);
             let (tx, mut rx) = broadcast::channel(8);
             let mut domain = f.client.event_bus().subscribe_domain();
@@ -2452,8 +2459,8 @@ mod inbound_target_tests {
         let svc = f.client.messages();
 
         // Bob, from his own DM, targets Carol's DM message and her channel message.
-        assert!(!svc
-            .record_inbound_reaction(
+        assert!(
+            !svc.record_inbound_reaction(
                 &crate::domain::reaction::ReactionScope::new(
                     ChannelId::from(f.bob),
                     ConversationType::ServerDm
@@ -2465,9 +2472,10 @@ mod inbound_target_tests {
                 false,
                 1
             )
-            .unwrap());
-        assert!(!svc
-            .record_inbound_reaction(
+            .unwrap()
+        );
+        assert!(
+            !svc.record_inbound_reaction(
                 &crate::domain::reaction::ReactionScope::new(
                     ChannelId::from(f.bob),
                     ConversationType::ServerDm
@@ -2479,10 +2487,11 @@ mod inbound_target_tests {
                 false,
                 1
             )
-            .unwrap());
+            .unwrap()
+        );
         // Bob claims the channel he is not a member of.
-        assert!(!svc
-            .record_inbound_reaction(
+        assert!(
+            !svc.record_inbound_reaction(
                 &crate::domain::reaction::ReactionScope::new(f.channel, ConversationType::Channel),
                 &f.bob,
                 &f.carol,
@@ -2491,10 +2500,11 @@ mod inbound_target_tests {
                 false,
                 1
             )
-            .unwrap());
+            .unwrap()
+        );
         // Carol, a channel member, aims a channel reaction at her DM message.
-        assert!(!svc
-            .record_inbound_reaction(
+        assert!(
+            !svc.record_inbound_reaction(
                 &crate::domain::reaction::ReactionScope::new(f.channel, ConversationType::Channel),
                 &f.carol,
                 &f.carol,
@@ -2503,12 +2513,13 @@ mod inbound_target_tests {
                 false,
                 1
             )
-            .unwrap());
+            .unwrap()
+        );
         assert!(reactors(&f, DM_TS).is_empty() && reactors(&f, CH_TS).is_empty());
 
         // The legitimate ones land.
-        assert!(svc
-            .record_inbound_reaction(
+        assert!(
+            svc.record_inbound_reaction(
                 &crate::domain::reaction::ReactionScope::new(
                     ChannelId::from(f.carol),
                     ConversationType::ServerDm
@@ -2520,9 +2531,10 @@ mod inbound_target_tests {
                 false,
                 1
             )
-            .unwrap());
-        assert!(svc
-            .record_inbound_reaction(
+            .unwrap()
+        );
+        assert!(
+            svc.record_inbound_reaction(
                 &crate::domain::reaction::ReactionScope::new(f.channel, ConversationType::Channel),
                 &f.carol,
                 &f.carol,
@@ -2531,7 +2543,8 @@ mod inbound_target_tests {
                 false,
                 1
             )
-            .unwrap());
+            .unwrap()
+        );
         assert_eq!(reactors(&f, DM_TS), vec![f.carol]);
         assert_eq!(reactors(&f, CH_TS), vec![f.carol]);
 
@@ -2548,8 +2561,8 @@ mod inbound_target_tests {
             false,
         )
         .unwrap();
-        assert!(!svc
-            .record_inbound_reaction(
+        assert!(
+            !svc.record_inbound_reaction(
                 &crate::domain::reaction::ReactionScope::new(
                     ChannelId::from(f.bob),
                     ConversationType::ServerDm
@@ -2561,10 +2574,11 @@ mod inbound_target_tests {
                 true,
                 1
             )
-            .unwrap());
+            .unwrap()
+        );
         assert!(reactors(&f, DM_TS).contains(&f.bob));
-        assert!(svc
-            .record_inbound_reaction(
+        assert!(
+            svc.record_inbound_reaction(
                 &crate::domain::reaction::ReactionScope::new(
                     ChannelId::from(f.carol),
                     ConversationType::ServerDm
@@ -2576,7 +2590,8 @@ mod inbound_target_tests {
                 true,
                 2
             )
-            .unwrap());
+            .unwrap()
+        );
     }
 
     #[tokio::test]
@@ -2619,33 +2634,40 @@ mod inbound_target_tests {
                 .0,
             dm_scope
         );
-        assert!(svc
-            .record_inbound_reaction(&admitted, &f.me, &author, DM_TS, "👍", false, 1)
-            .unwrap());
-        assert!(!svc
-            .record_inbound_reaction(&admitted, &f.me, &author, DM_TS, "👍", false, 1)
-            .unwrap());
-        assert!(svc
-            .message_repo
-            .get_reactions(&encrypted_scope, &author, DM_TS)
-            .unwrap()
-            .is_empty());
-        assert!(svc
-            .record_inbound_reaction(&encrypted_scope, &f.carol, &author, DM_TS, "👍", false, 1)
-            .unwrap());
-        assert!(svc
-            .record_inbound_reaction(&dm_scope, &f.me, &author, DM_TS, "👍", true, 2)
-            .unwrap());
-        assert!(!svc
-            .record_inbound_reaction(&dm_scope, &f.me, &author, DM_TS, "👍", true, 2)
-            .unwrap());
-        assert!(svc
-            .message_repo
-            .get_by_reaction_scope(&dm_scope, &author, DM_TS)
-            .unwrap()
-            .unwrap()
-            .reaction_counts
-            .is_empty());
+        assert!(
+            svc.record_inbound_reaction(&admitted, &f.me, &author, DM_TS, "👍", false, 1)
+                .unwrap()
+        );
+        assert!(
+            !svc.record_inbound_reaction(&admitted, &f.me, &author, DM_TS, "👍", false, 1)
+                .unwrap()
+        );
+        assert!(
+            svc.message_repo
+                .get_reactions(&encrypted_scope, &author, DM_TS)
+                .unwrap()
+                .is_empty()
+        );
+        assert!(
+            svc.record_inbound_reaction(&encrypted_scope, &f.carol, &author, DM_TS, "👍", false, 1)
+                .unwrap()
+        );
+        assert!(
+            svc.record_inbound_reaction(&dm_scope, &f.me, &author, DM_TS, "👍", true, 2)
+                .unwrap()
+        );
+        assert!(
+            !svc.record_inbound_reaction(&dm_scope, &f.me, &author, DM_TS, "👍", true, 2)
+                .unwrap()
+        );
+        assert!(
+            svc.message_repo
+                .get_by_reaction_scope(&dm_scope, &author, DM_TS)
+                .unwrap()
+                .unwrap()
+                .reaction_counts
+                .is_empty()
+        );
         assert_eq!(
             svc.message_repo
                 .get_by_reaction_scope(&encrypted_scope, &author, DM_TS)
@@ -2655,16 +2677,18 @@ mod inbound_target_tests {
                 .count,
             1
         );
-        assert!(svc
-            .record_inbound_reaction(&encrypted_scope, &f.carol, &author, DM_TS, "👍", true, 2)
-            .unwrap());
-        assert!(svc
-            .message_repo
-            .get_by_reaction_scope(&encrypted_scope, &author, DM_TS)
-            .unwrap()
-            .unwrap()
-            .reaction_counts
-            .is_empty());
+        assert!(
+            svc.record_inbound_reaction(&encrypted_scope, &f.carol, &author, DM_TS, "👍", true, 2)
+                .unwrap()
+        );
+        assert!(
+            svc.message_repo
+                .get_by_reaction_scope(&encrypted_scope, &author, DM_TS)
+                .unwrap()
+                .unwrap()
+                .reaction_counts
+                .is_empty()
+        );
     }
 
     /// Pins resolve their target through the same binding.
