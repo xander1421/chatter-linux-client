@@ -39,6 +39,10 @@ pub use channel_settings::{
     apply_private_group_roster, load_private_group_roster, open_channel_settings,
     open_invite_member_modal, refresh_members_if_open, wire_channel_settings,
 };
+pub(crate) use channel_settings::{
+    present_settings_error, settings_open_allowed, settings_refresh_allowed,
+    show_channel_settings_shell,
+};
 pub use forward::{target_avatar, wire_forward_message};
 pub use friends::wire_friends_modal;
 pub use profile::{open_user_profile, open_user_profile_in_conversation};

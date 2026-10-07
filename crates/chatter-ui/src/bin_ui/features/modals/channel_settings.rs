@@ -28,34 +28,192 @@ pub fn wire_channel_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     wire_invite_member_search(window, ui_ctx);
 }
 
+/// Paint conversation settings only for the channel or private group the
+/// click was for. A later sidebar switch must not open or fill that screen.
+pub(crate) fn settings_open_allowed(
+    active: ActiveConversation,
+    opened: ActiveConversation,
+) -> bool {
+    active == opened
+        && matches!(
+            opened,
+            ActiveConversation::Channel(_) | ActiveConversation::AnonGroup(_)
+        )
+}
+
+/// A roster or error paint may update the screen already open for `opened_id`.
+/// It must not reopen settings, and it must not write a conversation the user left.
+pub(crate) fn settings_refresh_allowed(
+    active: ActiveConversation,
+    opened: ActiveConversation,
+    settings_id: &str,
+    opened_id: &str,
+    settings_on_stack: bool,
+) -> bool {
+    settings_open_allowed(active, opened) && settings_on_stack && settings_id == opened_id
+}
+
+fn settings_on_stack(w: &MainWindow) -> bool {
+    w.get_modal_stack()
+        .iter()
+        .any(|s| s.as_str() == "channel-settings")
+}
+
+/// Show the settings screen before any local or network read. Destructive
+/// actions stay off until the channel row says the user may take them.
+pub(crate) fn show_channel_settings_shell(w: &MainWindow, id: &str, kind: &str) {
+    w.set_channel_settings_id(id.into());
+    w.set_channel_settings_type(kind.into());
+    w.set_channel_settings_name("".into());
+    w.set_channel_settings_description("".into());
+    w.set_channel_settings_name_draft("".into());
+    w.set_channel_settings_description_draft("".into());
+    w.set_channel_settings_created_at("".into());
+    w.set_channel_settings_archived(false);
+    w.set_channel_settings_ai_enabled(false);
+    w.set_channel_settings_muted(false);
+    w.set_channel_settings_icon_path("".into());
+    w.set_channel_settings_has_icon_preview(false);
+    w.set_channel_settings_can_edit(false);
+    w.set_channel_settings_can_manage_members(false);
+    w.set_channel_settings_can_archive(false);
+    w.set_channel_settings_can_delete(false);
+    w.set_channel_settings_can_leave(false);
+    w.set_channel_settings_is_owner(false);
+    w.set_channel_settings_member_count(0);
+    w.set_channel_settings_members(ModelRc::default());
+    w.set_channel_settings_can_view_bans(false);
+    w.set_channel_settings_banned_members(ModelRc::default());
+    w.set_channel_settings_loading(true);
+    w.set_channel_settings_error("".into());
+    crate::bin_ui::features::chat::membership::reset_access(w);
+    crate::bin_ui::features::back::push(w, "channel-settings");
+}
+
+/// Put `message` on the settings screen. The error banner lives on that
+/// screen, so a failure that only sets the property is invisible.
+pub(crate) fn present_settings_error(w: &MainWindow, id: &str, kind: &str, message: &str) {
+    if w.get_channel_settings_id().as_str() != id || !settings_on_stack(w) {
+        show_channel_settings_shell(w, id, kind);
+    }
+    w.set_channel_settings_loading(false);
+    w.set_channel_settings_error(message.into());
+}
+
+struct LocalChannelSettings {
+    id: String,
+    name: String,
+    description: String,
+    channel_type: &'static str,
+    archived: bool,
+    created_at: String,
+    ai_enabled: bool,
+    muted: bool,
+    can_edit: bool,
+    can_manage_members: bool,
+    can_archive: bool,
+    can_delete: bool,
+    is_owner: bool,
+    can_leave: bool,
+    member_count: i32,
+    roster_pending: bool,
+}
+
+fn present_local_channel_settings(w: &MainWindow, settings: &LocalChannelSettings) {
+    w.set_channel_settings_id(settings.id.as_str().into());
+    w.set_channel_settings_name(settings.name.as_str().into());
+    w.set_channel_settings_description(settings.description.as_str().into());
+    // Reset the editable drafts to the stored values so reopening a
+    // different channel doesn't carry the previous edits.
+    w.set_channel_settings_name_draft(settings.name.as_str().into());
+    w.set_channel_settings_description_draft(settings.description.as_str().into());
+    // Clear any icon picked in a previous open.
+    w.set_channel_settings_icon_path("".into());
+    w.set_channel_settings_has_icon_preview(false);
+    w.set_channel_settings_ai_enabled(settings.ai_enabled);
+    w.set_channel_settings_muted(settings.muted);
+    w.set_channel_settings_type(settings.channel_type.into());
+    w.set_channel_settings_archived(settings.archived);
+    w.set_channel_settings_created_at(settings.created_at.as_str().into());
+    w.set_channel_settings_can_edit(settings.can_edit);
+    w.set_channel_settings_can_manage_members(settings.can_manage_members);
+    w.set_channel_settings_can_archive(settings.can_archive);
+    w.set_channel_settings_can_delete(settings.can_delete);
+    w.set_channel_settings_is_owner(settings.is_owner);
+    w.set_channel_settings_can_leave(settings.can_leave);
+    w.set_channel_settings_member_count(settings.member_count);
+    // Drop the previous channel's rows. The roster RPC fills this pane
+    // after the screen is already up.
+    w.set_channel_settings_members(ModelRc::default());
+    w.set_channel_settings_can_view_bans(false);
+    w.set_channel_settings_banned_members(ModelRc::default());
+    w.set_channel_settings_loading(settings.roster_pending);
+    w.set_channel_settings_error("".into());
+}
+
+fn paint_if_current(
+    weak: slint::Weak<MainWindow>,
+    ui_ctx: Arc<ChatterClient>,
+    opened: ActiveConversation,
+    opened_id: String,
+    paint: impl FnOnce(&MainWindow) + Send + 'static,
+) {
+    let _ = slint::invoke_from_event_loop(move || {
+        let Some(w) = weak.upgrade() else { return };
+        let current_id = w.get_channel_settings_id();
+        if !settings_refresh_allowed(
+            ui_ctx.chat_state().active_conversation(),
+            opened,
+            current_id.as_str(),
+            &opened_id,
+            settings_on_stack(&w),
+        ) {
+            return;
+        }
+        paint(&w);
+    });
+}
+
 /// Open the channel settings modal with channel data.
+///
+/// The screen is pushed before the member and ban RPCs. Those calls use the
+/// unary deadline (up to 75s), and the menu has already closed, so waiting
+/// to push left the chat with no settings and no error.
 pub fn open_channel_settings(
     weak_window: slint::Weak<MainWindow>,
     ui_ctx: Arc<ChatterClient>,
     channel_id: ChannelId,
 ) {
+    let opened = ActiveConversation::Channel(channel_id);
+    let channel_id_str = channel_id.to_string();
+    if settings_open_allowed(ui_ctx.chat_state().active_conversation(), opened) {
+        if let Some(w) = weak_window.upgrade() {
+            let already =
+                w.get_channel_settings_id().as_str() == channel_id_str && settings_on_stack(&w);
+            if !already {
+                // Type is filled from the local row. Empty hides the access
+                // pane until that row says public or private.
+                show_channel_settings_shell(&w, &channel_id_str, "");
+            }
+        }
+    }
+
     tokio::spawn(async move {
-        // Set loading state
-        {
-            let weak = weak_window.clone();
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak.upgrade() {
-                    w.set_channel_settings_loading(true);
-                    w.set_channel_settings_error("".into());
-                }
-            });
+        if !settings_open_allowed(ui_ctx.chat_state().active_conversation(), opened) {
+            return;
         }
 
-        // Get channel from local storage
         let channel = match ui_ctx.get_channel_local(&channel_id) {
             Some(c) => c,
             None => {
-                let weak = weak_window.clone();
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(w) = weak.upgrade() {
-                        w.set_channel_settings_loading(false);
-                        w.set_channel_settings_error("Channel not found".into());
-                    }
+                paint_if_current(weak_window, ui_ctx, opened, channel_id_str, |w| {
+                    w.set_channel_settings_loading(false);
+                    w.set_channel_settings_error("Channel not found".into());
+                    w.set_channel_settings_can_edit(false);
+                    w.set_channel_settings_can_manage_members(false);
+                    w.set_channel_settings_can_archive(false);
+                    w.set_channel_settings_can_delete(false);
+                    w.set_channel_settings_can_leave(false);
                 });
                 return;
             }
@@ -76,71 +234,81 @@ pub fn open_channel_settings(
             };
 
         let can_leave = ui_ctx.can_leave_channel(&channel_id);
-
         let created_at = channel
             .created_at
             .with_timezone(&chrono::Local)
             .format("%b %d, %Y")
             .to_string();
-
-        // Core shapes the rows; the images are decoded on the UI thread below
-        // (a slint::Image is not Send).
-        let (members, bans) = if !is_dm {
-            load_member_lists(&ui_ctx, &channel_id).await
-        } else {
-            (vec![], None)
-        };
-
         let channel_type_str = match channel.channel_type {
             ChannelType::Public => "public",
             ChannelType::Private => "private",
             ChannelType::DirectMessage => "dm",
             ChannelType::SavedMessages => "saved",
         };
-
-        let channel_name = channel.name.clone();
-        let channel_description = channel.description.clone().unwrap_or_default();
-        let channel_id_str = channel_id.to_string();
-        let is_archived = channel.archived;
-        // Read the stored per-channel AI switch so the toggle opens showing
-        // what is actually persisted, not a default.
-        let ai_enabled = ui_ctx.ai_enabled_for(&channel_id_str);
-        let muted = ui_ctx
-            .is_conversation_muted(chatter_core::state::ActiveConversation::Channel(channel_id))
-            .unwrap_or(false);
+        let local = LocalChannelSettings {
+            id: channel_id_str.clone(),
+            name: channel.name.clone(),
+            description: channel.description.clone().unwrap_or_default(),
+            channel_type: channel_type_str,
+            archived: channel.archived,
+            created_at,
+            // Read the stored per-channel AI switch so the toggle opens showing
+            // what is actually persisted, not a default.
+            ai_enabled: ui_ctx.ai_enabled_for(&channel_id_str),
+            muted: ui_ctx
+                .is_conversation_muted(ActiveConversation::Channel(channel_id))
+                .unwrap_or(false),
+            can_edit,
+            can_manage_members,
+            can_archive,
+            can_delete,
+            is_owner,
+            can_leave,
+            member_count: i32::try_from(channel.member_count).unwrap_or(i32::MAX),
+            roster_pending: !is_dm,
+        };
 
         let weak_access = weak_window.clone();
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(w) = weak_window.upgrade() {
-                w.set_channel_settings_id(channel_id_str.into());
-                w.set_channel_settings_name(channel_name.clone().into());
-                w.set_channel_settings_description(channel_description.clone().into());
-                // Reset the editable drafts to the stored values so reopening a
-                // different channel doesn't carry the previous edits.
-                w.set_channel_settings_name_draft(channel_name.into());
-                w.set_channel_settings_description_draft(channel_description.into());
-                // Clear any icon picked in a previous open.
-                w.set_channel_settings_icon_path("".into());
-                w.set_channel_settings_has_icon_preview(false);
-                w.set_channel_settings_ai_enabled(ai_enabled);
-                w.set_channel_settings_muted(muted);
-                w.set_channel_settings_type(channel_type_str.into());
-                w.set_channel_settings_archived(is_archived);
-                w.set_channel_settings_created_at(created_at.into());
-                w.set_channel_settings_can_edit(can_edit);
-                w.set_channel_settings_can_manage_members(can_manage_members);
-                w.set_channel_settings_can_archive(can_archive);
-                w.set_channel_settings_can_delete(can_delete);
-                w.set_channel_settings_is_owner(is_owner);
-                w.set_channel_settings_can_leave(can_leave);
-                apply_member_lists(&w, &members, bans.as_deref());
-                crate::bin_ui::features::chat::membership::reset_access(&w);
+        let ui_for_present = ui_ctx.clone();
+        let id_for_present = channel_id_str.clone();
+        paint_if_current(
+            weak_window.clone(),
+            ui_ctx.clone(),
+            opened,
+            id_for_present,
+            move |w| {
+                present_local_channel_settings(w, &local);
+                // Queued after the reset in the shell, so its answer is not wiped.
+                crate::bin_ui::features::chat::membership::reset_access(w);
+                crate::bin_ui::features::chat::membership::load_access(
+                    weak_access,
+                    ui_for_present,
+                    channel_id,
+                );
+            },
+        );
+
+        if is_dm {
+            return;
+        }
+
+        // Core shapes the rows; the images are decoded on the UI thread below
+        // (a slint::Image is not Send). This await must stay after the local
+        // present above: the roster RPC is what used to hide the screen.
+        let (members, bans, member_error) = load_member_lists(&ui_ctx, &channel_id).await;
+        paint_if_current(weak_window, ui_ctx, opened, channel_id_str, move |w| {
+            if let Some(message) = member_error {
+                if !members.is_empty() {
+                    apply_member_lists(w, &members, bans.as_deref());
+                }
                 w.set_channel_settings_loading(false);
-                crate::bin_ui::features::back::push(&w, "channel-settings");
+                w.set_channel_settings_error(message.into());
+                return;
             }
+            apply_member_lists(w, &members, bans.as_deref());
+            w.set_channel_settings_loading(false);
+            w.set_channel_settings_error("".into());
         });
-        // Queued after the reset above, so its answer is not wiped by it.
-        crate::bin_ui::features::chat::membership::load_access(weak_access, ui_ctx, channel_id);
     });
 }
 
@@ -155,19 +323,27 @@ async fn load_member_lists(
 ) -> (
     Vec<chatter_core::domain::channel::MemberWithProfile>,
     BannedMembers,
+    Option<String>,
 ) {
-    let members = ui_ctx
-        .list_members_with_profiles(channel_id, 100, 0)
-        .await
-        .unwrap_or_default();
-    let bans = ui_ctx
-        .list_banned_members(channel_id)
-        .await
-        .unwrap_or_else(|e| {
+    let members = match ui_ctx.list_members_with_profiles(channel_id, 100, 0).await {
+        Ok(members) => members,
+        Err(e) => {
+            tracing::warn!(error = %e, "Failed to list channel members");
+            return (vec![], None, Some(format!("Couldn't load members: {e}")));
+        }
+    };
+    let bans = match ui_ctx.list_banned_members(channel_id).await {
+        Ok(bans) => bans,
+        Err(e) => {
             tracing::warn!(error = %e, "Failed to list channel bans");
-            None
-        });
-    (members, bans)
+            return (
+                members,
+                None,
+                Some(format!("Couldn't load banned members: {e}")),
+            );
+        }
+    };
+    (members, bans, None)
 }
 
 /// UI thread only (decodes avatars into `slint::Image`s).
@@ -199,12 +375,20 @@ fn refresh_member_lists(
     channel_id: ChannelId,
 ) {
     tokio::spawn(async move {
-        let (members, bans) = load_member_lists(&ui_ctx, &channel_id).await;
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(w) = weak.upgrade() {
-                apply_member_lists(&w, &members, bans.as_deref());
-            }
-        });
+        let (members, bans, error) = load_member_lists(&ui_ctx, &channel_id).await;
+        paint_if_current(
+            weak,
+            ui_ctx,
+            ActiveConversation::Channel(channel_id),
+            channel_id.to_string(),
+            move |w| {
+                if let Some(error) = error {
+                    w.set_channel_settings_error(error.into());
+                } else {
+                    apply_member_lists(w, &members, bans.as_deref());
+                }
+            },
+        );
     });
 }
 
@@ -244,8 +428,14 @@ pub fn refresh_members_if_open(
             };
             let _ = slint::invoke_from_event_loop(move || {
                 let Some(w) = weak.upgrade() else { return };
-                // Still the same group's settings: the read took a moment.
-                if w.get_channel_settings_id() == id.as_str() {
+                let current_id = w.get_channel_settings_id();
+                if settings_refresh_allowed(
+                    ui_ctx.chat_state().active_conversation(),
+                    ActiveConversation::AnonGroup(group_id),
+                    current_id.as_str(),
+                    &id,
+                    settings_on_stack(&w),
+                ) {
                     apply_private_group_roster(&w, roster);
                 }
             });

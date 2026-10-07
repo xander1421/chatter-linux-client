@@ -314,26 +314,83 @@ fn wire_chat_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
             // Private group settings - move DB queries to background thread
             let ui_ctx = ui_ctx.clone();
             let weak = weak_window.clone();
+            let opened = ActiveConversation::AnonGroup(group_id);
+            if !super::modals::settings_open_allowed(
+                ui_ctx.chat_state().active_conversation(),
+                opened,
+            ) {
+                return;
+            }
+            let group_id_str = group_id.to_string();
+            if let Some(w) = weak.upgrade() {
+                let already = w.get_channel_settings_id().as_str() == group_id_str
+                    && w.get_modal_stack()
+                        .iter()
+                        .any(|s| s.as_str() == "channel-settings");
+                if !already {
+                    super::modals::show_channel_settings_shell(&w, &group_id_str, "private-group");
+                }
+            }
 
             std::thread::spawn(move || {
                 // Shared with the live refresh on membership events
                 // (`refresh_members_if_open`), so both read the same roster.
                 let Some(roster) = super::modals::load_private_group_roster(&ui_ctx, group_id)
                 else {
+                    let ui_ctx = ui_ctx.clone();
+                    let weak = weak.clone();
+                    let id = group_id_str.clone();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        let Some(w) = weak.upgrade() else { return };
+                        let current_id = w.get_channel_settings_id();
+                        let on_stack = w
+                            .get_modal_stack()
+                            .iter()
+                            .any(|s| s.as_str() == "channel-settings");
+                        if !super::modals::settings_refresh_allowed(
+                            ui_ctx.chat_state().active_conversation(),
+                            opened,
+                            current_id.as_str(),
+                            &id,
+                            on_stack,
+                        ) {
+                            return;
+                        }
+                        super::modals::present_settings_error(
+                            &w,
+                            &id,
+                            "private-group",
+                            "Private group not found",
+                        );
+                    });
                     return;
                 };
                 let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(w) = weak.upgrade() {
-                        w.set_channel_settings_id(group_id.to_string().into());
-                        w.set_channel_settings_name(roster.name.as_str().into());
-                        w.set_channel_settings_type("private-group".into());
-                        super::modals::apply_private_group_roster(&w, roster);
-                        // Clear a previous channel's ban list.
-                        w.set_channel_settings_can_view_bans(false);
-                        w.set_channel_settings_banned_members(ModelRc::default());
-                        crate::bin_ui::features::back::push(&w, "channel-settings");
-                        tracing::debug!("Opened settings for private group {}", group_id);
+                    let Some(w) = weak.upgrade() else { return };
+                    let current_id = w.get_channel_settings_id();
+                    let on_stack = w
+                        .get_modal_stack()
+                        .iter()
+                        .any(|s| s.as_str() == "channel-settings");
+                    if !super::modals::settings_refresh_allowed(
+                        ui_ctx.chat_state().active_conversation(),
+                        opened,
+                        current_id.as_str(),
+                        &group_id_str,
+                        on_stack,
+                    ) {
+                        return;
                     }
+                    w.set_channel_settings_id(group_id_str.as_str().into());
+                    w.set_channel_settings_name(roster.name.as_str().into());
+                    w.set_channel_settings_type("private-group".into());
+                    super::modals::apply_private_group_roster(&w, roster);
+                    // Clear a previous channel's ban list.
+                    w.set_channel_settings_can_view_bans(false);
+                    w.set_channel_settings_banned_members(ModelRc::default());
+                    w.set_channel_settings_loading(false);
+                    w.set_channel_settings_error("".into());
+                    tracing::debug!("Opened settings for private group {}", group_id);
                 });
             });
             return;
