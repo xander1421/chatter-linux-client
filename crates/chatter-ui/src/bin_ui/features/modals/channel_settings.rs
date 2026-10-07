@@ -1122,19 +1122,47 @@ fn wire_channel_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 Ok(id) => ChannelId::from(id),
                 Err(_) => return,
             };
-            if ui_ctx.delete_channel(&channel_uuid).await.is_ok() {
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(w) = weak.upgrade() {
-                        crate::bin_ui::features::back::close(&w, "channel-settings");
-                        ui_ctx
-                            .chat_state()
-                            .set_active_conversation(chatter_core::state::ActiveConversation::None);
-                        w.set_channel_name("".into());
-                        crate::bin_ui::features::sidebar::refresh_selection(&w, &ui_ctx);
-                    }
-                });
-            }
+            let result = ui_ctx.delete_channel(&channel_uuid).await;
+            finish_channel_delete(weak, ui_ctx, channel_uuid, result);
         });
+    });
+}
+
+/// Apply the awaited delete result on the same path used by Settings.
+fn finish_channel_delete(
+    weak: slint::Weak<MainWindow>,
+    ui_ctx: Arc<ChatterClient>,
+    channel_id: ChannelId,
+    result: Result<(), chatter_core::services::channel::ChannelError>,
+) {
+    if result.is_ok() {
+        crate::bin_ui::features::sidebar::conversation_removed(
+            &weak,
+            &ui_ctx,
+            ActiveConversation::Channel(channel_id),
+        );
+    }
+    let _ = slint::invoke_from_event_loop(move || {
+        let Some(w) = weak.upgrade() else { return };
+        match result {
+            Ok(()) => {
+                // A late completion must not close a different settings screen.
+                if w.get_channel_settings_id() == channel_id.to_string().as_str() {
+                    crate::bin_ui::features::back::close(&w, "channel-settings");
+                }
+                crate::bin_ui::features::sidebar::refresh_selection(&w, &ui_ctx);
+            }
+            Err(e) => {
+                tracing::warn!(%channel_id, error = %e, "Channel deletion failed");
+                let message = format!("Couldn't delete channel: {}", e.user_message());
+                if w.get_channel_settings_id() == channel_id.to_string().as_str() {
+                    w.set_channel_settings_error(message.clone().into());
+                }
+                w.set_toast_message(message.into());
+                w.set_toast_variant("error".into());
+                w.set_toast_visible(true);
+            }
+        }
     });
 }
 
@@ -1524,4 +1552,133 @@ fn wire_invite_member_search(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             });
         });
     });
+}
+
+#[cfg(test)]
+mod deletion_tests {
+    use super::*;
+    use crate::bin_ui::converters::ChatRowExt;
+    use chatter_core::services::channel::ChannelError;
+    use chatter_core::storage::repositories::{
+        channel_repo::ChannelRepository,
+        settings_repo::{SettingsRepository, keys},
+    };
+
+    #[test]
+    fn delete_result_refreshes_rows_reports_errors_and_preserves_a_new_selection() {
+        unsafe {
+            std::env::set_var("CHATTER_NO_KEYRING", "1");
+            std::env::set_var("CHATTER_DB_PASSPHRASE", "channel-delete-fixture");
+            std::env::set_var("CHATTER_HEADLESS", "1");
+        }
+        i_slint_backend_testing::init_integration_test_with_system_time();
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _entered = runtime.enter();
+        let fixture = tempfile::tempdir().unwrap();
+        let client = ChatterClient::builder()
+            .data_dir(fixture.path().to_string_lossy().into_owned())
+            .build()
+            .unwrap();
+        let path = chatter_core::system::Directories::with_base_dir(fixture.path().to_path_buf())
+            .unwrap()
+            .database_path();
+        let db = Arc::new(
+            chatter_core::storage::Database::open(&path, "channel-delete-fixture").unwrap(),
+        );
+        let me = UserId::new();
+        SettingsRepository::new(db.clone())
+            .set_string(keys::CURRENT_USER_ID, &me.to_string())
+            .unwrap();
+        let repo = ChannelRepository::new(db);
+        let deleted = ChannelId::new();
+        let other = ChannelId::new();
+        for (id, name) in [(deleted, "Delete fixture"), (other, "Keep fixture")] {
+            repo.insert(&chatter_core::domain::channel::Channel::new(
+                id,
+                name.into(),
+                ChannelType::Private,
+                me,
+            ))
+            .unwrap();
+            repo.mark_former(&id, false).unwrap();
+        }
+        let w = MainWindow::new().unwrap();
+        w.set_current_view("main".into());
+        w.set_channel_settings_id(deleted.to_string().into());
+        crate::bin_ui::features::back::push(&w, "channel-settings");
+        w.set_channel_name("Delete fixture".into());
+        client
+            .chat_state()
+            .set_active_conversation(ActiveConversation::Channel(deleted));
+        w.set_chat_rows(ModelRc::new(VecModel::from(
+            client
+                .sidebar_rows()
+                .into_iter()
+                .map(|r| r.to_slint())
+                .collect::<Vec<_>>(),
+        )));
+        assert_eq!(w.get_chat_rows().row_count(), 2);
+        let pump = || {
+            for _ in 0..4 {
+                slint::Timer::single_shot(std::time::Duration::from_millis(25), || {
+                    slint::quit_event_loop().unwrap();
+                });
+                w.run().unwrap();
+            }
+        };
+        finish_channel_delete(
+            w.as_weak(),
+            client.clone(),
+            deleted,
+            Err(ChannelError::NotAuthorized),
+        );
+        pump();
+        assert_eq!(w.get_chat_rows().row_count(), 2);
+        assert_eq!(
+            client.active_conversation(),
+            ActiveConversation::Channel(deleted)
+        );
+        assert_eq!(w.get_active_modal().as_str(), "channel-settings");
+        assert!(
+            w.get_channel_settings_error()
+                .contains("Couldn't delete channel")
+        );
+        assert!(w.get_toast_visible());
+
+        // Simulate the successful awaited service's local row removal. This
+        // exercises the production result handler, without a server or device.
+        repo.remove_confirmed_deleted_channel(&deleted).unwrap();
+        finish_channel_delete(w.as_weak(), client.clone(), deleted, Ok(()));
+        pump();
+        assert_eq!(w.get_chat_rows().row_count(), 1);
+        assert_eq!(
+            w.get_chat_rows()
+                .row_data(0)
+                .unwrap()
+                .conversation_id
+                .as_str(),
+            other.to_string()
+        );
+        assert_eq!(client.active_conversation(), ActiveConversation::None);
+        assert!(w.get_channel_name().is_empty());
+        assert_eq!(w.get_messages().row_count(), 0);
+        assert_ne!(w.get_active_modal().as_str(), "channel-settings");
+        assert!(repo.get(&other).unwrap().is_some());
+
+        // A late result for the deleted channel must preserve a newly opened chat.
+        client
+            .chat_state()
+            .set_active_conversation(ActiveConversation::Channel(other));
+        w.set_channel_name("Keep fixture".into());
+        w.set_channel_settings_id(other.to_string().into());
+        crate::bin_ui::features::back::push(&w, "channel-settings");
+        finish_channel_delete(w.as_weak(), client.clone(), deleted, Ok(()));
+        pump();
+        assert_eq!(
+            client.active_conversation(),
+            ActiveConversation::Channel(other)
+        );
+        assert_eq!(w.get_channel_name().as_str(), "Keep fixture");
+        assert_eq!(w.get_active_modal().as_str(), "channel-settings");
+    }
 }

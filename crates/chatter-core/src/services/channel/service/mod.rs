@@ -368,32 +368,95 @@ impl ChannelService {
         let mut channel_client = self.channel_client();
         let mut stream = channel_client.delete_channel(&channel_id_str).await?;
 
-        let mut deleted = false;
-        while let Some(event_result) = stream.next().await {
-            let event = event_result?;
-            if let Some(channel_event::Event::ChannelDeleted(_)) = event.event {
+        await_channel_deletion(&mut stream, &channel_id_str).await?;
+
+        self.channel_repo
+            .remove_confirmed_deleted_channel(channel_id)?;
+
+        Ok(())
+    }
+}
+
+/// Do not remove local state on progress, another channel's event, or failure.
+async fn await_channel_deletion<S>(stream: &mut S, channel_id: &str) -> Result<(), ChannelError>
+where
+    S: tokio_stream::Stream<Item = Result<pb::ChannelEvent, crate::error::NetworkError>> + Unpin,
+{
+    let mut deleted = false;
+    while let Some(event_result) = stream.next().await {
+        let event = event_result?;
+        match event.event {
+            Some(channel_event::Event::ChannelDeleted(id)) if id == channel_id => {
                 deleted = true;
                 break;
             }
-        }
-
-        if !deleted {
-            return Err(ChannelError::InvalidInput(
-                "no channel deleted event received".to_string(),
-            ));
-        }
-
-        let _ = self.channel_repo.delete(channel_id);
-        let _ = self.membership_log.forget(channel_id);
-
-        if let Ok(memberships) = self.channel_repo.list_members(channel_id) {
-            for membership in memberships {
-                let _ = self
-                    .channel_repo
-                    .delete_membership(channel_id, &membership.user_id);
+            Some(channel_event::Event::OperationFailed(failure)) => {
+                return Err(ChannelError::InvalidInput(
+                    failure
+                        .error
+                        .map(|e| e.message)
+                        .unwrap_or_else(|| "channel deletion failed".into()),
+                ));
             }
+            _ => {}
         }
+    }
 
-        Ok(())
+    if !deleted {
+        return Err(ChannelError::InvalidInput(
+            "no channel deleted event received".to_string(),
+        ));
+    }
+
+    Ok(())
+}
+
+#[cfg(test)]
+mod deletion_tests {
+    use super::*;
+
+    fn event(event: channel_event::Event) -> Result<pb::ChannelEvent, crate::error::NetworkError> {
+        Ok(pb::ChannelEvent {
+            event: Some(event),
+            ..Default::default()
+        })
+    }
+
+    #[tokio::test]
+    async fn deletion_requires_matching_confirmation_and_preserves_failure_reason() {
+        let id = ChannelId::new().to_string();
+        let mut stream = tokio_stream::iter(vec![
+            event(channel_event::Event::ChannelDeleted(
+                ChannelId::new().to_string(),
+            )),
+            event(channel_event::Event::ChannelDeleted(id.clone())),
+        ]);
+        assert!(await_channel_deletion(&mut stream, &id).await.is_ok());
+        let mut stream = tokio_stream::iter(vec![event(channel_event::Event::ChannelDeleted(
+            ChannelId::new().to_string(),
+        ))]);
+        assert!(await_channel_deletion(&mut stream, &id).await.is_err());
+        let mut stream = tokio_stream::iter(vec![event(channel_event::Event::OperationFailed(
+            pb::OperationFailed {
+                error: Some(pb::ChannelError {
+                    message: "delete refused".into(),
+                    ..Default::default()
+                }),
+                ..Default::default()
+            },
+        ))]);
+        assert!(
+            await_channel_deletion(&mut stream, &id)
+                .await
+                .unwrap_err()
+                .to_string()
+                .contains("delete refused")
+        );
+        let mut stream =
+            tokio_stream::iter(vec![Err(crate::error::NetworkError::PermissionDenied)]);
+        assert!(matches!(
+            await_channel_deletion(&mut stream, &id).await,
+            Err(ChannelError::Network(_))
+        ));
     }
 }

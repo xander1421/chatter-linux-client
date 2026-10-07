@@ -234,6 +234,23 @@ impl ChannelRepository {
         Ok(())
     }
 
+    /// Remove local channel state after the owner's delete is confirmed.
+    /// Keep message history; received deletion events use the read-only path.
+    /// Idempotent so retrying local cleanup after a concurrent event is safe.
+    pub fn remove_confirmed_deleted_channel(&self, id: &ChannelId) -> Result<(), StorageError> {
+        let mut conn = self.db.connection()?;
+        let tx = conn.transaction()?;
+        let id = id.to_string();
+        tx.execute("DELETE FROM memberships WHERE channel_id = ?1", params![id])?;
+        tx.execute(
+            "DELETE FROM verified_channel_state WHERE channel_id = ?1",
+            params![id],
+        )?;
+        tx.execute("DELETE FROM channels WHERE id = ?1", params![id])?;
+        tx.commit()?;
+        Ok(())
+    }
+
     // ========================================================================
     // Channel queries
     // ========================================================================
@@ -1100,6 +1117,51 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
+    }
+
+    #[test]
+    fn confirmed_delete_is_atomic_scoped_and_keeps_history() {
+        let (repo, _dir) = create_test_repo();
+        let id = ChannelId::new();
+        let other = ChannelId::new();
+        let me = UserId::new();
+        for target in [id, other] {
+            repo.insert(&make_channel(target)).unwrap();
+            repo.insert_membership(&make_membership(target, me))
+                .unwrap();
+        }
+        {
+            let conn = repo.db.connection().unwrap();
+            conn.execute_batch("CREATE TABLE IF NOT EXISTS verified_channel_state(channel_id TEXT PRIMARY KEY);
+                CREATE TRIGGER reject_channel_delete BEFORE DELETE ON channels BEGIN SELECT RAISE(ABORT, 'fixture storage failure'); END;").unwrap();
+            for target in [id, other] {
+                conn.execute("INSERT INTO messages(id,conversation_type,conversation_id,created_at) VALUES(?1,'channel',?2,?3)", params![uuid::Uuid::new_v4().to_string(), target.to_string(), Utc::now().to_rfc3339()]).unwrap();
+            }
+        }
+        assert!(repo.remove_confirmed_deleted_channel(&id).is_err());
+        assert!(repo.get(&id).unwrap().is_some());
+        assert!(
+            repo.get_membership(&id, &me).unwrap().is_some(),
+            "failed cleanup must roll back membership removal"
+        );
+        repo.db
+            .connection()
+            .unwrap()
+            .execute_batch("DROP TRIGGER reject_channel_delete;")
+            .unwrap();
+        repo.remove_confirmed_deleted_channel(&id).unwrap();
+        repo.remove_confirmed_deleted_channel(&id).unwrap();
+        assert!(repo.get(&id).unwrap().is_none());
+        assert!(repo.get_membership(&id, &me).unwrap().is_none());
+        assert!(repo.get(&other).unwrap().is_some());
+        assert!(repo.get_membership(&other, &me).unwrap().is_some());
+        let count: i64 = repo
+            .db
+            .connection()
+            .unwrap()
+            .query_row("SELECT COUNT(*) FROM messages", [], |row| row.get(0))
+            .unwrap();
+        assert_eq!(count, 2, "owner cleanup must not delete message history");
     }
 
     #[test]
