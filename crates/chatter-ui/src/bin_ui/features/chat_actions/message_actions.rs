@@ -342,7 +342,13 @@ pub fn wire_thread_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
 /// Wire close image viewer callback.
 pub fn wire_close_image_viewer(window: &MainWindow) {
-    window.on_close_image_viewer(|| {
+    let weak = window.as_weak();
+    window.on_close_image_viewer(move || {
+        super::media_viewer::invalidate();
+        if let Some(w) = weak.upgrade() {
+            w.set_media_viewer_attachment_id("".into());
+        }
+
         // Stop any GIF animation when closing the viewer
         crate::bin_ui::gif_state::stop_gif_animation();
         tracing::debug!("Image viewer closed");

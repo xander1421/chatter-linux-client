@@ -48,14 +48,19 @@ class VideoPlaybackActivity : Activity(), SurfaceHolder.Callback, MediaControlle
     private lateinit var focus: AudioFocusRequest
     private var hasFocus = false
     private var resumeOnFocusGain = false
+    private external fun nativeVideoTokenIsCurrent(token: Long): Boolean
     private external fun nativeVideoSize(token: Long): Long
     private external fun nativeReadVideo(token: Long, position: Long, buffer: ByteArray, offset: Int, count: Int): Int
     private external fun nativeReleaseVideo(token: Long)
+    private external fun nativeViewerAction(token: Long, action: Int)
+    private external fun nativeViewerCanNavigate(token: Long, delta: Int): Boolean
+
 
     override fun onCreate(state: Bundle?) {
         super.onCreate(state)
         window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
         token = intent.getLongExtra("video-token", 0)
+        if (!nativeVideoTokenIsCurrent(token)) { finish(); return; }
         title = intent.getStringExtra("video-title") ?: "Video"
         audioManager = getSystemService(AudioManager::class.java)
         focus = AudioFocusRequest.Builder(AudioManager.AUDIOFOCUS_GAIN)
@@ -89,6 +94,32 @@ class VideoPlaybackActivity : Activity(), SurfaceHolder.Callback, MediaControlle
         videoView = surface
         frame.addView(surface, FrameLayout.LayoutParams(-1, -1))
         setContentView(frame)
+        val galleryControls = android.widget.LinearLayout(this).apply {
+            orientation = android.widget.LinearLayout.HORIZONTAL
+            gravity = Gravity.CENTER
+        }
+        fun galleryButton(icon: Int, label: String, action: Int, enabled: Boolean = true) {
+            val button = android.widget.ImageButton(this).apply {
+                setImageResource(icon)
+                contentDescription = label
+                isEnabled = enabled
+                alpha = if (enabled) 1f else 0.35f
+                setOnClickListener {
+                    nativeViewerAction(token, action)
+                    if (action == -1 || action == 1) finish()
+                }
+            }
+            val size = (48 * resources.displayMetrics.density).toInt()
+            galleryControls.addView(button, android.widget.LinearLayout.LayoutParams(size, size))
+        }
+        galleryButton(android.R.drawable.ic_media_previous, "Previous media", -1, nativeViewerCanNavigate(token, -1))
+        galleryButton(android.R.drawable.ic_media_next, "Next media", 1, nativeViewerCanNavigate(token, 1))
+        galleryButton(android.R.drawable.ic_menu_save, "Download", 2)
+        galleryButton(android.R.drawable.ic_menu_agenda, "Open downloads", 3)
+        frame.addView(galleryControls, FrameLayout.LayoutParams(-2, -2, Gravity.TOP or Gravity.CENTER_HORIZONTAL).apply {
+            topMargin = (24 * resources.displayMetrics.density).toInt()
+        })
+
         controller = MediaController(this)
         controller.setMediaPlayer(this)
         controller.setAnchorView(frame)

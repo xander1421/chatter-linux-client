@@ -23,6 +23,13 @@ export component VideoPlayer inherits Rectangle {
     in property <float> volume: 1.0;  // 0.0 to 1.0
 
     // Callbacks
+    in property <string> position-label;
+    in property <bool> has-previous;
+    in property <bool> has-next;
+    callback previous();
+    callback next();
+    callback download();
+    callback open-downloads();
     callback close();
     callback toggle-play-pause();
     callback seek(float);  // position 0.0 to 1.0
@@ -41,9 +48,9 @@ export component VideoPlayer inherits Rectangle {
 
     // Content container - blocks clicks from reaching backdrop
     Rectangle {
-        x: 32px;
+        x: root.width < 600px ? 0px : 32px;
         y: 0;
-        width: parent.width - 64px;
+        width: parent.width - self.x * 2;
         height: parent.height;
         background: transparent;
 
@@ -53,7 +60,7 @@ export component VideoPlayer inherits Rectangle {
         // Main layout
         VerticalLayout {
             alignment: center;
-            padding: Spacing.lg;
+            padding: root.width < 600px ? Spacing.sm : Spacing.lg;
 
         // Header with filename and close button
         GlassSurface {
@@ -76,6 +83,7 @@ export component VideoPlayer inherits Rectangle {
 
                     Text {
                         text: root.filename;
+                        horizontal-stretch: 1;
                         color: Colors.text-primary;
                         font-size: Typography.base;
                         font-weight: Typography.medium;
@@ -88,6 +96,16 @@ export component VideoPlayer inherits Rectangle {
                     clicked => { root.close(); }
                 }
             }
+        }
+
+        HorizontalLayout {
+            spacing: Spacing.xxs;
+            alignment: center;
+                IconAction { icon: Icons.chevron-left; label: "Previous media"; enabled: root.has-previous; clicked => { root.previous(); } }
+                Text { text: root.position-label; color: Colors.text-muted; vertical-alignment: center; }
+                IconAction { icon: Icons.chevron-right; label: "Next media"; enabled: root.has-next; clicked => { root.next(); } }
+                IconAction { icon: Icons.download; label: "Download"; clicked => { root.download(); } }
+                IconAction { icon: Icons.folder; label: "Open downloads"; clicked => { root.open-downloads(); } }
         }
 
         // Video display area

@@ -46,6 +46,22 @@ import java.util.concurrent.Executors
  * `native…` methods declared here.
  */
 class MainActivity : GameActivity() {
+    @Suppress("unused")
+    fun beginViewerMediaExport(name: String, mime: String, copy: Boolean): LongArray? =
+        ViewerMediaExport.begin(this, name, mime, copy)
+
+    @Suppress("unused")
+    fun finishViewerMediaExport(token: Long, success: Boolean): Boolean =
+        ViewerMediaExport.finish(this, token, success)
+
+    @Suppress("unused")
+    fun openViewerDownloads() {
+        runOnUiThread {
+            try { ViewerMediaExport.openDownloads(this) }
+            catch (_: Exception) { android.widget.Toast.makeText(this, "Downloads unavailable", android.widget.Toast.LENGTH_SHORT).show() }
+        }
+    }
+
 
     // Called only after an explicit tap; duplicate validation at the native edge.
     fun openWebLink(value: String) {
@@ -65,9 +81,12 @@ class MainActivity : GameActivity() {
         runOnUiThread { android.widget.Toast.makeText(this, "Unable to play this video", android.widget.Toast.LENGTH_LONG).show() }
     }
 
+    private external fun nativeVideoTokenIsCurrent(token: Long): Boolean
+
     fun playVideo(token: Long, label: String) {
         runOnUiThread {
             try {
+                if (!nativeVideoTokenIsCurrent(token)) return@runOnUiThread
                 startActivity(Intent(this, VideoPlaybackActivity::class.java)
                     .putExtra("video-token", token).putExtra("video-title", label))
             } catch (_: Exception) {

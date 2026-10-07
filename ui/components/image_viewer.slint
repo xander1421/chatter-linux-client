@@ -1,3 +1,5 @@
+import { Icons } from "../theme/icons.slint";
+import { IconAction } from "icon_action.slint";
 import { GlassSurface } from "glass_surface.slint";
 // Image viewer modal component
 //
@@ -17,6 +19,14 @@ export component ImageViewer inherits Rectangle {
     in property <string> size-display: "";
 
     // Callbacks
+    in property <string> position-label;
+    in property <bool> has-previous;
+    in property <bool> has-next;
+    callback previous();
+    callback next();
+    callback download();
+    callback copy-image();
+    callback open-downloads();
     callback close();
 
     // Only render when show is true
@@ -33,7 +43,7 @@ export component ImageViewer inherits Rectangle {
     // Image container - centered
     VerticalLayout {
         alignment: center;
-        padding: Spacing.xl;
+        padding: root.width < 600px ? Spacing.sm : Spacing.xl;
 
         // Header with filename and close button
         GlassSurface {
@@ -47,10 +57,12 @@ export component ImageViewer inherits Rectangle {
 
                 // File info
                 VerticalLayout {
+                    horizontal-stretch: 1;
                     alignment: center;
 
                     Text {
                         text: root.filename;
+                        overflow: elide;
                         color: Colors.text-primary;
                         font-size: Typography.base;
                         font-weight: Typography.medium;
@@ -87,17 +99,16 @@ export component ImageViewer inherits Rectangle {
             }
         }
 
-        // Footer with hint
-        Rectangle {
-            height: 32px;
-
-            Text {
-                text: "Click outside or press X to close";
-                color: Colors.text-muted;
-                font-size: Typography.xs;
-                horizontal-alignment: center;
-                vertical-alignment: center;
-            }
+        HorizontalLayout {
+            height: Spacing.button-height;
+            alignment: center;
+            spacing: Spacing.xxs;
+            IconAction { icon: Icons.download; label: "Download"; clicked => { root.download(); } }
+            IconAction { icon: Icons.copy; label: "Copy image"; clicked => { root.copy-image(); } }
+            IconAction { icon: Icons.folder; label: "Open downloads"; clicked => { root.open-downloads(); } }
+            IconAction { icon: Icons.chevron-left; label: "Previous media"; enabled: root.has-previous; clicked => { root.previous(); } }
+            Text { text: root.position-label; color: Colors.text-muted; vertical-alignment: center; horizontal-stretch: 0; }
+            IconAction { icon: Icons.chevron-right; label: "Next media"; enabled: root.has-next; clicked => { root.next(); } }
         }
     }
 }

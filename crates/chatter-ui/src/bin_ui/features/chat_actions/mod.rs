@@ -21,6 +21,7 @@ mod attachment_view;
 mod audio_seek;
 mod code_preview;
 mod links;
+pub(crate) mod media_viewer;
 mod message_actions;
 mod pdf_preview;
 mod timers;
@@ -30,6 +31,7 @@ mod video_player;
 /// Wire message action callbacks.
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     links::wire(window);
+    media_viewer::wire(window, ui_ctx);
     message_actions::wire_message_clicked(window, ui_ctx);
     message_actions::wire_quote_clicked(window, ui_ctx);
     message_actions::wire_reply_clicked(window, ui_ctx);

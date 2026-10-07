@@ -8,13 +8,14 @@ use jni::{
 };
 use std::sync::{
     LazyLock, Mutex,
-    atomic::{AtomicI64, Ordering},
+    atomic::{AtomicI64, AtomicU64, Ordering},
 };
 use zeroize::Zeroize;
 
 // Exactly one source: replacing it revokes stale decoder handles immediately.
 static SOURCE: LazyLock<Mutex<Option<(i64, VideoSource)>>> = LazyLock::new(|| Mutex::new(None));
 static NEXT: AtomicI64 = AtomicI64::new(1);
+static SOURCE_REQUEST: AtomicU64 = AtomicU64::new(0);
 
 pub fn open_web_link(url: &str) -> Result<(), ()> {
     let mut env = activity::jni_env().map_err(|_| ())?;
@@ -38,6 +39,29 @@ pub fn open_web_link(url: &str) -> Result<(), ()> {
 }
 
 pub fn play_video(source: VideoSource, title: &str) -> Result<(), ()> {
+    play_video_guarded(
+        source,
+        title,
+        crate::bin_ui::features::chat_actions::media_viewer::current_request(),
+    )
+}
+
+pub fn invalidate_pending_video() {
+    if let Ok(mut source) = SOURCE.lock() {
+        *source = None;
+    }
+}
+
+fn source_request(token: i64) -> Option<u64> {
+    let source = SOURCE.lock().ok()?;
+    if !source.as_ref().is_some_and(|(id, _)| *id == token) {
+        return None;
+    }
+    let request = SOURCE_REQUEST.load(Ordering::SeqCst);
+    crate::bin_ui::features::chat_actions::media_viewer::is_current(request).then_some(request)
+}
+
+pub fn play_video_guarded(source: VideoSource, title: &str, request: u64) -> Result<(), ()> {
     let mut env = activity::jni_env().map_err(|_| ())?;
     let activity = activity::activity().map_err(|_| ())?;
     let title = match env.new_string(title) {
@@ -51,7 +75,13 @@ pub fn play_video(source: VideoSource, title: &str) -> Result<(), ()> {
     if token <= 0 {
         return Err(());
     }
-    *SOURCE.lock().map_err(|_| ())? = Some((token, source));
+    let mut slot = SOURCE.lock().map_err(|_| ())?;
+    if !crate::bin_ui::features::chat_actions::media_viewer::is_current(request) {
+        return Ok(());
+    }
+    SOURCE_REQUEST.store(request, Ordering::SeqCst);
+    *slot = Some((token, source));
+    drop(slot);
     let result = env.call_method(
         activity.as_obj(),
         "playVideo",
@@ -174,4 +204,47 @@ pub fn show_video_error() {
         let _ = env.call_method(activity.as_obj(), "showVideoError", "()V", &[]);
         let _ = env.exception_clear();
     }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_chatter_client_VideoPlaybackActivity_nativeViewerAction(
+    _env: JNIEnv,
+    _this: JObject,
+    token: jlong,
+    action: jint,
+) {
+    if let Some(request) = source_request(token) {
+        crate::bin_ui::features::chat_actions::media_viewer::native_action(action, request);
+    }
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_chatter_client_VideoPlaybackActivity_nativeViewerCanNavigate(
+    _env: JNIEnv,
+    _this: JObject,
+    token: jlong,
+    delta: jint,
+) -> jni::sys::jboolean {
+    u8::from(
+        source_request(token).is_some()
+            && crate::bin_ui::features::chat_actions::media_viewer::native_can_navigate(delta),
+    )
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_chatter_client_MainActivity_nativeVideoTokenIsCurrent(
+    _env: JNIEnv,
+    _this: JObject,
+    token: jlong,
+) -> jni::sys::jboolean {
+    u8::from(source_request(token).is_some())
+}
+
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_chatter_client_VideoPlaybackActivity_nativeVideoTokenIsCurrent(
+    _env: JNIEnv,
+    _this: JObject,
+    token: jlong,
+) -> jni::sys::jboolean {
+    u8::from(source_request(token).is_some())
 }

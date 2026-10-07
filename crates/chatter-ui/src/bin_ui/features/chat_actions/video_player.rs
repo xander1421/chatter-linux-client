@@ -14,6 +14,7 @@ pub fn wire_video_player_callbacks(window: &MainWindow) {
     // Close video player
     let weak_window = window.as_weak();
     window.on_close_video_player(move || {
+        super::media_viewer::invalidate();
         video_state::stop_video();
         stop_video_progress_timer();
         if let Some(w) = weak_window.upgrade() {
