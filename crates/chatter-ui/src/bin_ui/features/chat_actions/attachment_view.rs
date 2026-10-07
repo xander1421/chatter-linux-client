@@ -278,7 +278,11 @@ fn handle_local_attachment(
     // without the multi-second full-decrypt wall (and without holding the whole
     // plaintext in RAM). Small videos keep the simple full-decrypt path.
     if crate::platform::video_source::use_video_ranges(
-        &mime_type,
+        if FileCategory::from_mime_and_filename(&mime_type, &filename) == FileCategory::Video {
+            "video/unknown"
+        } else {
+            &mime_type
+        },
         file_size,
         cfg!(target_os = "android"),
     ) {
