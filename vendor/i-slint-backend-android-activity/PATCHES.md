@@ -81,3 +81,20 @@ are GL on a SurfaceView, so `dumpsys gfxinfo` does not see them).
   coercion assertions. `--clipboard-ref 60d79d0d` is a privacy negative control
   expected to fail the throwing-provider assertion. `--evidence-dir PATH` retains
   generated sources, executables/classes and each command's output.
+
+- RC81 incoming SAF-return geometry recovery: `InsetsRecovery.java` owns the
+  focused helper lifecycle and animation identities. Focus return, animation end,
+  layout, and native focus/resize requests pull current root-window insets and
+  full WindowMetrics bounds immediately and after layout. Retired animations and
+  old helpers cannot replay into the current owner. JNI publications carry a
+  process-wide monotonic sequence; `inset_dispatch.rs` drops superseded queued
+  frames before updating Slint. API 30+ publishes canonical full window size;
+  the older global-layout approximation keeps its previous size policy. Real
+  visible IME and system-bar insets are preserved. No composer padding, draft,
+  attachment, or input-focus policy changed.
+  Run the production lifecycle policy without Android using `javac -d OUT
+  java/InsetsRecovery.java tests/InsetsRecoveryTest.java` and `java -cp OUT
+  InsetsRecoveryTest`. The focused `chatter-ui` integration test
+  `ui_inset_recovery` uses the production queue fence and keyboard conversion
+  against the actual phone layout, including staged SAF draft navigation and
+  independent stale keyboard/property and reduced viewport recovery.

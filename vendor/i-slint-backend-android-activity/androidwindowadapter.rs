@@ -630,6 +630,8 @@ impl AndroidWindowAdapter {
                         self.requested_graphics_api.borrow().clone(),
                     )?;
                     self.resize()?;
+                    self.java_helper.window_focus_gained()
+                        .unwrap_or_else(|e| print_jni_error(&self.app, e));
 
                     // Fixes a problem for old Android versions: the soft input always prompt out on startup.
                     #[cfg(feature = "native-activity")]
@@ -640,12 +642,19 @@ impl AndroidWindowAdapter {
             }
             PollEvent::Main(
                 MainEvent::WindowResized { .. } | MainEvent::ContentRectChanged { .. },
-            ) => self.resize()?,
+            ) => {
+                self.resize()?;
+                self.java_helper.reconcile_window_insets()
+                    .unwrap_or_else(|e| print_jni_error(&self.app, e));
+            }
             PollEvent::Main(MainEvent::RedrawNeeded { .. }) => {
                 self.pending_redraw.set(false);
                 self.do_render()?;
             }
             PollEvent::Main(MainEvent::GainedFocus) => {
+                self.resize()?;
+                self.java_helper.window_focus_gained()
+                    .unwrap_or_else(|e| print_jni_error(&self.app, e));
                 self.window.try_dispatch_event(WindowEvent::WindowActiveChanged(true))?;
             }
             PollEvent::Main(MainEvent::LostFocus) => {
@@ -1206,51 +1215,15 @@ impl AndroidWindowAdapter {
 
     pub(super) fn update_window_insets(
         &self,
+        authoritative_geometry: bool,
         window_origin: PhysicalPosition,
         window_size: PhysicalSize,
         safe_area: PhysicalEdges,
         keyboard: PhysicalEdges,
     ) {
-        let scale_factor = self.window.scale_factor();
-        WindowInner::from_pub(&self.window)
-            .set_window_item_safe_area(safe_area.to_logical(scale_factor));
-
-        let window_origin = window_origin.to_logical(scale_factor);
-        let window_size = window_size.to_logical(scale_factor);
-        let keyboard = keyboard.to_logical(scale_factor);
-
-        // Assume that the keyboard is only on one side.
-        let rect = if keyboard.bottom > (0 as i_slint_core::Coord) {
-            (
-                LogicalPosition::new(
-                    window_origin.x,
-                    window_origin.y + window_size.height - keyboard.bottom as i_slint_core::Coord,
-                ),
-                LogicalSize::new(window_size.width, keyboard.bottom as _),
-            )
-        } else if keyboard.top > (0 as i_slint_core::Coord) {
-            (
-                LogicalPosition::new(window_origin.x, window_origin.y),
-                LogicalSize::new(window_size.width, keyboard.top as _),
-            )
-        } else if keyboard.left > (0 as i_slint_core::Coord) {
-            (
-                LogicalPosition::new(window_origin.x, window_origin.y),
-                LogicalSize::new(keyboard.left as _, window_size.height),
-            )
-        } else if keyboard.right > (0 as i_slint_core::Coord) {
-            (
-                LogicalPosition::new(
-                    window_origin.x + window_size.width - keyboard.right as i_slint_core::Coord,
-                    window_origin.y,
-                ),
-                LogicalSize::new(keyboard.right as _, window_size.height),
-            )
-        } else {
-            Default::default()
-        };
-
-        self.window.set_virtual_keyboard(rect.0, rect.1, i_slint_core::InternalToken);
+        crate::inset_dispatch::publish_window_insets(
+            &self.window, authoritative_geometry, window_origin, window_size, safe_area, keyboard,
+        );
     }
 }
 

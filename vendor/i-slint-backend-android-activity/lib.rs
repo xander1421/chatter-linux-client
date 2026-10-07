@@ -11,6 +11,7 @@
 
 mod androidwindowadapter;
 mod javahelper;
+mod inset_dispatch;
 mod text_input_offsets;
 
 #[cfg(all(not(feature = "aa-06"), feature = "aa-05"))]

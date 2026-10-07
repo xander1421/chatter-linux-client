@@ -324,9 +324,14 @@ class SlintInputView extends View {
         }
     }
 
+    interface InsetFocusListener { void changed(boolean focused); }
+    InsetFocusListener insetFocusChanged;
+    Runnable insetDetached;
+
     @Override
     public void onWindowFocusChanged(boolean hasWindowFocus) {
         super.onWindowFocusChanged(hasWindowFocus);
+        if (insetFocusChanged != null) insetFocusChanged.changed(hasWindowFocus);
         if (!hasWindowFocus) {
             setCursorPos(0, 0, 0, 0, 0, 0);
         }
@@ -334,6 +339,7 @@ class SlintInputView extends View {
 
     @Override
     protected void onDetachedFromWindow() {
+        if (insetDetached != null) insetDetached.run();
         setCursorPos(0, 0, 0, 0, 0, 0);
         super.onDetachedFromWindow();
     }
@@ -434,6 +440,7 @@ class SlintInputView extends View {
 public class SlintAndroidJavaHelper {
     Activity mActivity;
     SlintInputView mInputView;
+    InsetsRecovery mInsetsRecovery;
 
     public SlintAndroidJavaHelper(Activity activity, boolean nativeActivity) {
         this.mActivity = activity;
@@ -452,8 +459,27 @@ public class SlintAndroidJavaHelper {
                 mActivity.addContentView(mInputView, params);
                 mInputView.setVisibility(View.VISIBLE);
                 if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R) {
-                    mActivity.getWindow().getDecorView().getRootView()
-                            .setOnApplyWindowInsetsListener((v, insets) -> dispatchInsets(insets));
+                    View root = mActivity.getWindow().getDecorView().getRootView();
+                    mInsetsRecovery = new InsetsRecovery(new InsetsRecovery.Host() {
+                        public boolean ready() {
+                            return mInputView.isAttachedToWindow() && root.isAttachedToWindow() && root.hasWindowFocus();
+                        }
+                        public void requestInsets() { root.requestApplyInsets(); }
+                        public void postAfterLayout(Runnable action) { root.postOnAnimation(action); }
+                        public void publishCurrent() {
+                            WindowInsets current = root.getRootWindowInsets();
+                            if (current != null) dispatchInsets(current);
+                        }
+                        public void invalidateQueuedInsets(long sequence) { invalidateInsets(sequence); }
+                    });
+                    mInputView.insetFocusChanged = focused -> mInsetsRecovery.focusChanged(focused);
+                    mInputView.insetDetached = () -> mInsetsRecovery.detached();
+                    root.addOnLayoutChangeListener((v, l, t, r, b, ol, ot, or, ob) -> mInsetsRecovery.returnToWindow());
+                    root.setOnApplyWindowInsetsListener((v, insets) -> {
+                        if (mInsetsRecovery.canPublish()) dispatchInsets(insets);
+                        return insets;
+                    });
+                    mInsetsRecovery.focusChanged(root.hasWindowFocus());
                     // Attach the IME animation callback to the input view rather than the
                     // decor root: some OEM ROMs fail to render the IME surface when an
                     // animation callback is installed on the window's root view.
@@ -461,9 +487,18 @@ public class SlintAndroidJavaHelper {
                             new WindowInsetsAnimation.Callback(
                                     WindowInsetsAnimation.Callback.DISPATCH_MODE_CONTINUE_ON_SUBTREE) {
                                 @Override
+                                public void onPrepare(WindowInsetsAnimation animation) {
+                                    mInsetsRecovery.prepare(animation);
+                                }
+                                @Override
+                                public void onEnd(WindowInsetsAnimation animation) {
+                                    mInsetsRecovery.end(animation);
+                                }
+                                @Override
                                 public WindowInsets onProgress(WindowInsets insets,
                                         java.util.List<WindowInsetsAnimation> runningAnimations) {
-                                    return dispatchInsets(insets);
+                                    if (mInsetsRecovery.progress(runningAnimations)) dispatchInsets(insets);
+                                    return insets;
                                 }
                             });
                 }
@@ -512,7 +547,7 @@ public class SlintAndroidJavaHelper {
                                     }
 
                                     SlintAndroidJavaHelper.setInsets(
-                                            windowRect.top, windowRect.left,
+                                            InsetsRecovery.nextSequence(), 0, windowRect.top, windowRect.left,
                                             windowRect.bottom, windowRect.right,
                                             safeAreaRect.top, safeAreaRect.left,
                                             safeAreaRect.bottom, safeAreaRect.right,
@@ -530,13 +565,29 @@ public class SlintAndroidJavaHelper {
         Insets keyboardAreaInsets = insets.getInsets(WindowInsets.Type.ime());
         Rect windowRect = get_view_rect();
         SlintAndroidJavaHelper.setInsets(
-                windowRect.top, windowRect.left,
+                InsetsRecovery.nextSequence(), 1, windowRect.top, windowRect.left,
                 windowRect.bottom, windowRect.right,
                 safeAreaInsets.top, safeAreaInsets.left,
                 safeAreaInsets.bottom, safeAreaInsets.right,
                 keyboardAreaInsets.top, keyboardAreaInsets.left,
                 keyboardAreaInsets.bottom, keyboardAreaInsets.right);
         return insets;
+    }
+
+    public void window_focus_gained() {
+        mActivity.runOnUiThread(() -> {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && mInsetsRecovery != null) {
+                mInsetsRecovery.regainedFocus();
+            }
+        });
+    }
+
+    public void reconcile_window_insets() {
+        mActivity.runOnUiThread(() -> {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && mInsetsRecovery != null) {
+                mInsetsRecovery.returnToWindow();
+            }
+        });
     }
 
     public void show_keyboard() {
@@ -573,7 +624,9 @@ public class SlintAndroidJavaHelper {
 
     static public native void popupMenuAction(int id);
 
-    static public native void setInsets(int window_top, int window_left, int window_bottom, int window_right,
+    static public native void invalidateInsets(long sequence);
+
+    static public native void setInsets(long sequence, int authoritative_geometry, int window_top, int window_left, int window_bottom, int window_right,
             int safe_area_top, int safe_area_left, int safe_area_bottom, int safe_area_right,
             int keyboard_top, int keyboard_left, int keyboard_bottom, int keyboard_right);
 

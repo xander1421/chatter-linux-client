@@ -15,7 +15,7 @@ use i_slint_core::items::{ColorScheme, InputType};
 use i_slint_core::lengths::{LogicalLength, PhysicalEdges};
 use i_slint_core::platform::WindowAdapter;
 use jni::objects::{JClass, JClassLoader, JString, LoaderContext};
-use jni::sys::{jfloat, jint};
+use jni::sys::{jfloat, jint, jlong};
 use jni::{Env, JavaVM, bind_java_type};
 use std::sync::OnceLock;
 use std::time::Duration;
@@ -61,6 +61,14 @@ bind_java_type! {
         fn get_view_rect {
             name = "get_view_rect",
             sig = () -> AndroidRect,
+        },
+        fn window_focus_gained {
+            name = "window_focus_gained",
+            sig = (),
+        },
+        fn reconcile_window_insets {
+            name = "reconcile_window_insets",
+            sig = (),
         },
         fn hide_keyboard {
             name = "hide_keyboard",
@@ -119,8 +127,14 @@ bind_java_type! {
             sig = (id: jint) -> (),
             fn = callback_popup_menu_action,
         },
+        pub static fn invalidate_insets {
+            sig = (sequence: jlong) -> (),
+            fn = callback_invalidate_insets,
+        },
         pub static fn set_insets {
             sig = (
+                sequence: jlong,
+                authoritative_geometry: jint,
                 window_top: jint,
                 window_left: jint,
                 window_bottom: jint,
@@ -364,8 +378,16 @@ impl JavaHelper {
         })
     }
 
-    /// Unfortunately, the way that the android-activity crate uses to show or hide the virtual keyboard doesn't
-    /// work with native-activity. So do it manually with JNI
+    pub fn window_focus_gained(&self) -> Result<(), jni::errors::Error> {
+        self.with_jni_env(|env, helper| helper.window_focus_gained(env))
+    }
+
+    /// Pull current root insets after return or a native viewport resize.
+    pub fn reconcile_window_insets(&self) -> Result<(), jni::errors::Error> {
+        self.with_jni_env(|env, helper| helper.reconcile_window_insets(env))
+    }
+
+    /// The native-activity IME needs the Java input host.
     pub fn show_or_hide_soft_input(&self, show: bool) -> Result<(), jni::errors::Error> {
         self.with_jni_env(
             |env, helper| {
@@ -773,9 +795,23 @@ fn callback_popup_menu_action<'local>(
     Ok(())
 }
 
+static INSET_DISPATCH: crate::inset_dispatch::InsetDispatchFence =
+    crate::inset_dispatch::InsetDispatchFence::new();
+
+fn callback_invalidate_insets<'local>(
+    _env: &mut Env<'local>,
+    _class: JClass<'local>,
+    sequence: jlong,
+) -> Result<(), jni::errors::Error> {
+    INSET_DISPATCH.receive(sequence as u64);
+    Ok(())
+}
+
 fn callback_set_insets<'local>(
     _env: &mut Env<'local>,
     _class: JClass<'local>,
+    sequence: jlong,
+    authoritative_geometry: jint,
     window_top: jint,
     window_left: jint,
     window_bottom: jint,
@@ -789,29 +825,35 @@ fn callback_set_insets<'local>(
     keyboard_bottom: jint,
     keyboard_right: jint,
 ) -> Result<(), jni::errors::Error> {
-    i_slint_core::api::invoke_from_event_loop(move || {
-        if let Some(w) = CURRENT_WINDOW.with_borrow(|x| x.upgrade()) {
-            w.update_window_insets(
-                PhysicalPosition::new(window_left as _, window_top as _),
-                PhysicalSize::new(
-                    (window_right - window_left) as _,
-                    (window_bottom - window_top) as _,
-                ),
-                PhysicalEdges::new(
-                    safe_area_top as _,
-                    safe_area_bottom as _,
-                    safe_area_left as _,
-                    safe_area_right as _,
-                ),
-                PhysicalEdges::new(
-                    keyboard_top as _,
-                    keyboard_bottom as _,
-                    keyboard_left as _,
-                    keyboard_right as _,
-                ),
-            );
-        }
-    })
-    .unwrap();
+    INSET_DISPATCH.receive(sequence as u64);
+    // The Java host may attach before the platform installs its event-loop
+    // proxy, or finish detaching after shutdown. Native init/focus will pull
+    // current insets again; neither boundary should panic across JNI.
+    let _ = i_slint_core::api::invoke_from_event_loop(move || {
+        INSET_DISPATCH.apply(sequence as u64, || {
+            if let Some(w) = CURRENT_WINDOW.with_borrow(|x| x.upgrade()) {
+                w.update_window_insets(
+                    authoritative_geometry != 0,
+                    PhysicalPosition::new(window_left as _, window_top as _),
+                    PhysicalSize::new(
+                        (window_right - window_left) as _,
+                        (window_bottom - window_top) as _,
+                    ),
+                    PhysicalEdges::new(
+                        safe_area_top as _,
+                        safe_area_bottom as _,
+                        safe_area_left as _,
+                        safe_area_right as _,
+                    ),
+                    PhysicalEdges::new(
+                        keyboard_top as _,
+                        keyboard_bottom as _,
+                        keyboard_left as _,
+                        keyboard_right as _,
+                    ),
+                );
+            }
+        });
+    });
     Ok(())
 }
