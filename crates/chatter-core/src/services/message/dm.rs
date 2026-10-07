@@ -890,13 +890,13 @@ pub(super) fn own_device_copy(
 ) -> Option<crate::proto::content_v1::Content> {
     sync_sent_copy(peer_id, content)
         .or_else(|| crate::services::gateway::build_call_self_sync(content, our_device_id))
-        .or_else(|| bare_self_copy(content))
+        .or_else(|| bare_self_copy(peer_id, content))
 }
 
 /// The bare copy our own other devices get of a reaction, pin, edit or
-/// delete-for-everyone: it names its target by (author, sent timestamp), so
-/// the linked device applies it to the message wherever it is filed
-/// (`dispatch_control_content` → `inbox_processor`), no destination needed.
+/// delete-for-everyone. DM deletes additionally carry the destination inside
+/// authenticated self-device content so the linked device can apply the exact
+/// author in the exact ServerDm conversation.
 ///
 /// An allow-list, never "everything else": mailbox-internal and anon content
 /// (bootstrap `KeyExchange`, `DmMailboxRotation`, `AnonGroup*`/`AnonDm*`,
@@ -904,6 +904,7 @@ pub(super) fn own_device_copy(
 /// this conversation's, not theirs; typing and receipts are not synced
 /// (Signal does not); `ReadSync`/`SyncSent` already are own-device content.
 fn bare_self_copy(
+    peer_id: &UserId,
     content: &crate::proto::content_v1::Content,
 ) -> Option<crate::proto::content_v1::Content> {
     use crate::proto::content_v1::{Content, content};
@@ -912,7 +913,15 @@ fn bare_self_copy(
         Some(
             content::Content::Reaction(_) | content::Content::Pin(_) | content::Content::Edit(_),
         ) => content.content.clone(),
-        Some(content::Content::DataMessage(dm)) if dm.delete.is_some() => content.content.clone(),
+        Some(content::Content::DataMessage(dm)) if dm.delete.is_some() => {
+            let mut dm = dm.clone();
+            // Channel controls already carry their scope. DM copies require the
+            // destination inside the encrypted, authenticated self-device content.
+            if dm.channel_id.is_empty() {
+                dm.delete.as_mut()?.destination_user_id = Some(peer_id.to_string());
+            }
+            Some(content::Content::DataMessage(dm))
+        }
         _ => return None,
     };
     Some(Content {
@@ -1089,6 +1098,7 @@ mod sync_sent_copy_tests {
             delete: Some(Delete {
                 target_sent_timestamp: 3,
                 target_author_aci: None,
+                destination_user_id: None,
             }),
             ..Default::default()
         };
@@ -1101,7 +1111,11 @@ mod sync_sent_copy_tests {
         ] {
             let copy = super::own_device_copy(&peer, &wrap(allowed.clone()), 1)
                 .expect("allowed variant not copied");
-            assert_eq!(copy.content, Some(allowed));
+            let mut expected = allowed;
+            if let content::Content::DataMessage(dm) = &mut expected {
+                dm.delete.as_mut().unwrap().destination_user_id = Some(peer.to_string());
+            }
+            assert_eq!(copy.content, Some(expected));
             assert_eq!(copy.timestamp, 9);
             assert!(
                 copy.ephemeral_reply_to.is_none(),

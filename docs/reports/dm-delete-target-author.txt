@@ -1,32 +1,43 @@
 Exact-author delete protocol correction
 
 Contract
-- Delete.target_author_aci is optional string extension field 101. Go stores *string; Rust stores Option<String>. Absence and explicit empty are distinct.
+- Delete.target_author_aci is optional string extension field 101; Delete.destination_user_id is optional string extension field 102, solely for authenticated self-device ServerDm copies. Go stores *string; Rust stores Option<String>. Absence and explicit empty are distinct.
 - ConversationHandle::send_delete routes exact target_author through build_targeted_delete_content(timestamp, Some(author), optional_channel). Anonymous DM and group production senders also set Some(author); timestamp-only public builder wrappers remain legacy compatibility.
-- Standard DM: authenticated sender establishes ServerDm conversation. Present author must parse as current user or sender; absent author means sender only. Exact conversation/type lookup removes only that row; missing targets queue only that admitted author with ServerDm scope. Known targets outside scope are refused. Self-device sender without destination is refused because this route cannot authenticate a destination.
-- Anonymous DM: active, unblocked conversation must authenticate sender as its peer. Same optional-author admission applies; exact AnonDm scope/type, one-author tombstone, and legacy peer-only fallback. Inner channel claims are refused.
-- Channel and anonymous group controls reject a present author different from authenticated sender, including malformed/empty values, before applying a sender-only mutation. Group mutation additionally requires exact AnonGroup type.
+- Standard DM: authenticated sender establishes ServerDm conversation. Present author must parse as current user or sender; absent author means sender only. Exact conversation/type lookup removes only that row; missing targets queue only that admitted author with ServerDm scope. Other-scope rows remain untouched but do not prevent a typed in-scope tombstone. Self-device sender must supply a valid non-self destination and explicit author (us or destination); missing legacy self destination/author is refused without guessing. Peer-delivered controls reject any destination claim.
+- Anonymous DM: active, unblocked conversation must authenticate sender as its peer. Same optional-author admission applies; exact AnonDm scope/type, one-author tombstone, and legacy peer-only fallback. Inner channel and self-device destination claims are refused.
+- Channel and anonymous group controls reject a present author different from authenticated sender, including malformed/empty values, before applying a sender-only mutation. Group precheck and SQL mutation both require exact AnonGroup type. Channel and group controls also reject self-device destination claims.
 - Explicit empty author is rejected; it never falls back to legacy. No cross-author guessing remains.
-- A receiver without support for field 101 still treats a delete as sender-only, so symmetric deletion of peer-authored messages requires both clients to update. Legacy sender deleting its own message remains supported.
+- Previous receivers ignore field 101: their timestamp-only selection is peer-first, and a missing target queues both participant authors. They can delete the wrong same-timestamp author even when a new sender names the exact target. Symmetric delete-for-both requires peers and linked devices on the same updated RC; there is no mixed-version guarantee. New receivers treat an absent author as authenticated sender-only, so an old sender cannot delete the new receiver's own message through that legacy control.
 
 Changed flow
 Generated Delete schema -> builders -> ConversationHandle/anonymous senders -> DM parse/control dispatch -> DmContent/InboxEvent -> InboxEventProcessor -> exact-author MessageService or AnonDmService -> typed scoped tombstone -> actual deleted author in domain event. Channels validate at control dispatch; groups validate at common anonymous dispatcher and typed storage lookup.
 
 Validation performed (no Cargo/Gradle/APK)
 - protoc v system with protoc-gen-go v1.36.12 regenerated only content.pb.go.
-- Local protoc-gen-prost generated to /tmp; its Delete section matches checked-in Rust after ignoring generated whitespace. Existing unrelated generated sections preserved because local generator output omits custom checked-in sections.
+- Local protoc-gen-prost generated to /tmp; its Delete section matches checked-in Rust after ignoring generated whitespace. Existing unrelated generated sections preserved because local generator output omits custom checked-in sections. The independent-review fix regenerates FILE_DESCRIPTOR_SET from current protoc input including source info, bringing fields 101 and 102 into the descriptor.
 - Protoc encode/decode verified field 101 bytes and distinct absent, explicit-empty, and present-author roundtrips.
 - In-memory SQLite exercised the actual repository arrival tombstone predicate; other author, other conversation, channel, and anonymous group types remained unaffected for both DM kinds.
 - Rustfmt parsed changed Rust implementation/tests; git diff --check passed in both repos. Generated schema and preexisting conversation formatting preserved to avoid unrelated churn.
 - No real user data, keyring operations, server tests, Cargo, Gradle, or APK actions were run.
 
 Connected regressions added/updated (not executed during write freeze)
-- dm_delete_connected_processor_emits_actual_author_and_rejects_other_scope: protobuf roundtrip, DM parse field retention, control dispatch, processor/domain event, own+peer same timestamp, survivor retained, replay tombstone, other chat/type refused.
+- dm_delete_connected_processor_emits_actual_author_and_rejects_other_scope: protobuf roundtrip, DM parse field retention, control dispatch, processor/domain event, own+peer same timestamp, survivor retained, replay tombstone, other chat/type retained while the exact in-scope tombstone suppresses later arrival.
 - queued_dm_deletes_block_either_author_catchup_without_crossing_type_or_chat: explicit author queue in either direction, opposite-author collision survives, wrong chat/type survives, target replay suppressed.
 - exact_dm_delete_legacy_and_forged_author_admission: legacy queues peer only, explicit queues own only, forged/malformed/empty author rejected, legacy sender-owned existing target works.
-- anonymous_dm_receiver_deletes_both_authors_and_queues_without_group_privilege: same-timestamp own+peer protobuf roundtrip through anonymous processor; wrong authenticated sender rejected; exact author event; opposite-author and wrong-type queue survivors; legacy sender-owned target works; forged author/channel claim and existing other chat/type refused.
+- anonymous_dm_receiver_deletes_both_authors_and_queues_without_group_privilege: same-timestamp own+peer protobuf roundtrip through anonymous processor; wrong authenticated sender rejected; exact author event; opposite-author and wrong-type queue survivors; legacy sender-owned target works; forged author/channel claim and existing other chat/type retained while the exact in-scope tombstone suppresses later arrival.
 - channel_delete_rejects_forged_target_author_before_event and group_delete_rejects_forged_author_even_when_sender_row_exists: explicit forged author cannot downgrade to authenticated sender delete.
 - Updated every Delete literal found across client Rust source and integration_anon_dm.
 
 Remaining
 Independent reviewer and coordinator must run actual protected core tests after all source writers settle; these tests are written and statically parsed but not claimed to have run. Parent protocol commit intentionally excludes the linux-client gitlink.
+
+Independent-review repair (current dispatch)
+- Added destination_user_id optional field 102 to root proto, regenerated Go, extended the checked-in Rust Delete, and regenerated its descriptor including source information.
+- own_device_copy adds the encrypted destination to a channel-free DM delete without changing peer-bound content; the parse, polling/control event, and processor paths retain it. MessageService accepts it only from authenticated self and routes exact author to exact ServerDm destination. Missing destination or author, malformed/empty/self destination, third author, and any peer destination claim produce no mutation or tombstone.
+- Removed global other-scope existence refusal before typed DM/AnonDm tombstones. Scope lookups and arrival predicates still isolate conversation/type.
+- Renamed the group-only mutation to mark_deleted_anon_group_by_sender_timestamp and put conversation_type = 'anon_group' in the UPDATE itself.
+- Added self_device_dm_delete_carries_destination_through_production_processor: own_device_copy -> prost wire -> parse -> dispatch -> processor -> domain identity, own and peer targets, same timestamp and other-chat survivors, replay suppression, and invalid/forged/missing destination/author no-tombstone checks.
+- Extended connected regular and anonymous DM tests with existing other-chat/type collision before delete and actual in-scope arrival afterward; extended connected common group dispatch with exact group row plus AnonDm sibling and precheck-only collision.
+- Legacy builder regression now asserts both extension fields absent; own-device allow-list regression checks enriched delete copy.
+- No Cargo, Gradle, APK, realuserdata, or key operations during this repair. Prior focused suite 30/30 is pre-repair evidence only; coordinator must rerun focused and final integrated tests after the source freeze ends.
+- Repair validation: rustfmt parsed/formatted all changed non-generated Rust, both git diff --check checks passed, current protoc descriptor matches Rust bytes and optional tags 101/102, protoc generated exact/legacy/empty byte fixtures, and in-memory SQLite executed the extracted production group UPDATE against type/chat/author/timestamp collisions. Frozen protoc fixture is now in integration_content_builders; Rust execution remains unrun.

@@ -1010,6 +1010,7 @@ async fn test_anon_dm_message_with_delete() {
     // Create delete-for-everyone (DataMessage with Delete field)
     let delete = Delete {
         target_author_aci: None,
+        destination_user_id: None,
         target_sent_timestamp: 1234567890,
     };
 

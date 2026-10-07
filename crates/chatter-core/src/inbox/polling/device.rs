@@ -2069,13 +2069,15 @@ pub fn dispatch_control_content(
                     // Empty channel_id => channel-free DM (ServerDm) delete-for-everyone.
                     let _ = event_tx.send(InboxEvent::DmDeleteForEveryone {
                         target_author_aci: delete.target_author_aci,
+                        destination_user_id: delete.destination_user_id,
                         peer_id: *sender_id,
                         target_sent_timestamp: delete.target_sent_timestamp,
                     });
-                } else if delete
-                    .target_author_aci
-                    .as_deref()
-                    .is_some_and(|author| author.parse::<UserId>().ok() != Some(*sender_id))
+                } else if delete.destination_user_id.is_some()
+                    || delete
+                        .target_author_aci
+                        .as_deref()
+                        .is_some_and(|author| author.parse::<UserId>().ok() != Some(*sender_id))
                 {
                     return;
                 } else if let Ok(channel_id) = dm.channel_id.parse::<ChannelId>() {

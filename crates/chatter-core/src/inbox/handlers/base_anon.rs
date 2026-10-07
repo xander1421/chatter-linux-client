@@ -360,10 +360,11 @@ pub fn dispatch_common_content<B: AnonInboxBackend>(
         Some(ContentKind::DataMessage(data_msg)) => {
             // Delete-for-everyone wrapped inside DataMessage
             if let Some(delete) = &data_msg.delete {
-                if delete
-                    .target_author_aci
-                    .as_deref()
-                    .is_some_and(|author| author.parse::<UserId>().ok() != Some(*sender_id))
+                if delete.destination_user_id.is_some()
+                    || delete
+                        .target_author_aci
+                        .as_deref()
+                        .is_some_and(|author| author.parse::<UserId>().ok() != Some(*sender_id))
                 {
                     return CommonDispatchOutcome::Dropped;
                 }
@@ -688,6 +689,7 @@ mod tests {
                     delete: Some(content_v1::Delete {
                         target_sent_timestamp: 42,
                         target_author_aci: None,
+                        destination_user_id: None,
                     }),
                     ..Default::default()
                 },

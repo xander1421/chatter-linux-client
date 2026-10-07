@@ -175,6 +175,7 @@ pub enum DmContent {
     /// Delete for everyone (peer notification)
     DeleteForEveryone {
         target_author_aci: Option<String>,
+        destination_user_id: Option<String>,
         target_sent_timestamp: u64,
     },
     /// Key exchange for DM bootstrap (response from peer).

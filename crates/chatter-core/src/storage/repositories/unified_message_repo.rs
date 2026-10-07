@@ -1836,8 +1836,8 @@ impl UnifiedMessageRepository {
         Ok(rows > 0)
     }
 
-    /// Soft-delete by (conversation_id, sender_id, sent_at) — for delete-for-everyone.
-    pub fn mark_deleted_by_sender_timestamp(
+    /// Soft-delete an AnonGroup row by exact (conversation, sender, timestamp).
+    pub fn mark_deleted_anon_group_by_sender_timestamp(
         &self,
         conversation_id: &ChannelId,
         sender_id: &UserId,
@@ -1846,7 +1846,8 @@ impl UnifiedMessageRepository {
         let conn = self.db.connection()?;
         let rows = conn.execute(
             "UPDATE messages SET is_deleted = 1, updated_at = ?1
-             WHERE conversation_id = ?2 AND sender_id = ?3 AND sent_at = ?4 AND is_deleted = 0",
+             WHERE conversation_id = ?2 AND sender_id = ?3 AND sent_at = ?4
+             AND conversation_type = 'anon_group' AND is_deleted = 0",
             params![
                 Utc::now().to_rfc3339(),
                 conversation_id.to_string(),

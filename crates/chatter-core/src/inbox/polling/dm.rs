@@ -792,6 +792,7 @@ fn dispatch_dm_content(
 
         DmContent::DeleteForEveryone {
             target_author_aci,
+            destination_user_id,
             target_sent_timestamp,
         } => {
             tracing::debug!(
@@ -801,6 +802,7 @@ fn dispatch_dm_content(
             );
             let _ = event_tx.send(InboxEvent::DmDeleteForEveryone {
                 target_author_aci,
+                destination_user_id,
                 peer_id,
                 target_sent_timestamp,
             });

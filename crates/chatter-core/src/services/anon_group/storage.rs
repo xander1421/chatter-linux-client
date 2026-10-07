@@ -246,7 +246,7 @@ impl AnonGroupService {
         Ok(self
             .message_service
             .message_repo
-            .mark_deleted_by_sender_timestamp(&channel_id, sender_id, timestamp_ns)?)
+            .mark_deleted_anon_group_by_sender_timestamp(&channel_id, sender_id, timestamp_ns)?)
     }
 
     /// Get messages for a group with pagination.

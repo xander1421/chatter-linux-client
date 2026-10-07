@@ -190,7 +190,7 @@ impl AnonDmService {
         // intentionally remains author-only. Emit the stored target's identity.
         if let Some(ContentType::DataMessage(data)) = &inner_content.content {
             if let Some(delete) = &data.delete {
-                if !data.channel_id.is_empty() {
+                if !data.channel_id.is_empty() || delete.destination_user_id.is_some() {
                     return Ok(vec![]);
                 }
                 return Ok(self

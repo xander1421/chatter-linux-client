@@ -401,6 +401,8 @@ fn test_build_delete_for_everyone() {
             assert!(dm.delete.is_some());
             let delete = dm.delete.unwrap();
             assert_eq!(delete.target_sent_timestamp, 12345);
+            assert!(delete.target_author_aci.is_none());
+            assert!(delete.destination_user_id.is_none());
         }
         other => panic!("Expected DataMessage with delete, got {:?}", other),
     }
@@ -587,4 +589,42 @@ fn test_content_with_attachment_roundtrip() {
         }
         _ => panic!("Expected DataMessage"),
     }
+}
+
+/// Frozen bytes produced by protoc for Delete, independent of the prost codec.
+#[test]
+fn test_exact_delete_wire_matches_protoc_fixture() {
+    use chatter_core::proto::content_v1::Delete;
+    use prost::Message;
+    let delete = Delete {
+        target_sent_timestamp: 12345,
+        target_author_aci: Some("11111111-1111-4111-8111-111111111111".into()),
+        destination_user_id: Some("22222222-2222-4222-8222-222222222222".into()),
+    };
+    let expected: &[u8] = &[
+        0x09, 0x39, 0x30, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0xaa, 0x06, 0x24, 0x31, 0x31, 0x31,
+        0x31, 0x31, 0x31, 0x31, 0x31, 0x2d, 0x31, 0x31, 0x31, 0x31, 0x2d, 0x34, 0x31, 0x31, 0x31,
+        0x2d, 0x38, 0x31, 0x31, 0x31, 0x2d, 0x31, 0x31, 0x31, 0x31, 0x31, 0x31, 0x31, 0x31, 0x31,
+        0x31, 0x31, 0x31, 0xb2, 0x06, 0x24, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x2d,
+        0x32, 0x32, 0x32, 0x32, 0x2d, 0x34, 0x32, 0x32, 0x32, 0x2d, 0x38, 0x32, 0x32, 0x32, 0x2d,
+        0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32, 0x32,
+    ];
+    assert_eq!(delete.encode_to_vec(), expected);
+    assert_eq!(Delete::decode(expected).unwrap(), delete);
+    let legacy = Delete {
+        target_sent_timestamp: 12345,
+        ..Default::default()
+    };
+    assert_eq!(legacy.encode_to_vec(), [0x09, 0x39, 0x30, 0, 0, 0, 0, 0, 0]);
+    let empty = Delete {
+        target_author_aci: Some(String::new()),
+        destination_user_id: Some(String::new()),
+        ..legacy
+    };
+    assert_eq!(
+        empty.encode_to_vec(),
+        [
+            0x09, 0x39, 0x30, 0, 0, 0, 0, 0, 0, 0xaa, 0x06, 0x00, 0xb2, 0x06, 0x00
+        ]
+    );
 }

@@ -410,6 +410,7 @@ pub fn build_targeted_delete_content(
             delete: Some(Delete {
                 target_sent_timestamp,
                 target_author_aci: target_author_aci.map(str::to_owned),
+                destination_user_id: None,
             }),
             ..Default::default()
         })),

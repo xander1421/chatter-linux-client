@@ -224,14 +224,6 @@ impl AnonDmService {
         }
         let target =
             self.get_message_by_sender_timestamp(conversation_id, &author, sent_timestamp)?;
-        if target.is_none()
-            && self
-                .message_repo
-                .get_by_sender_timestamp(&author, sent_timestamp)?
-                .is_some()
-        {
-            return Ok(None);
-        }
         crate::storage::repositories::message_modifier_repo::MessageModifierRepository::new(
             self.settings_repo.database().clone(),
         )
