@@ -15,6 +15,10 @@ pub mod membership;
 mod pin;
 mod reactions;
 mod selection;
+#[cfg(feature = "ui-test-debug")]
+#[doc(hidden)]
+pub mod send_message;
+#[cfg(not(feature = "ui-test-debug"))]
 pub(crate) mod send_message;
 mod typing;
 
