@@ -29,6 +29,31 @@ fn click(w: &MainWindow, element: &ElementHandle) {
         .dispatch_event(slint::platform::WindowEvent::PointerReleased { position, button });
 }
 
+// ElementHandle searches only visible items. Reach the below-fold account
+// section through the same pointer scrolling that a phone user performs.
+fn scroll_to_label(w: &MainWindow, label: &str) {
+    let scroll = |delta_y| {
+        w.window()
+            .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+                position: slint::LogicalPosition::new(200.0, 400.0),
+                delta_x: 0.0,
+                delta_y,
+            });
+        pump(w);
+    };
+    scroll(10000.0);
+    for _ in 0..20 {
+        if ElementHandle::find_by_accessible_label(w, label)
+            .next()
+            .is_some()
+        {
+            return;
+        }
+        scroll(-160.0);
+    }
+    panic!("account section did not expose {label} after bounded scrolling");
+}
+
 #[test]
 fn failed_privacy_writes_restore_effective_values_and_selected_gif_tab_keeps_search() {
     assert!(
@@ -245,6 +270,10 @@ fn failed_privacy_writes_restore_effective_values_and_selected_gif_tab_keeps_sea
     chatter_ui::bin_ui::features::back::close(&w, "channel-settings");
     chatter_ui::bin_ui::features::back::push(&w, "settings");
     pump(&w);
+    scroll_to_label(
+        &w,
+        "File backup is unavailable on this device. Use server backup below.",
+    );
     assert!(
         ElementHandle::find_by_accessible_label(
             &w,
@@ -270,6 +299,7 @@ fn failed_privacy_writes_restore_effective_values_and_selected_gif_tab_keeps_sea
             .is_none()
     );
     // The server actions remain present, with their original production callbacks.
+    scroll_to_label(&w, "Back Up to Server");
     assert!(
         ElementHandle::find_by_accessible_label(&w, "Back Up to Server")
             .next()
@@ -277,6 +307,7 @@ fn failed_privacy_writes_restore_effective_values_and_selected_gif_tab_keeps_sea
     );
     w.set_is_mobile_platform(false);
     pump(&w);
+    scroll_to_label(&w, "Backup passphrase (for file backup)");
     assert!(
         ElementHandle::find_by_accessible_label(&w, "Backup passphrase (for file backup)")
             .next()
