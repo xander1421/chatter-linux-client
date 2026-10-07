@@ -1571,7 +1571,7 @@ mod deletion_tests {
             std::env::set_var("CHATTER_DB_PASSPHRASE", "channel-delete-fixture");
             std::env::set_var("CHATTER_HEADLESS", "1");
         }
-        i_slint_backend_testing::init_integration_test_with_system_time();
+        crate::init_ui_test_backend();
         let runtime = tokio::runtime::Runtime::new().unwrap();
         let _entered = runtime.enter();
         let fixture = tempfile::tempdir().unwrap();

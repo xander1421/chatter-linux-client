@@ -946,7 +946,7 @@ mod session_tests {
             run_isolated_session_test();
             return;
         }
-        i_slint_backend_testing::init_integration_test_with_system_time();
+        crate::init_ui_test_backend();
         let runtime = super::super::timers::tests::runtime();
         let _entered = runtime.enter();
         let dir = tempfile::tempdir().unwrap();

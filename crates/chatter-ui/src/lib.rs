@@ -16,6 +16,13 @@ pub mod bin_ui;
 // Platform integration (JNI on Android, etc.)
 pub mod platform;
 
+/// Slint permits one testing platform per process, shared by UI unit fixtures.
+#[cfg(test)]
+pub(crate) fn init_ui_test_backend() {
+    static BACKEND: std::sync::Once = std::sync::Once::new();
+    BACKEND.call_once(i_slint_backend_testing::init_integration_test_with_system_time);
+}
+
 /// Global tokio runtime handle for use in Slint callbacks.
 /// On Android, Slint's event loop doesn't preserve the tokio runtime context,
 /// so tokio::spawn silently fails from callbacks. This handle is set once at
