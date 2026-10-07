@@ -1,4 +1,5 @@
-//! Process-local, single-use notification capabilities. Never persisted or logged.
+//! Process-local, call-bound notification capabilities. Never persisted or logged.
+//! Decisions are single-use; trusted display actions remain usable while ringing.
 use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
@@ -58,9 +59,9 @@ impl Consent {
         if token.is_empty() || entry.tokens[index].as_deref() != Some(token) {
             return false;
         }
-        entry.tokens[index] = None;
-        // Accept/Decline retire every sibling action. Body and full-screen each
-        // get their own one-shot proof so auto-display does not consume a tap.
+        // Accept/Decline retire every sibling action. Trusted body/full-screen
+        // opens do not accept media and remain usable after Back minimizes the
+        // ring. They still expire and are retired on replacement/cancellation.
         if index == 0 || index == 3 {
             self.revoke(call_id);
         }
@@ -78,7 +79,7 @@ impl Consent {
 mod tests {
     use super::*;
     #[test]
-    fn valid_actions_are_bound_and_single_use() {
+    fn decisions_are_single_use_and_trusted_display_can_reopen() {
         let mut consent = Consent::new();
         let now = Instant::now();
         let a = consent.issue("a", now, Duration::from_secs(60));
@@ -90,12 +91,14 @@ mod tests {
         assert!(!consent.consume("a", OPEN, &a[0], now));
         assert!(!consent.consume("b", ACCEPT, &a[0], now));
         assert!(consent.consume("a", FULL_SCREEN, &a[2], now));
-        assert!(!consent.consume("a", FULL_SCREEN, &a[2], now));
+        assert!(consent.consume("a", FULL_SCREEN, &a[2], now));
         assert!(consent.consume("a", OPEN, &a[1], now));
-        assert!(!consent.consume("a", OPEN, &a[1], now));
+        assert!(consent.consume("a", OPEN, &a[1], now));
         assert!(consent.consume("a", ACCEPT, &a[0], now));
         assert!(!consent.consume("a", ACCEPT, &a[0], now));
         assert!(!consent.consume("a", DECLINE, &a[3], now));
+        assert!(!consent.consume("a", OPEN, &a[1], now));
+        assert!(!consent.consume("a", FULL_SCREEN, &a[2], now));
         assert!(consent.consume("b", DECLINE, &b[3], now));
         assert!(!consent.consume("b", ACCEPT, &b[0], now));
     }
