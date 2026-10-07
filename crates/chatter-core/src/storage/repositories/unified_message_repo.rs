@@ -744,7 +744,12 @@ impl UnifiedMessageRepository {
             conversation_id.to_string(),
             conversation_type.as_str(),
         ])?;
-        collect_messages(&mut rows)
+        collect_messages(&mut rows).map(|messages| {
+            messages
+                .into_iter()
+                .filter(|message| !crate::services::disappearing::is_timer_notice(message))
+                .collect()
+        })
     }
 
     // ========================================================================
@@ -2350,7 +2355,12 @@ impl UnifiedMessageRepository {
             message_columns("messages"),
         ))?;
         let mut rows = stmt.query(params![channel_id.to_string(), conversation_type.as_str()])?;
-        collect_messages(&mut rows)
+        collect_messages(&mut rows).map(|messages| {
+            messages
+                .into_iter()
+                .filter(|message| !crate::services::disappearing::is_timer_notice(message))
+                .collect()
+        })
     }
 
     /// List recent messages by sender.
