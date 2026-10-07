@@ -297,13 +297,38 @@ impl super::notification_sink::NotificationSink for DesktopNotifications {
         // Serialize cancellation with posting/replacement of this identity.
         let mut calls = self.calls.lock().unwrap_or_else(|e| e.into_inner());
         if let Some(handle) = calls.get(call_id) {
-            futures::executor::block_on(handle.connection.call_method(
-                Some(handle.daemon.as_str()),
-                "/org/freedesktop/Notifications",
-                Some("org.freedesktop.Notifications"),
-                "CloseNotification",
-                &(handle.id,),
-            ))
+            futures::executor::block_on(async {
+                match handle
+                    .connection
+                    .call_method(
+                        Some(handle.daemon.as_str()),
+                        "/org/freedesktop/Notifications",
+                        Some("org.freedesktop.Notifications"),
+                        "CloseNotification",
+                        &(handle.id,),
+                    )
+                    .await
+                {
+                    Ok(_) => Ok(()),
+                    Err(close_error) => {
+                        // Only confirmed loss of this exact owner makes its
+                        // notification gone. Use the stored connection so a
+                        // new bus generation cannot reuse the unique name.
+                        let has_owner = async {
+                            let bus = zbus::fdo::DBusProxy::new(&handle.connection).await?;
+                            let owner = zbus::names::UniqueName::try_from(handle.daemon.as_str())?;
+                            Ok::<_, zbus::Error>(bus.name_has_owner(owner.into()).await?)
+                        }
+                        .await;
+                        match has_owner {
+                            Ok(false) => Ok(()),
+                            // A live owner or an uncertain check must retain
+                            // the handle for retry and the original failure.
+                            _ => Err(close_error),
+                        }
+                    }
+                }
+            })
             .map_err(|e| SystemError::NotificationSend(e.to_string()))?;
             calls.remove(call_id);
         }
