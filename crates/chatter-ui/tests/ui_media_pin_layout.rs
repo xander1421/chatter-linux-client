@@ -1,5 +1,7 @@
 //! Real phone layout: media actions remain reachable and mixed-height seeks land.
-use chatter_ui::{ConversationKind, MainWindow, MessageItemData};
+use chatter_ui::{
+    ConversationKind, MainWindow, MessageAttachmentData, MessageItemData, ReactionEntry,
+};
 use i_slint_backend_testing as testing;
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
@@ -151,7 +153,46 @@ fn phone_media_actions_fit_and_mixed_height_pin_seek_lands_at_header() {
                 format!("target-{i}").into()
             },
             timestamp: format!("clock-{i}").into(),
-            is_call: i % 4 == 1,
+            is_call: i % 8 == 1,
+            has_attachments: matches!(i % 8, 2..=5),
+            attachment_count: if matches!(i % 8, 2..=5) { 1 } else { 0 },
+            attachments: ModelRc::new(VecModel::from(match i % 8 {
+                kind @ 2..=5 => vec![MessageAttachmentData {
+                    id: format!("geometry-attachment-{i}").into(),
+                    filename: format!("owned-fixture-{i}").into(),
+                    category: match kind {
+                        3 => "video",
+                        4 => "audio",
+                        _ => "image",
+                    }
+                    .into(),
+                    mime_type: match kind {
+                        3 => "video/mp4",
+                        4 => "audio/wav",
+                        5 => "image/gif",
+                        _ => "image/png",
+                    }
+                    .into(),
+                    is_image: kind == 2 || kind == 5,
+                    is_video: kind == 3,
+                    width: if i % 2 == 0 { 320 } else { 640 },
+                    height: if i % 2 == 0 { 480 } else { 360 },
+                    duration_display: "0:37".into(),
+                    waveform: ModelRc::new(VecModel::from(vec![45; 32])),
+                    ..Default::default()
+                }],
+                _ => Vec::new(),
+            })),
+            has_reactions: i % 6 == 0,
+            reactions: ModelRc::new(VecModel::from(if i % 6 == 0 {
+                vec![ReactionEntry {
+                    emoji: "👍".into(),
+                    count: 2,
+                    own: false,
+                }]
+            } else {
+                Vec::new()
+            })),
             call_type: "incoming".into(),
             call_duration: "3 min".into(),
             show_sender: true,
