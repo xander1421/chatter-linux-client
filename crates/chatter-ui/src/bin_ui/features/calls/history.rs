@@ -540,6 +540,9 @@ mod tests {
                 .collect(),
             missed_count: 0,
         };
+        // Production avatar cache normalizes to its 128px row budget, including
+        // upscaling these deliberately tiny encoded fixtures. Bytes/identity
+        // assertions above and changed-aspect checks below remain independent.
         let dm = prepare_page(&client, page);
         assert!(
             dm.page
@@ -550,7 +553,7 @@ mod tests {
         assert!(
             dm.avatars
                 .iter()
-                .all(|pixels| pixels.as_ref().unwrap().width() == 4)
+                .all(|pixels| (pixels.as_ref().unwrap().width(), pixels.as_ref().unwrap().height()) == (128, 64))
         );
         i_slint_backend_testing::init_no_event_loop();
         let w = MainWindow::new().unwrap();
@@ -582,7 +585,7 @@ mod tests {
             .iter()
             .find(|r| r.id == "channel")
             .unwrap();
-        assert_eq!((row.avatar_source.size().width, row.avatar_source.size().height), (3, 2));
+        assert_eq!((row.avatar_source.size().width, row.avatar_source.size().height), (128, 85));
         assert_eq!(row.name.as_str(), "Name at call time");
         for id in ["deleted", "anonymous-group"] {
             let row = w
@@ -604,7 +607,7 @@ mod tests {
             .iter()
             .find(|r| r.id == "channel")
             .unwrap();
-        assert_eq!((row.avatar_source.size().width, row.avatar_source.size().height), (5, 2));
+        assert_eq!((row.avatar_source.size().width, row.avatar_source.size().height), (128, 51));
         channel.icon = Some(vec![1, 2, 3]);
         channels.update(&channel).unwrap();
         let prepared = runtime
