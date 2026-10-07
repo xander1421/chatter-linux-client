@@ -18,6 +18,17 @@ fn pump(w: &MainWindow) {
     }
 }
 
+fn pump_until(w: &MainWindow, ready: impl Fn() -> bool) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+    while !ready() && std::time::Instant::now() < deadline {
+        pump(w);
+    }
+    assert!(
+        ready(),
+        "background settings paint did not complete within 3 seconds"
+    );
+}
+
 #[test]
 fn settings_route_opens_immediately_reports_missing_rows_and_discards_late_paints() {
     assert!(
@@ -70,7 +81,7 @@ fn settings_route_opens_immediately_reports_missing_rows_and_discards_late_paint
         .set_active_conversation(ActiveConversation::Channel(stored));
     w.invoke_chat_settings_clicked();
     assert_eq!(w.get_active_modal().as_str(), "channel-settings");
-    pump(&w);
+    pump_until(&w, || !w.get_channel_settings_loading());
     assert_eq!(
         w.get_channel_settings_name().as_str(),
         "Invite-only fixture"
@@ -95,7 +106,7 @@ fn settings_route_opens_immediately_reports_missing_rows_and_discards_late_paint
     );
     assert!(w.get_channel_settings_loading());
     assert!(!w.get_channel_settings_can_delete());
-    pump(&w);
+    pump_until(&w, || !w.get_channel_settings_loading());
     assert_eq!(w.get_channel_settings_error().as_str(), "Channel not found");
     assert!(!w.get_channel_settings_loading());
     assert_eq!(w.get_active_modal().as_str(), "channel-settings");
@@ -113,7 +124,7 @@ fn settings_route_opens_immediately_reports_missing_rows_and_discards_late_paint
         .set_active_conversation(ActiveConversation::AnonGroup(group));
     w.invoke_chat_settings_clicked();
     assert_eq!(w.get_active_modal().as_str(), "channel-settings");
-    pump(&w);
+    pump_until(&w, || !w.get_channel_settings_loading());
     assert_eq!(
         w.get_channel_settings_error().as_str(),
         "Private group not found"
@@ -149,7 +160,7 @@ fn settings_route_opens_immediately_reports_missing_rows_and_discards_late_paint
         .chat_state()
         .set_active_conversation(ActiveConversation::AnonGroup(group));
     w.invoke_chat_settings_clicked();
-    pump(&w);
+    pump_until(&w, || !w.get_channel_settings_loading());
     assert_eq!(w.get_channel_settings_id().as_str(), group.to_string());
     assert_eq!(
         w.get_channel_settings_error().as_str(),
