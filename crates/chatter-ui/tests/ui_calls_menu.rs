@@ -271,7 +271,7 @@ fn calls_overflow_uses_real_header_hit_target_and_card_anchor() {
             assert!(w.get_calls_more_menu_visible());
             match change {
                 0 => w.set_channel_id(format!("fixture-{width}-{change}").into()),
-                1 => w.set_conversation_kind("channel".into()),
+                1 => w.set_conversation_kind(chatter_ui::ConversationKind::Channel),
                 2 => w.set_current_view("loading".into()),
                 _ => w.set_active_tab("chats".into()),
             }
@@ -281,7 +281,7 @@ fn calls_overflow_uses_real_header_hit_target_and_card_anchor() {
             w.set_active_tab("calls".into());
             settle(&w, width, height);
             assert!(labelled(&w, "Clear call history").is_none());
-            w.set_conversation_kind("server_dm".into());
+            w.set_conversation_kind(chatter_ui::ConversationKind::ServerDm);
         }
         let more = labelled(&w, "More options").unwrap();
 
