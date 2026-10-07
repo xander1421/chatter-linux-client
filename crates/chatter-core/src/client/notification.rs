@@ -62,7 +62,7 @@ impl ChatterClient {
         if let Some(call_worker) = self.services.call_service.get() {
             let bridge_handle =
                 crate::services::call_notification_bridge::spawn_call_notification_bridge(
-                    call_worker.subscribe_call_events(),
+                    call_worker.clone(),
                     self.services.notification_service.clone(),
                 );
             self.tasks.lock().push(bridge_handle);

@@ -117,7 +117,7 @@ pub enum CallEndReason {
 
 /// Events emitted by the orchestrator. Consumers (UI, notification service,
 /// call history) subscribe via [`CallWorkerHandle::take_call_events`].
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub enum CallOrchestratorEvent {
     /// An incoming call should be presented to the user. When
     /// `replaces_active` is true there is already an ongoing call — the UI
@@ -201,7 +201,7 @@ pub enum CallOrchestratorEvent {
 ///
 /// The E2EE key is intentionally absent — it was consumed by the worker when
 /// it connected to LiveKit and should not be broadcast to subscribers.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct AnonCallConnectedInfo {
     pub room_name: String,
     pub channel_id: ChannelId,
@@ -257,6 +257,8 @@ struct OrchestratorState {
     active: Option<OrchestratedActive>,
     incoming: HashMap<CallHandle, PendingIncoming>,
     outgoing: HashMap<CallHandle, PendingOutgoing>,
+    generation: u64,
+    incoming_order: HashMap<CallHandle, u64>,
 }
 
 impl OrchestratorState {
@@ -266,6 +268,84 @@ impl OrchestratorState {
             .as_ref()
             .map(|a| a.kind)
             .or_else(|| self.outgoing.values().next().map(|o| o.kind))
+    }
+}
+
+/// Authoritative presentation state, read on the worker command queue.
+/// No signaling keys leave the actor. Events are ordered oldest to newest.
+#[derive(Debug, Clone)]
+pub struct IncomingCallPresentationSnapshot {
+    pub generation: u64,
+    pub presentations: Vec<CallOrchestratorEvent>,
+}
+
+/// Shared presentation authority. Readers hold a short synchronous lease while
+/// applying a projection; actor acceptance cannot overtake that projection.
+#[derive(Clone)]
+pub struct IncomingCallPresentationState {
+    snapshot: Arc<RwLock<IncomingCallPresentationSnapshot>>,
+    changes: tokio::sync::watch::Sender<u64>,
+}
+
+impl IncomingCallPresentationState {
+    fn new() -> Self {
+        Self {
+            snapshot: Arc::new(RwLock::new(IncomingCallPresentationSnapshot {
+                generation: 0,
+                presentations: Vec::new(),
+            })),
+            changes: tokio::sync::watch::channel(0).0,
+        }
+    }
+
+    /// The callback must be short and must not call back into the worker.
+    /// The lease orders native/UI projection before the next actor publication.
+    pub fn with_snapshot<R>(
+        &self,
+        apply: impl FnOnce(&IncomingCallPresentationSnapshot) -> R,
+    ) -> R {
+        apply(&self.snapshot.read())
+    }
+
+    pub fn subscribe_changes(&self) -> tokio::sync::watch::Receiver<u64> {
+        self.changes.subscribe()
+    }
+
+    fn publish(&self, orchestrator: &OrchestratorState) {
+        let snapshot = orchestrator.incoming_snapshot();
+        let generation = snapshot.generation;
+        let mut current = self.snapshot.write();
+        if current.presentations == snapshot.presentations {
+            return;
+        }
+        *current = snapshot;
+        self.changes.send_replace(generation);
+    }
+}
+
+impl OrchestratorState {
+    fn incoming_snapshot(&self) -> IncomingCallPresentationSnapshot {
+        let mut incoming: Vec<_> = self.incoming.values().collect();
+        incoming.sort_by_key(|p| self.incoming_order.get(&p.call).copied().unwrap_or(0));
+        IncomingCallPresentationSnapshot {
+            generation: self.generation,
+            presentations: incoming
+                .into_iter()
+                .map(|p| CallOrchestratorEvent::IncomingPresented {
+                    call: p.call.clone(),
+                    kind: p.kind,
+                    peer_id: p.peer_id,
+                    peer_name: p.peer_name.clone(),
+                    is_video: p.is_video,
+                    is_identity_verified: p.is_identity_verified,
+                    identity_warning: p.identity_warning.clone(),
+                    ephemeral_public_key: None,
+                    channel_context: p.channel_context.clone(),
+                    conversation_id: p.conversation_id.clone(),
+                    replaces_active: self.active.is_some(),
+                })
+                .collect(),
+        }
     }
 }
 
@@ -559,6 +639,10 @@ enum CallCommand {
         response: oneshot::Sender<Option<OrchestratedCallKind>>,
     },
 
+    /// Serialize presentation recovery with acceptance and withdrawal.
+    OrchIncomingSnapshot {
+        response: oneshot::Sender<IncomingCallPresentationSnapshot>,
+    },
     /// Shutdown the worker.
     Shutdown,
 }
@@ -581,6 +665,7 @@ pub struct CallWorkerHandle {
     /// Broadcast sender for orchestrator events. Kept on the handle so UI
     /// subscribers can call `subscribe_call_events` any number of times.
     call_events_tx: broadcast::Sender<CallOrchestratorEvent>,
+    incoming_presentation: IncomingCallPresentationState,
 }
 
 impl CallWorkerHandle {
@@ -595,6 +680,8 @@ impl CallWorkerHandle {
         let shared_video_frames = SharedVideoFrames::new();
         let shared_frames_for_worker = shared_video_frames.clone();
         let call_events_for_worker = call_events_tx.clone();
+        let incoming_presentation = IncomingCallPresentationState::new();
+        let presentation_for_worker = incoming_presentation.clone();
         let room_events_broadcast_for_worker = room_events_broadcast.clone();
 
         // Spawn dedicated thread for call operations
@@ -608,6 +695,7 @@ impl CallWorkerHandle {
                     shared_frames_for_worker,
                     call_events_for_worker,
                     room_events_broadcast_for_worker,
+                    presentation_for_worker,
                 );
             })
             .expect("Failed to spawn call worker thread");
@@ -618,6 +706,7 @@ impl CallWorkerHandle {
             room_events_broadcast,
             shared_video_frames,
             call_events_tx,
+            incoming_presentation,
         }
     }
 
@@ -646,6 +735,23 @@ impl CallWorkerHandle {
     /// call transitions, withdrawals). Each subscriber gets its own receiver.
     pub fn subscribe_call_events(&self) -> broadcast::Receiver<CallOrchestratorEvent> {
         self.call_events_tx.subscribe()
+    }
+
+    pub fn incoming_presentation_state(&self) -> IncomingCallPresentationState {
+        self.incoming_presentation.clone()
+    }
+
+    /// Subscribe before reading this snapshot. Buffered presentation events are
+    /// invalidation hints only: always reread authority, never replay their data.
+    pub async fn incoming_presentation_snapshot(
+        &self,
+    ) -> Result<IncomingCallPresentationSnapshot, CallError> {
+        let (response, rx) = oneshot::channel();
+        self.cmd_tx
+            .send(CallCommand::OrchIncomingSnapshot { response })
+            .await
+            .map_err(|_| CallError::WorkerShutdown)?;
+        rx.await.map_err(|_| CallError::WorkerShutdown)
     }
 
     /// Subscribe to LiveKit room events as a broadcast (multi-consumer).
@@ -1384,6 +1490,7 @@ fn run_call_worker(
     shared_video_frames: SharedVideoFrames,
     call_events_tx: broadcast::Sender<CallOrchestratorEvent>,
     room_events_broadcast: broadcast::Sender<LiveKitRoomEvent>,
+    incoming_presentation: IncomingCallPresentationState,
 ) {
     // Create single-threaded runtime for non-Send types
     let rt = tokio::runtime::Builder::new_current_thread()
@@ -1442,6 +1549,8 @@ fn run_call_worker(
                 None => break, // Channel closed
             };
 
+            orchestrator.generation = orchestrator.generation.checked_add(1)
+                .expect("call generation exhausted");
             match cmd {
                 CallCommand::InitiateCall {
                     channel_id,
@@ -1844,6 +1953,9 @@ fn run_call_worker(
                 CallCommand::OrchPresentIncoming { incoming } => {
                     let replaces_active = orchestrator.active.is_some();
                     let snapshot = incoming.clone();
+                    orchestrator.incoming_order.insert(
+                        incoming.call.clone(), orchestrator.generation,
+                    );
                     orchestrator.incoming.insert(incoming.call.clone(), incoming);
                     let _ = call_events_tx.send(CallOrchestratorEvent::IncomingPresented {
                         call: snapshot.call,
@@ -1872,6 +1984,7 @@ fn run_call_worker(
                             "OrchWithdrawIncoming: no matching pending incoming"
                         );
                     }
+                    incoming_presentation.publish(&orchestrator);
                     if let Some(response) = response {
                         let _ = response.send(());
                     }
@@ -1980,6 +2093,7 @@ fn run_call_worker(
                     } else {
                         Err(CallError::NotInCall)
                     };
+                    incoming_presentation.publish(&orchestrator);
                     let _ = response.send(result);
                 }
 
@@ -1994,6 +2108,7 @@ fn run_call_worker(
                     } else {
                         Err(CallError::NotInCall)
                     };
+                    incoming_presentation.publish(&orchestrator);
                     let _ = response.send(result);
                 }
 
@@ -2013,6 +2128,7 @@ fn run_call_worker(
                         }
                         None => Err(CallError::NotInCall),
                     };
+                    incoming_presentation.publish(&orchestrator);
                     let _ = response.send(result);
                 }
 
@@ -2029,6 +2145,7 @@ fn run_call_worker(
                         }
                         None => Err(CallError::NotInCall),
                     };
+                    incoming_presentation.publish(&orchestrator);
                     let _ = response.send(result);
                 }
 
@@ -2036,11 +2153,21 @@ fn run_call_worker(
                     let _ = response.send(orchestrator.call_kind());
                 }
 
+                CallCommand::OrchIncomingSnapshot { response } => {
+                    // Prune withdrawn identities; ordering metadata contains no keys.
+                    orchestrator.incoming_order.retain(
+                        |call, _| orchestrator.incoming.contains_key(call),
+                    );
+                    let _ = response.send(orchestrator.incoming_snapshot());
+                }
+
                 CallCommand::Shutdown => {
                     tracing::info!("Call worker shutting down");
                     break;
                 }
             }
+            orchestrator.incoming_order.retain(|call, _| orchestrator.incoming.contains_key(call));
+            incoming_presentation.publish(&orchestrator);
         }
 
         tracing::info!("Call worker stopped");
@@ -4912,7 +5039,7 @@ mod group_ring_cancel_tests {
         let worker = worker();
         let log = Arc::new(NotificationLog::default());
         let bridge = super::super::call_notification_bridge::spawn_call_notification_bridge(
-            worker.subscribe_call_events(),
+            worker.clone(),
             Arc::new(super::super::notification_service::NotificationService::new(log.clone())),
         );
         worker.orch_mark_connected(
@@ -4929,6 +5056,13 @@ mod group_ring_cancel_tests {
         let next = CallHandle::from("new-ring");
         present(&worker, &first).await;
         present(&worker, &next).await;
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !log.0.lock().iter().any(|event| event == "show new-ring") {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
         let mut events = worker.subscribe_call_events();
         let (entered_tx, entered_rx) = oneshot::channel();
         let (resume_tx, resume_rx) = oneshot::channel();
@@ -4974,10 +5108,6 @@ mod group_ring_cancel_tests {
             worker.orch_active_kind().await,
             Some(OrchestratedCallKind::DmStandard)
         );
-        worker
-            .orch_accept_incoming_replacing_active(next)
-            .await
-            .unwrap();
         tokio::time::timeout(std::time::Duration::from_secs(5), async {
             loop {
                 if log.0.lock().iter().any(|event| event == "cancel old-ring") {
@@ -4991,6 +5121,26 @@ mod group_ring_cancel_tests {
         assert_eq!(
             *log.0.lock(),
             ["show old-ring", "show new-ring", "cancel old-ring"]
+        );
+        worker
+            .orch_accept_incoming_replacing_active(next)
+            .await
+            .unwrap();
+        tokio::time::timeout(std::time::Duration::from_secs(5), async {
+            while !log.0.lock().iter().any(|event| event == "cancel new-ring") {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(
+            *log.0.lock(),
+            [
+                "show old-ring",
+                "show new-ring",
+                "cancel old-ring",
+                "cancel new-ring"
+            ]
         );
         bridge.abort();
     }

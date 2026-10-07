@@ -528,23 +528,100 @@ pub fn wire_orchestrator_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
         };
 
+        let Some(state) = ui_ctx.incoming_call_presentation_state() else { return };
+        let mut changes = state.subscribe_changes();
+        changes.borrow_and_update();
+        reconcile_incoming_modal(&weak, &ui_ctx, &state);
         tracing::info!("Call orchestrator UI subscriber started");
-
         loop {
-            match rx.recv().await {
-                Ok(event) => handle_orchestrator_event(&weak, &ui_ctx, event),
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
-                    tracing::warn!(skipped = n, "Call orchestrator UI subscriber lagged");
-                    continue;
+            tokio::select! {
+                changed = changes.changed() => {
+                    if changed.is_err() { break; }
+                    changes.borrow_and_update();
+                    reconcile_incoming_modal(&weak, &ui_ctx, &state);
                 }
-                Err(tokio::sync::broadcast::error::RecvError::Closed) => {
-                    tracing::info!("Call orchestrator UI subscriber stopping — channel closed");
-                    break;
+                event = rx.recv() => match event {
+                    Ok(CallOrchestratorEvent::IncomingPresented { .. }
+                        | CallOrchestratorEvent::IncomingWithdrawn { .. }) => {
+                        reconcile_incoming_modal(&weak, &ui_ctx, &state);
+                    }
+                    Ok(event) => handle_orchestrator_event(&weak, &ui_ctx, event),
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(n)) => {
+                        tracing::warn!(skipped = n, "Call orchestrator UI subscriber recovering from lag");
+                        reconcile_incoming_modal(&weak, &ui_ctx, &state);
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
                 }
             }
         }
     })
     .expect("spawn call orchestrator subscriber");
+}
+
+/// Read authority at UI execution time, rather than capturing a snapshot
+/// before the event-loop queue. Buffered events/queued closures cannot bring
+/// back withdrawn or accepted calls, and recovery never changes the active UI.
+fn reconcile_incoming_modal(
+    weak: &slint::Weak<MainWindow>,
+    ui_ctx: &Arc<ChatterClient>,
+    state: &chatter_core::services::call_worker::IncomingCallPresentationState,
+) {
+    let weak = weak.clone();
+    let ui_ctx = ui_ctx.clone();
+    let state = state.clone();
+    let _ = slint::invoke_from_event_loop(move || {
+        let Some(w) = weak.upgrade() else { return };
+        state.with_snapshot(|snapshot| {
+            let Some(CallOrchestratorEvent::IncomingPresented {
+                call,
+                kind,
+                peer_id,
+                peer_name,
+                is_video,
+                is_identity_verified,
+                identity_warning,
+                channel_context,
+                replaces_active,
+                ..
+            }) = snapshot.presentations.last()
+            else {
+                super::super::auth::initial_data::hide_incoming_call(&w);
+                w.set_incoming_call_replaces_active(false);
+                return;
+            };
+            // A tap hides this identity before permission/signaling completes.
+            // Another invalidation must not reopen the same dismissed modal.
+            if w.get_incoming_call_data().call_id.as_str() == call.as_str() {
+                if w.get_incoming_call_visible() {
+                    w.set_incoming_call_replaces_active(*replaces_active);
+                }
+                return;
+            }
+            let peer_id_str = peer_id.to_string();
+            let avatar_bytes = ui_ctx.resolve_call_participant(&peer_id_str).avatar_bytes;
+            let is_anonymous = matches!(
+                kind,
+                OrchestratedCallKind::AnonDm | OrchestratedCallKind::AnonGroup
+            );
+            super::super::auth::initial_data::show_incoming_call(
+                &w,
+                call.as_str(),
+                &peer_id_str,
+                peer_name,
+                if *is_video { "video" } else { "voice" },
+                *is_identity_verified,
+                identity_warning,
+                is_anonymous,
+                avatar_bytes.as_deref(),
+            );
+            if *kind == OrchestratedCallKind::GroupChannel {
+                let mut data = w.get_incoming_call_data();
+                data.channel_name = channel_context.clone().unwrap_or_default().into();
+                w.set_incoming_call_data(data);
+            }
+            w.set_incoming_call_replaces_active(*replaces_active);
+        });
+    });
 }
 
 fn handle_orchestrator_event(
@@ -553,78 +630,9 @@ fn handle_orchestrator_event(
     event: CallOrchestratorEvent,
 ) {
     match event {
-        CallOrchestratorEvent::IncomingPresented {
-            call,
-            kind,
-            peer_id,
-            peer_name,
-            is_video,
-            is_identity_verified,
-            identity_warning,
-            channel_context,
-            replaces_active,
-            ..
-        } => {
-            let weak = weak.clone();
-            let call_id = call.as_str().to_string();
-            let peer_id_str = peer_id.to_string();
-            let call_type_str = if is_video { "video".to_string() } else { "voice".to_string() };
-            let is_anonymous = matches!(
-                kind,
-                OrchestratedCallKind::AnonDm | OrchestratedCallKind::AnonGroup
-            );
-            // A channel group call rings with its channel ("in #team"); the
-            // modal then offers it as a group call to join.
-            let channel_name = match kind {
-                OrchestratedCallKind::GroupChannel => channel_context.unwrap_or_default(),
-                _ => String::new(),
-            };
-            // Caller avatar — core owns the "server-DM profile vs anon-DM row"
-            // source rule. Pass bytes (Send) and decode on the UI thread;
-            // slint::Image is not Send.
-            let avatar_bytes = ui_ctx.resolve_call_participant(&peer_id_str).avatar_bytes;
-
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak.upgrade() {
-                    super::super::auth::initial_data::show_incoming_call(
-                        &w,
-                        &call_id,
-                        &peer_id_str,
-                        &peer_name,
-                        &call_type_str,
-                        is_identity_verified,
-                        &identity_warning,
-                        is_anonymous,
-                        avatar_bytes.as_deref(),
-                    );
-                    if !channel_name.is_empty() {
-                        let mut data = w.get_incoming_call_data();
-                        data.channel_name = channel_name.into();
-                        w.set_incoming_call_data(data);
-                    }
-                    w.set_incoming_call_replaces_active(replaces_active);
-                }
-            });
-        }
-
-        CallOrchestratorEvent::IncomingWithdrawn { call, reason } => {
-            tracing::info!(
-                call = %call.as_str(),
-                reason = ?reason,
-                "Incoming call withdrawn"
-            );
-            let weak = weak.clone();
-            let expected_call_id = call.as_str().to_string();
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak.upgrade() {
-                    let current = w.get_incoming_call_data().call_id.to_string();
-                    if current == expected_call_id {
-                        super::super::auth::initial_data::hide_incoming_call(&w);
-                        w.set_incoming_call_replaces_active(false);
-                    }
-                }
-            });
-        }
+        // Presentation payloads are hints only; subscriber reconciles authority.
+        CallOrchestratorEvent::IncomingPresented { .. }
+        | CallOrchestratorEvent::IncomingWithdrawn { .. } => {}
 
         CallOrchestratorEvent::ActiveEnded { call, reason } => {
             tracing::info!(
@@ -649,8 +657,8 @@ fn handle_orchestrator_event(
             let weak = weak.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 let Some(w) = weak.upgrade() else { return };
+                if w.get_active_call_data().call_id.as_str() != call.as_str() { return; }
                 w.set_active_call_visible(false);
-                super::super::auth::initial_data::hide_incoming_call(&w);
                 if let Some((message, variant)) = notice {
                     stop_call_timer();
                     stop_video_frame_timer();

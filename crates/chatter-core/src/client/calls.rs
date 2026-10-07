@@ -826,6 +826,16 @@ impl ChatterClient {
         }
     }
 
+    /// Authoritative incoming modal/notification state. Never contains signaling keys.
+    #[cfg(feature = "media")]
+    pub fn incoming_call_presentation_state(
+        &self,
+    ) -> Option<crate::services::call_worker::IncomingCallPresentationState> {
+        self.call_service()
+            .get()
+            .map(|w| w.incoming_presentation_state())
+    }
+
     /// Subscribe to the orchestrator's broadcast stream. Returns `None`
     /// until the call service has been initialized (post-login).
     #[cfg(feature = "media")]
