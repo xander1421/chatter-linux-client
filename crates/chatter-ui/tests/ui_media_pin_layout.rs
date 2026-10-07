@@ -26,6 +26,61 @@ fn phone_media_actions_fit_and_mixed_height_pin_seek_lands_at_header() {
     assert!(chatter_ui::SLINT_DEBUG_INFO_ENABLED);
     testing::init_integration_test_with_system_time();
     let w = MainWindow::new().unwrap();
+    // A delete delivered to the event queue must not affect a new chat that
+    // happens to contain the same sender/timestamp. Use the real event queue.
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    let _runtime = runtime.enter();
+    let fixture = tempfile::tempdir().unwrap();
+    let client = chatter_core::client::ChatterClient::builder()
+        .data_dir(fixture.path().to_string_lossy().to_string())
+        .build()
+        .unwrap();
+    let a = chatter_core::state::ActiveConversation::Channel(
+        chatter_core::domain::ids::ChannelId::new(),
+    );
+    let b = chatter_core::state::ActiveConversation::Channel(
+        chatter_core::domain::ids::ChannelId::new(),
+    );
+    client.chat_state().set_active_conversation(a);
+    w.set_messages(ModelRc::new(VecModel::from(vec![MessageItemData {
+        message_id: "collision".into(),
+        ..Default::default()
+    }])));
+    let queued_client = client.clone();
+    w.as_weak()
+        .upgrade_in_event_loop(move |w| {
+            chatter_ui::bin_ui::features::chat::remove_messages_in_conversation(
+                &w,
+                &queued_client,
+                a,
+                |row| row.message_id == "collision",
+            );
+        })
+        .unwrap();
+    client.chat_state().set_active_conversation(b);
+    pump(&w, 412.0);
+    assert_eq!(
+        slint::Model::row_count(&w.get_messages()),
+        1,
+        "Queued old-chat delete must preserve the new chat"
+    );
+    let queued_client = client.clone();
+    w.as_weak()
+        .upgrade_in_event_loop(move |w| {
+            chatter_ui::bin_ui::features::chat::remove_messages_in_conversation(
+                &w,
+                &queued_client,
+                b,
+                |row| row.message_id == "collision",
+            );
+        })
+        .unwrap();
+    pump(&w, 412.0);
+    assert_eq!(
+        slint::Model::row_count(&w.get_messages()),
+        0,
+        "Current-chat deletion must still remove the bubble"
+    );
     w.set_current_view("main".into());
     w.set_is_mobile_platform(true);
     w.set_mobile_show_chat(true);

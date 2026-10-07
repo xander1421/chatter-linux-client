@@ -460,8 +460,15 @@ pub(super) fn handle_message_delete(
     if !ui_ctx.is_showing_conversation(conversation_id) {
         return;
     }
+    let conversation = ui_ctx.chat_state().active_conversation();
+    let ui_ctx = ui_ctx.clone();
     crate::run_ui!(window, |w| {
-        crate::bin_ui::features::chat::remove_messages_where(&w, |msg| target.matches(msg));
+        crate::bin_ui::features::chat::remove_messages_in_conversation(
+            &w,
+            &ui_ctx,
+            conversation,
+            |msg| target.matches(msg),
+        );
     });
 }
 

@@ -240,6 +240,19 @@ pub(crate) fn remove_message_from_ui(
     });
 }
 
+/// Apply a queued removal only while its original conversation is still open.
+#[doc(hidden)]
+pub fn remove_messages_in_conversation(
+    window: &MainWindow,
+    client: &chatter_core::client::ChatterClient,
+    conversation: chatter_core::state::ActiveConversation,
+    gone: impl Fn(&crate::MessageItemData) -> bool,
+) {
+    if client.chat_state().active_conversation() == conversation {
+        remove_messages_where(window, gone);
+    }
+}
+
 /// Remove every row `gone` matches, in place, back to front so the indices
 /// stay valid.
 pub(crate) fn remove_messages_where(

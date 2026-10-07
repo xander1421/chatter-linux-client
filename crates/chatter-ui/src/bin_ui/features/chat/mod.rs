@@ -28,6 +28,8 @@ use chatter_core::client::ChatterClient;
 
 use crate::MainWindow;
 
+#[doc(hidden)]
+pub use helpers::remove_messages_in_conversation;
 pub(crate) use helpers::{edit_messages, remove_messages_where};
 #[doc(hidden)]
 pub use helpers::{refresh_reaction_in_ui, refresh_scoped_reaction_in_ui};

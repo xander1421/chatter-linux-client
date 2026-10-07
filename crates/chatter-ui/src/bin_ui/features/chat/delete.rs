@@ -83,6 +83,9 @@ pub fn wire_delete_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             // to follow it here.
             crate::bin_ui::features::sidebar::history_changed(&weak, &ui_ctx_spawn);
             run_ui!(weak, |w| {
+                if ui_ctx_spawn.chat_state().active_conversation() != conversation {
+                    return;
+                }
                 super::helpers::remove_message_from_ui(
                     &w,
                     &sender_for_ui,
@@ -148,6 +151,7 @@ pub fn wire_delete_everyone_message(window: &MainWindow, ui_ctx: &Arc<ChatterCli
             // to follow it here.
             crate::bin_ui::features::sidebar::history_changed(&weak, &ui_ctx_spawn);
             run_ui!(weak, |w| {
+                if ui_ctx_spawn.chat_state().active_conversation() != conversation { return; }
                 super::helpers::remove_message_from_ui(&w, &sender_for_ui, &timestamp_for_ui, unregister_message_gifs);
             });
         });
