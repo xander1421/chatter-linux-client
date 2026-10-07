@@ -37,7 +37,7 @@ use chatter_core::client::ChatterClient;
 use chatter_core::client::calls::CallHistoryPage;
 use chatter_core::domain::call::CallHistoryFilter;
 
-use crate::bin_ui::converters::avatar_bytes_to_image;
+use crate::bin_ui::decode_cache::{self, Pixels};
 use crate::run_ui;
 use crate::{CallHistoryRow, MainWindow};
 
@@ -46,6 +46,39 @@ use crate::{CallHistoryRow, MainWindow};
 /// list as far as the UI is concerned.
 // fixed page, wire the repo's cursor when someone has 200 calls.
 const HISTORY_PAGE: u32 = 200;
+
+/// Send-safe page prepared off the event loop. Images are created only in paint.
+#[derive(Default)]
+struct PreparedHistoryPage {
+    page: CallHistoryPage,
+    avatars: Vec<Option<Pixels>>,
+}
+
+fn prepare_page(client: &ChatterClient, mut page: CallHistoryPage) -> PreparedHistoryPage {
+    use chatter_core::domain::message::ConversationType;
+    let avatars = page
+        .rows
+        .iter_mut()
+        .map(|row| {
+            // A channel-backed group uses its configured icon, never an owner's
+            // profile. Anonymous groups have no stored group-icon field; they must
+            // not look up a channel with the same UUID or borrow a member avatar.
+            if ConversationType::from_str_value(&row.conversation_type).ok()
+                == Some(ConversationType::Channel)
+            {
+                row.avatar_bytes = row
+                    .conversation_id
+                    .parse()
+                    .ok()
+                    .and_then(|id| client.get_channel_local(&id))
+                    .filter(|channel| channel.conversation_type() == ConversationType::Channel)
+                    .and_then(|channel| channel.icon);
+            }
+            row.avatar_bytes.as_deref().and_then(decode_cache::avatar)
+        })
+        .collect();
+    PreparedHistoryPage { page, avatars }
+}
 
 /// Wire the Calls tab and everything on the screen it opens.
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
@@ -256,13 +289,21 @@ pub(crate) fn refresh_badge(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     });
 }
 
-/// Load core's page off the event loop; `paint` turns it into Slint rows
-/// there, since a `slint::Image` (the avatar) cannot cross threads.
+/// Load core's page, then read configured icons and decode cached avatars on
+/// the blocking pool. Only Slint Image creation and model paint run on the UI.
 async fn load_page(
     ui_ctx: &Arc<ChatterClient>,
     filter: CallHistoryFilter,
-) -> Result<CallHistoryPage, chatter_core::client::ClientError> {
-    ui_ctx.call_history_page(filter, HISTORY_PAGE).await
+) -> Result<PreparedHistoryPage, chatter_core::client::ClientError> {
+    let page = ui_ctx.call_history_page(filter, HISTORY_PAGE).await?;
+    let client = ui_ctx.clone();
+    tokio::task::spawn_blocking(move || prepare_page(&client, page))
+        .await
+        .map_err(|error| {
+            chatter_core::client::ClientError::Inbox(format!(
+                "call history avatar preparation: {error}"
+            ))
+        })
 }
 
 fn complete_load(
@@ -270,7 +311,7 @@ fn complete_load(
     request: HistoryRequest,
     generation: u64,
     session: u64,
-    page: Result<CallHistoryPage, chatter_core::client::ClientError>,
+    page: Result<PreparedHistoryPage, chatter_core::client::ClientError>,
 ) {
     if request.matches(generation, session) {
         apply_page(window, page);
@@ -279,7 +320,7 @@ fn complete_load(
 
 fn apply_page(
     window: &MainWindow,
-    page: Result<CallHistoryPage, chatter_core::client::ClientError>,
+    page: Result<PreparedHistoryPage, chatter_core::client::ClientError>,
 ) {
     match page {
         Ok(page) => {
@@ -294,16 +335,14 @@ fn apply_page(
     }
 }
 
-fn paint(window: &MainWindow, page: CallHistoryPage) {
+fn paint(window: &MainWindow, prepared: PreparedHistoryPage) {
+    let page = prepared.page;
     let rows: Vec<CallHistoryRow> = page
         .rows
         .into_iter()
-        .map(|r| CallHistoryRow {
-            avatar_source: r
-                .avatar_bytes
-                .as_deref()
-                .and_then(avatar_bytes_to_image)
-                .unwrap_or_default(),
+        .zip(prepared.avatars)
+        .map(|(r, avatar)| CallHistoryRow {
+            avatar_source: avatar.map(slint::Image::from_rgba8).unwrap_or_default(),
             id: r.id.into(),
             conversation_id: r.conversation_id.into(),
             conversation_type: r.conversation_type.into(),
@@ -325,31 +364,8 @@ fn paint(window: &MainWindow, page: CallHistoryPage) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn delayed_filter_and_session_results_are_rejected() {
-        let all = HistoryRequest {
-            generation: 10,
-            session: 2,
-        };
-        let missed = HistoryRequest {
-            generation: 11,
-            session: 2,
-        };
-        assert!(!all.matches(11, 2));
-        assert!(missed.matches(11, 2));
-        assert!(
-            !missed.matches(11, 3),
-            "same account re-login must invalidate old loads"
-        );
-        assert!(!missed.matches(12, 2), "clear invalidates pending loads");
-    }
-    #[test]
-    fn read_failure_preserves_rows_and_unread_then_retry_replaces_them() {
-        const MARKER: &str = "CHATTER_CALL_HISTORY_FIXTURE_CHILD";
-        let name = format!(
-            "{}::read_failure_preserves_rows_and_unread_then_retry_replaces_them",
-            module_path!().split_once("::").unwrap().1
-        );
+    const MARKER: &str = "CHATTER_CALL_HISTORY_FIXTURE_CHILD";
+    fn isolated_fixture(name: &str) -> bool {
         if std::env::var(MARKER).ok().as_deref() != Some(name.as_str()) {
             use std::io::{Read, Seek, SeekFrom};
             use std::process::{Command, Stdio};
@@ -390,6 +406,227 @@ mod tests {
                 out.contains("history fixture completed"),
                 "child must execute its assertions"
             );
+            return false;
+        }
+        true
+    }
+
+    #[test]
+    fn delayed_filter_and_session_results_are_rejected() {
+        let all = HistoryRequest {
+            generation: 10,
+            session: 2,
+        };
+        let missed = HistoryRequest {
+            generation: 11,
+            session: 2,
+        };
+        assert!(!all.matches(11, 2));
+        assert!(missed.matches(11, 2));
+        assert!(
+            !missed.matches(11, 3),
+            "same account re-login must invalidate old loads"
+        );
+        assert!(!missed.matches(12, 2), "clear invalidates pending loads");
+    }
+    #[test]
+    fn configured_channel_icons_load_and_paint_without_crossing_identity_boundaries() {
+        use chatter_core::domain::call::{CallDirection, CallHistoryEntry, CallResult};
+        use chatter_core::domain::{
+            ChannelType,
+            ids::{ChannelId, UserId},
+            message::ConversationType,
+        };
+        use chatter_core::storage::repositories::{
+            CallHistoryRepository, channel_repo::ChannelRepository,
+        };
+        use slint::Model;
+        let name = format!(
+            "{}::configured_channel_icons_load_and_paint_without_crossing_identity_boundaries",
+            module_path!().split_once("::").unwrap().1
+        );
+        if !isolated_fixture(&name) {
+            return;
+        }
+        unsafe {
+            std::env::set_var("CHATTER_NO_KEYRING", "1");
+            std::env::set_var("CHATTER_DB_PASSPHRASE", "calls-icon-fixture");
+            std::env::set_var("CHATTER_HEADLESS", "1");
+        }
+        let runtime = tokio::runtime::Runtime::new().unwrap();
+        let _entered = runtime.enter();
+        let fixture = tempfile::tempdir().unwrap();
+        let client = ChatterClient::builder()
+            .data_dir(fixture.path().to_string_lossy().into_owned())
+            .build()
+            .unwrap();
+        let path = chatter_core::system::Directories::with_base_dir(fixture.path().to_path_buf())
+            .unwrap()
+            .database_path();
+        let db =
+            Arc::new(chatter_core::storage::Database::open(&path, "calls-icon-fixture").unwrap());
+        let channels = ChannelRepository::new(db.clone());
+        let calls = CallHistoryRepository::new(db);
+        let id = ChannelId::new();
+        let missing = ChannelId::new();
+        let mut channel = chatter_core::domain::channel::Channel::new(
+            id,
+            "Current channel name".into(),
+            ChannelType::Private,
+            UserId::new(),
+        );
+        let png = |width, color| {
+            let mut encoded = std::io::Cursor::new(Vec::new());
+            image::DynamicImage::ImageRgba8(image::RgbaImage::from_pixel(
+                width,
+                2,
+                image::Rgba(color),
+            ))
+            .write_to(&mut encoded, image::ImageFormat::Png)
+            .unwrap();
+            encoded.into_inner()
+        };
+        channel.icon = Some(png(3, [0, 255, 0, 255]));
+        channels.insert(&channel).unwrap();
+        for (call_id, key, kind) in [
+            ("channel", id, ConversationType::Channel),
+            ("deleted", missing, ConversationType::Channel),
+            ("anonymous-group", id, ConversationType::AnonGroup),
+        ] {
+            calls
+                .insert_entry(&CallHistoryEntry {
+                    id: call_id.into(),
+                    conversation_id: key.to_string(),
+                    conversation_type: kind,
+                    peer_name: "Name at call time".into(),
+                    started_at: chrono::Utc::now(),
+                    ended_at: None,
+                    direction: CallDirection::Incoming,
+                    result: CallResult::Missed,
+                    duration_secs: None,
+                    has_video: false,
+                })
+                .unwrap();
+        }
+        // Exercise the actual async loader and stored channel metadata, not a
+        // second test-only lookup; a same-UUID anon group must retain initials.
+        let prepared = runtime
+            .block_on(load_page(&client, CallHistoryFilter::All))
+            .unwrap();
+        let channel_index = prepared
+            .page
+            .rows
+            .iter()
+            .position(|r| r.id == "channel")
+            .unwrap();
+        assert!(prepared.avatars[channel_index].is_some());
+        assert_eq!(prepared.page.rows[channel_index].name, "Name at call time");
+        for id in ["deleted", "anonymous-group"] {
+            let index = prepared.page.rows.iter().position(|r| r.id == id).unwrap();
+            assert!(prepared.avatars[index].is_none());
+        }
+        // DM peer sources remain core's chosen bytes even with a matching
+        // channel UUID; anonymized identities never borrow its configured icon.
+        let dm_bytes = png(4, [255, 0, 0, 255]);
+        let page = CallHistoryPage {
+            rows: [ConversationType::ServerDm, ConversationType::AnonDm]
+                .into_iter()
+                .map(|kind| chatter_core::ui::CallHistoryRowData {
+                    conversation_id: id.to_string(),
+                    conversation_type: kind.as_str().into(),
+                    avatar_bytes: Some(dm_bytes.clone()),
+                    ..Default::default()
+                })
+                .collect(),
+            missed_count: 0,
+        };
+        let dm = prepare_page(&client, page);
+        assert!(
+            dm.page
+                .rows
+                .iter()
+                .all(|r| r.avatar_bytes.as_ref() == Some(&dm_bytes))
+        );
+        assert!(
+            dm.avatars
+                .iter()
+                .all(|pixels| pixels.as_ref().unwrap().width() == 4)
+        );
+        i_slint_backend_testing::init_no_event_loop();
+        let w = MainWindow::new().unwrap();
+        let request = HistoryRequest {
+            generation: 11,
+            session: 7,
+        };
+        complete_load(&w, request, 12, 7, Ok(prepared));
+        assert_eq!(
+            w.get_call_history_rows().row_count(),
+            0,
+            "newer filter rejects decoded old page"
+        );
+        let prepared = runtime
+            .block_on(load_page(&client, CallHistoryFilter::Missed))
+            .unwrap();
+        complete_load(&w, request, 11, 8, Ok(prepared));
+        assert_eq!(
+            w.get_call_history_rows().row_count(),
+            0,
+            "new login rejects decoded old page"
+        );
+        let prepared = runtime
+            .block_on(load_page(&client, CallHistoryFilter::All))
+            .unwrap();
+        complete_load(&w, request, 11, 7, Ok(prepared));
+        let row = w
+            .get_call_history_rows()
+            .iter()
+            .find(|r| r.id == "channel")
+            .unwrap();
+        assert_eq!(row.avatar_source.size(), slint::PhysicalSize::new(3, 2));
+        assert_eq!(row.name.as_str(), "Name at call time");
+        for id in ["deleted", "anonymous-group"] {
+            let row = w
+                .get_call_history_rows()
+                .iter()
+                .find(|r| r.id == id)
+                .unwrap();
+            assert_eq!(row.avatar_source.size(), slint::PhysicalSize::new(0, 0));
+        }
+        // Byte-keyed cache must observe a configured icon changed between loads.
+        channel.icon = Some(png(5, [255, 255, 0, 255]));
+        channels.update(&channel).unwrap();
+        let prepared = runtime
+            .block_on(load_page(&client, CallHistoryFilter::All))
+            .unwrap();
+        complete_load(&w, request, 11, 7, Ok(prepared));
+        let row = w
+            .get_call_history_rows()
+            .iter()
+            .find(|r| r.id == "channel")
+            .unwrap();
+        assert_eq!(row.avatar_source.size(), slint::PhysicalSize::new(5, 2));
+        channel.icon = Some(vec![1, 2, 3]);
+        channels.update(&channel).unwrap();
+        let prepared = runtime
+            .block_on(load_page(&client, CallHistoryFilter::All))
+            .unwrap();
+        complete_load(&w, request, 11, 7, Ok(prepared));
+        let row = w
+            .get_call_history_rows()
+            .iter()
+            .find(|r| r.id == "channel")
+            .unwrap();
+        assert_eq!(row.avatar_source.size(), slint::PhysicalSize::new(0, 0));
+        println!("history fixture completed");
+    }
+
+    #[test]
+    fn read_failure_preserves_rows_and_unread_then_retry_replaces_them() {
+        let name = format!(
+            "{}::read_failure_preserves_rows_and_unread_then_retry_replaces_them",
+            module_path!().split_once("::").unwrap().1
+        );
+        if !isolated_fixture(&name) {
             return;
         }
         i_slint_backend_testing::init_no_event_loop();
@@ -406,7 +643,7 @@ mod tests {
         };
         // Older All completion (success or failure) must not end the Missed spinner
         // or overwrite its rows/badge. A completion from an old session is inert.
-        complete_load(&w, old_all, 2, 2, Ok(CallHistoryPage::default()));
+        complete_load(&w, old_all, 2, 2, Ok(PreparedHistoryPage::default()));
         complete_load(
             &w,
             old_all,
@@ -424,7 +661,7 @@ mod tests {
             },
             2,
             2,
-            Ok(CallHistoryPage::default()),
+            Ok(PreparedHistoryPage::default()),
         );
         assert!(w.get_call_history_loading());
         assert!(w.get_call_history_error().is_empty());
@@ -459,7 +696,7 @@ mod tests {
             "original"
         );
         assert_eq!(w.get_missed_call_count(), 4);
-        apply_page(&w, Ok(CallHistoryPage::default()));
+        apply_page(&w, Ok(PreparedHistoryPage::default()));
         assert_eq!(w.get_call_history_rows().row_count(), 0);
         assert!(w.get_call_history_error().is_empty());
         println!("history fixture completed");
