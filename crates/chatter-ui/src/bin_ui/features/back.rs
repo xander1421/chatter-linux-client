@@ -11,6 +11,8 @@
 //!      notification keeps Accept / Decline; nothing underneath is popped.
 //!   1. Message multi-select exits. Selection mode is the shallowest, most
 //!      recently entered state, so it pops first.
+//!   Calls overflow and the other local pickers dismiss after selection,
+//!   before the modal stack or owning tab can navigate.
 //!   2. The unified search palette closes. It is an overlay of its own rather
 //!      than a screen on the modal stack, so it needs its own branch.
 //!   3. The top of the modal stack pops, revealing whatever it was pushed
@@ -155,6 +157,13 @@ pub fn handle_back(window: &MainWindow) -> bool {
         // would stay populated and the bubbles would stay visually marked.
         window.set_selection_mode(false);
         window.invoke_selection_cleared();
+        return true;
+    }
+
+    // Calls overflow is owned by the window and bound to the screen. Consume
+    // it before popping a modal or returning the Calls tab to Chats.
+    if window.get_calls_more_menu_visible() {
+        window.set_calls_more_menu_visible(false);
         return true;
     }
 

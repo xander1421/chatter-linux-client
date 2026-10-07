@@ -3,7 +3,19 @@
 use chatter_ui::{CallHistoryRow, MainWindow};
 use i_slint_backend_testing as testing;
 use slint::platform::{PointerEventButton, WindowEvent};
-use slint::{ComponentHandle, ModelRc, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, VecModel};
+
+// Include the actual navigation coordinator so the isolated Slint-only target
+// can run the same Back code without application/core/platform initialization.
+#[path = "../src/bin_ui/features/back.rs"]
+mod back;
+
+fn key(w: &MainWindow, key: slint::platform::Key) {
+    let text: slint::SharedString = key.into();
+    w.window()
+        .dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
+    w.window().dispatch_event(WindowEvent::KeyReleased { text });
+}
 
 fn settle(w: &MainWindow, width: f32, height: f32) {
     w.window().set_size(slint::LogicalSize::new(width, height));
@@ -55,6 +67,7 @@ fn calls_overflow_uses_real_header_hit_target_and_card_anchor() {
     );
     testing::init_integration_test_with_system_time();
     let w = MainWindow::new().unwrap();
+    back::wire(&w);
     w.set_current_view("main".into());
     w.set_connection_status("connected".into());
     w.set_call_history_rows(ModelRc::new(VecModel::from(
@@ -126,6 +139,41 @@ fn calls_overflow_uses_real_header_hit_target_and_card_anchor() {
             "menu trailing edge must align with overflow, including desktop close button"
         );
         assert!(mp.x >= 0.0 && mp.y + ms.height <= height);
+        // RC77/S9: the real header owns a local menu but Android Back is
+        // coordinated at MainWindow. Exercise the actual callback/key route.
+        assert!(w.get_calls_more_menu_visible());
+        key(&w, slint::platform::Key::Back);
+        settle(&w, width, height);
+        assert!(!w.get_calls_more_menu_visible());
+        assert!(labelled(&w, "Clear call history").is_none());
+        assert_eq!(w.get_active_tab().as_str(), "calls");
+        assert_eq!(row_actions.get(), 0, "Back leaked to a call row");
+        assert!(!cleared.get());
+        click(&w, &more);
+        settle(&w, width, height);
+        key(&w, slint::platform::Key::Escape);
+        settle(&w, width, height);
+        assert!(labelled(&w, "Clear call history").is_none());
+        assert_eq!(w.get_active_tab().as_str(), "calls");
+
+        // Preserve selection before menu, then menu before tab navigation.
+        click(&w, &more);
+        settle(&w, width, height);
+        w.set_selection_mode(true);
+        w.invoke_back_pressed();
+        assert!(!w.get_selection_mode());
+        assert!(w.get_calls_more_menu_visible());
+        w.invoke_back_pressed();
+        assert!(!w.get_calls_more_menu_visible());
+        assert_eq!(w.get_active_tab().as_str(), "calls");
+        w.invoke_back_pressed();
+        assert_eq!(w.get_active_tab().as_str(), "chats");
+        w.set_active_tab("calls".into());
+        settle(&w, width, height);
+        let more = labelled(&w, "More options").unwrap();
+        click(&w, &more);
+        settle(&w, width, height);
+
         // A body tap below the menu must dismiss its scrim rather than
         // reopening an underlying conversation row.
         click_position(
@@ -203,6 +251,39 @@ fn calls_overflow_uses_real_header_hit_target_and_card_anchor() {
         );
         assert!(!cleared.get(), "Cancel must never clear history");
         assert_eq!(row_actions.get(), before, "Cancel leaked a row action");
+
+        // A stacked screen still pops before its underlying Calls tab.
+        click(&w, &more);
+        settle(&w, width, height);
+        back::push(&w, "keyboard-shortcuts");
+        settle(&w, width, height);
+        assert!(!w.get_calls_more_menu_visible());
+        w.invoke_back_pressed();
+        assert_eq!(w.get_modal_stack().row_count(), 0);
+        assert_eq!(w.get_active_tab().as_str(), "calls");
+
+        // Mounted local state must also reset when the owner changes view or
+        // conversation; reopening Calls must not inherit stale overflow.
+        for change in 0..4 {
+            let more = labelled(&w, "More options").unwrap();
+            click(&w, &more);
+            settle(&w, width, height);
+            assert!(w.get_calls_more_menu_visible());
+            match change {
+                0 => w.set_channel_id(format!("fixture-{width}-{change}").into()),
+                1 => w.set_conversation_kind("channel".into()),
+                2 => w.set_current_view("loading".into()),
+                _ => w.set_active_tab("chats".into()),
+            }
+            settle(&w, width, height);
+            assert!(!w.get_calls_more_menu_visible());
+            w.set_current_view("main".into());
+            w.set_active_tab("calls".into());
+            settle(&w, width, height);
+            assert!(labelled(&w, "Clear call history").is_none());
+            w.set_conversation_kind("server_dm".into());
+        }
+        let more = labelled(&w, "More options").unwrap();
 
         if !mobile {
             click(&w, &more);

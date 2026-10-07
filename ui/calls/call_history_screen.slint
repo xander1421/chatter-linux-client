@@ -50,7 +50,7 @@ export component CallHistoryScreen inherits Rectangle {
     // closed mid-confirm reopens already asking to wipe the list.
     property <bool> show-clear-confirm: false;
     // The header ⋮ menu, which holds Clear call history.
-    property <bool> show-more-menu: false;
+    in-out property <bool> show-more-menu: false;
     // Desktop has a close button after overflow; mobile has overflow last.
     property <length> more-menu-trailing-inset: root.mobile-mode ? 0px
         : Spacing.header-action-box + Spacing.header-action-gap;

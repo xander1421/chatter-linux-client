@@ -1194,6 +1194,8 @@ export component MainWindow inherits Window {
     in property <[CallHistoryRow]> call-history-rows: [];
     in property <bool> call-history-loading: false;
     in-out property <string> call-history-error: "";
+    // Shared with the Calls screen so root Back dismisses its local overlay first.
+    in-out property <bool> calls-more-menu-visible: false;
     in-out property <string> call-history-filter: "all";  // "all" | "missed"
     in property <int> missed-call-count: 0;
     callback call-history-filter-changed(string);
@@ -1270,6 +1272,7 @@ export component MainWindow inherits Window {
     forward-focus: back-scope;
 
     changed channel-id => {
+        root.calls-more-menu-visible = false;
         root.cancel-composer-keyboard-handover();
         VoiceRecording.cancel();
         root.composer-emoji-picker-visible = false;
@@ -1278,12 +1281,13 @@ export component MainWindow inherits Window {
     private property <string> inserted-emoji;
     private property <int> insert-serial;
     public function insert-composer-emoji(emoji: string) { root.inserted-emoji = emoji; root.insert-serial += 1; }
-    changed conversation-kind => { VoiceRecording.cancel(); }
+    changed conversation-kind => { root.calls-more-menu-visible = false; VoiceRecording.cancel(); }
     changed selection-mode => { if root.selection-mode { VoiceRecording.cancel(); } }
     changed composer-is-editing => { if root.composer-is-editing { VoiceRecording.cancel(); } }
     changed thread-panel-visible => { VoiceRecording.cancel(); }
-    changed active-tab => { root.cancel-composer-keyboard-handover(); VoiceRecording.cancel(); }
-    changed current-view => { root.cancel-composer-keyboard-handover(); VoiceRecording.cancel(); }
+    changed active-tab => { root.calls-more-menu-visible = false; root.cancel-composer-keyboard-handover(); VoiceRecording.cancel(); }
+    changed current-view => { root.calls-more-menu-visible = false; root.cancel-composer-keyboard-handover(); VoiceRecording.cancel(); }
+    changed active-modal => { root.calls-more-menu-visible = false; }
     // Drop whatever text field holds focus (hiding the soft keyboard with it)
     // without leaving the window focus-less: Back keeps arriving at
     // back-scope. Called from Rust when Android's Back hid the keyboard
@@ -1398,6 +1402,8 @@ export component MainWindow inherits Window {
     // receives focus from `forward-focus` above and from the two `changed`
     // handlers, and otherwise works purely by event bubbling.
     back-scope := FocusScope {
+        // Remember the consumed Escape until key-up, after menu dismissal.
+        property <bool> calls-menu-escape-consumed: false;
         width: root.width;
         height: root.height;
         focus-on-click: false;
@@ -1406,7 +1412,10 @@ export component MainWindow inherits Window {
         key-pressed(event) => {
             if (event.text == Key.Back || (event.text == Key.Escape
                 && root.active-modal == "none"
-                && (root.composer-emoji-picker-visible || root.composer-gif-picker-visible))) {
+                && (root.calls-more-menu-visible || root.composer-emoji-picker-visible || root.composer-gif-picker-visible))) {
+                if (event.text == Key.Escape && root.calls-more-menu-visible) {
+                    self.calls-menu-escape-consumed = true;
+                }
                 root.back-pressed();
                 // Always consume. The android backend turns EventAccepted into
                 // InputStatus::Handled, which is what stops the framework's
@@ -1421,6 +1430,10 @@ export component MainWindow inherits Window {
         // would leave the release for the framework to act on — one physical
         // press then both pops a layer here and runs the default handler.
         key-released(event) => {
+            if (event.text == Key.Escape && self.calls-menu-escape-consumed) {
+                self.calls-menu-escape-consumed = false;
+                return accept;
+            }
             return event.text == Key.Back || (event.text == Key.Escape
                 && root.active-modal == "none"
                 && (root.composer-emoji-picker-visible || root.composer-gif-picker-visible)) ? accept : reject;
@@ -1465,6 +1478,10 @@ export component MainWindow inherits Window {
                 }
                 // Escape: close the top modal, else leave a non-Chats tab
                 if (event.text == Key.Escape) {
+                    if (root.calls-more-menu-visible) {
+                        root.back-pressed();
+                        return accept;
+                    }
                     if (root.active-modal != "none") {
                         root.nav-pop();
                         return accept;
@@ -2512,6 +2529,7 @@ export component MainWindow inherits Window {
             loading: root.call-history-loading;
             error-message: root.call-history-error;
             active-filter: root.call-history-filter;
+            show-more-menu <=> root.calls-more-menu-visible;
             retry => { root.call-history-retry(); }
 
             close => {
