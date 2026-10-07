@@ -23,7 +23,14 @@ fn pump(w: &MainWindow, width: f32) {
 fn visible(w: &MainWindow, label: &str) -> testing::ElementHandle {
     testing::ElementHandle::find_by_accessible_label(w, label)
         .find(|e| e.size().width > 0.0 && e.size().height > 0.0)
-        .unwrap_or_else(|| panic!("Missing visible {label}"))
+        .unwrap_or_else(|| {
+            panic!(
+                "Missing visible {label}; scroll={}, estimated rows={}..{}",
+                w.get_message_scroll_position(),
+                w.get_message_first_visible_row(),
+                w.get_message_last_visible_row()
+            )
+        })
 }
 #[test]
 fn phone_media_actions_fit_and_mixed_height_pin_seek_lands_at_header() {
