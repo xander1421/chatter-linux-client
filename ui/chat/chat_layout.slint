@@ -213,7 +213,7 @@ export component ChatLayout inherits Rectangle {
     callback scroll-to-bottom-clicked();  // Emitted when scroll-to-bottom button is clicked
 
     // Composer callbacks
-    callback send(string);
+    callback send(string) -> bool;
     callback send-edit(string, string);  // (message_id, new_text)
     callback cancel-edit();
     callback cancel-reply();
@@ -502,7 +502,7 @@ export component ChatLayout inherits Rectangle {
             reply-thumbnail: root.composer-reply-thumbnail;
 
             send(text) => {
-                root.send(text);
+                return root.send(text);
             }
             send-edit(msg-id, text) => {
                 root.send-edit(msg-id, text);

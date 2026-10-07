@@ -603,15 +603,19 @@ impl ChatState {
 
     /// Take the staged attachments for a send to `conversation`, in one
     /// update: `None`, with nothing taken, when another conversation has
-    /// become active. Each conversation owns its tray; this prevents a concurrent
-    /// take from clearing files staged after it.
+    /// become active or the account-local attachment revision has changed.
+    /// Each conversation owns its tray; a stale send cannot consume new-account files.
     pub fn take_pending_attachments_for(
         &self,
         conversation: ActiveConversation,
+        revision: u64,
     ) -> Option<Vec<PendingAttachment>> {
         let mut taken = None;
         self.store.update(|state| {
-            if state.active_conversation == conversation {
+            if state.active_conversation == conversation
+                && state.active_channel_id == conversation.channel_id()
+                && state.attachment_revision == revision
+            {
                 taken = Some(std::mem::take(&mut state.pending_attachments));
             }
         });
@@ -1576,9 +1580,9 @@ mod attachment_tray_tests {
         assert_eq!(state.get_pending_attachments()[0].filename, "b.png");
         state.set_active_conversation(a);
         assert_eq!(state.get_pending_attachments()[0].filename, "a.png");
-        assert!(state.take_pending_attachments_for(b).is_none());
+        assert!(state.take_pending_attachments_for(b, revision).is_none());
         assert_eq!(
-            state.take_pending_attachments_for(a).unwrap()[0].filename,
+            state.take_pending_attachments_for(a, revision).unwrap()[0].filename,
             "a.png"
         );
         state.set_active_conversation(b);
@@ -1598,5 +1602,23 @@ mod attachment_tray_tests {
         state.set_active_conversation(a);
         assert!(state.get_pending_attachments().is_empty());
         assert!(state.get().attachment_trays.is_empty());
+    }
+
+    #[test]
+    fn a_stale_take_cannot_consume_a_new_sessions_tray_in_the_same_conversation() {
+        let state = ChatState::new();
+        let conversation = ActiveConversation::Channel(ChannelId::new());
+        state.set_active_conversation(conversation);
+        let old_revision = state.get().attachment_revision;
+        state.add_pending_attachment(file("old.png"));
+        state.clear_attachment_trays();
+        state.add_pending_attachment(file("new.png"));
+        assert!(state.take_pending_attachments_for(conversation, old_revision).is_none());
+        assert_eq!(state.get_pending_attachments()[0].filename, "new.png");
+        assert_eq!(
+            state.take_pending_attachments_for(conversation, state.get().attachment_revision)
+                .unwrap()[0].filename,
+            "new.png",
+        );
     }
 }

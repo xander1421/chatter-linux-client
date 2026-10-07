@@ -259,7 +259,8 @@ export component MessageComposer inherits GlassSurface {
     property <length> reply-bar-height: is-replying ? 48px * Appearance.text-grow : 0px;
 
     // Callbacks
-    callback send(string);
+    // Only clear the native draft/composition once core accepts ownership.
+    callback send(string) -> bool;
     callback send-edit(string, string);  // (message_id, new_text)
     callback cancel-edit();
     callback cancel-reply();
@@ -1041,10 +1042,10 @@ export component MessageComposer inherits GlassSurface {
                                 if (root.can-send && !VoiceRecording.active) {
                                     if (root.is-editing) {
                                         root.send-edit(root.edit-message-id, root.outgoing-text);
+                                        root.reset-after-send();
                                     } else {
-                                        root.send(root.outgoing-text);
+                                        if root.send(root.outgoing-text) { root.reset-after-send(); }
                                     }
-                                    root.reset-after-send();
                                 }
                                 return accept;
                             }
@@ -1191,10 +1192,10 @@ export component MessageComposer inherits GlassSurface {
                     clicked => {
                         if (root.is-editing) {
                             root.send-edit(root.edit-message-id, root.outgoing-text);
+                            root.reset-after-send();
                         } else {
-                            root.send(root.outgoing-text);
+                            if root.send(root.outgoing-text) { root.reset-after-send(); }
                         }
-                        root.reset-after-send();
                     }
                 }
             }

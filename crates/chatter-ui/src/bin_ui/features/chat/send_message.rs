@@ -203,7 +203,7 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let has_attachments = !pending_attachments.is_empty();
 
         if text.trim().is_empty() && !has_attachments {
-            return;
+            return false;
         }
 
         // Mesh conversation open: serverless, so it must not reach the gateway
@@ -213,7 +213,7 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         #[cfg(feature = "mesh")]
         if crate::bin_ui::features::mesh::intercept_send(&ui_ctx_jarvis, &text, weak_window.clone())
         {
-            return;
+            return true;
         }
 
         // Local AI channel: every send routes to Jarvis, nothing networks.
@@ -221,7 +221,7 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         if let Some(id) = chat_state.get().active_channel_id {
             if chatter_core::client::is_jarvis_channel(&id) {
                 if text.trim().is_empty() {
-                    return;
+                    return false;
                 }
                 let ui_ctx = ui_ctx_jarvis.clone();
                 let weak = weak_window.clone();
@@ -229,7 +229,7 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     crate::bin_ui::features::jarvis::handle_jarvis_channel_send(ui_ctx, text, weak)
                         .await;
                 });
-                return;
+                return true;
             }
         }
 
@@ -242,7 +242,7 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             tokio::spawn(async move {
                 handle_jarvis_slash_command(&ui_ctx, cmd, channel_id.as_ref(), weak).await;
             });
-            return;
+            return true;
         }
 
         // @Jarvis request? Core decides: a whole-word mention in a
@@ -259,14 +259,26 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 )
                 .await;
             });
-            return;
+            return true;
         }
+
+        let Some(w) = weak_window.upgrade() else { return false };
+        let send = match ui_ctx_jarvis.begin_composer_send(text, composer_reply(&w)) {
+            Ok(send) => send,
+            Err(message) => {
+                w.set_toast_message(message.into());
+                w.set_toast_variant("error".into());
+                w.set_toast_visible(true);
+                return false;
+            }
+        };
+        if send.reply.is_some() {
+            clear_reply(&w);
+        }
+        crate::bin_ui::features::composer::render_attachments(&w, &[]);
 
         // Clear outgoing typing state (Signal: clearTypingTimers on message send)
         clear_outgoing_typing(&ui_ctx_jarvis);
-        if has_attachments {
-            chat_state.clear_pending_attachments();
-        }
 
         // Track user activity for presence updates
         {
@@ -279,40 +291,26 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let weak = weak_window.clone();
         let ui_ctx = ui_ctx_jarvis.clone();
 
-        // Determine active conversation from chat state
-        let conversation = chat_state.active_conversation();
-        if matches!(conversation, ActiveConversation::None) {
-            return;
-        }
-
-        // Capture the reply, then clear it: it belongs to this send.
-        let reply = weak.upgrade().and_then(|w| {
-            let reply = composer_reply(&w);
-            if reply.is_some() {
-                clear_reply(&w);
-            }
-            reply
-        });
-
-        if has_attachments {
-            if let Some(w) = weak.upgrade() {
-                crate::bin_ui::features::composer::render_attachments(&w, &[]);
-            }
-        }
-
-        let session_revision = ui_ctx.auth_state().get().session_revision;
-        let send = ComposerSend {
-            attempt_id: uuid::Uuid::new_v4(),
-            session_revision,
-            conversation,
-            text,
-            reply,
-            attachments: pending_attachments,
-        };
         tokio::spawn(async move {
-            deliver(weak, ui_ctx, send, send_started).await;
+            let frozen = send.clone();
+            if !deliver(weak.clone(), ui_ctx.clone(), send, send_started).await {
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak.upgrade() {
+                        recover_failed_send(&w, &ui_ctx, frozen);
+                    }
+                });
+            }
         });
+        true
     });
+}
+
+/// Recover a definite failure into its own empty composer, or park it there
+/// for later. Expired sessions and newer input are handled by core.
+pub fn recover_failed_send(w: &MainWindow, ui_ctx: &ChatterClient, send: ComposerSend) {
+    if let Some(send) = ui_ctx.recover_composer_send(send, composer_is_empty(w)) {
+        restore_composer(w, ui_ctx, send);
+    }
 }
 
 /// The reply bar's target, if the composer is replying.
@@ -375,6 +373,12 @@ pub fn take_composer_send(w: &MainWindow, ui_ctx: &ChatterClient) -> Result<Comp
 
 /// Put a failed send back into the (empty) composer it came from.
 pub fn restore_composer(w: &MainWindow, ui_ctx: &ChatterClient, send: ComposerSend) {
+    let chat = ui_ctx.chat_state().get();
+    if !ui_ctx.composer_session_is_current(send.session_revision)
+        || chat.active_conversation != send.conversation
+    {
+        return;
+    }
     w.set_composer_text(send.text.into());
     if let Some(reply) = send.reply {
         w.set_composer_reply_to_sender(reply.sender_id.into());
@@ -394,7 +398,11 @@ pub fn restore_composer(w: &MainWindow, ui_ctx: &ChatterClient, send: ComposerSe
         w.set_composer_is_replying(true);
     }
     for attachment in send.attachments {
-        ui_ctx.chat_state().add_pending_attachment(attachment);
+        ui_ctx.chat_state().add_pending_attachment_for(
+            send.conversation,
+            chat.attachment_revision,
+            attachment,
+        );
     }
     crate::bin_ui::features::composer::render_attachments(
         w,
@@ -518,6 +526,9 @@ pub async fn deliver(
                 let ui_ctx = ui_ctx.clone();
                 let frozen = send_for_delivery.clone();
                 let _ = slint::invoke_from_event_loop(move || {
+                    if !ui_ctx.composer_session_is_current(frozen.session_revision) {
+                        return;
+                    }
                     if let Some(w) = weak.upgrade() {
                         if let Some(send) =
                             ui_ctx.recover_composer_send(frozen, composer_is_empty(&w))

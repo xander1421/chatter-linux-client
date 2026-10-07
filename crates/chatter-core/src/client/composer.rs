@@ -44,11 +44,12 @@ impl ChatterClient {
         reply: Option<ComposerReply>,
     ) -> Result<ComposerSend, String> {
         let session_revision = self.auth_state().get().session_revision;
-        let conversation = self.chat_state().active_conversation();
+        let chat = self.chat_state().get();
+        let conversation = chat.active_conversation;
         if let ActiveConversation::None = conversation {
             return Err("This can't be sent here.".into());
         }
-        if !self.composer_shows_active() {
+        if chat.active_channel_id != conversation.channel_id() || !self.composer_shows_active() {
             return Err("The conversation is changing. Nothing was sent.".into());
         }
         if let ActiveConversation::Channel(id) = conversation {
@@ -72,9 +73,12 @@ impl ChatterClient {
         }
         self.ensure_send_available(conversation)
             .map_err(|e| e.to_string())?;
+        if !self.composer_session_is_current(session_revision) {
+            return Err("The account session changed. Nothing was sent.".into());
+        }
         let attachments = self
             .chat_state()
-            .take_pending_attachments_for(conversation)
+            .take_pending_attachments_for(conversation, chat.attachment_revision)
             .ok_or_else(|| "The conversation changed. Nothing was sent.".to_string())?;
         Ok(ComposerSend {
             attempt_id: uuid::Uuid::new_v4(),
@@ -88,6 +92,11 @@ impl ChatterClient {
 
     pub fn composer_session_is_current(&self, revision: u64) -> bool {
         self.auth_state().get().session_revision == revision
+    }
+
+    /// The draft currently presented, which may lag core navigation.
+    pub fn composer_owner_key(&self) -> String {
+        self.composer_owner.lock().clone()
     }
 
     /// Reject an expired intent before entering the authenticated send path.
@@ -399,7 +408,10 @@ mod tests {
         assert!(
             client
                 .chat_state()
-                .take_pending_attachments_for(ActiveConversation::Channel(a))
+                .take_pending_attachments_for(
+                    ActiveConversation::Channel(a),
+                    client.chat_state().get().attachment_revision,
+                )
                 .is_none()
         );
         assert_eq!(

@@ -72,36 +72,56 @@ fn wire_per_conversation_drafts(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
             .map(|id| id.to_string())
             .unwrap_or_default()
     };
-    let mut current = key(&ui_ctx.chat_state().get());
+    let mut rx = ui_ctx.chat_state().subscribe();
+    let initial = ui_ctx.chat_state().get();
+    let mut current = key(&initial);
+    let mut current_revision = initial.attachment_revision;
     // The composer starts out holding `current`'s draft.
     let draft = ui_ctx.swap_composer_draft("", String::new(), &current);
     if !draft.is_empty() {
         window.set_composer_text(draft.into());
     }
-    let mut rx = ui_ctx.chat_state().subscribe();
     let weak = slint::ComponentHandle::as_weak(window);
     let ctx = ui_ctx.clone();
     tokio::spawn(async move {
         loop {
             let snapshot = match rx.recv().await {
                 Ok(snap) => snap,
-                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                    Arc::new(ctx.chat_state().get())
+                }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             };
             let entering = key(&snapshot);
-            if entering == current {
+            if entering == current && snapshot.attachment_revision == current_revision {
                 continue;
             }
-            let leaving = std::mem::replace(&mut current, entering.clone());
+            current = entering;
+            let revision = snapshot.attachment_revision;
+            current_revision = revision;
             let ctx = ctx.clone();
             let weak = weak.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
-                    switch_composer_draft(&w, &ctx, &leaving, &entering);
+                    sync_composer_draft(&w, &ctx, revision);
                 }
             });
         }
     });
+}
+
+/// Apply queued navigation to the actual current conversation and draft owner.
+/// Intermediate snapshots may have been overtaken; old-account callbacks expire.
+pub fn sync_composer_draft(w: &MainWindow, ctx: &ChatterClient, revision: u64) {
+    let latest = ctx.chat_state().get();
+    if latest.attachment_revision != revision {
+        return;
+    }
+    let entering = latest.active_channel_id.map(|id| id.to_string()).unwrap_or_default();
+    let leaving = ctx.composer_owner_key();
+    if entering != leaving {
+        switch_composer_draft(w, ctx, &leaving, &entering);
+    }
 }
 
 /// Park the composer under `leaving` and load `entering`'s draft.
@@ -121,6 +141,7 @@ pub fn switch_composer_draft(w: &MainWindow, ctx: &ChatterClient, leaving: &str,
     // held aside is what gets parked, not the edit text.
     crate::bin_ui::features::chat::edit::end_edit(w);
     let text = w.get_composer_text().to_string();
+    crate::bin_ui::features::chat::send_message::clear_reply(w);
     w.set_composer_text(ctx.swap_composer_draft(leaving, text, entering).into());
     render_attachments(w, &ctx.chat_state().get_pending_attachments());
     // A GIF send that failed while this conversation was not open.

@@ -1000,7 +1000,7 @@ export component MainWindow inherits Window {
     callback view-attachment(string);  // attachment ID - for viewing/opening attachments
     callback audio-seek(string, float);  // attachment ID, position 0.0-1.0
     callback load-more();
-    callback send(string);
+    callback send(string) -> bool;
     callback send-edit(string, string);  // (message_id, new_text)
     callback cancel-edit();
     callback cancel-reply();
@@ -2054,7 +2054,7 @@ export component MainWindow inherits Window {
                         view-attachment(id) => { root.view-attachment(id); }
                         audio-seek(id, pos) => { root.audio-seek(id, pos); }
                         load-more => { root.load-more(); }
-                        send(text) => { root.send(text); }
+                        send(text) => { return root.send(text); }
                         send-edit(msg-id, text) => { root.send-edit(msg-id, text); }
                         cancel-edit => { root.cancel-edit(); }
                         cancel-reply => { root.cancel-reply(); }

@@ -6609,13 +6609,132 @@ fn sending_mid_composition_sends_the_word_at_the_caret() {
     let (_tmp, _client, w) = composer_with_caret("ac", 1);
     let sent = std::rc::Rc::new(std::cell::RefCell::new(None));
     let sink = sent.clone();
-    w.on_send(move |text| *sink.borrow_mut() = Some(text.to_string()));
+    w.on_send(move |text| {
+        *sink.borrow_mut() = Some(text.to_string());
+        true
+    });
     ime(&w, "b", false);
     w.window()
         .dispatch_event(slint::platform::WindowEvent::KeyPressed {
             text: slint::platform::Key::Return.into(),
         });
     assert_eq!(sent.borrow().as_deref(), Some("abc"));
+}
+
+#[test]
+fn refused_send_keeps_the_midline_composition_and_draft() {
+    use slint::ComponentHandle;
+    let (_tmp, _client, w) = composer_with_caret("ac", 1);
+    let sent = std::rc::Rc::new(std::cell::RefCell::new(None));
+    let sink = sent.clone();
+    w.on_send(move |text| {
+        *sink.borrow_mut() = Some(text.to_string());
+        false
+    });
+    ime(&w, "b", false);
+    w.window().dispatch_event(slint::platform::WindowEvent::KeyPressed {
+        text: slint::platform::Key::Return.into(),
+    });
+    assert_eq!(sent.borrow().as_deref(), Some("abc"));
+    w.invoke_settle_composer();
+    assert_eq!(w.get_composer_text().as_str(), "abc", "refusal erased the unsent word");
+}
+
+#[test]
+fn ordinary_send_mid_switch_refuses_without_taking_the_new_chats_tray_or_reply() {
+    let h = GifHarness::new();
+    let _guard = test_rt().enter();
+    chatter_ui::bin_ui::features::chat::send_message::wire_send(&h.w, &h.client);
+    h.w.set_composer_text("A draft".into());
+    h.w.set_composer_is_replying(true);
+    h.w.set_composer_reply_to_sender(uuid::Uuid::new_v4().to_string().into());
+    h.w.set_composer_reply_to_timestamp("1700000000000".into());
+    h.client.chat_state().set_active_conversation(
+        chatter_core::state::ActiveConversation::Channel(h.b),
+    );
+    h.stage("b.png");
+    assert!(!h.w.invoke_send("A draft".into()));
+    assert_eq!(h.w.get_composer_text().as_str(), "A draft");
+    assert!(h.w.get_composer_is_replying());
+    assert_eq!(h.staged(), ["b.png"]);
+    assert!(h.w.get_toast_visible());
+}
+
+#[test]
+fn queued_draft_navigation_uses_actual_owner_and_expires_on_session_reset() {
+    let h = GifHarness::new();
+    h.w.set_composer_text("A draft".into());
+    h.w.set_composer_is_replying(true);
+    h.stage("a.png");
+    let revision = h.client.chat_state().get().attachment_revision;
+    h.client.chat_state().set_active_conversation(
+        chatter_core::state::ActiveConversation::Channel(h.b),
+    );
+    let c = chatter_core::domain::ids::ChannelId::new();
+    h.client.chat_state().set_active_conversation(
+        chatter_core::state::ActiveConversation::Channel(c),
+    );
+    // The B callback never ran. Its replacement must park what is actually
+    // displayed under A, not the asynchronously expected intermediate B.
+    chatter_ui::bin_ui::features::composer::sync_composer_draft(&h.w, &h.client, revision);
+    assert_eq!(h.client.composer_owner_key(), c.to_string());
+    assert!(h.w.get_composer_text().is_empty());
+    assert!(!h.w.get_composer_is_replying());
+    h.open(h.a);
+    assert_eq!(h.w.get_composer_text().as_str(), "A draft");
+    assert_eq!(h.staged(), ["a.png"]);
+    h.client.clear_composer_session();
+    h.w.set_composer_text("new account draft".into());
+    chatter_ui::bin_ui::features::composer::sync_composer_draft(&h.w, &h.client, revision);
+    assert_eq!(h.w.get_composer_text().as_str(), "new account draft");
+    assert!(h.client.composer_owner_key().is_empty());
+}
+
+#[test]
+fn definite_send_failure_parks_exact_reply_and_files_without_overwriting_new_input() {
+    use slint::ComponentHandle;
+    let h = GifHarness::new();
+    let bytes = vec![25u8, 50, 75, 255, 100, 125, 150, 255];
+    let author = uuid::Uuid::new_v4().to_string();
+    h.w.set_composer_text("failed caption".into());
+    h.w.set_composer_is_replying(true);
+    h.w.set_composer_reply_to_sender(author.clone().into());
+    h.w.set_composer_reply_to_timestamp("1700000000000".into());
+    h.w.set_composer_reply_to_sender_name("Author".into());
+    h.w.set_composer_reply_preview("Photo".into());
+    h.w.set_composer_reply_thumbnail(slint::Image::from_rgba8(
+        slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(&bytes, 2, 1),
+    ));
+    h.w.set_composer_reply_has_thumbnail(true);
+    h.stage("missing.png");
+    let send = chatter_ui::bin_ui::features::chat::send_message::take_composer_send(&h.w, &h.client)
+        .unwrap();
+    // The synthetic staged file does not exist: the production attachment
+    // preparation fails before any deposit or network submission.
+    assert!(!test_rt().block_on(chatter_ui::bin_ui::features::chat::send_message::deliver(
+        h.w.as_weak(), h.client.clone(), send.clone(), std::time::Instant::now(),
+    )));
+    h.w.set_composer_text("newer draft".into());
+    chatter_ui::bin_ui::features::chat::send_message::recover_failed_send(&h.w, &h.client, send);
+    assert_eq!(h.w.get_composer_text().as_str(), "newer draft");
+    assert!(!h.w.get_composer_is_replying());
+    assert!(h.staged().is_empty());
+    h.open(h.b);
+    assert!(h.staged().is_empty());
+    assert!(!h.w.get_composer_is_replying());
+    h.open(h.a);
+    assert_eq!(h.w.get_composer_text().as_str(), "newer draft");
+    h.w.set_composer_text("".into());
+    let recovered = h.client.take_parked_send(true).unwrap();
+    chatter_ui::bin_ui::features::chat::send_message::restore_composer(&h.w, &h.client, recovered);
+    assert_eq!(h.w.get_composer_text().as_str(), "failed caption");
+    assert_eq!(h.staged(), ["missing.png"]);
+    let reply = chatter_ui::bin_ui::features::chat::send_message::composer_reply(&h.w).unwrap();
+    assert_eq!(reply.sender_id, author);
+    assert_eq!(reply.timestamp, "1700000000000");
+    assert_eq!(reply.sender_name, "Author");
+    assert_eq!(reply.preview, "Photo");
+    assert_eq!(reply.thumbnail, Some((bytes, 2, 1)));
 }
 
 #[test]

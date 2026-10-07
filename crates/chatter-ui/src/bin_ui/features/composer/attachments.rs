@@ -142,8 +142,9 @@ pub(crate) fn wire_attachment_clicked(
         }
 
         // Check if we have an active conversation BEFORE opening file picker
-        let conversation = chat_state.active_conversation();
-        let revision = chat_state.get().attachment_revision;
+        let snapshot = chat_state.get();
+        let conversation = snapshot.active_conversation;
+        let revision = snapshot.attachment_revision;
 
         tracing::info!(
             conversation = ?conversation,
@@ -260,10 +261,11 @@ pub(crate) fn wire_paste_image(window: &MainWindow, chat_state: ChatState) {
         let weak = weak_window.clone();
         let chat_state = chat_state.clone();
 
-        let conversation = chat_state.active_conversation();
-        let revision = chat_state.get().attachment_revision;
+        let snapshot = chat_state.get();
+        let conversation = snapshot.active_conversation;
+        let revision = snapshot.attachment_revision;
         // No point reading the clipboard if there's nowhere to attach.
-        if matches!(chat_state.active_conversation(), ActiveConversation::None) {
+        if matches!(conversation, ActiveConversation::None) {
             return;
         }
 

@@ -62,10 +62,11 @@ pub(crate) fn wire_drag_drop(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 fn handle_dropped_file(path: PathBuf, chat_state: &ChatState, weak: &slint::Weak<MainWindow>) {
     tracing::info!("File dropped: {:?}", path);
 
-    let conversation = chat_state.active_conversation();
-    let revision = chat_state.get().attachment_revision;
+    let snapshot = chat_state.get();
+    let conversation = snapshot.active_conversation;
+    let revision = snapshot.attachment_revision;
     // Check if we have an active conversation
-    if matches!(chat_state.active_conversation(), ActiveConversation::None) {
+    if matches!(conversation, ActiveConversation::None) {
         tracing::warn!("File dropped but no active conversation - ignoring");
         return;
     }
