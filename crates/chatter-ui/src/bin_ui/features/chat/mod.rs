@@ -9,6 +9,7 @@ mod delete;
 pub mod disappearing;
 pub(crate) mod edit;
 pub mod emoji_loader;
+mod forward_preview;
 mod helpers;
 pub mod identity_change;
 pub mod membership;

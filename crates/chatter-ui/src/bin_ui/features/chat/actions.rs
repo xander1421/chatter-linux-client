@@ -100,13 +100,23 @@ pub fn wire_forward_message_action(window: &MainWindow, ui_ctx: &Arc<ChatterClie
                 }
             };
 
-            // Lookup message text via ConversationHandle (polymorphic across all types)
+            // Keep the existing text preview; empty bodies need an attachment
+            // summary from the same captured conversation, author and clock.
             let handle = ui_ctx.conversation(conversation);
-            let preview = handle.get_message_text(&target_sender_id, target_sent_timestamp)
+            let text = handle.get_message_text(&target_sender_id, target_sent_timestamp)
                 .ok()
-                .flatten()
-                .map(|t| ui_ctx.truncate_message_preview(&t))
-                .unwrap_or_else(|| "Message".to_string());
+                .flatten();
+            let preview = super::forward_preview::message_preview(
+                text.as_deref(),
+                |text| ui_ctx.truncate_message_preview(text),
+                || handle
+                    .get_message_attachment_ids(&target_sender_id, target_sent_timestamp)
+                    .unwrap_or_default()
+                    .iter()
+                    // Keep unresolved attachments in the count as generic files.
+                    .map(|id| ui_ctx.get_attachment(id).map(|a| a.metadata))
+                    .collect::<Vec<_>>(),
+            );
 
             run_ui!(weak, |w| {
                 open_forward_modal(
