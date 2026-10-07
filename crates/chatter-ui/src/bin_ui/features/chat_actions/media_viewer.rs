@@ -186,7 +186,9 @@ fn stream_export(
         result.map_err(|_| "Download write failed")?;
         offset += expected;
     }
-    output.sync_all().map_err(|_| "Unable to finish download")
+    output
+        .sync_all()
+        .map_err(|_| "Unable to finish download".to_string())
 }
 
 fn export(client: &ChatterClient, id: &AttachmentId, copy: bool) -> Result<String, String> {

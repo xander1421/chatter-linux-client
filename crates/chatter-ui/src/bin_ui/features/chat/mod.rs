@@ -22,6 +22,7 @@ pub mod send_message;
 pub(crate) mod send_message;
 mod typing;
 
+use slint::ComponentHandle;
 use std::sync::Arc;
 
 use chatter_core::client::ChatterClient;

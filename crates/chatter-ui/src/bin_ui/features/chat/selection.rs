@@ -45,19 +45,26 @@ fn sync_model(w: &MainWindow, selected_ids: &HashSet<String>) {
     w.set_selected_message_count(selected_ids.len() as i32);
 }
 
-fn refresh_delete_everyone(w: &MainWindow, ui_ctx: &ChatterClient, selected_ids: &HashSet<String>) {
+fn refresh_delete_everyone(
+    w: &MainWindow,
+    ui_ctx: &Arc<ChatterClient>,
+    selected_ids: &HashSet<String>,
+) {
     let handle = ui_ctx.conversation(ui_ctx.chat_state().active_conversation());
     let model = w.get_messages();
     let all_ok = !selected_ids.is_empty()
-        && model.iter().filter(|row| selected_ids.contains(row.message_id.as_str())).all(|row| {
-            let Ok(author) = row.sender_id.parse::<UserId>() else {
-                return false;
-            };
-            let Ok(ts) = row.timestamp_ns.parse() else {
-                return false;
-            };
-            handle.can_delete_for_everyone(&author, ts).unwrap_or(false)
-        });
+        && model
+            .iter()
+            .filter(|row| selected_ids.contains(row.message_id.as_str()))
+            .all(|row| {
+                let Ok(author) = row.sender_id.parse::<UserId>() else {
+                    return false;
+                };
+                let Ok(ts) = row.timestamp_ns.parse() else {
+                    return false;
+                };
+                handle.can_delete_for_everyone(&author, ts).unwrap_or(false)
+            });
     w.global::<crate::SelectionChrome>()
         .set_can_delete_everyone(all_ok);
 }
@@ -264,7 +271,10 @@ pub fn wire_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         .map(|row| (row.sender_id.clone(), row.timestamp_ns.clone()))
                         .collect()
                 };
-                tracing::info!(count = targets.len(), "UI callback: bulk delete-for-everyone");
+                tracing::info!(
+                    count = targets.len(),
+                    "UI callback: bulk delete-for-everyone"
+                );
                 for (sender_id, timestamp_ns) in targets {
                     w.invoke_delete_everyone_message(sender_id, timestamp_ns);
                 }

@@ -193,8 +193,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 };
 
                 let anon_header_avatar = ui_ctx.get_anon_dm_conversation(&anon_dm_id)
-                    .and_then(|conversation| conversation.peer_avatar)
-                    .and_then(|bytes| crate::bin_ui::converters::avatar_bytes_to_image(&bytes));
+                    .and_then(|conversation| conversation.peer_avatar);
 
                 let initial_count = display_messages.len();
                 tracing::info!(dm_id = %anon_dm_id, count = initial_count, "[UI_OPEN_DM] anon DM spawn run_ui firing");
@@ -219,7 +218,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     w.set_topic(subtitle.into());
                     w.set_header_presence_status("online".into());
                     w.set_channel_has_avatar(anon_header_avatar.is_some());
-                    w.set_channel_avatar_source(anon_header_avatar.unwrap_or_default());
+                    w.set_channel_avatar_source(anon_header_avatar.as_deref().and_then(crate::bin_ui::converters::avatar_bytes_to_image).unwrap_or_default());
                     crate::bin_ui::gif_state::auto_register_gifs_from_messages(w.as_weak(), ui_ctx.clone());
                 });
                 return;
