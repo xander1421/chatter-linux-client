@@ -1126,67 +1126,34 @@ impl MessageService {
         Ok(target)
     }
 
-    /// A channel delete-for-everyone from `sender` of its message sent at
-    /// `target_sent_at`; see [`apply_delete`](Self::apply_delete).
+    /// Apply an authenticated channel author's delete in its exact channel scope.
+    /// Retain a typed tombstone even for a held target, so history replay cannot
+    /// resurrect it and collisions in other conversations or types survive.
     pub fn apply_channel_delete(
         &self,
         channel_id: &ChannelId,
         sender: &UserId,
         target_sent_at: u64,
     ) -> Result<Option<Message>, MessageError> {
-        self.apply_delete(sender, Some(*channel_id), target_sent_at)
-    }
-
-    /// Delete the message `author`'s delete-for-everyone names and return it,
-    /// for the caller to announce (`DomainEvent::MessageDeleted`). The row is
-    /// gone BEFORE the announcement, as an edit is applied before its
-    /// `MessageEdited`: a subscriber that rebuilds the chat-list preview from
-    /// storage on the event must not still find the deleted message there.
-    /// One not here yet is held (Signal-Desktop `Deletes.preload.ts:28`), so
-    /// it is never stored when it arrives (`message_modifier_repo`).
-    fn take_delete_target(
-        &self,
-        author: &UserId,
-        conversation: Option<ChannelId>,
-        target_sent_at: u64,
-    ) -> Result<Option<Message>, MessageError> {
-        match self
-            .message_repo
-            .get_by_sender_timestamp(author, target_sent_at)?
-        {
-            Some(message)
-                if message.conversation_type == ConversationType::Channel
-                    && conversation.is_some_and(|c| c == message.conversation_id) =>
-            {
-                self.message_repo.delete(&message.id)?;
-                Ok(Some(message))
-            }
-            _ => Ok(None),
+        crate::storage::repositories::message_modifier_repo::MessageModifierRepository::new(
+            self.database.clone(),
+        )
+        .queue_channel_delete(
+            sender,
+            target_sent_at,
+            *channel_id,
+            crate::util::time::TimestampNanos::now().as_u64(),
+        )?;
+        let target = self.message_repo.get_by_reaction_scope(
+            &crate::domain::reaction::ReactionScope::new(*channel_id, ConversationType::Channel),
+            sender,
+            target_sent_at,
+        )?;
+        if let Some(message) = &target {
+            // Storage must reflect deletion before the caller announces it.
+            self.message_repo.delete(&message.id)?;
         }
-    }
-
-    fn apply_delete(
-        &self,
-        author: &UserId,
-        conversation: Option<ChannelId>,
-        target_sent_at: u64,
-    ) -> Result<Option<Message>, MessageError> {
-        if let Some(message) = self.take_delete_target(author, conversation, target_sent_at)? {
-            return Ok(Some(message));
-        }
-        match self
-            .message_repo
-            .get_by_sender_timestamp(author, target_sent_at)?
-        {
-            Some(_) => Ok(None),
-            None => {
-                crate::storage::repositories::message_modifier_repo::MessageModifierRepository::new(
-                    self.database.clone(),
-                )
-                .queue_delete(author, target_sent_at, conversation, crate::util::time::TimestampNanos::now().as_u64())?;
-                Ok(None)
-            }
-        }
+        Ok(target)
     }
 
     /// Add or remove a reaction on a message and persist to DB.
@@ -2382,6 +2349,163 @@ mod inbound_target_tests {
                     svc.message_repo.get(&dm.id).unwrap().is_none(),
                     "redelivery must not resurrect deleted DM"
                 );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn channel_delete_dispatch_is_exact_and_retains_typed_late_arrival_tombstone() {
+        use crate::inbox::{polling::device::dispatch_control_content, state::InboxStats};
+        use crate::services::inbox_processor::InboxEventProcessor;
+        use parking_lot::RwLock;
+        use tokio::sync::broadcast;
+
+        let f = fixture();
+        let svc = f.client.messages();
+        let processor = InboxEventProcessor::from_client(&f.client);
+        let (tx, mut rx) = broadcast::channel(16);
+        let stats = Arc::new(RwLock::new(InboxStats::default()));
+        let other_channel = ChannelId::new();
+        // Insert other types first to expose the old global LIMIT 1 lookup.
+        for (ts, held, explicit_author) in [(930, true, true), (931, false, false)] {
+            let mut survivors = Vec::new();
+            for (conversation, kind, author) in [
+                (f.channel, ConversationType::ServerDm, f.carol),
+                (f.channel, ConversationType::AnonDm, f.carol),
+                (f.channel, ConversationType::AnonGroup, f.carol),
+                (other_channel, ConversationType::Channel, f.carol),
+                (f.channel, ConversationType::Channel, f.me),
+            ] {
+                let row =
+                    Message::new_text(conversation, kind, Some(author), "survivor".into(), ts);
+                svc.message_repo.insert(&row).unwrap();
+                survivors.push(row);
+            }
+            let target = Message::new_text(
+                f.channel,
+                ConversationType::Channel,
+                Some(f.carol),
+                "target".into(),
+                ts,
+            );
+            if held {
+                svc.message_repo.insert(&target).unwrap();
+            }
+            let mut domain = f.client.event_bus().subscribe_domain();
+            let author = f.carol.to_string();
+            let channel = f.channel.to_string();
+            let content = crate::services::gateway::builders::build_targeted_delete_content(
+                ts,
+                explicit_author.then_some(author.as_str()),
+                Some(&channel),
+            );
+            dispatch_control_content(
+                content.content.unwrap(),
+                &f.carol,
+                1,
+                "channel delete",
+                2,
+                &tx,
+                &stats,
+            );
+            processor.process(&rx.try_recv().unwrap()).await;
+            if held {
+                match domain.try_recv().unwrap() {
+                    crate::inbox::handlers::DomainEvent::MessageDeleted {
+                        message_id,
+                        author_id,
+                        channel_id,
+                        target_sent_timestamp,
+                    } => {
+                        assert_eq!(message_id, target.id);
+                        assert_eq!(author_id, f.carol);
+                        assert_eq!(channel_id, Some(f.channel));
+                        assert_eq!(target_sent_timestamp, ts);
+                    }
+                    event => panic!("unexpected event: {event:?}"),
+                }
+            } else {
+                assert!(domain.try_recv().is_err());
+            }
+            assert!(svc.message_repo.get(&target.id).unwrap().is_none());
+            for _ in 0..2 {
+                svc.message_repo.insert(&target).unwrap();
+                assert!(svc.message_repo.get(&target.id).unwrap().is_none());
+            }
+            for row in survivors {
+                assert!(svc.message_repo.get(&row.id).unwrap().is_some());
+                svc.message_repo.delete(&row.id).unwrap();
+                svc.message_repo.insert(&row).unwrap();
+                assert!(svc.message_repo.get(&row.id).unwrap().is_some());
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn channel_delete_dispatch_rejects_forged_author_and_destination_without_tombstone() {
+        use crate::inbox::{polling::device::dispatch_control_content, state::InboxStats};
+        use crate::services::inbox_processor::InboxEventProcessor;
+        use parking_lot::RwLock;
+        use tokio::sync::broadcast;
+
+        let f = fixture();
+        let svc = f.client.messages();
+        let processor = InboxEventProcessor::from_client(&f.client);
+        let (tx, mut rx) = broadcast::channel(16);
+        let stats = Arc::new(RwLock::new(InboxStats::default()));
+        for (index, author, destination) in [
+            (0, Some(f.me.to_string()), None),
+            (1, Some(String::new()), None),
+            (2, Some("invalid".into()), None),
+            (3, Some(f.carol.to_string()), Some(f.me.to_string())),
+            (4, None, Some(String::new())),
+        ] {
+            let ts = 940 + index;
+            let targets: Vec<_> = [f.me, f.carol]
+                .into_iter()
+                .map(|sender| {
+                    Message::new_text(
+                        f.channel,
+                        ConversationType::Channel,
+                        Some(sender),
+                        "protected".into(),
+                        ts,
+                    )
+                })
+                .collect();
+            for row in &targets {
+                svc.message_repo.insert(row).unwrap();
+            }
+            let mut domain = f.client.event_bus().subscribe_domain();
+            let mut content = crate::services::gateway::builders::build_targeted_delete_content(
+                ts,
+                author.as_deref(),
+                Some(&f.channel.to_string()),
+            );
+            if let Some(crate::proto::content_v1::content::Content::DataMessage(dm)) =
+                &mut content.content
+            {
+                dm.delete.as_mut().unwrap().destination_user_id = destination;
+            }
+            dispatch_control_content(
+                content.content.unwrap(),
+                &f.carol,
+                1,
+                "forged channel delete",
+                2,
+                &tx,
+                &stats,
+            );
+            if let Ok(event) = rx.try_recv() {
+                processor.process(&event).await;
+                panic!("forged channel delete reached the processor");
+            }
+            assert!(domain.try_recv().is_err());
+            for row in targets {
+                assert!(svc.message_repo.get(&row.id).unwrap().is_some());
+                svc.message_repo.delete(&row.id).unwrap();
+                svc.message_repo.insert(&row).unwrap();
+                assert!(svc.message_repo.get(&row.id).unwrap().is_some());
             }
         }
     }

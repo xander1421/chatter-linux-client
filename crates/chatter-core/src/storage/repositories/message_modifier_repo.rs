@@ -189,6 +189,30 @@ impl MessageModifierRepository {
         )
     }
 
+    /// Author-only channel tombstone, isolated by both channel and type.
+    /// A separate uniqueness namespace preserves the legacy and typed DM paths.
+    pub fn queue_channel_delete(
+        &self,
+        author: &UserId,
+        target_sent_at: u64,
+        channel: ChannelId,
+        now: u64,
+    ) -> Result<(), StorageError> {
+        let scope_key = format!("channel-delete:{}", channel);
+        self.upsert(
+            author,
+            target_sent_at,
+            "delete",
+            None,
+            &scope_key,
+            Some(channel),
+            Some(ConversationType::Channel.as_str()),
+            0,
+            false,
+            now,
+        )
+    }
+
     /// Typed DM tombstone: author is one of the authenticated DM participants.
     /// The existing body field carries the type; emoji namespaces distinct DMs
     /// in the legacy uniqueness key without changing the schema.
