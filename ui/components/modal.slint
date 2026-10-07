@@ -125,6 +125,9 @@ export component Modal inherits Rectangle {
             // floating dialog they close (X, TRAILING edge). Exactly one of
             // the two exists at a time — never both.
             ModalHeader {
+                // Sort this shared instance above bodies whose lists extend
+                // behind the header. A z on its definition cannot order siblings.
+                z: 1;
                 full-screen: root.full-screen;
                 root-screen: root.root-screen;
                 show-more: root.show-more;

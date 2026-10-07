@@ -49,6 +49,9 @@ export component CallHistoryScreen inherits Rectangle {
     property <bool> show-clear-confirm: false;
     // The header ⋮ menu, which holds Clear call history.
     property <bool> show-more-menu: false;
+    // Desktop has a close button after overflow; mobile has overflow last.
+    property <length> more-menu-trailing-inset: root.mobile-mode ? 0px
+        : Spacing.header-action-box + Spacing.header-action-gap;
     changed show-modal => {
         self.show-clear-confirm = false;
         self.show-more-menu = false;
@@ -361,9 +364,9 @@ export component CallHistoryScreen inherits Rectangle {
             }
         }
 
-            // Anchored under the header ⋮ (trailing control), not the window
-            // corner: this overlay is the Modal body, whose right edge lines
-            // up with that button.
+            // The Modal body shares the header's padded edges. On desktop,
+            // reserve the trailing close button so the menu aligns with ⋮,
+            // even when the card is centred in a much wider window.
             if root.show-more-menu: Rectangle {
                 width: 100%;
                 height: 100%;
@@ -375,9 +378,10 @@ export component CallHistoryScreen inherits Rectangle {
                 GlassSurface {
                     material-level: 3;
                     elevation: 4;
-                    x: parent.width - self.width;
+                    x: parent.width - root.more-menu-trailing-inset - self.width;
                     y: 0;
-                    width: menu-label.preferred-width + 2 * Spacing.lg;
+                    width: min(menu-label.preferred-width + 2 * Spacing.lg,
+                        max(0px, parent.width - root.more-menu-trailing-inset));
                     height: Spacing.touch-target-min;
                     border-radius: Spacing.radius-xl;
 
