@@ -24,7 +24,10 @@ static NEXT: AtomicI64 = AtomicI64::new(1);
 pub fn init() {
     chatter_core::services::attachment::register_video_thumbnail_extractor(extract);
 }
-fn extract(source: Arc<CbcRangeDecryptor>) -> Result<ImageDecodeResult, String> {
+fn extract(
+    source: Arc<CbcRangeDecryptor>,
+    owner: ThumbnailOwner,
+) -> Result<ImageDecodeResult, String> {
     let token = NEXT.fetch_add(1, Ordering::Relaxed);
     if token <= 0 {
         return Err("video preview token exhausted".into());
