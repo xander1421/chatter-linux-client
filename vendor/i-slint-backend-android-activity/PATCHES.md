@@ -123,27 +123,49 @@ are GL on a SurfaceView, so `dumpsys gfxinfo` does not see them).
   through `TextInputBridge::push` with the owner (a monotonic number per
   `ime_client`) and generation it was computed under; an accepted send
   (`consume_text_input`, called by the app right after it clears the field; a
-  no-op unless the IME's client is that now-empty field) bumps the generation,
-  marks the reset pending and publishes an immutable pending reset through
-  `TextInputBridge::consume` without any lock or wait (the listener path takes
-  the android_app mutex on the UI thread, so a Java lock there could deadlock
-  the input iterator). On the UI thread every mutating IME operation is gated:
-  it claims a pending reset first (empty state applied, GameActivity's native
-  copy refreshed through `stateChanged`, generation acknowledged to the
-  backend with no text), runs, and if a reset was published while it ran it is
-  claimed then and the operation runs again on the new generation, so no
-  operation after the accepted consumption is lost to the posted fallback
-  claim; claims are compare-and-set once-only, and nested calls (`setState`'s
-  own `setSelection`/`setComposingRegion`, `processKeyEvent`'s parts) are not
-  gated again. Owners are monotonic on both sides: a push for an older field is
-  ignored, a reset for a newer field waits for that field's first push (which
-  establishes the owner before claiming), a push older than the pending reset
-  of its field claims the reset and is dropped. Every snapshot the IME produces
-  is tagged with the owner and generation applied when it was made; the backend
-  drops it only by that provenance, never by content, and `finish_composing`
-  replays nothing while the reset is unacknowledged. With a bridge bound
-  android-activity's `TextEvent` is a wake-up only; without one the old path is
-  unchanged. Limit: an IME operation the IME computed against the consumed text
-  (a composing-text update it dispatched before it learned of the restart)
-  applies as the IME formed it, to the new generation; no timer, focus change or
-  content rule second-guesses it.
+  no-op unless the IME's client is that now-empty multi-line field — the
+  composer, never a single-line search box) bumps the generation, marks the
+  reset pending and publishes an immutable pending reset through
+  `TextInputBridge::consume`. Both publications put an immutable request into
+  a slot under ONE Java monitor and return (the latest push replaces an
+  unclaimed one); on the UI thread every mutating IME operation, the
+  connection's creation (`onCreateInputConnection`) and a posted fallback take
+  the same monitor, claim what is pending — the push first, which establishes
+  the owner, then the reset (empty state applied, GameActivity's native copy
+  refreshed through `stateChanged`, generation acknowledged to the backend
+  with no text) — and only then run the operation, whose own snapshot
+  publication (`endBatchEdit`/`onKey`) happens inside the same hold. A request
+  is therefore claimed before an operation or published after it completed;
+  nothing is replayed. The native thread's wait is bounded by one IME
+  operation and never by the UI event loop; the monitor cannot deadlock
+  because the native thread reaches the bridge only from Slint callbacks and
+  by then holds no lock the UI thread needs (0.6.1 `lib.rs
+  input_events_iter` drops the inner read guard before building the iterator,
+  `game_activity/mod.rs InputIteratorInner::from` ends `with_locked_app`
+  before any callback and the C `android_app_swap_input_buffers` unlocks
+  before returning, `InputIteratorInner::next` holds no lock around the
+  callbacks, `GameTextInput::getState` copies under `currentStateMutex_` and
+  releases it before dispatch), while the UI thread under the monitor only
+  enqueues to the Slint event loop (`invoke_from_event_loop` pushes and
+  wakes), briefly takes `currentStateMutex_` and the `android_app` mutex in
+  `onTextInputEventNative` (no callbacks under them) and makes the IMM
+  `restartInput` binder call. For the first state of a field to be the one
+  the IME attaches to, Enable now publishes the state BEFORE
+  `show_soft_input` (which travels the work pipe; a push is a Handler message
+  plus the synchronous slot). Owners and generations are monotonic on both
+  sides: a push for an older field is ignored, a reset for a newer field
+  waits for that field's first push, a push older than the pending reset of
+  its field claims the reset and is dropped, a push newer than it supersedes
+  and acknowledges it. Every snapshot the IME produces is tagged with the
+  owner and generation applied when it was made; the backend drops it only by
+  that provenance, never by content, and `finish_composing` replays nothing
+  while the reset is unacknowledged. Activity replacement inside one process
+  does not occur (`android_main` ends with `_exit(0)`, chatter-ui `lib.rs`),
+  so no cross-process session token is carried; a gate that is not the
+  installed one claims and publishes nothing regardless. With a bridge bound
+  android-activity's `TextEvent` is a wake-up only; without one the old path
+  is unchanged. Limit: an IME operation that completed before the accepted
+  send's publication is part of the consumed text even if its snapshot
+  reaches the backend after the consumption (dropped by generation); one that
+  starts after it runs on the new generation as the IME formed it; no timer,
+  focus change or content rule second-guesses either.

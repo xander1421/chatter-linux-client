@@ -274,7 +274,7 @@ impl i_slint_core::window::WindowAdapterInternal for AndroidWindowAdapter {
     fn input_method_request(&self, request: InputMethodRequest) {
         use android_activity::input::{TextInputState, TextSpan};
 
-        let props = match request {
+        let (props, show) = match request {
             InputMethodRequest::Enable(props) => {
                 // NO composition reset here. Slint 1.17 fires Enable
                 // repeatedly (§112c), and set_text_input_state calls
@@ -355,12 +355,20 @@ impl i_slint_core::window::WindowAdapterInternal for AndroidWindowAdapter {
                 // for an already visible keyboard; resetting the echo guards
                 // then repeats the selected-state restart too. Neither belongs
                 // to long-press selection (which must keep IME/insets stable).
-                if !self.long_press_selection.get() {
-                    self.app.show_soft_input(true);
+                // Chatter patch: the show itself comes AFTER the push below.
+                // `TextInputBridge::push` returns with the state in the gate's
+                // slot and the gate applies it when the IME attaches
+                // (`onCreateInputConnection`) or before its first operation,
+                // so the connection the IME gets is this field's, not an empty
+                // Editable the first owner state would later overwrite.
+                // `show_soft_input` travels the native work pipe and a push a
+                // Handler message: with show first their order was undefined.
+                let show = !self.long_press_selection.get();
+                if show {
                     *self.last_ime_epoch.borrow_mut() = None;
                     self.ime_states_seen.borrow_mut().clear();
                 }
-                props
+                (props, show)
             }
             InputMethodRequest::Update(props) => {
                 if self.ime_client.borrow().is_none() {
@@ -370,7 +378,7 @@ impl i_slint_core::window::WindowAdapterInternal for AndroidWindowAdapter {
                     *self.deferred_ime_update.borrow_mut() = Some(props);
                     return;
                 }
-                props
+                (props, false)
             }
             InputMethodRequest::Disable => {
                 // Native focus loss (SAF picker / pause) is not a text edit.
@@ -393,6 +401,7 @@ impl i_slint_core::window::WindowAdapterInternal for AndroidWindowAdapter {
         self.java_helper
             .update_selection_menu(&props, self.window.scale_factor(), self.show_cursor_handles.get())
             .unwrap_or_else(|e| print_jni_error(&self.app, e));
+        'push: {
         let mut text = props.text.to_string();
         if !props.preedit_text.is_empty() {
             text.insert_str(props.preedit_offset, props.preedit_text.as_str());
@@ -474,7 +483,7 @@ impl i_slint_core::window::WindowAdapterInternal for AndroidWindowAdapter {
             && sel_end == 0
             && self.last_pushed_cursor.get() > 0
         {
-            return;
+            break 'push;
         }
 
         // Chatter patch: never echo the IME's own text back at it.
@@ -500,7 +509,7 @@ impl i_slint_core::window::WindowAdapterInternal for AndroidWindowAdapter {
         if self.last_ime_text.borrow().as_deref() == Some(text.as_str())
             && (compose.is_some() || self.last_ime_selection.get() == (sel_start, sel_end))
         {
-            return;
+            break 'push;
         }
 
         // Slint's delayed notification of the caret `finish_composing` set,
@@ -513,11 +522,11 @@ impl i_slint_core::window::WindowAdapterInternal for AndroidWindowAdapter {
             && self.last_ime_selection.get() != (sel_end, sel_end)
         {
             self.stale_commit_cursor.set(None);
-            return;
+            break 'push;
         }
         let key = (text.clone(), sel_start, sel_end, compose);
         if self.ime_states_seen.borrow().contains(&key) {
-            return;
+            break 'push;
         }
         self.ime_states_seen.borrow_mut().push(key);
         self.had_compose.set(compose.is_some());
@@ -529,6 +538,10 @@ impl i_slint_core::window::WindowAdapterInternal for AndroidWindowAdapter {
             selection: TextSpan { start: sel_start, end: sel_end },
             compose_region: compose.map(|(start, end)| TextSpan { start, end }),
         });
+        }
+        if show {
+            self.app.show_soft_input(true);
+        }
     }
 
     /// Modals and the conversation pane re-take focus when they close
@@ -573,6 +586,11 @@ impl AndroidWindowAdapter {
     /// Drop everything recorded about the current client's editing session.
     fn forget_ime_session(&self) {
         self.dismiss_selection_menu();
+        // Chatter patch: a reset still unacknowledged belongs to the old
+        // owner; its acknowledgement will not match the new one
+        // (`handle_text_input_ack`), so the flag would otherwise keep
+        // `finish_composing` inert for the next field.
+        self.reset_pending.set(false);
         self.had_compose.set(false);
         *self.last_ime_text.borrow_mut() = None;
         self.last_ime_selection.set((0, 0));
@@ -863,7 +881,10 @@ impl AndroidWindowAdapter {
             return;
         };
         let field = field.as_pin_ref();
-        if !field.text().is_empty() || !field.preedit_text().is_empty() {
+        // The composer is the one multi-line field a send consumes; a
+        // single-line one (the GIF picker's search box behind an attachment
+        // send) is never the consumed client, empty or not.
+        if field.single_line() || !field.text().is_empty() || !field.preedit_text().is_empty() {
             return;
         }
         let generation = self.ime_generation.get() + 1;

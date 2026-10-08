@@ -12,8 +12,6 @@ import com.google.androidgamesdk.gametextinput.InputConnection;
 import com.google.androidgamesdk.gametextinput.Listener;
 import com.google.androidgamesdk.gametextinput.Settings;
 import com.google.androidgamesdk.gametextinput.State;
-import java.util.concurrent.atomic.AtomicLong;
-import java.util.concurrent.atomic.AtomicReference;
 
 /**
  * The producer gate for the Slint text field's native copy.
@@ -33,33 +31,64 @@ import java.util.concurrent.atomic.AtomicReference;
  * {@code GameActivity.onCreate} calls {@code setInputConnectionNative}, so the
  * native show/hide/restart calls land on the gate and its
  * {@code softKeyboardActive} flag is the one {@code onCreateInputConnection}
- * consults. It is the point where the two copies are ordered:
+ * consults. It is the point where the two copies are ordered, by one monitor
+ * ({@link #LOCK}):
  *
  * <ul>
- * <li>Native accepts a send: {@link #publishReset} stores an immutable pending
- *     reset {@code (owner, generation)} at once, from any thread, with no lock
- *     and no wait on the UI thread, and bumps a publication counter.</li>
- * <li>Every mutating IME operation runs through {@link #gated}: on the UI
- *     thread it claims a pending reset first (the Editable is emptied and
- *     input restarted), then runs; if a reset was published while it ran,
- *     the operation had landed on the consumed text, so the reset is claimed
- *     and the operation runs again on the new generation. A posted fallback
- *     claims a reset no operation came for. Claims are once-only
- *     (compare-and-set) and nested calls (setState's own setSelection,
- *     processKeyEvent's parts) are not gated again.</li>
- * <li>A claim applies the empty state, tells GameActivity's native copy
- *     (setState itself notifies nobody) and acknowledges the generation to
- *     Slint; the acknowledgement carries no text and never clears anything.</li>
+ * <li>The native thread publishes two kinds of immutable request into slots
+ *     under the monitor and returns: Slint's state for the field ({@link
+ *     #push}; the latest replaces any earlier one still waiting) and an
+ *     accepted send's consumption of it ({@link #publishReset}). It never
+ *     waits on the UI thread's event loop; it waits at most for one IME
+ *     operation to finish (a bounded monitor wait, see below).</li>
+ * <li>On the UI thread, every mutating IME operation ({@link #gated}), the
+ *     creation of the connection ({@link GatedSurfaceView#onCreateInputConnection})
+ *     and a posted fallback each take the monitor, claim whatever is pending
+ *     ({@link #claimAll}: the push first, which establishes the field's owner,
+ *     then the reset) and only then run the operation. The operation's own
+ *     snapshot publication (GameTextInput 4.4.0 publishes from
+ *     {@code endBatchEdit} and {@code onKey} only, both gated) happens inside
+ *     the same hold, so a request is either claimed before the operation or
+ *     published after it completed: nothing is run twice and no operation
+ *     lands between a claim and its application. Nested calls (setState's
+ *     own setSelection/setComposingRegion/restartInput, processKeyEvent's
+ *     parts) belong to the outer operation (depth guard).</li>
+ * <li>A claim of a reset applies the empty state, tells GameActivity's native
+ *     copy (setState itself notifies nobody) and acknowledges the generation
+ *     to Slint; a push computed after the consumption applies instead of the
+ *     reset and acknowledges it the same way with the state it applied. The
+ *     acknowledgement carries no text and never clears anything.</li>
  * <li>Every snapshot the IME produces is tagged with the owner and the
  *     generation applied when it was produced ({@link #stateChanged}), so the
  *     native side drops snapshots from before the reset by provenance, never
  *     by content.</li>
- * <li>Every outbound Slint state ({@link #push}) is versioned by owner and
- *     generation, both monotonic: a push for an older field is ignored, a
- *     push issued before the accepted send of the same field claims the reset
- *     and is dropped, and a push establishes its field's owner before any
- *     claim for that field can happen.</li>
+ * <li>Owners and generations are monotonic: a push for an older field is
+ *     ignored, a push issued before the accepted send of the same field claims
+ *     the reset and is dropped, a push issued after it supersedes the reset
+ *     (and acknowledges it), and a reset for a field the IME has not served
+ *     yet waits for that field's first push, which the backend publishes
+ *     before it asks native code to show the keyboard.</li>
  * </ul>
+ *
+ * Why a monitor is safe here (android-activity 0.6.1, games-activity 4.4.0):
+ * the native thread reaches {@link #push}/{@link #publishReset} only from
+ * Slint callbacks, and by then holds no lock the UI thread needs — the input
+ * iterator's app lock ends before any callback ({@code game_activity/mod.rs}
+ * {@code InputIteratorInner::from}, {@code lib.rs input_events_iter}; the C
+ * buffer swap unlocks before returning) and the text-state copy under
+ * {@code currentStateMutex_} completes before the event is dispatched. The UI
+ * thread, holding the monitor, only enqueues to the Slint event loop (JNI
+ * {@link #nativeTextInputState}/{@link #nativeTextInputAck} queue and wake),
+ * briefly takes {@code currentStateMutex_} and the {@code android_app} mutex
+ * inside {@code onTextInputEventNative} (no callbacks under them), and makes
+ * the IMM {@code restartInput} binder call. Neither side waits for the other's
+ * event loop.
+ *
+ * Activity replacement never happens inside one process: {@code android_main}
+ * ends with {@code _exit(0)} (chatter-ui {@code lib.rs}), so a new Activity is
+ * a new process with fresh statics and a fresh backend. Should a second gate
+ * ever be constructed anyway, the earlier one is retired: it claims nothing
+ * and publishes nothing.
  *
  * In this package so it can replace {@code InputEnabledSurfaceView.mInputConnection}
  * (package-private) the way the view's own constructor filled it.
@@ -76,23 +105,40 @@ public final class ChatterTextInputGate extends InputConnection implements Liste
         }
     }
 
+    /** Slint's state for the field {@code owner}, computed at {@code generation}; immutable. */
+    private static final class PendingPush {
+        final State state;
+        final long owner;
+        final long generation;
+
+        PendingPush(State state, long owner, long generation) {
+            this.state = state;
+            this.owner = owner;
+            this.generation = generation;
+        }
+    }
+
     private interface Operation {
         boolean run();
     }
 
     private static final State EMPTY = new State("", 0, 0, -1, -1);
-    private static final AtomicReference<PendingReset> PENDING = new AtomicReference<>();
-    /** Bumped on every publication, so an operation can see one that landed while it ran. */
-    private static final AtomicLong PUBLISHED = new AtomicLong();
+    /** Orders the native thread's publications with the UI thread's operations. */
+    private static final Object LOCK = new Object();
+    /** Guarded by {@link #LOCK}. */
+    private static PendingReset pendingReset;
+    /** Guarded by {@link #LOCK}. The latest push replaces an unclaimed earlier one. */
+    private static PendingPush pendingPush;
+    /** Guarded by {@link #LOCK}. */
+    private static ChatterTextInputGate installed;
     private static final Handler MAIN = new Handler(Looper.getMainLooper());
-    private static volatile ChatterTextInputGate installed;
 
     private final GameActivity activity;
     /** UI thread only: the field the IME serves, as native numbers it; monotonic. */
     private long owner;
     /** UI thread only: the generation the Editable reflects (last reset or push). */
     private long generation;
-    /** UI thread only: > 0 while a gated operation, a reset or a push is being applied. */
+    /** UI thread only: > 0 while a gated operation or a claim is running. */
     private int depth;
 
     private ChatterTextInputGate(GameActivity activity, View view, Settings settings) {
@@ -107,127 +153,166 @@ public final class ChatterTextInputGate extends InputConnection implements Liste
      * native code, so the gate is what native code holds.
      */
     public static class GatedSurfaceView extends GameActivity.InputEnabledSurfaceView {
+        private final ChatterTextInputGate gate;
+
         public GatedSurfaceView(GameActivity activity) {
             activity.super(activity);
             // The connection the superclass constructor built; same settings as
             // it derived (key events forwarded for an untyped field).
             InputConnection previous = mInputConnection;
             EditorInfo info = previous != null ? previous.getEditorInfo() : activity.getImeEditorInfo();
-            ChatterTextInputGate gate =
-                    new ChatterTextInputGate(activity, this, new Settings(info, info.inputType == 0));
+            gate = new ChatterTextInputGate(activity, this, new Settings(info, info.inputType == 0));
             gate.setListener(gate);
             mInputConnection = gate;
-            installed = gate;
+            synchronized (LOCK) {
+                installed = gate;
+            }
+        }
+
+        /**
+         * The IME attaches (native show's restartInput, a window focus
+         * change): the field's pending state and reset are applied first, so
+         * the connection the IME gets already reflects them. A nested call
+         * from that application's own restartInput is not a claim (depth).
+         */
+        @Override
+        public InputConnection onCreateInputConnection(EditorInfo outAttrs) {
+            gate.claimAllOutside();
+            return super.onCreateInputConnection(outAttrs);
         }
     }
 
-    // ---- Native side (any thread, never waits) ------------------------------
+    // ---- Native side (any thread; bounded monitor wait, no event-loop wait) ----
 
     /** Native accepted a send of the field {@code owner}: its Editable is consumed as of now. */
     public static void publishReset(long owner, long generation) {
-        PENDING.set(new PendingReset(owner, generation));
-        PUBLISHED.incrementAndGet();
+        synchronized (LOCK) {
+            pendingReset = new PendingReset(owner, generation);
+        }
         MAIN.post(ChatterTextInputGate::claimFromHandler);
     }
 
     /** Slint's state for the field {@code owner}, computed at {@code generation}. */
     public static void push(
             String text, int selStart, int selEnd, int compStart, int compEnd, long owner, long generation) {
-        MAIN.post(() -> {
-            ChatterTextInputGate gate = installed;
-            if (gate != null) {
-                gate.applyPush(text, selStart, selEnd, compStart, compEnd, owner, generation);
-            }
-        });
+        PendingPush push =
+                new PendingPush(new State(text, selStart, selEnd, compStart, compEnd), owner, generation);
+        synchronized (LOCK) {
+            pendingPush = push;
+        }
+        MAIN.post(ChatterTextInputGate::claimFromHandler);
     }
 
+    /** The fallback: whatever no IME operation came for is applied from here. */
     private static void claimFromHandler() {
-        ChatterTextInputGate gate = installed;
+        ChatterTextInputGate gate;
+        synchronized (LOCK) {
+            gate = installed;
+        }
         if (gate != null) {
-            gate.claim();
+            gate.claimAllOutside();
         }
     }
 
     // ---- UI thread ---------------------------------------------------------
 
+    /** Claim outside any gated operation; a no-op inside one. */
+    private void claimAllOutside() {
+        if (depth > 0) {
+            return;
+        }
+        synchronized (LOCK) {
+            depth++;
+            try {
+                claimAll();
+            } finally {
+                depth--;
+            }
+        }
+    }
+
+    /** {@link #LOCK} held, {@code depth > 0}: apply the pending push, then the pending reset. */
+    private void claimAll() {
+        if (installed != this) {
+            return;
+        }
+        PendingPush push = pendingPush;
+        pendingPush = null;
+        if (push != null) {
+            applyPush(push);
+        }
+        claimReset();
+    }
+
     /**
      * Apply the pending reset if it is this field's; once. A reset for a field
      * older than the one the IME serves is moot and dropped; one for a newer
      * field waits for that field's first push, which establishes the owner.
-     * Returns whether a reset was applied.
      */
-    private boolean claim() {
-        PendingReset reset = PENDING.get();
+    private void claimReset() {
+        PendingReset reset = pendingReset;
         if (reset == null) {
-            return false;
+            return;
         }
         if (reset.owner < owner) {
-            PENDING.compareAndSet(reset, null);
-            return false;
+            pendingReset = null;
+            return;
         }
         if (reset.owner > owner) {
-            return false;
+            return;
         }
-        if (!PENDING.compareAndSet(reset, null)) {
-            return false;
-        }
-        applyReset(reset.generation);
-        return true;
-    }
-
-    private void applyReset(long resetGeneration) {
-        generation = resetGeneration;
-        depth++;
-        try {
-            setState(EMPTY);
-        } finally {
-            depth--;
-        }
+        pendingReset = null;
+        generation = reset.generation;
+        setState(EMPTY);
         // setState notifies nobody: refresh GameActivity's native copy of the
         // state, then acknowledge the generation to Slint. The acknowledgement
         // carries no text; Slint's own copy is left as it is.
         activity.stateChanged(EMPTY, false);
-        nativeTextInputAck(owner, resetGeneration);
+        nativeTextInputAck(owner, reset.generation);
     }
 
-    private void applyPush(
-            String text, int selStart, int selEnd, int compStart, int compEnd, long pushOwner, long pushGeneration) {
-        if (pushOwner < owner) {
+    private void applyPush(PendingPush push) {
+        if (push.owner < owner) {
             // A field the IME no longer serves: never resurrect it.
             return;
         }
         // Establish the owner first, so a reset published for this field
-        // before its first push arrived can be claimed from here on.
-        owner = pushOwner;
-        PendingReset reset = PENDING.get();
-        if (reset != null && reset.owner == owner) {
-            if (pushGeneration < reset.generation) {
-                // Issued before the send was accepted: the reset supersedes it.
-                claim();
-                return;
-            }
-            // Already reflects the consumption.
-            PENDING.compareAndSet(reset, null);
-        } else if (reset != null && reset.owner < owner) {
+        // before its first push arrived can be claimed from here on. A new
+        // field's first push is never stale, whatever generation the
+        // previous field's Editable reflected.
+        boolean newOwner = push.owner > owner;
+        owner = push.owner;
+        PendingReset reset = pendingReset;
+        if (reset != null && reset.owner < owner) {
             // The IME moved to a newer field since that send was accepted.
-            PENDING.compareAndSet(reset, null);
+            pendingReset = null;
+            reset = null;
         }
-        if (pushGeneration < generation) {
+        if (reset != null && reset.owner == owner && push.generation < reset.generation) {
+            // Issued before the send was accepted: the reset supersedes it.
+            claimReset();
             return;
         }
-        generation = pushGeneration;
-        depth++;
-        try {
-            setState(new State(text, selStart, selEnd, compStart, compEnd));
-        } finally {
-            depth--;
+        if (!newOwner && push.generation < generation) {
+            return;
+        }
+        generation = push.generation;
+        setState(push.state);
+        if (reset != null && reset.owner == owner) {
+            // Computed after the consumption: applying it is the reset. Give
+            // GameActivity's native copy the state actually applied (setState
+            // notifies nobody), then acknowledge the consumption.
+            pendingReset = null;
+            activity.stateChanged(push.state, false);
+            nativeTextInputAck(owner, reset.generation);
         }
     }
 
     /**
-     * Run one of the IME's mutating operations after any pending reset, and
-     * on the new generation if a reset was published while it ran. Nested
-     * calls (setState's setSelection/setComposingRegion, processKeyEvent's
+     * Run one of the IME's mutating operations after any pending request,
+     * under the monitor, so its snapshot publication and the native thread's
+     * next publication cannot interleave. Nested calls (setState's
+     * setSelection/setComposingRegion, processKeyEvent's
      * finishComposingText/setComposingRegion/setSelection) belong to the
      * outer operation and are not gated again.
      */
@@ -235,19 +320,14 @@ public final class ChatterTextInputGate extends InputConnection implements Liste
         if (depth > 0) {
             return operation.run();
         }
-        depth++;
-        try {
-            long seen = PUBLISHED.get();
-            claim();
-            boolean result = operation.run();
-            if (PUBLISHED.get() != seen && claim()) {
-                // The operation landed on the consumed text, which the reset
-                // just emptied: it is input for the new generation, run it there.
-                result = operation.run();
+        synchronized (LOCK) {
+            depth++;
+            try {
+                claimAll();
+                return operation.run();
+            } finally {
+                depth--;
             }
-            return result;
-        } finally {
-            depth--;
         }
     }
 
@@ -305,8 +385,9 @@ public final class ChatterTextInputGate extends InputConnection implements Liste
 
     @Override
     public boolean endBatchEdit() {
-        // Edits nothing; reports the snapshot. Gated so a batch with no edit
-        // still reports the new generation's state after a claim.
+        // Edits nothing; publishes the snapshot. Gated so the publication is
+        // under the monitor and a batch with no edit still reports the new
+        // generation's state after a claim.
         return gated(super::endBatchEdit);
     }
 
@@ -317,10 +398,8 @@ public final class ChatterTextInputGate extends InputConnection implements Liste
 
     @Override
     public boolean performEditorAction(int actionCode) {
-        // An action, not an edit: never run twice.
-        if (depth == 0) {
-            claim();
-        }
+        // An action, not an edit: claim, then act on the current generation.
+        claimAllOutside();
         return super.performEditorAction(actionCode);
     }
 
@@ -328,6 +407,10 @@ public final class ChatterTextInputGate extends InputConnection implements Liste
 
     @Override
     public void stateChanged(State state, boolean dismissed) {
+        if (installed != this) {
+            // Retired: neither copy is this gate's to report any more.
+            return;
+        }
         nativeTextInputState(
                 state.text,
                 state.selectionStart,
