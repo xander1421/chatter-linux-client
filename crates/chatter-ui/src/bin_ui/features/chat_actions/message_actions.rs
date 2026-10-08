@@ -236,22 +236,18 @@ pub fn wire_reply_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             sender_name = ui_ctx.quote_author_name(&author, || sender_name);
         }
 
-        w.set_composer_is_replying(true);
-        w.set_composer_reply_to_sender(sender_id_str.clone().into());
-        w.set_composer_reply_to_sender_name(sender_name.clone().into());
-        w.set_composer_reply_to_timestamp(timestamp_str.clone().into());
-        w.set_composer_reply_preview(reply_preview.clone().into());
-        w.set_composer_reply_has_thumbnail(reply_has_thumbnail);
-        w.set_composer_reply_thumbnail(reply_thumbnail);
-        w.set_composer_placeholder("Type your reply...".into());
-
-        tracing::info!(
-            sender = %sender_name,
-            timestamp = %timestamp_str,
-            preview = %reply_preview,
-            has_thumbnail = %reply_has_thumbnail,
-            "Reply mode activated"
+        crate::bin_ui::features::chat::send_message::show_reply_image(
+            &w,
+            chatter_core::client::ComposerReply {
+                sender_id: sender_id_str,
+                timestamp: timestamp_str,
+                sender_name,
+                preview: reply_preview,
+                thumbnail: None,
+            },
+            reply_has_thumbnail.then_some(reply_thumbnail),
         );
+        tracing::debug!(has_thumbnail = %reply_has_thumbnail, "Reply mode activated");
     });
 }
 

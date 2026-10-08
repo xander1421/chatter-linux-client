@@ -19,49 +19,51 @@ pub fn wire_reply_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     window.on_reply_message(move |sender_id: SharedString, timestamp_ns: SharedString| {
         let sender_id_str = sender_id.to_string();
         let timestamp_ns_str = timestamp_ns.to_string();
-        let ui_ctx = ui_ctx.clone();
 
+        // Synchronous, like `reply_clicked`: the rows and composer read here
+        // are the ones the menu was opened over. A queued callback could run
+        // after a navigation or sign-out and target another conversation.
+        let Some(w) = weak_window.upgrade() else {
+            return;
+        };
         // Get reply info directly from UI message model (works for all message types)
-        run_ui!(weak_window, |w| {
-            let messages = w.get_messages();
-            let mut display_name = String::new();
-            let mut preview_text = String::new();
-            for i in 0..messages.row_count() {
-                if let Some(m) = messages.row_data(i) {
-                    if m.sender_id.as_str() == sender_id_str
-                        && m.timestamp_ns.as_str() == timestamp_ns_str
-                    {
-                        display_name = m.sender_name.to_string();
-                        let content = m.content.to_string();
-                        preview_text = if content.chars().count() > 50 {
-                            format!("{}...", content.chars().take(47).collect::<String>())
-                        } else {
-                            content
-                        };
-                        break;
-                    }
+        let messages = w.get_messages();
+        let mut display_name = String::new();
+        let mut preview_text = String::new();
+        for i in 0..messages.row_count() {
+            if let Some(m) = messages.row_data(i) {
+                if m.sender_id.as_str() == sender_id_str
+                    && m.timestamp_ns.as_str() == timestamp_ns_str
+                {
+                    display_name = m.sender_name.to_string();
+                    let content = m.content.to_string();
+                    preview_text = if content.chars().count() > 50 {
+                        format!("{}...", content.chars().take(47).collect::<String>())
+                    } else {
+                        content
+                    };
+                    break;
                 }
             }
-            if display_name.is_empty() {
-                display_name = sender_id_str.clone();
-            }
-            if let Ok(author) = sender_id_str.parse::<UserId>() {
-                display_name = ui_ctx.quote_author_name(&author, || display_name);
-            }
+        }
+        if display_name.is_empty() {
+            display_name = sender_id_str.clone();
+        }
+        if let Ok(author) = sender_id_str.parse::<UserId>() {
+            display_name = ui_ctx.quote_author_name(&author, || display_name);
+        }
 
-            w.set_composer_is_replying(true);
-            w.set_composer_reply_to_sender(sender_id_str.clone().into());
-            w.set_composer_reply_to_sender_name(display_name.clone().into());
-            w.set_composer_reply_to_timestamp(timestamp_ns_str.clone().into());
-            w.set_composer_reply_preview(preview_text.clone().into());
-            w.set_composer_placeholder("Type your reply...".into());
-            tracing::info!(
-                sender = %display_name,
-                timestamp = %timestamp_ns_str,
-                preview = %preview_text,
-                "Reply mode activated (context menu)"
-            );
-        });
+        super::send_message::show_reply(
+            &w,
+            chatter_core::client::ComposerReply {
+                sender_id: sender_id_str,
+                timestamp: timestamp_ns_str,
+                sender_name: display_name,
+                preview: preview_text,
+                thumbnail: None,
+            },
+        );
+        tracing::debug!("Reply mode activated (context menu)");
     });
 }
 

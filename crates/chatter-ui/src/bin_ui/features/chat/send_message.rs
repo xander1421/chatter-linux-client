@@ -272,10 +272,15 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 return false;
             }
         };
+        // The composer clears itself once this returns true; clear it here
+        // first so the persisted draft goes with the accepted send now, not
+        // after the autosave delay (see `take_composer_send`).
+        w.set_composer_text("".into());
         if send.reply.is_some() {
             clear_reply(&w);
         }
         crate::bin_ui::features::composer::render_attachments(&w, &[]);
+        crate::bin_ui::features::composer::autosave_composer_draft(&w, &ui_ctx_jarvis);
 
         // Clear outgoing typing state (Signal: clearTypingTimers on message send)
         clear_outgoing_typing(&ui_ctx_jarvis);
@@ -377,15 +382,27 @@ pub fn take_composer_send(w: &MainWindow, ui_ctx: &ChatterClient) -> Result<Comp
 
 /// Show `reply` in the composer's reply bar.
 pub(crate) fn show_reply(w: &MainWindow, reply: ComposerReply) {
+    let thumbnail = reply.thumbnail.as_ref().map(|(bytes, width, height)| {
+        slint::Image::from_rgba8(
+            slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(bytes, *width, *height),
+        )
+    });
+    show_reply_image(w, reply, thumbnail);
+}
+
+/// The one way into reply mode: every reply-bar setter goes through here so
+/// the draft autosave sees the new target. `thumbnail` is the already decoded
+/// image when the caller has one (a bubble's attachment); `reply.thumbnail`
+/// is ignored.
+pub(crate) fn show_reply_image(
+    w: &MainWindow,
+    reply: ComposerReply,
+    thumbnail: Option<slint::Image>,
+) {
     w.set_composer_reply_to_sender(reply.sender_id.into());
     w.set_composer_reply_to_timestamp(reply.timestamp.into());
     w.set_composer_reply_to_sender_name(reply.sender_name.into());
     w.set_composer_reply_preview(reply.preview.into());
-    let thumbnail = reply.thumbnail.map(|(bytes, width, height)| {
-        slint::Image::from_rgba8(
-            slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(&bytes, width, height),
-        )
-    });
     w.set_composer_reply_has_thumbnail(thumbnail.is_some());
     w.set_composer_reply_thumbnail(thumbnail.unwrap_or_default());
     w.set_composer_placeholder("Type your reply...".into());

@@ -55,6 +55,12 @@ pub fn autosave_composer_draft(w: &MainWindow, ctx: &ChatterClient) {
 /// Every text or reply-bar change schedules one autosave shortly after the
 /// typing pauses; a change inside the window restarts the wait. Lifecycle
 /// edges (Android pause, desktop exit, send) call the save directly.
+///
+/// The session and the conversation owning the composer are captured when
+/// the change happens. A tick that fires after either moved on (sign-out,
+/// account switch, navigation that already parked the text) is dropped
+/// rather than storing whatever the composer shows by then; core checks the
+/// same two things again under its lock.
 fn wire_draft_autosave(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak = slint::ComponentHandle::as_weak(window);
     let ctx = ui_ctx.clone();
@@ -62,10 +68,15 @@ fn wire_draft_autosave(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     window.on_composer_draft_changed(move || {
         let weak = weak.clone();
         let ctx = ctx.clone();
+        let session = crate::bin_ui::features::history_owner::SessionOwner::capture(&ctx);
+        let owner = ctx.composer_owner_key();
         timer.start(
             slint::TimerMode::SingleShot,
             std::time::Duration::from_millis(400),
             move || {
+                if !session.is_current() || ctx.composer_owner_key() != owner {
+                    return;
+                }
                 if let Some(w) = weak.upgrade() {
                     autosave_composer_draft(&w, &ctx);
                 }
