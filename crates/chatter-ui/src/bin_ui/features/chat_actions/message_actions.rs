@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, SharedString};
 
-use crate::MainWindow;
 use crate::bin_ui::features::chat::emoji_loader;
+use crate::MainWindow;
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::MessageId;
 
@@ -283,21 +283,12 @@ pub fn wire_cancel_reply(window: &MainWindow) {
     let weak_window = window.as_weak();
 
     window.on_cancel_reply(move || {
-        let weak = weak_window.clone();
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(w) = weak.upgrade() {
-                // Clear reply state
-                w.set_composer_is_replying(false);
-                w.set_composer_reply_to_sender("".into());
-                w.set_composer_reply_to_sender_name("".into());
-                w.set_composer_reply_to_timestamp("".into());
-                w.set_composer_reply_preview("".into());
-                w.set_composer_reply_has_thumbnail(false);
-                w.set_composer_reply_thumbnail(slint::Image::default());
-                w.set_composer_placeholder("Type a message...".into());
-                tracing::debug!("Cancelled reply mode");
-            }
-        });
+        // Cancel belongs to the composer visible at the click, before a
+        // subsequent navigation can park it or restore another draft.
+        if let Some(w) = weak_window.upgrade() {
+            crate::bin_ui::features::chat::send_message::clear_reply(&w);
+            tracing::debug!("Cancelled reply mode");
+        }
     });
 }
 

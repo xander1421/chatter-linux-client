@@ -44,21 +44,21 @@ pub(crate) fn wire_saved_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClien
         chat_state
             .set_active_conversation(chatter_core::state::ActiveConversation::Channel(channel_id));
 
+        if let Some(w) = weak.upgrade() {
+            crate::bin_ui::features::composer::sync_composer_draft(
+                &w,
+                &ui_ctx,
+                ui_ctx.chat_state().get().attachment_revision,
+            );
+        }
+
         let owner = crate::bin_ui::features::history_owner::HistoryOwner::begin(
             &ui_ctx,
             chatter_core::state::ActiveConversation::Channel(channel_id),
         );
         crate::run_history_ui!(weak, owner, |w| {
             w.set_loading_messages(true);
-            // Clear composer reply/edit state to prevent stale context
-            w.set_composer_is_replying(false);
-            w.set_composer_reply_to_sender("".into());
-            w.set_composer_reply_to_sender_name("".into());
-            w.set_composer_reply_to_timestamp("".into());
-            w.set_composer_reply_preview("".into());
-            w.set_composer_reply_has_thumbnail(false);
-            w.set_composer_reply_thumbnail(slint::Image::default());
-            crate::bin_ui::features::chat::edit::end_edit(&w);
+
             // Clear pinned bar immediately
             w.set_has_pinned_messages(false);
             w.set_pinned_message_preview("".into());

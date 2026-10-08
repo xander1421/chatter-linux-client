@@ -44,6 +44,8 @@ pub fn reset_session(window: &MainWindow, ui_ctx: &ChatterClient) {
     // Invalidate old completions synchronously, before clearing presentation.
     // This also removes any draft a queued navigation callback re-parked.
     ui_ctx.clear_composer_session();
+    #[cfg(feature = "mesh")]
+    crate::bin_ui::features::mesh::clear_active(window);
     window.global::<crate::VoiceRecording>().invoke_cancel();
     window.set_composer_emoji_picker_visible(false);
     window.set_composer_gif_picker_visible(false);
@@ -64,8 +66,8 @@ pub fn wire_text_format(window: &MainWindow) {
 /// Each conversation keeps its own unsent text (OPEN-ITEMS §112x). Every
 /// conversation switch goes through `ChatState`, so watch it: on a change of
 /// active conversation, park the composer under the one left and restore the
-/// one entered. Switching never touches the composer itself, so at this point
-/// it still holds the text typed in the conversation being left.
+/// one entered. UI navigation also synchronizes immediately after committing
+/// selection, before any header/history work; this subscriber covers other paths.
 fn wire_per_conversation_drafts(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let key = |d: &chatter_core::state::ChatStateData| {
         d.active_channel_id
@@ -102,9 +104,13 @@ fn wire_per_conversation_drafts(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
             current = entering;
             let revision = snapshot.attachment_revision;
             current_revision = revision;
+            let session = crate::bin_ui::features::history_owner::SessionOwner::capture(&ctx);
             let ctx = ctx.clone();
             let weak = weak.clone();
             let _ = slint::invoke_from_event_loop(move || {
+                if !session.is_current() {
+                    return;
+                }
                 if let Some(w) = weak.upgrade() {
                     sync_composer_draft(&w, &ctx, revision);
                 }
@@ -120,11 +126,28 @@ pub fn sync_composer_draft(w: &MainWindow, ctx: &ChatterClient, revision: u64) {
     if latest.attachment_revision != revision {
         return;
     }
-    let entering = latest.active_channel_id.map(|id| id.to_string()).unwrap_or_default();
+    let entering = if let Some(id) = latest.active_channel_id {
+        id.to_string()
+    } else {
+        mesh_draft_key(w)
+    };
     let leaving = ctx.composer_owner_key();
     if entering != leaving {
         switch_composer_draft(w, ctx, &leaving, &entering);
     }
+}
+
+/// Core represents every mesh scope as None; the UI owns its exact id.
+fn mesh_draft_key(w: &MainWindow) -> String {
+    #[cfg(feature = "mesh")]
+    {
+        use slint::ComponentHandle;
+        if crate::bin_ui::features::mesh::active().is_some() {
+            return format!("mesh:{}", w.global::<crate::MeshGlobal>().get_active_id());
+        }
+    }
+    let _ = w;
+    String::new()
 }
 
 /// Park the composer under `leaving` and load `entering`'s draft.

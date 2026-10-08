@@ -96,6 +96,12 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         tracing::info!(?active, dm_id = %dm_id_str, is_anon = is_anon_dm, "[UI_OPEN_DM] committing active conversation pre-spawn");
         ui_ctx.chat_state().set_active_conversation(active);
 
+        if let Some(w) = weak.upgrade() {
+            crate::bin_ui::features::composer::sync_composer_draft(
+                &w, &ui_ctx, ui_ctx.chat_state().get().attachment_revision,
+            );
+        }
+
         let owner = HistoryOwner::begin(&ui_ctx, active);
         let dm_id_str_for_ui = dm_id_str.clone();
         let ui_ctx_for_ui = ui_ctx.clone();
@@ -104,17 +110,6 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
             // Clear unread count in sidebar
             crate::bin_ui::features::auth::inbox::domain_handler::update_unread_count(&w, &ui_ctx_for_ui, &dm_id_str_for_ui, 0);
-
-
-            // Clear composer state
-            w.set_composer_is_replying(false);
-            w.set_composer_reply_to_sender("".into());
-            w.set_composer_reply_to_sender_name("".into());
-            w.set_composer_reply_to_timestamp("".into());
-            w.set_composer_reply_preview("".into());
-            w.set_composer_reply_has_thumbnail(false);
-            w.set_composer_reply_thumbnail(slint::Image::default());
-            crate::bin_ui::features::chat::edit::end_edit(&w);
 
             // Clear pins
             w.set_has_pinned_messages(false);

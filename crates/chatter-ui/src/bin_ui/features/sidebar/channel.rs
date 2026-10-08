@@ -46,6 +46,13 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     chatter_core::state::ActiveConversation::Channel(parsed),
                 );
             }
+            if let Some(w) = weak.upgrade() {
+                crate::bin_ui::features::composer::sync_composer_draft(
+                    &w,
+                    &ui_ctx,
+                    ui_ctx.chat_state().get().attachment_revision,
+                );
+            }
             let ui_ctx_for_sel = ui_ctx.clone();
             run_ui!(weak, |w| {
                 w.set_loading_messages(true);
@@ -68,6 +75,14 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 .set_active_conversation(chatter_core::state::ActiveConversation::Channel(parsed));
         }
 
+        if let Some(w) = weak.upgrade() {
+            crate::bin_ui::features::composer::sync_composer_draft(
+                &w,
+                &ui_ctx,
+                ui_ctx.chat_state().get().attachment_revision,
+            );
+        }
+
         let owner = HistoryOwner::begin(&ui_ctx, ui_ctx.chat_state().active_conversation());
         let channel_id_str_for_ui = channel_id_str.clone();
         let ui_ctx_for_ui = ui_ctx.clone();
@@ -81,16 +96,6 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 &channel_id_str_for_ui,
                 0,
             );
-
-            // Clear composer reply/edit state to prevent stale context
-            w.set_composer_is_replying(false);
-            w.set_composer_reply_to_sender("".into());
-            w.set_composer_reply_to_sender_name("".into());
-            w.set_composer_reply_to_timestamp("".into());
-            w.set_composer_reply_preview("".into());
-            w.set_composer_reply_has_thumbnail(false);
-            w.set_composer_reply_thumbnail(slint::Image::default());
-            crate::bin_ui::features::chat::edit::end_edit(&w);
 
             // Clear pinned bar immediately while loading new channel's pins
             w.set_has_pinned_messages(false);

@@ -35,6 +35,7 @@ pub(crate) struct HistoryOwner {
     revision: u64,
     conversation: ActiveConversation,
     epoch: u64,
+    mesh_epoch: Option<u64>,
     thread: Option<(MessageId, u64)>,
     older: Option<u64>,
 }
@@ -55,6 +56,13 @@ impl HistoryOwner {
             revision: client.auth_state().get().session_revision,
             conversation,
             epoch: MAIN.load(Ordering::SeqCst),
+            // Mesh scopes all use ActiveConversation::None. Their independent
+            // selection epoch also fences captures and queued publications.
+            mesh_epoch: if matches!(conversation, ActiveConversation::None) {
+                mesh_epoch()
+            } else {
+                None
+            },
             thread: None,
             older: None,
         }
@@ -85,6 +93,9 @@ impl HistoryOwner {
             && self.chat.active_conversation() == self.conversation
             && MAIN.load(Ordering::SeqCst) == self.epoch
             && self
+                .mesh_epoch
+                .is_none_or(|epoch| mesh_epoch() == Some(epoch))
+            && self
                 .older
                 .is_none_or(|epoch| OLDER.load(Ordering::SeqCst) == epoch)
             && self.thread.is_none_or(|(root, epoch)| {
@@ -94,6 +105,17 @@ impl HistoryOwner {
                         .active_thread()
                         .is_some_and(|t| t.root_message_id == root)
             })
+    }
+}
+
+fn mesh_epoch() -> Option<u64> {
+    #[cfg(feature = "mesh")]
+    {
+        super::mesh::active_session().map(|(_, epoch)| epoch)
+    }
+    #[cfg(not(feature = "mesh"))]
+    {
+        None
     }
 }
 

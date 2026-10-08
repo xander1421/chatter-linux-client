@@ -53,6 +53,16 @@ pub fn open(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, id: &str) {
     // phone this is the only thing that leaves the chat list.
     crate::bin_ui::features::sidebar::show_chat_pane(&window.as_weak());
 
+    // Give the None-backed mesh scope a distinct composer owner before any
+    // header clear. This also parks a server quote before leaving its view.
+    window
+        .global::<MeshGlobal>()
+        .set_active_id(row.id.clone().into());
+    crate::bin_ui::features::composer::sync_composer_draft(
+        window,
+        ui_ctx,
+        ui_ctx.chat_state().get().attachment_revision,
+    );
     apply_header(window, &row);
     super::refresh_rows(window, ui_ctx);
 
@@ -158,16 +168,9 @@ fn apply_header(window: &MainWindow, row: &MeshRow) {
         .into(),
     );
 
-    // A mesh conversation has no server-side reply, edit or pin surface yet;
-    // leaving stale state behind would apply it to the wrong conversation.
-    window.set_composer_is_replying(false);
-    window.set_composer_reply_to_sender("".into());
-    window.set_composer_reply_to_sender_name("".into());
-    window.set_composer_reply_to_timestamp("".into());
-    window.set_composer_reply_preview("".into());
-    window.set_composer_reply_has_thumbnail(false);
-    window.set_composer_reply_thumbnail(slint::Image::default());
-    crate::bin_ui::features::chat::edit::end_edit(window);
+    // Composer ownership was transferred synchronously above; history and
+    // headers must never clear the newly restored draft. Mesh has no pins.
+
     window.set_has_pinned_messages(false);
     window.set_pinned_message_preview("".into());
     window.set_pinned_total_count(0);
