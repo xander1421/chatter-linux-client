@@ -49,6 +49,8 @@ export component ThreadPanel inherits Rectangle {
     callback react-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
     callback reply-clicked(string, string);  // (sender_id, timestamp_ns)
     callback more-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
+    callback quote-clicked(string);  // parent message id
+    callback sender-profile-requested(string);
     in property <bool> menu-open: false;
     callback reaction-toggled(string, string, string);  // (sender_id, timestamp_ns, emoji)
 
@@ -353,6 +355,27 @@ export component ThreadPanel inherits Rectangle {
                         delivery-status: item.delivery-status;
                         failure-reason: item.failure-reason;
                         can-thread: false;
+                        has-avatar: item.has-avatar;
+                        sender-avatar-source: item.sender-avatar-source;
+                        is-pinned: item.is-pinned;
+                        // Quoted parents: the converter fills these for every
+                        // row, thread replies included.
+                        is-reply: item.is-reply;
+                        reply-to-not-found: item.reply-to-not-found;
+                        reply-to-message-id: item.reply-to-message-id;
+                        reply-to-sender-name: item.reply-to-sender-name;
+                        reply-to-preview: item.reply-to-preview;
+                        reply-to-category: item.reply-to-category;
+                        reply-to-attachment-id: item.reply-to-attachment-id;
+                        reply-to-duration: item.reply-to-duration;
+                        reply-to-filename: item.reply-to-filename;
+                        reply-to-waveform: item.reply-to-waveform;
+                        reply-to-has-thumbnail: item.reply-to-has-thumbnail;
+                        reply-to-thumbnail: item.reply-to-thumbnail;
+                        reply-to-thumbnail-width: item.reply-to-thumbnail-width;
+                        reply-to-thumbnail-height: item.reply-to-thumbnail-height;
+                        quote-clicked(id) => { root.quote-clicked(id); }
+                        sender-profile-requested(user-id) => { root.sender-profile-requested(user-id); }
                         reply-clicked(sender-id, timestamp-ns) => { root.reply-clicked(sender-id, timestamp-ns); }
                         more-clicked(sender-id, timestamp-ns, x, y) => { root.more-clicked(sender-id, timestamp-ns, x, y); }
 

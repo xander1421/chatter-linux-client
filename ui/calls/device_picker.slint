@@ -18,8 +18,8 @@ component DeviceItem inherits Rectangle {
     callback clicked();
 
     height: 48px * Appearance.text-grow;
-    background: is-selected ? Colors.primary.with-alpha(0.2) :
-                touch.has-hover ? Colors.surface-hover : Colors.surface;
+    background: is-selected ? Colors.tint-strong :
+                touch.pressed ? Materials.pressed : touch.has-hover ? Materials.hover : Colors.surface;
     border-radius: Spacing.radius-md;
 
     touch := TouchArea {

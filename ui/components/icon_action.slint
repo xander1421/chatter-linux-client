@@ -19,8 +19,23 @@ export component IconAction inherits Rectangle {
     accessible-enabled: root.enabled;
     accessible-action-default => { if root.enabled { root.clicked(); } }
 
+    keys := FocusScope {
+        width: 0px;
+        height: 0px;
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if event.text == Key.Space || event.text == Key.Return {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
     Rectangle {
         border-radius: self.height / 2;
+        border-width: keys.has-focus ? Spacing.stroke : 0px;
+        border-color: Colors.primary;
         opacity: root.enabled ? 1 : 0.38;
         background: root.destructive
             ? (touch.pressed || touch.has-hover ? Colors.error-hover : Colors.error)

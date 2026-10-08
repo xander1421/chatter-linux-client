@@ -37,7 +37,8 @@ export component IdentityChangeBar inherits Rectangle {
     property <color> accent: root.attributed ? Colors.warning : Colors.error;
 
     min-height: 24px;
-    background: root.accent.with-alpha(0.10);
+    // Opaque: a safety-number warning must stay legible over scrolling bubbles.
+    background: Colors.surface.mix(root.accent, 0.88);
 
     // Bottom hairline, matching the other in-chat strips.
     Rectangle {

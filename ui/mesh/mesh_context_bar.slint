@@ -46,7 +46,8 @@ export component MeshContextBar inherits Rectangle {
     // changed is that it is one paragraph rather than three stacked rows, so the
     // floor is a single line instead of three.
     min-height: 24px;
-    background: Colors.surface.with-alpha(0.7);
+    // Opaque: the list scrolls under this strip.
+    background: Colors.surface;
 
     // Bottom hairline, matching the other in-chat strips.
     Rectangle {

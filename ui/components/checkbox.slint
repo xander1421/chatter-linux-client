@@ -18,6 +18,20 @@ export component Checkbox inherits Rectangle {
     accessible-action-default => {
         if root.enabled { root.checked = !root.checked; root.toggled(root.checked); }
     }
+    keys := FocusScope {
+        width: 0px;
+        height: 0px;
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if event.text == Key.Space || event.text == Key.Return {
+                root.checked = !root.checked;
+                root.toggled(root.checked);
+                return accept;
+            }
+            return reject;
+        }
+    }
+
     Rectangle {
         width: Spacing.switch-thumb;
         height: self.width;
@@ -25,7 +39,7 @@ export component Checkbox inherits Rectangle {
         y: (parent.height - self.height) / 2;
         border-radius: Spacing.radius-sm;
         border-width: Spacing.stroke;
-        border-color: root.checked ? Colors.action-fill : Colors.text-muted;
+        border-color: keys.has-focus ? Colors.primary : root.checked ? Colors.action-fill : Colors.text-muted;
         background: root.checked ? (touch.pressed ? Colors.action-active : Colors.action-fill)
             : touch.pressed || touch.has-hover ? Colors.surface-hover : transparent;
         opacity: root.enabled ? 1 : 0.38;

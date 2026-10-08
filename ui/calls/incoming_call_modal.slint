@@ -51,10 +51,10 @@ export component IncomingCallModal inherits Rectangle {
         x: (parent.width - self.width) / 2;
         y: ((parent.height - self.height) / 2) + self.entrance-offset;
         width: min(320px, parent.width - 32px);
-        height: min(380px, parent.height - 48px);
-        border-radius: Spacing.radius-xl;
+        height: min(card-content.preferred-height, parent.height - 48px);
+        border-radius: Spacing.radius-sheet;
 
-        VerticalLayout {
+        card-content := VerticalLayout {
             alignment: center;
             spacing: Spacing.xl;
             padding: Spacing.xxl;

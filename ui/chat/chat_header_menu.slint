@@ -24,13 +24,20 @@ export component ChatHeaderMenu inherits Rectangle {
     callback video-call();
     callback settings();
 
+    // Logical close is immediate; the card settles back and the scrim fades
+    // before the host unmounts it. Nothing is a live target meanwhile.
+    in property <bool> show: true;
+    opacity: root.show ? 1 : 0;
+    animate opacity { duration: Materials.menu-duration; easing: ease-out; }
+    visible: root.show || self.opacity > 0;
     // The one scrim, like every other modal surface.
     background: Materials.scrim;
     // Taps outside the card close it and must not reach the chat under it.
-    TouchArea { clicked => { root.close(); } }
+    TouchArea { enabled: root.show; clicked => { root.close(); } }
 
     GlassSurface {
         enter-distance: 6px;
+        shown: root.show;
 
         material-level: 3;
         elevation: 4;
@@ -50,5 +57,10 @@ export component ChatHeaderMenu inherits Rectangle {
             if root.show-video-call: MenuRow { icon: Icons.video; label: "Video call"; clicked => { root.video-call(); } }
             if root.show-settings: MenuRow { icon: Icons.settings; label: "Conversation settings"; clicked => { root.settings(); } }
         }
+    }
+
+    if !root.show: TouchArea {
+        width: 100%;
+        height: 100%;
     }
 }

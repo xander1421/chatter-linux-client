@@ -222,8 +222,13 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
             tracing::error!("Failed to save reduce motion: {}", e);
         }
         if let Some(w) = weak_motion.upgrade() {
-            w.global::<crate::Appearance>()
-                .set_reduce_motion(ui_ctx_motion.reduce_motion_enabled());
+            let reduce = ui_ctx_motion.reduce_motion_enabled();
+            w.global::<crate::Appearance>().set_reduce_motion(reduce);
+            // Decorative playback in the GIF picker stops at once; tiles keep
+            // their first frame.
+            if reduce {
+                crate::bin_ui::gif_state::clear_picker_gifs();
+            }
         }
     });
 

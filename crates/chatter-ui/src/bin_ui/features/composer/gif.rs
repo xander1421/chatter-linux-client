@@ -103,30 +103,40 @@ pub(crate) fn wire_gif_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
         };
         let id = gif_id.to_string();
         let url = gif_url.to_string();
-        tracing::debug!(gif_id = %id, "GIF selected");
-        // What the picker knew about the tile, read before the models go.
+        tracing::debug!("GIF selected");
+        // What the picker knew about the tile, read while the models are up.
         let picked = find_gif_row(&w, &id);
+        // Who is picking, before anything is consumed.
+        let scope = ui_ctx.picker_history_scope();
 
-        // Hide picker immediately for responsiveness
-        w.set_composer_gif_picker_visible(false);
-        w.invoke_release_text_focus();
-        crate::bin_ui::gif_state::clear_picker_gifs();
-
+        // Validate FIRST. An editing session, a read-only channel or a
+        // changed conversation refuses the send with a toast, and the picker
+        // stays open with the tile still there — nothing was consumed and
+        // nothing is remembered.
         let Some(send) = begin_gif_send(&w, &ui_ctx) else {
             return;
         };
-        // Accepted by the composer: remember it now, so a failed upload can
-        // simply be picked again from Recent.
-        ui_ctx.record_recent_gif(RecentGif {
-            id: id.clone(),
-            url: url.clone(),
-            preview_url: picked
-                .as_ref()
-                .map(|g| g.preview_url.to_string())
-                .unwrap_or_default(),
-            width: picked.as_ref().map_or(0, |g| g.width.max(0) as u32),
-            height: picked.as_ref().map_or(0, |g| g.height.max(0) as u32),
-        });
+
+        // Accepted: the drawer gives way, and the pick is remembered for the
+        // account it was made under, so a failed upload can be repicked.
+        w.set_composer_gif_picker_visible(false);
+        w.invoke_release_text_focus();
+        crate::bin_ui::gif_state::clear_picker_gifs();
+        if let Some(scope) = scope {
+            ui_ctx.record_recent_gif(
+                scope,
+                RecentGif {
+                    id: id.clone(),
+                    url: url.clone(),
+                    preview_url: picked
+                        .as_ref()
+                        .map(|g| g.preview_url.to_string())
+                        .unwrap_or_default(),
+                    width: picked.as_ref().map_or(0, |g| g.width.max(0) as u32),
+                    height: picked.as_ref().map_or(0, |g| g.height.max(0) as u32),
+                },
+            );
+        }
         let (weak, ctx) = (w.as_weak(), ui_ctx.clone());
         tokio::spawn(async move {
             let upload = upload_gif(ctx.clone(), url, id);
@@ -166,11 +176,7 @@ async fn upload_gif(
         .download_and_upload_gif(&url, &gif_id)
         .await
         .map_err(|e| e.to_string())?;
-    tracing::info!(
-        "GIF uploaded to CDN: {} -> {} (encrypted on filesystem)",
-        gif_id,
-        upload.attachment_id
-    );
+    tracing::info!("GIF uploaded to CDN (encrypted on filesystem)");
     Ok(PendingAttachment::with_pointer(
         upload.attachment_id,
         std::path::PathBuf::new(), // No temp file - already uploaded
@@ -193,8 +199,8 @@ pub async fn finish_gif_send(
 ) -> Option<ComposerSend> {
     match upload.await {
         Ok(gif) => send.attachments.push(gif),
-        Err(error) => {
-            tracing::error!(%error, "GIF upload failed");
+        Err(_) => {
+            tracing::error!("GIF upload failed");
             return Some(send);
         }
     }
@@ -307,8 +313,8 @@ async fn fetch_full_gif_frames(
 ) -> Option<RawGifFrames> {
     let bytes = match ui_ctx.fetch_gif_media(url).await {
         Ok(b) => b,
-        Err(e) => {
-            tracing::warn!(gif_id = %id, error = %e, "GIF preview fetch failed");
+        Err(_) => {
+            tracing::warn!("GIF preview fetch failed");
             return None;
         }
     };
@@ -320,8 +326,8 @@ async fn fetch_full_gif_frames(
     let cursor = Cursor::new(&bytes);
     let decoder = match GifDecoder::new(cursor) {
         Ok(d) => d,
-        Err(e) => {
-            tracing::warn!(gif_id = %id, error = %e, "GIF preview decode failed");
+        Err(_) => {
+            tracing::warn!("GIF preview decode failed");
             return None;
         }
     };
@@ -375,8 +381,8 @@ fn load_gif_previews(
 ) {
     let raw_gifs = match raw_gifs {
         Ok(gifs) => gifs,
-        Err(error) => {
-            tracing::warn!(%error, "GIF request failed");
+        Err(_) => {
+            tracing::warn!("GIF request failed");
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak_window.upgrade() {
                     if !request_is_current(&w, &ui_ctx, generation, session) {
@@ -441,7 +447,9 @@ fn spawn_previews(
                     gif.preview = first_image.clone();
                     gif.failed = false;
                 });
-                crate::bin_ui::gif_state::register_picker_gif(decoded.id, decoded.frames);
+                if !w.global::<crate::Appearance>().get_reduce_motion() {
+                    crate::bin_ui::gif_state::register_picker_gif(decoded.id, decoded.frames);
+                }
             });
         });
     }

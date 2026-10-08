@@ -1,4 +1,5 @@
 import { GlassSurface } from "../components/glass_surface.slint";
+import { Materials } from "../theme/materials.slint";
 // FriendsModal - Comprehensive friends management
 // Tabs: Add Friend, Friends, Requests, Blocked
 
@@ -188,7 +189,7 @@ export component FriendsModal inherits Rectangle {
                         { id: "blocked", label: "Blocked" }
                     ]: Rectangle {
                         horizontal-stretch: 1;
-                        background: root.active-tab == tab.id ? Colors.text-primary.with-alpha(0.12) : (tab-touch.has-hover ? Colors.surface-hover.with-alpha(0.3) : transparent);
+                        background: root.active-tab == tab.id ? Colors.tint-strong : (tab-touch.pressed ? Materials.pressed : tab-touch.has-hover ? Materials.hover : transparent);
 
                         VerticalLayout {
                             HorizontalLayout {
@@ -756,7 +757,7 @@ export component FriendsModal inherits Rectangle {
 
                         Rectangle {
                             horizontal-stretch: 1;
-                            background: recv-tab-touch.has-hover ? Colors.surface-hover.with-alpha(0.3) : transparent;
+                            background: recv-tab-touch.has-hover ? Materials.hover : transparent;
 
                             VerticalLayout {
                                 HorizontalLayout {
@@ -789,7 +790,7 @@ export component FriendsModal inherits Rectangle {
 
                         Rectangle {
                             horizontal-stretch: 1;
-                            background: sent-tab-touch.has-hover ? Colors.surface-hover.with-alpha(0.3) : transparent;
+                            background: sent-tab-touch.has-hover ? Materials.hover : transparent;
 
                             VerticalLayout {
                                 HorizontalLayout {
@@ -822,7 +823,7 @@ export component FriendsModal inherits Rectangle {
 
                         Rectangle {
                             horizontal-stretch: 1;
-                            background: priv-tab-touch.has-hover ? Colors.surface-hover.with-alpha(0.3) : transparent;
+                            background: priv-tab-touch.has-hover ? Materials.hover : transparent;
 
                             VerticalLayout {
                                 HorizontalLayout {
@@ -855,7 +856,7 @@ export component FriendsModal inherits Rectangle {
 
                         Rectangle {
                             horizontal-stretch: 1;
-                            background: groups-tab-touch.has-hover ? Colors.surface-hover.with-alpha(0.3) : transparent;
+                            background: groups-tab-touch.has-hover ? Materials.hover : transparent;
 
                             VerticalLayout {
                                 HorizontalLayout {
@@ -888,7 +889,7 @@ export component FriendsModal inherits Rectangle {
 
                         Rectangle {
                             horizontal-stretch: 1;
-                            background: channels-tab-touch.has-hover ? Colors.surface-hover.with-alpha(0.3) : transparent;
+                            background: channels-tab-touch.has-hover ? Materials.hover : transparent;
 
                             VerticalLayout {
                                 HorizontalLayout {

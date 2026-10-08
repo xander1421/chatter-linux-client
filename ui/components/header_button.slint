@@ -38,6 +38,21 @@ export component HeaderButton inherits Rectangle {
 
     callback clicked();
 
+    // Keyboard: Tab lands here, Space/Enter activates. The focused state is
+    // the tint (no stroke: the shell's material owns its edge).
+    keys := FocusScope {
+        width: 0px;
+        height: 0px;
+        enabled: root.enabled;
+        key-pressed(event) => {
+            if event.text == Key.Space || event.text == Key.Return {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
     accessible-role: button;
     accessible-label: root.label;
     accessible-enabled: root.enabled;
@@ -58,7 +73,7 @@ export component HeaderButton inherits Rectangle {
         y: (parent.height - self.height) / 2;
         border-radius: self.height / 2;
         background: touch-area.pressed ? Materials.pressed : touch-area.has-hover ? Materials.hover
-            : (root.active ? Colors.primary.with-alpha(0.15) : transparent);
+            : (root.active || keys.has-focus ? Colors.tint-strong : transparent);
 
         animate background { duration: Materials.feedback-duration; easing: ease-out; }
 

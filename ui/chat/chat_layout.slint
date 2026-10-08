@@ -702,7 +702,8 @@ export component ChatLayout inherits Rectangle {
                         failed: root.gif-failed;
                         search-query: root.gif-search;
                         search(query) => { root.gif-search-changed(query); }
-                        gif-selected(id, url) => { root.gif-picker-visible = false; root.gif-selected(id, url); }
+                        // Rust validates the send first and hides the drawer only once it is accepted.
+                        gif-selected(id, url) => { root.gif-selected(id, url); }
                     }
                 }
                 mode-tabs := Rectangle {

@@ -243,7 +243,7 @@ export component MessageItem inherits Rectangle {
     // Selected rows tint rather than outline the flat bubbles.
     // Animate a private property so Slint can share MessageItem between the
     // main conversation and thread panel instead of inlining both trees.
-    property <brush> selection-background: root.selected ? Colors.primary.with-alpha(0.18) : transparent;
+    property <brush> selection-background: root.selected ? Colors.tint-strong : transparent;
     background: root.selection-background;
     animate selection-background { duration: Materials.feedback-duration; easing: ease-out; }
 

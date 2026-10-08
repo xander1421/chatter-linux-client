@@ -178,7 +178,7 @@ export component CallHistoryScreen inherits Rectangle {
                         { id: "missed", label: "Missed" }
                     ]: Rectangle {
                         horizontal-stretch: 1;
-                        background: root.active-filter == tab.id ? Colors.text-primary.with-alpha(0.12) : (tab-touch.has-hover ? Colors.surface-hover.with-alpha(0.3) : transparent);
+                        background: root.active-filter == tab.id ? Colors.tint-strong : (tab-touch.pressed ? Materials.pressed : tab-touch.has-hover ? Materials.hover : transparent);
 
                         VerticalLayout {
                             HorizontalLayout {

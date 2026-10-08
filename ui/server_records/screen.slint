@@ -21,8 +21,9 @@ export global ServerRecordsGlobal {
 export component ServerRecordsScreen inherits Rectangle {
     in property <bool> mobile-mode;
     callback close();
+    in property <bool> show: true;
     Modal {
-        show: true;
+        show: root.show;
         title: ServerRecordsGlobal.kind == "notifications" ? "Notification inbox" : ServerRecordsGlobal.kind == "integrations" ? "Channel integrations" : "Channel call history";
         modal-width: 600px;
         max-modal-height: 800px;

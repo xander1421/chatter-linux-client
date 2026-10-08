@@ -24,6 +24,7 @@ mod composer;
 #[cfg(feature = "media")]
 mod group_ring_lifecycle;
 pub use composer::{ComposerDraft, ComposerReply, ComposerSend};
+pub use picker_history::PickerHistoryScope;
 pub mod events;
 #[cfg(feature = "jarvis")]
 mod jarvis;

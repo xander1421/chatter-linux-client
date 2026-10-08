@@ -63,9 +63,25 @@ export component Button inherits Rectangle {
 
     // Keep opacity on the visual child. A root opacity binding makes Slint
     // inline the whole Button (including its loading animation) at every use.
+    keys := FocusScope {
+        width: 0px;
+        height: 0px;
+        enabled: !root.disabled && !root.loading;
+        key-pressed(event) => {
+            if event.text == Key.Space || event.text == Key.Return {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
     Rectangle {
         border-radius: root.border-radius;
         background: root.bg-color;
+        // Keyboard focus ring; nothing at rest.
+        border-width: keys.has-focus ? Spacing.stroke : 0px;
+        border-color: Colors.primary;
         // 38%: Material's disabled level, including both fill and content.
         opacity: root.disabled ? 0.38 : 1.0;
 

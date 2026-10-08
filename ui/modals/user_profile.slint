@@ -1,4 +1,5 @@
 import { GlassSurface } from "../components/glass_surface.slint";
+import { Materials } from "../theme/materials.slint";
 // UserProfileModal — the contact/self profile page.
 //
 // Telegram-shaped: avatar and name on top, a row of square action tiles, an
@@ -915,8 +916,8 @@ export component UserProfileModal inherits Rectangle {
                                     horizontal-stretch: 1;
                                     border-radius: Spacing.radius-full;
                                     background: root.shared-tab == tab.id
-                                        ? Colors.primary.with-alpha(0.18)
-                                        : (tab-touch.has-hover ? Colors.surface-hover : transparent);
+                                        ? Colors.tint-strong
+                                        : (tab-touch.pressed ? Materials.pressed : tab-touch.has-hover ? Materials.hover : transparent);
                                     accessible-role: button;
                                     accessible-label: "shared-tab-" + tab.id;
 

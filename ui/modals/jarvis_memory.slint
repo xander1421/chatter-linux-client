@@ -194,7 +194,7 @@ export component JarvisMemoryModal inherits GlassSurface {
                             for row in root.entities: Rectangle {
                                 height: Spacing.button-height;
                                 border-radius: Spacing.radius-md;
-                                background: row.is-selected ? Colors.surface-hover : transparent;
+                                background: row.is-selected ? Colors.selected : transparent;
                                 TouchArea { clicked => { root.select-entity(row.entity-id); } }
                                 HorizontalLayout {
                                     padding-left: Spacing.sm;

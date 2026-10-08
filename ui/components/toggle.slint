@@ -45,6 +45,20 @@ export component Toggle inherits Rectangle {
     height: Spacing.button-height;
     opacity: disabled ? 0.5 : 1.0;
 
+    keys := FocusScope {
+        width: 0px;
+        height: 0px;
+        enabled: !root.disabled;
+        key-pressed(event) => {
+            if event.text == Key.Space || event.text == Key.Return {
+                root.checked = !root.checked;
+                root.toggled(root.checked);
+                return accept;
+            }
+            return reject;
+        }
+    }
+
     // Track
     Rectangle {
         width: 100%;
@@ -52,6 +66,8 @@ export component Toggle inherits Rectangle {
         y: (root.height - self.height) / 2;
         border-radius: self.height / 2;
         background: track-color;
+        border-width: keys.has-focus ? Spacing.stroke : 0px;
+        border-color: Colors.primary;
 
         animate background {
             duration: Materials.feedback-duration;

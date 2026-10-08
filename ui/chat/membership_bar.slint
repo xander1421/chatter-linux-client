@@ -21,7 +21,8 @@ export component MembershipBar inherits Rectangle {
     changed alert => { self.expanded = false; }
 
     min-height: 24px;
-    background: root.accent.with-alpha(root.alert ? 0.16 : 0.10);
+    // Opaque: the list scrolls under this strip.
+    background: Colors.surface.mix(root.accent, root.alert ? 0.82 : 0.88);
 
     Rectangle {
         y: parent.height - 1px;

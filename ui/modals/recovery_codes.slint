@@ -23,7 +23,8 @@ export component RecoveryCodesModal inherits Rectangle {
     // the Continue button, and that is gated on the "I saved them" checkbox.
     // Same shape as sealed_sender_intro.slint's acknowledge screen.
     opacity: root.show-modal ? 1 : 0;
-    visible: root.show-modal;
+    animate opacity { duration: Materials.sheet-duration; easing: ease-out; }
+    visible: root.show-modal || self.opacity > 0;
 
     // Backdrop
     background: Materials.scrim;
@@ -185,5 +186,11 @@ export component RecoveryCodesModal inherits Rectangle {
                 clicked => { root.confirmed(); }
             }
         }
+    }
+
+    // The fade-out is presentation only: nothing in it is a live target.
+    if !root.show-modal: TouchArea {
+        width: 100%;
+        height: 100%;
     }
 }

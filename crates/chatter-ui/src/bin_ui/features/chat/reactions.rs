@@ -123,8 +123,15 @@ pub fn wire_reaction_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
             };
             let session_revision = auth.session_revision;
             // Every reaction route (picker, quick bar, tapping a chip) lands
-            // here, so this is where the account's recent emoji learn a pick.
-            ui_ctx.record_recent_emoji(&emoji_str);
+            // here, so this is where the account's recent emoji learn a pick —
+            // under the owner and session captured for this very reaction.
+            ui_ctx.record_recent_emoji(
+                chatter_core::client::PickerHistoryScope {
+                    owner,
+                    session_revision,
+                },
+                &emoji_str,
+            );
             let scope = match ui_ctx
                 .conversation(conversation.clone())
                 .reaction_snapshot(&target_author, target_sent_timestamp)

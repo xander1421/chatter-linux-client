@@ -1,4 +1,5 @@
 import { GlassSurface } from "glass_surface.slint";
+import { Materials } from "../theme/materials.slint";
 // Mention autocomplete popup for @user, #channel, @here, @all suggestions
 
 import { Colors } from "../theme/colors.slint";
@@ -56,7 +57,7 @@ export component MentionAutocomplete inherits GlassSurface {
         for suggestion[index] in root.suggestions: Rectangle {
             height: Spacing.button-height * Appearance.text-grow;
             border-radius: Spacing.radius-sm;
-            background: index == root.selected-index ? Colors.primary.with-alpha(0.2) : (item-area.has-hover ? Colors.surface-hover : transparent);
+            background: index == root.selected-index ? Colors.tint-strong : (item-area.pressed ? Materials.pressed : item-area.has-hover ? Materials.hover : transparent);
 
             HorizontalLayout {
                 padding-left: Spacing.sm;
@@ -69,7 +70,7 @@ export component MentionAutocomplete inherits GlassSurface {
                     height: 28px;
                     y: (parent.height - self.height) / 2;
                     border-radius: suggestion.mention-type == "user" ? Spacing.radius-full : Spacing.radius-sm;
-                    background: suggestion.mention-type == "user" ? Colors.primary.with-alpha(0.3) : Colors.background;
+                    background: suggestion.mention-type == "user" ? Colors.tint-strong : Colors.background;
 
                     // User avatar (if available) or fallback
                     if suggestion.mention-type == "user" && suggestion.has-avatar: Image {

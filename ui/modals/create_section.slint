@@ -5,6 +5,7 @@
 //   - Rename: pre-filled name + emoji, "Save" button
 
 import { Colors } from "../theme/colors.slint";
+import { Materials } from "../theme/materials.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Modal } from "../components/modal.slint";
@@ -131,8 +132,8 @@ export component CreateSectionModal inherits Rectangle {
                             height: Spacing.button-height;
                             border-radius: Spacing.radius-sm;
                             background: icon == root.selected-emoji
-                                ? Colors.primary.with-alpha(0.25)
-                                : (icon-touch.has-hover ? Colors.surface-hover : transparent);
+                                ? Colors.tint-strong
+                                : (icon-touch.pressed ? Materials.pressed : icon-touch.has-hover ? Materials.hover : transparent);
 
                             Text {
                                 text: icon;
