@@ -612,28 +612,38 @@ export component MainWindow inherits Window {
     // The top of the stack, or "none". Each modal's `if` reads this.
     out property <string> active-modal: root.modal-stack.length > 0
         ? root.modal-stack[root.modal-stack.length - 1] : "none";
-    // Presentation lags logic by one exit. When the stack empties, the last
-    // dialog keeps its surface with `show-modal: false` — it fades, accepts
-    // no input and holds no focus — until the sheet duration has passed,
-    // then unmounts. A push while it fades replaces it at once; reduced
-    // motion unmounts at once. Each dialog's `if` reads THIS.
+    // Presentation lags logic by one exit. The identity that just left the
+    // top of the stack (pop, close-at-top, replace) keeps its surface with
+    // `show-modal: false` — it fades, accepts no input and holds no focus —
+    // until the sheet duration has passed, then unmounts. The destination
+    // (the dialog under it, or nothing) is presented at once, so a pop never
+    // waits and a push never waits. One exit is retained at a time: a second
+    // close during the fade replaces it. Reduced motion unmounts at once.
+    // Each dialog's `if` reads `is-presented`.
     private property <string> presented-modal: "none";
+    private property <string> exiting-modal: "none";
+    private property <int> presented-depth: 0;
+    function is-presented(name: string) -> bool {
+        return root.presented-modal == name || root.exiting-modal == name;
+    }
     function present-active-modal() {
-        if root.active-modal != "none" {
-            root.presented-modal = root.active-modal;
-            modal-exit.running = false;
-        } else if Appearance.reduce-motion {
-            root.presented-modal = "none";
-        } else {
+        // Grew: the old top is still on the stack under the new one, nothing
+        // left. Otherwise the old top is gone and gets its exit.
+        if root.presented-modal != "none" && root.presented-modal != root.active-modal
+            && root.modal-stack.length <= root.presented-depth && !Appearance.reduce-motion {
+            root.exiting-modal = root.presented-modal;
             modal-exit.running = true;
+            modal-exit.restart();
         }
+        root.presented-modal = root.active-modal;
+        root.presented-depth = root.modal-stack.length;
     }
     modal-exit := Timer {
         interval: Materials.sheet-duration + 40ms;
         running: false;
         triggered => {
             self.running = false;
-            if root.active-modal == "none" { root.presented-modal = "none"; }
+            root.exiting-modal = "none";
         }
     }
     // The same contract for the incoming-call card.
@@ -655,6 +665,26 @@ export component MainWindow inherits Window {
         triggered => {
             self.running = false;
             if !root.incoming-shown { root.incoming-presented = false; }
+        }
+    }
+    // And for the device picker, which is not on the modal stack.
+    private property <bool> device-picker-presented: false;
+    changed device-picker-visible => {
+        if root.device-picker-visible {
+            root.device-picker-presented = true;
+            device-picker-exit.running = false;
+        } else if Appearance.reduce-motion {
+            root.device-picker-presented = false;
+        } else {
+            device-picker-exit.running = true;
+        }
+    }
+    device-picker-exit := Timer {
+        interval: Materials.menu-duration + 40ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            if !root.device-picker-visible { root.device-picker-presented = false; }
         }
     }
     // "settings" is anywhere on the stack. Settings stays mounted under what
@@ -2278,7 +2308,7 @@ export component MainWindow inherits Window {
         }
 
         // Create Channel Modal
-        if root.presented-modal == "create-channel": CreateChannelModal {
+        if root.is-presented("create-channel"): CreateChannelModal {
             show-modal: root.active-modal == "create-channel";
             channel-name <=> root.create-channel-name;
             channel-description <=> root.create-channel-description;
@@ -2338,7 +2368,7 @@ export component MainWindow inherits Window {
         }
 
         // Invite to Private Group Modal
-        if root.presented-modal == "invite-private-group": InvitePrivateGroupModal {
+        if root.is-presented("invite-private-group"): InvitePrivateGroupModal {
             show-modal: root.active-modal == "invite-private-group";
             available-friends <=> root.invite-private-group-friends;
             selected-count <=> root.invite-private-group-selected-count;
@@ -2359,7 +2389,7 @@ export component MainWindow inherits Window {
         }
 
         // Invite Member to Channel Modal
-        if root.presented-modal == "invite-member": InviteMemberModal {
+        if root.is-presented("invite-member"): InviteMemberModal {
             show-modal: root.active-modal == "invite-member";
             channel-name: root.invite-member-channel-name;
             users <=> root.invite-member-users;
@@ -2385,7 +2415,7 @@ export component MainWindow inherits Window {
         // returns there. Stays mounted under Edit Profile — the only way into
         // that modal is this page's Edit button — so its backdrop dims the
         // profile it edits (§112u).
-        if root.presented-modal == "user-profile" || root.presented-modal == "edit-profile": UserProfileModal {
+        if root.is-presented("user-profile") || root.is-presented("edit-profile"): UserProfileModal {
             show-modal: root.active-modal == "user-profile" || root.active-modal == "edit-profile";
             user-id: root.profile-user-id;
             is-anonymous: root.profile-is-anonymous;
@@ -2480,7 +2510,7 @@ export component MainWindow inherits Window {
         }
 
         // Edit Profile Modal
-        if root.presented-modal == "edit-profile": EditProfileModal {
+        if root.is-presented("edit-profile"): EditProfileModal {
             show-modal: root.active-modal == "edit-profile";
             display-name <=> root.edit-profile-display-name;
             bio <=> root.edit-profile-bio;
@@ -2500,7 +2530,7 @@ export component MainWindow inherits Window {
         }
 
         // Recovery Codes Modal
-        if root.presented-modal == "recovery-codes": RecoveryCodesModal {
+        if root.is-presented("recovery-codes"): RecoveryCodesModal {
             show-modal: root.active-modal == "recovery-codes";
             codes: root.recovery-codes;
 
@@ -2521,7 +2551,7 @@ export component MainWindow inherits Window {
         }
 
         // Sealed Sender onboarding explainer (shown right after recovery codes)
-        if root.presented-modal == "sealed-sender-intro": SealedSenderIntroModal {
+        if root.is-presented("sealed-sender-intro"): SealedSenderIntroModal {
             show-modal: root.active-modal == "sealed-sender-intro";
             allow-from-anyone <=> root.settings-sealed-sender-unrestricted;
 
@@ -2532,7 +2562,7 @@ export component MainWindow inherits Window {
         }
 
         // Link Device Approve Modal (primary side)
-        if root.presented-modal == "link-device-approve": LinkDeviceApproveModal {
+        if root.is-presented("link-device-approve"): LinkDeviceApproveModal {
             show-modal: root.active-modal == "link-device-approve";
             link-url <=> root.link-approve-url;
             password <=> root.link-approve-password;
@@ -2554,7 +2584,7 @@ export component MainWindow inherits Window {
             approve(p) => { root.link-approve-submit(p); }
         }
 
-        if root.presented-modal == "server-records": ServerRecordsScreen {
+        if root.is-presented("server-records"): ServerRecordsScreen {
             show: root.active-modal == "server-records";
             mobile-mode: root.compact-layout;
             close => { root.nav-pop(); }
@@ -2749,7 +2779,7 @@ export component MainWindow inherits Window {
         }
 
         // Forward Message Modal
-        if root.presented-modal == "forward-message": ForwardMessageModal {
+        if root.is-presented("forward-message"): ForwardMessageModal {
             show-modal: root.active-modal == "forward-message";
             message-preview: root.forward-message-preview;
             search-text <=> root.forward-search-text;
@@ -2768,7 +2798,7 @@ export component MainWindow inherits Window {
         }
 
         // Sessions Modal
-        if root.presented-modal == "sessions": SessionsModal {
+        if root.is-presented("sessions"): SessionsModal {
             show-modal: root.active-modal == "sessions";
             sessions: root.sessions;
             loading: root.sessions-loading;
@@ -2830,7 +2860,7 @@ export component MainWindow inherits Window {
             }
         }
 
-        if root.presented-modal == "channel-settings": ChannelSettingsModal {
+        if root.is-presented("channel-settings"): ChannelSettingsModal {
             show-modal: root.active-modal == "channel-settings";
             channel-id: root.channel-settings-id;
             integrations => {
@@ -2925,7 +2955,7 @@ export component MainWindow inherits Window {
         }
 
         // Anon Mode PIN gate
-        if root.presented-modal == "anon-mode-pin": AnonModePinModal {
+        if root.is-presented("anon-mode-pin"): AnonModePinModal {
             show-modal: root.active-modal == "anon-mode-pin";
             pin <=> root.anon-mode-pin;
             error: root.anon-mode-pin-error;
@@ -2943,7 +2973,7 @@ export component MainWindow inherits Window {
         // The '+' create menu: from the Chats tab's floating button on a phone,
         // from the sidebar header's '+' on two-pane. Replaces the in-list
         // "+ New Channel" / "+ New Section" rows (owner decision 2026-09-26).
-        if root.presented-modal == "create-menu": CreateMenu {
+        if root.is-presented("create-menu"): CreateMenu {
             show: root.active-modal == "create-menu";
             card-x: root.compact-layout
                 ? root.width - self.card-width - Spacing.xl
@@ -2968,14 +2998,14 @@ export component MainWindow inherits Window {
 
         // The chat header's ⋯ menu, dropped from the top-right of the chat
         // pane (the header's trailing edge on a phone and on two-pane).
-        if root.presented-modal == "pinned-messages": PinnedMessagesModal {
+        if root.is-presented("pinned-messages"): PinnedMessagesModal {
             show-modal: root.active-modal == "pinned-messages";
             items: root.pinned-items;
             close => { root.nav-close("pinned-messages"); }
             selected(message-id) => { root.pinned-item-selected(message-id); }
         }
 
-        if root.presented-modal == "chat-menu": ChatHeaderMenu {
+        if root.is-presented("chat-menu"): ChatHeaderMenu {
             show: root.active-modal == "chat-menu";
             show-video-call: root.chat-menu-video;
             show-settings: root.chat-menu-settings;
@@ -2994,7 +3024,7 @@ export component MainWindow inherits Window {
             }
         }
 
-        if root.presented-modal == "new-chat": NewChatPicker {
+        if root.is-presented("new-chat"): NewChatPicker {
             show: root.active-modal == "new-chat";
             mobile-mode: root.compact-layout;
             friends: root.friends-list;
@@ -3004,7 +3034,7 @@ export component MainWindow inherits Window {
             pick(user-id) => { root.friends-start-dm(user-id); }
         }
 
-        if root.presented-modal == "create-section": CreateSectionModal {
+        if root.is-presented("create-section"): CreateSectionModal {
             show-modal: root.active-modal == "create-section";
             rename-mode: root.create-section-rename-mode;
             section-name <=> root.create-section-name;
@@ -3024,7 +3054,7 @@ export component MainWindow inherits Window {
         }
 
         // Keyboard shortcuts help dialog
-        if root.presented-modal == "keyboard-shortcuts": Rectangle {
+        if root.is-presented("keyboard-shortcuts"): shortcuts-host := Rectangle {
             property <bool> shown: root.active-modal == "keyboard-shortcuts";
             width: root.width;
             height: root.height;
@@ -3052,79 +3082,86 @@ export component MainWindow inherits Window {
 
                 TouchArea {} // block click-through
 
-                shortcuts-layout := VerticalLayout {
-                    padding: Spacing.lg;
-                    spacing: Spacing.md;
-
-                    // Header
-                    HorizontalLayout {
-                        height: Spacing.header-action-box;
-                        Text {
-                            text: "Keyboard Shortcuts";
-                            color: Colors.text-primary;
-                            font-size: Typography.lg;
-                            font-weight: Typography.semibold;
-                            vertical-alignment: center;
-                            horizontal-stretch: 1;
-                        }
-
-                        DismissButton {
-                            clicked => { root.nav-close("keyboard-shortcuts"); }
-                        }
-                    }
-
-                    Rectangle { height: 1px; background: Colors.surface-hover; }
-
-                    // Navigation section
-                    Text {
-                        text: "Navigation";
-                        color: Colors.text-muted;
-                        font-size: Typography.xs;
-                        font-weight: Typography.semibold;
-                    }
-
-                    for shortcut in [
-                        { key: "Ctrl + K / Ctrl + F", action: "Search" },
-                        { key: "Ctrl + ,", action: "Open settings" },
-                        { key: "Ctrl + J", action: "Toggle AI assistant" },
-                        { key: "Ctrl + /", action: "Show this dialog" },
-                        { key: "Escape", action: "Close modal or panel" },
-                    ]: HorizontalLayout {
-                        height: 28px;
+                // Hidden the moment the dialog is logically closed: nothing in
+                // an invisible subtree is a pointer, key, Tab or accessible
+                // target while the shell and scrim finish their fade.
+                Rectangle {
+                    visible: shortcuts-host.shown;
+                    shortcuts-layout := VerticalLayout {
+                        padding: Spacing.lg;
                         spacing: Spacing.md;
 
-                        Text {
-                            text: shortcut.action;
-                            color: Colors.text-primary;
-                            font-size: Typography.sm;
-                            horizontal-stretch: 1;
-                            vertical-alignment: center;
-                        }
-
-                        Rectangle {
-                            width: key-text.preferred-width + Spacing.md;
-                            height: 24px;
-                            border-radius: Spacing.radius-sm;
-                            background: Colors.surface-hover;
-
-                            key-text := Text {
-                                text: shortcut.key;
-                                color: Colors.text-secondary;
-                                font-size: Typography.xs;
-                                font-weight: Typography.medium;
-                                horizontal-alignment: center;
+                        // Header
+                        HorizontalLayout {
+                            height: Spacing.header-action-box;
+                            Text {
+                                text: "Keyboard Shortcuts";
+                                color: Colors.text-primary;
+                                font-size: Typography.lg;
+                                font-weight: Typography.semibold;
                                 vertical-alignment: center;
+                                horizontal-stretch: 1;
+                            }
+
+                            DismissButton {
+                                enabled: shortcuts-host.shown;
+                                clicked => { root.nav-close("keyboard-shortcuts"); }
                             }
                         }
-                    }
 
-                    Rectangle { height: Spacing.xs; }
+                        Rectangle { height: 1px; background: Colors.surface-hover; }
+
+                        // Navigation section
+                        Text {
+                            text: "Navigation";
+                            color: Colors.text-muted;
+                            font-size: Typography.xs;
+                            font-weight: Typography.semibold;
+                        }
+
+                        for shortcut in [
+                            { key: "Ctrl + K / Ctrl + F", action: "Search" },
+                            { key: "Ctrl + ,", action: "Open settings" },
+                            { key: "Ctrl + J", action: "Toggle AI assistant" },
+                            { key: "Ctrl + /", action: "Show this dialog" },
+                            { key: "Escape", action: "Close modal or panel" },
+                        ]: HorizontalLayout {
+                            height: 28px;
+                            spacing: Spacing.md;
+
+                            Text {
+                                text: shortcut.action;
+                                color: Colors.text-primary;
+                                font-size: Typography.sm;
+                                horizontal-stretch: 1;
+                                vertical-alignment: center;
+                            }
+
+                            Rectangle {
+                                width: key-text.preferred-width + Spacing.md;
+                                height: 24px;
+                                border-radius: Spacing.radius-sm;
+                                background: Colors.surface-hover;
+
+                                key-text := Text {
+                                    text: shortcut.key;
+                                    color: Colors.text-secondary;
+                                    font-size: Typography.xs;
+                                    font-weight: Typography.medium;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                }
+                            }
+                        }
+
+                        Rectangle { height: Spacing.xs; }
+                    }
                 }
             }
         }
 
         // Jarvis memory browser (centered modal over the backdrop)
-        if root.presented-modal == "jarvis-memory": Rectangle {
+        if root.is-presented("jarvis-memory"): Rectangle {
             property <bool> shown: root.active-modal == "jarvis-memory";
             width: root.width;
             height: root.height;
@@ -3134,7 +3171,7 @@ export component MainWindow inherits Window {
             visible: self.shown || self.opacity > 0;
             TouchArea { enabled: parent.shown; clicked => { root.nav-close("jarvis-memory"); } }
         }
-        if root.presented-modal == "jarvis-memory": JarvisMemoryModal {
+        if root.is-presented("jarvis-memory"): JarvisMemoryModal {
             show: root.active-modal == "jarvis-memory";
             width: min(860px, parent.width - 32px);
             height: min(560px, parent.height - 48px);
@@ -3349,8 +3386,8 @@ export component MainWindow inherits Window {
         // (Active call view is now docked above ChatLayout — see chat column block.)
 
         // Device picker modal (for audio devices and screen sources)
-        if root.device-picker-visible: DevicePicker {
-            show: true;
+        if root.device-picker-presented: DevicePicker {
+            show: root.device-picker-visible;
             title: root.device-picker-type == "audio" ? "Select Microphone" :
                    root.device-picker-type == "audio_output" ? "Select Speaker" : "Select Screen to Share";
             picker-type: root.device-picker-type;
@@ -3594,7 +3631,7 @@ export component MainWindow inherits Window {
             }
         }
 
-        if root.presented-modal == "message-info": MessageInfoModal {
+        if root.is-presented("message-info"): MessageInfoModal {
             show: root.active-modal == "message-info";
             close => { root.nav-close("message-info"); }
         }

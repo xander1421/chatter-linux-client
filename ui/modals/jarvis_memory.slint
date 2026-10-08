@@ -72,213 +72,222 @@ export component JarvisMemoryModal inherits GlassSurface {
     width: 860px;
     height: 560px;
 
-    VerticalLayout {
-        padding: Spacing.lg;
-        spacing: Spacing.md;
-
-        // Header — as tall as its header button, title on the same axis.
-        HorizontalLayout {
-            spacing: Spacing.sm;
-            height: Spacing.header-action-box;
-            Text {
-                horizontal-stretch: 1;
-                text: "Jarvis Memory";
-                color: Colors.text-primary;
-                font-size: Typography.xl;
-                font-weight: Typography.semibold;
-                vertical-alignment: center;
-            }
-            Text {
-                text: root.stats-label;
-                color: Colors.text-muted;
-                font-size: Typography.xs;
-                vertical-alignment: center;
-            }
-            Button { text: "Clear history"; variant: "ghost"; clicked => { JarvisGlobal.clear-history(); } }
-            Button { text: "Refresh"; variant: "ghost"; clicked => { root.refresh(); } }
-            // Centered dialog → the shared X on the trailing edge. A "Close"
-            // text button was a fourth spelling of the same action, and it sat
-            // next to "Refresh" looking like another content action.
-            DismissButton {
-                back: false;
-                clicked => { root.close(); }
-            }
-        }
-
-        HorizontalLayout {
+    // Hidden the moment the dialog is logically closed: an invisible subtree
+    // gets no pointer, key, Tab focus or accessible default action (Slint
+    // resets focus off an invisible item before key input, skips it in Tab
+    // order and marks it hidden to accessibility), and the actions it holds
+    // are disabled besides. The shell and scrim finish their exit on their own.
+    Rectangle {
+        visible: root.show;
+        VerticalLayout {
+            padding: Spacing.lg;
             spacing: Spacing.md;
 
-            // ── Facts column ────────────────────────────────────────────
-            Rectangle {
-                horizontal-stretch: 1;
-                background: Colors.inset;
-                border-radius: Spacing.radius-md;
+            // Header — as tall as its header button, title on the same axis.
+            HorizontalLayout {
+                spacing: Spacing.sm;
+                height: Spacing.header-action-box;
+                Text {
+                    horizontal-stretch: 1;
+                    text: "Jarvis Memory";
+                    color: Colors.text-primary;
+                    font-size: Typography.xl;
+                    font-weight: Typography.semibold;
+                    vertical-alignment: center;
+                }
+                Text {
+                    text: root.stats-label;
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
+                    vertical-alignment: center;
+                }
+                Button { text: "Clear history"; variant: "ghost"; disabled: !root.show; clicked => { JarvisGlobal.clear-history(); } }
+                Button { text: "Refresh"; variant: "ghost"; disabled: !root.show; clicked => { root.refresh(); } }
+                // Centered dialog → the shared X on the trailing edge. A "Close"
+                // text button was a fourth spelling of the same action, and it sat
+                // next to "Refresh" looking like another content action.
+                DismissButton {
+                    back: false;
+                    enabled: root.show;
+                    clicked => { root.close(); }
+                }
+            }
 
-                VerticalLayout {
-                    padding: Spacing.md;
-                    spacing: Spacing.sm;
+            HorizontalLayout {
+                spacing: Spacing.md;
 
-                    Text {
-                        text: "Facts";
-                        color: Colors.text-primary;
-                        font-size: Typography.lg;
-                        font-weight: Typography.medium;
-                    }
-                    if root.facts.length == 0: Text {
-                        text: "Nothing yet — chat with Jarvis and durable facts land here automatically.";
-                        color: Colors.text-muted;
-                        font-size: Typography.xs;
-                        wrap: word-wrap;
-                    }
+                // ── Facts column ────────────────────────────────────────────
+                Rectangle {
+                    horizontal-stretch: 1;
+                    background: Colors.inset;
+                    border-radius: Spacing.radius-md;
 
-                    Flickable {
-                        vertical-stretch: 1;
-                        viewport-height: facts-column.preferred-height;
-                        facts-column := VerticalLayout {
-                            spacing: Spacing.sm;
-                            for fact in root.facts: Rectangle {
-                                border-radius: Spacing.radius-md;
-                                background: fact.is-current ? Colors.surface : transparent;
-                                opacity: fact.is-current ? 1.0 : 0.55;
-                                VerticalLayout {
-                                    padding: Spacing.sm;
-                                    spacing: Spacing.xxs;
-                                    HorizontalLayout {
-                                        spacing: Spacing.sm;
-                                        Text {
-                                            horizontal-stretch: 1;
-                                            text: fact.predicate + " → " + fact.object;
-                                            color: Colors.text-primary;
-                                            font-size: Typography.sm;
-                                            overflow: elide;
+                    VerticalLayout {
+                        padding: Spacing.md;
+                        spacing: Spacing.sm;
+
+                        Text {
+                            text: "Facts";
+                            color: Colors.text-primary;
+                            font-size: Typography.lg;
+                            font-weight: Typography.medium;
+                        }
+                        if root.facts.length == 0: Text {
+                            text: "Nothing yet — chat with Jarvis and durable facts land here automatically.";
+                            color: Colors.text-muted;
+                            font-size: Typography.xs;
+                            wrap: word-wrap;
+                        }
+
+                        Flickable {
+                            vertical-stretch: 1;
+                            viewport-height: facts-column.preferred-height;
+                            facts-column := VerticalLayout {
+                                spacing: Spacing.sm;
+                                for fact in root.facts: Rectangle {
+                                    border-radius: Spacing.radius-md;
+                                    background: fact.is-current ? Colors.surface : transparent;
+                                    opacity: fact.is-current ? 1.0 : 0.55;
+                                    VerticalLayout {
+                                        padding: Spacing.sm;
+                                        spacing: Spacing.xxs;
+                                        HorizontalLayout {
+                                            spacing: Spacing.sm;
+                                            Text {
+                                                horizontal-stretch: 1;
+                                                text: fact.predicate + " → " + fact.object;
+                                                color: Colors.text-primary;
+                                                font-size: Typography.sm;
+                                                overflow: elide;
+                                            }
+                                            Text {
+                                                text: fact.confidence-label;
+                                                color: fact.is-current ? Colors.success : Colors.text-muted;
+                                                font-size: Typography.xs;
+                                                vertical-alignment: center;
+                                            }
                                         }
                                         Text {
-                                            text: fact.confidence-label;
-                                            color: fact.is-current ? Colors.success : Colors.text-muted;
+                                            text: fact.since-label;
+                                            color: Colors.text-muted;
                                             font-size: Typography.xs;
-                                            vertical-alignment: center;
                                         }
-                                    }
-                                    Text {
-                                        text: fact.since-label;
-                                        color: Colors.text-muted;
-                                        font-size: Typography.xs;
                                     }
                                 }
                             }
                         }
                     }
                 }
-            }
 
-            // ── Entities + graph column ─────────────────────────────────
-            Rectangle {
-                horizontal-stretch: 1;
-                background: Colors.inset;
-                border-radius: Spacing.radius-md;
+                // ── Entities + graph column ─────────────────────────────────
+                Rectangle {
+                    horizontal-stretch: 1;
+                    background: Colors.inset;
+                    border-radius: Spacing.radius-md;
 
-                VerticalLayout {
-                    padding: Spacing.md;
-                    spacing: Spacing.sm;
+                    VerticalLayout {
+                        padding: Spacing.md;
+                        spacing: Spacing.sm;
 
-                    Text {
-                        text: "Knowledge Graph";
-                        color: Colors.text-primary;
-                        font-size: Typography.lg;
-                        font-weight: Typography.medium;
-                    }
-                    if root.entities.length == 0: Text {
-                        text: "No entities yet — Jarvis learns people, projects, and topics from conversations.";
-                        color: Colors.text-muted;
-                        font-size: Typography.xs;
-                        wrap: word-wrap;
-                    }
+                        Text {
+                            text: "Knowledge Graph";
+                            color: Colors.text-primary;
+                            font-size: Typography.lg;
+                            font-weight: Typography.medium;
+                        }
+                        if root.entities.length == 0: Text {
+                            text: "No entities yet — Jarvis learns people, projects, and topics from conversations.";
+                            color: Colors.text-muted;
+                            font-size: Typography.xs;
+                            wrap: word-wrap;
+                        }
 
-                    // Entity chips (click → radial map)
-                    Flickable {
-                        height: 92px;
-                        viewport-height: chips.preferred-height;
-                        chips := VerticalLayout {
-                            spacing: Spacing.xs;
-                            for row in root.entities: Rectangle {
-                                height: Spacing.button-height;
-                                border-radius: Spacing.radius-md;
-                                background: row.is-selected ? Colors.selected : transparent;
-                                TouchArea { clicked => { root.select-entity(row.entity-id); } }
-                                HorizontalLayout {
-                                    padding-left: Spacing.sm;
-                                    padding-right: Spacing.sm;
-                                    spacing: Spacing.sm;
-                                    Text {
-                                        horizontal-stretch: 1;
-                                        text: row.name;
-                                        color: Colors.text-primary;
-                                        font-size: Typography.sm;
-                                        vertical-alignment: center;
-                                        overflow: elide;
-                                    }
-                                    Text {
-                                        text: row.kind + " · " + row.mention-label;
-                                        color: Colors.text-muted;
-                                        font-size: Typography.xs;
-                                        vertical-alignment: center;
+                        // Entity chips (click → radial map)
+                        Flickable {
+                            height: 92px;
+                            viewport-height: chips.preferred-height;
+                            chips := VerticalLayout {
+                                spacing: Spacing.xs;
+                                for row in root.entities: Rectangle {
+                                    height: Spacing.button-height;
+                                    border-radius: Spacing.radius-md;
+                                    background: row.is-selected ? Colors.selected : transparent;
+                                    TouchArea { enabled: root.show; clicked => { root.select-entity(row.entity-id); } }
+                                    HorizontalLayout {
+                                        padding-left: Spacing.sm;
+                                        padding-right: Spacing.sm;
+                                        spacing: Spacing.sm;
+                                        Text {
+                                            horizontal-stretch: 1;
+                                            text: row.name;
+                                            color: Colors.text-primary;
+                                            font-size: Typography.sm;
+                                            vertical-alignment: center;
+                                            overflow: elide;
+                                        }
+                                        Text {
+                                            text: row.kind + " · " + row.mention-label;
+                                            color: Colors.text-muted;
+                                            font-size: Typography.xs;
+                                            vertical-alignment: center;
+                                        }
                                     }
                                 }
                             }
                         }
-                    }
 
-                    // Radial connection map
-                    graph-pane := Rectangle {
-                        vertical-stretch: 1;
-                        border-radius: Spacing.radius-md;
-                        background: Colors.surface;
-                        clip: true;
+                        // Radial connection map
+                        graph-pane := Rectangle {
+                            vertical-stretch: 1;
+                            border-radius: Spacing.radius-md;
+                            background: Colors.surface;
+                            clip: true;
 
-                        // Coordinates live in a virtual 400x300 space; the
-                        // Path viewbox and node positioning both scale it to
-                        // the pane, so the map is resolution-independent.
-                        for edge in root.graph-edges: Path {
-                            width: 100%;
-                            height: 100%;
-                            viewbox-width: 400;
-                            viewbox-height: 300;
-                            stroke: Colors.divider;
-                            stroke-width: 1px;
-                            MoveTo { x: edge.x1; y: edge.y1; }
-                            LineTo { x: edge.x2; y: edge.y2; }
-                        }
-
-                        for node in root.graph-nodes: Rectangle {
-                            x: (node.x / 400) * parent.width - self.width / 2;
-                            y: (node.y / 300) * parent.height - self.height / 2;
-                            width: node.is-center ? 120px : 96px;
-                            height: 24px;
-                            border-radius: 12px;
-                            background: node.is-center ? Colors.primary : Colors.background;
-                            border-width: node.is-center ? Spacing.stroke : 0px;
-                            border-color: Colors.primary;
-                            Text {
-                                width: parent.width - 8px;
-                                x: 4px;
+                            // Coordinates live in a virtual 400x300 space; the
+                            // Path viewbox and node positioning both scale it to
+                            // the pane, so the map is resolution-independent.
+                            for edge in root.graph-edges: Path {
+                                width: 100%;
                                 height: 100%;
-                                text: node.name;
-                                color: node.is-center ? Colors.background : Colors.text-primary;
+                                viewbox-width: 400;
+                                viewbox-height: 300;
+                                stroke: Colors.divider;
+                                stroke-width: 1px;
+                                MoveTo { x: edge.x1; y: edge.y1; }
+                                LineTo { x: edge.x2; y: edge.y2; }
+                            }
+
+                            for node in root.graph-nodes: Rectangle {
+                                x: (node.x / 400) * parent.width - self.width / 2;
+                                y: (node.y / 300) * parent.height - self.height / 2;
+                                width: node.is-center ? 120px : 96px;
+                                height: 24px;
+                                border-radius: 12px;
+                                background: node.is-center ? Colors.primary : Colors.background;
+                                border-width: node.is-center ? Spacing.stroke : 0px;
+                                border-color: Colors.primary;
+                                Text {
+                                    width: parent.width - 8px;
+                                    x: 4px;
+                                    height: 100%;
+                                    text: node.name;
+                                    color: node.is-center ? Colors.background : Colors.text-primary;
+                                    font-size: Typography.xs;
+                                    horizontal-alignment: center;
+                                    vertical-alignment: center;
+                                    overflow: elide;
+                                }
+                            }
+
+                            if root.graph-nodes.length == 0: Text {
+                                width: 100%;
+                                height: 100%;
+                                text: "Select an entity to map its connections";
+                                color: Colors.text-muted;
                                 font-size: Typography.xs;
                                 horizontal-alignment: center;
                                 vertical-alignment: center;
-                                overflow: elide;
                             }
-                        }
-
-                        if root.graph-nodes.length == 0: Text {
-                            width: 100%;
-                            height: 100%;
-                            text: "Select an entity to map its connections";
-                            color: Colors.text-muted;
-                            font-size: Typography.xs;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
                         }
                     }
                 }

@@ -50,12 +50,19 @@ export component ChatHeaderMenu inherits Rectangle {
         // Eat taps on the card's own padding.
         TouchArea { }
 
-        menu := VerticalLayout {
-            padding-top: Spacing.xs;
-            padding-bottom: Spacing.xs;
-            if root.show-pinned: MenuRow { icon: Icons.pin; label: "Pinned messages"; clicked => { root.pinned(); } }
-            if root.show-video-call: MenuRow { icon: Icons.video; label: "Video call"; clicked => { root.video-call(); } }
-            if root.show-settings: MenuRow { icon: Icons.settings; label: "Conversation settings"; clicked => { root.settings(); } }
+        // Rows are hidden the moment the menu is logically closed (no pointer,
+        // key, Tab focus or accessible default action reaches an invisible
+        // subtree) and every row action checks `show` besides: MenuRow's
+        // default action is unconditional.
+        Rectangle {
+            visible: root.show;
+            menu := VerticalLayout {
+                padding-top: Spacing.xs;
+                padding-bottom: Spacing.xs;
+                if root.show-pinned: MenuRow { icon: Icons.pin; label: "Pinned messages"; clicked => { if root.show { root.pinned(); } } }
+                if root.show-video-call: MenuRow { icon: Icons.video; label: "Video call"; clicked => { if root.show { root.video-call(); } } }
+                if root.show-settings: MenuRow { icon: Icons.settings; label: "Conversation settings"; clicked => { if root.show { root.settings(); } } }
+            }
         }
     }
 

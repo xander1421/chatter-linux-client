@@ -58,13 +58,20 @@ export component CreateMenu inherits Rectangle {
         // Eat taps on the card's own padding.
         TouchArea { }
 
-        menu := VerticalLayout {
-            padding-top: Spacing.xs;
-            padding-bottom: Spacing.xs;
-            MenuRow { icon: Icons.message-circle; label: "New Chat"; clicked => { root.new-chat(); } }
-            // Channels do not exist in Shield mode (sidebar.slint hides them).
-            if !AnonMode.enabled: MenuRow { icon: Icons.megaphone; label: "New Channel"; clicked => { root.new-channel(); } }
-            MenuRow { icon: Icons.folder; label: "New Section"; clicked => { root.new-section(); } }
+        // Rows are hidden the moment the menu is logically closed (no pointer,
+        // key, Tab focus or accessible default action reaches an invisible
+        // subtree) and every row action checks `show` besides: MenuRow's
+        // default action is unconditional.
+        Rectangle {
+            visible: root.show;
+            menu := VerticalLayout {
+                padding-top: Spacing.xs;
+                padding-bottom: Spacing.xs;
+                MenuRow { icon: Icons.message-circle; label: "New Chat"; clicked => { if root.show { root.new-chat(); } } }
+                // Channels do not exist in Shield mode (sidebar.slint hides them).
+                if !AnonMode.enabled: MenuRow { icon: Icons.megaphone; label: "New Channel"; clicked => { if root.show { root.new-channel(); } } }
+                MenuRow { icon: Icons.folder; label: "New Section"; clicked => { if root.show { root.new-section(); } } }
+            }
         }
     }
 
