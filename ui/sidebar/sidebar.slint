@@ -233,6 +233,10 @@ export component Sidebar inherits Rectangle {
     in property <length> bottom-inset: 0px;
 
     Rectangle {
+        // Clip the list and glass chrome together. Child/backdrop painting must
+        // not fill the square corners outside the tablet panel silhouette.
+        border-radius: root.border-radius;
+        clip: true;
         // ════════════════════════════════════════
         // FIXED TOP ROW — the app's title row
         // ════════════════════════════════════════
