@@ -30,7 +30,7 @@ debug = 0              # No debug symbols (faster linking)
 incremental = true     # Incremental compilation
 codegen-units = 256    # More parallelism
 
-# chatter-ui-slint gets NO per-package override, and that is measured, not an
+# chatter-ui-slint keeps O0, and that is measured, not an
 # oversight (OPEN-ITEMS §101, 2026-10-04). It is a workspace member, so the
 # `"*"` opt-level = 2 below never applied to it: it already builds at O0 with
 # debug = 0. Its rustc compiles ~50 MB of generated Rust for one edited .slint
@@ -43,6 +43,11 @@ codegen-units = 256    # More parallelism
 #   -Zthreads=8 (nightly rustc)     75 s, 9.2 GB               (-36% wall)
 # Only -Zthreads helps, and it is nightly-only, so it cannot live here (CI
 # builds this workspace on stable). Opt in per machine, see §101.
+
+# Keep the generated UI non-incremental to bound memory and allow sccache reuse.
+# Other workspace crates inherit incremental = true above.
+[profile.dev.package.chatter-ui-slint]
+incremental = false
 
 # chatter-core is opted OUT of the workspace-member opt-level = 0 above.
 #
