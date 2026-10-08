@@ -715,6 +715,7 @@ enum CallCommand {
     /// Withdraw a previously presented incoming call (caller hung up / timed
     /// out / remote-declined before we acted).
     OrchWithdrawIncoming {
+        session_revision: Option<u64>,
         call: CallHandle,
         reason: CallEndReason,
         response: Option<oneshot::Sender<()>>,
@@ -1158,6 +1159,7 @@ impl CallWorkerHandle {
     /// Withdraw a previously presented incoming call.
     pub fn orch_withdraw_incoming(&self, call: CallHandle, reason: CallEndReason) {
         let _ = self.cmd_tx.try_send(CallCommand::OrchWithdrawIncoming {
+            session_revision: self.presentation_session,
             call,
             reason,
             response: None,
@@ -1173,6 +1175,7 @@ impl CallWorkerHandle {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
             .send(CallCommand::OrchWithdrawIncoming {
+                session_revision: self.presentation_session,
                 call,
                 reason,
                 response: Some(tx),
@@ -1500,7 +1503,7 @@ impl CallWorkerHandle {
     }
 
     /// Fire-and-forget variant of [`disconnect_local`] for use in sync
-    /// event handlers (e.g. `handle_domain_event`) that can't `.await`.
+    /// event handlers that can't `.await`.
     /// The worker will disconnect LiveKit, clear `active_call`, clear the
     /// orchestrator slot, and emit `ActiveEnded` — same as the awaited
     /// version, just without backpressure. With `call`, a no-op unless that
@@ -2517,7 +2520,21 @@ fn run_call_worker(
                     });
                 }
 
-                CallCommand::OrchWithdrawIncoming { call, reason, response } => {
+                CallCommand::OrchWithdrawIncoming { session_revision, call, reason, response } => {
+                    // Queue backpressure may span logout/login. Fence the mutation
+                    // under the session lease, including a reused call handle.
+                    let session_lease = incoming_presentation.snapshot.read();
+                    if session_revision.is_some()
+                        && (session_lease.session_revision != session_revision
+                            || orchestrator.incoming.get(&call).is_some_and(|pending| {
+                                pending.session_revision != session_revision
+                            }))
+                    {
+                        if let Some(response) = response {
+                            let _ = response.send(());
+                        }
+                        continue;
+                    }
                     if let Some(pending) = orchestrator.incoming.remove(&call) {
                         pending.retire_anon();
                         let _ = call_events_tx.send(CallOrchestratorEvent::IncomingWithdrawn {
@@ -2530,6 +2547,7 @@ fn run_call_worker(
                             "OrchWithdrawIncoming: no matching pending incoming"
                         );
                     }
+                    drop(session_lease);
                     incoming_presentation.publish(&orchestrator);
                     if let Some(response) = response {
                         let _ = response.send(());
@@ -4032,7 +4050,7 @@ pub fn spawn_call_orchestrator_bridge(
                         let now = worker.incoming_presentation.session_revision();
                         if now != owner { owner = now; rx = bus.subscribe_domain(); continue; }
                         let scoped = match owner { Some(rev) => worker.for_presentation_session(rev), None => worker.clone() };
-                        if scoped.presentation_session_is_current() { handle_domain_event(&scoped, &signaling, event); }
+                        if scoped.presentation_session_is_current() { handle_domain_event(&scoped, &signaling, event).await; }
                     },
                     Err(RecvError::Lagged(n)) => {
                         tracing::warn!(
@@ -4172,7 +4190,7 @@ fn stage_incoming_anon_offer(
     });
 }
 
-fn handle_domain_event(
+async fn handle_domain_event(
     worker: &CallWorkerHandle,
     signaling: &crate::services::call_signaling::CallSignalingService,
     event: DomainEvent,
@@ -4229,7 +4247,7 @@ fn handle_domain_event(
             // ringing — it must never tear down a call this device is in.
             if let Some(reason) = elsewhere_reason(reason) {
                 if signaling.is_current_user(&peer_id) {
-                    worker.orch_withdraw_incoming(CallHandle::from(call_id), reason);
+                    withdraw_domain_call(worker, CallHandle::from(call_id), reason, false).await;
                     return;
                 }
                 tracing::warn!(peer_id = %peer_id, "Answered/declined-elsewhere hangup from another user; treating as a plain hangup");
@@ -4244,10 +4262,7 @@ fn handle_domain_event(
             // Still ringing? The caller gave up — stop ringing. A no-op when
             // this call was never presented or was already accepted.
             let call = CallHandle::from(call_id);
-            worker.orch_withdraw_incoming(call.clone(), end.clone());
-            // In this call? Disconnect from LiveKit + clear active_call +
-            // orchestrator. A hangup for any other call leaves this one alone.
-            worker.disconnect_local_nonblocking(Some(call), end);
+            withdraw_domain_call(worker, call, end, true).await;
         }
 
         DomainEvent::AnonCallOfferReceived {
@@ -4329,7 +4344,7 @@ fn handle_domain_event(
                 OrchestratedCallKind::AnonDm,
                 &call_room_id,
                 sender_id,
-            );
+            ).await;
         }
         DomainEvent::AnonGroupCallHangupReceived {
             call_room_id,
@@ -4342,7 +4357,7 @@ fn handle_domain_event(
                 OrchestratedCallKind::AnonGroup,
                 &call_room_id,
                 sender_id,
-            );
+            ).await;
         }
 
         DomainEvent::AnonGroupCallOfferReceived {
@@ -4423,6 +4438,42 @@ fn handle_domain_event(
     }
 }
 
+/// Run on the separate EventBus bridge, never on the call actor itself.
+/// Apply the withdrawal before any exact-call disconnect, using the existing
+/// bounded actor queue for both so saturation cannot drop either command.
+async fn withdraw_domain_call(
+    worker: &CallWorkerHandle,
+    call: CallHandle,
+    reason: CallEndReason,
+    disconnect: bool,
+) {
+    if let Err(error) = worker
+        .orch_withdraw_incoming_reliably(call.clone(), reason.clone())
+        .await
+    {
+        tracing::debug!(%error, "Domain call withdrawal worker unavailable");
+        return;
+    }
+    if disconnect {
+        let (tx, rx) = oneshot::channel();
+        if worker
+            .cmd_tx
+            .send(CallCommand::DisconnectLocal {
+                notify_server: false,
+                session_revision: worker.presentation_session,
+                call: Some(call),
+                reason,
+                response: tx,
+            })
+            .await
+            .is_err()
+            || rx.await.is_err()
+        {
+            tracing::debug!("Domain call disconnect worker unavailable");
+        }
+    }
+}
+
 /// `sender`'s hangup of the anon call `kind` in room `call_room_id`.
 ///
 /// It calls off the ring `sender` started: the callee stops ringing and the
@@ -4430,7 +4481,7 @@ fn handle_domain_event(
 /// hangup ([`anon_hangup_ends_call`]). In a group the member only leaves — the
 /// room drops them from the roster, and ends the call for us only once nobody
 /// else is left in it ([`peer_left_ends_call`]).
-fn handle_anon_hangup(
+async fn handle_anon_hangup(
     worker: &CallWorkerHandle,
     signaling: &crate::services::call_signaling::CallSignalingService,
     kind: OrchestratedCallKind,
@@ -4449,16 +4500,13 @@ fn handle_anon_hangup(
         // Only the member who rang us can call our ring off; another's hangup
         // (or our own, echoed back by the group mailbox) leaves it ringing.
         if rang_us {
-            worker.orch_withdraw_incoming(call, CallEndReason::RemoteHangup);
+            withdraw_domain_call(worker, call, CallEndReason::RemoteHangup, false).await;
         }
         return;
     }
     // Still ringing? The caller gave up or it rang out — stop ringing.
     // A no-op when this call was never presented or already accepted.
-    worker.orch_withdraw_incoming(call.clone(), CallEndReason::RemoteHangup);
-    // In this call? Disconnect from LiveKit + clear active_call +
-    // orchestrator. A hangup for any other call leaves this one alone.
-    worker.disconnect_local_nonblocking(Some(call), CallEndReason::RemoteHangup);
+    withdraw_domain_call(worker, call, CallEndReason::RemoteHangup, true).await;
 }
 
 /// Whether a participant's hangup ends anon call `kind` for us: a 1:1 call
@@ -4480,7 +4528,7 @@ fn anon_room_handle(call_room_id: &[u8]) -> Option<CallHandle> {
 /// Handle an anonymous call answer (DM or group) inside the orchestrator.
 ///
 /// Calls `CallSignalingService::handle_anon_call_answer` on a background task
-/// so the bridge's sync dispatch loop stays responsive, then translates the
+/// so the bridge's dispatch loop stays responsive, then translates the
 /// outcome into orchestrator events:
 ///
 /// - `Connected`   → emit `AnonCallConnected`; UI mounts the active-call surface.

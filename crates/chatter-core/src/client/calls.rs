@@ -546,10 +546,12 @@ impl ChatterClient {
             // Rung for it too: the ring is answered now, and any key held for
             // the join belongs to this one (else it would sit in the invite).
             let call_id = call.id.to_string();
-            call_worker.orch_withdraw_incoming(
+            if let Err(error) = call_worker.orch_withdraw_incoming_reliably(
                 CallHandle::from(call_id.as_str()),
                 crate::services::call_worker::CallEndReason::AnsweredElsewhere,
-            );
+            ).await {
+                tracing::debug!(%error, "Group join withdrawal worker unavailable");
+            }
             let _ = self
                 .services
                 .notification_service
