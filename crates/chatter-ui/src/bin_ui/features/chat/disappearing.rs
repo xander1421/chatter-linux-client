@@ -20,7 +20,6 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     window
         .global::<DisappearingGlobal>()
         .set_options(ModelRc::new(VecModel::from(options())));
-    wire_set_dm_timer(window, ui_ctx);
     wire_set_dm_window(window, ui_ctx);
     wire_refresh(window, ui_ctx);
     wire_expired(window, ui_ctx);
@@ -115,42 +114,6 @@ fn refresh_all(w: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             show_for_profile(w, ui_ctx, &peer, true);
         }
     }
-}
-
-fn wire_set_dm_timer(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    let weak = window.as_weak();
-    let ctx = ui_ctx.clone();
-    window.global::<DisappearingGlobal>().on_set_dm_timer(move |peer, seconds| {
-        let Ok(peer_id) = peer.parse::<UserId>() else {
-            tracing::warn!(peer = %peer, "disappearing: bad peer id from the picker");
-            return;
-        };
-        let seconds = u32::try_from(seconds).unwrap_or(0);
-        let ctx = ctx.clone();
-        let weak = weak.clone();
-        tokio::spawn(async move {
-            let result = ctx
-                .set_disappearing_timer(ActiveConversation::ServerDm { peer_id }, seconds)
-                .await;
-            let _ = slint::invoke_from_event_loop(move || {
-                let Some(w) = weak.upgrade() else { return };
-                // Adopted locally even when the announcement failed (core
-                // keeps the change; the next message carries it), so the
-                // screen shows the new value either way.
-                refresh_all(&w, &ctx);
-                if let Err(e) = result {
-                    tracing::warn!(peer_id = %peer_id, error = %e, "disappearing: timer change not announced");
-                    w.set_toast_message(
-                        "Timer changed here, but your friend could not be told yet. \
-                         It reaches them with your next message."
-                            .into(),
-                    );
-                    w.set_toast_variant("error".into());
-                    w.set_toast_visible(true);
-                }
-            });
-        });
-    });
 }
 
 fn wire_set_dm_window(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {

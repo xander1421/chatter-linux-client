@@ -399,7 +399,8 @@ def dead_callbacks(slint_texts, rust_text):
 #
 # The rule: any TouchArea that tests `PointerEventButton.right` must ALSO have a
 # touch path — it is a `HoldArea`, or it arms a hold timer (`... .running =
-# true`) on pointer-down. A new row component that copies only the right-click
+# true`) on pointer-down, directly or through component-local helpers, and
+# its expiry reaches the same menu action. A row that copies only right-click
 # branch fails here.
 # =============================================================================
 
@@ -432,13 +433,105 @@ def enclosing_touch_block(text: str, idx: int):
     return None
 
 
-# Arming a Timer is the shape every hold path in this tree uses.
-TIMER_ARM_RE = re.compile(r"\.running\s*=\s*true|running\s*:\s*true")
+def slint_code(text):
+    """Mask comments and strings without moving braces or source locations."""
+    tokens = re.compile(r'//[^\n]*|/\*.*?\*/|"(?:\\.|[^"\\])*"', re.S)
+    return tokens.sub(lambda m: re.sub(r'[^\n]', ' ', m.group()), text)
+
+
+def enclosing_component(text, idx):
+    depth = 0
+    for i in range(idx - 1, -1, -1):
+        if text[i] == '}':
+            depth += 1
+        elif text[i] == '{':
+            if depth:
+                depth -= 1
+            else:
+                head = text[text.rfind('\n', 0, i) + 1:i]
+                if re.search(r'\bcomponent\s+[\w-]+(?:\s+inherits\s+[\w-]+)?\s*$', head):
+                    return balanced_block(text, i)
+    return ''
+
+
+ROOT_CALL_RE = re.compile(r'\broot\.([\w-]+)\s*\(')
+
+
+def helper_hold_path(text, idx, body):
+    """Resolve component-local press helpers to a timer and the menu action.
+
+    Only calls from a pointer-down branch count. Timer expiry must reach an
+    action also reachable from the right-click branch; an unrelated timer or
+    an uncalled helper does not establish a touch menu path.
+    """
+    scope = enclosing_component(text, idx)
+    functions = {}
+    for m in re.finditer(r'\bfunction\s+([\w-]+)\s*\([^)]*\)\s*(?:->\s*[\w<>-]+\s*)?\{', scope):
+        functions[m.group(1)] = balanced_block(scope, m.end() - 1)
+
+    def expand(code, visited=None):
+        visited = set() if visited is None else visited
+        result = code
+        for name in ROOT_CALL_RE.findall(code):
+            if name in functions and name not in visited:
+                visited.add(name)
+                result += '\n' + expand(functions[name], visited)
+        return result
+
+    def branches(code, guards=()):
+        # Balanced braces keep nested ifs separate; carry outer guards so a
+        # down test nested inside a right-button guard cannot look touchable.
+        cursor = 0
+        pattern = re.compile(r'\bif\s*([^{};]+)\{')
+        while (m := pattern.search(code, cursor)):
+            inner = balanced_block(code, m.end() - 1)
+            conditions = guards + (m.group(1),)
+            # Do not attribute a nested, separately guarded call to its parent.
+            direct = inner
+            nested = list(pattern.finditer(inner))
+            spans = []
+            end = 0
+            for child in nested:
+                if child.start() < end:
+                    continue
+                child_body = balanced_block(inner, child.end() - 1)
+                end = child.end() + len(child_body) + 1
+                spans.append((child.start(), end))
+            for start, end in reversed(spans):
+                direct = direct[:start] + ' ' * (end - start) + direct[end:]
+            yield conditions, direct
+            yield from branches(inner, conditions)
+            cursor = m.end() + len(inner) + 1
+
+    handler = re.search(r'\bpointer-event\s*\([^)]*\)\s*=>\s*\{', body)
+    if not handler:
+        return False
+    pointer = balanced_block(body, handler.end() - 1)
+    down, right = [], []
+    for guards, code in branches(pointer):
+        condition = ' '.join(guards)
+        if re.search(r'\b\w+\.kind\s*==\s*PointerEventKind\.down\b', condition) and RIGHT_BTN not in condition:
+            down.append(expand(code))
+        if re.search(r'\b\w+\.button\s*==\s*PointerEventButton\.right\b', condition):
+            right.append(expand(code))
+    menu_calls = set(ROOT_CALL_RE.findall('\n'.join(right))) - functions.keys()
+    armed = set(re.findall(r'\b([\w-]+)\.running\s*=\s*true\b', '\n'.join(down)))
+    for m in re.finditer(r'\b([\w-]+)\s*:=\s*Timer\s*\{', scope):
+        if m.group(1) not in armed:
+            continue
+        timer = balanced_block(scope, m.end() - 1)
+        triggered = re.search(r'\btriggered\s*=>\s*\{', timer)
+        if triggered:
+            action = expand(balanced_block(timer, triggered.end() - 1))
+            if menu_calls & set(ROOT_CALL_RE.findall(action)):
+                return True
+    return False
 
 
 def right_click_only_areas(slint_texts):
     out = []
     for path, text in slint_texts.items():
+        text = slint_code(text)
         rel = os.path.relpath(path, ROOT)
         seen = set()
         for m in re.finditer(re.escape(RIGHT_BTN), text):
@@ -453,7 +546,7 @@ def right_click_only_areas(slint_texts):
             seen.add(line)
             if kind == "HoldArea":
                 continue                      # HoldArea IS the touch path
-            if TIMER_ARM_RE.search(body):
+            if helper_hold_path(text, m.start(), body):
                 continue                      # rolls its own hold timer
             out.append((rel, line, "TouchArea with right-click and no hold path"))
     return out
