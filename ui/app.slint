@@ -1317,7 +1317,11 @@ export component MainWindow inherits Window {
     callback toggle-anon-mode();              // sidebar button → Rust handler
     callback submit-anon-mode-pin(string);    // PIN modal submit → Rust verify
 
-    background: Materials.ambient;
+    // Tablet panes share one page canvas behind their rounded chrome.
+    // A tinted window behind the sidebar and an opaque chat beside it expose
+    // a rectangular patch in the search/footer corner cutouts.
+    background: root.is-mobile-platform && !root.compact-layout
+        ? Colors.background : Materials.ambient;
 
     // ========== Responsive sidebar auto-collapse ==========
     // Auto-collapse sidebar on smaller screens (< 800px width)
