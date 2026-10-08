@@ -147,12 +147,14 @@ impl ChatterClient {
     }
 
     /// Account-local drafts and failed sends never survive sign-out, on disk
-    /// included. The row deleted is the signed-in account's, whether or not
-    /// its drafts were ever loaded this session (sign-out straight from the
-    /// list, before any conversation was opened), or the one the map was
-    /// loaded for when the caller already signed the account out
-    /// (`delete_account`). Only the explicit sign-out paths call this;
-    /// `shutdown` invalidates the session without touching the row.
+    /// included. Exactly one row is deleted: the signed-in account's, whether
+    /// or not its drafts were ever loaded this session (sign-out straight
+    /// from the list, before any conversation was opened), or, when the
+    /// caller already signed the account out (`delete_account`), the one the
+    /// map was loaded for. A loaded owner that is not the signed-in account
+    /// is a previous session's; that account is not signing out and keeps
+    /// its row. Only the explicit sign-out paths call this; `shutdown`
+    /// invalidates the session without touching the row.
     pub fn clear_composer_session(&self) {
         let signed_in = self.auth_state().get().current_user_id;
         self.auth_state().invalidate_session();
@@ -160,9 +162,7 @@ impl ChatterClient {
         let mut drafts = self.composer_drafts.lock();
         drafts.clear();
         let loaded = self.composer_draft_owner.lock().take();
-        let mut owners: Vec<_> = signed_in.into_iter().chain(loaded).collect();
-        owners.dedup();
-        for owner in owners {
+        if let Some(owner) = signed_in.or(loaded) {
             if self
                 .settings_repo()
                 .delete(&Self::composer_drafts_key(owner))
@@ -755,6 +755,38 @@ mod tests {
                 .swap_composer_draft("", ComposerDraft::default(), &a.to_string())
                 .is_empty(),
             "row survived a sign-out that never loaded it"
+        );
+    }
+
+    #[tokio::test]
+    async fn signing_out_another_account_keeps_the_last_loaded_owners_row() {
+        let (client, dir) = client();
+        let a_user = crate::domain::ids::UserId::new();
+        client.auth_state().set_logged_in(a_user, 1, "A".into());
+        let a = ChannelId::new();
+        open(&client, a);
+        client.autosave_composer_draft(ComposerDraft {
+            text: "a's thought".into(),
+            reply: None,
+        });
+
+        // B signs in and out again without ever touching the composer, so the
+        // map is still the one loaded for A. Only B's row may go.
+        client.auth_state().set_logged_out();
+        client
+            .auth_state()
+            .set_logged_in(crate::domain::ids::UserId::new(), 1, "B".into());
+        client.clear_composer_session();
+        drop(client);
+
+        let client = client_in(&dir);
+        client.auth_state().set_logged_in(a_user, 1, "A".into());
+        assert_eq!(
+            client
+                .swap_composer_draft("", ComposerDraft::default(), &a.to_string())
+                .text,
+            "a's thought",
+            "another account's sign-out deleted A's drafts"
         );
     }
 }
