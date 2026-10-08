@@ -255,7 +255,7 @@ export component CallHistoryScreen inherits Rectangle {
                 }
             }
 
-            if !root.loading && root.error-message == "" && root.rows.length == 0: VerticalLayout {
+            if !root.loading && root.error-message == "" && root.rows.length == 0 && !root.paging-paused: VerticalLayout {
                 alignment: center;
                 vertical-stretch: 1;
                 spacing: Spacing.sm;
