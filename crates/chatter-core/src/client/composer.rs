@@ -10,20 +10,28 @@ use super::ChatterClient;
 use crate::state::{ActiveConversation, PendingAttachment};
 
 /// The message being replied to, as the composer's reply bar holds it.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ComposerReply {
     pub sender_id: String,
     pub timestamp: String,
     pub sender_name: String,
     pub preview: String,
-    /// Presentation-only RGBA thumbnail, retained across delayed send recovery.
+    /// Presentation-only RGBA thumbnail, retained across delayed send recovery
+    /// but not across a restart: a restored reply bar shows text only.
+    #[serde(skip)]
     pub thumbnail: Option<(Vec<u8>, u32, u32)>,
 }
 
 /// What a conversation's composer holds while another conversation is open:
 /// unsent text and the reply bar's target. Staged files live in the
 /// per-conversation attachment trays.
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+///
+/// Drafts outlive a restart: the signed-in account's map is one row of the
+/// encrypted settings table (`ui.composer_drafts.<owner>`), loaded on the
+/// first use after sign-in and rewritten on every change. Sign-out deletes
+/// the row. Accounts never share a key, so one account cannot see another's
+/// unsent text.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct ComposerDraft {
     pub text: String,
     pub reply: Option<ComposerReply>,
@@ -138,11 +146,23 @@ impl ChatterClient {
         )
     }
 
-    /// Account-local drafts and failed sends never survive sign-out.
+    /// Account-local drafts and failed sends never survive sign-out, on disk
+    /// included: the row loaded for the account being signed out is deleted.
     pub fn clear_composer_session(&self) {
         self.auth_state().invalidate_session();
         self.parked_sends.lock().clear();
-        self.composer_drafts.lock().clear();
+        let mut drafts = self.composer_drafts.lock();
+        drafts.clear();
+        if let Some(owner) = self.composer_draft_owner.lock().take() {
+            if self
+                .settings_repo()
+                .delete(&Self::composer_drafts_key(owner))
+                .is_err()
+            {
+                tracing::warn!("persisted composer drafts not deleted at sign-out");
+            }
+        }
+        drop(drafts);
         self.composer_owner.lock().clear();
         self.chat_state().clear_attachment_trays();
         self.chat_state()
@@ -201,6 +221,95 @@ impl ChatterClient {
             && self.composer_shows_active()
             && self.chat_state().get_pending_attachments().is_empty()
     }
+
+    // ── Persistence ─────────────────────────────────────────────────
+
+    fn composer_drafts_key(owner: crate::domain::UserId) -> String {
+        format!("ui.composer_drafts.{}", owner.0)
+    }
+
+    fn settings_repo(&self) -> crate::storage::repositories::settings_repo::SettingsRepository {
+        crate::storage::repositories::settings_repo::SettingsRepository::new(
+            self.services.database.clone(),
+        )
+    }
+
+    /// The draft map for the current session. A session change (sign-in,
+    /// sign-out, re-login) discards whatever the map held and loads the
+    /// signed-in account's persisted drafts, or nothing while signed out.
+    /// Returns the guard and whether the session changed on this call.
+    pub(super) fn composer_drafts_for_session(
+        &self,
+    ) -> (
+        parking_lot::MutexGuard<'_, std::collections::HashMap<String, ComposerDraft>>,
+        bool,
+    ) {
+        let mut drafts = self.composer_drafts.lock();
+        let auth = self.auth_state().get();
+        let mut draft_revision = self.composer_draft_revision.lock();
+        let changed_session = *draft_revision != auth.session_revision;
+        if changed_session {
+            *draft_revision = auth.session_revision;
+            *self.composer_draft_owner.lock() = auth.current_user_id;
+            *drafts = auth
+                .current_user_id
+                .and_then(|owner| {
+                    self.settings_repo()
+                        .get(&Self::composer_drafts_key(owner))
+                        .ok()
+                        .flatten()
+                })
+                .unwrap_or_default();
+        }
+        (drafts, changed_session)
+    }
+
+    /// Write the map under the account it was loaded for. Nothing is written
+    /// while signed out; the in-memory map still serves the session.
+    pub(super) fn persist_composer_drafts(
+        &self,
+        drafts: &std::collections::HashMap<String, ComposerDraft>,
+    ) {
+        let Some(owner) = *self.composer_draft_owner.lock() else {
+            return;
+        };
+        if self
+            .settings_repo()
+            .set(&Self::composer_drafts_key(owner), drafts)
+            .is_err()
+        {
+            tracing::warn!("composer draft not saved");
+        }
+    }
+
+    /// Live snapshot of the composer the UI shows, stored under the
+    /// conversation that composer belongs to (its owner, which may lag core
+    /// navigation) so a restart restores it. Nothing is stored when no
+    /// conversation owns the composer, or after sign-out has moved the
+    /// session on: a stale autosave from the old account's UI lands nowhere.
+    pub fn autosave_composer_draft(&self, draft: ComposerDraft) {
+        let owner = self.composer_owner.lock().clone();
+        if owner.is_empty() {
+            return;
+        }
+        let (mut drafts, changed_session) = self.composer_drafts_for_session();
+        if changed_session {
+            // The composer still shows the previous session's text.
+            return;
+        }
+        let same = drafts
+            .get(&owner)
+            .map_or(draft.is_empty(), |held| *held == draft);
+        if same {
+            return;
+        }
+        if draft.is_empty() {
+            drafts.remove(&owner);
+        } else {
+            drafts.insert(owner, draft);
+        }
+        self.persist_composer_drafts(&drafts);
+    }
 }
 
 #[cfg(test)]
@@ -223,15 +332,20 @@ mod tests {
             b"",
         )
         .unwrap();
-        let client = ChatterClient::builder()
-            .server_url("https://localhost:1")
-            .data_dir(dir.path().to_str().unwrap())
-            .build()
-            .expect("build client");
+        let client = client_in(&dir);
         client
             .auth_state()
             .set_logged_in(crate::domain::ids::UserId::new(), 1, "Test user".into());
         (client, dir)
+    }
+
+    /// A fresh process over the same data directory.
+    fn client_in(dir: &tempfile::TempDir) -> Arc<ChatterClient> {
+        ChatterClient::builder()
+            .server_url("https://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .expect("build client")
     }
 
     fn staged(name: &str) -> PendingAttachment {
@@ -482,5 +596,127 @@ mod tests {
         );
         client.swap_composer_draft(&b.to_string(), ComposerDraft::default(), &a.to_string());
         assert_eq!(client.take_parked_send(true).unwrap().text, "for A");
+    }
+
+    #[tokio::test]
+    async fn drafts_survive_a_restart_for_their_account_only_until_sign_out() {
+        let (client, dir) = client();
+        let user = crate::domain::ids::UserId::new();
+        client.auth_state().set_logged_in(user, 1, "A".into());
+        let (a, b) = (ChannelId::new(), ChannelId::new());
+        open(&client, a);
+        client.autosave_composer_draft(ComposerDraft {
+            text: "half a thought".into(),
+            reply: Some(ComposerReply {
+                sender_id: "peer".into(),
+                timestamp: "1".into(),
+                sender_name: "Peer".into(),
+                preview: "quoted".into(),
+                thumbnail: Some((vec![0; 4], 1, 1)),
+            }),
+        });
+        // Switching away parks it; the parked copy is what the next process sees.
+        client.swap_composer_draft(
+            &a.to_string(),
+            ComposerDraft {
+                text: "half a thought".into(),
+                reply: None,
+            },
+            &b.to_string(),
+        );
+        client.autosave_composer_draft(ComposerDraft {
+            text: "for b".into(),
+            reply: None,
+        });
+        drop(client);
+
+        let client = client_in(&dir);
+        client.auth_state().set_logged_in(user, 1, "A".into());
+        let restored = client.swap_composer_draft("", ComposerDraft::default(), &b.to_string());
+        assert_eq!(restored.text, "for b", "live text lost over restart");
+        let restored = client.swap_composer_draft(&b.to_string(), restored, &a.to_string());
+        assert_eq!(restored.text, "half a thought");
+        assert!(restored.reply.is_none(), "parked copy had no reply");
+
+        // Another account on the same installation sees none of it.
+        client.auth_state().set_logged_out();
+        client
+            .auth_state()
+            .set_logged_in(crate::domain::ids::UserId::new(), 1, "B".into());
+        assert!(
+            client
+                .swap_composer_draft("", ComposerDraft::default(), &a.to_string())
+                .is_empty()
+        );
+
+        // Back as A, the drafts are still there; explicit sign-out removes them.
+        client.auth_state().set_logged_out();
+        client.auth_state().set_logged_in(user, 1, "A".into());
+        assert_eq!(
+            client
+                .swap_composer_draft("", ComposerDraft::default(), &a.to_string())
+                .text,
+            "half a thought"
+        );
+        client.clear_composer_session();
+        drop(client);
+
+        let client = client_in(&dir);
+        client.auth_state().set_logged_in(user, 1, "A".into());
+        assert!(
+            client
+                .swap_composer_draft("", ComposerDraft::default(), &a.to_string())
+                .is_empty(),
+            "drafts survived sign-out"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_reply_target_survives_a_restart_without_its_thumbnail() {
+        let (client, dir) = client();
+        let user = crate::domain::ids::UserId::new();
+        client.auth_state().set_logged_in(user, 1, "A".into());
+        let a = ChannelId::new();
+        open(&client, a);
+        client.autosave_composer_draft(ComposerDraft {
+            text: String::new(),
+            reply: Some(ComposerReply {
+                sender_id: "peer".into(),
+                timestamp: "1".into(),
+                sender_name: "Peer".into(),
+                preview: "quoted".into(),
+                thumbnail: Some((vec![0; 4], 1, 1)),
+            }),
+        });
+        drop(client);
+        let client = client_in(&dir);
+        client.auth_state().set_logged_in(user, 1, "A".into());
+        let reply = client
+            .swap_composer_draft("", ComposerDraft::default(), &a.to_string())
+            .reply
+            .expect("reply target lost over restart");
+        assert_eq!(reply.preview, "quoted");
+        assert!(reply.thumbnail.is_none());
+    }
+
+    #[tokio::test]
+    async fn an_autosave_after_sign_out_lands_nowhere() {
+        let (client, _dir) = client();
+        let a = ChannelId::new();
+        open(&client, a);
+        client.clear_composer_session();
+        // The old UI's debounced autosave fires after core moved on.
+        client.autosave_composer_draft(ComposerDraft {
+            text: "stale".into(),
+            reply: None,
+        });
+        client
+            .auth_state()
+            .set_logged_in(crate::domain::ids::UserId::new(), 1, "B".into());
+        assert!(
+            client
+                .swap_composer_draft("", ComposerDraft::default(), &a.to_string())
+                .is_empty()
+        );
     }
 }

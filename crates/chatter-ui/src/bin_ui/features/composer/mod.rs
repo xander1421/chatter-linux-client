@@ -35,6 +35,43 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     voice::wire(window, ui_ctx);
     wire_text_format(window);
     wire_per_conversation_drafts(window, ui_ctx);
+    wire_draft_autosave(window, ui_ctx);
+}
+
+/// Store what the composer shows right now under the conversation it belongs
+/// to, so an app restart brings it back. Core decides the owner and whether
+/// the session is still the one the text was typed under. Edit mode borrows
+/// the composer for a message's text; that is never a draft.
+pub fn autosave_composer_draft(w: &MainWindow, ctx: &ChatterClient) {
+    if w.get_composer_is_editing() {
+        return;
+    }
+    ctx.autosave_composer_draft(chatter_core::client::ComposerDraft {
+        text: w.get_composer_text().to_string(),
+        reply: crate::bin_ui::features::chat::send_message::composer_reply(w),
+    });
+}
+
+/// Every text or reply-bar change schedules one autosave shortly after the
+/// typing pauses; a change inside the window restarts the wait. Lifecycle
+/// edges (Android pause, desktop exit, send) call the save directly.
+fn wire_draft_autosave(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let weak = slint::ComponentHandle::as_weak(window);
+    let ctx = ui_ctx.clone();
+    let timer = slint::Timer::default();
+    window.on_composer_draft_changed(move || {
+        let weak = weak.clone();
+        let ctx = ctx.clone();
+        timer.start(
+            slint::TimerMode::SingleShot,
+            std::time::Duration::from_millis(400),
+            move || {
+                if let Some(w) = weak.upgrade() {
+                    autosave_composer_draft(&w, &ctx);
+                }
+            },
+        );
+    });
 }
 
 /// Clear only composer presentation when its account is being signed out.

@@ -341,6 +341,7 @@ pub(crate) fn clear_reply(w: &MainWindow) {
     w.set_composer_reply_has_thumbnail(false);
     w.set_composer_reply_thumbnail(slint::Image::default());
     w.set_composer_placeholder("Type a message...".into());
+    w.invoke_composer_draft_changed();
 }
 
 /// Whether the composer holds nothing a restored send could overwrite.
@@ -368,6 +369,9 @@ pub fn take_composer_send(w: &MainWindow, ui_ctx: &ChatterClient) -> Result<Comp
         clear_reply(w);
     }
     crate::bin_ui::features::composer::render_attachments(w, &[]);
+    // The accepted send took the draft: its persisted copy goes with it now,
+    // not after the autosave delay, so a restart cannot resurrect sent text.
+    crate::bin_ui::features::composer::autosave_composer_draft(w, ui_ctx);
     Ok(send)
 }
 
@@ -386,6 +390,7 @@ pub(crate) fn show_reply(w: &MainWindow, reply: ComposerReply) {
     w.set_composer_reply_thumbnail(thumbnail.unwrap_or_default());
     w.set_composer_placeholder("Type your reply...".into());
     w.set_composer_is_replying(true);
+    w.invoke_composer_draft_changed();
 }
 
 /// Put a failed send back into the (empty) composer it came from.

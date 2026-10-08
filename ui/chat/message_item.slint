@@ -1245,10 +1245,11 @@ export component MessageItem inherits Rectangle {
                                     for reaction in root.reactions: Rectangle {
                                         width: max(root.mobile ? Spacing.button-height : 0px, entry.preferred-width + (root.mobile ? Spacing.sm : 4px));
                                         border-radius: self.height / 2;
-                                        // Own reactions: the brand tint, so "yours" reads
-                                        // without a ring (8% neutral was invisible).
+                                        // Own reactions: a neutral 8% tint, no ring and no
+                                        // brand-colour pill around a lone emoji (owner's
+                                        // call); the accessible label carries "yours".
                                         border-width: 0px;
-                                        background: reaction.own ? Colors.tint-strong : transparent;
+                                        background: reaction.own ? Colors.text-primary.with-alpha(0.08) : transparent;
                                         accessible-role: button;
                                         accessible-label: reaction.emoji + (reaction.own ? ", your reaction" : "");
                                         accessible-action-default => { root.reaction-toggled(root.sender-id, root.timestamp-ns, reaction.emoji); }

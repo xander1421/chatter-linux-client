@@ -105,6 +105,11 @@ fn android_main(app: i_slint_backend_android_activity::AndroidApp) {
                     crate::bin_ui::decode_cache::on_lock();
                     if let Some(window) = listener_window.get().and_then(slint::Weak::upgrade) {
                         window.invoke_cancel_composer_keyboard_handover();
+                        // The process may be killed while paused: store the
+                        // draft now rather than after the autosave delay.
+                        if let Some(client) = listener_client.get() {
+                            crate::bin_ui::features::composer::autosave_composer_draft(&window, client);
+                        }
                     }
                 }
                 if let Some(client) = listener_client.get() {
@@ -737,6 +742,8 @@ fn app_run(state: AppState) {
 
     // Shutdown
     tracing::info!("Window closed, signaling shutdown...");
+    // Whatever the composer still holds outlives this exit.
+    bin_ui::features::composer::autosave_composer_draft(&state.window, &state.ui_ctx);
     state.shutdown_token.cancel();
     tracing::info!("Shutting down services...");
 

@@ -197,6 +197,7 @@ impl ClientBuilder {
             server_contact_deferred: AtomicBool::new(false),
             composer_drafts: Mutex::new(std::collections::HashMap::new()),
             composer_draft_revision: Mutex::new(0),
+            composer_draft_owner: Mutex::new(None),
             parked_sends: Mutex::new(Vec::new()),
             composer_owner: Mutex::new(String::new()),
             expired_messages: tokio::sync::broadcast::channel(16).0,
@@ -398,9 +399,12 @@ pub struct ChatterClient {
     server_contact_deferred: AtomicBool,
     /// Unsent composer text and reply target per conversation id, so a draft
     /// stays with the conversation it was typed in. See `swap_composer_draft`.
-    // in-memory, lost on restart.
+    /// Mirrored to the signed-in account's settings row on every change
+    /// (`persist_composer_drafts`), so it survives a restart.
     composer_drafts: Mutex<std::collections::HashMap<String, ComposerDraft>>,
     composer_draft_revision: Mutex<u64>,
+    /// The account whose persisted drafts the map holds, deleted at sign-out.
+    composer_draft_owner: Mutex<Option<crate::domain::UserId>>,
     /// Failed composed sends kept until their composer has room for them.
     /// See `recover_composer_send`. In memory, like the drafts.
     parked_sends: Mutex<Vec<ComposerSend>>,
@@ -3341,25 +3345,25 @@ impl ChatterClient {
         draft: ComposerDraft,
         entering: &str,
     ) -> ComposerDraft {
-        let mut drafts = self.composer_drafts.lock();
-        let revision = self.auth_state().get().session_revision;
-        let mut draft_revision = self.composer_draft_revision.lock();
-        let changed_session = *draft_revision != revision;
-        if changed_session {
-            // A queued navigation callback can arrive after sign-out cleared
-            // the store but before the old UI text was cleared. Discard it.
-            drafts.clear();
-            *draft_revision = revision;
-        }
+        // A queued navigation callback can arrive after sign-out cleared the
+        // store but before the old UI text was cleared: a changed session
+        // discards `draft` rather than parking it under the new account.
+        let (mut drafts, changed_session) = self.composer_drafts_for_session();
         if !changed_session && !leaving.is_empty() {
+            let unchanged = drafts.get(leaving).map_or(draft.is_empty(), |held| *held == draft);
             if draft.is_empty() {
                 drafts.remove(leaving);
             } else {
                 drafts.insert(leaving.to_owned(), draft);
             }
+            if !unchanged {
+                self.persist_composer_drafts(&drafts);
+            }
         }
         *self.composer_owner.lock() = entering.to_owned();
-        drafts.remove(entering).unwrap_or_default()
+        // The entry stays in the map while shown, so a restart before the
+        // next autosave still finds it.
+        drafts.get(entering).cloned().unwrap_or_default()
     }
 
     // ── Conversation listing ────────────────────────────────────────
