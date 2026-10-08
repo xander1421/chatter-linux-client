@@ -600,13 +600,9 @@ fn load_older(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, until: Option<Message
     let Some(conversation_type) = ui_ctx.active_conversation_type() else {
         return;
     };
-    // Admit on the serialized UI thread before renewing the older-page epoch.
-    // A busy duplicate must not invalidate the in-flight admitted page.
-    if ui_ctx.message_state().is_loading(&channel_id) {
+    let Some(owner) = super::history_owner::HistoryOwner::admit_older(ui_ctx, conversation) else {
         return;
-    }
-    ui_ctx.message_state().set_loading(channel_id, true);
-    let owner = super::history_owner::HistoryOwner::older(ui_ctx, conversation);
+    };
     let weak = w.as_weak();
     let ui_ctx = ui_ctx.clone();
 

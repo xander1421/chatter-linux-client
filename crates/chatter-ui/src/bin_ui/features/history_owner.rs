@@ -59,12 +59,16 @@ impl HistoryOwner {
             older: None,
         }
     }
-    pub fn older(client: &ChatterClient, conversation: ActiveConversation) -> Self {
+    /// Called on the serialized UI thread; rejected work cannot revoke accepted work.
+    pub fn admit_older(client: &ChatterClient, conversation: ActiveConversation) -> Option<Self> {
         let mut owner = Self::capture(client, conversation);
-        if owner.is_current() {
-            owner.older = Some(OLDER.fetch_add(1, Ordering::SeqCst) + 1);
+        let channel = conversation.channel_id()?;
+        if !owner.is_current() || client.message_state().is_loading(&channel) {
+            return None;
         }
-        owner
+        client.message_state().set_loading(channel, true);
+        owner.older = Some(OLDER.fetch_add(1, Ordering::SeqCst) + 1);
+        Some(owner)
     }
     pub fn thread(client: &ChatterClient, root: MessageId, replace: bool) -> Self {
         let mut owner = Self::capture(client, client.chat_state().active_conversation());
@@ -243,22 +247,15 @@ mod tests {
         let conversation = ActiveConversation::Channel(channel);
         client.chat_state().set_active_conversation(conversation);
         HistoryOwner::begin(&client, conversation);
-        // Mirror the serialized production admission gate: a rejected busy
-        // scroll request does not allocate a replacement older-page epoch.
-        client.message_state().set_loading(channel, true);
-        let first = HistoryOwner::older(&client, conversation);
-        let rejected = if client.message_state().is_loading(&channel) {
-            None
-        } else {
-            Some(HistoryOwner::older(&client, conversation))
-        };
-        assert!(rejected.is_none());
+        let first = HistoryOwner::admit_older(&client, conversation).unwrap();
+        assert!(HistoryOwner::admit_older(&client, conversation).is_none());
         assert!(
             first.is_current(),
             "admitted page survives rejected duplicate"
         );
         client.message_state().set_loading(channel, false);
-        let second = HistoryOwner::older(&client, conversation);
+        let second = HistoryOwner::admit_older(&client, conversation).unwrap();
+        client.message_state().set_loading(channel, false);
         assert!(!first.is_current());
         assert!(second.is_current());
         HistoryOwner::begin(&client, conversation);
