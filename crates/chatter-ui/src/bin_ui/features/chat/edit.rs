@@ -169,15 +169,19 @@ pub fn wire_send_edit(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 tracing::error!(error = %e, "Failed to send edit");
                 // The text was taken out of the composer when the send was
                 // accepted; give it back to this same, still-empty edit
-                // session so it can be retried, and never over a newer draft.
+                // session so it can be retried, and say why. A session that
+                // has since ended (sign-out, navigation, another edit) gets
+                // neither the text nor the toast.
                 let message = e.to_string();
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
-                        if owner.is_current()
-                            && current_generation() == generation
-                            && w.get_composer_edit_message_id().as_str() == composite_key_str
-                            && w.get_composer_text().is_empty()
+                        if !owner.is_current()
+                            || current_generation() != generation
+                            || w.get_composer_edit_message_id().as_str() != composite_key_str
                         {
+                            return;
+                        }
+                        if w.get_composer_text().is_empty() {
                             w.set_composer_text(new_text_str.into());
                         }
                         w.set_toast_message(format!("Edit not saved: {message}").into());
