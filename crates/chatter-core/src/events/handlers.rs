@@ -210,13 +210,16 @@ impl EventHandlers {
                 new_content,
                 channel_id,
                 conversation_type,
+                author_id,
                 ..  // target_sent_timestamp
             } => {
                 trace!(?channel_id, ?message_id, "Updating message content in state + DB");
                 // A Saved edit is durable before its event is sent
                 // (`ConversationHandle::edit_saved_message`), so the stored
                 // row is the truth: a queued older event must neither show
-                // nor write its body over a newer edit.
+                // nor write its body over a newer edit. The row read back by
+                // id must be that Saved row — same kind, conversation and
+                // author — or the event is dropped.
                 let new_content = if conversation_type
                     == crate::domain::message::ConversationType::SavedMessages
                 {
@@ -224,6 +227,11 @@ impl EventHandlers {
                         .message_service
                         .as_ref()
                         .and_then(|svc| svc.message_repo.get(&message_id).ok().flatten())
+                        .filter(|stored| {
+                            stored.conversation_type == conversation_type
+                                && stored.conversation_id == channel_id
+                                && stored.sender_id == Some(author_id)
+                        })
                     else {
                         return;
                     };

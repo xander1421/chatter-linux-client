@@ -224,11 +224,11 @@ impl ConversationHandle {
     }
 
     /// Where this conversation's rows are stored (`SavedMessages` only with
-    /// authenticated own identity and matching channel metadata). A Saved
-    /// channel that is not the signed-in account's — a handle built before a
-    /// sign-out or account switch — is refused outright rather than resolved
-    /// to a plain channel, which would let a remote control be sent to a
-    /// user id.
+    /// authenticated own identity and matching channel metadata). A Channel
+    /// handle on a Saved channel that is not the signed-in account's — built
+    /// before a sign-out or account switch — is refused outright rather than
+    /// resolved to a plain channel, which would let a remote control be sent
+    /// to a user id. A DM or anonymous handle sharing that id is unaffected.
     fn storage_scope(&self) -> ConversationResult<crate::domain::reaction::ReactionScope> {
         let channel = self
             .conversation
@@ -239,7 +239,8 @@ impl ConversationHandle {
             self.client.auth_state().get().current_user_id,
             channel.as_ref(),
         )?;
-        if scope.kind != ConversationType::SavedMessages
+        if matches!(self.conversation, ActiveConversation::Channel(_))
+            && scope.kind != ConversationType::SavedMessages
             && channel.is_some_and(|c| {
                 c.channel_type == crate::domain::channel::ChannelType::SavedMessages
             })

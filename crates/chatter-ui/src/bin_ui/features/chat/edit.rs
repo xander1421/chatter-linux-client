@@ -143,10 +143,15 @@ pub fn wire_send_edit(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             Err(_) => return,
         };
 
-        // The edit is accepted: the composer resets right after this
-        // callback (`reset-after-send`), and on Android the input method's
-        // own copy of the text must go with it, as a normal send does
-        // (`take_composer_send`), or it comes back into the emptied box.
+        // The edit is accepted: take the text out of the composer now, on
+        // this thread, in the order a normal send does (`take_composer_send`):
+        // clear the field, then let the Android input method drop its own
+        // copy (the consume is a no-op while the field still holds text).
+        // Slint's `reset-after-send` right after this callback is then an
+        // empty reset, and the old text cannot come back into the box.
+        if let Some(w) = weak.upgrade() {
+            w.set_composer_text("".into());
+        }
         #[cfg(target_os = "android")]
         crate::platform::android::text_input::consume();
 
