@@ -43,7 +43,7 @@ use slint::{ComponentHandle, ModelRc, VecModel};
 use chatter_core::client::ChatterClient;
 use chatter_core::services::mesh::{MeshConversation, MeshEvent};
 
-use crate::{MainWindow, MeshConversationData, MeshGlobal, run_ui};
+use crate::{run_ui, MainWindow, MeshConversationData, MeshGlobal};
 
 /// The mesh conversation currently open, if any.
 ///
@@ -392,7 +392,15 @@ fn handle_event(event: MeshEvent, weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<C
     match event {
         MeshEvent::Message(message) => {
             let message = *message;
-            let is_open = active().as_ref() == Some(&message.conversation);
+            let mesh_owner = active_session();
+            let owner = super::history_owner::HistoryOwner::capture(
+                ui_ctx,
+                ui_ctx.chat_state().active_conversation(),
+            );
+            let session = super::history_owner::SessionOwner::capture(ui_ctx);
+            let is_open = mesh_owner
+                .as_ref()
+                .is_some_and(|(scope, _)| scope.as_ref() == Some(&message.conversation));
 
             // It arrived into a conversation that is on screen, so it has been
             // read. Done here, on the event-pump task, rather than from inside
@@ -404,8 +412,12 @@ fn handle_event(event: MeshEvent, weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<C
             }
 
             let ui_ctx = ui_ctx.clone();
-            run_ui!(weak, |w| {
-                if is_open {
+            crate::run_history_ui!(weak, session, |w| {
+                if is_open
+                    && owner.is_current()
+                    && active_session() == mesh_owner
+                    && active().as_ref() == Some(&message.conversation)
+                {
                     conversation::append_incoming(&w, &ui_ctx, &message);
                 }
                 refresh_rows(&w, &ui_ctx);
