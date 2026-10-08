@@ -11,7 +11,7 @@ use slint::ComponentHandle;
 
 use chatter_core::client::ChatterClient;
 
-use crate::{MainWindow, MeshGlobal, run_ui};
+use crate::{run_ui, MainWindow, MeshGlobal};
 
 use super::core_api;
 
