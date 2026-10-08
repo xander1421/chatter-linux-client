@@ -216,6 +216,14 @@ echo ">> staged $(du -h "$JNI_DIR/libchatter_ui.so" | cut -f1) cdylib"
 
 # ── 3. Assemble the APK ─────────────────────────────────────────────────────
 echo ">> gradle: $GRADLE_TASK…"
+# Android's incremental APK writer can retain large gaps from the previous
+# native library. Start the ZIP afresh without rebuilding unchanged classes.
+rm -f "$APK"
+if [ "${MULTI_INSTANCE:-0}" = "1" ]; then
+    for variant in b c; do
+        rm -f "app/build/outputs/apk/$variant/debug/app-$variant-debug.apk"
+    done
+fi
 # Gradle 8.10 needs a supported JDK; Android Studio may bundle a newer one.
 JAVA_HOME="${JAVA_HOME:-/usr/lib/jvm/java-17-openjdk}" ./gradlew :app:$GRADLE_TASK "${GRADLE_ARGS[@]}" --no-daemon
 [ -f "$APK" ] || { echo "FATAL: $APK missing (unsigned release?)"; exit 1; }

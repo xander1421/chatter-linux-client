@@ -39,10 +39,13 @@ export CFLAGS_x86_64_pc_windows_gnu="-I${GST_ROOT_DIR}/include"
 find "${GST_ROOT_DIR}/lib/pkgconfig" -name '*.pc' -exec \
     sed -i "s|^prefix=.*|prefix=${GST_ROOT_DIR}|" {} +
 
-set +e
-cargo build --release --target x86_64-pc-windows-gnu \
-    --no-default-features --features windows-cross 2>&1 | tee /tmp/build.log
-set -e
+if ! cargo build --release --target x86_64-pc-windows-gnu \
+    --no-default-features --features windows-cross > /tmp/build.log 2>&1; then
+    echo "=== Build Failed ==="
+    tail -100 /tmp/build.log
+    exit 1
+fi
+cat /tmp/build.log
 
 exe="target/x86_64-pc-windows-gnu/release/chatter-ui.exe"
 if [ ! -f "$exe" ]; then

@@ -461,12 +461,17 @@ export component CallHistoryScreen inherits Rectangle {
             // header ⋮ menu below.
             if !root.loading && root.show-clear-confirm: Rectangle {
                 vertical-stretch: 0;
+                // Fixed at the body's wrapped height so the shared column takes
+                // any shortage from the list slot above, never from this card:
+                // left implicit, the card was squeezed and Cancel/Delete spilled
+                // past its bottom edge onto the mobile tab dock.
+                height: confirm-body.preferred-height;
                 background: Colors.surface;
                 border-radius: Spacing.radius-lg;
                 // Shield whitespace as well as the controls from row actions.
                 TouchArea {}
 
-                VerticalLayout {
+                confirm-body := VerticalLayout {
                     spacing: Spacing.sm;
                     padding: Spacing.sm;
 
