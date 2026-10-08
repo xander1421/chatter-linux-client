@@ -87,6 +87,10 @@ pub enum OutgoingIntent {
     SavedMessages {
         text: String,
         attachment_ids: Vec<AttachmentId>,
+        /// Reply context. Saved Messages are stored locally only, so the
+        /// row written by `save_message` is the one every reload reads:
+        /// without `reply_to*` on it the quote strip vanishes at restart.
+        quote: Option<QuoteIntent>,
     },
 
     /// Initiate a call.
@@ -334,11 +338,28 @@ pub async fn route_outgoing(
         OutgoingIntent::SavedMessages {
             text,
             attachment_ids,
+            quote,
         } => {
             let message = services
                 .message_service
                 .save_message(&text, attachment_ids)
                 .await?;
+            // Same patch as `route_channel`: `save_message` writes the row
+            // without reply context, so fill it in or the quote only lives
+            // until restart.
+            let message = match quote {
+                Some(q) => services
+                    .message_service
+                    .persist_outgoing_reply_context(message, &q)
+                    .unwrap_or_else(|(msg, err)| {
+                        tracing::warn!(
+                            error = %err,
+                            "Failed to persist saved-message reply context; quote will be visible this session only"
+                        );
+                        msg
+                    }),
+                None => message,
+            };
             let sent_at = message.sent_at;
             let att_ids = message.attachments.clone();
             Ok(SendResult {

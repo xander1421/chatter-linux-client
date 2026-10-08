@@ -4757,6 +4757,7 @@ fn build_intent(
                 Ok(OutgoingIntent::SavedMessages {
                     text: text.to_string(),
                     attachment_ids: att_ids,
+                    quote,
                 })
             } else {
                 Ok(OutgoingIntent::Channel {
