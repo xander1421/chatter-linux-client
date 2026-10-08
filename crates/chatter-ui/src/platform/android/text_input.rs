@@ -92,8 +92,9 @@ pub fn consume() {
 /// The app replaced the focused composer's text (the draft an edit held
 /// aside or a failed send's text put back after a `consume`, the message
 /// text an edit opens on): replace the IME's copy as of a new generation, so
-/// no snapshot of the field as it was before can land on top of it. Call
-/// right after the composer is set, on the Slint thread.
+/// no snapshot of the field as it was before can land on top of it. The
+/// caret goes to the end of the new text. Call right after the composer is
+/// set, on the Slint thread.
 pub fn restore() {
     i_slint_backend_android_activity::restore_text_input();
 }

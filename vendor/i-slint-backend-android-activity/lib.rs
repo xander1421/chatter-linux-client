@@ -334,8 +334,9 @@ pub fn consume_text_input() {
 /// back after `consume_text_input`, the message text an edit opens on). The
 /// IME's copy is replaced as of a new generation, so a snapshot of the field
 /// as it was before (emptied by the consumption, or still the old draft)
-/// cannot overwrite the new text when it arrives.
-/// A no-op unless the IME serves a multi-line field that now holds text.
+/// cannot overwrite the new text when it arrives. The caret goes to the end
+/// of the new text on both sides.
+/// A no-op unless the IME serves a multi-line field.
 pub fn restore_text_input() {
     if let Some(adapter) = CURRENT_WINDOW.with_borrow(|x| x.upgrade()) {
         adapter.restore_text_input();

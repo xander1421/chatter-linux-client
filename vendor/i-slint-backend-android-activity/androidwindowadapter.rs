@@ -971,8 +971,16 @@ impl AndroidWindowAdapter {
     /// provenance and put the draft back under the edit banner (RC89,
     /// Galaxy S9, FUTO: Edit then typing at once extended the old draft).
     /// Every app-initiated replacement of the field's text goes through
-    /// here.
-    pub(crate) fn restore_text_input(&self) {
+    /// here, a clear included (the text the field holds is what is pushed).
+    ///
+    /// The caret goes to the end of the new text, on both sides, from here:
+    /// Slint's caret is wherever the old text left it (clamped), and a
+    /// keystroke the IME ran between a push of that caret and the
+    /// composer's own move to the end (`changed edit-message-id`, next
+    /// frame) would land mid-text under the new generation, accepted. With
+    /// both carets at the end from the first push, that later move is an
+    /// echo and pushes nothing.
+    pub(crate) fn restore_text_input(self: &Rc<Self>) {
         use android_activity::input::{TextInputState, TextSpan};
         let Some(client) = self.ime_client.borrow().as_ref().and_then(|c| c.upgrade()) else {
             return;
@@ -981,13 +989,21 @@ impl AndroidWindowAdapter {
             return;
         };
         let field = field.as_pin_ref();
-        if field.single_line() || field.text().is_empty() || !field.preedit_text().is_empty() {
+        if field.single_line() || !field.preedit_text().is_empty() {
             return;
         }
         let text = field.text().to_string();
-        let clamp = |offset: i32| (offset.max(0) as usize).min(text.len());
-        let anchor = clamp(field.anchor_position_byte_offset());
-        let cursor = clamp(field.cursor_position_byte_offset());
+        let cursor = text.len();
+        let anchor = cursor;
+        let window_adapter = self.clone() as Rc<dyn WindowAdapter>;
+        field.anchor_position_byte_offset.set(cursor as i32);
+        field.set_cursor_position(
+            cursor as i32,
+            true,
+            i_slint_core::items::TextChangeNotify::SkipCallbacks,
+            &window_adapter,
+            &client,
+        );
         let generation = self.ime_generation.get() + 1;
         self.ime_generation.set(generation);
         self.reset_pending.set(false);

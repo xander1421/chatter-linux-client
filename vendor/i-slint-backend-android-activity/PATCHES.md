@@ -188,4 +188,9 @@ are GL on a SurfaceView, so `dumpsys gfxinfo` does not see them).
   that push applied and landing after the replacement put the draft back
   under the edit banner (S9/FUTO: Edit then typing at once extended the
   old draft). Edit entry calls `restore_text_input` right after the text
-  is set, like the restores: new generation, pushed now.
+  is set, like the restores: new generation, pushed now. The restore puts
+  the caret at the end of the new text on both sides itself (a keystroke
+  between a push of the old clamped caret and the composer's next-frame
+  move to the end would land mid-text under the new generation), and takes
+  an empty text too, so an app clear without a consumption (Cancel with an
+  empty stash) is fenced the same way.
