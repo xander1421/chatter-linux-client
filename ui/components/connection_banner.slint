@@ -19,6 +19,8 @@
 // — delivery is the context bar's subject, not this one's.
 
 import { Colors } from "../theme/colors.slint";
+import { Appearance } from "../theme/appearance.slint";
+import { Materials } from "../theme/materials.slint";
 import { Elevation } from "../theme/elevation.slint";
 import { Icons } from "../theme/icons.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -130,7 +132,7 @@ export component ConnectionBanner inherits Rectangle {
     height: !root.should-show ? 0px
           : root.tight ? root.compact-height
           : content.preferred-height;
-    animate height { duration: 200ms; easing: ease-out; }
+    animate height { duration: Materials.menu-duration; easing: ease-out; }
 
     // Banner color based on state
     property <color> banner-color:
@@ -189,7 +191,7 @@ export component ConnectionBanner inherits Rectangle {
                         opacity: 0.4;
                     }
                 ]
-                animate opacity { duration: 800ms; easing: ease-in-out; }
+                animate opacity { duration: Appearance.reduce-motion ? 0ms : 800ms; easing: ease-in-out; }
             }
 
             // Status text. Two wordings for the same fact: the long one explains

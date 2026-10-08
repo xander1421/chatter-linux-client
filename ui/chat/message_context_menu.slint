@@ -152,9 +152,9 @@ export component MessageContextMenu inherits Rectangle {
     // escalation.
     // Keep every descendant of chat chrome below this modal scrim.
     z: 10;
-    visible: root.show;
+    visible: root.show || self.opacity > 0;
     opacity: root.show ? 1 : 0;
-    animate opacity { duration: 120ms; easing: ease-out; }
+    animate opacity { duration: Materials.menu-duration; easing: ease-out; }
 
     // Full screen backdrop, dimmed like every other modal surface so the menu
     // reads as a modal choice over the chat, not a stray card on top of it.
@@ -166,6 +166,7 @@ export component MessageContextMenu inherits Rectangle {
     TouchArea {
         width: 100%;
         height: 100%;
+        enabled: root.show;
         clicked => { root.close(); }
     }
 
@@ -362,5 +363,11 @@ export component MessageContextMenu inherits Rectangle {
                 }
             }
         }
+    }
+
+    // The fade-out is presentation only: swallow taps until it is gone.
+    if !root.show: TouchArea {
+        width: 100%;
+        height: 100%;
     }
 }

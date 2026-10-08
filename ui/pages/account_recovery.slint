@@ -32,8 +32,15 @@ export component AccountRecoveryPage inherits Rectangle {
 
     background: Materials.ambient;
 
-    // Centered form container
-    VerticalLayout {
+    // The form scrolls when the keyboard covers it (login.slint does the
+    // same): five inputs plus the IME do not fit a phone.
+    flick := Flickable {
+        width: 100%;
+        height: 100%;
+        viewport-height: max(self.height, content.preferred-height);
+        interactive: content.preferred-height > self.height;
+
+    content := VerticalLayout {
         alignment: center;
         // Centre the card (see login.slint).
         cross-axis-alignment: center;
@@ -267,5 +274,6 @@ export component AccountRecoveryPage inherits Rectangle {
                 }
             }
         }
+    }
     }
 }

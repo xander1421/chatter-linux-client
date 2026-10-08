@@ -1,4 +1,5 @@
 import { Icons } from "../theme/icons.slint";
+import { Materials } from "../theme/materials.slint";
 import { IconAction } from "icon_action.slint";
 import { GlassSurface } from "glass_surface.slint";
 // Video player modal component
@@ -38,7 +39,7 @@ export component VideoPlayer inherits Rectangle {
 
     // Only render when show is true
     visible: root.show;
-    background: Colors.background.with-alpha(0.94);
+    background: Materials.scrim-media;
 
     // Close on backdrop click (outside content area)
     backdrop := TouchArea {
@@ -85,7 +86,7 @@ export component VideoPlayer inherits Rectangle {
                     Text {
                         text: root.filename;
                         horizontal-stretch: 1;
-                        color: Colors.text-primary;
+                        color: Colors.on-media;
                         font-size: Typography.base;
                         font-weight: Typography.medium;
                         overflow: elide;
@@ -103,7 +104,7 @@ export component VideoPlayer inherits Rectangle {
             spacing: Spacing.xxs;
             alignment: center;
                 IconAction { icon: Icons.chevron-left; label: "Previous media"; enabled: root.has-previous; clicked => { root.previous(); } }
-                Text { text: root.position-label; color: Colors.text-muted; vertical-alignment: center; }
+                Text { text: root.position-label; color: Colors.on-media-muted; vertical-alignment: center; }
                 IconAction { icon: Icons.chevron-right; label: "Next media"; enabled: root.has-next; clicked => { root.next(); } }
                 IconAction { icon: Icons.download; label: "Download"; clicked => { root.download(); } }
                 IconAction { icon: Icons.folder; label: "Open downloads"; clicked => { root.open-downloads(); } }

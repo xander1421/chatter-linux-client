@@ -1,4 +1,5 @@
 import { Materials } from "../theme/materials.slint";
+import { Appearance } from "../theme/appearance.slint";
 import { GlassSurface } from "../components/glass_surface.slint";
 // Incoming call notification modal
 
@@ -25,9 +26,9 @@ export component IncomingCallModal inherits Rectangle {
     height: 100%;
     background: Materials.scrim;
     opacity: show ? 1.0 : 0.0;
-    visible: show;
+    visible: root.show || self.opacity > 0;
 
-    animate opacity { duration: 200ms; }
+    animate opacity { duration: Materials.menu-duration; }
 
     // Swallow every tap on the scrim and on the card's background: without it
     // a tap beside the card opened the chat underneath while the call kept
@@ -39,7 +40,7 @@ export component IncomingCallModal inherits Rectangle {
         enabled: root.show;
     }
 
-    if show: GlassSurface {
+    if root.show || root.opacity > 0: GlassSurface {
         enter-distance: 6px;
         shown: root.show;
 
@@ -83,8 +84,9 @@ export component IncomingCallModal inherits Rectangle {
                         property <float> pulse-opacity: 0.0;
 
                         animate pulse-opacity {
-                            duration: 1500ms;
-                            iteration-count: -1;
+                            // Reduce animations: the ring stays, the pulse stops.
+                            duration: Appearance.reduce-motion ? 0ms : 1500ms;
+                            iteration-count: Appearance.reduce-motion ? 1 : -1;
                             easing: ease-out;
                         }
 
@@ -186,8 +188,12 @@ export component IncomingCallModal inherits Rectangle {
                     drop-shadow-blur: decline-hover.has-hover ? Elevation.halo-blur-strong : Elevation.halo-blur;
                     drop-shadow-offset-y: Elevation.popover-contact-offset;
                     drop-shadow-color: Colors.error.with-alpha(0.4);
+                    accessible-role: button;
+                    accessible-label: "Decline call";
+                    accessible-action-default => { if root.show { root.decline-call(); } }
 
                     decline-hover := TouchArea {
+                        enabled: root.show;
                         clicked => { decline-call(); }
                     }
 
@@ -215,8 +221,12 @@ export component IncomingCallModal inherits Rectangle {
                     drop-shadow-blur: accept-hover.has-hover ? Elevation.halo-blur-strong : Elevation.halo-blur;
                     drop-shadow-offset-y: Elevation.popover-contact-offset;
                     drop-shadow-color: Colors.success-fill.with-alpha(0.4);
+                    accessible-role: button;
+                    accessible-label: "Accept call";
+                    accessible-action-default => { if root.show { root.accept-call(); } }
 
                     accept-hover := TouchArea {
+                        enabled: root.show;
                         clicked => { accept-call(); }
                     }
 

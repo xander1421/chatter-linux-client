@@ -1,6 +1,7 @@
 // Button component with variants, hover/press states, icons, and loading
 
 import { Materials } from "../theme/materials.slint";
+import { Appearance } from "../theme/appearance.slint";
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
@@ -23,27 +24,32 @@ export component Button inherits Rectangle {
     property <bool> hover: false;
     property <bool> pressed: touch.pressed && !root.disabled && !root.loading;
 
+    // A destructive button carries white text, so its fill must hold it at
+    // 4.5:1: dark `error` #ef4b4b is 3.6:1 (fine for an icon-only badge, not
+    // for a label), dark `error-hover` #dc2626 is 4.8:1.
+    property <color> destructive-fill: Appearance.dark ? Colors.error-hover : Colors.error;
+    property <color> destructive-fill-active: Appearance.dark ? Colors.error-hover.darker(0.12) : Colors.error-hover;
     // Computed background color based on variant and state
     property <color> bg-color: {
         if disabled {
             variant == "primary" ? Colors.action-fill :
             variant == "secondary" ? Colors.fill-secondary :
-            variant == "destructive" ? Colors.error :
+            variant == "destructive" ? root.destructive-fill :
             transparent
         } else if pressed {
             variant == "primary" ? Colors.action-active :
             variant == "secondary" ? Colors.fill-secondary-hover :
-            variant == "destructive" ? Colors.error-hover :
+            variant == "destructive" ? root.destructive-fill-active :
             Materials.pressed
         } else if hover {
             variant == "primary" ? Colors.action-hover :
             variant == "secondary" ? Colors.fill-secondary-hover :
-            variant == "destructive" ? Colors.error-hover :
+            variant == "destructive" ? root.destructive-fill-active :
             Materials.hover
         } else {
             variant == "primary" ? Colors.action-fill :
             variant == "secondary" ? Colors.fill-secondary :
-            variant == "destructive" ? Colors.error :
+            variant == "destructive" ? root.destructive-fill :
             transparent
         }
     };
@@ -124,8 +130,8 @@ export component Button inherits Rectangle {
 
                 anim-progress: 0;
                 animate anim-progress {
-                    duration: 800ms;
-                    iteration-count: -1;
+                    duration: Appearance.reduce-motion ? 0ms : 800ms;
+                    iteration-count: Appearance.reduce-motion ? 1 : -1;
                 }
 
                 init => {

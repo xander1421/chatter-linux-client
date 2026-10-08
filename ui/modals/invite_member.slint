@@ -1,6 +1,7 @@
 // InviteMemberModal - Modal for inviting users to a channel
 
 import { Colors } from "../theme/colors.slint";
+import { Icons } from "../theme/icons.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Modal } from "../components/modal.slint";
@@ -151,17 +152,17 @@ export component InviteMemberModal inherits Rectangle {
                                     border-radius: Spacing.radius-sm;
                                     border-width: user.selected ? 0px : Spacing.stroke;
                                     border-color: Colors.text-muted;
-                                    background: user.selected ? Colors.primary : transparent;
+                                    background: user.selected ? Colors.action-fill : transparent;
 
-                                    // Checkmark (shown when selected)
-                                    if user.selected: Text {
-                                        text: "\u{2713}";
-                                        color: Colors.text-primary;
-                                        font-size: Typography.xs;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
-                                        width: 100%;
-                                        height: 100%;
+                                    // Checkmark (shown when selected) — the bundled SVG, as
+                                    // components/checkbox.slint draws it; ✓ was a tofu risk.
+                                    if user.selected: Image {
+                                        source: Icons.check;
+                                        width: 12px;
+                                        height: 12px;
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                        colorize: Colors.on-action;
                                     }
                                 }
                             }

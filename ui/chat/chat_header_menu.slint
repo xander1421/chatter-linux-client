@@ -1,4 +1,5 @@
 import { GlassSurface } from "../components/glass_surface.slint";
+import { Materials } from "../theme/materials.slint";
 // The chat header's ⋯ menu: Video call and Conversation settings (owner,
 // 2026-10-05: video call moved out of the header row into this menu, voice
 // call stays in the row). Pushed on the modal stack as "chat-menu" (app.slint),
@@ -23,6 +24,8 @@ export component ChatHeaderMenu inherits Rectangle {
     callback video-call();
     callback settings();
 
+    // The one scrim, like every other modal surface.
+    background: Materials.scrim;
     // Taps outside the card close it and must not reach the chat under it.
     TouchArea { clicked => { root.close(); } }
 

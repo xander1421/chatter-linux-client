@@ -997,12 +997,12 @@ export component ChannelSettingsModal inherits Rectangle {
                                 if root.is-private-group && root.can-manage-members: Rectangle {
                                     width: invite-btn-text.width + Spacing.md * 2;
                                     height: Spacing.button-height;
-                                    background: invite-btn-touch.has-hover ? Colors.primary.darker(10%) : Colors.primary;
+                                    background: invite-btn-touch.has-hover ? Colors.action-hover : Colors.action-fill;
                                     border-radius: Spacing.radius-sm;
 
                                     invite-btn-text := Text {
                                         text: "+ Invite";
-                                        color: Colors.text-primary;
+                                        color: Colors.on-action;
                                         font-size: Typography.xs;
                                         font-weight: Typography.medium;
                                         horizontal-alignment: center;
@@ -1019,12 +1019,12 @@ export component ChannelSettingsModal inherits Rectangle {
                                 if !root.is-private-group && root.can-manage-members: Rectangle {
                                     width: invite-ch-btn-text.width + Spacing.md * 2;
                                     height: Spacing.button-height;
-                                    background: invite-ch-btn-touch.has-hover ? Colors.primary.darker(10%) : Colors.primary;
+                                    background: invite-ch-btn-touch.has-hover ? Colors.action-hover : Colors.action-fill;
                                     border-radius: Spacing.radius-sm;
 
                                     invite-ch-btn-text := Text {
                                         text: "+ Invite";
-                                        color: Colors.text-primary;
+                                        color: Colors.on-action;
                                         font-size: Typography.xs;
                                         font-weight: Typography.medium;
                                         horizontal-alignment: center;

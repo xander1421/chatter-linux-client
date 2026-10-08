@@ -187,7 +187,9 @@ fn composer_drawer_and_recording_have_usable_geometry() {
         w.invoke_insert_composer_emoji("😀".into());
         pump_at(&w, width, height);
         assert_eq!(w.get_composer_text().as_str(), "Draft stays her😀e");
-        click(&w, "Show keyboard");
+        // The open-state label names what the click does: on touch it hands
+        // the keyboard back, on desktop it closes the drawer.
+        click(&w, if mobile { "Show keyboard" } else { "Close picker" });
         pump_at(&w, width, height);
         assert!(!w.get_composer_emoji_picker_visible());
         w.window()
@@ -208,7 +210,13 @@ fn composer_drawer_and_recording_have_usable_geometry() {
             .unwrap();
         let cp = chat.absolute_position();
         let ep = emoji.absolute_position();
-        assert!(emoji.size().width >= chat.size().width - 50.0);
+        // Touch: the drawer spans the pane. Desktop: a bounded panel under
+        // the emoji button, never the whole 1200px pane.
+        if mobile {
+            assert!(emoji.size().width >= chat.size().width - 50.0);
+        } else {
+            assert!(emoji.size().width <= 420.0 && emoji.size().width >= 300.0);
+        }
         assert!(ep.x >= cp.x && ep.x + emoji.size().width <= cp.x + chat.size().width + 1.0);
         assert!(ep.y >= composer.absolute_position().y + composer.size().height - 1.0);
         assert!(ep.y + emoji.size().height <= cp.y + chat.size().height + 1.0);
@@ -284,7 +292,11 @@ fn composer_drawer_and_recording_have_usable_geometry() {
         let gif = testing::ElementHandle::find_by_element_type_name(&w, "GifPicker")
             .next()
             .unwrap();
-        assert!(gif.size().width >= chat.size().width - 50.0);
+        if mobile {
+            assert!(gif.size().width >= chat.size().width - 50.0);
+        } else {
+            assert!(gif.size().width <= 420.0 && gif.size().width >= 300.0);
+        }
         assert!(gif.absolute_position().y + gif.size().height <= cp.y + chat.size().height + 1.0);
         w.set_composer_gif_picker_visible(false);
         pump_at(&w, width, height);

@@ -24,6 +24,24 @@ impl ChatterClient {
             .set_bool(keys::GLASS_EFFECTS, enabled)
     }
 
+    /// Whether decorative animation is skipped. Off by default on each device.
+    pub fn reduce_motion_enabled(&self) -> bool {
+        SettingsRepository::new(self.services.database.clone())
+            .get_bool(keys::REDUCE_MOTION)
+            .ok()
+            .flatten()
+            .unwrap_or(false)
+    }
+
+    /// Persist the device-local reduce-motion preference.
+    pub fn set_reduce_motion_enabled(
+        &self,
+        enabled: bool,
+    ) -> Result<(), crate::error::StorageError> {
+        SettingsRepository::new(self.services.database.clone())
+            .set_bool(keys::REDUCE_MOTION, enabled)
+    }
+
     /// The user's theme choice (defaults to [`ThemeMode::System`]).
     pub fn theme_mode(&self) -> ThemeMode {
         let raw = SettingsRepository::new(self.services.database.clone())

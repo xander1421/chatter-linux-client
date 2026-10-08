@@ -1,6 +1,7 @@
 // Skeleton loading placeholder component
 
 import { Colors } from "../theme/colors.slint";
+import { Appearance } from "../theme/appearance.slint";
 import { Spacing } from "../theme/spacing.slint";
 
 export component Skeleton inherits Rectangle {
@@ -29,8 +30,9 @@ export component Skeleton inherits Rectangle {
         // Continuous shimmer animation
         shimmer-offset: 0px;
         animate shimmer-offset {
-            duration: 1500ms;
-            iteration-count: -1;
+            // Reduce animations: a still placeholder.
+            duration: Appearance.reduce-motion ? 0ms : 1500ms;
+            iteration-count: Appearance.reduce-motion ? 1 : -1;
         }
 
         // Trigger animation by setting final value

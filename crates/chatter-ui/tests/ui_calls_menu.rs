@@ -128,7 +128,7 @@ fn calls_overflow_uses_real_header_hit_target_and_card_anchor() {
         w.set_active_tab("calls".into());
         settle(&w, width, height);
         if !mobile {
-            let card = labelled(&w, "Modal dialog").expect("Calls desktop card");
+            let card = labelled(&w, "Calls dialog").expect("Calls desktop card");
             let position = card.absolute_position();
             let size = card.size();
             assert!(

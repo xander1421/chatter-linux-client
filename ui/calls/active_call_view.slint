@@ -1,4 +1,6 @@
 import { IconAction } from "../components/icon_action.slint";
+import { Elevation } from "../theme/elevation.slint";
+import { Materials } from "../theme/materials.slint";
 import { GlassSurface } from "../components/glass_surface.slint";
 // Active call view as a dock on top of the chat pane (Discord-style).
 //
@@ -38,16 +40,16 @@ component ParticipantTile inherits Rectangle {
     // rest of the app's green instead of a one-off neon.
     border-width: participant.is-speaking ? Spacing.stroke : 0px;
     border-color: Colors.primary;
-    drop-shadow-blur: participant.is-speaking ? 18px : 0px;
+    drop-shadow-blur: participant.is-speaking ? Elevation.halo-blur-strong : 0px;
     drop-shadow-color: participant.is-speaking ? Colors.primary.with-alpha(0.6) : transparent;
     drop-shadow-offset-x: 0px;
     drop-shadow-offset-y: 0px;
     clip: true;
 
-    animate border-width { duration: 160ms; easing: ease-in-out; }
-    animate border-color { duration: 200ms; easing: ease-in-out; }
-    animate drop-shadow-blur { duration: 240ms; easing: ease-in-out; }
-    animate drop-shadow-color { duration: 240ms; easing: ease-in-out; }
+    animate border-width { duration: Materials.menu-duration; easing: ease-in-out; }
+    animate border-color { duration: Materials.menu-duration; easing: ease-in-out; }
+    animate drop-shadow-blur { duration: Materials.menu-duration; easing: ease-in-out; }
+    animate drop-shadow-color { duration: Materials.menu-duration; easing: ease-in-out; }
 
     // Video frame or avatar placeholder. Screen-share streams ALWAYS use
     // `contain` — never crop. Cropping a screen share hides content (the

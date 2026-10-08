@@ -47,6 +47,9 @@ export component ThreadPanel inherits Rectangle {
     callback open-message-link(string);
     callback message-clicked(string);
     callback react-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
+    callback reply-clicked(string, string);  // (sender_id, timestamp_ns)
+    callback more-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
+    in property <bool> menu-open: false;
     callback reaction-toggled(string, string, string);  // (sender_id, timestamp_ns, emoji)
 
     // Panel sizing — adjustable width with drag handle
@@ -340,6 +343,18 @@ export component ThreadPanel inherits Rectangle {
                         // list uses to mark thread messages.
                         is-thread-reply: false;
                         show-sender: item.show-sender;
+                        // The same row as the main list: touch rules, media,
+                        // continuation grouping and delivery state; no thread
+                        // inside a thread.
+                        mobile: root.mobile;
+                        menu-open: root.menu-open;
+                        attachments: item.attachments;
+                        is-continuation: item.is-continuation;
+                        delivery-status: item.delivery-status;
+                        failure-reason: item.failure-reason;
+                        can-thread: false;
+                        reply-clicked(sender-id, timestamp-ns) => { root.reply-clicked(sender-id, timestamp-ns); }
+                        more-clicked(sender-id, timestamp-ns, x, y) => { root.more-clicked(sender-id, timestamp-ns, x, y); }
 
                         open-message-link(url) => { root.open-message-link(url); }
                         message-clicked(id) => {

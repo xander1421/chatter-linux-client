@@ -92,7 +92,7 @@ pub(crate) fn category_to_icon_and_color(category: &str) -> (&'static str, slint
         "document" => ("\u{1F4C4}", slint::Color::from_argb_u8(255, 96, 165, 250)), // #60a5fa
         "code" => ("\u{1F4DD}", slint::Color::from_argb_u8(255, 251, 191, 36)),     // #fbbf24
         "archive" => ("\u{1F4E6}", slint::Color::from_argb_u8(255, 251, 146, 60)),  // #fb923c
-        "image" => ("\u{1F5BC}", slint::Color::from_argb_u8(255, 74, 222, 128)),    // #4ade80
+        "image" => ("\u{1F4F7}", slint::Color::from_argb_u8(255, 74, 222, 128)),    // #4ade80
         "video" => ("\u{1F3AC}", slint::Color::from_argb_u8(255, 248, 113, 113)),   // #f87171
         "audio" => ("\u{1F3B5}", slint::Color::from_argb_u8(255, 167, 139, 250)),   // #a78bfa
         _ => ("\u{1F4CE}", slint::Color::from_argb_u8(255, 148, 163, 184)),         // #94a3b8

@@ -1,4 +1,6 @@
 import { IconAction } from "../components/icon_action.slint";
+import { Materials } from "../theme/materials.slint";
+import { Appearance } from "../theme/appearance.slint";
 // Single message item component with bubble layout
 //
 // Displays an individual message with chat-style bubbles.
@@ -99,7 +101,7 @@ export component MessageItem inherits Rectangle {
     in property <bool> highlighted: false;          // Brief green flash when this is a jump target
     // Animate outside the conditional overlay so it survives until fade-out ends.
     property <float> highlight-progress: root.highlighted ? 1.0 : 0.0;
-    animate highlight-progress { duration: 400ms; easing: ease-out; }
+    animate highlight-progress { duration: Appearance.reduce-motion ? 0ms : 400ms; easing: ease-out; }
     in property <string> reply-to-sender-name: "";
     in property <string> reply-to-preview: "";
     in property <string> reply-to-category: "";        // Quoted parent media category ("audio"/"image"/"video"/"")
@@ -121,7 +123,10 @@ export component MessageItem inherits Rectangle {
     // to predict where it would draw and land on it blind, and a plain scroll
     // spawned it under the thumb. Press-and-hold (below) is the touch entry
     // point to the same menu, so gating this on `!mobile` costs touch nothing.
-    property <bool> is-hovered: !root.mobile && touch.has-hover;
+    // While the context menu or reaction picker is up for any message, the
+    // hover bar hides: two menus for one message read as competing controls.
+    in property <bool> menu-open: false;
+    property <bool> is-hovered: !root.mobile && !root.menu-open && touch.has-hover;
 
     // Multi-select
     in property <bool> selected: false;
@@ -240,7 +245,7 @@ export component MessageItem inherits Rectangle {
     // main conversation and thread panel instead of inlining both trees.
     property <brush> selection-background: root.selected ? Colors.primary.with-alpha(0.18) : transparent;
     background: root.selection-background;
-    animate selection-background { duration: 150ms; easing: ease-out; }
+    animate selection-background { duration: Materials.feedback-duration; easing: ease-out; }
 
     // Wrap entire content in TouchArea for reliable hover detection.
     // Width/Height 100% ensures it covers the whole row.
@@ -287,6 +292,12 @@ export component MessageItem inherits Rectangle {
             spacing: Spacing.sm;
             alignment: root.is-own ? end : start;
 
+            // A continuation hides the avatar but keeps its column, so every
+            // bubble of one sender shares a left edge.
+            if !root.is-own && !root.is-dm && root.show-sender && root.is-continuation: Rectangle {
+                width: Spacing.avatar-sm;
+                height: 1px;
+            }
             if !root.is-own && !root.is-dm && root.show-sender && !root.is-continuation: Avatar {
                 size: Spacing.avatar-sm;
                 anonymous: root.is-anonymous;
@@ -344,7 +355,7 @@ export component MessageItem inherits Rectangle {
                     if !root.is-own && !root.is-dm && root.show-sender && !root.is-continuation: Text {
                         text: root.sender-name;
                         wrap: word-wrap;
-                        color: Colors.primary;
+                        color: Colors.sender-name;
                         font-size: Typography.sm;
                         font-weight: Typography.medium;
                     }
@@ -469,6 +480,12 @@ export component MessageItem inherits Rectangle {
             alignment: root.is-own ? end : start;
 
             // Avatar for others in channels (before bubble, hidden in continuations)
+            // A continuation hides the avatar but keeps its column, so every
+            // bubble of one sender shares a left edge.
+            if !root.is-own && !root.is-dm && root.show-sender && root.is-continuation: Rectangle {
+                width: Spacing.avatar-sm;
+                height: 1px;
+            }
             if !root.is-own && !root.is-dm && root.show-sender && !root.is-continuation: Avatar {
                 size: Spacing.avatar-sm;
                 anonymous: root.is-anonymous;
@@ -606,9 +623,10 @@ export component MessageItem inherits Rectangle {
 
                             Text {
                                 text: root.sender-name;
-                                color: root.is-ai ? Colors.info : Colors.primary;
+                                color: root.is-ai ? Colors.info : Colors.sender-name;
                                 font-size: Typography.sm;
                                 font-weight: Typography.medium;
+                                overflow: elide;
                             }
 
                             if root.is-ai: Rectangle {
@@ -737,11 +755,11 @@ export component MessageItem inherits Rectangle {
                                         width: gif-label.preferred-width + 6px;
                                         height: 13px;
                                         border-radius: 3px;
-                                        background: Colors.primary;
+                                        background: Colors.action-fill;
                                         gif-label := Text {
                                             text: "GIF";
-                                            color: Colors.text-primary;
-                                            font-size: 8px;
+                                            color: Colors.on-action;
+                                            font-size: Typography.xxs;
                                             font-weight: Typography.semibold;
                                             x: (parent.width - self.width) / 2;
                                             y: (parent.height - self.height) / 2;
@@ -1208,7 +1226,10 @@ export component MessageItem inherits Rectangle {
                         if root.has-reactions: HorizontalLayout {
                             alignment: start;
                             reactions-pill := Rectangle {
-                                height: 22px;
+                                // Grows with the text size; on touch the row is
+                                // tall enough to tell neighbouring chips apart
+                                // under a thumb (22px was the whole hit box).
+                                height: (root.mobile ? 32px : 22px) * Appearance.text-grow;
                                 width: reactions-row.preferred-width + 8px;
                                 background: transparent;
                                 border-width: 0px;
@@ -1222,13 +1243,15 @@ export component MessageItem inherits Rectangle {
                                     alignment: center;
 
                                     for reaction in root.reactions: Rectangle {
-                                        width: entry.preferred-width + 4px;
-                                        border-radius: 8px;
-                                        // Own reactions use neutral shading, without an accent ring.
+                                        width: max(root.mobile ? Spacing.button-height : 0px, entry.preferred-width + (root.mobile ? Spacing.sm : 4px));
+                                        border-radius: self.height / 2;
+                                        // Own reactions: the brand tint, so "yours" reads
+                                        // without a ring (8% neutral was invisible).
                                         border-width: 0px;
-                                        background: reaction.own ? Colors.text-primary.with-alpha(0.08) : transparent;
+                                        background: reaction.own ? Colors.tint-strong : transparent;
                                         accessible-role: button;
                                         accessible-label: reaction.emoji + (reaction.own ? ", your reaction" : "");
+                                        accessible-action-default => { root.reaction-toggled(root.sender-id, root.timestamp-ns, reaction.emoji); }
 
                                         entry := HorizontalLayout {
                                             spacing: Spacing.xxs;
@@ -1237,7 +1260,7 @@ export component MessageItem inherits Rectangle {
                                             Text {
                                                 text: reaction.emoji;
                                                 font-family: Typography.font-family-emoji;
-                                                font-size: Typography.xs;
+                                                font-size: root.mobile ? Typography.sm : Typography.xs;
                                                 vertical-alignment: center;
                                             }
 
@@ -1414,7 +1437,14 @@ export component MessageItem inherits Rectangle {
                 // Action buttons — float above top corner of bubble on opposed side.
                 // Do not allocate hidden controls for every row (or any mobile row).
                 if root.is-hovered: Rectangle {
-                    x: root.is-own ? -action-btns.width + 8px : bubble.width - 8px;
+                    // Peer bubbles in a narrow pane: the bar would run off the
+                    // right edge, so it tucks inside the bubble's end instead.
+                    property <bool> overflows-right: !root.is-own
+                        && bubble.absolute-position.x + bubble.width - 8px + action-btns.width
+                            > root.absolute-position.x + root.width - Spacing.xs;
+                    x: root.is-own ? -action-btns.width + 8px
+                        : self.overflows-right ? bubble.width - action-btns.width - Spacing.sm
+                        : bubble.width - 8px;
                     y: -Spacing.button-height / 2; // Float halfway above the top edge
                     width: action-btns.width;
                     height: action-btns.height;

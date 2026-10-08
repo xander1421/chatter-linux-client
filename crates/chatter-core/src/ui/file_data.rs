@@ -6,7 +6,7 @@
 #[must_use]
 pub fn category_icon(category: &str) -> &'static str {
     match category {
-        "image" => "\u{1F5BC}\u{FE0F}", // Framed picture
+        "image" => "\u{1F4F7}",        // Camera: colour-default, 🖼️ was tofu on Android 10
         "video" => "\u{1F3AC}",         // Clapper board
         "audio" => "\u{1F3B5}",         // Musical note
         "document" => "\u{1F4C4}",      // Page facing up
@@ -22,7 +22,7 @@ mod tests {
 
     #[test]
     fn test_category_icon() {
-        assert_eq!(category_icon("image"), "\u{1F5BC}\u{FE0F}");
+        assert_eq!(category_icon("image"), "\u{1F4F7}");
         assert_eq!(category_icon("video"), "\u{1F3AC}");
         assert_eq!(category_icon("audio"), "\u{1F3B5}");
         assert_eq!(category_icon("document"), "\u{1F4C4}");

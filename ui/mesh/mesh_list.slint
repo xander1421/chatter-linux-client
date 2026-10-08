@@ -10,6 +10,7 @@
 // peers reads as "none nearby", never as an error.
 
 import { Colors } from "../theme/colors.slint";
+import { Materials } from "../theme/materials.slint";
 import { Appearance } from "../theme/appearance.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
@@ -19,6 +20,8 @@ import { MeshListItem } from "mesh_list_item.slint";
 
 export component MeshList inherits Rectangle {
     in property <bool> collapsed: false;
+    // Touch density: the wipe row and the join field are full touch targets.
+    in property <bool> touch: false;
 
     property <bool> expanded: true;
     property <bool> joining: false;
@@ -53,7 +56,7 @@ export component MeshList inherits Rectangle {
                                 height: 10px;
                                 colorize: Colors.text-muted;
                                 transform-rotation: root.expanded ? 90deg : 0deg;
-                                animate transform-rotation { duration: 150ms; easing: ease-out; }
+                                animate transform-rotation { duration: Materials.feedback-duration; easing: ease-out; }
                             }
                         }
                         Text {
@@ -123,7 +126,10 @@ export component MeshList inherits Rectangle {
                 // What the mesh needs, not what this device lacks: worded as a
                 // capability so it is not read as a status while the server is up.
                 Text {
-                    text: "Works without server or internet · ";
+                    // Short enough for the 240px sidebar beside the peer count;
+                    // the long form ("Works without server or internet") elided
+                    // mid-sentence on every desktop frame.
+                    text: "Works offline · ";
                     color: Colors.text-muted;
                     font-size: Typography.xs;
                     vertical-alignment: center;
@@ -154,14 +160,14 @@ export component MeshList inherits Rectangle {
 
         // ── Join-a-cell input ──
         if !root.collapsed && root.joining: Rectangle {
-            height: 34px;
+            height: root.touch ? Spacing.touch-target-min + Spacing.xs : 34px;
             HorizontalLayout {
                 padding-left: Spacing.sm;
                 padding-right: Spacing.sm;
                 padding-bottom: Spacing.xs;
 
                 Rectangle {
-                    height: 28px;
+                    height: root.touch ? Spacing.touch-target-min : 28px;
                     background: Colors.inset;
                     border-radius: Spacing.radius-sm;
                     border-width: Spacing.stroke;
@@ -249,15 +255,24 @@ export component MeshList inherits Rectangle {
         // ── Panic wipe ── two taps, because it cannot be undone. Says exactly
         // what goes and what stays: the chatter account is untouched.
         if !root.collapsed && root.expanded && !root.confirming-wipe: Rectangle {
-            height: 22px;
+            height: root.touch ? Spacing.touch-target-min : 22px;
             HorizontalLayout {
                 padding-left: Spacing.md;
                 alignment: start;
-                Text {
-                    text: "Wipe mesh data…";
-                    color: wipe-touch.has-hover ? Colors.error : Colors.text-muted;
-                    font-size: Typography.xxs;
-                    vertical-alignment: center;
+                // The hit box is the row, not the glyphs of a 12px label.
+                Rectangle {
+                    width: wipe-label.preferred-width + Spacing.sm * 2;
+                    accessible-role: button;
+                    accessible-label: "Wipe mesh data";
+                    accessible-action-default => { root.confirming-wipe = true; }
+                    wipe-label := Text {
+                        x: Spacing.sm;
+                        height: parent.height;
+                        text: "Wipe mesh data…";
+                        color: wipe-touch.has-hover ? Colors.error : Colors.text-muted;
+                        font-size: Typography.xxs;
+                        vertical-alignment: center;
+                    }
                     wipe-touch := TouchArea {
                         mouse-cursor: pointer;
                         clicked => { root.confirming-wipe = true; }

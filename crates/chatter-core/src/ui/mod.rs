@@ -6,7 +6,7 @@ pub mod call_history_data;
 pub mod chat_data;
 pub mod emoji_data;
 pub mod file_data;
-pub mod recent_emoji;
+pub mod picker_history;
 pub mod shared_content_data;
 pub mod sidebar_data;
 

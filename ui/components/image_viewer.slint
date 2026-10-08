@@ -1,4 +1,5 @@
 import { Icons } from "../theme/icons.slint";
+import { Materials } from "../theme/materials.slint";
 import { IconAction } from "icon_action.slint";
 import { GlassSurface } from "glass_surface.slint";
 // Image viewer modal component
@@ -32,7 +33,7 @@ export component ImageViewer inherits Rectangle {
 
     // Only render when show is true
     visible: root.show;
-    background: Colors.background.with-alpha(0.9);
+    background: Materials.scrim-media;
 
     // Close on backdrop click
     backdrop := TouchArea {
@@ -64,14 +65,14 @@ export component ImageViewer inherits Rectangle {
                     Text {
                         text: root.filename;
                         overflow: elide;
-                        color: Colors.text-primary;
+                        color: Colors.on-media;
                         font-size: Typography.base;
                         font-weight: Typography.medium;
                     }
 
                     if root.size-display != "": Text {
                         text: root.size-display;
-                        color: Colors.text-muted;
+                        color: Colors.on-media-muted;
                         font-size: Typography.xs;
                     }
                 }
@@ -108,7 +109,7 @@ export component ImageViewer inherits Rectangle {
             IconAction { icon: Icons.copy; label: "Copy image"; clicked => { root.copy-image(); } }
             IconAction { icon: Icons.folder; label: "Open downloads"; clicked => { root.open-downloads(); } }
             IconAction { icon: Icons.chevron-left; label: "Previous media"; enabled: root.has-previous; clicked => { root.previous(); } }
-            Text { text: root.position-label; color: Colors.text-muted; vertical-alignment: center; horizontal-stretch: 0; }
+            Text { text: root.position-label; color: Colors.on-media-muted; vertical-alignment: center; horizontal-stretch: 0; }
             IconAction { icon: Icons.chevron-right; label: "Next media"; enabled: root.has-next; clicked => { root.next(); } }
         }
     }

@@ -1,7 +1,10 @@
 import { GlassSurface } from "glass_surface.slint";
-// Emoji picker component with category tabs, search, and emoji grid
+// Emoji picker: category tabs, skin tones and the emoji grid. Standalone
+// (the reaction popover) it carries its own search row; embedded in the
+// composer drawer the drawer owns search, material and the Emoji/GIF tabs.
 
 import { Colors } from "../theme/colors.slint";
+import { Materials } from "../theme/materials.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
@@ -18,15 +21,15 @@ export component EmojiPicker inherits GlassSurface {
     elevation: 4;
     border-radius: Spacing.radius-xl;
 
+    // Inside another surface (the composer drawer, the reaction popover):
+    // flat, no second material or shadow, and no search row of its own.
     in property <bool> embedded: false;
+    material-enabled: !root.embedded;
     // Picker visibility
     in property <bool> show: false;
 
     // Emoji list from Rust (filtered by category or search)
     in property <[EmojiData]> emoji-list: [];
-
-    // The composer picker offers GIFs; the reaction picker cannot (a GIF is not a reaction).
-    in property <bool> show-gif-tab: true;
 
     // Currently selected category (-1=Recent, 0=Smileys, 1=People, etc.)
     in-out property <int> selected-category: 0;
@@ -42,7 +45,6 @@ export component EmojiPicker inherits GlassSurface {
     callback close();
     callback category-changed(int);
     callback search-changed(string);
-    callback gif-mode-requested();  // Switch to GIF picker
     callback skin-tone-changed(int);
 
     // Internal state
@@ -52,6 +54,9 @@ export component EmojiPicker inherits GlassSurface {
     // Only SMP Emoji_Presentation=Yes code points: 🏳 (U+1F3F3) is ≥ U+1F000 but
     // text-default, and was tofu on Android 10 — flags use 🏁.
     property <[string]> category-icons: ["\u{1F550}", "\u{1F600}", "\u{1F44B}", "\u{1F431}", "\u{1F34E}", "\u{1F680}", "\u{1F3C0}", "\u{1F4A1}", "\u{1F49C}", "\u{1F3C1}"];
+    // The tabs' names, for screen readers and the UI tests; the glyph alone
+    // is not a name.
+    property <[string]> category-names: ["Recent", "Smileys", "People", "Animals", "Food", "Travel", "Activities", "Objects", "Symbols", "Flags"];
     // Map icon index to category value: index 0 → -1 (Recent), index 1 → 0 (Smileys), etc.
     pure function icon-index-to-category(idx: int) -> int { idx - 1; }
     pure function category-to-icon-index(cat: int) -> int { cat + 1; }
@@ -128,6 +133,7 @@ export component EmojiPicker inherits GlassSurface {
                         font-size: Typography.sm;
                         vertical-alignment: center;
                         text <=> root.search-query;
+                        accessible-label: "Search emoji";
 
                         edited => {
                             root.search-changed(self.text);
@@ -141,7 +147,10 @@ export component EmojiPicker inherits GlassSurface {
                     height: Spacing.button-height;
                     y: (parent.height - self.height) / 2;
                     border-radius: Spacing.radius-full;
-                    background: clear-area.has-hover ? Colors.surface-hover : transparent;
+                    background: clear-area.has-hover ? Materials.hover : transparent;
+                    accessible-role: button;
+                    accessible-label: "Clear search";
+                    accessible-action-default => { root.search-query = ""; root.search-changed(""); }
 
                     Image {
                         source: Icons.x;
@@ -179,10 +188,17 @@ export component EmojiPicker inherits GlassSurface {
 
                     for icon[index] in root.category-icons: Rectangle {
                         property <int> cat: root.icon-index-to-category(index);
+                        property <bool> current: cat == root.selected-category;
                         width: Spacing.button-height;
                         height: Spacing.button-height;
                         border-radius: Spacing.radius-sm;
-                        background: cat == root.selected-category ? Colors.primary.with-alpha(0.2) : (tab-area.has-hover ? Colors.surface-hover : transparent);
+                        background: current ? Colors.tint-strong
+                            : tab-area.pressed ? Materials.pressed
+                            : tab-area.has-hover ? Materials.hover : transparent;
+                        accessible-role: tab;
+                        accessible-label: root.category-names[index];
+                        accessible-item-selected: current;
+                        accessible-action-default => { root.selected-category = cat; root.category-changed(cat); }
 
                         Text {
                             text: icon;
@@ -193,7 +209,7 @@ export component EmojiPicker inherits GlassSurface {
                         }
 
                         // Selected indicator
-                        if cat == root.selected-category: Rectangle {
+                        if current: Rectangle {
                             height: 2px;
                             y: parent.height - 2px;
                             width: parent.width * 60%;
@@ -208,31 +224,6 @@ export component EmojiPicker inherits GlassSurface {
                             clicked => {
                                 root.selected-category = cat;
                                 root.category-changed(cat);
-                            }
-                        }
-                    }
-
-                    // GIF tab — switches to GIF picker
-                    if root.show-gif-tab: Rectangle {
-                        width: Spacing.button-height;
-                        height: Spacing.button-height;
-                        border-radius: Spacing.radius-sm;
-                        background: gif-tab-area.has-hover ? Colors.surface-hover : transparent;
-
-                        Text {
-                            text: "GIF";
-                            color: Colors.text-secondary;
-                            font-size: Typography.xs;
-                            font-weight: Typography.bold;
-                            horizontal-alignment: center;
-                            vertical-alignment: center;
-                        }
-
-                        gif-tab-area := TouchArea {
-                            width: 100%;
-                            height: 100%;
-                            clicked => {
-                                root.gif-mode-requested();
                             }
                         }
                     }
@@ -251,12 +242,18 @@ export component EmojiPicker inherits GlassSurface {
                 spacing: Spacing.none;
 
                 for swatch[tone-idx] in ["\u{1F44B}", "\u{1F44B}\u{1F3FB}", "\u{1F44B}\u{1F3FC}", "\u{1F44B}\u{1F3FD}", "\u{1F44B}\u{1F3FE}", "\u{1F44B}\u{1F3FF}"]: Rectangle {
+                    property <bool> current: tone-idx == root.selected-skin-tone;
                     width: Spacing.button-height;
                     height: Spacing.button-height;
                     border-radius: Spacing.radius-sm;
-                    background: tone-idx == root.selected-skin-tone ? Colors.primary.with-alpha(0.2) : (tone-area.has-hover ? Colors.surface-hover : transparent);
-                    border-width: tone-idx == root.selected-skin-tone ? Spacing.stroke : 0px;
+                    background: current ? Colors.tint-strong
+                        : tone-area.pressed ? Materials.pressed
+                        : tone-area.has-hover ? Materials.hover : transparent;
+                    border-width: current ? Spacing.stroke : 0px;
                     border-color: Colors.primary;
+                    accessible-role: button;
+                    accessible-label: tone-idx == 0 ? "Default skin tone" : "Skin tone " + tone-idx;
+                    accessible-action-default => { root.selected-skin-tone = tone-idx; root.skin-tone-changed(tone-idx); }
 
                     Text {
                         text: swatch;
@@ -287,63 +284,74 @@ export component EmojiPicker inherits GlassSurface {
             vertical-alignment: center;
         }
 
-        // Emoji grid — columns adapt to available width
-        emoji-grid := Flickable {
+        // Emoji grid — columns adapt to available width. The empty state is
+        // drawn over the same box, so it sits in the middle of the results
+        // area rather than under a zero-height grid.
+        Rectangle {
             vertical-stretch: 1;
-            viewport-height: Math.ceil(root.emoji-list.length / root.emoji-columns) * 44px;
 
-            // Grid container
-            Rectangle {
-                width: parent.width;
-                height: parent.viewport-height;
+            emoji-grid := Flickable {
+                width: 100%;
+                height: 100%;
+                viewport-height: Math.ceil(root.emoji-list.length / root.emoji-columns) * 44px;
 
-                for emoji-data[index] in root.emoji-list: Rectangle {
-                    property <int> grid-row: Math.floor(index / root.emoji-columns);
-                    property <int> grid-col: mod(index, root.emoji-columns);
+                // Grid container
+                Rectangle {
+                    width: parent.width;
+                    height: parent.viewport-height;
 
-                    x: grid-col * root.emoji-cell-stride + (root.emoji-cell-stride - 44px) / 2;
-                    y: grid-row * 44px;
-                    width: 44px;
-                    height: 44px;
-                    border-radius: Spacing.radius-sm;
-                    background: emoji-area.has-hover ? Colors.surface-hover : transparent;
+                    for emoji-data[index] in root.emoji-list: Rectangle {
+                        property <int> grid-row: Math.floor(index / root.emoji-columns);
+                        property <int> grid-col: mod(index, root.emoji-columns);
 
-                    Text {
-                        text: emoji-data.emoji;
-                        font-family: Typography.font-family-emoji;
-                        font-size: Typography.xl;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
+                        x: grid-col * root.emoji-cell-stride + (root.emoji-cell-stride - 44px) / 2;
+                        y: grid-row * 44px;
+                        width: 44px;
+                        height: 44px;
+                        border-radius: Spacing.radius-sm;
+                        background: emoji-area.pressed ? Materials.pressed
+                            : emoji-area.has-hover ? Materials.hover : transparent;
+                        accessible-role: button;
+                        accessible-label: emoji-data.emoji;
+                        accessible-action-default => { root.emoji-selected(emoji-data.emoji); }
 
-                    emoji-area := TouchArea {
-                        width: 100%;
-                        height: 100%;
-                        clicked => {
-                            root.emoji-selected(emoji-data.emoji);
+                        Text {
+                            text: emoji-data.emoji;
+                            font-family: Typography.font-family-emoji;
+                            font-size: Typography.xl;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                        }
+
+                        emoji-area := TouchArea {
+                            width: 100%;
+                            height: 100%;
+                            clicked => {
+                                root.emoji-selected(emoji-data.emoji);
+                            }
                         }
                     }
                 }
             }
-        }
 
-        // Empty state
-        if root.emoji-list.length == 0: Rectangle {
-            vertical-stretch: 1;
-
-            VerticalLayout {
+            // Empty state
+            if root.emoji-list.length == 0: VerticalLayout {
+                width: 100%;
+                height: 100%;
                 alignment: center;
                 spacing: Spacing.sm;
 
                 Text {
-                    text: "😕";
+                    text: root.search-query == "" && root.selected-category == -1 ? "\u{1F550}" : "\u{1F615}";
                     font-family: Typography.font-family-emoji;
-                    font-size: 32px;
+                    font-size: Typography.xxxl;
                     horizontal-alignment: center;
                 }
 
                 Text {
-                    text: root.search-query != "" ? "No emoji found" : "No emoji in this category";
+                    text: root.search-query != "" ? "No emoji found"
+                        : root.selected-category == -1 ? "Emoji you use show up here"
+                        : "No emoji in this category";
                     color: Colors.text-secondary;
                     font-size: Typography.sm;
                     horizontal-alignment: center;

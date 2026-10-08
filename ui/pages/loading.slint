@@ -1,4 +1,5 @@
 import { Materials } from "../theme/materials.slint";
+import { Appearance } from "../theme/appearance.slint";
 // Loading page component with animated spinner and customizable messages
 
 import { Colors } from "../theme/colors.slint";
@@ -54,8 +55,8 @@ export component LoadingPage inherits Rectangle {
 
                     anim-progress: 0;
                     animate anim-progress {
-                        duration: 1200ms;
-                        iteration-count: -1;
+                        duration: Appearance.reduce-motion ? 0ms : 1200ms;
+                        iteration-count: Appearance.reduce-motion ? 1 : -1;
                     }
 
                     init => {

@@ -4,6 +4,7 @@
 // Neo states: flat default, highlight hover, inset active with purple glow.
 
 import { Avatar } from "../components/avatar.slint";
+import { Appearance } from "../theme/appearance.slint";
 import { Colors } from "../theme/colors.slint";
 import { HoldArea } from "../components/hold_area.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -42,8 +43,9 @@ export component PrivateGroupListItem inherits Rectangle {
             typing-animation-progress: 1.0;
             in {
                 animate typing-animation-progress {
-                    duration: 600ms;
-                    iteration-count: -1;
+                    // Reduce animations: the dots hold one static mark.
+                    duration: Appearance.reduce-motion ? 0ms : 600ms;
+                    iteration-count: Appearance.reduce-motion ? 1 : -1;
                 }
             }
         }
@@ -207,7 +209,7 @@ export component PrivateGroupListItem inherits Rectangle {
 
                     unread-text := Text {
                         text: root.unread-count > 99 ? "99+" : root.unread-count;
-                        color: Colors.text-primary;
+                        color: Colors.on-action;
                         font-size: Typography.xs;
                         font-weight: Typography.semibold;
                         horizontal-alignment: center;
@@ -273,7 +275,7 @@ export component PrivateGroupListItem inherits Rectangle {
 
                 collapsed-unread-text := Text {
                     text: root.unread-count > 99 ? "99+" : root.unread-count;
-                    color: Colors.text-primary;
+                    color: Colors.on-action;
                     font-size: Typography.xxs;
                     font-weight: Typography.semibold;
                     horizontal-alignment: center;

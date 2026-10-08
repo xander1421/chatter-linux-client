@@ -1,4 +1,5 @@
 import { GlassSurface } from "../components/glass_surface.slint";
+import { Materials } from "../theme/materials.slint";
 // Sidebar — plain conversation content with shared chrome materials.
 //
 // Layout (top to bottom):
@@ -216,7 +217,7 @@ export component Sidebar inherits Rectangle {
 
     // No animation on a phone: the list is full width there, and animating
     // from the pre-resize width drew a half-width first frame at launch.
-    animate width { duration: root.mobile-mode ? 0ms : 200ms; easing: ease-out; }
+    animate width { duration: root.mobile-mode ? 0ms : Materials.menu-duration; easing: ease-out; }
 
     in property <length> bottom-inset: 0px;
 
@@ -333,10 +334,10 @@ export component Sidebar inherits Rectangle {
                                 width: self.height + (root.missed-call-count > 9 ? 4px : 0px);
                                 height: Spacing.badge-md;
                                 border-radius: self.height / 2;
-                                background: Colors.error;
+                                background: Colors.error-hover;
                                 Text {
                                     text: root.missed-call-count > 9 ? "9+" : root.missed-call-count;
-                                    color: Colors.text-primary;
+                                    color: Colors.on-error;
                                     font-size: Typography.xs2;
                                     font-weight: 700;
                                     horizontal-alignment: center;
@@ -399,10 +400,10 @@ export component Sidebar inherits Rectangle {
                                 width: self.height + (root.total-pending-requests > 9 ? 4px : 0px);
                                 height: Spacing.badge-md;
                                 border-radius: self.height / 2;
-                                background: Colors.error;
+                                background: Colors.error-hover;
                                 Text {
                                     text: root.total-pending-requests > 9 ? "9+" : root.total-pending-requests;
-                                    color: Colors.text-primary;
+                                    color: Colors.on-error;
                                     font-size: Typography.xs2;
                                     font-weight: 700;
                                     horizontal-alignment: center;
@@ -524,6 +525,7 @@ export component Sidebar inherits Rectangle {
                 if MeshGlobal.enabled: MeshList {
                     vertical-stretch: 0;
                     collapsed: root.collapsed;
+                    touch: root.touch;
                 }
 
                 // 6b. CUSTOM SECTIONS — user-created folders, below the chat list and mesh
@@ -673,7 +675,7 @@ export component Sidebar inherits Rectangle {
                         spacing: Spacing.sm; alignment: start;
                         VerticalLayout { alignment: center; horizontal-stretch: 0;
                             Avatar { size: 24px; source: root.user-avatar-source; fallback-text: root.user-initials; show-presence: true;
-                                presence-color: root.user-presence-status == "online" ? Colors.online : Colors.offline;
+                                presence-color: root.user-presence-status == "online" ? Colors.online : root.user-presence-status == "away" ? Colors.away : root.user-presence-status == "dnd" ? Colors.dnd : Colors.offline;
                             }
                         }
                         Text { text: root.user-display-name; color: Colors.text-secondary; font-size: Typography.xs; font-weight: 600; vertical-alignment: center; overflow: elide; horizontal-stretch: 1; }
@@ -819,7 +821,7 @@ export component Sidebar inherits Rectangle {
                     height: root.rail-icon-size; clicked => { root.profile-clicked(); }
                     HorizontalLayout { alignment: center;
                         Avatar { size: 28px; source: root.user-avatar-source; fallback-text: root.user-initials; show-presence: true;
-                            presence-color: root.user-presence-status == "online" ? Colors.online : Colors.offline;
+                            presence-color: root.user-presence-status == "online" ? Colors.online : root.user-presence-status == "away" ? Colors.away : root.user-presence-status == "dnd" ? Colors.dnd : Colors.offline;
                         }
                     }
                 }

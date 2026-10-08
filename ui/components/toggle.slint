@@ -1,4 +1,5 @@
 import { Spacing } from "../theme/spacing.slint";
+import { Materials } from "../theme/materials.slint";
 // Toggle switch component with smooth animation
 
 import { Colors } from "../theme/colors.slint";
@@ -13,6 +14,9 @@ export component Toggle inherits Rectangle {
     accessible-enabled: !root.disabled;
     accessible-checkable: true;
     accessible-checked: root.checked;
+    accessible-action-default => {
+        if !root.disabled { root.checked = !root.checked; root.toggled(root.checked); }
+    }
 
     callback toggled(bool);
 
@@ -50,7 +54,7 @@ export component Toggle inherits Rectangle {
         background: track-color;
 
         animate background {
-            duration: 120ms;
+            duration: Materials.feedback-duration;
             easing: ease-out;
         }
 
@@ -64,7 +68,7 @@ export component Toggle inherits Rectangle {
             x: root.checked ? parent.width - self.width - Spacing.xxs : Spacing.xxs;
 
             animate x {
-                duration: 180ms;
+                duration: Materials.menu-duration;
                 easing: cubic-bezier(0.34, 1.56, 0.64, 1);  // Slight overshoot for snappy feel
             }
         }

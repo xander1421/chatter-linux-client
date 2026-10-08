@@ -264,7 +264,7 @@ export component SettingsScreen inherits Rectangle {
                 ]: Rectangle {
                     height: Spacing.button-height;
                     border-radius: Spacing.radius-md;
-                    background: active-section == item.id ? Colors.primary :
+                    background: active-section == item.id ? Colors.action-fill :
                                (nav-touch.has-hover && item.enabled ? Colors.surface-hover : transparent);
                     opacity: item.enabled ? 1.0 : 0.5;
 
@@ -275,7 +275,7 @@ export component SettingsScreen inherits Rectangle {
 
                         Text {
                             text: item.label;
-                            color: active-section == item.id ? Colors.text-primary :
+                            color: active-section == item.id ? Colors.on-action :
                                    (item.enabled ? Colors.text-secondary : Colors.text-muted);
                             font-size: Typography.sm;
                             font-weight: active-section == item.id ? Typography.medium : Typography.normal;
@@ -1196,11 +1196,11 @@ export component SettingsScreen inherits Rectangle {
                                                     width: 24px;
                                                     height: 20px;
                                                     border-radius: Spacing.radius-sm;
-                                                    background: Colors.primary;
+                                                    background: Colors.action-fill;
 
                                                     Text {
                                                         text: root.session-count;
-                                                        color: Colors.text-primary;
+                                                        color: Colors.on-action;
                                                         font-size: Typography.xs;
                                                         horizontal-alignment: center;
                                                         vertical-alignment: center;
@@ -1609,9 +1609,8 @@ export component SettingsScreen inherits Rectangle {
                                             height: Spacing.button-height;
                                             min-width: 56px;
                                             border-radius: Spacing.radius-md;
-                                            background: selected ? Colors.primary : Colors.surface-hover;
-                                            border-width: selected ? Spacing.stroke : 0px;
-                                            border-color: Colors.primary;
+                                            background: selected ? Colors.action-fill : Colors.surface-hover;
+                                            border-width: 0px;
 
                                             HorizontalLayout {
                                                 padding-left: Spacing.sm;
@@ -1620,7 +1619,7 @@ export component SettingsScreen inherits Rectangle {
                                                     text: opt.label;
                                                     vertical-alignment: center;
                                                     horizontal-alignment: center;
-                                                    color: selected ? Colors.text-primary : Colors.text-secondary;
+                                                    color: selected ? Colors.on-action : Colors.text-secondary;
                                                     font-size: Typography.xs;
                                                     font-weight: selected ? Typography.semibold : Typography.medium;
                                                 }
@@ -2742,6 +2741,33 @@ export component SettingsScreen inherits Rectangle {
                                     }
                                     Text {
                                         text: "Translucent navigation and controls. Turn off for a simpler appearance and better performance.";
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                        wrap: word-wrap;
+                                    }
+                                }
+                            }
+
+                            Rectangle {
+                                background: Colors.surface;
+                                border-radius: Spacing.radius-lg;
+
+                                ToggleRow {
+                                    row-padding: Spacing.md;
+                                    row-spacing: Spacing.md;
+                                    label-spacing: Spacing.sm;
+                                    accessible-text: "Reduce animations";
+                                    checked <=> Appearance.reduce-motion;
+                                    toggled(value) => { Appearance.reduce-motion-changed(value); }
+
+                                    Text {
+                                        text: "Reduce animations";
+                                        color: Colors.text-primary;
+                                        font-size: Typography.sm;
+                                        font-weight: Typography.medium;
+                                    }
+                                    Text {
+                                        text: "Menus, sheets and switches change without motion; loading shimmer, typing dots and the ringing pulse hold still.";
                                         color: Colors.text-muted;
                                         font-size: Typography.xs;
                                         wrap: word-wrap;

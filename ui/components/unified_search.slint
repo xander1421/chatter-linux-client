@@ -97,10 +97,10 @@ component ConvRow inherits Rectangle {
         }
         if root.unread-count > 0: Rectangle {
             width: 20px; height: 20px; border-radius: 10px;
-            background: Colors.primary; y: (parent.height - self.height) / 2;
+            background: Colors.action-fill; y: (parent.height - self.height) / 2;
             Text {
                 text: root.unread-count > 99 ? "99+" : root.unread-count;
-                color: Colors.text-primary; font-size: Typography.xs;
+                color: Colors.on-action; font-size: Typography.xs;
                 horizontal-alignment: center; vertical-alignment: center;
                 width: 100%; height: 100%;
             }

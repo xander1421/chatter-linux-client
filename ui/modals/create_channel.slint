@@ -594,8 +594,8 @@ export component CreateChannelModal inherits Rectangle {
                                         height: 20px;
                                         border-radius: 4px;
                                         border-width: Spacing.stroke;
-                                        border-color: friend.selected ? Colors.primary : Colors.text-muted;
-                                        background: friend.selected ? Colors.primary : transparent;
+                                        border-color: friend.selected ? Colors.action-fill : Colors.text-muted;
+                                        background: friend.selected ? Colors.action-fill : transparent;
                                         y: (parent.height - self.height) / 2;
 
                                         if friend.selected: Image {
@@ -604,7 +604,7 @@ export component CreateChannelModal inherits Rectangle {
                                             height: 12px;
                                             x: (parent.width - self.width) / 2;
                                             y: (parent.height - self.height) / 2;
-                                            colorize: Colors.text-primary;
+                                            colorize: Colors.on-action;
                                         }
                                     }
 

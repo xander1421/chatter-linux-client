@@ -24,6 +24,10 @@ component NavTab inherits Rectangle {
     height: Spacing.bottom-nav-height;
     horizontal-stretch: 1;
     background: transparent;
+    accessible-role: tab;
+    accessible-label: root.label;
+    accessible-item-selected: root.active;
+    accessible-action-default => { root.clicked(); }
 
     Rectangle {
         x: 5px; y: 5px;
@@ -75,13 +79,13 @@ component NavTab inherits Rectangle {
                 width: max(self.height, nav-badge-text.preferred-width + 6px);
                 height: Spacing.badge-sm;
                 border-radius: self.height / 2;
-                background: Colors.error;
+                background: Colors.error-hover;
 
                 nav-badge-text := Text {
                     text: root.badge-count > 99 ? "99+" : root.badge-count;
                     font-size: Typography.xxs;
                     font-weight: 700;
-                    color: Colors.text-primary;
+                    color: Colors.on-error;
                     horizontal-alignment: center;
                     vertical-alignment: center;
                 }

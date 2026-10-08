@@ -20,6 +20,8 @@ pub mod keys {
     pub const MESSAGE_DENSITY: &str = "app.message_density";
     /// Device-local chrome effects preference, enabled by default.
     pub const GLASS_EFFECTS: &str = "app.glass_effects";
+    /// Device-local motion preference: skip decorative animation.
+    pub const REDUCE_MOTION: &str = "app.reduce_motion";
     pub const NOTIFICATION_SOUND: &str = "app.notification_sound";
     /// Opaque ntfy push topic issued by the server in AuthResponse. The client
     /// subscribes to this instead of deriving `chatter_{user_id}` locally

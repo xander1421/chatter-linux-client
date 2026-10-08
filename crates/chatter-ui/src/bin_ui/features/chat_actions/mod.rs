@@ -36,7 +36,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     message_actions::wire_quote_clicked(window, ui_ctx);
     message_actions::wire_reply_clicked(window, ui_ctx);
     message_actions::wire_cancel_reply(window);
-    message_actions::wire_react_clicked(window);
+    message_actions::wire_react_clicked(window, ui_ctx);
     message_actions::wire_thread_clicked(window, ui_ctx);
     message_actions::wire_close_image_viewer(window);
     attachment_view::wire_view_attachment(window, ui_ctx);

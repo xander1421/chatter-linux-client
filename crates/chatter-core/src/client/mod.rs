@@ -63,6 +63,7 @@ pub struct UnreadBadges {
     pub total: u32,
 }
 mod notification;
+mod picker_history;
 mod pin;
 mod profile;
 mod profile_visibility;

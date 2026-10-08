@@ -1,6 +1,7 @@
 // Input component with focus states, placeholder, validation, and password mode
 
 import { Colors } from "../theme/colors.slint";
+import { Materials } from "../theme/materials.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
@@ -75,7 +76,7 @@ export component Input inherits Rectangle {
                 font-size: Typography.base;
                 vertical-alignment: center;
                 opacity: focused ? 0.5 : 1.0;
-                animate opacity { duration: 150ms; }
+                animate opacity { duration: Materials.feedback-duration; }
             }
 
             // Full-area touch target so a tap in the side padding still focuses

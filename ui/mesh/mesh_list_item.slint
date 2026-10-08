@@ -154,10 +154,10 @@ export component MeshListItem inherits Rectangle {
                 width: max(20px, badge-text.preferred-width + 12px);
                 height: 20px;
                 border-radius: Spacing.radius-full;
-                background: Colors.primary;
+                background: Colors.action-fill;
                 badge-text := Text {
                     text: root.unread-count > 99 ? "99+" : root.unread-count;
-                    color: Colors.text-primary;
+                    color: Colors.on-action;
                     font-size: Typography.xs2;
                     font-weight: 600;
                     horizontal-alignment: center;
@@ -191,10 +191,10 @@ export component MeshListItem inherits Rectangle {
             width: max(self.height, collapsed-badge.preferred-width + 8px);
             height: Spacing.badge-sm;
             border-radius: Spacing.radius-full;
-            background: Colors.primary;
+            background: Colors.action-fill;
             collapsed-badge := Text {
                 text: root.unread-count > 99 ? "99+" : root.unread-count;
-                color: Colors.text-primary;
+                color: Colors.on-action;
                 font-size: Typography.xxs;
                 font-weight: 600;
                 horizontal-alignment: center;

@@ -15,9 +15,9 @@ use chrono::{DateTime, Datelike, Duration, Local, Utc};
 /// Returns:
 /// - "Just now" for < 1 minute ago
 /// - "N min ago" for < 1 hour ago
-/// - "HH:MM AM/PM" for today
-/// - "Yesterday HH:MM AM/PM" for yesterday
-/// - "Mon HH:MM AM/PM" for this week
+/// - "HH:MM" for today (24-hour, the same clock as the sidebar rows)
+/// - "Yesterday HH:MM" for yesterday
+/// - "Mon HH:MM" for this week
 /// - "Jan 1" for this year
 /// - "Jan 1, 2024" for older
 #[must_use]
@@ -39,17 +39,17 @@ pub fn format_timestamp(datetime: DateTime<Utc>) -> String {
     let msg_date = local.date_naive();
 
     if msg_date == today {
-        return local.format("%-I:%M %p").to_string();
+        return local.format("%H:%M").to_string();
     }
 
     let yesterday = today - chrono::Duration::days(1);
     if msg_date == yesterday {
-        return format!("Yesterday {}", local.format("%-I:%M %p"));
+        return format!("Yesterday {}", local.format("%H:%M"));
     }
 
     // Within the last week
     if diff < Duration::days(7) {
-        return local.format("%a %-I:%M %p").to_string();
+        return local.format("%a %H:%M").to_string();
     }
 
     // This year

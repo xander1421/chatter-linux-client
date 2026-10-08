@@ -38,6 +38,10 @@ export global Materials {
         ? @linear-gradient(180deg, #00000000 0%, #00000000 80%, #0000001a 100%)
         : @linear-gradient(180deg, #00000000 0%, #00000000 84%, #1a2c3e08 100%);
     out property <color> scrim: Appearance.dark ? #02050999 : #08111c40;
+    // Media viewers sit on a dark backdrop in both themes, as every photo
+    // viewer does; their text uses Colors.on-media. Light `Colors.overlay`
+    // washed the whole app white behind an image.
+    out property <color> scrim-media: Appearance.dark ? #02050ae6 : #0b1420e0;
     out property <color> hover: Appearance.dark ? #ffffff0c : #15202b0a;
     out property <color> pressed: Appearance.dark ? #ffffff18 : #15202b14;
     // The page behind every screen: a faint teal wash at the top fading into

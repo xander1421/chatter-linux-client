@@ -2829,7 +2829,7 @@ fn message_selection_toggle_reaches_the_selection_store() {
 fn the_message_hover_action_bar_never_appears_on_touch() {
     let item_src = include_str!("../../../ui/chat/message_item.slint");
     assert!(
-        item_src.contains("property <bool> is-hovered: !root.mobile && touch.has-hover;"),
+        item_src.contains("property <bool> is-hovered: !root.mobile && !root.menu-open && touch.has-hover;"),
         "the message action bar's hover gate must exclude touch platforms"
     );
     assert!(
@@ -4239,7 +4239,6 @@ fn headers_use_the_shared_header_button() {
         "components/pdf_preview_panel.slint",
         "components/image_viewer.slint",
         "components/video_player.slint",
-        "components/gif_picker.slint",
         "pages/register.slint",
         "app.slint",
     ] {

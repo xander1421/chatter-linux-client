@@ -1,4 +1,5 @@
 import { GlassSurface } from "../components/glass_surface.slint";
+import { Materials } from "../theme/materials.slint";
 // Create menu — what the chat list's '+' opens (owner decision 2026-09-26).
 //
 // CreateMenu: the small popup of New Chat / New Channel / New Section. On a
@@ -31,8 +32,9 @@ export component CreateMenu inherits Rectangle {
     callback new-channel();
     callback new-section();
 
-    // The backdrop is app.slint's shared modal backdrop; this only has to
-    // keep taps outside the card from reaching the list under it.
+    // The one scrim, like every other modal surface; taps outside the card
+    // close it and must not reach the list under it.
+    background: Materials.scrim;
     TouchArea { clicked => { root.close(); } }
 
     GlassSurface {

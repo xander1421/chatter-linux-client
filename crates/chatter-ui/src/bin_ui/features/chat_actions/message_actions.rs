@@ -256,22 +256,24 @@ pub fn wire_reply_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 }
 
 /// Wire react click callback.
-pub fn wire_react_clicked(window: &MainWindow) {
+pub fn wire_react_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
+    let ui_ctx = ui_ctx.clone();
 
     // Callback signature: (sender_id, timestamp_ns) - Signal-style identification
     window.on_react_clicked(move |sender_id: SharedString, timestamp_ns: SharedString, _x: f32, _y: f32| {
         let sender_id_str = sender_id.to_string();
         let timestamp_str = timestamp_ns.to_string();
         let weak = weak_window.clone();
+        let ui_ctx = ui_ctx.clone();
         tracing::debug!(sender = %sender_id_str, timestamp = %timestamp_str, "React clicked");
 
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
                 tracing::info!(sender = %sender_id_str, timestamp = %timestamp_str, "Emoji picker requested");
 
-                // Populate initial emojis (Smileys)
-                emoji_loader::show_reaction_picker_start(&w);
+                // Recent when the account has history, otherwise Smileys.
+                emoji_loader::show_reaction_picker_start(&w, &ui_ctx);
             }
         });
     });

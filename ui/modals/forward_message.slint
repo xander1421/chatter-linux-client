@@ -1,6 +1,7 @@
 // ForwardMessageModal - Modal for forwarding messages to channels or DMs
 
 import { Colors } from "../theme/colors.slint";
+import { Icons } from "../theme/icons.slint";
 import { Appearance } from "../theme/appearance.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
@@ -168,17 +169,17 @@ export component ForwardMessageModal inherits Rectangle {
                                     width: 20px;
                                     height: 20px;
                                     border-radius: 10px;
-                                    background: Colors.primary;
+                                    background: Colors.action-fill;
 
-                                    // Checkmark using Unicode
-                                    Text {
-                                        text: "\u{2713}";
-                                        color: Colors.text-primary;
-                                        font-size: Typography.xs;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
-                                        width: 100%;
-                                        height: 100%;
+                                    // The bundled check, as components/checkbox.slint
+                                    // draws it; a text ✓ is a tofu risk.
+                                    Image {
+                                        source: Icons.check;
+                                        width: 12px;
+                                        height: 12px;
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                        colorize: Colors.on-action;
                                     }
                                 }
                             }

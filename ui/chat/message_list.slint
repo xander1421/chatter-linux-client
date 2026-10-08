@@ -6,6 +6,7 @@
 // divider, auto-follow of new messages, older history on reaching the top.
 
 import { Colors } from "../theme/colors.slint";
+import { Appearance } from "../theme/appearance.slint";
 import { GlassSurface } from "../components/glass_surface.slint";
 import { Materials } from "../theme/materials.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -196,6 +197,8 @@ export component MessageList inherits Rectangle {
     // Multi-select: while on, a plain tap toggles selection instead of opening
     // the message, and each bubble renders its `selected` flag.
     in property <bool> selection-mode: false;
+    // The context menu or reaction picker is open: rows hide their hover bar.
+    in property <bool> menu-open: false;
     // Touch platform — gates the press-and-hold gesture so a desktop
     // left-button hold does not open the message menu.
     in property <bool> mobile: false;
@@ -656,7 +659,7 @@ export component MessageList inherits Rectangle {
                 // the user was away.
                 if idx == root.unread-index: HorizontalLayout {
                     width: 100%;
-                    height: 40px;
+                    height: 40px * Appearance.text-grow;
                     spacing: Spacing.md;
                     alignment: center;
                     padding-top: Spacing.sm;
@@ -673,10 +676,10 @@ export component MessageList inherits Rectangle {
                     // plain fill in the material's tint, which over the flat list
                     // background is what the glass rendered anyway.
                     Rectangle {
-                        border-radius: 12px;
+                        border-radius: self.height / 2;
                         background: Materials.regular;
                         min-width: unread-label.preferred-width + Spacing.md * 2;
-                        height: 24px;
+                        height: 24px * Appearance.text-grow;
                         unread-label := Text {
                             text: "Unread messages";
                             color: Colors.primary;
@@ -701,7 +704,7 @@ export component MessageList inherits Rectangle {
                 if item.date-separator-text != ""
                     && (idx == 0 || root.messages[idx - 1].date-separator-text != item.date-separator-text): HorizontalLayout {
                     width: 100%;
-                    height: 40px;
+                    height: 40px * Appearance.text-grow;
                     spacing: Spacing.md;
                     alignment: center;
                     padding-top: Spacing.sm;
@@ -717,10 +720,10 @@ export component MessageList inherits Rectangle {
                     // plain fill in the material's tint, which over the flat list
                     // background is what the glass rendered anyway.
                     Rectangle {
-                        border-radius: 12px;
+                        border-radius: self.height / 2;
                         background: Materials.regular;
                         min-width: date-label.preferred-width + Spacing.md * 2;
-                        height: 24px;
+                        height: 24px * Appearance.text-grow;
                         date-label := Text {
                             text: item.date-separator-text;
                             color: Colors.text-muted;
@@ -799,6 +802,7 @@ export component MessageList inherits Rectangle {
                     selected: item.selected;
                     selection-mode: root.selection-mode;
                     mobile: root.mobile;
+                    menu-open: root.menu-open;
 
                     selection-toggled(id) => {
                         root.selection-toggled(id);
@@ -854,8 +858,8 @@ export component MessageList inherits Rectangle {
             x: root.width - self.width - 16px;
             y: root.height - root.bottom-inset - 60px;
             width: pill-content.preferred-width + Spacing.lg * 2;
-            height: 44px;
-            border-radius: 22px;
+            height: Spacing.button-height * Appearance.text-grow;
+            border-radius: self.height / 2;
             material-level: 3;
             backdrop-paused: root.scrolling;
             accessible-role: button;
@@ -866,7 +870,7 @@ export component MessageList inherits Rectangle {
             // Fade in animation
             opacity: 1.0;
             animate opacity {
-                duration: 200ms;
+                duration: Materials.menu-duration;
                 easing: ease-out;
             }
 
@@ -884,13 +888,17 @@ export component MessageList inherits Rectangle {
                     vertical-alignment: center;
                 }
 
-                // Down arrow icon
-                Text {
-                    text: "↓";
-                    color: Colors.text-primary;
-                    font-size: Typography.xl;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
+                // Down arrow: the bundled chevron turned, not a Unicode
+                // arrow the UI font may lack.
+                VerticalLayout {
+                    alignment: center;
+                    Image {
+                        source: Icons.chevron-right;
+                        width: Spacing.button-icon;
+                        height: Spacing.button-icon;
+                        transform-rotation: 90deg;
+                        colorize: Colors.text-primary;
+                    }
                 }
             }
 

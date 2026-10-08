@@ -1,4 +1,5 @@
 import { GlassSurface } from "glass_surface.slint";
+import { Materials } from "../theme/materials.slint";
 // Toast notification component
 
 import { Colors } from "../theme/colors.slint";
@@ -25,9 +26,9 @@ export component Toast inherits GlassSurface {
         Colors.info;
 
     // Visibility and animation
-    visible: root.show-toast;
+    visible: root.show-toast || self.opacity > 0;
     opacity: root.show-toast ? 1 : 0;
-    animate opacity { duration: 200ms; }
+    animate opacity { duration: Materials.menu-duration; }
 
     // Toast container
     in property <length> max-toast-width: 320px;
@@ -92,6 +93,7 @@ export component Toast inherits GlassSurface {
                 dismiss-area := TouchArea {
                     width: 100%;
                     height: 100%;
+                    enabled: root.show-toast;
                     clicked => {
                         root.dismissed();
                     }

@@ -1,65 +1,124 @@
 import { GlassSurface } from "glass_surface.slint";
-// GIF picker component with search, trending tabs, and preview grid
+// GIF picker body for the composer drawer: the account's recent GIFs, then
+// trending or a search. The drawer owns the material, the search field and
+// the Emoji/GIF tabs; this component owns the grid.
 
 import { Colors } from "../theme/colors.slint";
+import { Appearance } from "../theme/appearance.slint";
+import { Materials } from "../theme/materials.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
-import { HeaderButton } from "header_button.slint";
-import { DismissButton } from "dismiss_button.slint";
 import { Skeleton } from "skeleton.slint";
 import { Button } from "button.slint";
 
 // GIF data struct for the picker
 export struct GifData {
     id: string,
-    preview: image,       // Loaded from Rust
+    preview: image,       // First frame, loaded from Rust; empty until then
+    preview-url: string,  // Provider preview, kept for Recent
     full-url: string,     // URL to send when selected
     width: int,
     height: int,
+    failed: bool,         // Preview could not be fetched or decoded
+}
+
+// One tile. Selectable only once its preview is on screen: a blank tile
+// could otherwise send a GIF the user never saw.
+component GifTile inherits Rectangle {
+    in property <GifData> gif;
+    callback picked(string, string);
+    property <bool> ready: root.gif.preview.width > 0 && !root.gif.failed;
+
+    border-radius: Spacing.radius-md;
+    clip: true;
+    background: root.ready && (area.has-hover || area.pressed) ? Materials.hover : Colors.inset;
+    accessible-role: button;
+    accessible-label: root.gif.failed ? "GIF " + root.gif.id + ", preview unavailable" : "GIF " + root.gif.id;
+    accessible-enabled: root.ready;
+    accessible-action-default => { if root.ready { root.picked(root.gif.id, root.gif.full-url); } }
+
+    if root.ready: Image {
+        width: parent.width;
+        height: parent.height;
+        source: root.gif.preview;
+        image-fit: cover;
+    }
+    if !root.ready: Image {
+        source: root.gif.failed ? Icons.alert-triangle : Icons.image;
+        width: 20px;
+        height: 20px;
+        x: (parent.width - self.width) / 2;
+        y: (parent.height - self.height) / 2;
+        colorize: Colors.text-muted;
+        opacity: root.gif.failed ? 1.0 : 0.6;
+    }
+
+    area := TouchArea {
+        enabled: root.ready;
+        mouse-cursor: root.ready ? pointer : default;
+        clicked => { root.picked(root.gif.id, root.gif.full-url); }
+    }
 }
 
 export component GifPicker inherits GlassSurface {
-    material-level: 3;
-    elevation: 4;
-    border-radius: Spacing.radius-xl;
+    // The drawer is the material; this is content inside it.
+    material-enabled: false;
+    elevation: 0;
+    border-radius: 0px;
 
-    in property <bool> embedded: false;
-    // Picker visibility
     in property <bool> show: false;
 
-    // Loading state
+    // Trending (empty query) or search results, from Rust.
     in property <bool> loading: false;
     in property <bool> failed: false;
-
-    // GIF results from Rust
     in property <[GifData]> results: [];
+    // The signed-in account's sent GIFs, newest first. Local, so it is on
+    // screen whether or not the provider answers.
+    in property <[GifData]> recent: [];
 
-    // Search query
+    // The drawer's query, mirrored so the sections know what they show.
     in-out property <string> search-query: "";
 
-    // Callbacks
-    callback gif-selected(string, string);  // Returns full GIF URL
+    callback gif-selected(string, string);  // (id, full URL)
     callback search(string);
-    callback close();
-    callback emoji-mode-requested();  // Switch back to emoji picker
 
-    // Internal state
-    property <bool> search-focused: search-input.has-focus;
     property <bool> show-search-results: root.search-query != "";
-
-    // Forward focus to search
-    forward-focus: search-input;
+    property <bool> show-recent: !root.show-search-results && root.recent.length > 0;
+    property <bool> show-results: !root.loading && root.results.length > 0;
+    property <bool> show-status: !root.loading && root.results.length == 0;
 
     // Only render when visible
     visible: root.show;
     opacity: root.show ? 1 : 0;
 
-    // Picker container — responsive: never exceed parent width
     in property <length> max-picker-width: 320px;
     in property <length> max-picker-height: 400px;
     width: root.max-picker-width;
     height: root.max-picker-height;
+
+    // Grid geometry from the width: as many ~160px columns as fit (never
+    // fewer than two), tiles at 16:10 between 72px and 150px tall. Two
+    // tiles stretched across a tablet pane were 10:1 strips (RC86).
+    property <length> grid-gap: Spacing.sm;
+    property <length> grid-width: max(0px, root.width - 2 * Spacing.xs);
+    property <int> columns: max(2, Math.floor((root.grid-width + root.grid-gap) / (160px + root.grid-gap)));
+    property <length> tile-width: (root.grid-width - (root.columns - 1) * root.grid-gap) / root.columns;
+    property <length> tile-height: max(72px, min(150px, root.tile-width * 0.62));
+    property <length> row-stride: root.tile-height + root.grid-gap;
+    property <length> section-header: 20px * Appearance.text-grow;
+    property <length> status-height: root.failed ? 112px : 72px;
+    property <length> attribution-height: 20px;
+    pure function grid-height(count: int) -> length {
+        return Math.ceil(count / root.columns) * root.row-stride;
+    }
+    property <length> recent-height: root.show-recent
+        ? root.section-header + root.grid-height(root.recent.length) : 0px;
+    property <length> results-top: root.recent-height;
+    property <length> results-height: root.show-results
+        ? (root.show-recent ? root.section-header : 0px) + root.grid-height(root.results.length)
+        : root.show-status ? root.status-height
+        : root.show-recent ? root.section-header : 0px;
 
     // Block clicks from passing through
     TouchArea {
@@ -68,336 +127,145 @@ export component GifPicker inherits GlassSurface {
     }
 
     VerticalLayout {
-        padding: root.embedded ? Spacing.xs : Spacing.sm;
-        spacing: root.embedded ? Spacing.xs : Spacing.sm;
+        padding: Spacing.xs;
+        spacing: Spacing.xs;
 
-        // Standalone picker chrome
-        if !root.embedded: HorizontalLayout {
-            height: Spacing.header-action-box;
-            spacing: Spacing.header-action-gap;
-
-            // Emoji toggle — switches back to emoji picker
-            HeaderButton {
-                icon: Icons.smile;
-                label: "Emoji";
-                clicked => { root.emoji-mode-requested(); }
-            }
-
-            Text {
-                text: "GIFs";
-                color: Colors.text-primary;
-                font-size: Typography.lg;
-                font-weight: Typography.semibold;
-                vertical-alignment: center;
-                horizontal-stretch: 1;
-            }
-
-            // Close button
-            DismissButton {
-                clicked => { root.close(); }
-            }
-        }
-
-        // Search input
-        Rectangle {
-            visible: !root.embedded;
-            height: root.embedded ? 0px : Spacing.touch-target-min;
-            border-radius: Spacing.radius-md;
-            background: transparent;
-            border-width: Spacing.stroke;
-            border-color: search-focused ? Colors.primary : Colors.border;
-
-            HorizontalLayout {
-                padding-left: Spacing.sm;
-                padding-right: Spacing.sm;
-                spacing: Spacing.sm;
-
-                // Search icon
-                Image {
-                    source: Icons.search;
-                    colorize: Colors.text-muted;
-                    width: 16px;
-                    height: 16px;
-                    y: (parent.height - self.height) / 2;
-                }
-
-                // Search text input
-                search-input := TextInput {
-                    horizontal-stretch: 1;
-                    height: parent.height;
-                    color: Colors.text-primary;
-                    font-size: Typography.sm;
-                    vertical-alignment: center;
-                    text <=> root.search-query;
-
-                    edited => {
-                        root.search(self.text);
-                    }
-                }
-
-                // Clear button (shown when search has text)
-                if root.search-query != "": Rectangle {
-                    width: Spacing.button-height;
-                    height: root.embedded ? 0px : Spacing.button-height;
-                    y: (parent.height - self.height) / 2;
-                    border-radius: Spacing.radius-full;
-                    background: clear-area.has-hover ? Colors.surface-hover : transparent;
-
-                    Image {
-                        source: Icons.x;
-                        colorize: Colors.text-secondary;
-                        width: 12px;
-                        height: 12px;
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
-                    }
-
-                    clear-area := TouchArea {
-                        width: 100%;
-                        height: 100%;
-                        clicked => {
-                            root.search-query = "";
-                            root.search("");
-                        }
-                    }
-                }
-            }
-        }
-
-        // Tab bar
-        if !root.embedded: Rectangle {
-            height: Spacing.button-height + Spacing.xs * 2;
-            background: transparent;
-            border-radius: Spacing.radius-md;
-
-            HorizontalLayout {
-                padding: Spacing.xs;
-                spacing: Spacing.xs;
-
-                // Trending tab
-                Rectangle {
-                    horizontal-stretch: 1;
-                    height: Spacing.button-height;
-                    border-radius: Spacing.radius-sm;
-                    background: !show-search-results ? Colors.primary.with-alpha(0.2) : (trending-area.has-hover ? Colors.surface-hover : transparent);
-
-                    HorizontalLayout {
-                        alignment: center;
-                        spacing: Spacing.xs;
-
-                        Image {
-                            source: Icons.sparkles;
-                            colorize: !show-search-results ? Colors.primary : Colors.text-secondary;
-                            width: 14px;
-                            height: 14px;
-                            y: (parent.height - self.height) / 2;
-                        }
-
-                        Text {
-                            text: "Trending";
-                            color: !show-search-results ? Colors.primary : Colors.text-secondary;
-                            font-size: Typography.sm;
-                            font-weight: !show-search-results ? Typography.medium : Typography.normal;
-                            vertical-alignment: center;
-                        }
-                    }
-
-                    // Selected indicator
-                    if !show-search-results: Rectangle {
-                        height: 2px;
-                        y: parent.height - 2px;
-                        width: parent.width * 60%;
-                        x: (parent.width - self.width) / 2;
-                        background: Colors.primary;
-                        border-radius: 1px;
-                    }
-
-                    trending-area := TouchArea {
-                        width: 100%;
-                        height: 100%;
-                        clicked => {
-                            root.search-query = "";
-                            root.search("");
-                        }
-                    }
-                }
-
-                // Search Results tab (only active when searching)
-                Rectangle {
-                    horizontal-stretch: 1;
-                    height: Spacing.button-height;
-                    border-radius: Spacing.radius-sm;
-                    background: show-search-results ? Colors.primary.with-alpha(0.2) : (results-area.has-hover && root.search-query != "" ? Colors.surface-hover : transparent);
-                    opacity: root.search-query != "" ? 1.0 : 0.5;
-
-                    HorizontalLayout {
-                        alignment: center;
-                        spacing: Spacing.xs;
-
-                        Image {
-                            source: Icons.search;
-                            colorize: show-search-results ? Colors.primary : Colors.text-secondary;
-                            width: 14px;
-                            height: 14px;
-                            y: (parent.height - self.height) / 2;
-                        }
-
-                        Text {
-                            text: "Results";
-                            color: show-search-results ? Colors.primary : Colors.text-secondary;
-                            font-size: Typography.sm;
-                            font-weight: show-search-results ? Typography.medium : Typography.normal;
-                            vertical-alignment: center;
-                        }
-                    }
-
-                    // Selected indicator
-                    if show-search-results: Rectangle {
-                        height: 2px;
-                        y: parent.height - 2px;
-                        width: parent.width * 60%;
-                        x: (parent.width - self.width) / 2;
-                        background: Colors.primary;
-                        border-radius: 1px;
-                    }
-
-                    results-area := TouchArea {
-                        width: 100%;
-                        height: 100%;
-                        enabled: root.search-query != "";
-                    }
-                }
-            }
-        }
-
-        // GIF grid or loading/empty states
         Rectangle {
             vertical-stretch: 1;
             clip: true;
 
-            // Loading state - show skeleton placeholders
-            if root.loading: VerticalLayout {
-                spacing: Spacing.sm;
-                padding: Spacing.xs;
-
-                // 2 columns, 3 rows of skeleton placeholders
+            // Loading with nothing local to show: skeleton tiles in the
+            // real grid geometry.
+            if root.loading && !root.show-recent: Rectangle {
+                width: 100%;
+                height: 100%;
+                clip: true;
                 for row in 3: HorizontalLayout {
-                    spacing: Spacing.sm;
-
-                    Skeleton {
+                    y: row * root.row-stride;
+                    height: root.tile-height;
+                    spacing: root.grid-gap;
+                    for col in root.columns: Skeleton {
                         horizontal-stretch: 1;
-                        height: 80px;
-                        border-radius: Spacing.radius-md;
-                    }
-
-                    Skeleton {
-                        horizontal-stretch: 1;
-                        height: 80px;
+                        height: root.tile-height;
                         border-radius: Spacing.radius-md;
                     }
                 }
             }
 
-            // Empty state - no results
-            if !root.loading && root.results.length == 0: Rectangle {
+            if !(root.loading && !root.show-recent): gif-grid := Flickable {
                 width: 100%;
                 height: 100%;
-
-                VerticalLayout {
-                    alignment: center;
-                    spacing: Spacing.sm;
-
-                    HorizontalLayout {
-                        alignment: center;
-                        Image {
-                            source: show-search-results ? Icons.search : Icons.image;
-                            colorize: Colors.text-muted;
-                            width: 32px;
-                            height: Spacing.button-height;
-                        }
-                    }
-
-                    Text {
-                        text: root.failed ? "Couldn't load GIFs" : (show-search-results ? "No GIFs found" : "No trending GIFs");
-                        color: Colors.text-secondary;
-                        font-size: Typography.sm;
-                        horizontal-alignment: center;
-                    }
-
-                    Text {
-                        text: root.failed ? "The GIF service is unavailable. Try again later." : (show-search-results ? "Try a different search term" : "Try again later.");
-                        wrap: word-wrap;
-                        color: Colors.text-muted;
-                        font-size: Typography.xs;
-                        horizontal-alignment: center;
-                    }
-
-                    if root.failed: HorizontalLayout {
-                        alignment: center;
-                        Button {
-                            text: "Retry";
-                            variant: "secondary";
-                            clicked => { root.search(root.search-query); }
-                        }
-                    }
-                }
-            }
-
-            // GIF grid - 2 columns
-            if !root.loading && root.results.length > 0: gif-grid := Flickable {
-                width: 100%;
-                height: 100%;
-                viewport-height: Math.ceil(root.results.length / 2) * 90px;
+                viewport-height: root.recent-height + root.results-height + root.attribution-height;
 
                 Rectangle {
                     width: parent.width;
                     height: parent.viewport-height;
 
-                    for gif-data[index] in root.results: Rectangle {
-                        property <int> grid-row: Math.floor(index / 2);
-                        property <int> grid-col: mod(index, 2);
-                        property <length> item-width: (parent.width - Spacing.sm) / 2;
+                    // ── Recent ──
+                    if root.show-recent: Text {
+                        y: 0px;
+                        height: root.section-header;
+                        text: "Recent";
+                        color: Colors.text-secondary;
+                        font-size: Typography.xs;
+                        font-weight: Typography.semibold;
+                        vertical-alignment: center;
+                    }
+                    if root.show-recent: Rectangle {
+                        y: root.section-header;
+                        width: parent.width;
+                        height: root.grid-height(root.recent.length);
+                        for gif-data[index] in root.recent: GifTile {
+                            gif: gif-data;
+                            x: mod(index, root.columns) * (root.tile-width + root.grid-gap);
+                            y: Math.floor(index / root.columns) * root.row-stride;
+                            width: root.tile-width;
+                            height: root.tile-height;
+                            picked(id, url) => { root.gif-selected(id, url); }
+                        }
+                    }
 
-                        x: grid-col * (item-width + Spacing.sm);
-                        y: grid-row * 90px;
-                        width: item-width;
-                        height: 85px;
-                        border-radius: Spacing.radius-md;
-                        background: gif-area.has-hover ? Colors.surface-hover : Colors.background;
-                        clip: true;
+                    // ── Trending / results ──
+                    if root.show-recent && (root.show-results || root.loading): Text {
+                        y: root.results-top;
+                        height: root.section-header;
+                        text: root.loading ? "Loading trending…" : "Trending";
+                        color: Colors.text-secondary;
+                        font-size: Typography.xs;
+                        font-weight: Typography.semibold;
+                        vertical-alignment: center;
+                    }
+                    if root.show-results: Rectangle {
+                        y: root.results-top + (root.show-recent ? root.section-header : 0px);
+                        width: parent.width;
+                        height: root.grid-height(root.results.length);
+                        for gif-data[index] in root.results: GifTile {
+                            gif: gif-data;
+                            x: mod(index, root.columns) * (root.tile-width + root.grid-gap);
+                            y: Math.floor(index / root.columns) * root.row-stride;
+                            width: root.tile-width;
+                            height: root.tile-height;
+                            picked(id, url) => { root.gif-selected(id, url); }
+                        }
+                    }
 
-                        // Hover glow effect
+                    // Empty or failed. With recents above it, the provider's
+                    // failure is one line and a Retry, not a blank drawer.
+                    if root.show-status: VerticalLayout {
+                        y: root.results-top;
+                        width: parent.width;
+                        height: root.status-height;
+                        alignment: center;
+                        spacing: Spacing.xs;
 
-                        // GIF preview image (loaded from Rust)
-                        Image {
-                            width: parent.width;
-                            height: parent.height;
-                            source: gif-data.preview;
-                            image-fit: cover;
+                        if !root.show-recent: HorizontalLayout {
+                            alignment: center;
+                            Image {
+                                source: root.show-search-results ? Icons.search : Icons.image;
+                                colorize: Colors.text-muted;
+                                width: 24px;
+                                height: 24px;
+                            }
                         }
 
-                        gif-area := TouchArea {
-                            width: 100%;
-                            height: 100%;
-                            clicked => {
-                                root.gif-selected(gif-data.id, gif-data.full-url);
+                        Text {
+                            text: root.failed ? "Couldn't load GIFs" : (root.show-search-results ? "No GIFs found" : "No trending GIFs");
+                            color: Colors.text-secondary;
+                            font-size: Typography.sm;
+                            horizontal-alignment: center;
+                        }
+
+                        Text {
+                            text: root.failed ? "The GIF service is unavailable." : (root.show-search-results ? "Try a different search term" : "Try again later.");
+                            wrap: word-wrap;
+                            color: Colors.text-muted;
+                            font-size: Typography.xs;
+                            horizontal-alignment: center;
+                        }
+
+                        if root.failed: HorizontalLayout {
+                            alignment: center;
+                            Button {
+                                text: "Retry";
+                                variant: "secondary";
+                                clicked => { root.search(root.search-query); }
                             }
                         }
                     }
+
+                    // Klipy attribution: one centred line below the grid,
+                    // inside the scroll, so the last row never sits under it.
+                    Text {
+                        y: parent.height - root.attribution-height;
+                        width: parent.width;
+                        height: root.attribution-height;
+                        text: "Powered by Klipy";
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
                 }
-            }
-        }
-
-        // Klipy attribution
-        HorizontalLayout {
-            min-height: 16px;
-            alignment: center;
-
-            Text {
-                text: "Powered by Klipy";
-                color: Colors.text-muted;
-                font-size: Typography.xs;
-                horizontal-alignment: center;
             }
         }
     }

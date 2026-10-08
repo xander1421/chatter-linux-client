@@ -102,6 +102,7 @@ export component Modal inherits Rectangle {
 
     container := ModalContainer {
         show: root.show;
+        accessible-title: root.title == "" ? "Dialog" : root.title + " dialog";
         modal-width: root.modal-width;
         max-modal-height: min(root.max-modal-height, root.viewport-height-cap);
         fill-height: root.fill-height;

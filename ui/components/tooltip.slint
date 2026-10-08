@@ -1,4 +1,5 @@
 import { GlassSurface } from "glass_surface.slint";
+import { Materials } from "../theme/materials.slint";
 // Tooltip components for hover hints
 //
 // TooltipArea: wraps content and renders its own tooltip on hover, so no
@@ -54,7 +55,7 @@ export component TooltipArea inherits Rectangle {
 
         border-radius: Spacing.radius-xl;
         opacity: 1;
-        animate opacity { duration: 150ms; }
+        animate opacity { duration: Materials.feedback-duration; }
 
         tt-text := Text {
             x: Spacing.sm;

@@ -5,10 +5,10 @@
 //! Only colour-default emoji are offered (see [`is_color_default`]): a
 //! text-default one renders grey, or as tofu on older Android fonts.
 
-use super::recent_emoji::RecentEmojiStore;
-
 /// Category index reserved for "Recent" emoji (displayed as first tab).
 pub const RECENT_CATEGORY: i32 = -1;
+/// The tab a fresh picker opens on when there is no history.
+pub const DEFAULT_CATEGORY: i32 = 0;
 /// People & Body: the one category skin tones apply to.
 pub const PEOPLE_CATEGORY: i32 = 1;
 
@@ -114,9 +114,20 @@ fn apply_skin_tone(emoji: &str, tone: i32) -> String {
     }
 }
 
+/// Where a freshly opened picker lands: Recent when the account has picked
+/// anything, otherwise Smileys. Returns the tab and what it shows.
+pub fn initial_listing(recent: &[String], tone: i32) -> (i32, Vec<PickerEmoji>) {
+    let recents = recent_emojis(recent);
+    if recents.is_empty() {
+        (DEFAULT_CATEGORY, listing(DEFAULT_CATEGORY, tone, recent))
+    } else {
+        (RECENT_CATEGORY, recents)
+    }
+}
+
 /// What a picker tab shows: the recents for [`RECENT_CATEGORY`], otherwise
 /// the category with skin `tone` applied (People & Body only; 0 = none).
-pub fn listing(category: i32, tone: i32, recent: &RecentEmojiStore) -> Vec<PickerEmoji> {
+pub fn listing(category: i32, tone: i32, recent: &[String]) -> Vec<PickerEmoji> {
     if category == RECENT_CATEGORY {
         return recent_emojis(recent);
     }
@@ -133,14 +144,13 @@ pub fn listing(category: i32, tone: i32, recent: &RecentEmojiStore) -> Vec<Picke
 }
 
 /// Recently used emoji, newest first.
-fn recent_emojis(store: &RecentEmojiStore) -> Vec<PickerEmoji> {
-    store
-        .get_recent()
-        .into_iter()
-        // Picks saved before the text-default filter must not bring tofu back.
+fn recent_emojis(recent: &[String]) -> Vec<PickerEmoji> {
+    recent
+        .iter()
+        // A text-default pick must not bring tofu back.
         .filter(|emoji| is_color_default(emoji))
         .map(|emoji| PickerEmoji {
-            emoji,
+            emoji: emoji.clone(),
             name: "recent".into(),
             category: RECENT_CATEGORY,
         })
@@ -519,8 +529,7 @@ mod picker_tests {
 
     #[test]
     fn skin_tone_applies_to_people_only() {
-        let dir = tempfile::tempdir().unwrap();
-        let recent = RecentEmojiStore::load(dir.path());
+        let recent: Vec<String> = Vec::new();
         let plain = listing(PEOPLE_CATEGORY, 0, &recent);
         let toned = listing(PEOPLE_CATEGORY, 3, &recent);
         assert_eq!(plain.len(), toned.len());
@@ -532,10 +541,10 @@ mod picker_tests {
 
     #[test]
     fn recents_and_search() {
-        let dir = tempfile::tempdir().unwrap();
-        let recent = RecentEmojiStore::load(dir.path());
-        recent.record("😀");
-        recent.record("\u{1F6E1}\u{FE0F}"); // 🛡️, text-default: never offered
+        let recent = vec![
+            "\u{1F6E1}\u{FE0F}".to_string(), // 🛡️, text-default: never offered
+            "😀".to_string(),
+        ];
         let tab = listing(RECENT_CATEGORY, 0, &recent);
         assert_eq!(
             tab.iter().map(|e| e.emoji.as_str()).collect::<Vec<_>>(),
@@ -549,5 +558,18 @@ mod picker_tests {
         assert!(hits.iter().all(|e| e.name.contains("heart")));
         assert!(search("").len() <= 50);
         assert!(listing(42, 0, &recent).is_empty());
+    }
+
+    #[test]
+    fn fresh_picker_lands_on_recent_only_when_there_is_history() {
+        let (category, shown) = initial_listing(&[], 0);
+        assert_eq!(category, DEFAULT_CATEGORY);
+        assert_eq!(shown, category_emojis(DEFAULT_CATEGORY));
+        // Only tofu in history counts as no history.
+        let (category, _) = initial_listing(&["\u{1F6E1}\u{FE0F}".to_string()], 0);
+        assert_eq!(category, DEFAULT_CATEGORY);
+        let (category, shown) = initial_listing(&["🎉".to_string()], 0);
+        assert_eq!(category, RECENT_CATEGORY);
+        assert_eq!(shown[0].emoji, "🎉");
     }
 }

@@ -30,6 +30,9 @@ export component ModalContainer inherits Rectangle {
     // that then hides it reads as a takeover rather than a tab — you lose the
     // thing you navigated with.
     in property <length> bottom-inset: 0px;
+    // What a screen reader announces: the dialog's title ("Calls dialog"),
+    // never one name for every dialog.
+    in property <string> accessible-title: "Modal dialog";
 
     callback close();
 
@@ -43,9 +46,11 @@ export component ModalContainer inherits Rectangle {
         modal-keys.focus();
     }
 
-    // Only show when visible
+    // Logical close is immediate (nothing below accepts input); the fade and
+    // the card's settle run to the end before the surface goes.
     opacity: root.show ? 1 : 0;
-    visible: root.show;
+    animate opacity { duration: Materials.sheet-duration; easing: ease-out; }
+    visible: root.show || self.opacity > 0;
 
     // Backdrop - full parent coverage. Full-screen has no "outside" to dim:
     // the card covers everything except the strip deliberately left for the tab
@@ -81,6 +86,7 @@ export component ModalContainer inherits Rectangle {
             y: -modal-scroll.viewport-y;
             width: parent.width;
             height: root.full-screen ? parent.height - root.bottom-inset : parent.height;
+            enabled: root.show;
             clicked => { root.close(); }
         }
 
@@ -94,7 +100,7 @@ export component ModalContainer inherits Rectangle {
             enter-duration: Materials.sheet-duration;
 
             accessible-role: groupbox;
-            accessible-label: "Modal dialog";
+            accessible-label: root.accessible-title;
             
             // Responsive width: cap at viewport width minus padding
             width: root.full-screen ? root.width : min(root.modal-width, root.width - 32px);
@@ -166,5 +172,11 @@ export component ModalContainer inherits Rectangle {
                 }
             }
         }
+    }
+
+    // While the exit plays nothing underneath is a live target.
+    if !root.show: TouchArea {
+        width: 100%;
+        height: 100%;
     }
 }

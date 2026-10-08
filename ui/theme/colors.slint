@@ -66,10 +66,14 @@ export global Colors {
     out property <color> accent-purple: Appearance.dark ? #8b5cf6 : #7c3aed;
 
     // Presence colors
+    // Presence dots are non-text (WCAG 1.4.11 wants 3:1 on what they sit
+    // on). Light offline #9ca3af was 2.2:1 on the page; #748393 is 3.4:1 on
+    // the page and 3.9:1 on white, and still a step lighter than text-muted.
+    // Light away #d97706 was 2.8:1; the warning step is 3.9:1.
     out property <color> online: Appearance.dark ? #10b981 : #059669;
-    out property <color> away: Appearance.dark ? #f59e0b : #d97706;
+    out property <color> away: Appearance.dark ? #f59e0b : #b45309;
     out property <color> dnd: Appearance.dark ? #ef4444 : #dc2626;
-    out property <color> offline: Appearance.dark ? #6b7280 : #9ca3af;
+    out property <color> offline: Appearance.dark ? #6b7280 : #748393;
 
     // Borders and dividers
     out property <color> border: Appearance.dark ? #243242 : #d2dae3;
@@ -118,6 +122,10 @@ export global Colors {
     out property <color> bubble-inset: Appearance.dark ? #0000003d : #1a2c3e0a;
     // Read receipts / play glyphs inside a bubble: >= 3:1 on both fills.
     out property <color> bubble-accent: Appearance.dark ? #64ddcc : #0f766e;
+    // A sender's name on a peer bubble (14px text, so 4.5:1): dark primary
+    // #0d9488 was 4.0:1 on the bubble top; the glass accent is 9:1. Light
+    // primary already passes (5.3:1).
+    out property <color> sender-name: Appearance.dark ? #64ddcc : #0f766e;
 
     // File category colors
     out property <color> cat-image: Appearance.dark ? #4ade80 : #16a34a;
@@ -130,6 +138,19 @@ export global Colors {
     // A well pressed into whatever it sits on: text fields, QR plates,
     // selected list rows and options (one step BELOW the page).
     out property <color> inset: Appearance.dark ? #060a0f : #e6ebf0;
+    // THE selected-row fill, and the two tints for a selected or active
+    // control drawn on chrome (tabs, categories, swatches): one weak step and
+    // one strong step of the brand colour, instead of per-file alphas. Light
+    // `selected` is a shade below `inset` so a selected row is not the same
+    // colour as a hovered one (hover #e6ecf2 ≈ inset #e6ebf0); text-muted
+    // stays 4.6:1 on it.
+    out property <color> selected: Appearance.dark ? #060a0f : #dde4ec;
+    out property <color> tint-weak: primary.with-alpha(0.10);
+    out property <color> tint-strong: primary.with-alpha(0.20);
+    // Text drawn straight on Materials.scrim-media (a media viewer's
+    // backdrop, dark in both themes).
+    out property <color> on-media: #eef3f8;
+    out property <color> on-media-muted: #b6c4d2;
     // Every 1px rule between rows, sections and header groups.
     out property <color> divider: Appearance.dark ? #97a8ba2b : #5566772b;
 }

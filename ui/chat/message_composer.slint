@@ -6,11 +6,11 @@ import { HeaderButton } from "../components/header_button.slint";
 // Enhanced message input with attachment, emoji, GIF buttons, and @ mention detection.
 
 import { Colors } from "../theme/colors.slint";
-import { Elevation } from "../theme/elevation.slint";
 import { Appearance } from "../theme/appearance.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
+import { Materials } from "../theme/materials.slint";
 import { MeshGlobal } from "../mesh/mesh_global.slint";
 
 // Markdown wrapping for the formatting toolbar. Implemented in Rust
@@ -175,6 +175,10 @@ export component MessageComposer inherits GlassSurface {
     // Reply preview sits in the first toolbar row's gap; with attachments too,
     // the strip takes a second gap row below it so the two never overlap.
     property <length> reply-row-height: is-replying ? max(action-shell-height, 48px * Appearance.text-grow) : 0px;
+    // The first raised row: the emoji and attach shells are as tall as the
+    // reply chip beside them, so large text cannot leave the chip taller
+    // than its neighbours.
+    property <length> top-shell-height: is-replying ? reply-row-height : action-shell-height;
     property <length> raised-toolbar-height: !raised-actions ? 0px
         : (is-replying ? reply-row-height + Spacing.xs : 0px)
             + (has-attachments || !is-replying ? action-shell-height + Spacing.xs : 0px);
@@ -275,7 +279,6 @@ export component MessageComposer inherits GlassSurface {
     // Text paste is handled by TextInput itself (this doesn't consume the key).
     callback paste-image();
     callback emoji-clicked();
-    callback gif-clicked();
     // The text field took focus: the emoji / GIF panel gives way to the
     // keyboard, the way Signal toggles between the two.
     callback input-focused();
@@ -630,7 +633,9 @@ export component MessageComposer inherits GlassSurface {
         Rectangle {
             width: 100%;
             height: root.content-height + root.raised-toolbar-height + root.row-padding * 2;
-            property <length> action-y: root.row-padding + (root.raised-actions ? 0px : (root.content-height - Spacing.touch-target-min) / 2);
+            property <length> action-y: root.raised-actions
+                ? (root.top-shell-height - Spacing.touch-target-min) / 2
+                : root.row-padding + (root.content-height - Spacing.touch-target-min) / 2;
             property <length> lower-action-y: root.row-padding + root.raised-toolbar-height + root.content-height - Spacing.touch-target-min;
 
             // Decorative surfaces never reparent or replace the native input.
@@ -639,7 +644,7 @@ export component MessageComposer inherits GlassSurface {
                 y: 0px;
                 visible: root.raised-actions;
                 width: Spacing.touch-target-min + root.row-padding * 2;
-                height: Spacing.touch-target-min + root.row-padding * 2;
+                height: root.top-shell-height;
                 material-level: root.material-level;
                 elevation: root.elevation;
                 backdrop-paused: root.backdrop-paused;
@@ -648,7 +653,7 @@ export component MessageComposer inherits GlassSurface {
                 y: 0px;
                 x: parent.width - self.width;
                 width: Spacing.touch-target-min + root.row-padding * 2;
-                height: Spacing.touch-target-min + root.row-padding * 2;
+                height: root.top-shell-height;
                 material-level: root.material-level;
                 elevation: root.elevation;
                 backdrop-paused: root.backdrop-paused;
@@ -762,13 +767,18 @@ export component MessageComposer inherits GlassSurface {
 
             // Bounded previews occupy only the gap between the individual action shells,
             // one row below the reply preview when both are present.
-            if root.has-attachments: attachment-strip := Rectangle {
+            if root.has-attachments: attachment-strip := GlassSurface {
                 x: left-action-surface.width + Spacing.xs;
                 y: root.is-replying ? root.reply-row-height + Spacing.xs : 0px;
                 width: max(0px, parent.width - (root.show-attachment-action ? root.action-shell-height : 0px) - self.x - Spacing.xs);
                 height: Spacing.touch-target-min + root.row-padding * 2;
+                // One material with the reply chip and the action shells; the
+                // cards are wells inside it, not a second card style.
+                border-radius: Spacing.radius-chrome;
                 clip: true;
-                background: transparent;
+                material-level: root.material-level;
+                elevation: root.elevation;
+                backdrop-paused: root.backdrop-paused;
 
                 attachment-scroll := Flickable {
                     width: 100%;
@@ -779,21 +789,18 @@ export component MessageComposer inherits GlassSurface {
                     interactive: true;
 
                     HorizontalLayout {
-                        padding: Spacing.none;
+                        padding-left: root.row-padding;
+                        padding-right: root.row-padding;
                         spacing: Spacing.xs;
-                        alignment: center;
+                        alignment: start;
 
-                        // Pending attachment items — Neo convex cards
+                        // Pending attachment items: inset wells, concentric with
+                        // the shell (radius-chrome-inner − chrome-inset).
                         for attachment in root.pending-attachments: Rectangle {
                             width: 180px;
                             height: Spacing.touch-target-min + root.row-padding * 2;
-                            background: Colors.surface;
-                            border-radius: Spacing.radius-md;
-                            drop-shadow-blur: Elevation.card-blur;
-                            drop-shadow-offset-y: Elevation.card-offset;
-                            drop-shadow-color: Elevation.card-shadow;
-                            border-width: Elevation.rim-width;
-                            border-color: Elevation.card-rim;
+                            background: Colors.inset;
+                            border-radius: Spacing.radius-lg;
                             opacity: attachment.is-ready ? 1.0 : 0.7;
 
                             property <color> category-bg: attachment.category == "image" ? Colors.cat-image :
@@ -804,7 +811,7 @@ export component MessageComposer inherits GlassSurface {
                                                           attachment.category == "archive" ? Colors.cat-archive :
                                                           Colors.text-muted;
 
-                            property <string> category-emoji: attachment.category == "image" ? "\u{1F5BC}\u{FE0F}" :
+                            property <string> category-emoji: attachment.category == "image" ? "\u{1F4F7}" :
                                                               attachment.category == "video" ? "\u{1F3AC}\u{FE0F}" :
                                                               attachment.category == "audio" ? "\u{1F3B5}\u{FE0F}" :
                                                               attachment.category == "document" ? "\u{1F4C4}\u{FE0F}" :
@@ -878,23 +885,27 @@ export component MessageComposer inherits GlassSurface {
                                     }
                                 }
 
-                                // Remove button
+                                // Remove button: the reply chip's dismiss, exactly.
+                                // A 48dp hit box, quiet at rest, error tint only
+                                // under the pointer — the filled pink disc was the
+                                // loudest thing in the composer.
                                 Rectangle {
                                     width: Spacing.touch-target-min;
                                     height: Spacing.touch-target-min;
-                                    background: remove-touch.has-hover ? Colors.error.transparentize(0.7) : Colors.error.transparentize(0.9);
-                                    border-radius: Spacing.radius-full;
+                                    background: remove-touch.pressed ? Colors.error.transparentize(0.7)
+                                        : remove-touch.has-hover ? Colors.error.transparentize(0.8) : transparent;
+                                    border-radius: Spacing.radius-chrome-inner;
                                     accessible-role: button;
                                     accessible-label: "Remove attachment";
+                                    accessible-action-default => { root.remove-attachment(attachment.id); }
 
-                                    Text {
-                                        width: 100%;
-                                        height: 100%;
-                                        text: "\u{00D7}";
-                                        font-size: Typography.xs;
-                                        color: Colors.error;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
+                                    Image {
+                                        source: Icons.x;
+                                        width: 18px;
+                                        height: 18px;
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                        colorize: remove-touch.has-hover ? Colors.error : Colors.text-secondary;
                                     }
 
                                     remove-touch := TouchArea {
@@ -907,30 +918,35 @@ export component MessageComposer inherits GlassSurface {
                             }
                         }
 
-                        // Add more button — Neo dashed outline
-                        Rectangle {
-                            width: Spacing.touch-target-min;
-                            height: Spacing.touch-target-min;
-                            background: add-more-touch.has-hover ? Colors.surface-hover : Colors.inset;
-                            border-radius: Spacing.radius-md;
-                            accessible-role: button;
-                            accessible-label: "Add attachment";
+                        // Add more: the same 48dp box as the remove control,
+                        // centred in the row, with the bundled plus glyph.
+                        VerticalLayout {
+                            alignment: center;
+                            Rectangle {
+                                width: Spacing.touch-target-min;
+                                height: Spacing.touch-target-min;
+                                background: add-more-touch.pressed ? Materials.pressed
+                                    : add-more-touch.has-hover ? Materials.hover : Colors.inset;
+                                border-radius: Spacing.radius-chrome-inner;
+                                accessible-role: button;
+                                accessible-label: "Add attachment";
+                                accessible-action-default => { if !root.disabled { root.attachment-clicked(); } }
 
-                            Text {
-                                width: 100%;
-                                height: 100%;
-                                text: "+";
-                                font-size: Typography.xxl;
-                                color: Colors.text-muted;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
-                            }
+                                Image {
+                                    source: Icons.plus;
+                                    width: 18px;
+                                    height: 18px;
+                                    x: (parent.width - self.width) / 2;
+                                    y: (parent.height - self.height) / 2;
+                                    colorize: Colors.text-secondary;
+                                }
 
-                            add-more-touch := TouchArea {
-                                enabled: !root.disabled;
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    root.attachment-clicked();
+                                add-more-touch := TouchArea {
+                                    enabled: !root.disabled;
+                                    mouse-cursor: pointer;
+                                    clicked => {
+                                        root.attachment-clicked();
+                                    }
                                 }
                             }
                         }
@@ -946,19 +962,25 @@ export component MessageComposer inherits GlassSurface {
                 y: parent.action-y;
                 width: Spacing.touch-target-min;
                 height: Spacing.touch-target-min;
-                background: emoji-touch.has-hover ? Colors.surface-hover : transparent;
+                background: root.picker-open && !root.mobile ? Colors.tint-strong
+                    : emoji-touch.pressed ? Materials.pressed
+                    : emoji-touch.has-hover ? Materials.hover : transparent;
                 border-radius: Spacing.radius-chrome-inner;
                 opacity: root.disabled ? 0.5 : 1.0;
                 accessible-role: button;
-                accessible-label: root.picker-open ? "Show keyboard" : "Emoji & GIF picker";
+                // On a phone the open drawer stands where the keyboard was, so
+                // the button offers the keyboard back; a desktop window has no
+                // soft keyboard, so there the same click is "close".
+                accessible-label: root.picker-open ? (root.mobile ? "Show keyboard" : "Close picker") : "Emoji & GIF picker";
 
                 Image {
-                    source: root.picker-open ? Icons.keyboard : Icons.smile;
+                    source: root.picker-open && root.mobile ? Icons.keyboard : Icons.smile;
                     width: 20px;
                     height: 20px;
                     x: (parent.width - self.width) / 2;
                     y: (parent.height - self.height) / 2;
-                    colorize: emoji-touch.has-hover ? Colors.text-primary : Colors.text-secondary;
+                    colorize: root.picker-open && !root.mobile ? Colors.glass-accent
+                        : emoji-touch.has-hover ? Colors.text-primary : Colors.text-secondary;
                 }
 
                 emoji-touch := TouchArea {
@@ -1008,7 +1030,7 @@ export component MessageComposer inherits GlassSurface {
                     font-size: Typography.base;
                     wrap: word-wrap;
                     opacity: text-input.has-focus ? 0.5 : 1.0;
-                    animate opacity { duration: 150ms; }
+                    animate opacity { duration: Materials.feedback-duration; }
                 }
 
                 // Keep raw TextInput: no std TextEdit/ScrollView focus wrapper.
@@ -1241,7 +1263,10 @@ export component MessageComposer inherits GlassSurface {
             padding: root.row-padding;
             spacing: Spacing.xs;
             Text {
-                text: VoiceRecording.status != "" ? VoiceRecording.status : (VoiceRecording.locked ? "Voice message" : "Slide left to cancel · up to lock");
+                text: VoiceRecording.status != "" ? VoiceRecording.status
+                    : VoiceRecording.locked ? "Voice message"
+                    : root.mobile ? "Slide left to cancel · up to lock"
+                    : "Recording · cancel, lock or send below";
                 color: Colors.text-muted;
                 font-size: Typography.sm;
                 wrap: word-wrap;

@@ -212,6 +212,21 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
         }
     });
 
+    // Reduce animations is device-local too, and read before the first frame
+    // so no decorative loop starts only to be stopped.
+    appearance.set_reduce_motion(ui_ctx.reduce_motion_enabled());
+    let ui_ctx_motion = ui_ctx.clone();
+    let weak_motion = window.as_weak();
+    appearance.on_reduce_motion_changed(move |enabled: bool| {
+        if let Err(e) = ui_ctx_motion.set_reduce_motion_enabled(enabled) {
+            tracing::error!("Failed to save reduce motion: {}", e);
+        }
+        if let Some(w) = weak_motion.upgrade() {
+            w.global::<crate::Appearance>()
+                .set_reduce_motion(ui_ctx_motion.reduce_motion_enabled());
+        }
+    });
+
     // Account push delivery is read from and saved to the server. Keep this
     // separate from device sound/OS permissions and notification privacy.
     let delivery = window.global::<crate::NotificationDelivery>();

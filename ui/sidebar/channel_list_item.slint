@@ -6,6 +6,7 @@
 // Neo states: flat default, highlight hover, inset active (selected).
 
 import { Colors } from "../theme/colors.slint";
+import { Appearance } from "../theme/appearance.slint";
 import { HoldArea } from "../components/hold_area.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Icons } from "../theme/icons.slint";
@@ -47,8 +48,9 @@ export component ChannelListItem inherits Rectangle {
             typing-animation-progress: 1.0;
             in {
                 animate typing-animation-progress {
-                    duration: 600ms;
-                    iteration-count: -1;
+                    // Reduce animations: the dots hold one static mark.
+                    duration: Appearance.reduce-motion ? 0ms : 600ms;
+                    iteration-count: Appearance.reduce-motion ? 1 : -1;
                 }
             }
         }
@@ -237,11 +239,11 @@ export component ChannelListItem inherits Rectangle {
                     width: max(20px, badge-text.preferred-width + 12px);
                     height: 20px;
                     border-radius: Spacing.radius-full;
-                    background: Colors.primary;
+                    background: Colors.action-fill;
 
                     badge-text := Text {
                         text: root.unread-count > 99 ? "99+" : root.unread-count;
-                        color: Colors.text-primary;
+                        color: Colors.on-action;
                         font-size: Typography.xs2;
                         font-weight: 600;
                         horizontal-alignment: center;
@@ -318,11 +320,11 @@ export component ChannelListItem inherits Rectangle {
                 border-radius: Spacing.radius-full;
                 border-width: 2px;
                 border-color: Colors.surface;
-                background: Colors.primary;
+                background: Colors.action-fill;
 
                 collapsed-badge-text := Text {
                     text: root.unread-count > 99 ? "99+" : root.unread-count;
-                    color: Colors.text-primary;
+                    color: Colors.on-action;
                     font-size: Typography.xxs;
                     font-weight: 600;
                     horizontal-alignment: center;

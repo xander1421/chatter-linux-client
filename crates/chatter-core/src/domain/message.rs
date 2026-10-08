@@ -1395,8 +1395,8 @@ mod tests {
         let mut file = text(them, "");
         file.attachments = vec![AttachmentId::new(), AttachmentId::new()];
         assert_eq!(
-            file.sidebar_preview(Some(&me), Some("\u{1F5BC}\u{FE0F} Photo +1")),
-            "\u{1F5BC}\u{FE0F} Photo +1"
+            file.sidebar_preview(Some(&me), Some("\u{1F4F7} Photo +1")),
+            "\u{1F4F7} Photo +1"
         );
         assert_eq!(
             file.sidebar_preview(Some(&me), None),

@@ -107,21 +107,26 @@ fn tick_picker_gifs(elapsed_ms: u64) {
 }
 
 fn update_picker_thumbnails(window: &crate::MainWindow, updates: &[(String, Image)]) {
-    let results = window.get_composer_gif_picker_results();
-    let count = results.row_count();
-
-    for (update_id, new_image) in updates {
-        for idx in 0..count {
-            if let Some(mut gif) = results.row_data(idx) {
-                if gif.id.as_str() == update_id {
-                    if let Some(model) = results
-                        .as_any()
-                        .downcast_ref::<slint::VecModel<crate::GifData>>()
-                    {
+    // A GIF can sit in both sections (sent before, trending now); each tile
+    // showing it animates.
+    for results in [
+        window.get_composer_gif_picker_recent(),
+        window.get_composer_gif_picker_results(),
+    ] {
+        let Some(model) = results
+            .as_any()
+            .downcast_ref::<slint::VecModel<crate::GifData>>()
+        else {
+            continue;
+        };
+        for (update_id, new_image) in updates {
+            for idx in 0..model.row_count() {
+                if let Some(mut gif) = model.row_data(idx) {
+                    if gif.id.as_str() == update_id {
                         gif.preview = new_image.clone();
                         model.set_row_data(idx, gif);
+                        break;
                     }
-                    break;
                 }
             }
         }

@@ -4,6 +4,7 @@
 // conversation lists. A folder's rows are the chat list's own rows (ChatRow).
 
 import { Colors } from "../theme/colors.slint";
+import { Materials } from "../theme/materials.slint";
 import { HoldArea } from "../components/hold_area.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Icons } from "../theme/icons.slint";
@@ -88,7 +89,7 @@ component CustomSectionHeader inherits Rectangle {
                         height: root.mobile-mode ? 14px : 10px;
                         colorize: Colors.text-muted;
                         transform-rotation: root.is-expanded ? 90deg : 0deg;
-                        animate transform-rotation { duration: 150ms; easing: ease-out; }
+                        animate transform-rotation { duration: Materials.feedback-duration; easing: ease-out; }
                     }
                 }
 
@@ -116,10 +117,10 @@ component CustomSectionHeader inherits Rectangle {
                     width: max(self.height, header-badge-text.preferred-width + 8px);
                     height: Spacing.badge-md;
                     border-radius: self.height / 2;
-                    background: Colors.primary;
+                    background: Colors.action-fill;
                     header-badge-text := Text {
                         text: root.unread-count > 99 ? "99+" : root.unread-count;
-                        color: Colors.text-primary;
+                        color: Colors.on-action;
                         font-size: Typography.xxs;
                         font-weight: 600;
                         horizontal-alignment: center;

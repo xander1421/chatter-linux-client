@@ -1,4 +1,10 @@
 //! GIF picker for the composer.
+//!
+//! Two models feed the drawer: `composer-gif-picker-recent` (the signed-in
+//! account's sent GIFs, local, shown at once) and
+//! `composer-gif-picker-results` (trending, or a search). Previews load per
+//! tile; a tile stays unselectable until its preview is on screen, and a
+//! preview that cannot be fetched is marked failed rather than left blank.
 
 use std::rc::Rc;
 use std::sync::Arc;
@@ -7,6 +13,7 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use chatter_core::client::{ChatterClient, ComposerSend};
 use chatter_core::state::PendingAttachment;
+use chatter_core::ui::picker_history::RecentGif;
 
 use crate::{GifData, MainWindow};
 
@@ -15,6 +22,9 @@ pub(crate) fn wire_gif_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
     let weak_window = window.as_weak();
     let ui_ctx = ui_ctx.clone();
 
+    // The drawer's GIFs tab. The query it kept is re-run, not cleared: a
+    // tab switch must not throw away what was typed (an empty query shows
+    // Recent and Trending).
     window.on_gif_clicked(move || {
         let weak = weak_window.clone();
         let ui_ctx = ui_ctx.clone();
@@ -23,26 +33,63 @@ pub(crate) fn wire_gif_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
                 if w.get_composer_gif_picker_visible() {
-                    // Allocate here, before launching the request, rather than
-                    // relying on a deferred Slint visibility change handler.
-                    w.set_composer_gif_generation(w.get_composer_gif_generation() + 1);
-                    w.set_composer_gif_picker_search("".into());
-                    let generation = w.get_composer_gif_generation();
-                    w.set_composer_gif_picker_loading(true);
-                    w.set_composer_gif_picker_failed(false);
-
-                    let weak_load = weak.clone();
-                    let ui_ctx_load = ui_ctx.clone();
-                    tokio::spawn(async move {
-                        let raw_gifs = fetch_trending_gifs_raw(&ui_ctx_load).await;
-                        load_gif_previews(raw_gifs, weak_load, ui_ctx_load, generation);
-                    });
+                    let query = w.get_composer_gif_picker_search().to_string();
+                    request_gifs(&w, &ui_ctx, query);
                 } else {
                     // Stop animations when picker is hidden
                     crate::bin_ui::gif_state::clear_picker_gifs();
                 }
             }
         });
+    });
+}
+
+pub(crate) fn wire_gif_search(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let weak_window = window.as_weak();
+    let ui_ctx = ui_ctx.clone();
+
+    window.on_composer_gif_search_changed(move |query: SharedString| {
+        tracing::debug!("GIF search requested");
+        let Some(w) = weak_window.upgrade() else { return };
+        request_gifs(&w, &ui_ctx, query.to_string());
+    });
+}
+
+/// One request for `query`: an empty query shows the account's recent GIFs
+/// at once and asks for trending; anything else is a search. A new
+/// generation retires every earlier completion.
+fn request_gifs(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, query: String) {
+    // Allocate here, before launching the request, rather than relying on a
+    // deferred Slint visibility change handler.
+    w.set_composer_gif_generation(w.get_composer_gif_generation() + 1);
+    let generation = w.get_composer_gif_generation();
+    let session = ui_ctx.auth_state().get().session_revision;
+    w.set_composer_gif_picker_loading(true);
+    w.set_composer_gif_picker_failed(false);
+    crate::bin_ui::gif_state::clear_picker_gifs();
+
+    // Recents are local and never depend on the provider answering.
+    let recent: Vec<RawGifData> = if query.is_empty() {
+        ui_ctx
+            .recent_gifs()
+            .into_iter()
+            .map(|g| (g.id, g.preview_url, g.url, g.width, g.height))
+            .collect()
+    } else {
+        Vec::new()
+    };
+    w.set_composer_gif_picker_recent(rows_model(&recent));
+    spawn_previews(&recent, w.as_weak(), ui_ctx.clone(), generation, session);
+
+    let weak = w.as_weak();
+    let ctx = ui_ctx.clone();
+    tokio::spawn(async move {
+        let raw_gifs = if query.is_empty() {
+            fetch_trending_gifs_raw(&ctx).await
+        } else {
+            search_gifs_raw(&query, &ctx).await
+        };
+        load_gif_previews(raw_gifs, weak, ctx, generation, session);
     });
 }
 
@@ -56,7 +103,9 @@ pub(crate) fn wire_gif_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
         };
         let id = gif_id.to_string();
         let url = gif_url.to_string();
-        tracing::debug!("GIF selected: id={}, url={}", id, url);
+        tracing::debug!(gif_id = %id, "GIF selected");
+        // What the picker knew about the tile, read before the models go.
+        let picked = find_gif_row(&w, &id);
 
         // Hide picker immediately for responsiveness
         w.set_composer_gif_picker_visible(false);
@@ -66,6 +115,18 @@ pub(crate) fn wire_gif_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
         let Some(send) = begin_gif_send(&w, &ui_ctx) else {
             return;
         };
+        // Accepted by the composer: remember it now, so a failed upload can
+        // simply be picked again from Recent.
+        ui_ctx.record_recent_gif(RecentGif {
+            id: id.clone(),
+            url: url.clone(),
+            preview_url: picked
+                .as_ref()
+                .map(|g| g.preview_url.to_string())
+                .unwrap_or_default(),
+            width: picked.as_ref().map_or(0, |g| g.width.max(0) as u32),
+            height: picked.as_ref().map_or(0, |g| g.height.max(0) as u32),
+        });
         let (weak, ctx) = (w.as_weak(), ui_ctx.clone());
         tokio::spawn(async move {
             let upload = upload_gif(ctx.clone(), url, id);
@@ -163,7 +224,7 @@ pub fn recover_gif_send(w: &MainWindow, ui_ctx: &ChatterClient, send: ComposerSe
             restore_composer(w, ui_ctx, send);
             toast(
                 w,
-                "The GIF was not sent. Your message is back in the composer.",
+                "The GIF was not sent. Your message is back in the composer; the GIF is under Recent.",
             );
         }
         None => toast(
@@ -179,37 +240,59 @@ fn toast(w: &MainWindow, message: &str) {
     w.set_toast_visible(true);
 }
 
-pub(crate) fn wire_gif_search(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    let weak_window = window.as_weak();
-    let ui_ctx = ui_ctx.clone();
+/// (id, preview url, full url, width, height)
+type RawGifData = (String, String, String, u32, u32);
 
-    window.on_composer_gif_search_changed(move |query: SharedString| {
-        let weak = weak_window.clone();
-        let query_str = query.to_string();
-        let ui_ctx = ui_ctx.clone();
-        tracing::debug!("GIF search requested");
-        let Some(w) = weak.upgrade() else { return };
-        w.set_composer_gif_generation(w.get_composer_gif_generation() + 1);
-        let generation = w.get_composer_gif_generation();
-
-        if let Some(w) = weak.upgrade() {
-            w.set_composer_gif_picker_loading(true);
-            w.set_composer_gif_picker_failed(false);
-            crate::bin_ui::gif_state::clear_picker_gifs();
-        }
-
-        tokio::spawn(async move {
-            let raw_gifs = if query_str.is_empty() {
-                fetch_trending_gifs_raw(&ui_ctx).await
-            } else {
-                search_gifs_raw(&query_str, &ui_ctx).await
-            };
-            load_gif_previews(raw_gifs, weak, ui_ctx, generation);
-        });
-    });
+fn rows_model(rows: &[RawGifData]) -> ModelRc<GifData> {
+    let gifs: Vec<GifData> = rows
+        .iter()
+        .map(|(id, preview_url, full_url, width, height)| GifData {
+            id: id.clone().into(),
+            preview: slint::Image::default(),
+            preview_url: preview_url.clone().into(),
+            full_url: full_url.clone().into(),
+            width: *width as i32,
+            height: *height as i32,
+            failed: false,
+        })
+        .collect();
+    ModelRc::from(Rc::new(VecModel::from(gifs)))
 }
 
-type RawGifData = (String, String, String, u32, u32);
+/// The tile the picker shows for `id`, from either section.
+fn find_gif_row(w: &MainWindow, id: &str) -> Option<GifData> {
+    [
+        w.get_composer_gif_picker_recent(),
+        w.get_composer_gif_picker_results(),
+    ]
+    .iter()
+    .find_map(|model| model.iter().find(|gif| gif.id.as_str() == id))
+}
+
+/// Apply `change` to every tile with `id`, in both sections.
+fn update_gif_rows(w: &MainWindow, id: &str, change: impl Fn(&mut GifData)) {
+    for model in [
+        w.get_composer_gif_picker_recent(),
+        w.get_composer_gif_picker_results(),
+    ] {
+        for i in 0..model.row_count() {
+            if let Some(mut gif) = model.row_data(i) {
+                if gif.id.as_str() == id {
+                    change(&mut gif);
+                    model.set_row_data(i, gif);
+                }
+            }
+        }
+    }
+}
+
+/// Still the request these rows belong to: the drawer is open on the GIF
+/// tab, nothing newer was asked for, and the account has not changed.
+fn request_is_current(w: &MainWindow, ui_ctx: &ChatterClient, generation: i32, session: u64) -> bool {
+    w.get_composer_gif_picker_visible()
+        && w.get_composer_gif_generation() == generation
+        && ui_ctx.composer_session_is_current(session)
+}
 
 /// Raw decoded frames (Send-safe).
 struct RawGifFrames {
@@ -280,11 +363,15 @@ async fn fetch_full_gif_frames(
     Some(RawGifFrames { id, frames })
 }
 
+/// Publish the provider's answer as the results section, then fetch its
+/// previews. On failure the section is empty and `failed` is set; the
+/// recent section is untouched either way.
 fn load_gif_previews(
     raw_gifs: Result<Vec<RawGifData>, chatter_core::error::NetworkError>,
     weak_window: slint::Weak<MainWindow>,
     ui_ctx: std::sync::Arc<ChatterClient>,
     generation: i32,
+    session: u64,
 ) {
     let raw_gifs = match raw_gifs {
         Ok(gifs) => gifs,
@@ -292,9 +379,7 @@ fn load_gif_previews(
             tracing::warn!(%error, "GIF request failed");
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak_window.upgrade() {
-                    if !w.get_composer_gif_picker_visible()
-                        || w.get_composer_gif_generation() != generation
-                    {
+                    if !request_is_current(&w, &ui_ctx, generation, session) {
                         return;
                     }
                     w.set_composer_gif_picker_results(ModelRc::new(VecModel::<GifData>::default()));
@@ -305,80 +390,59 @@ fn load_gif_previews(
             return;
         }
     };
-    let raw_gifs_clone: Vec<_> = raw_gifs
-        .iter()
-        .map(|(id, _, full_url, width, height)| (id.clone(), full_url.clone(), *width, *height))
-        .collect();
 
-    {
-        let weak = weak_window.clone();
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(w) = weak.upgrade() {
-                if !w.get_composer_gif_picker_visible()
-                    || w.get_composer_gif_generation() != generation
-                {
-                    return;
-                }
-                let gifs: Vec<GifData> = raw_gifs_clone
-                    .into_iter()
-                    .map(|(id, full_url, width, height)| GifData {
-                        id: id.into(),
-                        preview: slint::Image::default(),
-                        full_url: full_url.into(),
-                        width: width as i32,
-                        height: height as i32,
-                    })
-                    .collect();
-                let model = Rc::new(VecModel::from(gifs));
-                w.set_composer_gif_picker_results(ModelRc::from(model));
-                w.set_composer_gif_picker_failed(false);
-                w.set_composer_gif_picker_loading(false);
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(w) = weak_window.upgrade() {
+            if !request_is_current(&w, &ui_ctx, generation, session) {
+                return;
             }
-        });
-    }
+            w.set_composer_gif_picker_results(rows_model(&raw_gifs));
+            w.set_composer_gif_picker_failed(false);
+            w.set_composer_gif_picker_loading(false);
+            spawn_previews(&raw_gifs, w.as_weak(), ui_ctx.clone(), generation, session);
+        }
+    });
+}
 
-    for (id, preview_url, _full_url, _width, _height) in raw_gifs {
+/// Fetch and decode each row's preview; the first frame goes into the tile,
+/// the rest into the picker animation. A row whose preview cannot be had is
+/// marked failed so it never offers a blank hit target.
+fn spawn_previews(
+    rows: &[RawGifData],
+    weak_window: slint::Weak<MainWindow>,
+    ui_ctx: std::sync::Arc<ChatterClient>,
+    generation: i32,
+    session: u64,
+) {
+    for (id, preview_url, _full_url, _width, _height) in rows {
         let weak = weak_window.clone();
         let gif_id = id.clone();
+        let preview_url = preview_url.clone();
         let ui_ctx_fetch = ui_ctx.clone();
 
         tokio::spawn(async move {
-            if let Some(decoded) = fetch_full_gif_frames(gif_id, &preview_url, &ui_ctx_fetch).await
-            {
-                let id_for_ui = decoded.id.clone();
-                let first_frame_raw = decoded.frames.first().unwrap();
-                let frame_bytes = first_frame_raw.0.clone();
-                let width = first_frame_raw.1;
-                let height = first_frame_raw.2;
-
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(w) = weak.upgrade() {
-                        if !w.get_composer_gif_picker_visible()
-                            || w.get_composer_gif_generation() != generation
-                        {
-                            return;
-                        }
-                        let first_image = crate::bin_ui::slint_conversions::rgba_to_slint_image(
-                            &frame_bytes,
-                            width,
-                            height,
-                        );
-
-                        let model = w.get_composer_gif_picker_results();
-                        for i in 0..model.row_count() {
-                            if let Some(mut gif) = model.row_data(i) {
-                                if gif.id.as_str() == id_for_ui {
-                                    gif.preview = first_image;
-                                    model.set_row_data(i, gif);
-                                    break;
-                                }
-                            }
-                        }
-
-                        crate::bin_ui::gif_state::register_picker_gif(decoded.id, decoded.frames);
-                    }
+            let decoded = fetch_full_gif_frames(gif_id.clone(), &preview_url, &ui_ctx_fetch).await;
+            let _ = slint::invoke_from_event_loop(move || {
+                let Some(w) = weak.upgrade() else { return };
+                if !request_is_current(&w, &ui_ctx_fetch, generation, session) {
+                    return;
+                }
+                let Some(decoded) = decoded else {
+                    update_gif_rows(&w, &gif_id, |gif| gif.failed = true);
+                    return;
+                };
+                let (frame_bytes, width, height, _) = decoded.frames.first().unwrap();
+                let first_image = crate::bin_ui::slint_conversions::rgba_to_slint_image(
+                    frame_bytes,
+                    *width,
+                    *height,
+                );
+                update_gif_rows(&w, &gif_id, |gif| {
+                    gif.preview = first_image.clone();
+                    gif.failed = false;
                 });
-            }
+                crate::bin_ui::gif_state::register_picker_gif(decoded.id, decoded.frames);
+            });
         });
     }
 }

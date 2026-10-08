@@ -7,6 +7,7 @@ import { GlassSurface } from "../components/glass_surface.slint";
 // Integrates ChatHeader, MessageList, and MessageComposer into a complete chat view.
 
 import { Colors } from "../theme/colors.slint";
+import { Materials } from "../theme/materials.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { ChatHeader } from "chat_header.slint";
@@ -99,6 +100,7 @@ export component ChatLayout inherits Rectangle {
     changed emoji-picker-visible => { if root.emoji-picker-visible { root.drawer-search-text = root.emoji-search; } }
     changed gif-picker-visible => { if root.gif-picker-visible { root.drawer-search-text = root.gif-search; } }
     in property <[GifData]> gif-results;
+    in property <[GifData]> gif-recent;
     in property <bool> gif-loading;
     in property <bool> gif-failed;
     callback emoji-selected(string);
@@ -203,6 +205,8 @@ export component ChatLayout inherits Rectangle {
     // Message list callbacks
     in property <bool> selection-mode: false;
     in property <bool> mobile: false;
+    // A message menu (context menu or reaction picker) is up.
+    in property <bool> menu-open: false;
     callback selection-toggled(string);
     callback open-message-link(string);
     callback message-clicked(string);
@@ -242,6 +246,7 @@ export component ChatLayout inherits Rectangle {
         messages: root.messages;
         loading: root.loading-messages;
         selection-mode: root.selection-mode;
+        menu-open: root.menu-open;
         mobile: root.mobile;
         is-dm: root.is-dm;
                     is-anonymous: root.is-anonymous;
@@ -537,11 +542,6 @@ export component ChatLayout inherits Rectangle {
                 root.gif-picker-visible = false;
                 root.emoji-clicked();
             }
-            gif-clicked => {
-                root.gif-picker-visible = !root.gif-picker-visible;
-                root.emoji-picker-visible = false;
-                root.gif-clicked();
-            }
             keyboard-requested => { root.composer-keyboard-requested(root.drawer-height); }
             input-dismissed => { root.composer-focus-released(); }
             input-focused => {
@@ -566,7 +566,11 @@ export component ChatLayout inherits Rectangle {
                 // flags stay true, so restore Back ownership on this mount too.
                 root.composer-focus-released();
             }
-            width: 100%;
+            // Touch: the whole pane, docked above the IME. Desktop: a panel
+            // under the emoji button no wider than a picker needs — across a
+            // 1600px pane two GIF tiles were 10:1 strips and the emoji grid a
+            // 35-wide ribbon (RC86).
+            width: root.mobile ? parent.width : min(parent.width, 420px);
             height: root.drawer-space;
             clip: true;
             vertical-stretch: 0;
@@ -578,19 +582,43 @@ export component ChatLayout inherits Rectangle {
             private property <length> drawer-padding: Spacing.sm * self.chrome-scale;
             private property <length> drawer-gap: Spacing.xs * self.chrome-scale;
             private property <length> control-height: Spacing.touch-target-min * self.chrome-scale;
+            // The Emoji | GIFs tabs are the only mode switch. On touch they sit
+            // at the foot, in thumb reach above the IME; on desktop at the head,
+            // where a mode switch is looked for.
+            private property <bool> tabs-on-top: !root.mobile;
+            private property <length> tabs-y: self.tabs-on-top ? self.drawer-padding
+                : root.drawer-space - self.drawer-padding - self.control-height;
+            private property <length> search-y: self.tabs-on-top
+                ? self.drawer-padding + self.control-height + self.drawer-gap
+                : self.drawer-padding;
+            function clear-search() {
+                root.drawer-search-text = "";
+                if root.gif-picker-visible { root.gif-search = ""; root.gif-search-changed(""); }
+                else { root.emoji-search = ""; root.emoji-search-changed(""); }
+            }
+            function select-mode(gifs: bool) {
+                if gifs == root.gif-picker-visible { return; }
+                // Open the destination first: switching tabs keeps the
+                // unified drawer alive and its search focused. Each mode keeps
+                // its own query and tab; only the GIF side re-requests, since
+                // its rows are the provider's.
+                root.gif-picker-visible = gifs;
+                root.emoji-picker-visible = !gifs;
+                if gifs { root.gif-clicked(); }
+            }
             Rectangle {
                 width: parent.width;
                 height: root.drawer-space;
                 drawer-search-row := Rectangle {
                     x: picker-drawer.drawer-padding;
-                    y: picker-drawer.drawer-padding;
+                    y: picker-drawer.search-y;
                     width: parent.width - 2 * picker-drawer.drawer-padding;
                     height: picker-drawer.control-height;
                     border-radius: Spacing.radius-md;
                     background: Colors.inset;
                     HorizontalLayout {
                         padding-left: Spacing.sm;
-                        padding-right: Spacing.sm;
+                        padding-right: Spacing.xs;
                         spacing: Spacing.sm;
                         VerticalLayout {
                             horizontal-stretch: 0;
@@ -618,6 +646,29 @@ export component ChatLayout inherits Rectangle {
                                 }
                             }
                         }
+                        // Clear: the embedded pickers hide their own.
+                        if root.drawer-search-text != "": Rectangle {
+                            width: picker-drawer.control-height;
+                            height: picker-drawer.control-height;
+                            border-radius: Spacing.radius-full;
+                            background: clear-touch.pressed ? Materials.pressed
+                                : clear-touch.has-hover ? Materials.hover : transparent;
+                            accessible-role: button;
+                            accessible-label: "Clear search";
+                            accessible-action-default => { picker-drawer.clear-search(); }
+                            Image {
+                                source: Icons.x;
+                                width: 16px;
+                                height: 16px;
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                                colorize: Colors.text-secondary;
+                            }
+                            clear-touch := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { picker-drawer.clear-search(); }
+                            }
+                        }
                     }
                 }
                 picker-results := Rectangle {
@@ -628,7 +679,7 @@ export component ChatLayout inherits Rectangle {
                         - 2 * picker-drawer.drawer-gap - 2 * picker-drawer.control-height);
                     clip: true;
                     if root.emoji-picker-visible: EmojiPicker {
-                        embedded: true; show-gif-tab: false; show: true;
+                        embedded: true; show: true;
                         max-picker-width: parent.width;
                         max-picker-height: parent.height;
 
@@ -641,11 +692,12 @@ export component ChatLayout inherits Rectangle {
                         skin-tone-changed(tone) => { root.emoji-skin-tone-changed(tone); }
                     }
                     if root.gif-picker-visible: GifPicker {
-                        embedded: true; show: true;
+                        show: true;
                         max-picker-width: parent.width;
                         max-picker-height: parent.height;
 
                         results: root.gif-results;
+                        recent: root.gif-recent;
                         loading: root.gif-loading;
                         failed: root.gif-failed;
                         search-query: root.gif-search;
@@ -653,33 +705,48 @@ export component ChatLayout inherits Rectangle {
                         gif-selected(id, url) => { root.gif-picker-visible = false; root.gif-selected(id, url); }
                     }
                 }
-                Rectangle {
+                mode-tabs := Rectangle {
                     x: picker-drawer.drawer-padding;
-                    y: picker-results.y + picker-results.height + picker-drawer.drawer-gap;
+                    y: picker-drawer.tabs-y;
                     width: drawer-search-row.width;
                     height: picker-drawer.control-height;
                     for tab[index] in ["Emoji", "GIFs"]: Rectangle {
-                        x: index * parent.width / 2;
-                        width: parent.width / 2;
+                        property <bool> current: index == 0 ? root.emoji-picker-visible : root.gif-picker-visible;
+                        x: index * (parent.width + Spacing.xs) / 2;
+                        width: (parent.width - Spacing.xs) / 2;
                         height: parent.height;
-                        background: (index == 0 ? root.emoji-picker-visible : root.gif-picker-visible) ? Colors.primary.with-alpha(0.2) : transparent;
+                        background: current ? Colors.tint-strong
+                            : tab-touch.pressed ? Materials.pressed
+                            : tab-touch.has-hover ? Materials.hover : transparent;
                         border-radius: Spacing.radius-md;
-                        accessible-role: button;
+                        accessible-role: tab;
                         accessible-label: tab;
-                        Text { text: tab; color: Colors.text-primary; horizontal-alignment: center; vertical-alignment: center; }
-                        TouchArea { clicked => {
-                            if (index == 0 && root.emoji-picker-visible) || (index == 1 && root.gif-picker-visible) { return; }
-                            // Open the destination first: switching tabs keeps
-                            // the unified drawer alive and its search focused.
-                            if index == 0 {
-                                root.emoji-picker-visible = true;
-                                root.gif-picker-visible = false;
-                            } else {
-                                root.gif-picker-visible = true;
-                                root.emoji-picker-visible = false;
+                        accessible-item-selected: current;
+                        accessible-action-default => { picker-drawer.select-mode(index == 1); }
+                        HorizontalLayout {
+                            alignment: center;
+                            spacing: Spacing.xs;
+                            VerticalLayout {
+                                alignment: center;
+                                Image {
+                                    source: index == 0 ? Icons.smile : Icons.image;
+                                    width: 18px;
+                                    height: 18px;
+                                    colorize: current ? Colors.glass-accent : Colors.text-secondary;
+                                }
                             }
-                            if index == 0 { root.emoji-clicked(); } else { root.gif-clicked(); }
-                        } }
+                            Text {
+                                text: tab;
+                                color: current ? Colors.glass-accent : Colors.text-secondary;
+                                font-size: Typography.sm;
+                                font-weight: current ? Typography.semibold : Typography.medium;
+                                vertical-alignment: center;
+                            }
+                        }
+                        tab-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => { picker-drawer.select-mode(index == 1); }
+                        }
                     }
                 }
 
