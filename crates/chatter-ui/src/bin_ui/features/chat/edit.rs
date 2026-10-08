@@ -167,6 +167,24 @@ pub fn wire_send_edit(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 .await
             {
                 tracing::error!(error = %e, "Failed to send edit");
+                // The text was taken out of the composer when the send was
+                // accepted; give it back to this same, still-empty edit
+                // session so it can be retried, and never over a newer draft.
+                let message = e.to_string();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak.upgrade() {
+                        if owner.is_current()
+                            && current_generation() == generation
+                            && w.get_composer_edit_message_id().as_str() == composite_key_str
+                            && w.get_composer_text().is_empty()
+                        {
+                            w.set_composer_text(new_text_str.into());
+                        }
+                        w.set_toast_message(format!("Edit not saved: {message}").into());
+                        w.set_toast_variant("error".into());
+                        w.set_toast_visible(true);
+                    }
+                });
                 return;
             }
             // Core emits `DomainEvent::MessageEdited` after persisting, so the
