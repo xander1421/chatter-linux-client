@@ -26,7 +26,7 @@ rustflags = ["-C", "target-feature=+crt-static"]
 # Use sccache for compilation caching
 rustc-wrapper = "sccache"
 
-# Leave build.jobs to the user/global config (the host uses 4 to avoid OOM).
+# Leave build.jobs to the user/global config; tune it for available memory.
 
 [env]
 # webrtc-sys 0.3.24 auto-compiled a broken VA-API H.264 encoder shim when
