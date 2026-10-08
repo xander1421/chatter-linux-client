@@ -234,7 +234,13 @@ fn calls_overflow_uses_real_header_hit_target_and_card_anchor() {
             .unwrap();
         let mut list_bounds = None;
         screen.visit_descendants(|e| {
-            if e.type_name().as_deref() == Some("Flickable") && e.size().height > 0.0 {
+            // The list is a custom `ListView inherits Flickable` (the
+            // virtualized kind): its first type name is ListView, so the
+            // Flickable is found down the base chain.
+            if (e.type_name().as_deref() == Some("Flickable")
+                || e.bases().is_some_and(|mut bases| bases.any(|t| t == "Flickable")))
+                && e.size().height > 0.0
+            {
                 list_bounds = Some((e.absolute_position(), e.size()));
             }
             std::ops::ControlFlow::<()>::Continue(())

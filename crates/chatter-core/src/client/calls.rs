@@ -14,7 +14,14 @@ pub struct CallHistoryPage {
     /// Taken just before the read. Clearing "this list" passes it back so a
     /// call that arrived after the user saw the list is never deleted unseen.
     pub snapshot_at: chrono::DateTime<chrono::Utc>,
+    /// Where the next page starts, when this one filled its `limit`: the
+    /// `(started_at, id)` of the last stored entry read, which the
+    /// repository treats as strictly-older-than. `None` = the list ends here.
+    pub next_cursor: Option<CallHistoryCursor>,
 }
+
+/// Opaque to the UI: it hands the cursor back unchanged to page further.
+pub type CallHistoryCursor = (chrono::DateTime<chrono::Utc>, String);
 
 /// orchestrator internals. `Clone` is intentionally omitted — the anonymous
 /// setup's encryption key is `Zeroize`-only.
@@ -1761,10 +1768,14 @@ impl ChatterClient {
     ///
     /// Only the Calls screen loads a page, so loading one is the user seeing
     /// their missed calls: it marks them seen and the badge clears.
+    ///
+    /// `cursor` is the previous page's [`CallHistoryPage::next_cursor`];
+    /// `None` reads from the newest call.
     pub async fn call_history_page(
         &self,
         filter: crate::domain::call::CallHistoryFilter,
         limit: u32,
+        cursor: Option<CallHistoryCursor>,
     ) -> Result<CallHistoryPage, ClientError> {
         let auth = self.auth_state().clone();
         let revision = auth.get().session_revision;
@@ -1772,8 +1783,13 @@ impl ChatterClient {
         let mut page = tokio::task::spawn_blocking(move || {
             let snapshot_at = chrono::Utc::now();
             let entries = repo
-                .list(filter, limit, None)
+                .list(filter, limit, cursor)
                 .map_err(|e| ClientError::Inbox(format!("call history list: {}", e)))?;
+            // From the stored rows, before the live-row filter below: a page
+            // short by a hidden in-progress call still has older calls.
+            let next_cursor = (entries.len() as u32 >= limit)
+                .then(|| entries.last().map(|e| (e.started_at, e.id.clone())))
+                .flatten();
             if auth.get().session_revision != revision {
                 return Err(ClientError::Validation(
                     "call history session changed".into(),
@@ -1815,6 +1831,7 @@ impl ChatterClient {
                     .collect(),
                 missed_count,
                 snapshot_at,
+                next_cursor,
             })
         })
         .await

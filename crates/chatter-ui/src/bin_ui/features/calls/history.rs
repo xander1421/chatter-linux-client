@@ -20,6 +20,19 @@ thread_local! {
     /// UI-thread only, like the model it describes.
     static PAINTED: std::cell::Cell<Option<(CallHistoryFilter, chrono::DateTime<chrono::Utc>)>> =
         const { std::cell::Cell::new(None) };
+    /// Where the next page of the painted list starts; `None` = every call
+    /// is loaded. Taken when a page is requested, so one approach to the
+    /// end asks once, and set again by the paint that lands it.
+    static NEXT_CURSOR: std::cell::RefCell<Option<CallHistoryCursor>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// How a landed page meets the model: the first page replaces it, a later
+/// one is appended under the rows already on screen.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+enum Paint {
+    Replace,
+    Append,
 }
 
 #[derive(Clone, Copy)]
@@ -42,18 +55,17 @@ impl HistoryRequest {
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use chatter_core::client::ChatterClient;
-use chatter_core::client::calls::CallHistoryPage;
+use chatter_core::client::calls::{CallHistoryCursor, CallHistoryPage};
 use chatter_core::domain::call::CallHistoryFilter;
 
 use crate::bin_ui::decode_cache::{self, Pixels};
 use crate::run_ui;
 use crate::{CallHistoryRow, MainWindow};
 
-/// One screenful and then some. Pagination exists in the repository but the
-/// screen has no "load more" affordance yet, so a fixed page is the whole
-/// list as far as the UI is concerned.
-// fixed page, wire the repo's cursor when someone has 200 calls.
-const HISTORY_PAGE: u32 = 200;
+/// Rows per page: what is read before anything is shown, not a ceiling on
+/// the list. The screen asks for the next page as it nears its loaded end
+/// (`load_more`), following the repository's `(started_at, id)` cursor.
+const HISTORY_PAGE: u32 = 50;
 
 /// Send-safe page prepared off the event loop. Images are created only in paint.
 #[derive(Default)]
@@ -101,6 +113,15 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     window.on_call_history_retry(move || {
         if let Some(w) = weak.upgrade() {
             reload(&w, &client);
+        }
+    });
+    // The list is within a screen of its loaded end (`load-more` in
+    // call_history_screen.slint, forwarded by app.slint).
+    let weak = window.as_weak();
+    let client = ui_ctx.clone();
+    window.on_call_history_load_more(move || {
+        if let Some(w) = weak.upgrade() {
+            load_more(&w, &client);
         }
     });
     // Paint the tab badge at startup — missed calls from a previous session
@@ -259,7 +280,7 @@ fn wire_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         if deleted < wanted {
                             toast(&w, "A call in progress was kept.", "info");
                         }
-                        reload(&w, &client);
+                        refresh_in_place(&w, &client);
                     }
                     Err(e) => {
                         tracing::error!(error = %e, "Failed to delete call history rows");
@@ -344,11 +365,40 @@ fn open_conversation(
     opened
 }
 
-/// Re-read the list from core and repaint it, badge included.
+/// Re-read the list from core and repaint it, badge included: the first
+/// page, from the newest call, behind the loading state.
 ///
 /// The read itself runs on core's blocking pool; only the model swap happens
 /// on the event loop.
 pub(crate) fn reload(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    window.set_call_history_loading(true);
+    request_page(window, ui_ctx, HISTORY_PAGE, None, Paint::Replace);
+}
+
+/// After rows were deleted: re-read the span the user had loaded and swap it
+/// in place. `loading` is not raised, so the list element survives and the
+/// viewport stays where it was rather than jumping back to the newest call.
+fn refresh_in_place(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let loaded = window.get_call_history_rows().row_count() as u32;
+    request_page(window, ui_ctx, loaded.max(HISTORY_PAGE), None, Paint::Replace);
+}
+
+/// The list is within a screen of its loaded end. Nothing to do once the
+/// last page is in, or while one is in flight.
+fn load_more(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let Some(cursor) = NEXT_CURSOR.with(|c| c.borrow_mut().take()) else {
+        return;
+    };
+    request_page(window, ui_ctx, HISTORY_PAGE, Some(cursor), Paint::Append);
+}
+
+fn request_page(
+    window: &MainWindow,
+    ui_ctx: &Arc<ChatterClient>,
+    limit: u32,
+    cursor: Option<CallHistoryCursor>,
+    paint: Paint,
+) {
     let filter = match window.get_call_history_filter().as_str() {
         "missed" => CallHistoryFilter::Missed,
         _ => CallHistoryFilter::All,
@@ -359,14 +409,14 @@ pub(crate) fn reload(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         window.set_call_history_rows(ModelRc::new(VecModel::<CallHistoryRow>::default()));
         window.set_missed_call_count(0);
         PAINTED.with(|p| p.set(None));
+        NEXT_CURSOR.with(|c| c.borrow_mut().take());
     }
-    window.set_call_history_loading(true);
     window.set_call_history_error("".into());
 
     let weak = window.as_weak();
     let ui_ctx = ui_ctx.clone();
     tokio::spawn(async move {
-        let page = load_page(&ui_ctx, filter).await;
+        let page = load_page(&ui_ctx, filter, limit, cursor).await;
         let client = ui_ctx.clone();
         run_ui!(weak, |w| {
             complete_load(
@@ -375,6 +425,7 @@ pub(crate) fn reload(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 HISTORY_GENERATION.load(Ordering::SeqCst),
                 client.auth_state().get().session_revision,
                 page,
+                paint,
             );
         });
     });
@@ -407,8 +458,10 @@ pub(crate) fn refresh_badge(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 async fn load_page(
     ui_ctx: &Arc<ChatterClient>,
     filter: CallHistoryFilter,
+    limit: u32,
+    cursor: Option<CallHistoryCursor>,
 ) -> Result<PreparedHistoryPage, chatter_core::client::ClientError> {
-    let page = ui_ctx.call_history_page(filter, HISTORY_PAGE).await?;
+    let page = ui_ctx.call_history_page(filter, limit, cursor).await?;
     let client = ui_ctx.clone();
     tokio::task::spawn_blocking(move || prepare_page(&client, page))
         .await
@@ -425,20 +478,22 @@ fn complete_load(
     generation: u64,
     session: u64,
     page: Result<PreparedHistoryPage, chatter_core::client::ClientError>,
+    paint: Paint,
 ) {
     if request.matches(generation, session) {
-        apply_page(window, page);
+        apply_page(window, page, paint);
     }
 }
 
 fn apply_page(
     window: &MainWindow,
     page: Result<PreparedHistoryPage, chatter_core::client::ClientError>,
+    how: Paint,
 ) {
     match page {
         Ok(page) => {
             window.set_call_history_error("".into());
-            paint(window, page);
+            paint(window, page, how);
         }
         Err(error) => {
             tracing::error!(%error, "Failed to load call history");
@@ -448,13 +503,18 @@ fn apply_page(
     }
 }
 
-fn paint(window: &MainWindow, prepared: PreparedHistoryPage) {
+fn paint(window: &MainWindow, prepared: PreparedHistoryPage, how: Paint) {
     let page = prepared.page;
     let filter = match window.get_call_history_filter().as_str() {
         "missed" => CallHistoryFilter::Missed,
         _ => CallHistoryFilter::All,
     };
-    PAINTED.with(|p| p.set(Some((filter, page.snapshot_at))));
+    if how == Paint::Replace {
+        // A later page keeps the first paint's time: clearing "this list"
+        // must not reach a call that arrived while the user paged down.
+        PAINTED.with(|p| p.set(Some((filter, page.snapshot_at))));
+    }
+    NEXT_CURSOR.with(|c| *c.borrow_mut() = page.next_cursor);
     let rows: Vec<CallHistoryRow> = page
         .rows
         .into_iter()
@@ -475,10 +535,28 @@ fn paint(window: &MainWindow, prepared: PreparedHistoryPage) {
             selected: false,
         })
         .collect();
-    window.set_call_history_rows(ModelRc::new(VecModel::from(rows)));
-    // New rows carry no marks, so any selection is over.
-    window.set_call_history_selecting(false);
-    window.set_call_history_selected_count(0);
+    match how {
+        Paint::Replace => {
+            window.set_call_history_rows(ModelRc::new(VecModel::from(rows)));
+            // New rows carry no marks, so any selection is over.
+            window.set_call_history_selecting(false);
+            window.set_call_history_selected_count(0);
+        }
+        Paint::Append => {
+            // Under the rows on screen, in the model they are bound to, so
+            // the list and its marks stay put. The painted model is always
+            // the VecModel above; a foreign model (a test's) is rebuilt.
+            let model = window.get_call_history_rows();
+            match model.as_any().downcast_ref::<VecModel<CallHistoryRow>>() {
+                Some(vec) => vec.extend(rows),
+                None => {
+                    let mut all: Vec<CallHistoryRow> = model.iter().collect();
+                    all.extend(rows);
+                    window.set_call_history_rows(ModelRc::new(VecModel::from(all)));
+                }
+            }
+        }
+    }
     window.set_call_history_loading(false);
     window.set_missed_call_count(page.missed_count as i32);
 }
@@ -633,7 +711,7 @@ mod tests {
         // Exercise the actual async loader and stored channel metadata, not a
         // second test-only lookup; a same-UUID anon group must retain initials.
         let prepared = runtime
-            .block_on(load_page(&client, CallHistoryFilter::All))
+            .block_on(load_page(&client, CallHistoryFilter::All, HISTORY_PAGE, None))
             .unwrap();
         let channel_index = prepared
             .page
@@ -662,6 +740,7 @@ mod tests {
                 .collect(),
             missed_count: 0,
             snapshot_at: chrono::Utc::now(),
+            next_cursor: None,
         };
         // Production avatar cache normalizes to its 128px row budget, including
         // upscaling these deliberately tiny encoded fixtures. Bytes/identity
@@ -684,25 +763,25 @@ mod tests {
             generation: 11,
             session: 7,
         };
-        complete_load(&w, request, 12, 7, Ok(prepared));
+        complete_load(&w, request, 12, 7, Ok(prepared), Paint::Replace);
         assert_eq!(
             w.get_call_history_rows().row_count(),
             0,
             "newer filter rejects decoded old page"
         );
         let prepared = runtime
-            .block_on(load_page(&client, CallHistoryFilter::Missed))
+            .block_on(load_page(&client, CallHistoryFilter::Missed, HISTORY_PAGE, None))
             .unwrap();
-        complete_load(&w, request, 11, 8, Ok(prepared));
+        complete_load(&w, request, 11, 8, Ok(prepared), Paint::Replace);
         assert_eq!(
             w.get_call_history_rows().row_count(),
             0,
             "new login rejects decoded old page"
         );
         let prepared = runtime
-            .block_on(load_page(&client, CallHistoryFilter::All))
+            .block_on(load_page(&client, CallHistoryFilter::All, HISTORY_PAGE, None))
             .unwrap();
-        complete_load(&w, request, 11, 7, Ok(prepared));
+        complete_load(&w, request, 11, 7, Ok(prepared), Paint::Replace);
         let row = w
             .get_call_history_rows()
             .iter()
@@ -722,9 +801,9 @@ mod tests {
         channel.icon = Some(png(5, [255, 255, 0, 255]));
         channels.update(&channel).unwrap();
         let prepared = runtime
-            .block_on(load_page(&client, CallHistoryFilter::All))
+            .block_on(load_page(&client, CallHistoryFilter::All, HISTORY_PAGE, None))
             .unwrap();
-        complete_load(&w, request, 11, 7, Ok(prepared));
+        complete_load(&w, request, 11, 7, Ok(prepared), Paint::Replace);
         let row = w
             .get_call_history_rows()
             .iter()
@@ -734,9 +813,9 @@ mod tests {
         channel.icon = Some(vec![1, 2, 3]);
         channels.update(&channel).unwrap();
         let prepared = runtime
-            .block_on(load_page(&client, CallHistoryFilter::All))
+            .block_on(load_page(&client, CallHistoryFilter::All, HISTORY_PAGE, None))
             .unwrap();
-        complete_load(&w, request, 11, 7, Ok(prepared));
+        complete_load(&w, request, 11, 7, Ok(prepared), Paint::Replace);
         let row = w
             .get_call_history_rows()
             .iter()
@@ -769,7 +848,7 @@ mod tests {
         };
         // Older All completion (success or failure) must not end the Missed spinner
         // or overwrite its rows/badge. A completion from an old session is inert.
-        complete_load(&w, old_all, 2, 2, Ok(PreparedHistoryPage::default()));
+        complete_load(&w, old_all, 2, 2, Ok(PreparedHistoryPage::default()), Paint::Replace);
         complete_load(
             &w,
             old_all,
@@ -778,6 +857,7 @@ mod tests {
             Err(chatter_core::client::ClientError::Validation(
                 "stale error".into(),
             )),
+            Paint::Replace,
         );
         complete_load(
             &w,
@@ -788,6 +868,7 @@ mod tests {
             2,
             2,
             Ok(PreparedHistoryPage::default()),
+            Paint::Replace,
         );
         assert!(w.get_call_history_loading());
         assert!(w.get_call_history_error().is_empty());
@@ -797,6 +878,7 @@ mod tests {
             Err(chatter_core::client::ClientError::Validation(
                 "controlled read failure".into(),
             )),
+            Paint::Replace,
         );
         use slint::Model;
         assert_eq!(
@@ -822,9 +904,42 @@ mod tests {
             "original"
         );
         assert_eq!(w.get_missed_call_count(), 4);
-        apply_page(&w, Ok(PreparedHistoryPage::default()));
+        apply_page(&w, Ok(PreparedHistoryPage::default()), Paint::Replace);
         assert_eq!(w.get_call_history_rows().row_count(), 0);
         assert!(w.get_call_history_error().is_empty());
+
+        // Paging: a later page lands under the rows on screen, in the same
+        // model, and the cursor it carries is what the next request takes.
+        let page = |ids: &[&str], next: Option<&str>| PreparedHistoryPage {
+            page: CallHistoryPage {
+                rows: ids
+                    .iter()
+                    .map(|id| chatter_core::ui::CallHistoryRowData {
+                        id: (*id).into(),
+                        ..Default::default()
+                    })
+                    .collect(),
+                missed_count: 0,
+                snapshot_at: chrono::Utc::now(),
+                next_cursor: next.map(|id| (chrono::Utc::now(), id.to_string())),
+            },
+            avatars: ids.iter().map(|_| None).collect(),
+        };
+        apply_page(&w, Ok(page(&["newest", "newer"], Some("newer"))), Paint::Replace);
+        let first = w.get_call_history_rows();
+        assert_eq!(
+            NEXT_CURSOR.with(|c| c.borrow().as_ref().map(|c| c.1.clone())),
+            Some("newer".to_string())
+        );
+        apply_page(&w, Ok(page(&["older"], None)), Paint::Append);
+        let ids: Vec<String> = w
+            .get_call_history_rows()
+            .iter()
+            .map(|r| r.id.to_string())
+            .collect();
+        assert_eq!(ids, ["newest", "newer", "older"]);
+        assert_eq!(first.row_count(), 3, "appended into the bound model, not a new one");
+        assert!(NEXT_CURSOR.with(|c| c.borrow().is_none()), "last page ends paging");
         println!("history fixture completed");
     }
 }

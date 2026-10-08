@@ -24,6 +24,20 @@ import { HeaderButton } from "../components/header_button.slint";
 import { HoldArea } from "../components/hold_area.slint";
 import { CallHistoryRow } from "types.slint";
 
+// The bare Flickable with Slint's lazy row runtime enabled — the same five
+// lines as ui/chat/message_list.slint. The compiler virtualizes a `for` whose
+// parent element is named `ListView` and carries these length properties
+// (i-slint-compiler object_tree.rs, "Custom ListView is OK"): only the rows
+// that fit the viewport exist, each measured for real, the rest estimated
+// from their average. Not exported from message_list.slint, so repeated here
+// rather than editing the chat; a shared ui/components/ home is the obvious
+// next step once a third list needs it.
+component ListView inherits Flickable {
+    out property <length> visible-height: self.height;
+    out property <length> visible-width: self.width;
+    @children
+}
+
 export component CallHistoryScreen inherits Rectangle {
     in property <bool> show-modal: false;
     // "Touch input", same meaning as the sidebar's and the Contacts screen's.
@@ -46,6 +60,16 @@ export component CallHistoryScreen inherits Rectangle {
 
     callback close();
     callback filter-changed(string);
+    // The list is a screen from the end of what is loaded: fetch the next
+    // page. Raised once per approach; a page landing re-arms it.
+    callback load-more();
+    private property <bool> load-more-armed: true;
+    property <int> row-count: root.rows.length;
+    changed row-count => { root.load-more-armed = true; }
+    // Rows are moving under the glass bars (finger, wheel, fling): they stop
+    // sampling their backdrop until the list has been still a moment, as the
+    // chat chrome does over MessageList.scrolling.
+    out property <bool> scrolling: false;
     // conversation-id, conversation-type
     callback open-conversation(string, string);
     // conversation-id, conversation-type, is-video
@@ -121,6 +145,7 @@ export component CallHistoryScreen inherits Rectangle {
                 material-enabled: root.mobile-mode;
                 elevation: 0;
                 z: 1;
+                backdrop-paused: root.scrolling;
                 height: root.mobile-mode ? Spacing.header-action-box-touch : Spacing.header-action-box;
 
                 HorizontalLayout {
@@ -170,34 +195,38 @@ export component CallHistoryScreen inherits Rectangle {
                 material-enabled: root.mobile-mode;
                 elevation: 0;
                 z: 1;
+                backdrop-paused: root.scrolling;
                 height: root.mobile-mode ? Spacing.header-action-box-touch : Spacing.header-action-box;
 
+                // Segmented control, concentric with its shell: the tabs sit
+                // `chrome-inset` inside the glass pill and the selected one is
+                // filled at `radius-chrome-inner`, so its fill follows the
+                // shell's curve. Filled square to the shell's rectangle, the
+                // selection's corners stuck out past the rounded ends.
                 HorizontalLayout {
+                    padding: Spacing.chrome-inset;
+
                     for tab in [
                         { id: "all", label: "All" },
                         { id: "missed", label: "Missed" }
                     ]: Rectangle {
                         horizontal-stretch: 1;
+                        border-radius: Spacing.radius-chrome-inner;
                         background: root.active-filter == tab.id ? Colors.tint-strong : (tab-touch.pressed ? Materials.pressed : tab-touch.has-hover ? Materials.hover : transparent);
+                        accessible-role: tab;
+                        accessible-label: tab.label;
+                        accessible-item-selected: root.active-filter == tab.id;
+                        accessible-action-default => { root.filter-changed(tab.id); }
 
-                        VerticalLayout {
-                            HorizontalLayout {
-                                alignment: center;
-                                vertical-stretch: 1;
-
-                                Text {
-                                    text: tab.label;
-                                    color: root.active-filter == tab.id ? Colors.text-primary : Colors.text-secondary;
-                                    font-size: Typography.sm;
-                                    font-weight: root.active-filter == tab.id ? Typography.semibold : Typography.normal;
-                                    vertical-alignment: center;
-                                }
-                            }
-
-                            Rectangle {
-                                height: 2px;
-                                background: root.active-filter == tab.id ? Colors.primary : transparent;
-                            }
+                        Text {
+                            width: 100%;
+                            height: 100%;
+                            text: tab.label;
+                            color: root.active-filter == tab.id ? Colors.text-primary : Colors.text-secondary;
+                            font-size: Typography.sm;
+                            font-weight: root.active-filter == tab.id ? Typography.semibold : Typography.normal;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
                         }
 
                         tab-touch := TouchArea {
@@ -259,10 +288,30 @@ export component CallHistoryScreen inherits Rectangle {
                 Button { text: "Retry"; disabled: root.loading; clicked => { root.retry(); } }
             }
 
-            if !root.loading && root.rows.length > 0: Rectangle {
+            // ── The list ─────────────────────────────────────────────────
+            // Rows exist only while they fit the viewport (ListView above):
+            // the runtime creates and destroys them as the user scrolls and
+            // estimates the total from their average. Every row is the same
+            // height, so the estimate is exact and `viewport-y` is a plain
+            // offset. Pages: the screen asks for more when the loaded end is
+            // within a screen of the viewport; Rust appends to the model, so
+            // nothing on screen moves.
+            if !root.loading && root.rows.length > 0: list-slot := Rectangle {
                 vertical-stretch: 1;
                 property <length> chrome-inset: self.absolute-position.y - root.absolute-position.y;
-                scroll-calls-list := Flickable {
+
+                // A fling reports its release, not its end: `scrolling` lasts
+                // until the viewport has been still this long.
+                at-rest := Timer {
+                    interval: 300ms;
+                    running: false;
+                    triggered => {
+                        self.running = false;
+                        root.scrolling = false;
+                    }
+                }
+
+                calls-list := ListView {
                     property <length> chrome-inset: parent.chrome-inset;
                     width: parent.width;
                     y: root.mobile-mode ? -parent.chrome-inset : 0px;
@@ -273,14 +322,47 @@ export component CallHistoryScreen inherits Rectangle {
                         ? (root.show-clear-confirm ? parent.height + parent.chrome-inset : root.height)
                         : parent.height;
 
-                    viewport-height: calls-list.preferred-height;
+                    // Created fresh on every load (it lives under `!loading`),
+                    // so a list that never changed its row count still asks
+                    // for a next page.
+                    init => { root.load-more-armed = true; }
 
-                    calls-list := VerticalLayout {
-                        padding-top: root.mobile-mode ? scroll-calls-list.chrome-inset : Spacing.none;
-                        padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : Spacing.none;
-                        spacing: Spacing.xs;
+                    flicked => {
+                        root.scrolling = true;
+                        at-rest.restart();
+                    }
 
-                        for row in root.rows: Rectangle {
+                    changed viewport-y => {
+                        // The runtime's "content shorter than the view" fix-up
+                        // can leave viewport-y positive (rows pushed down from
+                        // the top). Rows start at the top edge, always.
+                        if (self.viewport-y > 0px) {
+                            self.viewport-y = 0px;
+                            return;
+                        }
+                        if (root.scrolling) {
+                            at-rest.restart();
+                        }
+                        // Content below the bottom edge is
+                        // viewport-y + viewport-height - height; under one
+                        // screen of it left, ask for the next page now, so
+                        // it is in before the last loaded row is reached.
+                        if (root.load-more-armed
+                                && self.viewport-y + self.viewport-height < self.height * 2) {
+                            root.load-more-armed = false;
+                            root.load-more();
+                        }
+                    }
+
+                    for row[idx] in root.rows: VerticalLayout {
+                        width: list-slot.width;
+                        height: self.preferred-height;
+                        // The list's insets ride on its first and last row, so
+                        // the runtime counts them in viewport-height.
+                        padding-top: idx == 0 && root.mobile-mode ? calls-list.chrome-inset : Spacing.none;
+                        padding-bottom: Spacing.xs;
+
+                        Rectangle {
                             height: root.row-height;
                             background: root.selecting && row.selected ? Colors.text-primary.with-alpha(0.12)
                                 : row-touch.has-hover ? Colors.surface-hover : transparent;
@@ -312,34 +394,46 @@ export component CallHistoryScreen inherits Rectangle {
                                 // Passive mark: the row's HoldArea takes the tap.
                                 // Checkbox would flip its own `checked` and drop
                                 // the binding to the model Rust updates.
-                                if root.selecting: Rectangle {
-                                    width: Spacing.switch-thumb;
-                                    height: self.width;
-                                    y: (parent.height - self.height) / 2;
-                                    border-radius: Spacing.radius-sm;
-                                    border-width: Spacing.stroke;
-                                    border-color: row.selected ? Colors.action-fill : Colors.text-muted;
-                                    background: row.selected ? Colors.action-fill : transparent;
-                                    accessible-role: checkbox;
-                                    accessible-label: "Select call with " + row.name;
-                                    accessible-checkable: true;
-                                    accessible-checked: row.selected;
+                                // A fixed-height child of a HorizontalLayout sits
+                                // at its top (the layout owns `y`): the column
+                                // centres it on the row.
+                                if root.selecting: VerticalLayout {
+                                    alignment: center;
+                                    horizontal-stretch: 0;
 
-                                    if row.selected: Image {
-                                        source: Icons.check;
-                                        width: Spacing.md;
+                                    Rectangle {
+                                        width: Spacing.switch-thumb;
                                         height: self.width;
-                                        x: (parent.width - self.width) / 2;
-                                        y: (parent.height - self.height) / 2;
-                                        colorize: Colors.on-action;
+                                        border-radius: Spacing.radius-sm;
+                                        border-width: Spacing.stroke;
+                                        border-color: row.selected ? Colors.action-fill : Colors.text-muted;
+                                        background: row.selected ? Colors.action-fill : transparent;
+                                        accessible-role: checkbox;
+                                        accessible-label: "Select call with " + row.name;
+                                        accessible-checkable: true;
+                                        accessible-checked: row.selected;
+
+                                        if row.selected: Image {
+                                            source: Icons.check;
+                                            width: Spacing.md;
+                                            height: self.width;
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                            colorize: Colors.on-action;
+                                        }
                                     }
                                 }
 
-                                Avatar {
-                                    size: root.row-avatar;
-                                    name: row.name;
-                                    source: row.avatar-source;
-                                    anonymous: row.conversation-type == "anon_dm" || row.conversation-type == "anon_group";
+                                VerticalLayout {
+                                    alignment: center;
+                                    horizontal-stretch: 0;
+
+                                    Avatar {
+                                        size: root.row-avatar;
+                                        name: row.name;
+                                        source: row.avatar-source;
+                                        anonymous: row.conversation-type == "anon_dm" || row.conversation-type == "anon_group";
+                                    }
                                 }
 
                                 VerticalLayout {
@@ -397,17 +491,19 @@ export component CallHistoryScreen inherits Rectangle {
                                 // repeating the original call's type: wanting to
                                 // switch is exactly why you'd come back to a row.
                                 // Fixed width, no stretch, so the two buttons
-                                // sit at the same x on every row.
+                                // sit at the same x on every row; the row's full
+                                // height, so the target is centred and tall.
                                 if row.can-call-back && !root.selecting: HorizontalLayout {
                                     spacing: Spacing.xs;
                                     alignment: center;
                                     horizontal-stretch: 0;
 
                                     Rectangle {
-                                        width: 44px;
-                                        height: 44px;
+                                        width: Spacing.touch-target-min;
                                         border-radius: Spacing.radius-sm;
                                         background: voice-touch.has-hover ? Colors.surface : transparent;
+                                        accessible-role: button;
+                                        accessible-label: "Call " + row.name;
 
                                         Image {
                                             source: Icons.phone;
@@ -427,10 +523,11 @@ export component CallHistoryScreen inherits Rectangle {
                                     }
 
                                     Rectangle {
-                                        width: 44px;
-                                        height: 44px;
+                                        width: Spacing.touch-target-min;
                                         border-radius: Spacing.radius-sm;
                                         background: video-touch.has-hover ? Colors.surface : transparent;
+                                        accessible-role: button;
+                                        accessible-label: "Video call " + row.name;
 
                                         Image {
                                             source: Icons.video;
@@ -451,8 +548,14 @@ export component CallHistoryScreen inherits Rectangle {
                                 }
                             }
                         }
-                    }
 
+                        // The list's bottom inset, carried by the last row (a
+                        // ListView holds nothing but its `for`): on the phone
+                        // the tab dock floats over the list.
+                        if idx == root.rows.length - 1: VerticalLayout {
+                            padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : Spacing.none;
+                        }
+                    }
                 }
             }
 
