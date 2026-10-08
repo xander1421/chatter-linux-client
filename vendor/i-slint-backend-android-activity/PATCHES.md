@@ -98,3 +98,24 @@ are GL on a SurfaceView, so `dumpsys gfxinfo` does not see them).
   `ui_inset_recovery` uses the production queue fence and keyboard conversion
   against the actual phone layout, including staged SAF draft navigation and
   independent stale keyboard/property and reduced viewport recovery.
+
+- RC88 accepted-send clear vs. a stale IME snapshot (`androidwindowadapter.rs`,
+  `app_edit_unpublished` in the `TextEvent` arm): core publishes a programmatic
+  text change only at the next render (`i-slint-core` `items/text.rs` `render`),
+  while android-activity's input pass samples the one pending text state —
+  the *current* Java state, not a queued event — after its touches. A send
+  tap therefore cleared the field and, in the same pass, received the IME's
+  snapshot of the sent text (composing), which full-replaced the clear; the
+  render then saw nothing to publish, so the IME kept composing the sent text
+  and every later tap's `finish_composing` replayed it (Galaxy S9 / Gboard,
+  caption + attachment and a plain send alike). A snapshot delivered while the
+  client's text matches neither the IME's last report nor the last pushed
+  state is dropped: it predates an unpublished app edit whose push will
+  overwrite the IME's copy anyway. Content of the snapshot is not compared;
+  the guard clears as soon as the render pushes. Pure rule
+  `app_edit_unpublished_for` with a `#[cfg(test)]` check (not run here).
+  Remaining limit: a Java `InputConnection.setState` fires no listener event,
+  so there is no ack for an app push; an IME report produced between the
+  push's main-thread application and the next input pass still cannot be
+  told from typing. That window holds no human keystroke; it was not the
+  observed failure.

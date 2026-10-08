@@ -526,6 +526,31 @@ impl AndroidWindowAdapter {
         self.ime_states_seen.borrow_mut().clear();
     }
 
+    /// Whether the IME's client holds text that neither direction has
+    /// carried yet: not what the IME last reported, nor what was last pushed
+    /// to it. That is an app-side edit (an accepted send's clear, an inserted
+    /// emoji, a prefilled edit) waiting for the render that publishes it.
+    /// A live pre-edit never occurs on this backend (reports are delivered as
+    /// committed text); if one did, the merged text is not what is compared
+    /// here, so the answer is "no" rather than a guess.
+    fn app_edit_unpublished(&self) -> bool {
+        let Some(client) = self.ime_client.borrow().as_ref().and_then(|c| c.upgrade()) else {
+            return false;
+        };
+        let Some(field) = client.downcast::<i_slint_core::items::TextInput>() else {
+            return false;
+        };
+        let field = field.as_pin_ref();
+        if !field.preedit_text().is_empty() {
+            return false;
+        }
+        app_edit_unpublished_for(
+            field.text().as_str(),
+            self.last_pushed_text.borrow().as_deref(),
+            self.last_ime_text.borrow().as_deref(),
+        )
+    }
+
     /// Whether the TextInput the input method belongs to was destroyed
     /// without losing focus first (see `ime_client`).
     fn ime_client_vanished(&self) -> bool {
@@ -1060,6 +1085,41 @@ impl AndroidWindowAdapter {
                     // (§112m); recording it would poison the echo guards.
                     if self.ime_client.borrow().is_none() || self.ime_client_vanished() {
                         self.release_vanished_ime_client(false);
+                        return InputStatus::Handled;
+                    }
+                    // Chatter patch: an edit the app made to this field that
+                    // the IME has not been told about yet. Core publishes a
+                    // programmatic text change at the next render
+                    // (i-slint-core items/text.rs `render`: Update when the
+                    // text differs from what was last handed over), so an
+                    // accepted send's clear stays unpublished for the rest of
+                    // the input pass that ran the send — and that pass samples
+                    // the IME's snapshot AFTER its touches (android-activity
+                    // drains keys, then motions, then one text state, which
+                    // is the current Java state, not a queued event). The
+                    // snapshot is the field as the IME still holds it: the
+                    // sent text, composing. Delivered, it full-replaced the
+                    // just-cleared field; the render then saw text == last
+                    // published and never pushed the empty state, so the IME
+                    // kept composing the sent text, the composer showed it,
+                    // and the next tap's `finish_composing` replayed it again
+                    // (RC88, Galaxy S9 / Gboard: a caption with an
+                    // attachment, then a plain send of the same text, both
+                    // left the text in the box with the keyboard suggesting
+                    // its last word).
+                    //
+                    // Any snapshot sampled while an app edit is unpublished
+                    // predates that edit's arrival at the IME, and the push
+                    // that follows overwrites the IME's copy of it anyway
+                    // (`InputConnection.setState` clears the Editable and
+                    // restarts input). Dropping it keeps both sides on the
+                    // app's edit. This is an ordering rule, not a comparison
+                    // with the sent text: the snapshot's content is not
+                    // consulted. Once the render has pushed, the field's text
+                    // is `last_pushed_text` again and the guard is off, so
+                    // the IME's first report after the push — the next draft
+                    // — is delivered as before.
+                    if self.app_edit_unpublished() {
                         return InputStatus::Handled;
                     }
                     // Drop GameTextInput's echo of our own finish_composing
@@ -1698,5 +1758,33 @@ impl raw_window_handle::HasDisplayHandle for DummyDisplayHandle {
         &self,
     ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
         Ok(raw_window_handle::DisplayHandle::android())
+    }
+}
+
+/// An app-side edit is unpublished while the field's text is neither the
+/// IME's last report nor the last state pushed to it. Pure, for the host
+/// regression below.
+fn app_edit_unpublished_for(field: &str, last_pushed: Option<&str>, last_ime: Option<&str>) -> bool {
+    last_pushed != Some(field) && last_ime != Some(field)
+}
+
+#[cfg(test)]
+mod app_edit_tests {
+    use super::app_edit_unpublished_for;
+
+    #[test]
+    fn accepted_send_clear_is_unpublished_until_pushed() {
+        let sent = "rc88-s9-caption";
+        // The send cleared the field; the IME still holds and last reported
+        // the sent text: whatever it reports in this pass is stale.
+        assert!(app_edit_unpublished_for("", Some(sent), Some(sent)));
+        // The render pushed the empty state: the guard is off, the IME's next
+        // report (the next draft) goes through.
+        assert!(!app_edit_unpublished_for("", Some(""), Some(sent)));
+        // Ordinary typing: the field shows what the IME last reported.
+        assert!(!app_edit_unpublished_for("rc", Some("r"), Some("rc")));
+        // A fresh session (Enable pushed the field's own text, nothing
+        // reported yet) is published.
+        assert!(!app_edit_unpublished_for(sent, Some(sent), None));
     }
 }
