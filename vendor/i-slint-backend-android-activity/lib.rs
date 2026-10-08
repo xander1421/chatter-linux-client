@@ -330,10 +330,11 @@ pub fn consume_text_input() {
     }
 }
 
-/// Chatter patch: the app put text back into the focused field after
-/// `consume_text_input` (a restored draft). The IME's copy is replaced as of
-/// a new generation, so a snapshot of the emptied field that the consumption
-/// left behind cannot overwrite the restored text when it arrives.
+/// Chatter patch: the app replaced the focused field's text (a draft put
+/// back after `consume_text_input`, the message text an edit opens on). The
+/// IME's copy is replaced as of a new generation, so a snapshot of the field
+/// as it was before (emptied by the consumption, or still the old draft)
+/// cannot overwrite the new text when it arrives.
 /// A no-op unless the IME serves a multi-line field that now holds text.
 pub fn restore_text_input() {
     if let Some(adapter) = CURRENT_WINDOW.with_borrow(|x| x.upgrade()) {

@@ -962,6 +962,16 @@ impl AndroidWindowAdapter {
     /// its place, so nothing of it stays pending here. Same identity check
     /// as the consumption, for a field that now holds text. No timer, focus
     /// change or content rule: provenance only.
+    ///
+    /// The same holds without a consumption: opening an edit replaces the
+    /// draft of a composer that kept its IME client through the message
+    /// menu, at the generation the IME still reports under. The render's
+    /// push of the message text carried that generation too, so a snapshot
+    /// of the old draft produced before that push applied was current by
+    /// provenance and put the draft back under the edit banner (RC89,
+    /// Galaxy S9, FUTO: Edit then typing at once extended the old draft).
+    /// Every app-initiated replacement of the field's text goes through
+    /// here.
     pub(crate) fn restore_text_input(&self) {
         use android_activity::input::{TextInputState, TextSpan};
         let Some(client) = self.ime_client.borrow().as_ref().and_then(|c| c.upgrade()) else {

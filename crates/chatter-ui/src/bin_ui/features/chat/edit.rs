@@ -88,6 +88,16 @@ pub fn wire_edit_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             w.set_composer_stash_held(true);
                         }
                         w.set_composer_text(text.into());
+                        // Android: the composer keeps its IME client across
+                        // the message menu (keyboard stays up), so the
+                        // message text replaces the draft at the generation
+                        // the IME is still reporting under; a snapshot of
+                        // the old draft landing after this line put the
+                        // draft back under the edit banner (RC89, S9). The
+                        // replacement is a new app state of the field: new
+                        // generation, pushed now.
+                        #[cfg(target_os = "android")]
+                        crate::platform::android::text_input::restore();
                         w.set_composer_edit_message_id(composite_key.into());
                         w.set_composer_is_editing(true);
                         tracing::debug!(

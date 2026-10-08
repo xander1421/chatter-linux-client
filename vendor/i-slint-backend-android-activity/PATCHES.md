@@ -181,3 +181,11 @@ are GL on a SurfaceView, so `dumpsys gfxinfo` does not see them).
   snapshots by provenance; `TextInputBridge::push` now reports whether the
   gate was reached so the generation is not advanced past a push it never
   saw.
+  RC89 entry: the same without a consumption. Opening an edit replaces the
+  draft in a composer that kept its IME client through the message menu;
+  the render's push of the message text carried the generation the IME
+  still reported under, so a snapshot of the old draft produced before
+  that push applied and landing after the replacement put the draft back
+  under the edit banner (S9/FUTO: Edit then typing at once extended the
+  old draft). Edit entry calls `restore_text_input` right after the text
+  is set, like the restores: new generation, pushed now.
