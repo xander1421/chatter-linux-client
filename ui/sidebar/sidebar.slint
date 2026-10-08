@@ -211,7 +211,10 @@ export component Sidebar inherits Rectangle {
     // screen, so it is the page: transparent, so the window's ambient wash
     // (Materials.ambient) shows through. Desktop keeps the raised-panel tone
     // that separates it from the chat column beside it.
-    background: AnonMode.enabled ? Colors.primary.with-alpha(0.08)
+    // On touch layouts, let the page show through the rounded glass chrome.
+    // An opaque full-height backing fills the header/footer corner cutouts.
+    background: root.touch ? transparent
+              : AnonMode.enabled ? Colors.primary.with-alpha(0.08)
               : root.mobile-mode ? transparent
               : Colors.surface;
     // The pinned header and footer are chrome-radius glass flush with the
