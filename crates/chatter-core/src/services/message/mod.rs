@@ -341,6 +341,8 @@ pub struct MessageService {
     /// Backoff gate for outgoing `SenderKeyRequest`s — see
     /// [`MessageService::should_request_sender_key`].
     pub(crate) sender_key_requests: Arc<parking_lot::Mutex<group::SenderKeyRequestGate>>,
+    /// Session-local backoff for exact failed channel envelopes; never an acknowledgement.
+    pub(crate) channel_decrypt_failures: Arc<parking_lot::Mutex<channel_inbound::DecryptFailureGate>>,
     /// Group messages we already sent a `DecryptionErrorMessage` for, keyed
     /// `(message id, sender device)`: one retry request per message per device.
     pub(crate) group_retry_requests:
@@ -495,6 +497,9 @@ impl MessageService {
             sender_key_requests: Arc::new(
                 parking_lot::Mutex::new(std::collections::HashMap::new()),
             ),
+            channel_decrypt_failures: Arc::new(parking_lot::Mutex::new(
+                std::collections::HashMap::new(),
+            )),
             group_retry_requests: Arc::new(parking_lot::Mutex::new(
                 std::collections::HashSet::new(),
             )),

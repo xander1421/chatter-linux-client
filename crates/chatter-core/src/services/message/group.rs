@@ -716,13 +716,8 @@ impl MessageService {
         use crate::proto::content_v1::GroupEncrypted;
         use crate::services::message::conversion::proto_to_domain_message_with_sender;
 
-        // The key we asked for arrived: the next miss may ask again at once.
-        // Device 0 is the inbox path's "device unknown" entry.
-        {
-            let mut gate = self.sender_key_requests.lock();
-            gate.remove(&(channel_id, sender_id, device_id));
-            gate.remove(&(channel_id, sender_id, 0));
-        }
+        // An SKDM reply is not proof that it supplied a missing historical key.
+        // Keep request backoff until a parked message is durably persisted.
 
         let pending: Vec<chat_v1::Message> = {
             let mut guard = self.pending_group_decrypts.lock();
@@ -873,6 +868,11 @@ impl MessageService {
                                 !dm.message_id.is_empty(),
                             ) {
                                 continue;
+                            }
+                            {
+                                let mut gate = self.sender_key_requests.lock();
+                                gate.remove(&(channel_id, sender_id, device_id));
+                                gate.remove(&(channel_id, sender_id, 0));
                             }
                             let _ = self
                                 .event_bus

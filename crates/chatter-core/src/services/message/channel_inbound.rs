@@ -28,6 +28,14 @@ use crate::services::current_user::CurrentUserProvider;
 use super::conversion::{conversation_type_for_channel, proto_to_domain_message_with_sender};
 use super::{MessageError, MessageService};
 
+// Scope includes the complete envelope digest, so a new edit or repaired ciphertext
+// is immediately eligible. Bounded volatile state only delays work: server recovery
+// and message-sync checkpoints remain pending until durable handling succeeds.
+pub(crate) type DecryptFailureGate = std::collections::HashMap<
+    (ChannelId, UserId, u32, [u8; 32]),
+    (std::time::Instant, u32),
+>;
+
 /// Outcome of ingesting one server-delivered channel message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ingested {
@@ -406,6 +414,23 @@ impl ChannelInbound {
                 return Err(Ingested::Dropped);
             }
 
+            use sha2::{Digest, Sha256};
+            let failure_key = (
+                channel_id,
+                sid,
+                device_id,
+                Sha256::digest(proto_msg.encode_to_vec()).into(),
+            );
+            if self
+                .messages
+                .channel_decrypt_failures
+                .lock()
+                .get(&failure_key)
+                .is_some_and(|(due, _)| std::time::Instant::now() < *due)
+            {
+                return Err(Ingested::RetryableFailure);
+            }
+
             match self
                 .messages
                 .signal_service
@@ -477,6 +502,25 @@ impl ChannelInbound {
                     patched
                 }
                 Err(e) => {
+                    {
+                        let mut failures = self.messages.channel_decrypt_failures.lock();
+                        // Evict one oldest deadline, never clear every sender's gate.
+                        if failures.len() >= 512 && !failures.contains_key(&failure_key) {
+                            if let Some(oldest) = failures
+                                .iter()
+                                .min_by_key(|(_, v)| v.0)
+                                .map(|(key, _)| *key)
+                            {
+                                failures.remove(&oldest);
+                            }
+                        }
+                        let now = std::time::Instant::now();
+                        let entry = failures.entry(failure_key).or_insert((now, 0));
+                        let delay = std::time::Duration::from_secs(30)
+                            .saturating_mul(1u32 << entry.1.min(10))
+                            .min(std::time::Duration::from_secs(15 * 60));
+                        *entry = (now + delay, entry.1.saturating_add(1));
+                    }
                     let es = e.to_string();
                     if es.contains("no sender key")
                         || es.contains("missing sender key")
