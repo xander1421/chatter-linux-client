@@ -258,12 +258,13 @@ echo "------------------------------------------------------------"
 # ── 4. Optional: install + tunnel ───────────────────────────────────────────
 if [ "${1:-}" = "install" ]; then
     ADB="$ANDROID_HOME/platform-tools/adb"
-    echo ">> installing + setting reverse tunnels (50051 gRPC, 9000 RustFS storage)…"
-    # 50051 = ConnectRPC server. 9000 = RustFS/S3 — attachment uploads hit a
-    # presigned URL at 127.0.0.1:9000, which on-device is the phone's localhost,
-    # so it must be tunnelled to the host too or attachment sends fail.
+    echo ">> installing + setting reverse tunnels (50051 gRPC, 9444 HTTPS storage)…"
+    # 50051 = ConnectRPC server. Presigned storage URLs use the pinned
+    # HTTPS edge at 127.0.0.1:9444; tunnel it so uploads work on mobile data.
+    # 9000 remains available for legacy local development tools.
     "$ADB" reverse tcp:50051 tcp:50051 || true
     "$ADB" reverse tcp:9000 tcp:9000 || true
+    "$ADB" reverse tcp:9444 tcp:9444 || true
     # 7880 = LiveKit signaling (WS), 7881 = LiveKit ICE/TCP media fallback.
     # (UDP media won't tunnel over adb; for real calls use the host LAN IP.)
     "$ADB" reverse tcp:7880 tcp:7880 || true
