@@ -33,7 +33,10 @@ impl MessageService {
     /// and the preview comes from that parent, never from the caller's
     /// `target_preview`, which may have been looked up without a scope.
     /// Storage errors, lookup and insert alike, are returned: no row is
-    /// written without its quote.
+    /// written without its quote. A parent that is absent or deleted in
+    /// that scope rejects the send as `InvalidContent` instead of storing
+    /// a timestamp-derived `reply_to`: that id is an ordinary UUID another
+    /// conversation's row can carry, which reload would then follow.
     pub async fn save_message(
         &self,
         text: &str,
@@ -63,17 +66,20 @@ impl MessageService {
         message.attachments = attachment_ids.clone();
         if let Some(quote) = quote {
             let scope = ReactionScope::new(channel_id, ConversationType::SavedMessages);
-            let original = self.message_repo.get_by_reaction_scope(
-                &scope,
-                &quote.target_author_id,
-                quote.target_timestamp,
-            )?;
+            let original = self
+                .message_repo
+                .get_by_reaction_scope(&scope, &quote.target_author_id, quote.target_timestamp)?
+                .ok_or_else(|| {
+                    MessageError::InvalidContent(
+                        "the quoted Saved message no longer exists".to_string(),
+                    )
+                })?;
             let scoped = QuoteIntent {
                 target_author_id: quote.target_author_id,
                 target_timestamp: quote.target_timestamp,
                 target_preview: None,
             };
-            self.fill_reply_context(&mut message, &scoped, original);
+            self.fill_reply_context(&mut message, &scoped, Some(original));
         }
         self.message_repo.insert_outgoing(&message)?;
 
