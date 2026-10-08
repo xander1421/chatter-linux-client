@@ -208,6 +208,11 @@ export component Sidebar inherits Rectangle {
     background: AnonMode.enabled ? Colors.primary.with-alpha(0.08)
               : root.mobile-mode ? transparent
               : Colors.surface;
+    // The pinned header and footer are chrome-radius glass flush with the
+    // panel's edges, so the panel's own corners must curve with them: square,
+    // the opaque surface filled the notch outside each rounded corner. Not
+    // on a phone, where the panel is the (transparent) page.
+    border-radius: root.mobile-mode ? Spacing.none : Spacing.radius-chrome;
     // No `border-width` here: this is a right-EDGE highlight in intent and
     // Slint's border draws all four sides. On a phone that traced a hairline
     // rectangle around the whole display; on desktop it now also ran a line
