@@ -86,13 +86,16 @@ pub fn spawn_call_history_recorder(
                         break;
                     }
                 };
-                // A too-late offer is over as it arrives: nothing else will
-                // close it, so its bubble is filed with the row.
+                // A too-late offer is over as it arrives: no terminal event
+                // ever follows it, so its row is written closed and its
+                // bubble is filed with it.
                 let missed_on_arrival =
                     matches!(event, CallOrchestratorEvent::IncomingMissed { .. });
                 match event {
                     // A too-late offer never rings but writes the same row:
-                    // missed, which is what a presented call starts as too.
+                    // missed, which is what a presented call starts as too —
+                    // except that the expired one is stamped `ended_at` here,
+                    // where a presented one stays open until it is withdrawn.
                     CallOrchestratorEvent::IncomingPresented {
                         call,
                         kind,
@@ -108,6 +111,16 @@ pub fn spawn_call_history_recorder(
                         is_video,
                         conversation_id,
                     } => {
+                        // A replayed stale offer for a call this device already
+                        // has a row for (rung, answered, declined, or an earlier
+                        // expiry): `insert_entry` replaces on conflict, which
+                        // would reopen or overwrite a final fact. Keep the row.
+                        if missed_on_arrival {
+                            if let Ok(Some(_)) = history.get(call.as_str()) {
+                                tracing::debug!(call = %call.as_str(), "call history: expired offer already recorded");
+                                continue;
+                            }
+                        }
                         let conversation_type = kind.conversation_type();
                         // The conversation's own name beats the caller's
                         // self-reported one — it is what the sidebar shows,
@@ -120,13 +133,14 @@ pub fn spawn_call_history_recorder(
                             .map(|c| c.name)
                             .filter(|n| !n.is_empty())
                             .unwrap_or(peer_name);
+                        let now = chrono::Utc::now();
                         let entry = CallHistoryEntry {
                             id: call.as_str().to_string(),
                             conversation_id,
                             conversation_type,
                             peer_name: name,
-                            started_at: chrono::Utc::now(),
-                            ended_at: None,
+                            started_at: now,
+                            ended_at: missed_on_arrival.then_some(now),
                             direction: CallDirection::Incoming,
                             // Pessimistic on purpose: a ringing call that is
                             // never resolved (app killed mid-ring) is a

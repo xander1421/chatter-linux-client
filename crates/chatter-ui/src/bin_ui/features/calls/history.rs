@@ -34,11 +34,12 @@ thread_local! {
 }
 
 /// Longest chain of empty pages followed automatically: a first page plus
-/// this many follow-ups, 9 × `HISTORY_PAGE` stored rows read. Open rows do
-/// accumulate — an expired incoming offer files its chat bubble without
-/// closing its history row (call_worker.rs `IncomingMissed`) — so this is
-/// reachable, not theoretical. Past it the cursor stays set, the screen
-/// shows `paging-paused` with a "Load older calls" control, and that control
+/// this many follow-ups, 9 × `HISTORY_PAGE` stored rows read. An expired
+/// incoming offer is stored closed (call_history_recorder.rs
+/// `IncomingMissed`), so the only open rows a Missed page hides are this
+/// process's calls still ringing or connected — few, but the chain is kept
+/// as a guard. Past it the cursor stays set, the screen shows
+/// `paging-paused` with a "Load older calls" control, and that control
 /// restarts the budget from the saved cursor (`resume_paging`).
 const MAX_EMPTY_PAGES: u32 = 8;
 
