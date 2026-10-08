@@ -152,8 +152,6 @@ export component ChatLayout inherits Rectangle {
     // composer is replaced by this text, worded by chatter-core.
     in property <string> composer-notice: "";
     in property <bool> conversation-read-only: false;
-    // Non-empty while a send is on the wire — see message_composer.slint.
-    in property <string> composer-send-status: "";
     in property <[PendingAttachmentData]> pending-attachments: [];
     in-out property <bool> composer-is-editing: false;
     in-out property <string> composer-edit-message-id: "";
@@ -510,7 +508,6 @@ export component ChatLayout inherits Rectangle {
             attachment-restore-serial: root.attachment-restore-serial;
             text <=> root.composer-text;
             placeholder: root.composer-placeholder;
-            send-status: root.composer-send-status;
             // Composer owns attachment-row geometry; keep the host reservation
             // based on its single reported height, including caption-free drafts.
             pending-attachments: root.pending-attachments;

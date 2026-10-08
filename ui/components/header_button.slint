@@ -35,6 +35,12 @@ export component HeaderButton inherits Rectangle {
     in property <bool> enabled: true;
     // Forwarded to the glass shell; see GlassSurface.backdrop-paused.
     in property <bool> backdrop-paused: false;
+    // What is drawn, as opposed to what is tappable. The root box is always
+    // the touch target; a row with lighter chrome around it (the sidebar
+    // header's '+' and Shield beside 24px quick-link glyphs) draws a smaller
+    // shell and glyph inside the same box.
+    in property <length> shell: root.width;
+    in property <length> glyph: root.touch ? Spacing.header-glyph-touch : Spacing.header-glyph;
 
     callback clicked();
 
@@ -68,8 +74,9 @@ export component HeaderButton inherits Rectangle {
         material-level: 1;
         elevation: 0;
         backdrop-paused: root.backdrop-paused;
-        width: parent.width;
+        width: min(root.shell, parent.width);
         height: self.width;
+        x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         border-radius: self.height / 2;
         background: touch-area.pressed ? Materials.pressed : touch-area.has-hover ? Materials.hover
@@ -79,7 +86,7 @@ export component HeaderButton inherits Rectangle {
 
         Image {
             source: root.icon;
-            width: root.touch ? Spacing.header-glyph-touch : Spacing.header-glyph;
+            width: min(root.glyph, parent.width);
             height: self.width;
             x: (parent.width - self.width) / 2;
             y: (parent.height - self.height) / 2;
@@ -89,13 +96,15 @@ export component HeaderButton inherits Rectangle {
                 : (touch-area.has-hover ? Colors.text-primary : Colors.text-secondary);
         }
 
-        touch-area := TouchArea {
-            mouse-cursor: root.enabled ? pointer : default;
-            clicked => { if root.enabled { root.clicked(); } }
-        }
-
         // Status marks drawn over the glyph (Shield's Tor dot), relative to
-        // the box.
+        // the shell.
         @children
+    }
+
+    // The whole root box, not the shell: the target never shrinks with the
+    // drawing.
+    touch-area := TouchArea {
+        mouse-cursor: root.enabled ? pointer : default;
+        clicked => { if root.enabled { root.clicked(); } }
     }
 }

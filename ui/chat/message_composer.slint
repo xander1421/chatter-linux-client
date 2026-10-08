@@ -124,14 +124,6 @@ export component MessageComposer inherits GlassSurface {
     in property <bool> disabled: false;
     in property <[PendingAttachmentData]> pending-attachments: [];
 
-    // Unused. A send in flight is now the pending bubble itself (its thin
-    // progress line, message_item.slint), not a label here: the label grew the
-    // composer 28px on every send and shrank it again on the append, and on a
-    // phone that geometry change landed under the soft keyboard. Kept only
-    // because app.slint / chat_layout.slint still bind `composer-send-status`;
-    // delete it with them.
-    in property <string> send-status: "";
-
     // Edit mode properties
     in-out property <bool> is-editing: false;
     in-out property <string> edit-message-id: "";
@@ -211,7 +203,16 @@ export component MessageComposer inherits GlassSurface {
 
     // Make the input method finish composing. Dropping focus is the only handle
     // Slint gives us for that; re-focusing immediately keeps the keyboard up.
+    //
+    // Only with a composition to finish. On Android the focus drop sends
+    // InputMethodRequest::Disable (a real hideSoftInput) and the re-focus an
+    // Enable (showSoftInput), so the keyboard closed and reopened on every
+    // send — and there was never anything to end: the Android backend commits
+    // the composition on the send tap's pointer-down and never hands Slint a
+    // pre-edit, so `preedit-text` is always empty there. A live pre-edit
+    // (desktop CJK with Enter) still takes the cycle.
     function reset-composition() {
+        if text-input.preedit-text == "" { return; }
         text-input.clear-focus();
         text-input.focus();
     }

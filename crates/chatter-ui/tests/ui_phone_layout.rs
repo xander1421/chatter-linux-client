@@ -295,25 +295,9 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     assert!(composer_native_item(&w) == original_input);
     assert_action_geometry(&w, false);
 
-    // A send in flight is a pending row in the list, not a composer row: the
-    // composer's geometry must not change with the status property at all.
-    for (draft, raised) in [
-        ("".to_owned(), false),
-        ("status budget words ".repeat(100), true),
-    ] {
-        w.set_composer_text(draft.into());
-        pump_size(&w, PHONE_W, 460.0);
-        let field_without_status = one(&w, "Message input").size().height;
-        let shell_without_status = composer_shell_height(&w);
-        w.set_composer_send_status("Sending geometry fixture".into());
-        pump_size(&w, PHONE_W, 460.0);
-        assert_action_geometry(&w, raised);
-        assert!((one(&w, "Message input").size().height - field_without_status).abs() < 0.5);
-        assert!((composer_shell_height(&w) - shell_without_status).abs() < 0.5);
-        w.set_composer_send_status("".into());
-    }
-    w.set_composer_text("".into());
-    pump_size(&w, PHONE_W, 460.0);
+    // A send in flight is a pending row in the list (message_item.slint's
+    // progress line), not a composer row: there is no status property left
+    // to move the composer's geometry.
 
     // Exercise the actual conditional width branches: a mesh room has Attach
     // but no mic, a mesh DM has neither, and an empty edit has no trailing action.
@@ -1599,14 +1583,6 @@ fn assert_composer_caps(w: &MainWindow, drawer: bool, accessories: f32) {
         "composer {:?} exceeds six-line/actual-pane cap {cap}, pane={available}, accessories={accessories}",
         shell.size()
     );
-}
-
-fn composer_shell_height(w: &MainWindow) -> f32 {
-    testing::ElementHandle::find_by_element_type_name(w, "MessageComposer")
-        .find(|e| e.type_name().is_some_and(|t| t == "MessageComposer") && e.size().height > 0.0)
-        .expect("actual composer root")
-        .size()
-        .height
 }
 
 /// Check actual controls against the actual field: no duplicate layout model.

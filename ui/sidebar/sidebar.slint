@@ -135,6 +135,12 @@ export component Sidebar inherits Rectangle {
     property <length> quick-link-text-size: root.touch ? Typography.base : Typography.sm2;
     property <brush> quick-link-text-color: root.touch ? Colors.text-primary : Colors.text-secondary;
     property <length> quick-link-icon-size: root.touch ? 24px : 14px;
+    // The header row's '+' and Shield on a touch two-pane: HeaderButton's
+    // 48px shell and 26px glyph were the biggest things in a panel whose own
+    // glyphs are 24px (quick links) and 18px (rail). Draw them at the
+    // footer's 36px with a 20px glyph; the 48px touch box is unchanged.
+    property <length> header-control-shell: root.touch ? 36px : Spacing.header-action-box;
+    property <length> header-control-glyph: root.touch ? 20px : Spacing.header-glyph;
     // Quick-link icons sit in the conversation rows' avatar column: the same
     // leading inset (ChatList's xs + the row's sm) and a slot as wide as a
     // row's avatar ring, icon centred in it — so the lens, bookmark and the
@@ -596,6 +602,8 @@ export component Sidebar inherits Rectangle {
             // the Shield toggle.
             if !root.mobile-mode: HeaderButton {
                 touch: root.touch;
+                shell: root.header-control-shell;
+                glyph: root.header-control-glyph;
                 x: parent.width - self.width - Spacing.sm - self.width - Spacing.header-action-gap;
                 y: (parent.height - self.height) / 2;
                 icon: Icons.plus;
@@ -614,6 +622,8 @@ export component Sidebar inherits Rectangle {
             // AnonMode.onion-built — without Tor it would be a permanent red.
             HeaderButton {
                 touch: root.touch;
+                shell: root.header-control-shell;
+                glyph: root.header-control-glyph;
                 x: parent.width - self.width - Spacing.sm; y: (parent.height - self.height) / 2;
                 icon: Icons.shield;
                 label: AnonMode.enabled ? "Shield on - tap to turn off" : "Shield off - tap to turn on";
@@ -628,8 +638,8 @@ export component Sidebar inherits Rectangle {
                     visible: AnonMode.enabled && AnonMode.onion-built;
                     width: 8px; height: 8px; border-radius: 4px;
                     // On the glyph's top-right corner, not the box's.
-                    x: (parent.width + (root.touch ? Spacing.header-glyph-touch : Spacing.header-glyph)) / 2 - self.width * 0.75;
-                    y: (parent.height - (root.touch ? Spacing.header-glyph-touch : Spacing.header-glyph)) / 2 - self.height * 0.25;
+                    x: (parent.width + root.header-control-glyph) / 2 - self.width * 0.75;
+                    y: (parent.height - root.header-control-glyph) / 2 - self.height * 0.25;
                     border-width: 1px; border-color: Colors.surface;
                     background: TorStatus.state == 2 ? Colors.success
                         : TorStatus.state >= 3 ? Colors.error
