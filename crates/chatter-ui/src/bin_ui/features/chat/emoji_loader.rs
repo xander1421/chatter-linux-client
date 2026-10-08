@@ -11,6 +11,25 @@ use chatter_core::ui::emoji_data::{self, PEOPLE_CATEGORY, PickerEmoji, RECENT_CA
 
 use crate::{EmojiData, MainWindow};
 
+/// Build one listing from the signed-in account's recent emoji, for
+/// publishing right away. The scope is captured once, core reads for it (and
+/// returns nothing once it is stale), and if the account or session changed
+/// by the time the result is about to be published, the listing is built
+/// again without history, so a sign-out or switch between read and publish
+/// never shows one account's picks to another.
+fn with_recent_emoji<R>(ui_ctx: &ChatterClient, build: impl Fn(&[String]) -> R) -> R {
+    const NONE: &[String] = &[];
+    let Some(scope) = ui_ctx.picker_history_scope() else {
+        return build(NONE);
+    };
+    let built = build(&ui_ctx.recent_emoji(scope));
+    if ui_ctx.picker_scope_is_current(scope) {
+        built
+    } else {
+        build(NONE)
+    }
+}
+
 fn model(emojis: Vec<PickerEmoji>) -> ModelRc<EmojiData> {
     ModelRc::new(VecModel::from(
         emojis
@@ -27,7 +46,8 @@ fn model(emojis: Vec<PickerEmoji>) -> ModelRc<EmojiData> {
 /// A fresh reaction picker: Recent when the account has picked anything,
 /// otherwise Smileys, with the search cleared.
 pub fn show_reaction_picker_start(w: &MainWindow, ui_ctx: &ChatterClient) {
-    let (category, emojis) = emoji_data::initial_listing(&ui_ctx.recent_emoji(), 0);
+    let (category, emojis) =
+        with_recent_emoji(ui_ctx, |recent| emoji_data::initial_listing(recent, 0));
     w.set_reaction_picker_selected_category(category);
     w.set_reaction_picker_search_query("".into());
     w.set_reaction_picker_emojis(model(emojis));
@@ -39,7 +59,8 @@ pub fn show_reaction_picker_start(w: &MainWindow, ui_ctx: &ChatterClient) {
 /// its query and category until the drawer closes.
 pub fn show_composer_picker_start(w: &MainWindow, ui_ctx: &ChatterClient) {
     let tone = w.get_composer_emoji_skin_tone();
-    let (category, emojis) = emoji_data::initial_listing(&ui_ctx.recent_emoji(), tone);
+    let (category, emojis) =
+        with_recent_emoji(ui_ctx, |recent| emoji_data::initial_listing(recent, tone));
     w.set_composer_emoji_category(category);
     w.set_composer_emoji_search("".into());
     w.set_composer_emoji_list(model(emojis));
@@ -61,11 +82,9 @@ pub fn wire_emoji_loader(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         move |category| {
             if let Some(w) = weak.upgrade() {
                 let tone = w.get_composer_emoji_skin_tone();
-                w.set_composer_emoji_list(model(emoji_data::listing(
-                    category,
-                    tone,
-                    &ui_ctx.recent_emoji(),
-                )));
+                w.set_composer_emoji_list(model(with_recent_emoji(&ui_ctx, |recent| {
+                    emoji_data::listing(category, tone, recent)
+                })));
             }
         }
     });
@@ -79,11 +98,13 @@ pub fn wire_emoji_loader(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         move |query| {
             if let Some(w) = weak.upgrade() {
                 let emojis = if query.is_empty() {
-                    emoji_data::listing(
-                        w.get_composer_emoji_category(),
-                        w.get_composer_emoji_skin_tone(),
-                        &ui_ctx.recent_emoji(),
-                    )
+                    with_recent_emoji(&ui_ctx, |recent| {
+                        emoji_data::listing(
+                            w.get_composer_emoji_category(),
+                            w.get_composer_emoji_skin_tone(),
+                            recent,
+                        )
+                    })
                 } else {
                     emoji_data::search(&query)
                 };
@@ -98,11 +119,9 @@ pub fn wire_emoji_loader(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let ui_ctx = ui_ctx.clone();
         move |category| {
             if let Some(w) = weak.upgrade() {
-                w.set_reaction_picker_emojis(model(emoji_data::listing(
-                    category,
-                    0,
-                    &ui_ctx.recent_emoji(),
-                )));
+                w.set_reaction_picker_emojis(model(with_recent_emoji(&ui_ctx, |recent| {
+                    emoji_data::listing(category, 0, recent)
+                })));
             }
         }
     });
@@ -113,11 +132,9 @@ pub fn wire_emoji_loader(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         move |query| {
             if let Some(w) = weak.upgrade() {
                 let emojis = if query.is_empty() {
-                    emoji_data::listing(
-                        w.get_reaction_picker_selected_category(),
-                        0,
-                        &ui_ctx.recent_emoji(),
-                    )
+                    with_recent_emoji(&ui_ctx, |recent| {
+                        emoji_data::listing(w.get_reaction_picker_selected_category(), 0, recent)
+                    })
                 } else {
                     emoji_data::search(&query)
                 };
@@ -144,11 +161,9 @@ pub fn wire_emoji_loader(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 if w.get_composer_emoji_category() == RECENT_CATEGORY
                     && w.get_composer_emoji_search().is_empty()
                 {
-                    w.set_composer_emoji_list(model(emoji_data::listing(
-                        RECENT_CATEGORY,
-                        0,
-                        &ui_ctx.recent_emoji(),
-                    )));
+                    w.set_composer_emoji_list(model(with_recent_emoji(&ui_ctx, |recent| {
+                        emoji_data::listing(RECENT_CATEGORY, 0, recent)
+                    })));
                 }
                 // Deliberately left OPEN. Picking an emoji for the composer is
                 // usually not the last thing you do — closing after each one
@@ -165,11 +180,9 @@ pub fn wire_emoji_loader(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             if let Some(w) = weak.upgrade() {
                 let category = w.get_composer_emoji_category();
                 if category == PEOPLE_CATEGORY && w.get_composer_emoji_search().is_empty() {
-                    w.set_composer_emoji_list(model(emoji_data::listing(
-                        category,
-                        tone,
-                        &ui_ctx.recent_emoji(),
-                    )));
+                    w.set_composer_emoji_list(model(with_recent_emoji(&ui_ctx, |recent| {
+                        emoji_data::listing(category, tone, recent)
+                    })));
                 }
             }
         }

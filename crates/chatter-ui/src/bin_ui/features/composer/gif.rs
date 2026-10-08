@@ -68,16 +68,22 @@ fn request_gifs(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, query: String) {
     w.set_composer_gif_picker_failed(false);
     crate::bin_ui::gif_state::clear_picker_gifs();
 
-    // Recents are local and never depend on the provider answering.
-    let recent: Vec<RawGifData> = if query.is_empty() {
-        ui_ctx
-            .recent_gifs()
+    // Recents are local and never depend on the provider answering. They are
+    // read for the account signed in now and published only while it still
+    // is: core returns nothing for a stale scope, and a scope that went stale
+    // between that read and this publish publishes no history either.
+    let scope = ui_ctx.picker_history_scope();
+    let mut recent: Vec<RawGifData> = match scope {
+        Some(scope) if query.is_empty() => ui_ctx
+            .recent_gifs(scope)
             .into_iter()
             .map(|g| (g.id, g.preview_url, g.url, g.width, g.height))
-            .collect()
-    } else {
-        Vec::new()
+            .collect(),
+        _ => Vec::new(),
     };
+    if !scope.is_some_and(|scope| ui_ctx.picker_scope_is_current(scope)) {
+        recent.clear();
+    }
     w.set_composer_gif_picker_recent(rows_model(&recent));
     spawn_previews(&recent, w.as_weak(), ui_ctx.clone(), generation, session);
 
