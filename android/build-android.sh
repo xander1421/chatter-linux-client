@@ -21,6 +21,25 @@ TARGET_DIR="${CARGO_TARGET_DIR:-$PROJECT_ROOT/target}"
 [[ "$TARGET_DIR" = /* ]] || TARGET_DIR="$PROJECT_ROOT/$TARGET_DIR"
 export CARGO_TARGET_DIR="$TARGET_DIR"
 
+# Explicit Android metadata; debug retains the historical defaults.
+# Validate before bootstrap/download/build work. Android caps codes at 2100000000.
+if [ "${RELEASE:-0}" = "1" ]; then
+    for v in CHATTER_ANDROID_VERSION_CODE CHATTER_ANDROID_VERSION_NAME; do
+        [ -n "${!v:-}" ] || { echo "FATAL: RELEASE=1 needs $v" >&2; exit 1; }
+    done
+fi
+export CHATTER_ANDROID_VERSION_CODE="${CHATTER_ANDROID_VERSION_CODE-1}"
+export CHATTER_ANDROID_VERSION_NAME="${CHATTER_ANDROID_VERSION_NAME-0.1.0}"
+python3 - <<'VERSION_CHECK'
+import os, re, sys
+code = os.environ["CHATTER_ANDROID_VERSION_CODE"]
+name = os.environ["CHATTER_ANDROID_VERSION_NAME"]
+if not re.fullmatch(r"[1-9][0-9]{0,9}", code) or int(code) > 2100000000:
+    sys.exit("FATAL: CHATTER_ANDROID_VERSION_CODE must be 1..2100000000 (decimal, no leading zeros)")
+if not re.fullmatch(r"[0-9][A-Za-z0-9._+-]{0,63}", name):
+    sys.exit("FATAL: CHATTER_ANDROID_VERSION_NAME must be 1..64 ASCII version characters, starting with a digit")
+VERSION_CHECK
+
 # ── Toolchain / cross-compile env ───────────────────────────────────────────
 export ANDROID_HOME="${ANDROID_HOME:-$HOME/Android/Sdk}"
 export ANDROID_SDK_ROOT="$ANDROID_HOME"
@@ -160,10 +179,8 @@ fi
 #
 # This is a compile-time cargo feature, NOT a runtime OS check. It used to be
 # `cfg!(target_os = "android")` in lib.rs, which is true for every Android build
-# — so a RELEASE APK auto-registered with those credentials too. This script only
-# ever produces a debug APK against the local docker-compose stack, so it opts in
-# by default; any release Android pipeline added later must simply not pass this
-# feature, and the literals will not be in the binary.
+# — so a RELEASE APK auto-registered with those credentials too. Debug builds
+# opt in by default; RELEASE=1 refuses this feature and its public credentials.
 #
 # Set DEV_AUTO_REGISTER=0 to build the debug APK with the normal register screen.
 DEV_AUTO_REGISTER_FEATURE=""

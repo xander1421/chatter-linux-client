@@ -3,6 +3,24 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
+// Shared with build-android.sh; direct Gradle release tasks also need metadata.
+val suppliedVersionCode = System.getenv("CHATTER_ANDROID_VERSION_CODE")
+val suppliedVersionName = System.getenv("CHATTER_ANDROID_VERSION_NAME")
+val productionRequested = System.getenv("RELEASE") == "1" ||
+    gradle.startParameter.taskNames.any { it.contains("release", ignoreCase = true) }
+require(!productionRequested || (!suppliedVersionCode.isNullOrEmpty() && !suppliedVersionName.isNullOrEmpty())) {
+    "Release requires CHATTER_ANDROID_VERSION_CODE and CHATTER_ANDROID_VERSION_NAME"
+}
+val clientVersionCode = suppliedVersionCode ?: "1"
+val clientVersionName = suppliedVersionName ?: "0.1.0"
+require(clientVersionCode.matches(Regex("[1-9][0-9]{0,9}")) &&
+    (clientVersionCode.toLongOrNull() ?: Long.MAX_VALUE) <= 2100000000L) {
+    "CHATTER_ANDROID_VERSION_CODE must be 1..2100000000 (decimal, no leading zeros)"
+}
+require(clientVersionName.matches(Regex("[0-9][A-Za-z0-9._+-]{0,63}"))) {
+    "CHATTER_ANDROID_VERSION_NAME must be 1..64 ASCII version characters, starting with a digit"
+}
+
 android {
     namespace = "com.chatter.client"
     compileSdk = 35
@@ -11,8 +29,8 @@ android {
         applicationId = "com.chatter.client"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        versionCode = clientVersionCode.toInt()
+        versionName = clientVersionName
         // We only ship the Rust cdylib for arm64 today.
         ndk { abiFilters += "arm64-v8a" }
     }
