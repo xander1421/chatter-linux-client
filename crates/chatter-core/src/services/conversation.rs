@@ -113,11 +113,16 @@ fn stored_message_menu(message: &crate::domain::Message, is_own: bool, now_ns: u
     }
     // Saved records have only a local/own-device deletion path. Their UI
     // Channel variant must never grant a public-channel remote delete. Edit
-    // stays: it is persisted locally by `send_edit`, never dispatched.
+    // is a local rewrite of our own note (`send_edit`), so the remote 24h
+    // window does not apply: own, delivered, undeleted, with a body.
     if message.conversation_type == ConversationType::SavedMessages {
         actions.delete_for_everyone = false;
         actions.pin = false;
         actions.react = false;
+        actions.edit = is_own
+            && !message.is_deleted
+            && !matches!(message.delivery_status.as_str(), "failed" | "sending")
+            && message.as_text().is_some_and(|t| !t.trim().is_empty());
     }
     MessageMenu {
         actions,
@@ -125,34 +130,19 @@ fn stored_message_menu(message: &crate::domain::Message, is_own: bool, now_ns: u
     }
 }
 
-/// The stored body after an own edit. A `Mixed` row keeps its attachment ids
-/// and only its text changes; everything else becomes `Text`. Attachments,
-/// reply identity and timestamps live on the row, not in the content, and
-/// are left alone by `update_message_body`.
-fn edited_content(
-    current: &crate::domain::message::MessageContent,
-    new_text: &str,
-) -> crate::domain::message::MessageContent {
-    use crate::domain::message::{MessageContent, MixedContent};
-    match current {
-        MessageContent::Mixed(mixed) => MessageContent::Mixed(MixedContent {
-            text: Some(new_text.to_string()),
-            attachment_ids: mixed.attachment_ids.clone(),
-        }),
-        _ => MessageContent::Text(new_text.to_string()),
-    }
-}
-
-/// Validate an own edit of one Saved record and shape its new body. The row
-/// must be this user's, undeleted, inside the edit window and the new text
-/// non-empty (same gate as the menu's `edit` flag, so the menu and the send
-/// cannot drift).
-fn saved_edit_content(
+/// The full Saved row as it is stored after our edit: the same row with only
+/// its body (the text, or the caption of a `Mixed` body whose attachment ids
+/// stay) replaced, `is_edited` set and `edited_at` the real edit time. Id,
+/// `sent_at`, `attachments`, reply identity and every other column are the
+/// stored values. Gated exactly like the menu's `edit` flag for Saved
+/// (`stored_message_menu`: own, delivered, undeleted, has a body; no age
+/// window), plus a non-empty new text, so the menu and the send cannot drift.
+fn edited_saved_record(
     message: &crate::domain::Message,
     own: UserId,
-    now_ns: u64,
     new_text: &str,
-) -> ConversationResult<crate::domain::message::MessageContent> {
+) -> ConversationResult<crate::domain::Message> {
+    use crate::domain::message::{MessageContent, MixedContent};
     if message.conversation_type != ConversationType::SavedMessages
         || message.sender_id != Some(own)
     {
@@ -166,12 +156,22 @@ fn saved_edit_content(
             "An edited Saved message needs text".into(),
         ));
     }
+    let now_ns = crate::util::time::TimestampNanos::now().as_u64();
     if !stored_message_menu(message, true, now_ns).actions.edit {
         return Err(ConversationError::Other(
-            "This Saved message can no longer be edited".into(),
+            "This Saved message cannot be edited".into(),
         ));
     }
-    Ok(edited_content(&message.content, trimmed))
+    let mut edited = message.clone();
+    edited.content = match &message.content {
+        MessageContent::Mixed(mixed) => MessageContent::Mixed(MixedContent {
+            text: Some(trimmed.to_string()),
+            attachment_ids: mixed.attachment_ids.clone(),
+        }),
+        _ => MessageContent::Text(trimmed.to_string()),
+    };
+    edited.mark_edited();
+    Ok(edited)
 }
 
 fn require_remote_message_kind(kind: &ConversationType) -> ConversationResult {
@@ -654,16 +654,17 @@ impl ConversationHandle {
         result
     }
 
-    /// Edit one of our Saved records in place. Local only: the row's id,
-    /// `sent_at`, attachments and reply identity are untouched, only the body
-    /// changes and `is_edited` is set. Nothing goes to the server — the Saved
-    /// id is our own user id, not a channel a sender-key control may be sent
-    /// to — and nothing reaches linked devices: `SavedMessageSync` has no
-    /// edit form and a re-sent one is dropped as a duplicate on arrival
-    /// (`store_synced_saved_message`), so a sibling device keeps the old text
-    /// until that proto grows an edit. The emitted `MessageEdited` carries
-    /// the real row id and the `SavedMessages` kind, so a same-id channel or
-    /// DM row is never patched.
+    /// Edit one of our Saved records in place. Local only: the stored row is
+    /// read in the Saved scope, rewritten by [`edited_saved_record`] and
+    /// written back whole (`MessageRepository::update`), so a storage
+    /// failure is this call's error, never a silent success. Nothing goes to
+    /// the server — the Saved id is our own user id, not a channel a
+    /// sender-key control may be sent to — and nothing reaches linked
+    /// devices: `SavedMessageSync` has no edit form and a re-sent one is
+    /// dropped as a duplicate on arrival (`store_synced_saved_message`), so a
+    /// sibling device keeps the old text until that proto grows an edit. The
+    /// emitted `MessageEdited` carries the real row id and the
+    /// `SavedMessages` kind, so a same-id channel or DM row is never patched.
     fn edit_saved_message(
         &self,
         scope: &crate::domain::reaction::ReactionScope,
@@ -676,22 +677,15 @@ impl ConversationHandle {
             .get()
             .current_user_id
             .ok_or_else(|| ConversationError::Other("Editing requires a signed-in user".into()))?;
-        let message = scoped_stored_message(
-            &self.client.messages().message_repo,
-            scope,
-            &own,
-            target_sent_timestamp,
-        )?;
-        let now_ns = crate::util::time::TimestampNanos::now().as_u64();
-        let new_content = saved_edit_content(&message, own, now_ns, new_text)?;
-        self.client
-            .messages()
-            .update_message_body(&message.id, &new_content)?;
+        let repo = &self.client.messages().message_repo;
+        let stored = scoped_stored_message(repo, scope, &own, target_sent_timestamp)?;
+        let edited = edited_saved_record(&stored, own, new_text)?;
+        repo.update(&edited)?;
         self.client
             .event_bus()
             .emit_domain(crate::events::DomainEvent::MessageEdited {
-                message_id: message.id,
-                new_content,
+                message_id: edited.id,
+                new_content: edited.content,
                 channel_id: scope.id,
                 conversation_type: ConversationType::SavedMessages,
                 author_id: own,
@@ -1998,7 +1992,8 @@ impl ConversationHandle {
     fn persist_edit(&self, sent_timestamp: u64, new_text: &str) {
         if let Some(user_id) = self.client.auth_state().get().current_user_id {
             if let Ok(msg) = self.lookup_message(&user_id, sent_timestamp) {
-                let new_content = edited_content(&msg.content, new_text);
+                let new_content =
+                    crate::domain::message::MessageContent::Text(new_text.to_string());
                 let _ = self
                     .client
                     .messages()

@@ -109,48 +109,100 @@ fn saved_storage_requires_matching_own_identity_and_metadata() {
 }
 
 #[test]
-fn saved_edit_keeps_row_identity_attachments_and_mixed_ids() {
-    use crate::domain::ids::AttachmentId;
-    use crate::domain::message::{MessageContent, MixedContent};
+fn saved_edit_rewrites_only_the_body_and_persists_the_whole_row() {
+    use crate::domain::ids::{AttachmentId, MessageId};
+    use crate::domain::message::{MessageContent, MixedContent, REMOTE_ACTION_WINDOW_NS};
+    let dir = tempfile::tempdir().unwrap();
+    let db = Arc::new(Database::open(&dir.path().join("saved.db"), "test-password").unwrap());
+    db.run_migrations().unwrap();
+    let repo = MessageRepository::new(db);
     let own = UserId::new();
     let other = UserId::new();
     let id = ChannelId::from(own);
     let now = crate::util::time::TimestampNanos::now().as_u64();
+    // Older than any remote edit window: Saved notes are editable regardless.
+    let sent = now - REMOTE_ACTION_WINDOW_NS * 3;
+    let channel = Channel::new(id, "Saved Messages".into(), ChannelType::SavedMessages, own);
+    let scope =
+        message_storage_scope(&ActiveConversation::Channel(id), Some(own), Some(&channel)).unwrap();
+
     let mut saved = Message::new_text(
         id,
         ConversationType::SavedMessages,
         Some(own),
         "old".into(),
-        now,
+        sent,
     );
     saved.attachments = vec![AttachmentId::new()];
-    saved.reply_to = Some(crate::domain::ids::MessageId::new());
+    saved.reply_to = Some(MessageId::new());
     saved.reply_to_author_id = Some(own);
-
-    // Text row: body replaced, trimmed; row fields are not part of the content.
-    assert_eq!(
-        saved_edit_content(&saved, own, now, "  new  ").unwrap(),
-        MessageContent::Text("new".into())
+    saved.reply_to_text = Some("quoted".into());
+    repo.insert_outgoing(&saved).unwrap();
+    // A same-id channel row with the same author/clock must stay untouched.
+    let collider = Message::new_text(
+        id,
+        ConversationType::Channel,
+        Some(own),
+        "channel".into(),
+        sent,
     );
-    // Mixed row: only the text moves, attachment ids stay.
-    let ids = vec![AttachmentId::new(), AttachmentId::new()];
-    saved.content = MessageContent::Mixed(MixedContent::new("cap".into(), ids.clone()));
+    repo.insert(&collider).unwrap();
+
+    assert!(stored_message_menu(&saved, true, now).actions.edit);
+    let edited = edited_saved_record(&saved, own, "  new  ").unwrap();
+    assert_eq!(edited.content, MessageContent::Text("new".into()));
+    assert!(edited.is_edited && edited.edited_at.is_some());
     assert_eq!(
-        saved_edit_content(&saved, own, now, "new cap").unwrap(),
+        (
+            edited.id,
+            edited.sent_at,
+            &edited.attachments,
+            edited.reply_to,
+            edited.reply_to_author_id
+        ),
+        (
+            saved.id,
+            saved.sent_at,
+            &saved.attachments,
+            saved.reply_to,
+            saved.reply_to_author_id
+        )
+    );
+    // Exactly the write `edit_saved_message` makes.
+    repo.update(&edited).unwrap();
+    let stored = scoped_stored_message(&repo, &scope, &own, sent).unwrap();
+    assert_eq!(stored.as_text(), Some("new"));
+    assert!(stored.is_edited && stored.edited_at.is_some());
+    assert_eq!(stored.attachments, saved.attachments);
+    assert_eq!(stored.reply_to, saved.reply_to);
+    assert_eq!(stored.reply_to_author_id, saved.reply_to_author_id);
+    assert_eq!(stored.reply_to_text.as_deref(), Some("quoted"));
+    assert_eq!(
+        repo.get(&collider.id).unwrap().unwrap().as_text(),
+        Some("channel")
+    );
+
+    // A Mixed body keeps its attachment ids and only its caption moves.
+    let ids = vec![AttachmentId::new(), AttachmentId::new()];
+    let mut mixed = saved.clone();
+    mixed.content = MessageContent::Mixed(MixedContent::new("cap".into(), ids.clone()));
+    assert_eq!(
+        edited_saved_record(&mixed, own, "new cap").unwrap().content,
         MessageContent::Mixed(MixedContent {
             text: Some("new cap".into()),
             attachment_ids: ids,
         })
     );
-    // Refused: empty text, another author, deleted, past the window, non-Saved kind.
-    assert!(saved_edit_content(&saved, own, now, " \n").is_err());
-    assert!(saved_edit_content(&saved, other, now, "x").is_err());
+
+    // Refused: empty text, another author, deleted, unsent, non-Saved kind.
+    assert!(edited_saved_record(&saved, own, " \n").is_err());
+    assert!(edited_saved_record(&saved, other, "x").is_err());
     let mut deleted = saved.clone();
     deleted.is_deleted = true;
-    assert!(saved_edit_content(&deleted, own, now, "x").is_err());
-    let late = now + crate::domain::message::REMOTE_ACTION_WINDOW_NS + 1;
-    assert!(saved_edit_content(&saved, own, late, "x").is_err());
-    let mut channel = saved.clone();
-    channel.conversation_type = ConversationType::Channel;
-    assert!(saved_edit_content(&channel, own, now, "x").is_err());
+    assert!(edited_saved_record(&deleted, own, "x").is_err());
+    let mut failed = saved.clone();
+    failed.delivery_status = "failed".into();
+    assert!(!stored_message_menu(&failed, true, now).actions.edit);
+    assert!(edited_saved_record(&failed, own, "x").is_err());
+    assert!(edited_saved_record(&collider, own, "x").is_err());
 }

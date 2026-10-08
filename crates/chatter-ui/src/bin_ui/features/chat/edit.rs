@@ -4,13 +4,20 @@
 //! All operations are properly synchronized using Signal-style identification.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use slint::{ComponentHandle, SharedString};
 
 use crate::MainWindow;
+use crate::bin_ui::features::history_owner::HistoryOwner;
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::UserId;
 use chatter_core::state::ActiveConversation;
+
+/// The newest Edit tap. Its text lookup runs off the UI thread; only the
+/// request that is still the newest may fill the composer, so two quick taps
+/// end on the second message's text, not whichever lookup finished last.
+static ENTER_EDIT: AtomicU64 = AtomicU64::new(0);
 
 /// Wire edit-message callback - enters edit mode by populating composer.
 pub fn wire_edit_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
@@ -24,9 +31,16 @@ pub fn wire_edit_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let weak = weak_window.clone();
 
         let conversation = ui_ctx.chat_state().active_conversation();
+        // Session + conversation epoch at the tap: a logout, a reload or
+        // another conversation opened meanwhile retires this request.
+        let owner = HistoryOwner::capture(&ui_ctx, conversation);
+        let request = ENTER_EDIT.fetch_add(1, Ordering::SeqCst) + 1;
 
         // Move service lookups to background task
         tokio::spawn(async move {
+            if !owner.is_current() {
+                return;
+            }
             let target_sender_id: UserId = match sender_id_str.parse() {
                 Ok(id) => id,
                 Err(_) => return,
@@ -49,9 +63,15 @@ pub fn wire_edit_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
-                        // The lookup ran off the UI thread; a conversation
-                        // opened meanwhile must not get this one's text.
-                        if ui_ctx.chat_state().active_conversation() != conversation {
+                        // Still the same session/conversation, still the
+                        // newest Edit tap, and no other edit session opened
+                        // since: otherwise this text would replace a newer
+                        // draft.
+                        let current_key = w.get_composer_edit_message_id();
+                        if !owner.is_current()
+                            || ENTER_EDIT.load(Ordering::SeqCst) != request
+                            || !(current_key.is_empty() || current_key.as_str() == composite_key)
+                        {
                             return;
                         }
                         // Editing borrows the composer; keep the unsent draft
@@ -102,6 +122,7 @@ pub fn wire_send_edit(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
         let weak = weak_window.clone();
         let ui_ctx = ui_ctx.clone();
+        let owner = HistoryOwner::capture(&ui_ctx, conversation);
 
         let target_sent_timestamp: u64 = match timestamp_ns_str.parse() {
             Ok(ts) => ts,
@@ -115,6 +136,11 @@ pub fn wire_send_edit(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         };
 
         tokio::spawn(async move {
+            // The tap bound this edit to its session and conversation; a
+            // logout or a switch before the task ran retires it.
+            if !owner.is_current() {
+                return;
+            }
             let handle = ui_ctx.conversation(conversation);
             if let Err(e) = handle.send_edit(target_sent_timestamp, &new_text_str).await {
                 tracing::error!(error = %e, "Failed to send edit");
@@ -126,10 +152,23 @@ pub fn wire_send_edit(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
-                    // Only this edit's own session: an edit started since
-                    // (another message, another conversation) keeps its draft.
-                    if w.get_composer_edit_message_id().as_str() == composite_key_str {
+                    // Only this edit's own session may be closed: the same
+                    // session/conversation and the same edit key. The
+                    // composer was emptied when this edit was sent; text
+                    // typed since is a newer draft and stays, so the stash
+                    // is not restored over it.
+                    if !owner.is_current()
+                        || w.get_composer_edit_message_id().as_str() != composite_key_str
+                    {
+                        return;
+                    }
+                    if w.get_composer_text().is_empty() {
                         end_edit(&w);
+                    } else {
+                        w.set_composer_stash("".into());
+                        w.set_composer_stash_held(false);
+                        w.set_composer_edit_message_id("".into());
+                        w.set_composer_is_editing(false);
                     }
                 }
             });
