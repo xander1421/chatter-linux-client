@@ -9,6 +9,7 @@ use chatter_core::domain::ids::MessageId;
 use chatter_core::domain::message::Message;
 use chatter_core::state::ChatState;
 
+use super::history_owner::HistoryOwner;
 use crate::bin_ui::converters::messages_to_display_batch;
 use crate::{MainWindow, MessageItemData};
 
@@ -21,12 +22,18 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 fn wire_close_thread(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let chat_state = ui_ctx.chat_state().clone();
+    let client = ui_ctx.clone();
     window.on_close_thread_clicked(move || {
+        let owner = HistoryOwner::capture(&client, chat_state.active_conversation());
+        let chat = chat_state.clone();
         let weak = weak_window.clone();
         if let Some(thread) = chat_state.active_thread() {
             chat_state.close_thread(thread.root_message_id);
         }
         let _ = slint::invoke_from_event_loop(move || {
+            if !owner.is_current() || chat.active_thread().is_some() {
+                return;
+            }
             if let Some(w) = weak.upgrade() {
                 w.set_thread_panel_visible(false);
                 w.set_thread_replies(ModelRc::new(VecModel::default()));
@@ -47,11 +54,14 @@ fn wire_send_thread_reply(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let weak = weak_window.clone();
         let chat_state = chat_state.clone();
         let ui_ctx = ui_ctx.clone();
+        let Some(thread) = chat_state.active_thread() else {
+            return;
+        };
+        let owner = HistoryOwner::thread(&ui_ctx, thread.root_message_id, false);
         tokio::spawn(async move {
-            let thread = match chat_state.active_thread() {
-                Some(t) => t,
-                None => return,
-            };
+            if !owner.is_current() {
+                return;
+            }
             let sent = ui_ctx
                 .send_channel_message(
                     None,
@@ -64,11 +74,17 @@ fn wire_send_thread_reply(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     false,
                 )
                 .await;
+            if !owner.is_current() {
+                return;
+            }
             if let Err(e) = &sent {
                 // The panel cleared its composer on tap. A reply that did not
                 // leave must say so and give the text back — it used to vanish.
                 tracing::error!(error = %e, "thread reply send failed");
                 let _ = slint::invoke_from_event_loop(move || {
+                    if !owner.is_current() {
+                        return;
+                    }
                     if let Some(w) = weak.upgrade() {
                         if w.get_thread_composer_text().is_empty() {
                             w.set_thread_composer_text(text.into());
@@ -93,6 +109,9 @@ fn wire_send_thread_reply(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     .unwrap_or_default();
                 let root_id = thread.root_message_id;
                 let _ = slint::invoke_from_event_loop(move || {
+                    if !owner.is_current() {
+                        return;
+                    }
                     if let Some(w) = weak.upgrade() {
                         w.set_thread_composer_text(SharedString::default());
                         apply_live_thread_reply(
@@ -126,12 +145,15 @@ fn wire_load_more_thread_replies(window: &MainWindow, ui_ctx: &Arc<ChatterClient
         else {
             return;
         };
+        let Some(thread) = chat_state.active_thread() else {
+            return;
+        };
+        let root = thread.root_message_id;
+        let owner = HistoryOwner::thread(&ui_ctx, root, false);
         tokio::spawn(async move {
-            let thread = match chat_state.active_thread() {
-                Some(t) => t,
-                None => return,
-            };
-            let root = thread.root_message_id;
+            if !owner.is_current() {
+                return;
+            }
             let Ok(page) = ui_ctx.list_thread_replies(&root, Some(&oldest), 50) else {
                 return;
             };
@@ -152,6 +174,9 @@ fn wire_load_more_thread_replies(window: &MainWindow, ui_ctx: &Arc<ChatterClient
                 .map(|id| id.to_string())
                 .unwrap_or_default();
             let _ = slint::invoke_from_event_loop(move || {
+                if !owner.is_current() {
+                    return;
+                }
                 let Some(w) = weak.upgrade() else { return };
                 // The user may have switched threads while this page loaded.
                 if w.get_thread_root_message_id() != root.to_string().as_str() {
@@ -315,7 +340,11 @@ pub fn load_thread_data(
     ui_ctx: Arc<ChatterClient>,
     root_message_id: MessageId,
 ) {
+    let owner = HistoryOwner::thread(&ui_ctx, root_message_id, true);
     tokio::spawn(async move {
+        if !owner.is_current() {
+            return;
+        }
         if let Some(root_message) = ui_ctx.get_message_local(&root_message_id) {
             let sender_name = root_message
                 .sender_id
@@ -346,6 +375,9 @@ pub fn load_thread_data(
                 .map(|id| id.to_string())
                 .unwrap_or_default();
             let _ = slint::invoke_from_event_loop(move || {
+                if !owner.is_current() {
+                    return;
+                }
                 if let Some(w) = window.upgrade() {
                     w.set_thread_panel_visible(true);
                     w.set_thread_root_message_id(root_message_id.to_string().into());

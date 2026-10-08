@@ -600,10 +600,14 @@ fn load_older(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, until: Option<Message
     let Some(conversation_type) = ui_ctx.active_conversation_type() else {
         return;
     };
+    let owner = super::history_owner::HistoryOwner::older(ui_ctx, conversation);
     let weak = w.as_weak();
     let ui_ctx = ui_ctx.clone();
 
     std::thread::spawn(move || {
+        if !owner.is_current() {
+            return;
+        }
         let message_state = ui_ctx.message_state();
         if message_state.is_loading(&channel_id) {
             tracing::trace!("Already loading messages for channel: {}", channel_id);
@@ -645,6 +649,9 @@ fn load_older(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, until: Option<Message
             .into_iter()
             .filter(|m| !chatter_core::services::disappearing::is_timer_notice(m))
             .collect();
+        if !owner.is_current() {
+            return;
+        }
         // Convert older messages to display data
         let mut display_messages = messages_to_display_batch(
             &older_messages,
@@ -668,8 +675,8 @@ fn load_older(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, until: Option<Message
 
         let _ = slint::invoke_from_event_loop(move || {
             let Some(w) = weak.upgrade() else { return };
-            // The conversation was switched while this loaded.
-            if ui_ctx.chat_state().active_conversation() != conversation {
+            // The bytes remain private to their original session and history request.
+            if !owner.is_current() {
                 return;
             }
             // Convert display data to Slint types (must be done on UI thread)

@@ -12,6 +12,7 @@ use crate::bin_ui::converters::messages_to_display_batch;
 use crate::{MainWindow, run_ui};
 
 use super::stop_audio_playback;
+use crate::bin_ui::features::history_owner::HistoryOwner;
 
 /// Wire channel selected callback.
 pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
@@ -67,9 +68,10 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 .set_active_conversation(chatter_core::state::ActiveConversation::Channel(parsed));
         }
 
+        let owner = HistoryOwner::begin(&ui_ctx, ui_ctx.chat_state().active_conversation());
         let channel_id_str_for_ui = channel_id_str.clone();
         let ui_ctx_for_ui = ui_ctx.clone();
-        run_ui!(weak, |w| {
+        crate::run_history_ui!(weak, owner, |w| {
             w.set_loading_messages(true);
 
             // Clear unread count in sidebar
@@ -97,6 +99,9 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         });
 
         tokio::spawn(async move {
+            if !owner.is_current() {
+                return;
+            }
             // Parse channel ID
             let channel_id: ChannelId = match channel_id_str.parse() {
                 Ok(id) => id,
@@ -108,7 +113,10 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
             // Active conversation already committed pre-spawn.
             let ui_ctx_for_sel = ui_ctx.clone();
-            run_ui!(weak, |w| super::refresh_selection(&w, &ui_ctx_for_sel));
+            crate::run_history_ui!(weak, owner, |w| super::refresh_selection(
+                &w,
+                &ui_ctx_for_sel
+            ));
 
             // Mark as read
             let handle =
@@ -119,9 +127,20 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let anchor = handle.mark_read_local().unwrap_or_default();
             // Reading a foldered channel has to clear its folder badge too.
             let ui_ctx_badges = ui_ctx.clone();
-            run_ui!(weak, |w| super::refresh_section_badges(&w, &ui_ctx_badges));
+            crate::run_history_ui!(weak, owner, |w| super::refresh_section_badges(
+                &w,
+                &ui_ctx_badges
+            ));
 
-            load_channel_into_ui(weak, channel_id, ui_ctx.clone(), anchor, Some(handle)).await;
+            load_channel_into_ui_owned(
+                weak,
+                channel_id,
+                ui_ctx.clone(),
+                anchor,
+                Some(handle),
+                owner,
+            )
+            .await;
         });
     });
 }
@@ -192,12 +211,30 @@ pub async fn load_channel_into_ui(
     anchor: chatter_core::domain::message::UnreadAnchor,
     receipts: Option<chatter_core::services::conversation::ConversationHandle>,
 ) -> Vec<String> {
+    let owner = HistoryOwner::capture(
+        &ui_ctx,
+        chatter_core::state::ActiveConversation::Channel(channel_id),
+    );
+    load_channel_into_ui_owned(weak, channel_id, ui_ctx, anchor, receipts, owner).await
+}
+
+async fn load_channel_into_ui_owned(
+    weak: slint::Weak<MainWindow>,
+    channel_id: ChannelId,
+    ui_ctx: Arc<ChatterClient>,
+    anchor: chatter_core::domain::message::UnreadAnchor,
+    receipts: Option<chatter_core::services::conversation::ConversationHandle>,
+    owner: HistoryOwner,
+) -> Vec<String> {
+    if !owner.is_current() {
+        return Vec::new();
+    }
     // 1. Get channel metadata
     let channel = match ui_ctx.get_channel_local(&channel_id) {
         Some(c) => c,
         None => {
             tracing::error!("Channel {} not found locally", channel_id);
-            run_ui!(weak, |w| w.set_loading_messages(false));
+            crate::run_history_ui!(weak, owner, |w| w.set_loading_messages(false));
             return Vec::new();
         }
     };
@@ -217,7 +254,10 @@ pub async fn load_channel_into_ui(
         }
         _ => (vec![], String::new()),
     };
-    super::apply_pinned_ui(&weak, &ui_ctx.chat_state(), msg_ids, preview);
+    if !owner.is_current() {
+        return Vec::new();
+    }
+    super::apply_pinned_ui_owned(&weak, &ui_ctx.chat_state(), msg_ids, preview, &owner);
 
     // 2. Load messages — use the channel's actual conversation type so
     // SavedMessages (stored as ConversationType::SavedMessages) round-trip correctly.
@@ -231,11 +271,14 @@ pub async fn load_channel_into_ui(
         Ok(msgs) => msgs,
         Err(e) => {
             tracing::error!("Failed to list channel messages: {}", e);
-            run_ui!(weak, |w| w.set_loading_messages(false));
+            crate::run_history_ui!(weak, owner, |w| w.set_loading_messages(false));
             return Vec::new();
         }
     };
 
+    if !owner.is_current() {
+        return Vec::new();
+    }
     if let Some(handle) = receipts {
         handle.send_read_receipts_for_page(&messages);
     }
@@ -257,6 +300,9 @@ pub async fn load_channel_into_ui(
         &ui_ctx.thread_reply_counts(&channel_id, &conv_type),
     );
 
+    if !owner.is_current() {
+        return Vec::new();
+    }
     // 4. Update UI
     let metadata = ChannelMetadata::from_channel(&channel);
     let conversation_type = channel.conversation_type();
@@ -269,7 +315,7 @@ pub async fn load_channel_into_ui(
     let ui_ctx_gifs = ui_ctx.clone();
 
     let anchor_page = messages.clone();
-    run_ui!(weak, |w| {
+    crate::run_history_ui!(weak, owner, |w| {
         super::apply_unread_anchor(&w, anchor, &anchor_page);
         metadata.apply(&w);
         crate::bin_ui::converters::set_conversation_kind(&w, &conversation_type, private_channel);

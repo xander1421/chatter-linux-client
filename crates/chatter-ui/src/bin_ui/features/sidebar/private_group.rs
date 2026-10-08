@@ -7,9 +7,10 @@ use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::anon_group::AnonGroupId;
 
-use crate::{MainWindow, run_ui};
+use crate::MainWindow;
 
 use super::stop_audio_playback;
+use crate::bin_ui::features::history_owner::HistoryOwner;
 use std::str::FromStr;
 
 /// Load and display messages for a private group.
@@ -32,7 +33,14 @@ pub fn load_private_group_messages(
     let weak_window = window.as_weak();
     let group_id_str = group_id_str.to_string();
 
+    let owner = HistoryOwner::begin(
+        &ui_ctx,
+        chatter_core::state::ActiveConversation::AnonGroup(group_id),
+    );
     tokio::spawn(async move {
+        if !owner.is_current() {
+            return;
+        }
         // Get group details
         let group = match ui_ctx.get_anon_group(&group_id) {
             Some(g) => g,
@@ -80,7 +88,7 @@ pub fn load_private_group_messages(
         let group_name = group.name.clone();
         let ui_ctx_gifs = ui_ctx.clone();
         let ui_ctx_for_ui = ui_ctx.clone();
-        run_ui!(weak_window, |w| {
+        crate::run_history_ui!(weak_window, owner, |w| {
             // Clear unread count in sidebar
             crate::bin_ui::features::auth::inbox::domain_handler::update_unread_count(
                 &w,
@@ -88,16 +96,6 @@ pub fn load_private_group_messages(
                 &group_id_str,
                 0,
             );
-
-            // Clear composer state
-            w.set_composer_is_replying(false);
-            w.set_composer_reply_to_sender("".into());
-            w.set_composer_reply_to_sender_name("".into());
-            w.set_composer_reply_to_timestamp("".into());
-            w.set_composer_reply_preview("".into());
-            w.set_composer_reply_has_thumbnail(false);
-            w.set_composer_reply_thumbnail(slint::Image::default());
-            crate::bin_ui::features::chat::edit::end_edit(&w);
 
             // Set chat header info for private group
             w.set_channel_name(group_name.into());
@@ -156,7 +154,11 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<Chat
             );
         }
 
+        let owner = HistoryOwner::begin(&ui_ctx, ui_ctx.chat_state().active_conversation());
         tokio::spawn(async move {
+            if !owner.is_current() {
+                return;
+            }
             // Parse group ID
             let group_id: AnonGroupId = match group_id_str.parse() {
                 Ok(id) => id,
@@ -168,7 +170,10 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<Chat
 
             // Active conversation already committed pre-spawn.
             let ui_ctx_for_sel = ui_ctx.clone();
-            run_ui!(weak, |w| super::refresh_selection(&w, &ui_ctx_for_sel));
+            crate::run_history_ui!(weak, owner, |w| super::refresh_selection(
+                &w,
+                &ui_ctx_for_sel
+            ));
 
             // Load pinned messages
             let pinned = ui_ctx.list_anon_group_pinned(&group_id);
@@ -183,7 +188,10 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<Chat
                     .unwrap_or_else(|| "[Pinned message]".to_string());
                 (ids, preview)
             };
-            super::apply_pinned_ui(&weak, &ui_ctx.chat_state(), msg_ids, preview);
+            if !owner.is_current() {
+                return;
+            }
+            super::apply_pinned_ui_owned(&weak, &ui_ctx.chat_state(), msg_ids, preview, &owner);
 
             // Mark messages as read
             let handle =
@@ -192,9 +200,15 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<Chat
             let anchor = handle.mark_as_read().await.unwrap_or_default();
             // Reading a foldered group has to clear its folder badge too.
             let ui_ctx_badges = ui_ctx.clone();
-            run_ui!(weak, |w| super::refresh_section_badges(&w, &ui_ctx_badges));
+            crate::run_history_ui!(weak, owner, |w| super::refresh_section_badges(
+                &w,
+                &ui_ctx_badges
+            ));
 
-            load_private_group_messages_internal(weak, group_id, ui_ctx, anchor).await;
+            if !owner.is_current() {
+                return;
+            }
+            load_private_group_messages_internal(weak, group_id, ui_ctx, anchor, owner).await;
         });
     });
 }
@@ -205,14 +219,18 @@ async fn load_private_group_messages_internal(
     group_id: AnonGroupId,
     ui_ctx: Arc<ChatterClient>,
     anchor: chatter_core::domain::message::UnreadAnchor,
+    owner: HistoryOwner,
 ) {
+    if !owner.is_current() {
+        return;
+    }
     let auth_state = ui_ctx.auth_state().clone();
 
     // Get group info
     let group = match ui_ctx.get_anon_group(&group_id) {
         Some(g) => g,
         None => {
-            run_ui!(weak, |w| w.set_loading_messages(false));
+            crate::run_history_ui!(weak, owner, |w| w.set_loading_messages(false));
             return;
         }
     };
@@ -245,7 +263,7 @@ async fn load_private_group_messages_internal(
     let ui_ctx_gifs = ui_ctx.clone();
     let ui_ctx_for_ui = ui_ctx.clone();
     let anchor_page = messages.clone();
-    run_ui!(weak, |w| {
+    crate::run_history_ui!(weak, owner, |w| {
         super::apply_unread_anchor(&w, anchor, &anchor_page);
         // Clear unread count in sidebar
         crate::bin_ui::features::auth::inbox::domain_handler::update_unread_count(

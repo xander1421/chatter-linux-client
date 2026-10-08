@@ -9,10 +9,11 @@ use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::{ChannelId, UserId};
 
+use crate::MainWindow;
 use crate::bin_ui::converters::messages_to_display_batch;
-use crate::{MainWindow, run_ui};
 
 use super::stop_audio_playback;
+use crate::bin_ui::features::history_owner::HistoryOwner;
 
 /// Sidebar menu › Delete chat on a DM row, or a channel we are no longer in
 /// (confirmed in the menu). Core resolves the row and deletes
@@ -95,9 +96,10 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         tracing::info!(?active, dm_id = %dm_id_str, is_anon = is_anon_dm, "[UI_OPEN_DM] committing active conversation pre-spawn");
         ui_ctx.chat_state().set_active_conversation(active);
 
+        let owner = HistoryOwner::begin(&ui_ctx, active);
         let dm_id_str_for_ui = dm_id_str.clone();
         let ui_ctx_for_ui = ui_ctx.clone();
-        run_ui!(weak, |w| {
+        crate::run_history_ui!(weak, owner, |w| {
             w.set_loading_messages(true);
 
             // Clear unread count in sidebar
@@ -127,6 +129,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         });
 
         tokio::spawn(async move {
+            if !owner.is_current() { return; }
             // Mark as read — the local half persists `is_read`, which is what
             // the sidebar badge counts. Clearing the Slint model above only
             // hides the badge until the next rebuild. Same call the channel
@@ -143,7 +146,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             if let chatter_core::state::ActiveConversation::AnonDm(anon_dm_id) = active {
 
                 let ui_ctx_for_sel = ui_ctx.clone();
-                run_ui!(weak, |w| {
+                crate::run_history_ui!(weak, owner, |w| {
                     super::refresh_selection(&w, &ui_ctx_for_sel);
                     super::refresh_section_badges(&w, &ui_ctx_for_sel);
                 });
@@ -160,18 +163,20 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         .unwrap_or_else(|| "[Pinned message]".to_string());
                     (ids, preview)
                 };
-                super::apply_pinned_ui(&weak, &ui_ctx.chat_state(), msg_ids, preview);
+                if !owner.is_current() { return; }
+                super::apply_pinned_ui_owned(&weak, &ui_ctx.chat_state(), msg_ids, preview, &owner);
 
                 // Load messages
                 let messages = match ui_ctx.get_anon_dm_messages_asc(&anon_dm_id, None, chatter_core::config::MESSAGE_PAGE_SIZE) {
                     Ok(msgs) => msgs,
                     Err(e) => {
                         tracing::error!("Failed to list anon DM messages: {}", e);
-                        run_ui!(weak, |w| w.set_loading_messages(false));
+                        crate::run_history_ui!(weak, owner, |w| w.set_loading_messages(false));
                         return;
                     }
                 };
-                read_handle.send_read_receipts_for_page(&messages);
+                if !owner.is_current() { return; }
+            read_handle.send_read_receipts_for_page(&messages);
 
                 let display_messages = messages_to_display_batch(
                     &messages,
@@ -198,7 +203,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 let initial_count = display_messages.len();
                 tracing::info!(dm_id = %anon_dm_id, count = initial_count, "[UI_OPEN_DM] anon DM spawn run_ui firing");
                 let anchor_page = messages.clone();
-                run_ui!(weak, |w| {
+                crate::run_history_ui!(weak, owner, |w| {
                     use slint::Model;
                     super::apply_unread_anchor(&w, anchor, &anchor_page);
                     let before = w.get_messages().row_count();
@@ -229,7 +234,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 Some(id) => id,
                 None => {
                     tracing::error!("Could not determine peer ID for DM: {}", dm_id_str);
-                    run_ui!(weak, |w| w.set_loading_messages(false));
+                    crate::run_history_ui!(weak, owner, |w| w.set_loading_messages(false));
                     return;
                 }
             };
@@ -248,7 +253,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let conv_type = chatter_core::domain::message::ConversationType::ServerDm;
 
             let ui_ctx_for_sel = ui_ctx.clone();
-            run_ui!(weak, |w| {
+            crate::run_history_ui!(weak, owner, |w| {
                 super::refresh_selection(&w, &ui_ctx_for_sel);
                 super::refresh_section_badges(&w, &ui_ctx_for_sel);
             });
@@ -262,17 +267,19 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
                 _ => (vec![], String::new()),
             };
-            super::apply_pinned_ui(&weak, &ui_ctx.chat_state(), msg_ids, preview);
+            if !owner.is_current() { return; }
+                super::apply_pinned_ui_owned(&weak, &ui_ctx.chat_state(), msg_ids, preview, &owner);
 
             // Load messages
             let messages = match ui_ctx.get_messages_local_asc(&channel_id, &conv_type, None, chatter_core::config::MESSAGE_PAGE_SIZE as u32) {
                 Ok(msgs) => msgs,
                 Err(e) => {
                     tracing::error!("Failed to list DM messages: {}", e);
-                    run_ui!(weak, |w| w.set_loading_messages(false));
+                    crate::run_history_ui!(weak, owner, |w| w.set_loading_messages(false));
                     return;
                 }
             };
+            if !owner.is_current() { return; }
             read_handle.send_read_receipts_for_page(&messages);
 
             // The stored profile, not a server fetch: the open no longer waits
@@ -296,6 +303,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 |m| ui_ctx.reply_parent_media(m),
             );
 
+            if !owner.is_current() { return; }
             // Decode the peer's avatar (Send-safe RGBA); the non-Send Image is
             // built in the run_ui closure. Header shows it if present.
             let header_avatar: Option<(u32, u32, Vec<u8>)> = peer_profile
@@ -311,7 +319,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
             let refresh_ctx = ui_ctx.clone();
             let anchor_page = messages.clone();
-            run_ui!(weak, |w| {
+            crate::run_history_ui!(weak, owner, |w| {
                 super::apply_unread_anchor(&w, anchor, &anchor_page);
                 let current_user_id = ui_ctx.session_current_user_id().map(|id| id.to_string()).unwrap_or_default();
                 let slint_messages: Vec<_> = display_messages.iter().map(|d| d.to_slint_with_user(&current_user_id)).collect();

@@ -238,30 +238,30 @@ pub(crate) fn refresh_section_badges(window: &MainWindow, ui_ctx: &Arc<ChatterCl
 ///
 /// Shared helper used by channel, DM, and private group sidebar handlers
 /// to update the pinned message bar after loading pinned messages.
-pub(crate) fn apply_pinned_ui(
+/// Pins belong to the same history request as the model/header they accompany.
+pub(crate) fn apply_pinned_ui_owned(
     weak: &slint::Weak<MainWindow>,
-    chat_state: &chatter_core::state::ChatState,
-    message_ids: Vec<chatter_core::domain::ids::MessageId>,
+    chat: &chatter_core::state::ChatState,
+    ids: Vec<chatter_core::domain::ids::MessageId>,
     preview: String,
+    owner: &crate::bin_ui::features::history_owner::HistoryOwner,
 ) {
-    if message_ids.is_empty() {
-        chat_state.clear_pinned();
-        run_ui!(weak, |w| {
+    let chat = chat.clone();
+    crate::run_history_ui!(weak, owner, |w| {
+        if ids.is_empty() {
+            chat.clear_pinned();
             w.set_has_pinned_messages(false);
             w.set_pinned_message_preview("".into());
             w.set_pinned_total_count(0);
-        });
-    } else {
-        let total_count = message_ids.len() as i32;
-        chat_state.set_pinned_messages(message_ids);
-        let should_show = chat_state.pinned_should_show();
-        run_ui!(weak, |w| {
-            w.set_has_pinned_messages(should_show);
+        } else {
+            let count = ids.len() as i32;
+            chat.set_pinned_messages(ids);
+            w.set_has_pinned_messages(chat.pinned_should_show());
             w.set_pinned_message_preview(preview.into());
             w.set_pinned_current_index(1);
-            w.set_pinned_total_count(total_count);
-        });
-    }
+            w.set_pinned_total_count(count);
+        }
+    });
 }
 
 /// Update a sidebar item's preview text and timestamp, moving it to the top

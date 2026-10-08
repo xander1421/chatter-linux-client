@@ -21,6 +21,7 @@ pub mod chat_actions;
 pub mod composer;
 pub mod connection;
 pub mod header;
+pub(crate) mod history_owner;
 #[cfg(feature = "jarvis")]
 pub mod jarvis;
 /// bitchat mesh surfaces. Gated exactly like `jarvis`: the Slint side is

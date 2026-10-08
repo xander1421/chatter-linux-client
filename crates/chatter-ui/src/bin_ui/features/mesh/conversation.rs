@@ -15,7 +15,7 @@ use chatter_core::services::mesh::MeshMessage;
 use chatter_core::state::ActiveConversation;
 
 use crate::bin_ui::converters::messages_to_display_batch;
-use crate::{MainWindow, MeshGlobal, MessageItemData, run_ui};
+use crate::{MainWindow, MeshGlobal, MessageItemData};
 
 use super::core_api::{self, MeshRow};
 
@@ -56,11 +56,18 @@ pub fn open(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, id: &str) {
     apply_header(window, &row);
     super::refresh_rows(window, ui_ctx);
 
+    let owner = crate::bin_ui::features::history_owner::HistoryOwner::begin(
+        ui_ctx,
+        ActiveConversation::None,
+    );
     let conversation = row.conversation.clone();
     let ui_ctx = ui_ctx.clone();
     let weak = window.as_weak();
 
     tokio::spawn(async move {
+        if !owner.is_current() {
+            return;
+        }
         let local_user = super::local_user_id(&ui_ctx);
         // Oldest first, the same page size every other conversation loads.
         let messages = match core_api::history(
@@ -71,11 +78,14 @@ pub fn open(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, id: &str) {
             Ok(messages) => messages,
             Err(error) => {
                 tracing::error!(%error, "mesh: could not load the conversation");
-                run_ui!(weak, |w| w.set_loading_messages(false));
+                crate::run_history_ui!(weak, owner, |w| w.set_loading_messages(false));
                 return;
             }
         };
 
+        if !owner.is_current() {
+            return;
+        }
         let display = messages_to_display_batch(
             &messages,
             // Mesh senders, not chatter accounts — see `core_api::sender_display_name`.
@@ -92,7 +102,7 @@ pub fn open(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, id: &str) {
             |m| ui_ctx.reply_parent_media(m),
         );
 
-        run_ui!(weak, |w| {
+        crate::run_history_ui!(weak, owner, |w| {
             let items: Vec<MessageItemData> = display
                 .iter()
                 .map(|m| m.to_slint_with_user(&local_user))
@@ -104,12 +114,15 @@ pub fn open(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, id: &str) {
 
         // Everything on screen has been read. Local only — telling the peer
         // costs airtime and is a separate act.
+        if !owner.is_current() {
+            return;
+        }
         if let Err(error) = core_api::mark_read(&ui_ctx, &conversation) {
             tracing::debug!(%error, "mesh: could not mark the conversation read");
         }
         let weak_rows = weak.clone();
         let ui_ctx_rows = ui_ctx.clone();
-        run_ui!(weak_rows, |w| super::refresh_rows(&w, &ui_ctx_rows));
+        crate::run_history_ui!(weak_rows, owner, |w| super::refresh_rows(&w, &ui_ctx_rows));
     });
 }
 
