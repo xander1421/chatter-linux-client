@@ -99,23 +99,37 @@ are GL on a SurfaceView, so `dumpsys gfxinfo` does not see them).
   against the actual phone layout, including staged SAF draft navigation and
   independent stale keyboard/property and reduced viewport recovery.
 
-- RC88 accepted-send clear vs. a stale IME snapshot (`androidwindowadapter.rs`,
-  `app_edit_unpublished` in the `TextEvent` arm): core publishes a programmatic
-  text change only at the next render (`i-slint-core` `items/text.rs` `render`),
-  while android-activity's input pass samples the one pending text state —
-  the *current* Java state, not a queued event — after its touches. A send
-  tap therefore cleared the field and, in the same pass, received the IME's
-  snapshot of the sent text (composing), which full-replaced the clear; the
-  render then saw nothing to publish, so the IME kept composing the sent text
-  and every later tap's `finish_composing` replayed it (Galaxy S9 / Gboard,
-  caption + attachment and a plain send alike). A snapshot delivered while the
-  client's text matches neither the IME's last report nor the last pushed
-  state is dropped: it predates an unpublished app edit whose push will
-  overwrite the IME's copy anyway. Content of the snapshot is not compared;
-  the guard clears as soon as the render pushes. Pure rule
-  `app_edit_unpublished_for` with a `#[cfg(test)]` check (not run here).
-  Remaining limit: a Java `InputConnection.setState` fires no listener event,
-  so there is no ack for an app push; an IME report produced between the
-  push's main-thread application and the next input pass still cannot be
-  told from typing. That window holds no human keystroke; it was not the
-  observed failure.
+- RC88 accepted-send consumption vs. the IME's copy of the field
+  (`androidwindowadapter.rs` `TextInputBridge` / `consume_text_input` /
+  `handle_text_input_state`, `lib.rs` `with_text_input_bridge`,
+  `consume_text_input`, `deliver_text_input_state`). Core publishes a
+  programmatic text change only at the next render (`i-slint-core`
+  `items/text.rs` `render`), android-activity 0.6.1 samples one latest-state
+  text snapshot per input pass after that pass's motions, GameTextInput's
+  `InputConnection.setState` never fires its listener (only `endBatchEdit` and
+  `onKey` do, games-activity 4.4.0 bytecode) and android-activity's own
+  `setState` travels the native work pipe while anything the app posts is a
+  Handler message, so the two could not be ordered. A send tap therefore
+  cleared the field and then received the IME's snapshot of the sent text
+  (composing), which refilled it; the render saw nothing to publish and the IME
+  kept composing the sent text (Galaxy S9 / Gboard, caption + attachment and a
+  plain send alike). Now the app binds a bridge to its producer gate
+  (`com.google.androidgamesdk.ChatterTextInputGate`, a GameTextInput
+  `InputConnection` subclass installed over the surface view's own): every
+  outbound state goes through `TextInputBridge::push` with the owner (a number
+  per `ime_client`) and generation it was computed under; an accepted send
+  (`consume_text_input`, called by the app right after it clears the field; a
+  no-op unless the IME's client is that now-empty field) bumps the generation
+  and publishes an immutable pending reset through `TextInputBridge::consume`
+  without waiting; the gate empties the Editable before the IME's next
+  operation runs (or from a posted fallback, once), drops pushes older than
+  the reset, and tags every snapshot the IME produces with the owner and
+  generation applied on the UI thread when it was made. Inbound states arrive
+  through `deliver_text_input_state` in arrival order and are dropped only by
+  that provenance (another owner, or a generation older than the consumption);
+  content is never compared. With a bridge bound android-activity's
+  `TextEvent` is a wake-up only; without one the old path is unchanged.
+  Limit: an IME operation the IME computed against the consumed text (a
+  composing-text update dispatched before it learned of the restart) applies
+  as the IME formed it, to the new generation; no timer, focus change or
+  content rule is used to second-guess it.

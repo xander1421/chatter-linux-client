@@ -119,6 +119,7 @@ fn android_main(app: i_slint_backend_android_activity::AndroidApp) {
             },
         )
         .with_refresh_rate_vote(crate::platform::android::activity::set_ui_moving),
+        .with_text_input_bridge(crate::platform::android::text_input::Bridge),
     ))
     .expect("Failed to set Android platform");
 

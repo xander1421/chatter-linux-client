@@ -448,6 +448,11 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         // first so the persisted draft goes with the accepted send now, not
         // after the autosave delay (see `take_composer_send`).
         w.set_composer_text("".into());
+        // Android: the IME's own copy of the composer is consumed as of now,
+        // in order with the keyboard's operations (the producer gate), so
+        // nothing it still holds of the sent text can come back.
+        #[cfg(target_os = "android")]
+        crate::platform::android::text_input::consume();
         if send.reply.is_some() {
             clear_reply(&w);
         }
@@ -542,6 +547,8 @@ pub fn take_composer_send(w: &MainWindow, ui_ctx: &ChatterClient) -> Result<Comp
     w.invoke_settle_composer();
     let send = ui_ctx.begin_composer_send(w.get_composer_text().to_string(), composer_reply(w))?;
     w.set_composer_text("".into());
+    #[cfg(target_os = "android")]
+    crate::platform::android::text_input::consume();
     if send.reply.is_some() {
         clear_reply(w);
     }

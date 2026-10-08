@@ -132,6 +132,56 @@ pub struct AndroidWindowAdapter {
     /// Explicit modifier transitions, separate from an IME's meta-only command.
     /// Restore held Shift for pointer selection without leaving virtual Ctrl stuck.
     native_held_modifiers: Cell<[bool; 8]>,
+    /// Chatter patch: the app's producer gate (see `TextInputBridge`). With
+    /// one bound, every outbound state goes through it and inbound states
+    /// arrive through `handle_text_input_state`; android-activity's
+    /// `TextEvent` is then only a wake-up.
+    text_bridge: RefCell<Option<Rc<dyn TextInputBridge>>>,
+    /// The field the IME serves, as the gate numbers it: a new number for
+    /// each new `ime_client`. An inbound state tagged with another owner was
+    /// produced for a field the IME no longer serves.
+    ime_owner: Cell<u64>,
+    /// How many accepted sends have consumed this backend's field so far
+    /// (`consume_text_input`). An inbound state tagged with an older
+    /// generation was produced before that consumption was applied on the
+    /// UI thread and is dropped: it can only show text the app has taken.
+    ime_generation: Cell<u64>,
+}
+
+/// Chatter patch: a Slint text state for the IME's copy of the field, as
+/// handed to the app's gate. Offsets are UTF-16, as Android's
+/// `InputConnection` counts them. `owner` and `generation` are the values the
+/// state was computed under; the gate drops a push whose generation is older
+/// than a reset it has applied since.
+pub struct TextInputPush {
+    pub text: String,
+    pub selection: (usize, usize),
+    pub compose: Option<(usize, usize)>,
+    pub owner: u64,
+    pub generation: u64,
+}
+
+/// Chatter patch: a state the IME produced, as the gate tagged it on the UI
+/// thread: the owner and generation applied when the IME made it. UTF-16
+/// offsets.
+pub struct InboundTextInput {
+    pub text: String,
+    pub selection: (usize, usize),
+    pub compose: Option<(usize, usize)>,
+    pub owner: u64,
+    pub generation: u64,
+}
+
+/// Chatter patch: the app side of the producer gate. Both calls are made on
+/// the Slint thread and must not block: the gate serializes them on the UI
+/// thread with the IME's own operations.
+pub trait TextInputBridge {
+    /// Slint's state for the IME's field.
+    fn push(&self, push: &TextInputPush);
+    /// An accepted send took the field's text: the IME's copy is consumed as
+    /// of `generation`. The gate empties it before the IME's next operation
+    /// runs (or from a posted fallback), once.
+    fn consume(&self, owner: u64, generation: u64);
 }
 
 impl WindowAdapter for AndroidWindowAdapter {
@@ -289,6 +339,9 @@ impl i_slint_core::window::WindowAdapterInternal for AndroidWindowAdapter {
                 if self.ime_client.borrow().as_ref() != Some(&focus) {
                     self.forget_ime_session();
                     *self.ime_client.borrow_mut() = Some(focus);
+                    // A new owner for the gate: states the IME produced for
+                    // the previous field carry the previous number.
+                    self.ime_owner.set(self.ime_owner.get() + 1);
                 }
                 // A parked Update belongs to the field that had focus.
                 self.deferred_ime_update.take();
@@ -526,31 +579,6 @@ impl AndroidWindowAdapter {
         self.ime_states_seen.borrow_mut().clear();
     }
 
-    /// Whether the IME's client holds text that neither direction has
-    /// carried yet: not what the IME last reported, nor what was last pushed
-    /// to it. That is an app-side edit (an accepted send's clear, an inserted
-    /// emoji, a prefilled edit) waiting for the render that publishes it.
-    /// A live pre-edit never occurs on this backend (reports are delivered as
-    /// committed text); if one did, the merged text is not what is compared
-    /// here, so the answer is "no" rather than a guess.
-    fn app_edit_unpublished(&self) -> bool {
-        let Some(client) = self.ime_client.borrow().as_ref().and_then(|c| c.upgrade()) else {
-            return false;
-        };
-        let Some(field) = client.downcast::<i_slint_core::items::TextInput>() else {
-            return false;
-        };
-        let field = field.as_pin_ref();
-        if !field.preedit_text().is_empty() {
-            return false;
-        }
-        app_edit_unpublished_for(
-            field.text().as_str(),
-            self.last_pushed_text.borrow().as_deref(),
-            self.last_ime_text.borrow().as_deref(),
-        )
-    }
-
     /// Whether the TextInput the input method belongs to was destroyed
     /// without losing focus first (see `ime_client`).
     fn ime_client_vanished(&self) -> bool {
@@ -622,6 +650,9 @@ impl AndroidWindowAdapter {
             ime_dispatching: Cell::new(false),
             deferred_ime_update: RefCell::default(),
             native_held_modifiers: Cell::new([false; 8]),
+            text_bridge: RefCell::default(),
+            ime_owner: Cell::new(0),
+            ime_generation: Cell::new(0),
         })
     }
 
@@ -780,7 +811,95 @@ impl AndroidWindowAdapter {
             );
             TextSpan { start, end }
         });
-        self.app.set_text_input_state(state);
+        let bridge = self.text_bridge.borrow().clone();
+        match bridge {
+            Some(bridge) => bridge.push(&TextInputPush {
+                text: state.text,
+                selection: (state.selection.start, state.selection.end),
+                compose: state.compose_region.map(|s| (s.start, s.end)),
+                owner: self.ime_owner.get(),
+                generation: self.ime_generation.get(),
+            }),
+            None => self.app.set_text_input_state(state),
+        }
+    }
+
+    pub(crate) fn set_text_input_bridge(&self, bridge: Rc<dyn TextInputBridge>) {
+        *self.text_bridge.borrow_mut() = Some(bridge);
+    }
+
+    /// Chatter patch: an accepted send took the IME client's text; the app
+    /// has cleared the field. Consume the IME's copy as of a new generation.
+    ///
+    /// The identity check is the field itself: the IME's client must be live
+    /// and must now be empty, which is the field the app just took. Another
+    /// field (a search box behind the GIF picker's send) is left alone; so is
+    /// a field with no IME client, whose next Enable publishes its actual
+    /// (empty) text anyway.
+    ///
+    /// Nothing waits on the UI thread. The gate empties the Editable before
+    /// the IME's next operation or from a posted fallback, whichever comes
+    /// first, and tags every state it reports with the generation applied by
+    /// then; `handle_text_input_state` drops the older ones. The echo guards
+    /// are reset to the state the IME will hold: Slint's render-time
+    /// `Update("")` is then the IME's own state and is not pushed again.
+    pub(crate) fn consume_text_input(&self) {
+        let Some(client) = self.ime_client.borrow().as_ref().and_then(|c| c.upgrade()) else {
+            return;
+        };
+        let Some(field) = client.downcast::<i_slint_core::items::TextInput>() else {
+            return;
+        };
+        let field = field.as_pin_ref();
+        if !field.text().is_empty() || !field.preedit_text().is_empty() {
+            return;
+        }
+        let generation = self.ime_generation.get() + 1;
+        self.ime_generation.set(generation);
+        self.had_compose.set(false);
+        *self.pending_self_echo.borrow_mut() = None;
+        self.stale_commit_cursor.set(None);
+        *self.last_ime_text.borrow_mut() = Some(String::new());
+        self.last_ime_selection.set((0, 0));
+        *self.last_pushed_text.borrow_mut() = Some(String::new());
+        self.last_pushed_cursor.set(0);
+        *self.last_ime_epoch.borrow_mut() = None;
+        self.ime_states_seen.borrow_mut().clear();
+        self.deferred_ime_update.take();
+        let bridge = self.text_bridge.borrow().clone();
+        match bridge {
+            Some(bridge) => bridge.consume(self.ime_owner.get(), generation),
+            None => {
+                use android_activity::input::{TextInputState, TextSpan};
+                self.set_game_text_input_state(TextInputState {
+                    text: String::new(),
+                    selection: TextSpan { start: 0, end: 0 },
+                    compose_region: None,
+                });
+            }
+        }
+    }
+
+    /// Chatter patch: a state the IME produced, as the gate tagged it. Dropped
+    /// by provenance when it is another field's or predates the consumption
+    /// applied since (its content is never consulted); otherwise it is the
+    /// IME's current state and is delivered like any other.
+    pub(crate) fn handle_text_input_state(&self, state: InboundTextInput) {
+        use android_activity::input::{TextInputState, TextSpan};
+        if state.owner != self.ime_owner.get() || state.generation < self.ime_generation.get() {
+            return;
+        }
+        let (start, end) =
+            crate::text_input_offsets::utf16_span_to_utf8(&state.text, state.selection);
+        let compose_region = state.compose.map(|span| {
+            let (start, end) = crate::text_input_offsets::utf16_span_to_utf8(&state.text, span);
+            TextSpan { start, end }
+        });
+        self.deliver_ime_state(TextInputState {
+            text: state.text,
+            selection: TextSpan { start, end },
+            compose_region,
+        });
     }
 
     fn try_dispatch_key_event(&self, ev: WindowEvent) -> KeyEventResult {
@@ -1063,6 +1182,12 @@ impl AndroidWindowAdapter {
                     }
                 }
                 InputEvent::TextEvent(state) => {
+                    // Chatter patch: with the producer gate bound, states
+                    // arrive tagged through `handle_text_input_state`; this
+                    // is the same state untagged, a wake-up only.
+                    if self.text_bridge.borrow().is_some() {
+                        return InputStatus::Handled;
+                    }
                     // android-activity decodes the string, but leaves Java UTF-16
                     // span offsets unchanged. Everything below uses UTF-8 bytes.
                     let mut state = state.clone();
@@ -1078,139 +1203,7 @@ impl AndroidWindowAdapter {
                         );
                         android_activity::input::TextSpan { start, end }
                     });
-                    // No live field owns the input method: this is the IME
-                    // still reporting on a field that was destroyed (or a
-                    // late report after it was released). Delivering it would
-                    // hand the dead field's text to whatever is focused next
-                    // (§112m); recording it would poison the echo guards.
-                    if self.ime_client.borrow().is_none() || self.ime_client_vanished() {
-                        self.release_vanished_ime_client(false);
-                        return InputStatus::Handled;
-                    }
-                    // Chatter patch: an edit the app made to this field that
-                    // the IME has not been told about yet. Core publishes a
-                    // programmatic text change at the next render
-                    // (i-slint-core items/text.rs `render`: Update when the
-                    // text differs from what was last handed over), so an
-                    // accepted send's clear stays unpublished for the rest of
-                    // the input pass that ran the send — and that pass samples
-                    // the IME's snapshot AFTER its touches (android-activity
-                    // drains keys, then motions, then one text state, which
-                    // is the current Java state, not a queued event). The
-                    // snapshot is the field as the IME still holds it: the
-                    // sent text, composing. Delivered, it full-replaced the
-                    // just-cleared field; the render then saw text == last
-                    // published and never pushed the empty state, so the IME
-                    // kept composing the sent text, the composer showed it,
-                    // and the next tap's `finish_composing` replayed it again
-                    // (RC88, Galaxy S9 / Gboard: a caption with an
-                    // attachment, then a plain send of the same text, both
-                    // left the text in the box with the keyboard suggesting
-                    // its last word).
-                    //
-                    // Any snapshot sampled while an app edit is unpublished
-                    // predates that edit's arrival at the IME, and the push
-                    // that follows overwrites the IME's copy of it anyway
-                    // (`InputConnection.setState` clears the Editable and
-                    // restarts input). Dropping it keeps both sides on the
-                    // app's edit. This is an ordering rule, not a comparison
-                    // with the sent text: the snapshot's content is not
-                    // consulted. Once the render has pushed, the field's text
-                    // is `last_pushed_text` again and the guard is off, so
-                    // the IME's first report after the push — the next draft
-                    // — is delivered as before.
-                    if self.app_edit_unpublished() {
-                        return InputStatus::Handled;
-                    }
-                    // Drop GameTextInput's echo of our own finish_composing
-                    // push. It carries the pre-tap cursor and would undo the
-                    // caret move the tap just made (§112o).
-                    let self_echo = self
-                        .pending_self_echo
-                        .borrow()
-                        .as_ref()
-                        .is_some_and(|(t, c)| {
-                            t == &state.text
-                                && state.selection.start == *c
-                                && state.selection.end == *c
-                                && state.compose_region.is_none()
-                        });
-                    if self_echo {
-                        *self.pending_self_echo.borrow_mut() = None;
-                        return InputStatus::Handled;
-                    }
-                    // A selected-state echo after long-press is not typing. A
-                    // changed string, composition or collapsed caret is.
-                    if state.compose_region.is_some()
-                        || state.selection.start == state.selection.end
-                        || (self.last_ime_text.borrow().as_ref() != Some(&state.text)
-                            && self.last_pushed_text.borrow().as_ref() != Some(&state.text))
-                    {
-                        self.show_cursor_handles.set(false);
-                        self.dismiss_selection_menu();
-                    }
-                    // Remember what the IME believes, so the outbound path can
-                    // tell an app-initiated change from an echo of this (§112n).
-                    *self.last_ime_text.borrow_mut() = Some(state.text.clone());
-                    self.last_ime_selection
-                        .set((state.selection.start, state.selection.end));
-                    // The IME's own report is authoritative about whether a
-                    // composition is live; the outbound flag goes stale because
-                    // the dedupe guards return before setting it (§112o).
-                    self.had_compose.set(state.compose_region.is_some());
-                    let runtime_window = WindowInner::from_pub(&self.window);
-                    // Chatter patch: hand Slint the IME's text as plain
-                    // committed text, never as a pre-edit — the composing word
-                    // must look like normal text with a caret.
-                    //
-                    // i-slint-core 1.17.1 paints a TextInput's whole pre-edit
-                    // range with the selection colours whatever
-                    // `preedit_selection` says (textlayout/sharedparley.rs:1417
-                    // prefers `preedit_range` over `selection_range`), so ANY
-                    // composition Slint holds is drawn as a teal selection until
-                    // the IME commits it. Samsung Keyboard (S9, Android 10)
-                    // composes every word, re-marking already-committed text with
-                    // `setComposingRegion` (logcat `gti.InputConnection:
-                    // setComposingRegion: 6:12` beside `setSelection: n:n`, a
-                    // collapsed caret) — a composition, not a selection — which is
-                    // the reported S9 highlight. The S25/Gboard "pass" was typed with
-                    // `adb input text`, which commits without composing, so it
-                    // never exercised this path.
-                    //
-                    // This also removes the old reasons to reject a mid-text
-                    // composition: Slint pinned the pre-edit offset to the end of
-                    // the committed text ("abc def" recomposing (0,3) read
-                    // " defabc", §112o). With no pre-edit there is nothing to
-                    // misplace, so the IME may keep composing anywhere.
-                    //
-                    // The IME keeps its composition: the outbound path pushes
-                    // nothing back while Slint's text and selection equal what
-                    // the IME just reported (the `last_ime_text` guard), and any
-                    // real app-side change (send, clear) is pushed with no compose
-                    // region, which ends the composition as it should.
-                    //
-                    // A real user selection (long-press) is a non-empty
-                    // `state.selection` with no composition and still reaches
-                    // Slint as anchor..cursor below.
-                    let mut key_event = KeyEvent::default();
-                    key_event.text = state.text.as_str().into();
-                    let event = InternalKeyEvent {
-                        event_type: KeyEventType::CommitComposition,
-                        replacement_range: Some(i32::MIN..i32::MAX),
-                        cursor_position: Some(state.selection.end as _),
-                        anchor_position: Some(state.selection.start as _),
-                        key_event,
-                        ..Default::default()
-                    };
-                    self.ime_dispatching.set(true);
-                    runtime_window.process_key_input(event);
-                    self.ime_dispatching.set(false);
-                    if let Some(props) = self.deferred_ime_update.take() {
-                        i_slint_core::window::WindowAdapterInternal::input_method_request(
-                            self,
-                            InputMethodRequest::Update(props),
-                        );
-                    }
+                    self.deliver_ime_state(state);
                     InputStatus::Handled
                 }
                 // The IME's action key (Done/Go/Search on a single-line field)
@@ -1232,6 +1225,110 @@ impl AndroidWindowAdapter {
             if !read_input {
                 return Ok(());
             }
+        }
+    }
+
+    /// Deliver a state the IME holds (UTF-8 offsets) into Slint, through the
+    /// echo guards. Shared by the gate path and android-activity's own
+    /// `TextEvent` (used only without a bridge).
+    fn deliver_ime_state(&self, state: android_activity::input::TextInputState) {
+        // No live field owns the input method: this is the IME
+        // still reporting on a field that was destroyed (or a
+        // late report after it was released). Delivering it would
+        // hand the dead field's text to whatever is focused next
+        // (§112m); recording it would poison the echo guards.
+        if self.ime_client.borrow().is_none() || self.ime_client_vanished() {
+            self.release_vanished_ime_client(false);
+            return;
+        }
+        // Drop GameTextInput's echo of our own finish_composing
+        // push. It carries the pre-tap cursor and would undo the
+        // caret move the tap just made (§112o).
+        let self_echo = self
+            .pending_self_echo
+            .borrow()
+            .as_ref()
+            .is_some_and(|(t, c)| {
+                t == &state.text
+                    && state.selection.start == *c
+                    && state.selection.end == *c
+                    && state.compose_region.is_none()
+            });
+        if self_echo {
+            *self.pending_self_echo.borrow_mut() = None;
+            return;
+        }
+        // A selected-state echo after long-press is not typing. A
+        // changed string, composition or collapsed caret is.
+        if state.compose_region.is_some()
+            || state.selection.start == state.selection.end
+            || (self.last_ime_text.borrow().as_ref() != Some(&state.text)
+                && self.last_pushed_text.borrow().as_ref() != Some(&state.text))
+        {
+            self.show_cursor_handles.set(false);
+            self.dismiss_selection_menu();
+        }
+        // Remember what the IME believes, so the outbound path can
+        // tell an app-initiated change from an echo of this (§112n).
+        *self.last_ime_text.borrow_mut() = Some(state.text.clone());
+        self.last_ime_selection
+            .set((state.selection.start, state.selection.end));
+        // The IME's own report is authoritative about whether a
+        // composition is live; the outbound flag goes stale because
+        // the dedupe guards return before setting it (§112o).
+        self.had_compose.set(state.compose_region.is_some());
+        let runtime_window = WindowInner::from_pub(&self.window);
+        // Chatter patch: hand Slint the IME's text as plain
+        // committed text, never as a pre-edit — the composing word
+        // must look like normal text with a caret.
+        //
+        // i-slint-core 1.17.1 paints a TextInput's whole pre-edit
+        // range with the selection colours whatever
+        // `preedit_selection` says (textlayout/sharedparley.rs:1417
+        // prefers `preedit_range` over `selection_range`), so ANY
+        // composition Slint holds is drawn as a teal selection until
+        // the IME commits it. Samsung Keyboard (S9, Android 10)
+        // composes every word, re-marking already-committed text with
+        // `setComposingRegion` (logcat `gti.InputConnection:
+        // setComposingRegion: 6:12` beside `setSelection: n:n`, a
+        // collapsed caret) — a composition, not a selection — which is
+        // the reported S9 highlight. The S25/Gboard "pass" was typed with
+        // `adb input text`, which commits without composing, so it
+        // never exercised this path.
+        //
+        // This also removes the old reasons to reject a mid-text
+        // composition: Slint pinned the pre-edit offset to the end of
+        // the committed text ("abc def" recomposing (0,3) read
+        // " defabc", §112o). With no pre-edit there is nothing to
+        // misplace, so the IME may keep composing anywhere.
+        //
+        // The IME keeps its composition: the outbound path pushes
+        // nothing back while Slint's text and selection equal what
+        // the IME just reported (the `last_ime_text` guard), and any
+        // real app-side change (send, clear) is pushed with no compose
+        // region, which ends the composition as it should.
+        //
+        // A real user selection (long-press) is a non-empty
+        // `state.selection` with no composition and still reaches
+        // Slint as anchor..cursor below.
+        let mut key_event = KeyEvent::default();
+        key_event.text = state.text.as_str().into();
+        let event = InternalKeyEvent {
+            event_type: KeyEventType::CommitComposition,
+            replacement_range: Some(i32::MIN..i32::MAX),
+            cursor_position: Some(state.selection.end as _),
+            anchor_position: Some(state.selection.start as _),
+            key_event,
+            ..Default::default()
+        };
+        self.ime_dispatching.set(true);
+        runtime_window.process_key_input(event);
+        self.ime_dispatching.set(false);
+        if let Some(props) = self.deferred_ime_update.take() {
+            i_slint_core::window::WindowAdapterInternal::input_method_request(
+                self,
+                InputMethodRequest::Update(props),
+            );
         }
     }
 
@@ -1758,33 +1855,5 @@ impl raw_window_handle::HasDisplayHandle for DummyDisplayHandle {
         &self,
     ) -> Result<raw_window_handle::DisplayHandle<'_>, raw_window_handle::HandleError> {
         Ok(raw_window_handle::DisplayHandle::android())
-    }
-}
-
-/// An app-side edit is unpublished while the field's text is neither the
-/// IME's last report nor the last state pushed to it. Pure, for the host
-/// regression below.
-fn app_edit_unpublished_for(field: &str, last_pushed: Option<&str>, last_ime: Option<&str>) -> bool {
-    last_pushed != Some(field) && last_ime != Some(field)
-}
-
-#[cfg(test)]
-mod app_edit_tests {
-    use super::app_edit_unpublished_for;
-
-    #[test]
-    fn accepted_send_clear_is_unpublished_until_pushed() {
-        let sent = "rc88-s9-caption";
-        // The send cleared the field; the IME still holds and last reported
-        // the sent text: whatever it reports in this pass is stale.
-        assert!(app_edit_unpublished_for("", Some(sent), Some(sent)));
-        // The render pushed the empty state: the guard is off, the IME's next
-        // report (the next draft) goes through.
-        assert!(!app_edit_unpublished_for("", Some(""), Some(sent)));
-        // Ordinary typing: the field shows what the IME last reported.
-        assert!(!app_edit_unpublished_for("rc", Some("r"), Some("rc")));
-        // A fresh session (Enable pushed the field's own text, nothing
-        // reported yet) is published.
-        assert!(!app_edit_unpublished_for(sent, Some(sent), None));
     }
 }

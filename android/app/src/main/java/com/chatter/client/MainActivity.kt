@@ -31,6 +31,7 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import com.google.androidgamesdk.GameActivity
+import com.google.androidgamesdk.ChatterTextInputGate
 import java.io.File
 import java.nio.file.Files
 import java.util.concurrent.Executors
@@ -126,6 +127,11 @@ class MainActivity : GameActivity() {
         // has loaded libchatter_ui by now (android.app.lib_name), so the native
         // symbol resolves.
         nativeRegisterActivity()
+        // Put the producer gate between the IME and GameTextInput's Editable
+        // (com.google.androidgamesdk.ChatterTextInputGate): an accepted send
+        // consumes the native copy of the composer in order with the IME's
+        // own operations, so the sent text cannot come back.
+        ChatterTextInputGate.install(this)
         // Wire the JavaVM into libwebrtc from the Java main thread so its
         // FindClass for the bundled livekit.org.webrtc classes resolves via the
         // app classloader. Doing this from Rust's native thread fails.
@@ -302,6 +308,15 @@ class MainActivity : GameActivity() {
 
     /** Implemented in Rust. Re-shows a ringing call's screen that Back hid. */
     private external fun nativeShowIncomingCall(callId: String, action: String, capability: String)
+
+    /** Called from Rust (JNI, any thread): Slint's state for the IME's field. UTF-16 offsets. */
+    @Suppress("unused")
+    fun textInputPush(text: String, selStart: Int, selEnd: Int, compStart: Int, compEnd: Int, owner: Long, generation: Long) =
+        ChatterTextInputGate.push(text, selStart, selEnd, compStart, compEnd, owner, generation)
+
+    /** Called from Rust (JNI, any thread): a send was accepted, the field's native copy is consumed. */
+    @Suppress("unused")
+    fun textInputConsume(owner: Long, generation: Long) = ChatterTextInputGate.publishReset(owner, generation)
 
     /** Implemented in Rust. Back hid the keyboard: drop Slint's text focus too. */
     private external fun nativeImeHiddenByBack()

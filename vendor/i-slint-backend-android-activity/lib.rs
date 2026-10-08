@@ -22,6 +22,7 @@ pub use android_activity_06 as android_activity;
 pub use android_activity::AndroidApp;
 use android_activity::PollEvent;
 use androidwindowadapter::AndroidWindowAdapter;
+pub use androidwindowadapter::{InboundTextInput, TextInputBridge, TextInputPush};
 use core::ops::ControlFlow;
 use core::time::Duration;
 use i_slint_core::api::{EventLoopError, PlatformError};
@@ -95,6 +96,17 @@ impl AndroidPlatform {
     /// or `None` if the vote did not land, in which case it is retried.
     pub fn with_refresh_rate_vote(mut self, vote: impl Fn(bool) -> Option<f32> + 'static) -> Self {
         self.refresh_rate_vote = Some(Box::new(vote));
+        self
+    }
+
+    /// Chatter patch: route the IME's copy of the focused field through the
+    /// app's producer gate (see [`TextInputBridge`]). With a bridge bound,
+    /// every outbound text state and every accepted-send consumption go
+    /// through it, and inbound states arrive through
+    /// [`deliver_text_input_state`]; android-activity's own text events are
+    /// then only a wake-up.
+    pub fn with_text_input_bridge(self, bridge: impl TextInputBridge + 'static) -> Self {
+        self.window.set_text_input_bridge(Rc::new(bridge));
         self
     }
 
@@ -305,6 +317,27 @@ impl i_slint_core::platform::EventLoopProxy for AndroidEventLoopProxy {
         self.waker.wake();
         Ok(())
     }
+}
+
+/// Chatter patch: an accepted send took the focused field's text (the app
+/// has already cleared it). The IME's copy is consumed as of now: the gate
+/// is told, and every state the IME produced before that reset was applied
+/// on the UI thread is dropped by its generation when it arrives.
+/// A no-op unless the IME serves a field whose text is now empty.
+pub fn consume_text_input() {
+    if let Some(adapter) = CURRENT_WINDOW.with_borrow(|x| x.upgrade()) {
+        adapter.consume_text_input();
+    }
+}
+
+/// Chatter patch: a state the IME produced, tagged by the gate. Any thread;
+/// delivered on the event loop in arrival order.
+pub fn deliver_text_input_state(state: InboundTextInput) {
+    let _ = i_slint_core::api::invoke_from_event_loop(move || {
+        if let Some(adapter) = CURRENT_WINDOW.with_borrow(|x| x.upgrade()) {
+            adapter.handle_text_input_state(state);
+        }
+    });
 }
 
 pub fn set_requested_graphics_api(
