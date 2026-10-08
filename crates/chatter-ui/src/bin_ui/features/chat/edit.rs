@@ -49,6 +49,11 @@ pub fn wire_edit_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
+                        // The lookup ran off the UI thread; a conversation
+                        // opened meanwhile must not get this one's text.
+                        if ui_ctx.chat_state().active_conversation() != conversation {
+                            return;
+                        }
                         // Editing borrows the composer; keep the unsent draft
                         // (it used to be silently replaced and lost).
                         if !w.get_composer_stash_held() {
@@ -121,7 +126,11 @@ pub fn wire_send_edit(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
-                    end_edit(&w);
+                    // Only this edit's own session: an edit started since
+                    // (another message, another conversation) keeps its draft.
+                    if w.get_composer_edit_message_id().as_str() == composite_key_str {
+                        end_edit(&w);
+                    }
                 }
             });
         });

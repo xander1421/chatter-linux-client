@@ -39,7 +39,7 @@ fn saved_lookup_menu_and_local_delete_preserve_colliding_channel_and_dm() {
     let menu = stored_message_menu(&saved, true, now);
     assert!(menu.actions.copy && menu.actions.select && menu.actions.delete_for_me);
     assert!(!menu.actions.delete_for_everyone && !menu.actions.resend);
-    assert!(!menu.actions.edit && !menu.actions.pin && !menu.actions.react);
+    assert!(menu.actions.edit && !menu.actions.pin && !menu.actions.react);
     assert!(require_remote_message_kind(&saved.conversation_type).is_err());
     assert!(scoped_stored_message(&repo, &scope, &peer, now).is_err());
     assert!(scoped_stored_message(&repo, &scope, &own, now + 1).is_err());
@@ -106,4 +106,51 @@ fn saved_storage_requires_matching_own_identity_and_metadata() {
         ConversationType::ServerDm
     );
     assert!(message_storage_scope(&ActiveConversation::None, Some(own), Some(&saved)).is_err());
+}
+
+#[test]
+fn saved_edit_keeps_row_identity_attachments_and_mixed_ids() {
+    use crate::domain::ids::AttachmentId;
+    use crate::domain::message::{MessageContent, MixedContent};
+    let own = UserId::new();
+    let other = UserId::new();
+    let id = ChannelId::from(own);
+    let now = crate::util::time::TimestampNanos::now().as_u64();
+    let mut saved = Message::new_text(
+        id,
+        ConversationType::SavedMessages,
+        Some(own),
+        "old".into(),
+        now,
+    );
+    saved.attachments = vec![AttachmentId::new()];
+    saved.reply_to = Some(crate::domain::ids::MessageId::new());
+    saved.reply_to_author_id = Some(own);
+
+    // Text row: body replaced, trimmed; row fields are not part of the content.
+    assert_eq!(
+        saved_edit_content(&saved, own, now, "  new  ").unwrap(),
+        MessageContent::Text("new".into())
+    );
+    // Mixed row: only the text moves, attachment ids stay.
+    let ids = vec![AttachmentId::new(), AttachmentId::new()];
+    saved.content = MessageContent::Mixed(MixedContent::new("cap".into(), ids.clone()));
+    assert_eq!(
+        saved_edit_content(&saved, own, now, "new cap").unwrap(),
+        MessageContent::Mixed(MixedContent {
+            text: Some("new cap".into()),
+            attachment_ids: ids,
+        })
+    );
+    // Refused: empty text, another author, deleted, past the window, non-Saved kind.
+    assert!(saved_edit_content(&saved, own, now, " \n").is_err());
+    assert!(saved_edit_content(&saved, other, now, "x").is_err());
+    let mut deleted = saved.clone();
+    deleted.is_deleted = true;
+    assert!(saved_edit_content(&deleted, own, now, "x").is_err());
+    let late = now + crate::domain::message::REMOTE_ACTION_WINDOW_NS + 1;
+    assert!(saved_edit_content(&saved, own, late, "x").is_err());
+    let mut channel = saved.clone();
+    channel.conversation_type = ConversationType::Channel;
+    assert!(saved_edit_content(&channel, own, now, "x").is_err());
 }

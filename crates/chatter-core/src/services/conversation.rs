@@ -112,10 +112,10 @@ fn stored_message_menu(message: &crate::domain::Message, is_own: bool, now_ns: u
         actions.resend = false;
     }
     // Saved records have only a local/own-device deletion path. Their UI
-    // Channel variant must never grant a public-channel remote delete.
+    // Channel variant must never grant a public-channel remote delete. Edit
+    // stays: it is persisted locally by `send_edit`, never dispatched.
     if message.conversation_type == ConversationType::SavedMessages {
         actions.delete_for_everyone = false;
-        actions.edit = false;
         actions.pin = false;
         actions.react = false;
     }
@@ -123,6 +123,55 @@ fn stored_message_menu(message: &crate::domain::Message, is_own: bool, now_ns: u
         actions,
         pinned: message.is_pinned,
     }
+}
+
+/// The stored body after an own edit. A `Mixed` row keeps its attachment ids
+/// and only its text changes; everything else becomes `Text`. Attachments,
+/// reply identity and timestamps live on the row, not in the content, and
+/// are left alone by `update_message_body`.
+fn edited_content(
+    current: &crate::domain::message::MessageContent,
+    new_text: &str,
+) -> crate::domain::message::MessageContent {
+    use crate::domain::message::{MessageContent, MixedContent};
+    match current {
+        MessageContent::Mixed(mixed) => MessageContent::Mixed(MixedContent {
+            text: Some(new_text.to_string()),
+            attachment_ids: mixed.attachment_ids.clone(),
+        }),
+        _ => MessageContent::Text(new_text.to_string()),
+    }
+}
+
+/// Validate an own edit of one Saved record and shape its new body. The row
+/// must be this user's, undeleted, inside the edit window and the new text
+/// non-empty (same gate as the menu's `edit` flag, so the menu and the send
+/// cannot drift).
+fn saved_edit_content(
+    message: &crate::domain::Message,
+    own: UserId,
+    now_ns: u64,
+    new_text: &str,
+) -> ConversationResult<crate::domain::message::MessageContent> {
+    if message.conversation_type != ConversationType::SavedMessages
+        || message.sender_id != Some(own)
+    {
+        return Err(ConversationError::Other(
+            "Only your own Saved message can be edited".into(),
+        ));
+    }
+    let trimmed = new_text.trim();
+    if trimmed.is_empty() {
+        return Err(ConversationError::Other(
+            "An edited Saved message needs text".into(),
+        ));
+    }
+    if !stored_message_menu(message, true, now_ns).actions.edit {
+        return Err(ConversationError::Other(
+            "This Saved message can no longer be edited".into(),
+        ));
+    }
+    Ok(edited_content(&message.content, trimmed))
 }
 
 fn require_remote_message_kind(kind: &ConversationType) -> ConversationResult {
@@ -174,17 +223,22 @@ impl ConversationHandle {
         }
     }
 
-    fn require_remote_message_actions(&self) -> ConversationResult {
+    /// Where this conversation's rows are stored (`SavedMessages` only with
+    /// authenticated own identity and matching channel metadata).
+    fn storage_scope(&self) -> ConversationResult<crate::domain::reaction::ReactionScope> {
         let channel = self
             .conversation
             .channel_id()
             .and_then(|id| self.client.get_channel_local(&id));
-        let scope = message_storage_scope(
+        message_storage_scope(
             &self.conversation,
             self.client.auth_state().get().current_user_id,
             channel.as_ref(),
-        )?;
-        require_remote_message_kind(&scope.kind)
+        )
+    }
+
+    fn require_remote_message_actions(&self) -> ConversationResult {
+        require_remote_message_kind(&self.storage_scope()?.kind)
     }
 
     /// A handle for another conversation on the same client.
@@ -589,11 +643,61 @@ impl ConversationHandle {
         target_sent_timestamp: u64,
         new_text: &str,
     ) -> ConversationResult {
+        let scope = self.storage_scope()?;
+        if scope.kind == ConversationType::SavedMessages {
+            return self.edit_saved_message(&scope, target_sent_timestamp, new_text);
+        }
         let result = self.send_edit_inner(target_sent_timestamp, new_text).await;
         if result.is_ok() {
             self.emit_local_edit_event(target_sent_timestamp, new_text);
         }
         result
+    }
+
+    /// Edit one of our Saved records in place. Local only: the row's id,
+    /// `sent_at`, attachments and reply identity are untouched, only the body
+    /// changes and `is_edited` is set. Nothing goes to the server — the Saved
+    /// id is our own user id, not a channel a sender-key control may be sent
+    /// to — and nothing reaches linked devices: `SavedMessageSync` has no
+    /// edit form and a re-sent one is dropped as a duplicate on arrival
+    /// (`store_synced_saved_message`), so a sibling device keeps the old text
+    /// until that proto grows an edit. The emitted `MessageEdited` carries
+    /// the real row id and the `SavedMessages` kind, so a same-id channel or
+    /// DM row is never patched.
+    fn edit_saved_message(
+        &self,
+        scope: &crate::domain::reaction::ReactionScope,
+        target_sent_timestamp: u64,
+        new_text: &str,
+    ) -> ConversationResult {
+        let own = self
+            .client
+            .auth_state()
+            .get()
+            .current_user_id
+            .ok_or_else(|| ConversationError::Other("Editing requires a signed-in user".into()))?;
+        let message = scoped_stored_message(
+            &self.client.messages().message_repo,
+            scope,
+            &own,
+            target_sent_timestamp,
+        )?;
+        let now_ns = crate::util::time::TimestampNanos::now().as_u64();
+        let new_content = saved_edit_content(&message, own, now_ns, new_text)?;
+        self.client
+            .messages()
+            .update_message_body(&message.id, &new_content)?;
+        self.client
+            .event_bus()
+            .emit_domain(crate::events::DomainEvent::MessageEdited {
+                message_id: message.id,
+                new_content,
+                channel_id: scope.id,
+                conversation_type: ConversationType::SavedMessages,
+                author_id: own,
+                target_sent_timestamp,
+            });
+        Ok(())
     }
 
     fn emit_local_edit_event(&self, target_sent_timestamp: u64, new_text: &str) {
@@ -1894,8 +1998,7 @@ impl ConversationHandle {
     fn persist_edit(&self, sent_timestamp: u64, new_text: &str) {
         if let Some(user_id) = self.client.auth_state().get().current_user_id {
             if let Ok(msg) = self.lookup_message(&user_id, sent_timestamp) {
-                let new_content =
-                    crate::domain::message::MessageContent::Text(new_text.to_string());
+                let new_content = edited_content(&msg.content, new_text);
                 let _ = self
                     .client
                     .messages()
@@ -1909,18 +2012,9 @@ impl ConversationHandle {
         sender_id: &UserId,
         sent_timestamp: u64,
     ) -> ConversationResult<crate::domain::Message> {
-        let channel = self
-            .conversation
-            .channel_id()
-            .and_then(|id| self.client.get_channel_local(&id));
-        let scope = message_storage_scope(
-            &self.conversation,
-            self.client.auth_state().get().current_user_id,
-            channel.as_ref(),
-        )?;
         scoped_stored_message(
             &self.client.messages().message_repo,
-            &scope,
+            &self.storage_scope()?,
             sender_id,
             sent_timestamp,
         )
