@@ -40,6 +40,19 @@ fn pending_message_id(send: &ComposerSend) -> String {
 
 /// Put the pending row for `send` into the open list, if that is the
 /// conversation it is going to.
+///
+/// One enqueue, made before the network attempt starts, and nothing after it:
+/// every later change to this row (the stored message replacing it, or its
+/// removal on failure) is enqueued after this one, from the same task, once an
+/// await has returned. `invoke_from_event_loop` is a FIFO on every backend we
+/// ship (winit: `EventLoopProxy::send_event`; android-activity: a locked
+/// `Vec` push), so the row is always there before it is replaced or removed.
+/// A decode-then-insert callback would not have that property: it could run
+/// after the removal and leave a "sending" row behind for good.
+///
+/// Thumbnails: `to_slint` loads an image by its local path through Slint's
+/// image cache, which the attachment tray filled when the file was staged,
+/// so the common case decodes nothing here.
 fn show_pending_bubble(
     weak: &slint::Weak<MainWindow>,
     ui_ctx: &Arc<ChatterClient>,
@@ -47,7 +60,7 @@ fn show_pending_bubble(
     user_id: &str,
     user_name: &str,
 ) {
-    let mut attachments: Vec<_> = send
+    let attachments: Vec<_> = send
         .attachments
         .iter()
         .map(pending_attachment_to_display_data)
@@ -66,65 +79,87 @@ fn show_pending_bubble(
     let user_name = user_name.to_string();
     let weak = weak.clone();
     let ui_ctx = ui_ctx.clone();
-    // Thumbnails decode here, off the UI thread, like the stored message's.
-    tokio::task::spawn_blocking(move || {
-        for att in &mut attachments {
-            att.decode_thumbnail();
+    // The row's own clock, not 0: the live-receive path orders rows by
+    // (timestamp, sender) and a 0 at the tail would mislead it. No stored
+    // message carries this exact value, so a lookup by (me, this) finds
+    // nothing, which is what a context action on a pending row should do.
+    let now = chrono::Utc::now();
+    let now_ns = now.timestamp_nanos_opt().unwrap_or_default().max(0) as u64;
+    let _ = slint::invoke_from_event_loop(move || {
+        if !ui_ctx.composer_session_is_current(session_revision)
+            || ui_ctx.chat_state().active_conversation() != conversation
+        {
+            return;
         }
-        let _ = slint::invoke_from_event_loop(move || {
-            if !ui_ctx.composer_session_is_current(session_revision)
-                || ui_ctx.chat_state().active_conversation() != conversation
-            {
-                return;
-            }
-            let Some(w) = weak.upgrade() else { return };
-            let (thumb, has_thumb, thumb_w, thumb_h) = reply_thumbnail
-                .map(|(rgba, tw, th)| {
-                    (
-                        crate::bin_ui::slint_conversions::rgba_to_slint_image(&rgba, tw, th),
-                        true,
-                        tw as i32,
-                        th as i32,
-                    )
-                })
-                .unwrap_or_else(|| (slint::Image::default(), false, 0, 0));
-            let item = super::helpers::build_own_message_item(
-                &row,
-                &user_id,
-                &user_name,
-                &text,
-                &chatter_core::ui::chat_data::format_timestamp(chrono::Utc::now()),
-                0,
-                attachments.iter().map(|a| a.to_slint()).collect(),
-                !reply_sender_name.is_empty(),
-                &reply_sender_name,
-                &reply_preview,
-                thumb,
-                has_thumb,
-                thumb_w,
-                thumb_h,
-                &Default::default(),
-                "sending",
-            );
-            upsert_message_in_ui(&w, &row, item);
-        });
+        let Some(w) = weak.upgrade() else { return };
+        let (thumb, has_thumb, thumb_w, thumb_h) = reply_thumbnail
+            .map(|(rgba, tw, th)| {
+                (
+                    crate::bin_ui::slint_conversions::rgba_to_slint_image(&rgba, tw, th),
+                    true,
+                    tw as i32,
+                    th as i32,
+                )
+            })
+            .unwrap_or_else(|| (slint::Image::default(), false, 0, 0));
+        let item = super::helpers::build_own_message_item(
+            &row,
+            &user_id,
+            &user_name,
+            &text,
+            &chatter_core::ui::chat_data::format_timestamp(now),
+            now_ns,
+            attachments.iter().map(|a| a.to_slint()).collect(),
+            !reply_sender_name.is_empty(),
+            &reply_sender_name,
+            &reply_preview,
+            thumb,
+            has_thumb,
+            thumb_w,
+            thumb_h,
+            &Default::default(),
+            "sending",
+        );
+        upsert_message_in_ui(&w, &row, item);
     });
 }
 
 /// Replace the row `pending_id` with `item`, or append `item` when the row is
-/// not there (the list was reloaded by a conversation switch meanwhile).
+/// not there (the list was reloaded by a conversation switch meanwhile). If
+/// `item`'s own id is already in the list — the server echo or a sync landed
+/// it through the receive path first — the pending row is dropped instead,
+/// so the message is never shown twice.
 fn upsert_message_in_ui(w: &MainWindow, pending_id: &str, item: crate::MessageItemData) {
     use slint::Model;
     let mut item = Some(item);
+    let mut drop_pending = false;
     super::helpers::edit_messages(w, |model| {
-        if let Some(i) = (0..model.row_count()).rev().find(|&i| {
-            model
-                .row_data(i)
-                .is_some_and(|m| m.message_id.as_str() == pending_id)
-        }) {
-            model.set_row_data(i, item.take().expect("set once"));
+        let row_of = |id: &str| {
+            (0..model.row_count()).rev().find(|&i| {
+                model
+                    .row_data(i)
+                    .is_some_and(|m| m.message_id.as_str() == id)
+            })
+        };
+        let stored_id = item
+            .as_ref()
+            .map(|m| m.message_id.to_string())
+            .unwrap_or_default();
+        let already_shown = stored_id != pending_id && row_of(&stored_id).is_some();
+        match (row_of(pending_id), already_shown) {
+            (Some(_), true) => {
+                drop_pending = true;
+                item = None;
+            }
+            (Some(i), false) => model.set_row_data(i, item.take().expect("set once")),
+            (None, true) => item = None,
+            (None, false) => {}
         }
     });
+    if drop_pending {
+        // Through the shared removal so a selection on the row is released.
+        super::helpers::remove_messages_where(w, |m| m.message_id.as_str() == pending_id);
+    }
     if let Some(item) = item {
         // `append_message_to_ui` clears the composer; the next draft the
         // user has started typing meanwhile is theirs to keep.
