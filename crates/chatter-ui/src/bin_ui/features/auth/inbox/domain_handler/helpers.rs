@@ -64,11 +64,17 @@ pub(crate) fn recompute_total_unread(window: &MainWindow, ui_ctx: &Arc<ChatterCl
 ///
 /// Updates the message's `is_pinned` flag, the pinned bar preview/count,
 /// and the `ChatState` pinned-bar substate so that navigation arrows work correctly.
+/// `message_id` and `actor` are the event's: for a Saved event the row is
+/// re-read by them inside the UI closure, and the event's own flag is not
+/// what gets painted.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn handle_pin_ui_update(
     window: &Weak<MainWindow>,
     ui_ctx: &Arc<ChatterClient>,
     channel_id: chatter_core::domain::ids::ChannelId,
     conversation_type: ConversationType,
+    message_id: chatter_core::domain::ids::MessageId,
+    actor: chatter_core::domain::ids::UserId,
     target_sent_timestamp: u64,
     unpin: bool,
 ) {
@@ -95,15 +101,45 @@ pub(super) fn handle_pin_ui_update(
     let target_ts_str = target_sent_timestamp.to_string();
 
     crate::run_history_ui!(window, owner, |w| {
+        // A Saved pin is durable before its event, so the stored row as of
+        // publication decides the flag and the preview, not the event: a
+        // queued older pin cannot repaint over a later unpin, edit or
+        // delete. The row must be the event's (real id) at this account's
+        // Saved key — foreign, deleted or missing: nothing is painted — and
+        // its bubble is matched by that id, not by clock.
+        let saved = conversation_type == ConversationType::SavedMessages;
+        let (new_pinned, mut preview) = if saved {
+            let row = match refresh_ctx
+                .conversation(conversation)
+                .stored_message_scoped(&actor, target_sent_timestamp)
+            {
+                Ok(row) if row.id == message_id => row,
+                _ => return,
+            };
+            let preview = if row.is_pinned {
+                refresh_ctx.pinned_message_preview(&conversation, &row.id)
+            } else {
+                String::new()
+            };
+            (row.is_pinned, preview)
+        } else {
+            (!unpin, String::new())
+        };
+        let message_id_str = message_id.to_string();
         let messages = w.get_messages();
-        let new_pinned = !unpin;
-        let mut preview = String::new();
 
-        // Find message by timestamp_ns, update is_pinned, generate preview
+        // Find the bubble, update is_pinned, generate preview
         for i in 0..messages.row_count() {
             if let Some(msg) = messages.row_data(i) {
-                if msg.timestamp_ns.as_str() == target_ts_str.as_str() {
-                    preview = super::super::utils::generate_preview_from_ui_message(&msg);
+                let hit = if saved {
+                    msg.message_id.as_str() == message_id_str.as_str()
+                } else {
+                    msg.timestamp_ns.as_str() == target_ts_str.as_str()
+                };
+                if hit {
+                    if !saved {
+                        preview = super::super::utils::generate_preview_from_ui_message(&msg);
+                    }
 
                     let mut updated_msg = msg.clone();
                     updated_msg.is_pinned = new_pinned;
@@ -130,9 +166,17 @@ pub(super) fn handle_pin_ui_update(
                 }
             }
         }
+        // The Saved row's id is known whether or not its bubble is loaded.
+        if saved {
+            if new_pinned {
+                chat_state.add_pinned_message(message_id);
+            } else {
+                chat_state.remove_pinned_message(&message_id);
+            }
+        }
 
         let pinned_count = chat_state.pinned_total_count() as i32;
-        if unpin {
+        if !new_pinned {
             w.set_pinned_total_count(pinned_count);
             w.set_has_pinned_messages(pinned_count > 0);
             if pinned_count == 0 {

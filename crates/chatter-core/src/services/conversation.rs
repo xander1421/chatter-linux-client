@@ -2172,6 +2172,19 @@ impl ConversationHandle {
         }
     }
 
+    /// The stored row at this handle's storage scope and Signal-style key
+    /// (kind, conversation, author, sent clock), undeleted, as it is now. A
+    /// UI closure publishing a Saved change reads this — not the event's
+    /// flag or the tap's intent — so a stale completion cannot repaint a
+    /// state the row has since left. Foreign, deleted or missing: `Err`.
+    pub fn stored_message_scoped(
+        &self,
+        author: &UserId,
+        sent_at: u64,
+    ) -> ConversationResult<crate::domain::Message> {
+        self.lookup_message(author, sent_at)
+    }
+
     fn lookup_message(
         &self,
         sender_id: &UserId,

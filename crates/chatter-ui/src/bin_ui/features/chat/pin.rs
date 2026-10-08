@@ -168,11 +168,32 @@ pub fn wire_pin_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
             // Update UI (unified across all conversation types). The pinned
             // substate is moved here, on the UI thread, for the view that is
-            // still current and still stored under the menu's kind.
+            // still current and still stored under the menu's kind. A Saved
+            // pin is durable before this runs, so the stored row as of now
+            // decides the flag and the preview — not the tap's intent — and
+            // it must be the tapped row (real id) at this account's Saved
+            // key: foreign, deleted or missing paints nothing.
             crate::run_history_ui!(weak, owner, |w| {
-                if ui_ctx.conversation(conversation).storage_kind().ok() != Some(kind) {
+                let handle = ui_ctx.conversation(conversation);
+                if handle.storage_kind().ok() != Some(kind) {
                     return;
                 }
+                let saved = kind == chatter_core::domain::ConversationType::SavedMessages;
+                let (new_pinned_state, preview_text) = if saved {
+                    let row =
+                        match handle.stored_message_scoped(&target_author, target_sent_timestamp) {
+                            Ok(row) if row.id.to_string() == msg_id_str => row,
+                            _ => return,
+                        };
+                    let preview = if row.is_pinned {
+                        ui_ctx.pinned_message_preview(&conversation, &row.id)
+                    } else {
+                        String::new()
+                    };
+                    (row.is_pinned, preview)
+                } else {
+                    (new_pinned_state, preview_text)
+                };
                 if let Ok(msg_id) = msg_id_str.parse::<chatter_core::domain::ids::MessageId>() {
                     if new_pinned_state {
                         ui_ctx.chat_state().add_pinned_message(msg_id);
@@ -186,9 +207,13 @@ pub fn wire_pin_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         let Some(mut m) = model.row_data(i) else {
                             continue;
                         };
-                        if m.sender_id.as_str() == sender_id_str.as_str()
-                            && m.timestamp_ns.as_str() == timestamp_ns_str.as_str()
-                        {
+                        let hit = if saved {
+                            m.message_id.as_str() == msg_id_str.as_str()
+                        } else {
+                            m.sender_id.as_str() == sender_id_str.as_str()
+                                && m.timestamp_ns.as_str() == timestamp_ns_str.as_str()
+                        };
+                        if hit {
                             m.is_pinned = new_pinned_state;
                             model.set_row_data(i, m);
                         }

@@ -341,32 +341,38 @@ pub async fn handle_domain_event(
         DomainEvent::ViewedReceipt { .. } => {}
 
         DomainEvent::MessagePinned {
+            message_id,
+            pinner_id,
             channel_id,
             conversation_type,
             target_sent_timestamp,
-            ..
         } => {
             helpers::handle_pin_ui_update(
                 window,
                 ui_ctx,
                 channel_id,
                 conversation_type,
+                message_id,
+                pinner_id,
                 target_sent_timestamp,
                 false,
             );
         }
 
         DomainEvent::MessageUnpinned {
+            message_id,
+            unpinner_id,
             channel_id,
             conversation_type,
             target_sent_timestamp,
-            ..
         } => {
             helpers::handle_pin_ui_update(
                 window,
                 ui_ctx,
                 channel_id,
                 conversation_type,
+                message_id,
+                unpinner_id,
                 target_sent_timestamp,
                 true,
             );

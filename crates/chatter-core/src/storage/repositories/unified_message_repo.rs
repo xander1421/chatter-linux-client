@@ -1901,7 +1901,9 @@ impl UnifiedMessageRepository {
 
     /// Replace the body of the one row at this scope's Signal-style key,
     /// undeleted, marking it edited at `edited_at`. One UPDATE of the body
-    /// columns only, so a concurrent pin of the same row keeps its pin.
+    /// columns only — `content_json` with its `content_type` discriminant
+    /// (an edit may change the variant: a Saved edit turns an `AI` body into
+    /// `Text`) — so a concurrent pin of the same row keeps its pin.
     /// `Ok(false)`: no such row.
     pub fn set_body_scoped(
         &self,
@@ -1915,7 +1917,7 @@ impl UnifiedMessageRepository {
         let content_json = serde_json::to_string(content)
             .map_err(|e| StorageError::InvalidData(format!("serialize content: {}", e)))?;
         let rows = conn.execute(
-            "UPDATE messages SET content_json = ?1, is_edited = 1, edited_at = ?2, updated_at = ?2
+            "UPDATE messages SET content_type = ?7, content_json = ?1, is_edited = 1, edited_at = ?2, updated_at = ?2
              WHERE conversation_id = ?3 AND conversation_type = ?4 AND sender_id = ?5 AND sent_at = ?6 AND is_deleted = 0",
             params![
                 content_json,
@@ -1924,6 +1926,7 @@ impl UnifiedMessageRepository {
                 scope.kind.as_str(),
                 author.to_string(),
                 sent_at as i64,
+                content_type_discriminant(content),
             ],
         )?;
         Ok(rows > 0)
