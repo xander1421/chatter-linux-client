@@ -231,6 +231,7 @@ impl EventHandlers {
                             stored.conversation_type == conversation_type
                                 && stored.conversation_id == channel_id
                                 && stored.sender_id == Some(author_id)
+                                && !stored.is_deleted
                         })
                     else {
                         return;

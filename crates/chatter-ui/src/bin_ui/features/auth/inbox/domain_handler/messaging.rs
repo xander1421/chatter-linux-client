@@ -399,12 +399,16 @@ pub(super) fn handle_reaction_update(
 /// Only in the conversation on screen, and only the bubble whose Signal-style
 /// key (author, sent timestamp) matches — a timestamp alone let one member
 /// rewrite another member's bubble by reusing its timestamp.
-/// `conversation_type` is the event's storage kind. A `SavedMessages` edit
-/// is applied only when the open conversation resolves to this account's
-/// Saved scope, and with the body read back from the stored row (the edit
-/// is durable before its event), so a delayed event cannot show an older
-/// body or patch a same-id channel row. Other kinds keep the id-keyed path
-/// (an encrypted channel stores as `AnonGroup` under its real channel id).
+/// `conversation_type` is the event's storage kind, and it has to belong to
+/// the open conversation's storage kind ([`ConversationHandle::storage_kind`])
+/// in both directions: an open Saved view takes only `SavedMessages` events,
+/// and no other view takes one, so a same-id channel, DM or group row cannot
+/// patch a Saved bubble sharing its author and clock, nor the reverse. A
+/// `Channel` view also takes `AnonGroup` — an encrypted channel stores its
+/// rows under that kind with its real channel id. A Saved body is read back
+/// from the stored row inside the queued UI closure (the edit is durable
+/// before its event), so a delayed or reordered event cannot show an older
+/// body.
 #[allow(clippy::too_many_arguments)]
 pub(super) fn handle_message_edit(
     window: &Weak<MainWindow>,
@@ -424,22 +428,35 @@ pub(super) fn handle_message_edit(
     }
     let conversation = ui_ctx.chat_state().active_conversation();
     let owner = crate::bin_ui::features::history_owner::HistoryOwner::capture(ui_ctx, conversation);
-    let mut new_text = new_text.to_string();
-    if conversation_type == ConversationType::SavedMessages {
-        let handle = ui_ctx.conversation(conversation);
-        if handle.storage_kind().ok() != Some(ConversationType::SavedMessages) {
-            return;
-        }
-        match handle.get_message_text(&author_id, target_sent_timestamp) {
-            Ok(Some(stored)) => new_text = stored,
-            _ => return,
-        }
+    let handle = ui_ctx.conversation(conversation);
+    let Ok(active_kind) = handle.storage_kind() else {
+        return;
+    };
+    let accepted = match active_kind {
+        ConversationType::SavedMessages => conversation_type == ConversationType::SavedMessages,
+        ConversationType::Channel => matches!(
+            conversation_type,
+            ConversationType::Channel | ConversationType::AnonGroup
+        ),
+        other => conversation_type == other,
+    };
+    if !accepted {
+        return;
     }
+    let saved = conversation_type == ConversationType::SavedMessages;
+    let mut new_text = new_text.to_string();
     let message_id = message_id.to_string();
     let author = author_id.to_string();
 
     let ui_ctx = ui_ctx.clone();
     crate::run_history_ui!(window, owner, |w| {
+        if saved {
+            // The stored row as of publication, not as of the event.
+            match handle.get_message_text(&author_id, target_sent_timestamp) {
+                Ok(Some(stored)) => new_text = stored,
+                _ => return,
+            }
+        }
         crate::bin_ui::features::thread::apply_thread_edit(
             &w,
             &message_id,
