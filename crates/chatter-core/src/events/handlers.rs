@@ -408,7 +408,7 @@ impl EventHandlers {
                 message_id,
                 channel_id,
                 pinner_id,
-                target_sent_timestamp: _,
+                ..
             } => {
                 tracing::info!(
                     ?message_id,
@@ -433,7 +433,7 @@ impl EventHandlers {
                 message_id,
                 channel_id,
                 unpinner_id,
-                target_sent_timestamp: _,
+                ..
             } => {
                 tracing::info!(
                     ?message_id,
@@ -1420,6 +1420,7 @@ mod tests {
             message_id,
             pinner_id,
             channel_id,
+            conversation_type: ConversationType::Channel,
             target_sent_timestamp: 0,
         });
 
@@ -1449,6 +1450,7 @@ mod tests {
             message_id,
             pinner_id,
             channel_id,
+            conversation_type: ConversationType::Channel,
             target_sent_timestamp: 0,
         });
 
@@ -1457,6 +1459,7 @@ mod tests {
             message_id,
             unpinner_id: pinner_id,
             channel_id,
+            conversation_type: ConversationType::Channel,
             target_sent_timestamp: 0,
         });
 

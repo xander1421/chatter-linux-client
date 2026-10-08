@@ -114,6 +114,7 @@ fn test_domain_event_key_variants() {
         message_id,
         pinner_id: user_id,
         channel_id,
+        conversation_type: chatter_core::domain::ConversationType::Channel,
         target_sent_timestamp: 1234567890,
     };
     let _ = format!("{:?}", pin);

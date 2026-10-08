@@ -143,6 +143,10 @@ pub enum DomainEvent {
         message_id: MessageId,
         pinner_id: UserId,
         channel_id: ChannelId,
+        /// Storage kind of the pinned row. A view takes only the pin events
+        /// of its own kind (`SavedMessages` rows share their id with no
+        /// channel or DM view, and the reverse).
+        conversation_type: ConversationType,
         /// Original sent timestamp (nanoseconds) for UI matching.
         target_sent_timestamp: u64,
     },
@@ -151,6 +155,7 @@ pub enum DomainEvent {
         message_id: MessageId,
         unpinner_id: UserId,
         channel_id: ChannelId,
+        conversation_type: ConversationType,
         target_sent_timestamp: u64,
     },
     /// Key exchange received (mailbox DM encryption setup).

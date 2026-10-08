@@ -551,6 +551,7 @@ pub fn dispatch_common_content<B: AnonInboxBackend>(
                     message_id,
                     unpinner_id: *sender_id,
                     channel_id,
+                    conversation_type: backend.conversation_type(),
                     target_sent_timestamp: pin.target_sent_timestamp,
                 });
             } else {
@@ -558,6 +559,7 @@ pub fn dispatch_common_content<B: AnonInboxBackend>(
                     message_id,
                     pinner_id: *sender_id,
                     channel_id,
+                    conversation_type: backend.conversation_type(),
                     target_sent_timestamp: pin.target_sent_timestamp,
                 });
             }

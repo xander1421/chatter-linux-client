@@ -6,6 +6,25 @@ use slint::{Model, Weak};
 
 use crate::MainWindow;
 use chatter_core::client::ChatterClient;
+use chatter_core::domain::ConversationType;
+
+/// Whether the open conversation, stored as `active` (see
+/// `ConversationHandle::storage_kind`), takes an event about a row stored as
+/// `event`. Both directions: a Saved view takes only `SavedMessages` events
+/// and no other view takes one, so a same-id channel, DM or group row cannot
+/// patch a Saved bubble sharing its author and clock, nor the reverse. A
+/// `Channel` view also takes `AnonGroup` — an encrypted channel stores its
+/// rows under that kind with its real channel id.
+pub(super) fn accepts_event_kind(active: ConversationType, event: ConversationType) -> bool {
+    match active {
+        ConversationType::SavedMessages => event == ConversationType::SavedMessages,
+        ConversationType::Channel => matches!(
+            event,
+            ConversationType::Channel | ConversationType::AnonGroup
+        ),
+        other => event == other,
+    }
+}
 
 /// Update a chat-list row's unread badge.
 pub(crate) fn update_unread_count(
@@ -49,10 +68,20 @@ pub(super) fn handle_pin_ui_update(
     window: &Weak<MainWindow>,
     ui_ctx: &Arc<ChatterClient>,
     channel_id: chatter_core::domain::ids::ChannelId,
+    conversation_type: ConversationType,
     target_sent_timestamp: u64,
     unpin: bool,
 ) {
     if !ui_ctx.is_showing_conversation(channel_id) {
+        return;
+    }
+    // The bubble is matched by clock alone below, so the event's storage
+    // kind has to be the open view's (`accepts_event_kind`).
+    let handle = ui_ctx.conversation(ui_ctx.chat_state().active_conversation());
+    if !handle
+        .storage_kind()
+        .is_ok_and(|active| accepts_event_kind(active, conversation_type))
+    {
         return;
     }
     let weak = window.clone();

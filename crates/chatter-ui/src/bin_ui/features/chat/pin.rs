@@ -142,9 +142,14 @@ pub fn wire_pin_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             }
             let pinned_count = ui_ctx.chat_state().pinned_total_count();
 
-            // For DM/Channel, generate preview from stored message + attachments
+            // For DM/Channel, generate preview from stored message + attachments.
+            // A Saved row keeps the UI model's preview: the lookup below is
+            // keyed by author and clock alone, not by the Saved scope.
             let preview_text = match handle.conversation() {
-                ActiveConversation::ServerDm { .. } | ActiveConversation::Channel(_) => {
+                ActiveConversation::ServerDm { .. } | ActiveConversation::Channel(_)
+                    if handle.storage_kind().ok()
+                        != Some(chatter_core::domain::ConversationType::SavedMessages) =>
+                {
                     if let Ok(sender_id) = sender_id_str.parse::<chatter_core::domain::UserId>() {
                         if let Some(message) = ui_ctx
                             .get_message_by_sender_timestamp(&sender_id, target_sent_timestamp)

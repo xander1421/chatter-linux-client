@@ -1077,6 +1077,7 @@ impl InboxEventProcessor {
                             message_id: msg.id,
                             unpinner_id: *peer_id,
                             channel_id: msg.conversation_id,
+                            conversation_type: msg.conversation_type,
                             target_sent_timestamp: *target_sent_timestamp,
                         });
                     } else {
@@ -1084,6 +1085,7 @@ impl InboxEventProcessor {
                             message_id: msg.id,
                             pinner_id: *peer_id,
                             channel_id: msg.conversation_id,
+                            conversation_type: msg.conversation_type,
                             target_sent_timestamp: *target_sent_timestamp,
                         });
                     }
@@ -1138,6 +1140,7 @@ impl InboxEventProcessor {
                             message_id: msg.id,
                             unpinner_id: *sender_id,
                             channel_id: *channel_id,
+                            conversation_type: msg.conversation_type,
                             target_sent_timestamp: *target_sent_timestamp,
                         });
                     } else {
@@ -1145,6 +1148,7 @@ impl InboxEventProcessor {
                             message_id: msg.id,
                             pinner_id: *sender_id,
                             channel_id: *channel_id,
+                            conversation_type: msg.conversation_type,
                             target_sent_timestamp: *target_sent_timestamp,
                         });
                     }

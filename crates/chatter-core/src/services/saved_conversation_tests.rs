@@ -39,8 +39,37 @@ fn saved_lookup_menu_and_local_delete_preserve_colliding_channel_and_dm() {
     let menu = stored_message_menu(&saved, true, now);
     assert!(menu.actions.copy && menu.actions.select && menu.actions.delete_for_me);
     assert!(!menu.actions.delete_for_everyone && !menu.actions.resend);
-    assert!(menu.actions.edit && !menu.actions.pin && !menu.actions.react);
+    assert!(menu.actions.edit && menu.actions.pin && !menu.actions.react);
+    assert!(!menu.pinned);
     assert!(require_remote_message_kind(&saved.conversation_type).is_err());
+    // Exactly the write `pin_saved_message` makes: the whole row back with
+    // `is_pinned` flipped; `pinned_at` orders the list and is cleared by unpin.
+    let pinned = pinned_saved_record(&saved, own, true).unwrap();
+    assert!(pinned.is_pinned && pinned.id == saved.id && pinned.content == saved.content);
+    assert!(pinned_saved_record(&saved, peer, true).is_err());
+    assert!(pinned_saved_record(&records[1], own, true).is_err());
+    repo.update(&pinned).unwrap();
+    let listed = repo
+        .list_pinned_all(&id, &ConversationType::SavedMessages)
+        .unwrap();
+    assert_eq!(
+        listed.iter().map(|m| m.id).collect::<Vec<_>>(),
+        vec![saved.id]
+    );
+    assert!(
+        repo.list_pinned_all(&id, &ConversationType::Channel)
+            .unwrap()
+            .is_empty()
+    );
+    let stored = scoped_stored_message(&repo, &scope, &own, now).unwrap();
+    assert!(stored_message_menu(&stored, true, now).pinned);
+    repo.update(&pinned_saved_record(&stored, own, false).unwrap())
+        .unwrap();
+    assert!(
+        repo.list_pinned_all(&id, &ConversationType::SavedMessages)
+            .unwrap()
+            .is_empty()
+    );
     assert!(scoped_stored_message(&repo, &scope, &peer, now).is_err());
     assert!(scoped_stored_message(&repo, &scope, &own, now + 1).is_err());
     for (conversation, expected) in [

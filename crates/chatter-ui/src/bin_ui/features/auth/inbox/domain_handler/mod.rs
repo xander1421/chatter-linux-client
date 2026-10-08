@@ -342,18 +342,34 @@ pub async fn handle_domain_event(
 
         DomainEvent::MessagePinned {
             channel_id,
+            conversation_type,
             target_sent_timestamp,
             ..
         } => {
-            helpers::handle_pin_ui_update(window, ui_ctx, channel_id, target_sent_timestamp, false);
+            helpers::handle_pin_ui_update(
+                window,
+                ui_ctx,
+                channel_id,
+                conversation_type,
+                target_sent_timestamp,
+                false,
+            );
         }
 
         DomainEvent::MessageUnpinned {
             channel_id,
+            conversation_type,
             target_sent_timestamp,
             ..
         } => {
-            helpers::handle_pin_ui_update(window, ui_ctx, channel_id, target_sent_timestamp, true);
+            helpers::handle_pin_ui_update(
+                window,
+                ui_ctx,
+                channel_id,
+                conversation_type,
+                target_sent_timestamp,
+                true,
+            );
         }
 
         // =========================================================================

@@ -432,15 +432,7 @@ pub(super) fn handle_message_edit(
     let Ok(active_kind) = handle.storage_kind() else {
         return;
     };
-    let accepted = match active_kind {
-        ConversationType::SavedMessages => conversation_type == ConversationType::SavedMessages,
-        ConversationType::Channel => matches!(
-            conversation_type,
-            ConversationType::Channel | ConversationType::AnonGroup
-        ),
-        other => conversation_type == other,
-    };
-    if !accepted {
+    if !super::helpers::accepts_event_kind(active_kind, conversation_type) {
         return;
     }
     let saved = conversation_type == ConversationType::SavedMessages;
