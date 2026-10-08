@@ -720,7 +720,8 @@ export component ChatLayout inherits Rectangle {
                             : tab-touch.pressed ? Materials.pressed
                             : tab-touch.has-hover ? Materials.hover : transparent;
                         border-radius: Spacing.radius-md;
-                        accessible-role: tab;
+                        // `tab` is the repeater variable above, so the bare enum name resolves to that string.
+                        accessible-role: AccessibleRole.tab;
                         accessible-label: tab;
                         accessible-item-selected: current;
                         accessible-action-default => { picker-drawer.select-mode(index == 1); }
