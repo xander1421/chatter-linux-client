@@ -181,7 +181,14 @@ export component FriendsModal inherits Rectangle {
                 z: 1;
                 height: root.mobile-mode ? Spacing.header-action-box-touch : Spacing.header-action-box;
 
+                // Segmented control, concentric with its shell (the same
+                // rule as the Calls tabs): the tabs sit `chrome-inset` inside
+                // the glass pill and the selected one is filled at
+                // `radius-chrome-inner`, so its fill follows the shell's
+                // curve instead of sticking square out past the rounded ends.
                 HorizontalLayout {
+                    padding: Spacing.chrome-inset;
+
                     for tab in [
                         { id: "find", label: "Add Friend" },
                         { id: "friends", label: "Friends" },
@@ -189,28 +196,20 @@ export component FriendsModal inherits Rectangle {
                         { id: "blocked", label: "Blocked" }
                     ]: Rectangle {
                         horizontal-stretch: 1;
+                        border-radius: Spacing.radius-chrome-inner;
                         background: root.active-tab == tab.id ? Colors.tint-strong : (tab-touch.pressed ? Materials.pressed : tab-touch.has-hover ? Materials.hover : transparent);
 
-                        VerticalLayout {
-                            HorizontalLayout {
-                                alignment: center;
-                                vertical-stretch: 1;
-
-                                Text {
-                                    text: tab.label + (tab.id == "requests" && (root.received-requests.length > 0) ?
-                                        " (" + root.received-requests.length + ")" : "");
-                                    color: root.active-tab == tab.id ? Colors.text-primary : Colors.text-secondary;
-                                    font-size: Typography.sm;
-                                    font-weight: root.active-tab == tab.id ? Typography.semibold : Typography.normal;
-                                    vertical-alignment: center;
-                                    overflow: elide;
-                                }
-                            }
-
-                            Rectangle {
-                                height: 2px;
-                                background: root.active-tab == tab.id ? Colors.primary : transparent;
-                            }
+                        Text {
+                            width: 100%;
+                            height: 100%;
+                            text: tab.label + (tab.id == "requests" && (root.received-requests.length > 0) ?
+                                " (" + root.received-requests.length + ")" : "");
+                            color: root.active-tab == tab.id ? Colors.text-primary : Colors.text-secondary;
+                            font-size: Typography.sm;
+                            font-weight: root.active-tab == tab.id ? Typography.semibold : Typography.normal;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                            overflow: elide;
                         }
 
                         // TouchArea on top to capture clicks (fills parent)

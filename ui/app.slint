@@ -1284,6 +1284,7 @@ export component MainWindow inherits Window {
     callback call-history-redial(string, string, bool); // conversation-id, conversation-type, is-video
     callback call-history-clear();
     callback call-history-retry();
+    callback call-history-load-more();  // list within a screen of its loaded end
     // Calls-screen row selection (features/calls/history.rs owns the marks).
     in-out property <bool> call-history-selecting: false;
     in property <int> call-history-selected-count: 0;
@@ -2651,6 +2652,7 @@ export component MainWindow inherits Window {
             selecting: root.call-history-selecting;
             selected-count: root.call-history-selected-count;
             retry => { root.call-history-retry(); }
+            load-more => { root.call-history-load-more(); }
             toggle-select(id) => { root.call-history-toggle-select(id); }
             select-all(all) => { root.call-history-select-all(all); }
             end-selection => { root.call-history-end-selection(); }
