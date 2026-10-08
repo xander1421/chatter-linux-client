@@ -246,10 +246,7 @@ config_changes = "orientation|screenSize|keyboardHidden"
 # own JNI inset polling, so the manifest must match Slint's default.
 window_soft_input_mode = "adjustResize"
 
-# Release signing — for local dev builds we reuse Android's debug keystore
-# (same one Android Studio uses). Production release builds should replace this
-# with a proper keystore and password. The device trusts this signature for
-# testing; the Play Store rejects APKs signed with it.
-[package.metadata.android.signing.release]
-path = "/home/alex/.android/debug.keystore"
-keystore_password = "android"
+# Release signing is not declared here. cargo-apk is not the Android build
+# path. android/build-android.sh RELEASE=1 signs with CHATTER_KEYSTORE,
+# CHATTER_KEYSTORE_PASSWORD, CHATTER_KEY_ALIAS and CHATTER_KEY_PASSWORD,
+# read by app/build.gradle.kts. A debug keystore does not belong in this file.

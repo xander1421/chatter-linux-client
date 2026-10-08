@@ -6,6 +6,11 @@ import { GlassSurface } from "../components/glass_surface.slint";
 // (channel, server DM, anon DM, anon group). Rows are built by core; this
 // file only lays them out. Tapping a row reopens the conversation, the two
 // buttons redial it as voice or video.
+//
+// Deleting: hold (touch) or right-click (pointer) a row, or ⋮ → Select calls,
+// to pick rows; ⋮ → Clear call history for the whole list under the current
+// filter. Both delete from this device only — Calls history has no server
+// copy and no peer-side delete, and chat Call messages are separate.
 
 import { Colors } from "../theme/colors.slint";
 import { Appearance } from "../theme/appearance.slint";
@@ -15,6 +20,8 @@ import { Icons } from "../theme/icons.slint";
 import { Modal } from "../components/modal.slint";
 import { Button } from "../components/button.slint";
 import { Avatar } from "../components/avatar.slint";
+import { HeaderButton } from "../components/header_button.slint";
+import { HoldArea } from "../components/hold_area.slint";
 import { CallHistoryRow } from "types.slint";
 
 export component CallHistoryScreen inherits Rectangle {
@@ -45,15 +52,31 @@ export component CallHistoryScreen inherits Rectangle {
     callback call-back(string, string, bool);
     callback clear-history();
 
+    // Selection, owned by Rust (`features/calls/history.rs`): it sets the
+    // rows' `selected` marks, the count, and `selecting`.
+    in property <bool> selecting: false;
+    in property <int> selected-count: 0;
+    // Enter selection with this row marked, or flip its mark once selecting.
+    callback toggle-select(string);
+    // Mark every loaded row (true) or none (false); also enters selection.
+    callback select-all(bool);
+    callback end-selection();
+    callback delete-selected();
+
     // Clear-history confirmation reveal. Presentation state only — nothing
     // leaves the UI until the second click. Reset on every open, or a screen
     // closed mid-confirm reopens already asking to wipe the list.
     property <bool> show-clear-confirm: false;
+    // Which delete the confirmation is for: the selected rows, or the list.
+    property <bool> confirm-selected: false;
     // The header ⋮ menu, which holds Clear call history.
     in-out property <bool> show-more-menu: false;
     // Desktop has a close button after overflow; mobile has overflow last.
     property <length> more-menu-trailing-inset: root.mobile-mode ? 0px
         : Spacing.header-action-box + Spacing.header-action-gap;
+    // Entering or leaving selection changes what a pending confirmation
+    // would delete, so it never survives the switch.
+    changed selecting => { self.show-clear-confirm = false; }
     changed show-modal => {
         self.show-clear-confirm = false;
         self.show-more-menu = false;
@@ -71,7 +94,7 @@ export component CallHistoryScreen inherits Rectangle {
         // The scrollable list needs a viewport on desktop too. Its overlay
         // wrapper cannot supply a content-sized preferred height to Modal.
         fill-height: true;
-        show-more: !root.loading && root.rows.length > 0;
+        show-more: !root.loading && root.rows.length > 0 && !root.selecting;
         more-clicked => { root.show-more-menu = !root.show-more-menu; }
 
         close => {
@@ -92,7 +115,58 @@ export component CallHistoryScreen inherits Rectangle {
 
             // Filter tabs — mirrors core's `CallHistoryFilter`. Same box
             // height as the header row's dismissal control above it.
-            GlassSurface {
+            // Selection bar — stands in for the filter tabs while picking
+            // rows, as the chat's SelectionBar stands in for its header.
+            if root.selecting: GlassSurface {
+                material-enabled: root.mobile-mode;
+                elevation: 0;
+                z: 1;
+                height: root.mobile-mode ? Spacing.header-action-box-touch : Spacing.header-action-box;
+
+                HorizontalLayout {
+                    spacing: Spacing.header-action-gap;
+
+                    HeaderButton {
+                        touch: root.mobile-mode;
+                        icon: Icons.x;
+                        label: "Exit selection";
+                        clicked => { root.end-selection(); }
+                    }
+
+                    Text {
+                        text: root.selected-count == 1 ? "1 selected" : root.selected-count + " selected";
+                        color: Colors.text-primary;
+                        font-size: Typography.base;
+                        font-weight: Typography.semibold;
+                        vertical-alignment: center;
+                        horizontal-stretch: 1;
+                        overflow: elide;
+                    }
+
+                    // One toggle: everything loaded selected → clears it.
+                    HeaderButton {
+                        touch: root.mobile-mode;
+                        icon: Icons.check;
+                        active: root.rows.length > 0 && root.selected-count == root.rows.length;
+                        label: root.rows.length > 0 && root.selected-count == root.rows.length ? "Deselect all" : "Select all";
+                        clicked => { root.select-all(!(root.rows.length > 0 && root.selected-count == root.rows.length)); }
+                    }
+
+                    HeaderButton {
+                        touch: root.mobile-mode;
+                        icon: Icons.trash;
+                        label: "Delete selected";
+                        destructive: true;
+                        enabled: root.selected-count > 0;
+                        clicked => {
+                            root.confirm-selected = true;
+                            root.show-clear-confirm = true;
+                        }
+                    }
+                }
+            }
+
+            if !root.selecting: GlassSurface {
                 material-enabled: root.mobile-mode;
                 elevation: 0;
                 z: 1;
@@ -208,21 +282,58 @@ export component CallHistoryScreen inherits Rectangle {
 
                         for row in root.rows: Rectangle {
                             height: root.row-height;
-                            background: row-touch.has-hover ? Colors.surface-hover : transparent;
+                            background: root.selecting && row.selected ? Colors.text-primary.with-alpha(0.12)
+                                : row-touch.has-hover ? Colors.surface-hover : transparent;
                             border-radius: Spacing.radius-md;
 
                             // Under the row's content, not over it: declared last it
                             // sat on top and took the redial buttons' taps, so
                             // "call back" opened the DM instead of calling.
-                            row-touch := TouchArea {
+                            // Hold (touch) or right-click starts selection here.
+                            row-touch := HoldArea {
+                                enabled-for-touch: root.mobile-mode && !root.selecting;
+                                held => {
+                                    if !root.selecting { root.toggle-select(row.id); }
+                                }
                                 clicked => {
-                                    root.open-conversation(row.conversation-id, row.conversation-type);
+                                    if self.hold-fired { return; }
+                                    if root.selecting {
+                                        root.toggle-select(row.id);
+                                    } else {
+                                        root.open-conversation(row.conversation-id, row.conversation-type);
+                                    }
                                 }
                             }
 
                             HorizontalLayout {
                                 padding: Spacing.sm;
                                 spacing: Spacing.sm;
+
+                                // Passive mark: the row's HoldArea takes the tap.
+                                // Checkbox would flip its own `checked` and drop
+                                // the binding to the model Rust updates.
+                                if root.selecting: Rectangle {
+                                    width: Spacing.switch-thumb;
+                                    height: self.width;
+                                    y: (parent.height - self.height) / 2;
+                                    border-radius: Spacing.radius-sm;
+                                    border-width: Spacing.stroke;
+                                    border-color: row.selected ? Colors.action-fill : Colors.text-muted;
+                                    background: row.selected ? Colors.action-fill : transparent;
+                                    accessible-role: checkbox;
+                                    accessible-label: "Select call with " + row.name;
+                                    accessible-checkable: true;
+                                    accessible-checked: row.selected;
+
+                                    if row.selected: Image {
+                                        source: Icons.check;
+                                        width: Spacing.md;
+                                        height: self.width;
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
+                                        colorize: Colors.on-action;
+                                    }
+                                }
 
                                 Avatar {
                                     size: root.row-avatar;
@@ -286,7 +397,7 @@ export component CallHistoryScreen inherits Rectangle {
                                 // switch is exactly why you'd come back to a row.
                                 // Fixed width, no stretch, so the two buttons
                                 // sit at the same x on every row.
-                                if row.can-call-back: HorizontalLayout {
+                                if row.can-call-back && !root.selecting: HorizontalLayout {
                                     spacing: Spacing.xs;
                                     alignment: center;
                                     horizontal-stretch: 0;
@@ -360,9 +471,22 @@ export component CallHistoryScreen inherits Rectangle {
                     padding: Spacing.sm;
 
                     Text {
-                        text: "Delete every call in this list? This cannot be undone.";
+                        text: !root.confirm-selected
+                            ? "Delete every call in this list from this device? This cannot be undone."
+                            : root.selected-count == 1
+                            ? "Delete 1 selected call from this device? This cannot be undone."
+                            : "Delete " + root.selected-count + " selected calls from this device? This cannot be undone.";
                         color: Colors.error;
                         font-size: Typography.sm;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                    }
+
+                    // Scope, stated: nothing here reaches another device.
+                    Text {
+                        text: "Other people's call history and the call messages in your chats are not changed. A call in progress is kept.";
+                        color: Colors.text-muted;
+                        font-size: Typography.xs;
                         horizontal-alignment: center;
                         wrap: word-wrap;
                     }
@@ -380,11 +504,15 @@ export component CallHistoryScreen inherits Rectangle {
                         }
 
                         Button {
-                            text: "Clear history";
+                            text: root.confirm-selected ? "Delete" : "Clear history";
                             variant: "destructive";
                             clicked => {
                                 root.show-clear-confirm = false;
-                                root.clear-history();
+                                if root.confirm-selected {
+                                    root.delete-selected();
+                                } else {
+                                    root.clear-history();
+                                }
                             }
                         }
                     }
@@ -408,26 +536,56 @@ export component CallHistoryScreen inherits Rectangle {
                     elevation: 4;
                     x: parent.width - root.more-menu-trailing-inset - self.width;
                     y: 0;
-                    width: min(menu-label.preferred-width + 2 * Spacing.lg,
+                    width: min(max(select-label.preferred-width, menu-label.preferred-width) + 2 * Spacing.lg,
                         max(0px, parent.width - root.more-menu-trailing-inset));
-                    height: Spacing.touch-target-min;
+                    height: 2 * Spacing.touch-target-min;
                     border-radius: Spacing.radius-xl;
 
-                    menu-label := Text {
-                        text: "Clear call history";
-                        color: Colors.error;
-                        font-size: Typography.base;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                        width: 100%;
-                        height: 100%;
-                    }
+                    VerticalLayout {
+                        Rectangle {
+                            height: Spacing.touch-target-min;
 
-                    menu-touch := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            root.show-more-menu = false;
-                            root.show-clear-confirm = true;
+                            select-label := Text {
+                                text: "Select calls";
+                                color: Colors.text-primary;
+                                font-size: Typography.base;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                                width: 100%;
+                                height: 100%;
+                            }
+
+                            TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.show-more-menu = false;
+                                    root.show-clear-confirm = false;
+                                    root.select-all(false);
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            height: Spacing.touch-target-min;
+
+                            menu-label := Text {
+                                text: "Clear call history";
+                                color: Colors.error;
+                                font-size: Typography.base;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                                width: 100%;
+                                height: 100%;
+                            }
+
+                            menu-touch := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.show-more-menu = false;
+                                    root.confirm-selected = false;
+                                    root.show-clear-confirm = true;
+                                }
+                            }
                         }
                     }
                 }

@@ -9,9 +9,11 @@
 # Contents/Resources/gstreamer-1.0-plugins and rewrites THEIR dependency references to
 # @rpath the same way — see the "why" comment above the plugin loop below.
 #
-# GST_PLUGIN_SYSTEM_PATH must point at Contents/Resources/gstreamer-1.0-plugins when
-# launching (bundle-relative, so an Info.plist LSEnvironment entry can't
-# express it — set it in the shell that execs Contents/MacOS/chatter-ui).
+# GST_PLUGIN_SYSTEM_PATH must point at Contents/Resources/gstreamer-1.0-plugins.
+# Info.plist LSEnvironment cannot express a bundle-relative path. The desktop
+# binary sets it from its own executable path when this directory exists
+# (platform/macos.rs) and leaves a caller-supplied value alone. `open` and
+# double-click therefore do not need a wrapper.
 set -euo pipefail
 
 PROFILE="${1:-debug}"

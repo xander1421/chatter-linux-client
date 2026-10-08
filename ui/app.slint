@@ -1206,6 +1206,13 @@ export component MainWindow inherits Window {
     callback call-history-redial(string, string, bool); // conversation-id, conversation-type, is-video
     callback call-history-clear();
     callback call-history-retry();
+    // Calls-screen row selection (features/calls/history.rs owns the marks).
+    in-out property <bool> call-history-selecting: false;
+    in property <int> call-history-selected-count: 0;
+    callback call-history-toggle-select(string);  // row id
+    callback call-history-select-all(bool);
+    callback call-history-end-selection();
+    callback call-history-delete-selected();
     callback accept-incoming-call(string);  // call_id
     callback decline-incoming-call(string); // call_id
     callback call-toggle-mute();
@@ -1288,8 +1295,8 @@ export component MainWindow inherits Window {
     changed selection-mode => { if root.selection-mode { VoiceRecording.cancel(); } }
     changed composer-is-editing => { if root.composer-is-editing { VoiceRecording.cancel(); } }
     changed thread-panel-visible => { VoiceRecording.cancel(); }
-    changed active-tab => { root.calls-more-menu-visible = false; root.cancel-composer-keyboard-handover(); VoiceRecording.cancel(); }
-    changed current-view => { root.calls-more-menu-visible = false; root.cancel-composer-keyboard-handover(); VoiceRecording.cancel(); }
+    changed active-tab => { root.calls-more-menu-visible = false; root.call-history-selecting = false; root.cancel-composer-keyboard-handover(); VoiceRecording.cancel(); }
+    changed current-view => { root.calls-more-menu-visible = false; root.call-history-selecting = false; root.cancel-composer-keyboard-handover(); VoiceRecording.cancel(); }
     // Drop whatever text field holds focus (hiding the soft keyboard with it)
     // without leaving the window focus-less: Back keeps arriving at
     // back-scope. Called from Rust when Android's Back hid the keyboard
@@ -1415,8 +1422,8 @@ export component MainWindow inherits Window {
         key-pressed(event) => {
             if (event.text == Key.Back || (event.text == Key.Escape
                 && root.active-modal == "none"
-                && (root.delete-confirm-count > 0 || root.calls-more-menu-visible || root.composer-emoji-picker-visible || root.composer-gif-picker-visible))) {
-                if (event.text == Key.Escape && (root.calls-more-menu-visible || root.delete-confirm-count > 0)) {
+                && (root.delete-confirm-count > 0 || root.calls-more-menu-visible || root.call-history-selecting || root.composer-emoji-picker-visible || root.composer-gif-picker-visible))) {
+                if (event.text == Key.Escape && (root.calls-more-menu-visible || root.call-history-selecting || root.delete-confirm-count > 0)) {
                     self.calls-menu-escape-consumed = true;
                 }
                 root.back-pressed();
@@ -1481,7 +1488,7 @@ export component MainWindow inherits Window {
                 }
                 // Escape: close the top modal, else leave a non-Chats tab
                 if (event.text == Key.Escape) {
-                    if (root.calls-more-menu-visible || root.delete-confirm-count > 0) {
+                    if (root.calls-more-menu-visible || root.call-history-selecting || root.delete-confirm-count > 0) {
                         root.back-pressed();
                         return accept;
                     }
@@ -2536,7 +2543,13 @@ export component MainWindow inherits Window {
             error-message: root.call-history-error;
             active-filter: root.call-history-filter;
             show-more-menu <=> root.calls-more-menu-visible;
+            selecting: root.call-history-selecting;
+            selected-count: root.call-history-selected-count;
             retry => { root.call-history-retry(); }
+            toggle-select(id) => { root.call-history-toggle-select(id); }
+            select-all(all) => { root.call-history-select-all(all); }
+            end-selection => { root.call-history-end-selection(); }
+            delete-selected => { root.call-history-delete-selected(); }
 
             close => {
                 root.active-tab = "chats";

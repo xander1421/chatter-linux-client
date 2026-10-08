@@ -157,3 +157,44 @@ pub fn wire_delete_everyone_message(window: &MainWindow, ui_ctx: &Arc<ChatterCli
         });
     });
 }
+
+/// Selection deletion is one awaited operation, never a loop over UI callbacks.
+/// Core owns server authorization, transport limitations, and local persistence.
+pub(super) async fn delete_selected_messages(
+    handle: &chatter_core::services::conversation::ConversationHandle,
+    targets: &[(UserId, u64)],
+    everyone: bool,
+    client: &ChatterClient,
+    account: UserId,
+    session_revision: u64,
+) -> chatter_core::services::conversation::ConversationResult {
+    if everyone {
+        handle
+            .send_delete_batch_fenced(targets, account, session_revision)
+            .await
+    } else {
+        for (author, timestamp) in targets {
+            let auth = client.auth_state().get();
+            if auth.current_user_id != Some(account) || auth.session_revision != session_revision {
+                return Err(
+                    chatter_core::services::conversation::ConversationError::Other(
+                        "The login changed before deletion finished.".into(),
+                    ),
+                );
+            }
+            handle.delete_for_me(author, *timestamp).await?;
+        }
+        Ok(())
+    }
+}
+
+pub(super) fn remove_selected_messages_from_ui(w: &MainWindow, targets: &[(UserId, u64)]) {
+    for (author, timestamp) in targets {
+        super::helpers::remove_message_from_ui(
+            w,
+            &author.to_string(),
+            &timestamp.to_string(),
+            unregister_message_gifs,
+        );
+    }
+}

@@ -30,8 +30,10 @@ cmd /c "`"$vcvars`" && set" | ForEach-Object {
 }
 
 # --- Portable tools (protoc, pkg-config, nasm, sccache) ---
-$env:Path = "C:\Users\win11pc\build-tools\bin;$env:Path"
-$env:PROTOC = "C:\Users\win11pc\build-tools\bin\protoc.exe"
+$tools = Join-Path $env:USERPROFILE "build-tools\bin"
+if (-not (Test-Path $tools)) { throw "build tools not found at $tools" }
+$env:Path = "$tools;$env:Path"
+$env:PROTOC = Join-Path $tools "protoc.exe"
 
 # --- GStreamer (MSVC x86_64) ---
 $gst = "C:\gstreamer\1.0\msvc_x86_64"
@@ -47,8 +49,23 @@ $env:Path = "$llvm\bin;$env:Path"
 $env:LIBCLANG_PATH = "$llvm\bin"
 
 # --- Python 3 for the full Skia source build (no prebuilt for this config) ---
-$pydir = "C:\Users\win11pc\AppData\Local\Programs\Python\Python312"
+$pydir = Join-Path $env:LOCALAPPDATA "Programs\Python\Python312"
+if (-not (Test-Path $pydir)) { throw "Python 3.12 not found at $pydir" }
 $env:Path = "$pydir;$pydir\Scripts;$env:Path"
+
+# Production pins. Default features do not include dev-trust-root, so a
+# missing pin fails the Rust build. Fail here, before the long compile.
+foreach ($name in @(
+    "CHATTER_TLS_ROOT_CA_PEM",
+    "CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX",
+    "CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX",
+    "CHATTER_KT_VRF_PUBLIC_KEY_HEX"
+)) {
+    $value = [Environment]::GetEnvironmentVariable($name)
+    if ([string]::IsNullOrEmpty($value)) {
+        throw "RELEASE build needs $name. Export the four pins from a provisioned scripts/anchors.sh check. Do not pass --features dev-trust-root."
+    }
+}
 
 # --- SQLCipher crypto provider = webrtc's bundled BoringSSL ------------------
 # Mirrors android/build-android.sh `setup_boringssl_for_sqlcipher`. rusqlite

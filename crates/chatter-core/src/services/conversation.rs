@@ -777,6 +777,305 @@ impl ConversationHandle {
         }
     }
 
+    fn deletion_retry_scope(&self) -> ConversationResult<String> {
+        Ok(match self.conversation {
+            ActiveConversation::Channel(id) => format!("channel:{id}"),
+            ActiveConversation::ServerDm { peer_id } => format!("server_dm:{peer_id}"),
+            ActiveConversation::AnonDm(id) => format!("anon_dm:{id}"),
+            ActiveConversation::AnonGroup(id) => format!("anon_group:{id}"),
+            ActiveConversation::None => return Err(ConversationError::NoConversation),
+        })
+    }
+
+    /// Persist the immutable original batch before any remote action. Recovery
+    /// uses exact saved controls and minimal cleanup identities, never live rows.
+    pub async fn send_delete_batch(&self, targets: &[(UserId, u64)]) -> ConversationResult {
+        let auth = self.client.auth_state().get();
+        let account = auth
+            .current_user_id
+            .ok_or(crate::services::MessageError::NotLoggedIn)?;
+        self.send_delete_batch_in_session(targets, Some((account, auth.session_revision)))
+            .await
+    }
+
+    /// UI callers pass the account/revision captured at the original click,
+    /// before spawning a task, so a delayed first poll cannot adopt a new login.
+    pub async fn send_delete_batch_fenced(
+        &self,
+        targets: &[(UserId, u64)],
+        account: UserId,
+        revision: u64,
+    ) -> ConversationResult {
+        self.send_delete_batch_in_session(targets, Some((account, revision)))
+            .await
+    }
+
+    async fn send_delete_batch_in_session(
+        &self,
+        targets: &[(UserId, u64)],
+        expected: Option<(UserId, u64)>,
+    ) -> ConversationResult {
+        use crate::storage::repositories::delete_batch_retry_repo::{
+            DELETE_BATCH_LOCK, DeleteBatchRetryRepository, PreparedBatch, PreparedDelete,
+        };
+        use prost::Message as _;
+        if targets.is_empty() {
+            return Ok(());
+        }
+        if targets.len() > 500 {
+            return Err(ConversationError::Other(
+                "at most 500 messages may be deleted at once".into(),
+            ));
+        }
+        let _execution = DELETE_BATCH_LOCK.lock().await;
+        let auth = self.client.auth_state().get();
+        let account = auth
+            .current_user_id
+            .ok_or(crate::services::MessageError::NotLoggedIn)?;
+        let revision = auth.session_revision;
+        if self.client.messages().current_user_id()? != account
+            || expected.is_some_and(|e| e != (account, revision))
+        {
+            return Err(crate::services::MessageError::NotLoggedIn.into());
+        }
+        let scope = self.deletion_retry_scope()?;
+        let journal = DeleteBatchRetryRepository::new(self.client.messages().database.clone());
+        let selection = DeleteBatchRetryRepository::selection_key(targets)?;
+        let mut batch = if let Some(saved) = journal.get(&account, &scope, &selection)? {
+            saved
+        } else {
+            let mut seen = std::collections::HashSet::new();
+            let mut prepared = Vec::with_capacity(targets.len());
+            for &(author, timestamp) in targets {
+                if !seen.insert((author, timestamp)) {
+                    continue;
+                }
+                let (message, content) = self.prepare_delete_for_everyone(&author, timestamp)?;
+                let deletion_token = self
+                    .client
+                    .messages()
+                    .message_repo
+                    .deletion_token(&message.id)?
+                    .map(|t| t.to_vec())
+                    .unwrap_or_default();
+                prepared.push(PreparedDelete {
+                    author,timestamp,message_id:message.id,conversation_id:message.conversation_id,
+                    conversation_type:message.conversation_type.clone(),
+                    call_id:crate::storage::repositories::message_modifier_repo::canonical_call_record_id(&message).map(|id|id.to_string()),
+                    deletion_token,control:content.encode_to_vec(),control_sent:false,local_completed:false,
+                });
+            }
+            let batch = PreparedBatch {
+                id: uuid::Uuid::new_v4().to_string(),
+                targets: prepared,
+                server_committed: false,
+            };
+            journal.insert(&account, &scope, &selection, &batch)?;
+            batch
+        };
+        // Cancel all remaining network/local work if logout or a new login
+        // changes the account/session; recovery never adopts another account.
+        let result = tokio::select! {
+            biased;
+            _ = self.deletion_session_changed(account,revision) => Err(crate::services::MessageError::NotLoggedIn.into()),
+            result = tokio::time::timeout(std::time::Duration::from_secs(120), self.execute_prepared_delete_batch(&account,revision,&scope,&journal,&mut batch)) => {
+                match result { Ok(result) => result, Err(_) => Err(crate::services::MessageError::Network(crate::error::NetworkError::Timeout).into()) }
+            },
+        };
+        if let Err(error) = &result {
+            let permanent = matches!(
+                error,
+                ConversationError::Message(crate::services::MessageError::Network(
+                    crate::error::NetworkError::PermissionDenied
+                        | crate::error::NetworkError::InvalidRequest(_)
+                        | crate::error::NetworkError::DataLoss(_)
+                )) | ConversationError::AnonDm(
+                    crate::services::AnonDmError::ConversationBlocked(_)
+                        | crate::services::AnonDmError::UserBlocked(_)
+                        | crate::services::AnonDmError::ConversationNotFound(_)
+                        | crate::services::AnonDmError::DeliveryUnconfirmed
+                ) | ConversationError::AnonGroup(
+                    crate::services::AnonGroupError::InsufficientPermissions(_)
+                        | crate::services::AnonGroupError::GroupBlocked(_)
+                        | crate::services::AnonGroupError::UserBlocked(_)
+                        | crate::services::AnonGroupError::GroupNotFound(_)
+                        | crate::services::AnonGroupError::DeliveryUnconfirmed
+                )
+            );
+            journal.defer(&account, &scope, &batch.id, permanent)?;
+        }
+        result
+    }
+
+    fn require_deletion_session(&self, account: &UserId, revision: u64) -> ConversationResult {
+        let state = self.client.auth_state().get();
+        if state.current_user_id != Some(*account) || state.session_revision != revision {
+            return Err(crate::services::MessageError::NotLoggedIn.into());
+        }
+        Ok(())
+    }
+
+    async fn deletion_session_changed(&self, account: UserId, revision: u64) {
+        let mut changes = self.client.auth_state().subscribe();
+        loop {
+            let state = self.client.auth_state().get();
+            if state.current_user_id != Some(account) || state.session_revision != revision {
+                return;
+            }
+            if changes.recv().await.is_err() {
+                return;
+            }
+        }
+    }
+
+    async fn execute_prepared_delete_batch(
+        &self,
+        account: &UserId,
+        revision: u64,
+        scope: &str,
+        journal: &crate::storage::repositories::delete_batch_retry_repo::DeleteBatchRetryRepository,
+        batch: &mut crate::storage::repositories::delete_batch_retry_repo::PreparedBatch,
+    ) -> ConversationResult {
+        use prost::Message as _;
+        self.require_deletion_session(account, revision)?;
+        if !batch.server_committed {
+            // Preserve the entire original selected set in this one RPC. Never
+            // combine journal rows from different submissions or split a batch.
+            let server_targets = batch
+                .targets
+                .iter()
+                .filter(|t| {
+                    matches!(self.conversation, ActiveConversation::Channel(_))
+                        || matches!(self.conversation, ActiveConversation::ServerDm { .. })
+                            && !t.deletion_token.is_empty()
+                })
+                .map(|t| {
+                    (
+                        t.message_id.to_string(),
+                        t.conversation_id.to_string(),
+                        t.deletion_token.clone(),
+                    )
+                })
+                .collect::<Vec<_>>();
+            if !server_targets.is_empty() {
+                self.client
+                    .messages()
+                    .message_client()
+                    .delete_messages(server_targets)
+                    .await
+                    .map_err(crate::services::MessageError::from)?;
+            }
+            self.require_deletion_session(account, revision)?;
+            batch.server_committed = true;
+            for target in &mut batch.targets {
+                target.deletion_token.clear();
+            }
+            journal.progress(account, scope, batch)?;
+        }
+        for i in 0..batch.targets.len() {
+            self.require_deletion_session(account, revision)?;
+            let target = &batch.targets[i];
+            if target.control_sent || target.local_completed {
+                continue;
+            }
+            let content = crate::proto::content_v1::Content::decode(target.control.as_slice())
+                .map_err(|e| {
+                    ConversationError::Other(format!("invalid prepared deletion control: {e}"))
+                })?;
+            match &self.conversation {
+                ActiveConversation::AnonDm(id) => {
+                    self.client.anon_dms().send_message(id, content).await?
+                }
+                ActiveConversation::AnonGroup(id) => {
+                    self.client
+                        .anon_groups()
+                        .send_ephemeral_message(id, content)
+                        .await?
+                }
+                _ => self.dispatch_content(content).await?,
+            }
+            self.require_deletion_session(account, revision)?;
+            batch.targets[i].control_sent = true;
+            batch.targets[i].control.clear();
+            journal.progress(account, scope, batch)?;
+        }
+        for i in 0..batch.targets.len() {
+            self.require_deletion_session(account, revision)?;
+            if batch.targets[i].local_completed {
+                continue;
+            }
+            self.complete_prepared_delete(&batch.targets[i])?;
+            batch.targets[i].local_completed = true;
+            journal.progress(account, scope, batch)?;
+        }
+        self.require_deletion_session(account, revision)?;
+        journal.finish(account, scope, batch)?;
+        for target in &batch.targets {
+            self.client
+                .event_bus()
+                .emit_domain(crate::events::DomainEvent::MessageDeleted {
+                    message_id: target.message_id,
+                    author_id: target.author,
+                    channel_id: Some(target.conversation_id),
+                    target_sent_timestamp: target.timestamp,
+                });
+        }
+        Ok(())
+    }
+
+    fn complete_prepared_delete(
+        &self,
+        target: &crate::storage::repositories::delete_batch_retry_repo::PreparedDelete,
+    ) -> ConversationResult {
+        use crate::storage::repositories::message_modifier_repo::{
+            MessageModifierRepository, apply_call_delete,
+        };
+        if let Some(call_id) = &target.call_id {
+            apply_call_delete(
+                self.client.messages().database.clone(),
+                &self.client.messages().message_repo,
+                &crate::domain::reaction::ReactionScope::new(
+                    target.conversation_id,
+                    target.conversation_type.clone(),
+                ),
+                call_id,
+            )?;
+            return Ok(());
+        }
+        if matches!(
+            target.conversation_type,
+            ConversationType::ServerDm | ConversationType::AnonDm
+        ) {
+            MessageModifierRepository::new(self.client.messages().database.clone())
+                .queue_typed_dm_delete(
+                    &target.author,
+                    target.timestamp,
+                    Some(target.conversation_id),
+                    target.conversation_type.clone(),
+                    crate::util::time::TimestampNanos::now().as_u64(),
+                )?;
+        }
+        if let ActiveConversation::AnonGroup(id) = self.conversation {
+            self.client.anon_groups().delete_message_by_timestamp(
+                &id,
+                &target.author,
+                target.timestamp,
+            )?;
+            return Ok(());
+        }
+        match self
+            .client
+            .messages()
+            .delete_message_local(&target.message_id)
+        {
+            Ok(())
+            | Err(crate::services::MessageError::Storage(crate::error::StorageError::NotFound(
+                _,
+            ))) => Ok(()),
+            Err(error) => Err(error.into()),
+        }
+    }
+
     /// Delete-for-me: delete locally + sync to own devices.
     pub async fn delete_for_me(
         &self,
@@ -1691,6 +1990,66 @@ impl ConversationHandle {
             _ => Err(ConversationError::NoConversation),
         }
     }
+}
+
+/// Lifecycle-owned recovery; at most four due ORIGINAL batches per tick, with
+/// exponential backoff and paused denied/exhausted batches retained locally.
+pub(crate) fn spawn_delete_batch_recovery(
+    client: &Arc<ChatterClient>,
+) -> tokio::task::JoinHandle<()> {
+    let weak = Arc::downgrade(client);
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(30));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        loop {
+            interval.tick().await;
+            let Some(client) = weak.upgrade() else {
+                break;
+            };
+            let state = client.auth_state().get();
+            let Some(account) = state.current_user_id else {
+                continue;
+            };
+            let journal=crate::storage::repositories::delete_batch_retry_repo::DeleteBatchRetryRepository::new(client.messages().database.clone());
+            let due = match journal.due(&account) {
+                Ok(due) => due,
+                Err(error) => {
+                    tracing::warn!(%error,"Cannot load deletion retries");
+                    continue;
+                }
+            };
+            for (scope, batch) in due {
+                let Some((kind, id)) = scope.split_once(':') else {
+                    continue;
+                };
+                let conversation = match kind {
+                    "channel" => id.parse().ok().map(ActiveConversation::Channel),
+                    "server_dm" => id
+                        .parse()
+                        .ok()
+                        .map(|peer_id| ActiveConversation::ServerDm { peer_id }),
+                    "anon_dm" => id.parse().ok().map(ActiveConversation::AnonDm),
+                    "anon_group" => id.parse().ok().map(ActiveConversation::AnonGroup),
+                    _ => None,
+                };
+                let Some(conversation) = conversation else {
+                    continue;
+                };
+                let targets = batch
+                    .targets
+                    .iter()
+                    .map(|t| (t.author, t.timestamp))
+                    .collect::<Vec<_>>();
+                if let Err(error) = client
+                    .conversation(conversation)
+                    .send_delete_batch_in_session(&targets, Some((account, state.session_revision)))
+                    .await
+                {
+                    tracing::warn!(%error,%scope,batch_id=%batch.id,"Deletion retry remains pending");
+                }
+            }
+        }
+    })
 }
 
 /// Shared by actual dispatch and regression transport injection. The caller has

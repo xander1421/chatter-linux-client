@@ -25,6 +25,7 @@ pub mod attachment_repo;
 pub mod call_repo;
 pub mod channel_repo;
 pub mod ephemeral_repo;
+pub(crate) mod delete_batch_retry_repo;
 // message_repo.rs deleted — all callers now use UnifiedMessageRepository via `MessageRepository` alias.
 pub mod anon_dm_repo;
 pub mod anon_group_repo;

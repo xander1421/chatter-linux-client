@@ -87,6 +87,7 @@ mod v086_channel_message_clocks;
 mod v087_single_reaction;
 mod v088_reaction_normalization;
 mod v089_pin_added_order;
+mod v090_delete_batch_retry;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -177,6 +178,7 @@ pub use v086_channel_message_clocks::V086ChannelMessageClocks;
 pub use v087_single_reaction::V087SingleReaction;
 pub use v088_reaction_normalization::V088ReactionNormalization;
 pub use v089_pin_added_order::V089PinAddedOrder;
+pub use v090_delete_batch_retry::V090DeleteBatchRetry;
 
 /// Trait for database migrations.
 ///
@@ -398,4 +400,5 @@ pub fn default_migrations() -> MigrationRunner {
         .register(V087SingleReaction)
         .register(V088ReactionNormalization)
         .register(V089PinAddedOrder)
+        .register(V090DeleteBatchRetry)
 }

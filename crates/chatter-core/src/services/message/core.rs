@@ -1160,6 +1160,98 @@ impl MessageService {
         Ok(())
     }
 
+    /// Authorize and prepare the entire local selection before one server RPC.
+    /// The local soft-delete is one SQLite statement after server commit.
+    pub async fn delete_messages(
+        &self,
+        channel_id: &ChannelId,
+        message_ids: &[MessageId],
+    ) -> Result<(), MessageError> {
+        if message_ids.is_empty() {
+            return Ok(());
+        }
+        let current_user = self.settings_repo.current_user_id()?;
+        let mut seen = std::collections::HashSet::new();
+        let mut targets = Vec::with_capacity(message_ids.len());
+        for id in message_ids {
+            if !seen.insert(*id) {
+                continue;
+            }
+            let existing = self
+                .message_repo
+                .get(id)?
+                .ok_or_else(|| MessageError::MessageNotFound(*id))?;
+            if existing.conversation_id != *channel_id {
+                return Err(MessageError::NotAuthor);
+            }
+            if existing
+                .sender_id
+                .is_some_and(|sender| sender != current_user)
+            {
+                return Err(MessageError::NotAuthor);
+            }
+            let token = self.message_repo.deletion_token(id)?;
+            targets.push((
+                id.to_string(),
+                channel_id.to_string(),
+                token.map(|t| t.to_vec()).unwrap_or_default(),
+            ));
+        }
+        self.message_client().delete_messages(targets).await?;
+        self.message_repo.soft_delete_batch(message_ids)?;
+        Ok(())
+    }
+
+    /// Server-only batch phase for channels; caller retains local retry data
+    /// until all E2E controls have been queued successfully.
+    pub async fn delete_channel_server_copies(
+        &self,
+        messages: &[Message],
+    ) -> Result<(), MessageError> {
+        if messages.is_empty() {
+            return Ok(());
+        }
+        let mut targets = Vec::with_capacity(messages.len());
+        for message in messages {
+            let token = self.message_repo.deletion_token(&message.id)?;
+            targets.push((
+                message.id.to_string(),
+                message.conversation_id.to_string(),
+                token.map(|t| t.to_vec()).unwrap_or_default(),
+            ));
+        }
+        self.message_client().delete_messages(targets).await?;
+        Ok(())
+    }
+
+    /// Remove all owned sealed-sender server copies in one atomic request.
+    /// Messages without a local authorship token have no deletable server copy.
+    /// This does not atomically deliver E2E peer controls: callers must report
+    /// peer fanout failures separately and must not erase local retry data first.
+    pub async fn delete_sealed_server_copies(
+        &self,
+        messages: &[Message],
+    ) -> Result<(), MessageError> {
+        let mut seen = std::collections::HashSet::new();
+        let mut targets = Vec::new();
+        for message in messages {
+            if !seen.insert(message.id) {
+                continue;
+            }
+            if let Some(token) = self.message_repo.deletion_token(&message.id)? {
+                targets.push((
+                    message.id.to_string(),
+                    message.conversation_id.to_string(),
+                    token.to_vec(),
+                ));
+            }
+        }
+        if !targets.is_empty() {
+            self.message_client().delete_messages(targets).await?;
+        }
+        Ok(())
+    }
+
     /// Delete-for-everyone, server half: remove the server's copy of a
     /// sealed-sender message we sent by presenting the deletion token kept at
     /// send time. A message without a token (not sent by us as sealed sender)

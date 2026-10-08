@@ -71,6 +71,9 @@ export struct CallHistoryRow {
     is-video: bool,
     is-incoming: bool,
     can-call-back: bool,
+    // Calls-screen selection mark. UI state only, owned by
+    // `features/calls/history.rs`; core always builds rows unselected.
+    selected: bool,
 }
 
 // Device/source selection types

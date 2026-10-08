@@ -14,6 +14,14 @@ use std::sync::{
 static HISTORY_GENERATION: AtomicU64 = AtomicU64::new(0);
 static HISTORY_MODEL_SESSION: AtomicU64 = AtomicU64::new(u64::MAX);
 
+thread_local! {
+    /// Filter and read time of the painted list — what "Clear call history"
+    /// clears, so a call that arrived after the paint is never deleted unseen.
+    /// UI-thread only, like the model it describes.
+    static PAINTED: std::cell::Cell<Option<(CallHistoryFilter, chrono::DateTime<chrono::Utc>)>> =
+        const { std::cell::Cell::new(None) };
+}
+
 #[derive(Clone, Copy)]
 struct HistoryRequest {
     generation: u64,
@@ -31,7 +39,7 @@ impl HistoryRequest {
     }
 }
 
-use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use chatter_core::client::ChatterClient;
 use chatter_core::client::calls::CallHistoryPage;
@@ -87,6 +95,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     wire_open(window, ui_ctx);
     wire_redial(window, ui_ctx);
     wire_clear(window, ui_ctx);
+    wire_selection(window, ui_ctx);
     let weak = window.as_weak();
     let client = ui_ctx.clone();
     window.on_call_history_retry(move || {
@@ -164,11 +173,16 @@ fn wire_clear(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
 
     window.on_call_history_clear(move || {
+        // Nothing painted (still loading, or a new session) = nothing the
+        // user confirmed clearing.
+        let Some((filter, snapshot_at)) = PAINTED.with(|p| p.get()) else {
+            return;
+        };
         let weak = weak.clone();
         let ui_ctx = ui_ctx.clone();
         let request = HistoryRequest::begin(&ui_ctx);
         tokio::spawn(async move {
-            let result = ui_ctx.clear_call_history().await;
+            let result = ui_ctx.clear_call_history(filter, snapshot_at).await;
             let client = ui_ctx.clone();
             run_ui!(weak, |w| {
                 complete_clear(
@@ -181,6 +195,104 @@ fn wire_clear(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             });
         });
     });
+}
+
+/// Row selection and deleting the selected rows. The marks live on the
+/// painted model's rows; a repaint (reload, filter, clear) drops them.
+fn wire_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let weak = window.as_weak();
+    window.on_call_history_toggle_select(move |id: SharedString| {
+        let Some(w) = weak.upgrade() else { return };
+        // Entering selection starts from nothing marked but the held row.
+        let entering = !w.get_call_history_selecting();
+        mark_rows(&w, |row| {
+            if row.id == id {
+                !(row.selected && !entering)
+            } else {
+                row.selected && !entering
+            }
+        });
+    });
+
+    let weak = window.as_weak();
+    window.on_call_history_select_all(move |all| {
+        if let Some(w) = weak.upgrade() {
+            mark_rows(&w, |_| all);
+        }
+    });
+
+    let weak = window.as_weak();
+    window.on_call_history_end_selection(move || {
+        if let Some(w) = weak.upgrade() {
+            mark_rows(&w, |_| false);
+            w.set_call_history_selecting(false);
+        }
+    });
+
+    let weak = window.as_weak();
+    let ui_ctx = ui_ctx.clone();
+    window.on_call_history_delete_selected(move || {
+        let Some(w) = weak.upgrade() else { return };
+        // Snapshot the ids now: exactly what the confirmation counted.
+        let ids: Vec<String> = w
+            .get_call_history_rows()
+            .iter()
+            .filter(|row| row.selected)
+            .map(|row| row.id.to_string())
+            .collect();
+        if ids.is_empty() {
+            return;
+        }
+        let weak = weak.clone();
+        let ui_ctx = ui_ctx.clone();
+        let request = HistoryRequest::begin(&ui_ctx);
+        tokio::spawn(async move {
+            let wanted = ids.len() as u64;
+            let result = ui_ctx.delete_call_history_entries(ids).await;
+            let client = ui_ctx.clone();
+            run_ui!(weak, |w| {
+                if request.session != client.auth_state().get().session_revision {
+                    return;
+                }
+                match result {
+                    Ok(deleted) => {
+                        if deleted < wanted {
+                            toast(&w, "A call in progress was kept.", "info");
+                        }
+                        reload(&w, &client);
+                    }
+                    Err(e) => {
+                        tracing::error!(error = %e, "Failed to delete call history rows");
+                        toast(&w, "Could not delete those calls. Try again.", "error");
+                    }
+                }
+            });
+        });
+    });
+}
+
+/// Set every painted row's mark from `selected`, enter selection, and
+/// publish the count.
+fn mark_rows(window: &MainWindow, selected: impl Fn(&CallHistoryRow) -> bool) {
+    let rows = window.get_call_history_rows();
+    let mut count = 0;
+    for i in 0..rows.row_count() {
+        let Some(mut row) = rows.row_data(i) else { continue };
+        let mark = selected(&row);
+        count += i32::from(mark);
+        if row.selected != mark {
+            row.selected = mark;
+            rows.set_row_data(i, row);
+        }
+    }
+    window.set_call_history_selected_count(count);
+    window.set_call_history_selecting(true);
+}
+
+fn toast(window: &MainWindow, message: &str, variant: &str) {
+    window.set_toast_message(message.into());
+    window.set_toast_variant(variant.into());
+    window.set_toast_visible(true);
 }
 
 fn complete_clear(
@@ -246,6 +358,7 @@ pub(crate) fn reload(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         // Successful data belongs to its auth session, never to a new login.
         window.set_call_history_rows(ModelRc::new(VecModel::<CallHistoryRow>::default()));
         window.set_missed_call_count(0);
+        PAINTED.with(|p| p.set(None));
     }
     window.set_call_history_loading(true);
     window.set_call_history_error("".into());
@@ -337,6 +450,11 @@ fn apply_page(
 
 fn paint(window: &MainWindow, prepared: PreparedHistoryPage) {
     let page = prepared.page;
+    let filter = match window.get_call_history_filter().as_str() {
+        "missed" => CallHistoryFilter::Missed,
+        _ => CallHistoryFilter::All,
+    };
+    PAINTED.with(|p| p.set(Some((filter, page.snapshot_at))));
     let rows: Vec<CallHistoryRow> = page
         .rows
         .into_iter()
@@ -354,9 +472,13 @@ fn paint(window: &MainWindow, prepared: PreparedHistoryPage) {
             is_video: r.is_video,
             is_incoming: r.is_incoming,
             can_call_back: r.can_call_back,
+            selected: false,
         })
         .collect();
     window.set_call_history_rows(ModelRc::new(VecModel::from(rows)));
+    // New rows carry no marks, so any selection is over.
+    window.set_call_history_selecting(false);
+    window.set_call_history_selected_count(0);
     window.set_call_history_loading(false);
     window.set_missed_call_count(page.missed_count as i32);
 }
@@ -539,6 +661,7 @@ mod tests {
                 })
                 .collect(),
             missed_count: 0,
+            snapshot_at: chrono::Utc::now(),
         };
         // Production avatar cache normalizes to its 128px row budget, including
         // upscaling these deliberately tiny encoded fixtures. Bytes/identity

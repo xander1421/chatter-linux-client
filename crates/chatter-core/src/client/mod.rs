@@ -2593,6 +2593,7 @@ impl ChatterClient {
         }
 
         // ── Channel + DM services ───────────────────────────────────
+        let h_delete_batch_retry = crate::services::conversation::spawn_delete_batch_recovery(self);
         let h_channel_stream = self.ctx.start_channel_event_stream();
         // Live channel messages. This is the ONLY subscriber of the
         // server-managed channel message path: it re-subscribes on every
@@ -2714,6 +2715,7 @@ impl ChatterClient {
             h_inbox,
             h_skdm_retry,
             h_channel_stream,
+            h_delete_batch_retry,
             h_channel_messages,
             h_channel_bootstrap,
             h_dm_bootstrap,

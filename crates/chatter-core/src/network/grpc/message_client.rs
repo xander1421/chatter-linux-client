@@ -11,12 +11,12 @@ use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::proto::chat_v1::{
     AcknowledgeMessagesRequest, AcknowledgeMessagesResponse, DeleteMessageRequest,
-    EditMessageRequest, GetDeviceMessagesRequest, GetDeviceMessagesResponse, GetMessagesRequest,
-    GetMessagesResponse, ListPinnedMessagesResponse, Message, MessageEvent, MessageSearchRequest,
-    MessageSearchResponse, MessageSortDirection, MessageUpdate, SealedDelivery,
-    SealedDeviceMessage, SendMessageRequest, SendSealedMessageRequest, SendSealedMessageResponse,
-    StreamGlobalEventsRequest, StreamMessageEventsRequest, StreamMessagesRequest,
-    StreamMessagesResponse, message_service_client::MessageServiceClient,
+    DeleteMessagesRequest, EditMessageRequest, GetDeviceMessagesRequest, GetDeviceMessagesResponse,
+    GetMessagesRequest, GetMessagesResponse, ListPinnedMessagesResponse, Message, MessageEvent,
+    MessageSearchRequest, MessageSearchResponse, MessageSortDirection, MessageUpdate,
+    SealedDelivery, SealedDeviceMessage, SendMessageRequest, SendSealedMessageRequest,
+    SendSealedMessageResponse, StreamGlobalEventsRequest, StreamMessageEventsRequest,
+    StreamMessagesRequest, StreamMessagesResponse, message_service_client::MessageServiceClient,
 };
 
 /// Message service client wrapper.
@@ -143,6 +143,30 @@ impl MessageClient {
 
         self.inner
             .delete_message(request)
+            .await
+            .map(|_| ())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Atomically delete selected server copies. Never fall back to a loop:
+    /// older servers return Unimplemented and leave the batch intact.
+    pub async fn delete_messages(
+        &mut self,
+        targets: Vec<(String, String, Vec<u8>)>,
+    ) -> Result<(), NetworkError> {
+        let messages = targets
+            .into_iter()
+            .map(
+                |(message_id, channel_id, deletion_token)| DeleteMessageRequest {
+                    message_id,
+                    channel_id,
+                    request_id: uuid::Uuid::new_v4().to_string(),
+                    deletion_token,
+                },
+            )
+            .collect();
+        self.inner
+            .delete_messages(DeleteMessagesRequest { messages })
             .await
             .map(|_| ())
             .map_err(|s| NetworkError::from_status(&s))

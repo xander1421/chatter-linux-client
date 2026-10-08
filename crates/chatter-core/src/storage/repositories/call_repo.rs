@@ -120,20 +120,47 @@ impl CallHistoryRepository {
         Ok(())
     }
 
-    /// Delete a single entry by id. Silently succeeds if the row is absent —
-    /// the UI's "swipe to delete" should be idempotent.
-    pub fn delete(&self, id: &str) -> Result<(), StorageError> {
-        let conn = self.db.connection()?;
-        conn.execute("DELETE FROM call_history WHERE id = ?1", params![id])?;
-        Ok(())
-    }
-
-    /// Delete every call history entry.
+    /// Delete the entries named in `ids` — the rows the user selected,
+    /// snapshotted when they confirmed. Absent ids are skipped, so a repeat
+    /// is idempotent. A call still open in this process (no `ended_at`,
+    /// started at or after `live_since`) is kept: its recorder still has to
+    /// close the row and file the chat's Call bubble from it.
     ///
     /// Returns the number of rows deleted.
-    pub fn delete_all(&self) -> Result<u64, StorageError> {
+    pub fn delete_ids(&self, ids: &[String], live_since: DateTime<Utc>) -> Result<u64, StorageError> {
+        if ids.is_empty() {
+            return Ok(0);
+        }
         let conn = self.db.connection()?;
-        let rows = conn.execute("DELETE FROM call_history", [])?;
+        let marks = vec!["?"; ids.len()].join(",");
+        let sql = format!(
+            "DELETE FROM call_history WHERE id IN ({marks}) AND {CLOSED_OR_ORPHANED}"
+        );
+        let mut args: Vec<SqlValue> = ids.iter().cloned().map(SqlValue::Text).collect();
+        args.push(SqlValue::Text(live_since.to_rfc3339()));
+        let rows = conn.execute(&sql, params_from_iter(args.iter()))?;
+        Ok(rows as u64)
+    }
+
+    /// Delete every entry `filter` lists that started no later than `cutoff`
+    /// — the moment the list the user is clearing was read — so a call that
+    /// arrived after it is never deleted unseen. Open calls are kept as in
+    /// [`delete_ids`](Self::delete_ids).
+    ///
+    /// Returns the number of rows deleted.
+    pub fn delete_matching(
+        &self,
+        filter: CallHistoryFilter,
+        cutoff: DateTime<Utc>,
+        live_since: DateTime<Utc>,
+    ) -> Result<u64, StorageError> {
+        let conn = self.db.connection()?;
+        let sql = format!(
+            "DELETE FROM call_history WHERE julianday(started_at) <= julianday(?1){} AND {}",
+            filter_sql(filter),
+            CLOSED_OR_ORPHANED.replace('?', "?2"),
+        );
+        let rows = conn.execute(&sql, params![cutoff.to_rfc3339(), live_since.to_rfc3339()])?;
         Ok(rows as u64)
     }
 
@@ -163,20 +190,7 @@ impl CallHistoryRepository {
         );
         let mut args: Vec<SqlValue> = Vec::new();
 
-        match filter {
-            CallHistoryFilter::All => {}
-            CallHistoryFilter::Missed => {
-                // An unanswered call we placed is stored as 'missed' too;
-                // the filter means calls the user missed.
-                sql.push_str(" AND result = 'missed' AND direction = 'incoming'");
-            }
-            CallHistoryFilter::Outgoing => {
-                sql.push_str(" AND direction = 'outgoing'");
-            }
-            CallHistoryFilter::Incoming => {
-                sql.push_str(" AND direction = 'incoming'");
-            }
-        }
+        sql.push_str(filter_sql(filter));
 
         if let Some((cursor_ts, cursor_id)) = cursor {
             // Strictly-older-than cursor with id tiebreaker.
@@ -253,6 +267,23 @@ impl CallHistoryRepository {
 // ============================================================================
 // Helpers
 // ============================================================================
+
+/// A row a delete may remove: closed, or left open by an earlier process
+/// (app killed mid-call) and so never closing. One `?` binds `live_since`.
+const CLOSED_OR_ORPHANED: &str =
+    "(ended_at IS NOT NULL OR julianday(started_at) < julianday(?))";
+
+/// `AND …` clause selecting the rows `filter` lists.
+fn filter_sql(filter: CallHistoryFilter) -> &'static str {
+    match filter {
+        CallHistoryFilter::All => "",
+        // An unanswered call we placed is stored as 'missed' too; the filter
+        // means calls the user missed.
+        CallHistoryFilter::Missed => " AND result = 'missed' AND direction = 'incoming'",
+        CallHistoryFilter::Outgoing => " AND direction = 'outgoing'",
+        CallHistoryFilter::Incoming => " AND direction = 'incoming'",
+    }
+}
 
 fn parse_datetime(s: &str) -> Result<DateTime<Utc>, StorageError> {
     DateTime::parse_from_rfc3339(s)
@@ -534,7 +565,7 @@ mod tests {
     }
 
     #[test]
-    fn delete_and_delete_all() {
+    fn delete_ids_and_delete_matching() {
         let db = setup_db();
         let repo = CallHistoryRepository::new(db);
 
@@ -546,13 +577,15 @@ mod tests {
         }
         assert_eq!(repo.count().unwrap(), 3);
 
-        repo.delete("call-1").unwrap();
+        repo.delete_ids(&["call-1".into()], t0).unwrap();
         assert_eq!(repo.count().unwrap(), 2);
 
         // idempotent: deleting a missing row is fine
-        repo.delete("nonexistent").unwrap();
+        repo.delete_ids(&["nonexistent".into()], t0).unwrap();
 
-        let n = repo.delete_all().unwrap();
+        let n = repo
+            .delete_matching(CallHistoryFilter::All, Utc::now(), Utc::now())
+            .unwrap();
         assert_eq!(n, 2);
         assert_eq!(repo.count().unwrap(), 0);
     }

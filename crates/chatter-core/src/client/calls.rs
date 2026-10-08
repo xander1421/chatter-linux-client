@@ -11,6 +11,9 @@ use crate::services::call_worker::CallWorkerHandle;
 pub struct CallHistoryPage {
     pub rows: Vec<crate::ui::CallHistoryRowData>,
     pub missed_count: u32,
+    /// Taken just before the read. Clearing "this list" passes it back so a
+    /// call that arrived after the user saw the list is never deleted unseen.
+    pub snapshot_at: chrono::DateTime<chrono::Utc>,
 }
 
 /// orchestrator internals. `Clone` is intentionally omitted — the anonymous
@@ -1765,6 +1768,7 @@ impl ChatterClient {
         let revision = auth.get().session_revision;
         let repo = self.call_history_repo();
         let mut page = tokio::task::spawn_blocking(move || {
+            let snapshot_at = chrono::Utc::now();
             let entries = repo
                 .list(filter, limit, None)
                 .map_err(|e| ClientError::Inbox(format!("call history list: {}", e)))?;
@@ -1793,6 +1797,7 @@ impl ChatterClient {
                     .map(crate::ui::CallHistoryRowData::from)
                     .collect(),
                 missed_count,
+                snapshot_at,
             })
         })
         .await
@@ -1875,12 +1880,34 @@ impl ChatterClient {
         crate::state::ActiveConversation::from_routing_key(&ct, conversation_id)
     }
 
-    /// Clear all local call history.
-    pub async fn clear_call_history(&self) -> Result<u64, ClientError> {
+    /// Delete every call `filter` lists, on this device only, that started
+    /// no later than `snapshot_at` (the [`CallHistoryPage`] the user is
+    /// looking at). Calls history has no server copy and no peer-side delete;
+    /// chat Call bubbles are separate messages and are not touched. A call
+    /// still in progress is kept. Returns the number deleted.
+    pub async fn clear_call_history(
+        &self,
+        filter: crate::domain::call::CallHistoryFilter,
+        snapshot_at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<u64, ClientError> {
         let repo = self.call_history_repo();
         tokio::task::spawn_blocking(move || {
-            repo.delete_all()
+            repo.delete_matching(filter, snapshot_at, history_live_since())
                 .map_err(|e| ClientError::Inbox(format!("call history clear: {}", e)))
+        })
+        .await
+        .map_err(|e| ClientError::Inbox(format!("call history join: {}", e)))?
+    }
+
+    /// Delete exactly the selected Calls-screen rows, on this device only;
+    /// same scope and in-progress rule as
+    /// [`clear_call_history`](Self::clear_call_history). Returns the number
+    /// deleted, which is short of `ids.len()` when a row was kept.
+    pub async fn delete_call_history_entries(&self, ids: Vec<String>) -> Result<u64, ClientError> {
+        let repo = self.call_history_repo();
+        tokio::task::spawn_blocking(move || {
+            repo.delete_ids(&ids, history_live_since())
+                .map_err(|e| ClientError::Inbox(format!("call history delete: {}", e)))
         })
         .await
         .map_err(|e| ClientError::Inbox(format!("call history join: {}", e)))?
@@ -2159,6 +2186,22 @@ pub struct RingingPeer {
     /// ephemeral key only learned when they join.
     pub user_id: String,
     pub info: crate::ui::chat_data::CallParticipantInfo,
+}
+
+/// Open rows started at or after this may be live calls; see
+/// `call_history_recorder::LIVE_SINCE`. Without media no call can be live.
+fn history_live_since() -> chrono::DateTime<chrono::Utc> {
+    #[cfg(feature = "media")]
+    {
+        crate::services::call_history_recorder::LIVE_SINCE
+            .get()
+            .copied()
+            .unwrap_or(chrono::DateTime::<chrono::Utc>::MIN_UTC)
+    }
+    #[cfg(not(feature = "media"))]
+    {
+        chrono::DateTime::<chrono::Utc>::MAX_UTC
+    }
 }
 
 /// A participant's place in the order that picks the group-call key

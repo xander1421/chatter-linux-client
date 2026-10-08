@@ -227,7 +227,7 @@ fn calls_overflow_uses_real_header_hit_target_and_card_anchor() {
             !cleared.get(),
             "opening overflow/confirmation must not clear history"
         );
-        let prompt = labelled(&w, "Delete every call in this list? This cannot be undone.")
+        let prompt = labelled(&w, "Delete every call in this list from this device? This cannot be undone.")
             .expect("confirmation prompt");
         let screen = testing::ElementHandle::find_by_element_type_name(&w, "CallHistoryScreen")
             .next()

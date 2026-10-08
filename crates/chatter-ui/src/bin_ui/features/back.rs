@@ -171,6 +171,13 @@ pub fn handle_back(window: &MainWindow) -> bool {
         return true;
     }
 
+    // Calls row selection: leave it before the overflow or the tab. The
+    // marks live in `features::calls::history`, which this callback clears.
+    if window.get_call_history_selecting() {
+        window.invoke_call_history_end_selection();
+        return true;
+    }
+
     // Calls overflow is owned by the window and bound to the screen. Consume
     // it before popping a modal or returning the Calls tab to Chats.
     if window.get_calls_more_menu_visible() {

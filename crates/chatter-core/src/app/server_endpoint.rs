@@ -26,17 +26,17 @@ const fn build_server_url<'a>(
     }
 }
 
-// A production mobile artifact must have a usable default before the user
-// reaches the authentication screen. Explicit runtime overrides still win.
+// Every production artifact needs a usable default, including a desktop
+// launched from its application icon without a shell environment. Explicit
+// runtime overrides still win.
 #[cfg(all(
-    target_os = "android",
     not(test),
     not(feature = "dev-trust-root"),
     not(feature = "insecure-test-anchors")
 ))]
 const _: () = assert!(
     BUILT_SERVER_URL.is_some(),
-    "Android production builds require CHATTER_SERVER_URL or CHATTER_ANDROID_SERVER at build time"
+    "Production builds require CHATTER_SERVER_URL at build time (Android also accepts CHATTER_ANDROID_SERVER)"
 );
 
 pub(crate) fn resolve_server_url(explicit: Option<String>) -> String {

@@ -246,13 +246,17 @@ pub async fn app_init() -> AppState {
     }
 
     #[cfg(feature = "desktop-gstreamer")]
-    if let Err(e) = gstreamer::init() {
-        tracing::warn!(
-            "GStreamer initialization failed: {} (media features may not work)",
-            e
-        );
-    } else {
-        tracing::info!("GStreamer initialized: {}", gstreamer::version_string());
+    {
+        #[cfg(target_os = "macos")]
+        crate::platform::macos::prepare_bundled_gstreamer();
+        if let Err(e) = gstreamer::init() {
+            tracing::warn!(
+                "GStreamer initialization failed: {} (media features may not work)",
+                e
+            );
+        } else {
+            tracing::info!("GStreamer initialized: {}", gstreamer::version_string());
+        }
     }
 
     // Only Linux's hardware video path (gl_linux.rs) needs a GLES/EGL context.
@@ -320,6 +324,10 @@ pub async fn app_init() -> AppState {
     let connected = client.startup_connect(BOOT_CONNECT_BUDGET).await;
 
     let window = MainWindow::new().expect("Failed to create window");
+    // Native winit window is created later, on show. The id has to be set
+    // before that, and the Slint platform exists only after `MainWindow::new`.
+    #[cfg(target_os = "linux")]
+    crate::platform::linux::apply_desktop_app_id();
 
     // The register form's Server URL field is required to submit, and until now
     // it was only ever filled in dev mode. On a phone there is no shell to set

@@ -34,6 +34,14 @@ use crate::services::message::MessageService;
 use crate::storage::Database;
 use crate::storage::repositories::{CallHistoryRepository, UnifiedConversationRepository};
 
+/// When this process began recording calls. An open history row (no
+/// `ended_at`) that started earlier was left by an earlier run — killed
+/// mid-call — and nothing will ever close it; one that started later may be a
+/// live call. Calls-screen deletes keep the latter (`CallHistoryRepository::
+/// delete_ids`). Unset (no recorder) leaves every open row protected.
+pub(crate) static LIVE_SINCE: std::sync::OnceLock<chrono::DateTime<chrono::Utc>> =
+    std::sync::OnceLock::new();
+
 /// Spawn the call-history recorder. Exits when the orchestrator's broadcast
 /// channel closes.
 ///
@@ -53,6 +61,7 @@ pub fn spawn_call_history_recorder(
     database: Arc<Database>,
     messages: Arc<MessageService>,
 ) {
+    LIVE_SINCE.get_or_init(chrono::Utc::now);
     let mut rx = call.subscribe_call_events();
     let history = CallHistoryRepository::new(database.clone());
     let conversations = UnifiedConversationRepository::new(database);

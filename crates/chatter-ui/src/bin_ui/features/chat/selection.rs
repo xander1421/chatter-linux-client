@@ -14,7 +14,7 @@
 //! The per-row `selected` flag on `MessageItemData` is the only thing the UI
 //! renders from, so this module owns keeping that flag in sync with the set.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashSet;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -75,15 +75,140 @@ fn refresh_delete_everyone(
 }
 
 /// Leave selection mode and drop the marks.
-fn exit(w: &MainWindow, selected_ids: &Rc<RefCell<HashSet<String>>>) {
+fn exit(w: &MainWindow, selected_ids: &Rc<RefCell<HashSet<String>>>, generation: &Cell<u64>) {
+    generation.set(generation.get().wrapping_add(1));
     selected_ids.borrow_mut().clear();
     sync_model(w, &selected_ids.borrow());
     w.set_selection_mode(false);
+    w.global::<crate::SelectionChrome>()
+        .set_can_delete_everyone(false);
+}
+
+/// Snapshot the complete selection before any asynchronous deletion begins.
+fn selected_targets(w: &MainWindow, ids: &HashSet<String>) -> Option<Vec<(UserId, u64)>> {
+    let rows: Vec<_> = w
+        .get_messages()
+        .iter()
+        .filter(|row| ids.contains(row.message_id.as_str()))
+        .collect();
+    if rows.is_empty() || rows.len() != ids.len() {
+        return None;
+    }
+    rows.into_iter()
+        .map(|row| Some((row.sender_id.parse().ok()?, row.timestamp_ns.parse().ok()?)))
+        .collect()
+}
+
+fn delete_selection(
+    w: &MainWindow,
+    ui_ctx: &Arc<ChatterClient>,
+    selected_ids: &Rc<RefCell<HashSet<String>>>,
+    pending: &Rc<Cell<bool>>,
+    generation: &Rc<Cell<u64>>,
+    everyone: bool,
+) {
+    if pending.get() {
+        return;
+    }
+    let Some(targets) = selected_targets(w, &selected_ids.borrow()) else {
+        w.set_toast_message("The selected messages are no longer available.".into());
+        w.set_toast_visible(true);
+        return;
+    };
+    let conversation = ui_ctx.chat_state().active_conversation();
+    let handle = ui_ctx.conversation(conversation);
+    if everyone
+        && !targets
+            .iter()
+            .all(|(author, ts)| handle.can_delete_for_everyone(author, *ts).unwrap_or(false))
+    {
+        refresh_delete_everyone(w, ui_ctx, &selected_ids.borrow());
+        w.set_toast_message("These messages can no longer be deleted for everyone.".into());
+        w.set_toast_visible(true);
+        return;
+    }
+    let submitted_ids = selected_ids.borrow().clone();
+    let selection_revision = generation.get();
+    let generation = generation.clone();
+    let auth = ui_ctx.auth_state().get();
+    let Some(account) = auth.current_user_id else {
+        return;
+    };
+    let session_revision = auth.session_revision;
+    let selected_ids = selected_ids.clone();
+    let pending_completion = pending.clone();
+    let weak = w.as_weak();
+    let ui_ctx = ui_ctx.clone();
+    pending.set(true);
+    // Keep the UI-owned selection on the event loop; network/storage work runs
+    // on Tokio. Register completion before starting any destructive work.
+    if let Err(error) = slint::spawn_local(async move {
+        let task_targets = targets.clone();
+        let task_client = ui_ctx.clone();
+        let result = tokio::spawn(async move {
+            super::delete::delete_selected_messages(
+                &handle,
+                &task_targets,
+                everyone,
+                &task_client,
+                account,
+                session_revision,
+            )
+            .await
+        })
+        .await;
+        pending_completion.set(false);
+        let Some(w) = weak.upgrade() else { return };
+        let error = match result {
+            Ok(Ok(())) => None,
+            Ok(Err(error)) => Some(error.to_string()),
+            Err(error) => Some(error.to_string()),
+        };
+        if ui_ctx.auth_state().get().session_revision != session_revision {
+            return;
+        }
+        if error.is_none() {
+            crate::bin_ui::features::sidebar::history_changed(&weak, &ui_ctx);
+        }
+        if ui_ctx.chat_state().active_conversation() != conversation
+            || generation.get() != selection_revision
+            || *selected_ids.borrow() != submitted_ids
+        {
+            return;
+        }
+        if let Some(error) = error {
+            tracing::warn!(%error, everyone, "Selected-message deletion failed");
+            w.set_toast_message(
+                format!("Could not finish deleting selected messages: {error}").into(),
+            );
+            w.set_toast_visible(true);
+            refresh_delete_everyone(&w, &ui_ctx, &selected_ids.borrow());
+            return;
+        }
+        super::delete::remove_selected_messages_from_ui(&w, &targets);
+        selected_ids
+            .borrow_mut()
+            .retain(|id| !submitted_ids.contains(id));
+        if selected_ids.borrow().is_empty() {
+            exit(&w, &selected_ids, &generation);
+        } else {
+            sync_model(&w, &selected_ids.borrow());
+            refresh_delete_everyone(&w, &ui_ctx, &selected_ids.borrow());
+        }
+    }) {
+        pending.set(false);
+        tracing::error!(%error, "Could not schedule selected-message deletion");
+        w.set_toast_message("Could not start deleting selected messages.".into());
+        w.set_toast_visible(true);
+    }
 }
 
 /// Wire the multi-select callbacks.
 pub fn wire_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let selected_ids: Rc<RefCell<HashSet<String>>> = Rc::new(RefCell::new(HashSet::new()));
+
+    let delete_pending = Rc::new(Cell::new(false));
+    let generation = Rc::new(Cell::new(0_u64));
 
     // Toggle one message. Deselecting the last one leaves selection mode
     // entirely — a selection bar reading "0 selected" with a dead delete button
@@ -91,6 +216,7 @@ pub fn wire_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     {
         let weak = window.as_weak();
         let selected_ids = selected_ids.clone();
+        let generation = generation.clone();
         let ui_ctx = ui_ctx.clone();
         window.on_message_selection_toggled(move |message_id: SharedString| {
             let Some(w) = weak.upgrade() else { return };
@@ -98,6 +224,7 @@ pub fn wire_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             if id.is_empty() {
                 return;
             }
+            generation.set(generation.get().wrapping_add(1));
             {
                 let mut set = selected_ids.borrow_mut();
                 if !set.remove(&id) {
@@ -105,7 +232,7 @@ pub fn wire_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
             }
             if selected_ids.borrow().is_empty() {
-                exit(&w, &selected_ids);
+                exit(&w, &selected_ids, &generation);
                 w.global::<crate::SelectionChrome>()
                     .set_can_delete_everyone(false);
             } else {
@@ -120,9 +247,10 @@ pub fn wire_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     {
         let weak = window.as_weak();
         let selected_ids = selected_ids.clone();
+        let generation = generation.clone();
         window.on_selection_cleared(move || {
             let Some(w) = weak.upgrade() else { return };
-            exit(&w, &selected_ids);
+            exit(&w, &selected_ids, &generation);
         });
     }
 
@@ -131,6 +259,7 @@ pub fn wire_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     {
         let weak = window.as_weak();
         let selected_ids = selected_ids.clone();
+        let generation = generation.clone();
         let ui_ctx = ui_ctx.clone();
         window.on_selection_copy_clicked(move || {
             let Some(w) = weak.upgrade() else { return };
@@ -157,7 +286,7 @@ pub fn wire_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     crate::bin_ui::features::chat::actions::copy_text(&texts.join("\n\n"));
                 }
             });
-            exit(&w, &selected_ids);
+            exit(&w, &selected_ids, &generation);
         });
     }
 
@@ -166,6 +295,7 @@ pub fn wire_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     {
         let weak = window.as_weak();
         let selected_ids = selected_ids.clone();
+        let generation = generation.clone();
         let ui_ctx = ui_ctx.clone();
         window.on_selection_forward_clicked(move || {
             let Some(w) = weak.upgrade() else { return };
@@ -186,46 +316,34 @@ pub fn wire_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             } else {
                 format!("{} messages", sources.len())
             };
-            exit(&w, &selected_ids);
+            exit(&w, &selected_ids, &generation);
             super::actions::open_forward_modal(&w, &ui_ctx, sources, preview);
         });
     }
 
-    // Bulk delete-for-me. Reuses the existing single-message wire rather than
-    // reimplementing the delete path, so permissions and the local/sync split
-    // stay in exactly one place.
+    // Delete-for-me waits for the whole operation before dropping selection.
     {
         let weak = window.as_weak();
         let selected_ids = selected_ids.clone();
+        let generation = generation.clone();
+        let ui_ctx = ui_ctx.clone();
+        let pending = delete_pending.clone();
         window.on_selection_delete_clicked(move || {
             let Some(w) = weak.upgrade() else { return };
-            // Resolve ids to (sender_id, timestamp_ns) up front: invoking the
-            // delete callback mutates the model, so we must not be iterating it.
-            let targets: Vec<(SharedString, SharedString)> = {
-                let set = selected_ids.borrow();
-                let model = w.get_messages();
-                model
-                    .iter()
-                    .filter(|row| set.contains(row.message_id.as_str()))
-                    .map(|row| (row.sender_id.clone(), row.timestamp_ns.clone()))
-                    .collect()
-            };
-            tracing::info!(count = targets.len(), "UI callback: bulk delete-for-me");
-            for (sender_id, timestamp_ns) in targets {
-                w.invoke_delete_message(sender_id, timestamp_ns);
-            }
-            exit(&w, &selected_ids);
+            delete_selection(&w, &ui_ctx, &selected_ids, &pending, &generation, false);
         });
     }
 
     {
         let weak = window.as_weak();
         let selected_ids = selected_ids.clone();
+        let generation = generation.clone();
         let ui_ctx = ui_ctx.clone();
         window
             .global::<crate::SelectionChrome>()
             .on_select_all(move || {
                 let Some(w) = weak.upgrade() else { return };
+                generation.set(generation.get().wrapping_add(1));
                 {
                     let mut set = selected_ids.borrow_mut();
                     set.clear();
@@ -238,7 +356,7 @@ pub fn wire_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     }
                 }
                 if selected_ids.borrow().is_empty() {
-                    exit(&w, &selected_ids);
+                    exit(&w, &selected_ids, &generation);
                     w.global::<crate::SelectionChrome>()
                         .set_can_delete_everyone(false);
                 } else {
@@ -252,45 +370,14 @@ pub fn wire_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     {
         let weak = window.as_weak();
         let selected_ids = selected_ids.clone();
+        let generation = generation.clone();
         let ui_ctx = ui_ctx.clone();
+        let pending = delete_pending.clone();
         window
             .global::<crate::SelectionChrome>()
             .on_delete_everyone(move || {
                 let Some(w) = weak.upgrade() else { return };
-                let handle = ui_ctx.conversation(ui_ctx.chat_state().active_conversation());
-                let targets: Vec<(SharedString, SharedString)> = {
-                    let set = selected_ids.borrow();
-                    let model = w.get_messages();
-                    model
-                        .iter()
-                        .filter(|row| set.contains(row.message_id.as_str()))
-                        .map(|row| (row.sender_id.clone(), row.timestamp_ns.clone()))
-                        .collect()
-                };
-                // Recheck the entire selection at confirmation time. Never silently
-                // delete only an eligible subset or substitute delete-for-me.
-                if targets.is_empty() || targets.len() != selected_ids.borrow().len()
-                    || !targets.iter().all(|(author, ts)| {
-                        author.parse().ok().zip(ts.parse().ok()).is_some_and(|(author, ts)| {
-                            handle.can_delete_for_everyone(&author, ts).unwrap_or(false)
-                        })
-                    })
-                {
-                    refresh_delete_everyone(&w, &ui_ctx, &selected_ids.borrow());
-                    w.set_toast_message("These messages can no longer be deleted for both.".into());
-                    w.set_toast_visible(true);
-                    return;
-                }
-                tracing::info!(
-                    count = targets.len(),
-                    "UI callback: bulk delete-for-everyone"
-                );
-                for (sender_id, timestamp_ns) in targets {
-                    w.invoke_delete_everyone_message(sender_id, timestamp_ns);
-                }
-                exit(&w, &selected_ids);
-                w.global::<crate::SelectionChrome>()
-                    .set_can_delete_everyone(false);
+                delete_selection(&w, &ui_ctx, &selected_ids, &pending, &generation, true);
             });
     }
 }

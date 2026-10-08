@@ -3537,6 +3537,28 @@ pub mod message_service_client {
             self.inner.unary(req, path, codec).await
         }
         ///
+        pub async fn delete_messages(
+            &mut self,
+            request: impl tonic::IntoRequest<super::DeleteMessagesRequest>,
+        ) -> std::result::Result<tonic::Response<()>, tonic::Status> {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/chat.v1.MessageService/DeleteMessages",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(GrpcMethod::new("chat.v1.MessageService", "DeleteMessages"));
+            self.inner.unary(req, path, codec).await
+        }
+        ///
         pub async fn get_messages(
             &mut self,
             request: impl tonic::IntoRequest<super::GetMessagesRequest>,
