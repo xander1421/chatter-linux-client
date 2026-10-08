@@ -340,6 +340,17 @@ pub fn deliver_text_input_state(state: InboundTextInput) {
     });
 }
 
+/// Chatter patch: the gate applied the reset of `consume_text_input` for
+/// `(owner, generation)` on the UI thread. No text travels with it and
+/// nothing is cleared: it only ends the pending state of that consumption.
+pub fn deliver_text_input_ack(owner: u64, generation: u64) {
+    let _ = i_slint_core::api::invoke_from_event_loop(move || {
+        if let Some(adapter) = CURRENT_WINDOW.with_borrow(|x| x.upgrade()) {
+            adapter.handle_text_input_ack(owner, generation);
+        }
+    });
+}
+
 pub fn set_requested_graphics_api(
     requested_graphics_api: Option<i_slint_core::graphics::RequestedGraphicsAPI>,
 ) -> Result<(), PlatformError> {

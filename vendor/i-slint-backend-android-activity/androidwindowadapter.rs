@@ -146,6 +146,10 @@ pub struct AndroidWindowAdapter {
     /// generation was produced before that consumption was applied on the
     /// UI thread and is dropped: it can only show text the app has taken.
     ime_generation: Cell<u64>,
+    /// Set by `consume_text_input`, cleared by the gate's acknowledgement
+    /// of that generation. While set, the IME's copy may still hold the
+    /// consumed text; nothing cached about it is replayed (`finish_composing`).
+    reset_pending: Cell<bool>,
 }
 
 /// Chatter patch: a Slint text state for the IME's copy of the field, as
@@ -180,8 +184,9 @@ pub trait TextInputBridge {
     fn push(&self, push: &TextInputPush);
     /// An accepted send took the field's text: the IME's copy is consumed as
     /// of `generation`. The gate empties it before the IME's next operation
-    /// runs (or from a posted fallback), once.
-    fn consume(&self, owner: u64, generation: u64);
+    /// runs (or from a posted fallback), once. `false` when the request did
+    /// not reach the gate: the generation is then not advanced.
+    fn consume(&self, owner: u64, generation: u64) -> bool;
 }
 
 impl WindowAdapter for AndroidWindowAdapter {
@@ -653,6 +658,7 @@ impl AndroidWindowAdapter {
             text_bridge: RefCell::default(),
             ime_owner: Cell::new(0),
             ime_generation: Cell::new(0),
+            reset_pending: Cell::new(false),
         })
     }
 
@@ -757,6 +763,12 @@ impl AndroidWindowAdapter {
     /// See docs/OPEN-ITEMS.md §112o.
     fn finish_composing(&self) {
         use android_activity::input::{TextInputState, TextSpan};
+        // Chatter patch: between an accepted send and the gate's
+        // acknowledgement there is no composition of this field to finish;
+        // what the cache held was consumed.
+        if self.reset_pending.get() {
+            return;
+        }
         // Use the last state the INPUT METHOD reported, not `last_pushed_text`:
         // every dedupe guard in the outbound path can return before updating
         // that, so it goes stale exactly when a composition is live.
@@ -856,6 +868,7 @@ impl AndroidWindowAdapter {
         }
         let generation = self.ime_generation.get() + 1;
         self.ime_generation.set(generation);
+        self.reset_pending.set(true);
         self.had_compose.set(false);
         *self.pending_self_echo.borrow_mut() = None;
         self.stale_commit_cursor.set(None);
@@ -868,7 +881,15 @@ impl AndroidWindowAdapter {
         self.deferred_ime_update.take();
         let bridge = self.text_bridge.borrow().clone();
         match bridge {
-            Some(bridge) => bridge.consume(self.ime_owner.get(), generation),
+            Some(bridge) => {
+                if !bridge.consume(self.ime_owner.get(), generation) {
+                    // Nothing reached the gate: no reset will be applied or
+                    // acknowledged, so do not leave every later state behind
+                    // a generation the gate never saw.
+                    self.ime_generation.set(generation - 1);
+                    self.reset_pending.set(false);
+                }
+            }
             None => {
                 use android_activity::input::{TextInputState, TextSpan};
                 self.set_game_text_input_state(TextInputState {
@@ -877,6 +898,17 @@ impl AndroidWindowAdapter {
                     compose_region: None,
                 });
             }
+        }
+    }
+
+    /// Chatter patch: the gate applied the reset of generation `generation`
+    /// for `owner` on the UI thread. Only the pending flag changes; the
+    /// field's text is never touched here, so an acknowledgement arriving
+    /// after a failed send restored the draft, or after new typing, changes
+    /// nothing visible.
+    pub(crate) fn handle_text_input_ack(&self, owner: u64, generation: u64) {
+        if owner == self.ime_owner.get() && generation == self.ime_generation.get() {
+            self.reset_pending.set(false);
         }
     }
 

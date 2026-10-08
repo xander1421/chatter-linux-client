@@ -51,7 +51,7 @@ impl TextInputBridge for Bridge {
         }
     }
 
-    fn consume(&self, owner: u64, generation: u64) {
+    fn consume(&self, owner: u64, generation: u64) -> bool {
         let result = (|| -> Result<(), String> {
             let act = activity()?;
             let mut env = jni_env()?;
@@ -69,8 +69,12 @@ impl TextInputBridge for Bridge {
             }
             res.map(|_| ()).map_err(|e| e.to_string())
         })();
-        if let Err(e) = result {
-            tracing::error!("Android: textInputConsume failed: {e}");
+        match result {
+            Ok(()) => true,
+            Err(e) => {
+                tracing::error!("Android: textInputConsume failed: {e}");
+                false
+            }
         }
     }
 }
@@ -112,4 +116,17 @@ pub extern "system" fn Java_com_google_androidgamesdk_ChatterTextInputGate_nativ
         owner: owner as u64,
         generation: generation as u64,
     });
+}
+
+/// JNI: `ChatterTextInputGate.applyReset` (UI thread). A reset was applied
+/// for `(owner, generation)`. Carries no text: it only tells the backend the
+/// IME's copy now reflects that generation.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_google_androidgamesdk_ChatterTextInputGate_nativeTextInputAck(
+    _env: JNIEnv,
+    _class: JClass,
+    owner: jlong,
+    generation: jlong,
+) {
+    i_slint_backend_android_activity::deliver_text_input_ack(owner as u64, generation as u64);
 }

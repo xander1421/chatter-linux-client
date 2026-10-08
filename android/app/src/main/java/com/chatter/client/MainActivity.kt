@@ -127,11 +127,6 @@ class MainActivity : GameActivity() {
         // has loaded libchatter_ui by now (android.app.lib_name), so the native
         // symbol resolves.
         nativeRegisterActivity()
-        // Put the producer gate between the IME and GameTextInput's Editable
-        // (com.google.androidgamesdk.ChatterTextInputGate): an accepted send
-        // consumes the native copy of the composer in order with the IME's
-        // own operations, so the sent text cannot come back.
-        ChatterTextInputGate.install(this)
         // Wire the JavaVM into libwebrtc from the Java main thread so its
         // FindClass for the bundled livekit.org.webrtc classes resolves via the
         // app classloader. Doing this from Rust's native thread fails.
@@ -456,7 +451,11 @@ class MainActivity : GameActivity() {
         surface.setFrameRate(rate, compatibility)
     }
 
-    private inner class BackHidesImeSurfaceView : InputEnabledSurfaceView(this@MainActivity) {
+    // GatedSurfaceView puts the producer gate (ChatterTextInputGate) in as the
+    // view's InputConnection while the view is constructed, before GameActivity
+    // registers it with native code: an accepted send consumes the IME's copy
+    // of the composer in order with the keyboard's own operations.
+    private inner class BackHidesImeSurfaceView : ChatterTextInputGate.GatedSurfaceView(this@MainActivity) {
         /** The current Back press started while the keyboard was up. */
         private var backHidesIme = false
         private var backSelectionMode: ActionMode? = null

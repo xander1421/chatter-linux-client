@@ -101,35 +101,49 @@ are GL on a SurfaceView, so `dumpsys gfxinfo` does not see them).
 
 - RC88 accepted-send consumption vs. the IME's copy of the field
   (`androidwindowadapter.rs` `TextInputBridge` / `consume_text_input` /
-  `handle_text_input_state`, `lib.rs` `with_text_input_bridge`,
-  `consume_text_input`, `deliver_text_input_state`). Core publishes a
-  programmatic text change only at the next render (`i-slint-core`
-  `items/text.rs` `render`), android-activity 0.6.1 samples one latest-state
-  text snapshot per input pass after that pass's motions, GameTextInput's
-  `InputConnection.setState` never fires its listener (only `endBatchEdit` and
-  `onKey` do, games-activity 4.4.0 bytecode) and android-activity's own
-  `setState` travels the native work pipe while anything the app posts is a
-  Handler message, so the two could not be ordered. A send tap therefore
-  cleared the field and then received the IME's snapshot of the sent text
-  (composing), which refilled it; the render saw nothing to publish and the IME
-  kept composing the sent text (Galaxy S9 / Gboard, caption + attachment and a
-  plain send alike). Now the app binds a bridge to its producer gate
-  (`com.google.androidgamesdk.ChatterTextInputGate`, a GameTextInput
-  `InputConnection` subclass installed over the surface view's own): every
-  outbound state goes through `TextInputBridge::push` with the owner (a number
-  per `ime_client`) and generation it was computed under; an accepted send
+  `handle_text_input_state` / `handle_text_input_ack`, `lib.rs`
+  `with_text_input_bridge`, `consume_text_input`, `deliver_text_input_state`,
+  `deliver_text_input_ack`). Core publishes a programmatic text change only at
+  the next render (`i-slint-core` `items/text.rs` `render`), android-activity
+  0.6.1 samples one latest-state text snapshot per input pass after that pass's
+  motions, GameTextInput's `InputConnection.setState` never fires its listener
+  (only `endBatchEdit` and `onKey` do, games-activity 4.4.0 bytecode) and
+  android-activity's own `setState` travels the native work pipe while anything
+  the app posts is a Handler message, so the two could not be ordered. A send
+  tap therefore cleared the field and then received the IME's snapshot of the
+  sent text (composing), which refilled it; the render saw nothing to publish
+  and the IME kept composing the sent text (Galaxy S9 / Gboard, caption +
+  attachment and a plain send alike). Now the app binds a bridge to its
+  producer gate (`com.google.androidgamesdk.ChatterTextInputGate`, a
+  GameTextInput `InputConnection` subclass that `GatedSurfaceView` installs
+  while the surface view is constructed, before `GameActivity.onCreate`
+  registers `mSurfaceView.mInputConnection` with native code, so native
+  show/hide/restart and the `softKeyboardActive` flag that
+  `onCreateInputConnection` consults are the gate's). Every outbound state goes
+  through `TextInputBridge::push` with the owner (a monotonic number per
+  `ime_client`) and generation it was computed under; an accepted send
   (`consume_text_input`, called by the app right after it clears the field; a
-  no-op unless the IME's client is that now-empty field) bumps the generation
-  and publishes an immutable pending reset through `TextInputBridge::consume`
-  without waiting; the gate empties the Editable before the IME's next
-  operation runs (or from a posted fallback, once), drops pushes older than
-  the reset, and tags every snapshot the IME produces with the owner and
-  generation applied on the UI thread when it was made. Inbound states arrive
-  through `deliver_text_input_state` in arrival order and are dropped only by
-  that provenance (another owner, or a generation older than the consumption);
-  content is never compared. With a bridge bound android-activity's
-  `TextEvent` is a wake-up only; without one the old path is unchanged.
-  Limit: an IME operation the IME computed against the consumed text (a
-  composing-text update dispatched before it learned of the restart) applies
-  as the IME formed it, to the new generation; no timer, focus change or
-  content rule is used to second-guess it.
+  no-op unless the IME's client is that now-empty field) bumps the generation,
+  marks the reset pending and publishes an immutable pending reset through
+  `TextInputBridge::consume` without any lock or wait (the listener path takes
+  the android_app mutex on the UI thread, so a Java lock there could deadlock
+  the input iterator). On the UI thread every mutating IME operation is gated:
+  it claims a pending reset first (empty state applied, GameActivity's native
+  copy refreshed through `stateChanged`, generation acknowledged to the
+  backend with no text), runs, and if a reset was published while it ran it is
+  claimed then and the operation runs again on the new generation, so no
+  operation after the accepted consumption is lost to the posted fallback
+  claim; claims are compare-and-set once-only, and nested calls (`setState`'s
+  own `setSelection`/`setComposingRegion`, `processKeyEvent`'s parts) are not
+  gated again. Owners are monotonic on both sides: a push for an older field is
+  ignored, a reset for a newer field waits for that field's first push (which
+  establishes the owner before claiming), a push older than the pending reset
+  of its field claims the reset and is dropped. Every snapshot the IME produces
+  is tagged with the owner and generation applied when it was made; the backend
+  drops it only by that provenance, never by content, and `finish_composing`
+  replays nothing while the reset is unacknowledged. With a bridge bound
+  android-activity's `TextEvent` is a wake-up only; without one the old path is
+  unchanged. Limit: an IME operation the IME computed against the consumed text
+  (a composing-text update it dispatched before it learned of the restart)
+  applies as the IME formed it, to the new generation; no timer, focus change or
+  content rule second-guesses it.
