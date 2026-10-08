@@ -582,6 +582,8 @@ export component Sidebar inherits Rectangle {
             }
         }
         if !root.collapsed: GlassSurface {
+            // Bound backdrop and shadow painting to this chrome silhouette.
+            clip: true;
             material-level: 2;
             elevation: 3;
 
@@ -656,6 +658,8 @@ export component Sidebar inherits Rectangle {
             }
         }
         if !root.mobile-mode: GlassSurface {
+            // Bound backdrop and shadow painting to this chrome silhouette.
+            clip: true;
             x: 0;
             width: root.width;
             y: root.height - self.height;
