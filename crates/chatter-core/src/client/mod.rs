@@ -2884,8 +2884,16 @@ impl ChatterClient {
             .map_err(|e| SendError::from(e).before_submission())?;
         crate::services::gateway::submission::check_send_session()
             .map_err(|_| SendError::NotLoggedIn.before_submission())?;
+        // Saved Messages resolves its parent and preview itself, scoped to
+        // the Saved conversation (`MessageService::save_message`); the
+        // unscoped (sender, sent_at) prefill below could pick a channel or
+        // DM row and must not run for it.
+        let is_saved = matches!(
+            &conversation,
+            ActiveConversation::Channel(id) if is_saved_channel(id, self.channels())
+        );
         let quote = if let Some(mut q) = quote {
-            if q.target_preview.is_none() && !conversation.is_anon() {
+            if q.target_preview.is_none() && !conversation.is_anon() && !is_saved {
                 let attachments_svc = self.attachments();
                 q.target_preview = self
                     .messages()
@@ -4715,6 +4723,18 @@ fn roster_changes(
     )
 }
 
+/// Whether `id` is this user's Saved Messages (Note to Self) channel.
+fn is_saved_channel(
+    id: &crate::domain::ids::ChannelId,
+    channel_service: &ChannelService,
+) -> bool {
+    channel_service
+        .get_channel_local(id)
+        .ok()
+        .flatten()
+        .is_some_and(|c| c.channel_type == ChannelType::SavedMessages)
+}
+
 fn build_intent(
     conversation: ActiveConversation,
     text: &str,
@@ -4743,13 +4763,7 @@ fn build_intent(
             quote,
         }),
         ActiveConversation::Channel(id) => {
-            let is_saved = channel_service
-                .get_channel_local(&id)
-                .ok()
-                .flatten()
-                .map(|c| c.channel_type == ChannelType::SavedMessages)
-                .unwrap_or(false);
-            if is_saved {
+            if is_saved_channel(&id, channel_service) {
                 let att_ids = attachment_pointers
                     .iter()
                     .map(|p| crate::domain::AttachmentId::from_cdn_key(&p.cdn_key))

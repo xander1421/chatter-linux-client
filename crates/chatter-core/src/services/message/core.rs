@@ -1335,6 +1335,26 @@ impl MessageService {
             .get_by_sender_timestamp(&quote.target_author_id, quote.target_timestamp)
             .ok()
             .flatten();
+        self.fill_reply_context(&mut message, quote, original);
+        match self.message_repo.update(&message) {
+            Ok(()) => Ok(message),
+            Err(e) => Err((message, e)),
+        }
+    }
+
+    /// Set the reply-quote fields on `message` from `quote` and `original`,
+    /// the quoted parent as the caller resolved it locally (`None` when it is
+    /// not stored: the parent id then derives from the quote timestamp).
+    /// Preview text prefers `quote.target_preview`, then the parent's own
+    /// preview; the parent's first attachment supplies the thumbnail. Does
+    /// not touch storage: `persist_outgoing_reply_context` updates a stored
+    /// row, `save_message` fills the row before its insert.
+    pub(crate) fn fill_reply_context(
+        &self,
+        message: &mut Message,
+        quote: &crate::services::gateway::QuoteIntent,
+        original: Option<Message>,
+    ) {
         let original_attachments: Vec<_> = original
             .as_ref()
             .map(|m| {
@@ -1375,11 +1395,6 @@ impl MessageService {
         message.reply_to_text = reply_to_text;
         message.reply_to_thumbnail = reply_thumb;
         message.reply_to_thumbnail_mime = reply_thumb_mime;
-
-        match self.message_repo.update(&message) {
-            Ok(()) => Ok(message),
-            Err(e) => Err((message, e)),
-        }
     }
 
     /// Helper to encrypt content based on channel type.

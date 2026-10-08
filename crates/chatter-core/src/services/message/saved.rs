@@ -8,9 +8,10 @@
 
 use crate::domain::ids::{AttachmentId, ChannelId, MessageId, UserId};
 use crate::domain::message::{ConversationType, Message};
+use crate::domain::reaction::ReactionScope;
 use crate::network::grpc::message_client::MessageClient;
 use crate::services::current_user::CurrentUserProvider;
-use crate::services::gateway::build_saved_message_sync_content;
+use crate::services::gateway::{QuoteIntent, build_saved_message_sync_content};
 use crate::util::time::TimestampNanos;
 
 use super::core::proto_to_domain_message_with_sender;
@@ -20,13 +21,24 @@ impl MessageService {
     /// Send a message to the SavedMessages channel (Note to Self).
     ///
     /// Follows Signal Desktop's approach:
-    /// - Always store locally first
+    /// - Always store locally first, complete: a reply's quote fields are on
+    ///   the row before its insert, since this local row is the one every
+    ///   reload reads and nothing patches it afterwards
     /// - Build a SavedMessageSync Content proto and send it to our other
     ///   devices like any sync transcript (`sync_to_own_devices`)
+    ///
+    /// A `quote` is resolved only inside this user's Saved conversation
+    /// (`ConversationType::SavedMessages` under their own id): a channel or
+    /// DM row sharing the quoted (sender, sent_at) pair is never the parent,
+    /// and the preview comes from that parent, never from the caller's
+    /// `target_preview`, which may have been looked up without a scope.
+    /// Storage errors, lookup and insert alike, are returned: no row is
+    /// written without its quote.
     pub async fn save_message(
         &self,
         text: &str,
         attachment_ids: Vec<AttachmentId>,
+        quote: Option<&QuoteIntent>,
     ) -> Result<Message, MessageError> {
         let sender_id = self.settings_repo.current_user_id()?;
 
@@ -49,6 +61,20 @@ impl MessageService {
             sent_at,
         );
         message.attachments = attachment_ids.clone();
+        if let Some(quote) = quote {
+            let scope = ReactionScope::new(channel_id, ConversationType::SavedMessages);
+            let original = self.message_repo.get_by_reaction_scope(
+                &scope,
+                &quote.target_author_id,
+                quote.target_timestamp,
+            )?;
+            let scoped = QuoteIntent {
+                target_author_id: quote.target_author_id,
+                target_timestamp: quote.target_timestamp,
+                target_preview: None,
+            };
+            self.fill_reply_context(&mut message, &scoped, original);
+        }
         self.message_repo.insert_outgoing(&message)?;
 
         // Sync to other devices. Failures are logged there and non-fatal:
@@ -65,6 +91,11 @@ impl MessageService {
     /// device set checked by the server and reconciled when it changed, and
     /// in Shield only devices we already hold a session with. Best effort;
     /// returns how many devices it reached.
+    ///
+    /// Known limitation (predates reply persistence): `SavedMessageSync`
+    /// carries text, message id, timestamp and attachment ids but no quote,
+    /// so a linked device stores the synced row without reply context and
+    /// never shows the quote strip. Closing that needs a proto change.
     async fn sync_saved_message_to_devices(
         &self,
         message_id: &MessageId,

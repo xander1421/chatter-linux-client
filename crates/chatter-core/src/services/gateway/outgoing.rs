@@ -340,26 +340,13 @@ pub async fn route_outgoing(
             attachment_ids,
             quote,
         } => {
+            // Unlike `route_channel`, nothing to patch afterwards:
+            // `save_message` puts the quote on the row before its insert and
+            // syncs it only once stored, so an insert error surfaces here.
             let message = services
                 .message_service
-                .save_message(&text, attachment_ids)
+                .save_message(&text, attachment_ids, quote.as_ref())
                 .await?;
-            // Same patch as `route_channel`: `save_message` writes the row
-            // without reply context, so fill it in or the quote only lives
-            // until restart.
-            let message = match quote {
-                Some(q) => services
-                    .message_service
-                    .persist_outgoing_reply_context(message, &q)
-                    .unwrap_or_else(|(msg, err)| {
-                        tracing::warn!(
-                            error = %err,
-                            "Failed to persist saved-message reply context; quote will be visible this session only"
-                        );
-                        msg
-                    }),
-                None => message,
-            };
             let sent_at = message.sent_at;
             let att_ids = message.attachments.clone();
             Ok(SendResult {
