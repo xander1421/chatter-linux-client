@@ -2,17 +2,16 @@
 //!
 //! Uses ChannelService for all channel operations - no direct network calls.
 
-use std::sync::Arc;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Arc;
 
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
-use tokio::time::{Duration, sleep};
+use tokio::time::{sleep, Duration};
 
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::channel::ChannelType;
 
 use crate::bin_ui::converters::avatar_bytes_to_image;
-use crate::bin_ui::features::sidebar::load_channel_into_ui;
 use crate::{MainWindow, MembershipGlobal, SearchResultChannel};
 
 pub fn wire_join_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
@@ -213,7 +212,7 @@ pub fn wire_join_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     });
 
                     // Load the joined channel properly (loads messages, sets header)
-                    load_channel_into_ui(weak, channel_id, ui_ctx, Default::default(), None).await;
+                    // channel_selected owns this history load.
 
                     tracing::info!("Joined channel: {}", channel_id);
                 }

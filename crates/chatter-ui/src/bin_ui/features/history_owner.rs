@@ -243,7 +243,21 @@ mod tests {
         let conversation = ActiveConversation::Channel(channel);
         client.chat_state().set_active_conversation(conversation);
         HistoryOwner::begin(&client, conversation);
+        // Mirror the serialized production admission gate: a rejected busy
+        // scroll request does not allocate a replacement older-page epoch.
+        client.message_state().set_loading(channel, true);
         let first = HistoryOwner::older(&client, conversation);
+        let rejected = if client.message_state().is_loading(&channel) {
+            None
+        } else {
+            Some(HistoryOwner::older(&client, conversation))
+        };
+        assert!(rejected.is_none());
+        assert!(
+            first.is_current(),
+            "admitted page survives rejected duplicate"
+        );
+        client.message_state().set_loading(channel, false);
         let second = HistoryOwner::older(&client, conversation);
         assert!(!first.is_current());
         assert!(second.is_current());

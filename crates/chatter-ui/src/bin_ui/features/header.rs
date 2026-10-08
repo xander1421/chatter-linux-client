@@ -10,8 +10,8 @@ use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::MessageId;
 use chatter_core::state::ActiveConversation;
 
-use crate::MainWindow;
 use crate::bin_ui::converters::messages_to_display_batch;
+use crate::MainWindow;
 
 thread_local! {
     static PENDING_JUMP: std::cell::RefCell<Option<(ActiveConversation, String)>> = const { std::cell::RefCell::new(None) };
@@ -600,20 +600,22 @@ fn load_older(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, until: Option<Message
     let Some(conversation_type) = ui_ctx.active_conversation_type() else {
         return;
     };
+    // Admit on the serialized UI thread before renewing the older-page epoch.
+    // A busy duplicate must not invalidate the in-flight admitted page.
+    if ui_ctx.message_state().is_loading(&channel_id) {
+        return;
+    }
+    ui_ctx.message_state().set_loading(channel_id, true);
     let owner = super::history_owner::HistoryOwner::older(ui_ctx, conversation);
     let weak = w.as_weak();
     let ui_ctx = ui_ctx.clone();
 
     std::thread::spawn(move || {
-        if !owner.is_current() {
-            return;
-        }
         let message_state = ui_ctx.message_state();
-        if message_state.is_loading(&channel_id) {
-            tracing::trace!("Already loading messages for channel: {}", channel_id);
+        if !owner.is_current() {
+            message_state.set_loading(channel_id, false);
             return;
         }
-        message_state.set_loading(channel_id, true);
         let older_messages = match before.as_ref() {
             Some(before) => ui_ctx.get_older_messages_local_asc(
                 &channel_id,

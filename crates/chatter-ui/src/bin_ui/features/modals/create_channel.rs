@@ -9,7 +9,6 @@ use chatter_core::client::ChatterClient;
 use chatter_core::domain::channel::{ChannelConfig, ChannelType, MessagePersistence};
 use chatter_core::domain::ids::UserId;
 
-use crate::bin_ui::features::sidebar::load_channel_into_ui;
 use crate::{AIModelOption, CreateChannelConfig, MainWindow, PrivateGroupFriend};
 
 fn toggle_selected(friend: &mut PrivateGroupFriend) {
@@ -242,7 +241,7 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             }
                         });
 
-                        load_channel_into_ui(weak, channel_id, ui_ctx, Default::default(), None).await;
+                        // channel_selected owns this history load.
                     }
                     Err(e) => {
                         let error_msg = e.to_string();

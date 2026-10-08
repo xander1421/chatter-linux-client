@@ -37,6 +37,9 @@ pub fn refresh_friends_list(window_weak: Weak<MainWindow>, ui_ctx: Arc<ChatterCl
                 owner.clone(),
             );
         }
+        if !owner.is_current() {
+            return;
+        }
         publish_friends(window_weak, ui_ctx.friends_tab_entries().await, owner);
     });
 }
@@ -115,12 +118,18 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
         }
     }
 
+    if !session_owner.is_current() {
+        return;
+    }
     // Pre-fetch anonymous tokens for sealed sender messaging
     // This ensures tokens are available before the first SKDM distribution
     if let Err(e) = ui_ctx.prefetch_tokens(10).await {
         tracing::warn!("Failed to pre-fetch anonymous tokens: {}", e);
     }
 
+    if !session_owner.is_current() {
+        return;
+    }
     // Refresh any anon group mailboxes nearing their 30-day expiry so the
     // user can continue receiving messages across long offline gaps.
     match ui_ctx.refresh_expiring_group_mailboxes().await {
@@ -134,11 +143,17 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
         Err(e) => tracing::warn!("Failed to refresh anon group mailboxes: {}", e),
     }
 
+    if !session_owner.is_current() {
+        return;
+    }
     // Our own name/avatar: restored from the server under our profile key
     // (throttled in core). Only login used to do this, so a linked device
     // showed initials and no photo while peers saw it.
     ui_ctx.refresh_own_profile().await;
 
+    if !session_owner.is_current() {
+        return;
+    }
     // The chat list is built ENTIRELY in core: one list of every loose
     // conversation, mode-exclusive, ordered by activity with pins first,
     // previews/markers/presence included. Same source as every later

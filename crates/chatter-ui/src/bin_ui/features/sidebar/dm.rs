@@ -9,8 +9,8 @@ use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::{ChannelId, UserId};
 
-use crate::MainWindow;
 use crate::bin_ui::converters::messages_to_display_batch;
+use crate::MainWindow;
 
 use super::stop_audio_playback;
 use crate::bin_ui::features::history_owner::HistoryOwner;
@@ -359,7 +359,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
             // Catch up on the peer's profile edits once the conversation is on
             // screen (throttled in core; skipped in Shield).
-            refresh_ctx.refresh_profile_if_stale(&peer_id).await;
+            if owner.is_current() { refresh_ctx.refresh_profile_if_stale(&peer_id).await; }
         });
     });
 }

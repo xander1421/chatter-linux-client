@@ -7,9 +7,9 @@ use slint::ComponentHandle;
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::ChannelId;
 
-use crate::{MainWindow, run_ui};
+use crate::MainWindow;
 
-use super::channel::load_channel_into_ui;
+use super::channel::load_channel_into_ui_owned;
 use super::stop_audio_playback;
 
 pub(crate) fn wire_saved_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
@@ -44,7 +44,11 @@ pub(crate) fn wire_saved_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClien
         chat_state
             .set_active_conversation(chatter_core::state::ActiveConversation::Channel(channel_id));
 
-        run_ui!(weak, |w| {
+        let owner = crate::bin_ui::features::history_owner::HistoryOwner::begin(
+            &ui_ctx,
+            chatter_core::state::ActiveConversation::Channel(channel_id),
+        );
+        crate::run_history_ui!(weak, owner, |w| {
             w.set_loading_messages(true);
             // Clear composer reply/edit state to prevent stale context
             w.set_composer_is_replying(false);
@@ -62,15 +66,21 @@ pub(crate) fn wire_saved_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClien
         });
 
         tokio::spawn(async move {
+            if !owner.is_current() {
+                return;
+            }
             // Active conversation already committed pre-spawn.
             let ui_ctx_for_sel = ui_ctx.clone();
-            run_ui!(weak, |w| super::refresh_selection(&w, &ui_ctx_for_sel));
+            crate::run_history_ui!(weak, owner, |w| super::refresh_selection(
+                &w,
+                &ui_ctx_for_sel
+            ));
 
             // Ensure the saved messages channel exists locally
             if ui_ctx.get_channel_local(&channel_id).is_none() {
                 if let Err(e) = ui_ctx.get_channel(&channel_id).await {
                     tracing::error!("Failed to fetch saved messages channel from server: {}", e);
-                    run_ui!(weak, |w| w.set_loading_messages(false));
+                    crate::run_history_ui!(weak, owner, |w| w.set_loading_messages(false));
                     return;
                 }
             }
@@ -78,7 +88,8 @@ pub(crate) fn wire_saved_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClien
             // Load the saved messages channel and its messages
             // Saved Messages is your own notepad: nothing in it is ever
             // "unread", so it always opens at the newest entry.
-            load_channel_into_ui(weak, channel_id, ui_ctx, Default::default(), None).await;
+            load_channel_into_ui_owned(weak, channel_id, ui_ctx, Default::default(), None, owner)
+                .await;
         });
     });
 }

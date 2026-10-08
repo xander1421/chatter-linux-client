@@ -9,7 +9,7 @@ use chatter_core::domain::channel::ChannelType;
 use chatter_core::domain::ids::ChannelId;
 
 use crate::bin_ui::converters::messages_to_display_batch;
-use crate::{MainWindow, run_ui};
+use crate::{run_ui, MainWindow};
 
 use super::stop_audio_playback;
 use crate::bin_ui::features::history_owner::HistoryOwner;
@@ -211,14 +211,14 @@ pub async fn load_channel_into_ui(
     anchor: chatter_core::domain::message::UnreadAnchor,
     receipts: Option<chatter_core::services::conversation::ConversationHandle>,
 ) -> Vec<String> {
-    let owner = HistoryOwner::capture(
+    let owner = HistoryOwner::begin(
         &ui_ctx,
         chatter_core::state::ActiveConversation::Channel(channel_id),
     );
     load_channel_into_ui_owned(weak, channel_id, ui_ctx, anchor, receipts, owner).await
 }
 
-async fn load_channel_into_ui_owned(
+pub(crate) async fn load_channel_into_ui_owned(
     weak: slint::Weak<MainWindow>,
     channel_id: ChannelId,
     ui_ctx: Arc<ChatterClient>,
