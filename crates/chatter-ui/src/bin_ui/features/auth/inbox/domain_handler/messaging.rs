@@ -458,8 +458,12 @@ pub(super) fn handle_message_delete(
         return;
     }
     let conversation = ui_ctx.chat_state().active_conversation();
+    let owner = crate::bin_ui::features::history_owner::HistoryOwner::capture(ui_ctx, conversation);
     let ui_ctx = ui_ctx.clone();
     crate::run_ui!(window, |w| {
+        if !owner.is_current() {
+            return;
+        }
         crate::bin_ui::features::chat::remove_messages_in_conversation(
             &w,
             &ui_ctx,

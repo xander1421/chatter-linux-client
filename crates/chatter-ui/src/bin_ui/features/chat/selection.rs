@@ -210,6 +210,40 @@ pub fn wire_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let delete_pending = Rc::new(Cell::new(false));
     let generation = Rc::new(Cell::new(0_u64));
 
+    // Background recovery and incoming deletes use the same row-removal
+    // helper as manual deletion. Reconcile its exact removed IDs on the UI
+    // thread, never infer deletion from a partial/replaced message model.
+    {
+        let weak = window.as_weak();
+        let selected_ids = selected_ids.clone();
+        let generation = generation.clone();
+        let ui_ctx = ui_ctx.clone();
+        window
+            .global::<crate::SelectionChrome>()
+            .on_messages_removed(move |removed| {
+                let Some(w) = weak.upgrade() else { return };
+                let changed = {
+                    let mut set = selected_ids.borrow_mut();
+                    let before = set.len();
+                    for id in removed.iter() {
+                        set.remove(id.as_str());
+                    }
+                    set.len() != before
+                };
+                if !changed {
+                    return;
+                }
+                // Invalidate a pending manual completion's selection snapshot.
+                generation.set(generation.get().wrapping_add(1));
+                if selected_ids.borrow().is_empty() {
+                    exit(&w, &selected_ids, &generation);
+                } else {
+                    sync_model(&w, &selected_ids.borrow());
+                    refresh_delete_everyone(&w, &ui_ctx, &selected_ids.borrow());
+                }
+            });
+    }
+
     // Toggle one message. Deselecting the last one leaves selection mode
     // entirely — a selection bar reading "0 selected" with a dead delete button
     // is a dead end the user has to think their way out of.

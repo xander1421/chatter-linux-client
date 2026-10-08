@@ -1794,7 +1794,22 @@ impl ChatterClient {
             Ok::<_, ClientError>(CallHistoryPage {
                 rows: entries
                     .iter()
-                    .map(crate::ui::CallHistoryRowData::from)
+                    .filter(|entry| {
+                        // An open row created in this process may still be live;
+                        // its provisional result is not a missed-call outcome.
+                        filter != crate::domain::call::CallHistoryFilter::Missed
+                            || entry.ended_at.is_some()
+                            || entry.started_at < history_live_since()
+                    })
+                    .map(|entry| {
+                        let mut row = crate::ui::CallHistoryRowData::from(entry);
+                        if entry.ended_at.is_none() && entry.started_at >= history_live_since() {
+                            row.detail = "In progress".to_string();
+                            row.is_missed = false;
+                            row.can_call_back = false;
+                        }
+                        row
+                    })
                     .collect(),
                 missed_count,
                 snapshot_at,

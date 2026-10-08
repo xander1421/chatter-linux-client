@@ -2,7 +2,7 @@
 
 use crate::MainWindow;
 use chatter_core::domain::UserId;
-use slint::Model;
+use slint::{ComponentHandle, Model};
 
 /// Parsed reply context from UI strings.
 pub struct ReplyContext {
@@ -259,13 +259,20 @@ pub(crate) fn remove_messages_where(
     window: &MainWindow,
     gone: impl Fn(&crate::MessageItemData) -> bool,
 ) {
+    let mut removed_ids = Vec::new();
     edit_messages(window, |model| {
         for i in (0..model.row_count()).rev() {
-            if model.row_data(i).is_some_and(|m| gone(&m)) {
+            if let Some(row) = model.row_data(i).filter(|m| gone(m)) {
+                removed_ids.push(row.message_id);
                 model.remove(i);
             }
         }
     });
+    if !removed_ids.is_empty() {
+        window
+            .global::<crate::SelectionChrome>()
+            .invoke_messages_removed(slint::ModelRc::new(slint::VecModel::from(removed_ids)));
+    }
 }
 
 #[cfg(test)]

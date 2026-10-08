@@ -27,6 +27,8 @@ export global SelectionChrome {
     in-out property <bool> can-delete-everyone: false;
     callback select-all();
     callback delete-everyone();
+    // UI-owned selection reconciles only rows actually removed from the view.
+    callback messages-removed([string]);
 }
 
 export component SelectionBar inherits GlassSurface {

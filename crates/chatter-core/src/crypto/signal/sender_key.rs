@@ -321,6 +321,28 @@ impl SenderKeyManager {
         let result = group_decrypt(ciphertext, sender_key_store, sender)
             .await
             .map_err(|e| {
+                // `DuplicatedMessage` ("message with old counter") returns
+                // before `store_sender_key`. The persisted chain is unchanged.
+                // A missing SKDM and a ciphertext that might still open stay
+                // on the failure path below.
+                if matches!(
+                    e,
+                    libsignal_protocol::SignalProtocolError::DuplicatedMessage(_, _)
+                ) {
+                    tracing::debug!(
+                        sender = %sender,
+                        ciphertext_len = ciphertext.len(),
+                        error = %e,
+                        "[SENDER_KEY] Duplicate sender-key ciphertext; sender-key record not written"
+                    );
+                    tracing::debug!(
+                        target: "chatter::crypto::decrypt_failure",
+                        kind = "group_duplicate",
+                        error = %e,
+                        "consumed sender-key counter"
+                    );
+                    return CryptoError::DecryptionFailed(e.to_string());
+                }
                 tracing::error!(
                     sender = %sender,
                     ciphertext_len = ciphertext.len(),

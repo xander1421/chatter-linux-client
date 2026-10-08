@@ -2536,7 +2536,10 @@ export component MainWindow inherits Window {
             mobile-mode: root.compact-layout;
             // A tab's root screen: the tab bar navigates, no back chevron.
             root-screen: true;
-            bottom-inset: root.bottom-nav-visible ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom : 0px;
+            // During a call the return bar occupies the strip above the dock.
+            // Reserve it for fixed confirmation controls as well as list rows.
+            bottom-inset: (root.bottom-nav-visible ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom : 0px)
+                + (root.compact-layout && root.active-call-visible ? 44px + Spacing.sm : 0px);
             show-modal: true;
             rows: root.call-history-rows;
             loading: root.call-history-loading;
