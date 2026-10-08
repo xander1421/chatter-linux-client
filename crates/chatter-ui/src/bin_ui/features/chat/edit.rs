@@ -183,6 +183,8 @@ pub fn wire_send_edit(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         }
                         if w.get_composer_text().is_empty() {
                             w.set_composer_text(new_text_str.into());
+                            #[cfg(target_os = "android")]
+                            crate::platform::android::text_input::restore();
                         }
                         w.set_toast_message(format!("Edit not saved: {message}").into());
                         w.set_toast_variant("error".into());
@@ -249,6 +251,11 @@ pub(crate) fn end_edit(w: &MainWindow) {
     if w.get_composer_stash_held() {
         w.set_composer_text(w.get_composer_stash());
         w.set_composer_stash_held(false);
+        // Android: the accepted edit consumed the input method's copy of
+        // the composer; the draft going back in is a newer state of the
+        // field than the emptied one the IME may still be reporting.
+        #[cfg(target_os = "android")]
+        crate::platform::android::text_input::restore();
     }
     w.set_composer_stash("".into());
     w.set_composer_edit_message_id("".into());

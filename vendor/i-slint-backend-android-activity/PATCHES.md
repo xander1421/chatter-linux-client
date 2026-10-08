@@ -169,3 +169,15 @@ are GL on a SurfaceView, so `dumpsys gfxinfo` does not see them).
   reaches the backend after the consumption (dropped by generation); one that
   starts after it runs on the new generation as the IME formed it; no timer,
   focus change or content rule second-guesses either.
+  RC89 follow-up: a restore after the consumption (the draft an edit held
+  aside, a failed send's text) is a new app state of the field and takes the
+  next generation, pushed at once by `restore_text_input` rather than at the
+  next render; every gated IME operation publishes a snapshot (GameTextInput
+  4.4.0 `endBatchEdit` runs `stateUpdated` unconditionally), so a snapshot
+  of the Editable the reset emptied, tagged with the consumed generation,
+  landed after the restore as a current state and replaced the restored
+  text with nothing. The gate applies the restore push in place of a still
+  unacknowledged reset (newer generation) and drops the reset's own
+  snapshots by provenance; `TextInputBridge::push` now reports whether the
+  gate was reached so the generation is not advanced past a push it never
+  saw.

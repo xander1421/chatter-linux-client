@@ -330,6 +330,17 @@ pub fn consume_text_input() {
     }
 }
 
+/// Chatter patch: the app put text back into the focused field after
+/// `consume_text_input` (a restored draft). The IME's copy is replaced as of
+/// a new generation, so a snapshot of the emptied field that the consumption
+/// left behind cannot overwrite the restored text when it arrives.
+/// A no-op unless the IME serves a multi-line field that now holds text.
+pub fn restore_text_input() {
+    if let Some(adapter) = CURRENT_WINDOW.with_borrow(|x| x.upgrade()) {
+        adapter.restore_text_input();
+    }
+}
+
 /// Chatter patch: a state the IME produced, tagged by the gate. Any thread;
 /// delivered on the event loop in arrival order.
 pub fn deliver_text_input_state(state: InboundTextInput) {

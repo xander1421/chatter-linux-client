@@ -180,8 +180,9 @@ pub struct InboundTextInput {
 /// the Slint thread and must not block: the gate serializes them on the UI
 /// thread with the IME's own operations.
 pub trait TextInputBridge {
-    /// Slint's state for the IME's field.
-    fn push(&self, push: &TextInputPush);
+    /// Slint's state for the IME's field. `false` when the request did not
+    /// reach the gate.
+    fn push(&self, push: &TextInputPush) -> bool;
     /// An accepted send took the field's text: the IME's copy is consumed as
     /// of `generation`. The gate empties it before the IME's next operation
     /// runs (or from a posted fallback), once. `false` when the request did
@@ -827,7 +828,11 @@ impl AndroidWindowAdapter {
 
     /// Convert every outbound state, including finish_composing and clears,
     /// at the boundary. Echo guards and pending cursor state remain UTF-8.
-    fn set_game_text_input_state(&self, mut state: android_activity::input::TextInputState) {
+    /// `false` only when a bound gate could not be reached.
+    fn set_game_text_input_state(
+        &self,
+        mut state: android_activity::input::TextInputState,
+    ) -> bool {
         use android_activity::input::TextSpan;
         let (start, end) = crate::text_input_offsets::utf8_span_to_utf16(
             &state.text,
@@ -850,7 +855,10 @@ impl AndroidWindowAdapter {
                 owner: self.ime_owner.get(),
                 generation: self.ime_generation.get(),
             }),
-            None => self.app.set_text_input_state(state),
+            None => {
+                self.app.set_text_input_state(state);
+                true
+            }
         }
     }
 
@@ -930,6 +938,70 @@ impl AndroidWindowAdapter {
     pub(crate) fn handle_text_input_ack(&self, owner: u64, generation: u64) {
         if owner == self.ime_owner.get() && generation == self.ime_generation.get() {
             self.reset_pending.set(false);
+        }
+    }
+
+    /// Chatter patch: the app put text back into the IME client's field
+    /// after `consume_text_input` (the draft an edit had held aside, a
+    /// failed send's text). The reset emptied the IME's Editable and
+    /// restarted input, and every gated IME operation after that publishes
+    /// a snapshot of the Editable as it is then (GameTextInput 4.4.0
+    /// `endBatchEdit` runs `stateUpdated` unconditionally), tagged with the
+    /// consumed generation. The render-time push of the restored text
+    /// carried that same generation, so a snapshot of the still-empty
+    /// Editable landing after the restore was current by provenance and
+    /// replaced the restored text with nothing (RC89, Galaxy S9: Save on an
+    /// edit left the composer empty instead of the draft it had borrowed).
+    ///
+    /// The restore is a new app-initiated state of the field, so it gets the
+    /// next generation and is pushed from here, not left to the render: the
+    /// gate learns the generation even when Slint would not publish the text
+    /// again. A snapshot the IME produced before this push applied is older
+    /// and dropped; one produced after reflects the restored Editable. If a
+    /// consumption is still unacknowledged, the gate applies this push in
+    /// its place, so nothing of it stays pending here. Same identity check
+    /// as the consumption, for a field that now holds text. No timer, focus
+    /// change or content rule: provenance only.
+    pub(crate) fn restore_text_input(&self) {
+        use android_activity::input::{TextInputState, TextSpan};
+        let Some(client) = self.ime_client.borrow().as_ref().and_then(|c| c.upgrade()) else {
+            return;
+        };
+        let Some(field) = client.downcast::<i_slint_core::items::TextInput>() else {
+            return;
+        };
+        let field = field.as_pin_ref();
+        if field.single_line() || field.text().is_empty() || !field.preedit_text().is_empty() {
+            return;
+        }
+        let text = field.text().to_string();
+        let clamp = |offset: i32| (offset.max(0) as usize).min(text.len());
+        let anchor = clamp(field.anchor_position_byte_offset());
+        let cursor = clamp(field.cursor_position_byte_offset());
+        let generation = self.ime_generation.get() + 1;
+        self.ime_generation.set(generation);
+        self.reset_pending.set(false);
+        self.had_compose.set(false);
+        *self.pending_self_echo.borrow_mut() = None;
+        self.stale_commit_cursor.set(None);
+        // The state the IME will hold: the render's own Update of the same
+        // text and caret is then an echo and is not pushed again.
+        *self.last_ime_text.borrow_mut() = Some(text.clone());
+        self.last_ime_selection.set((anchor, cursor));
+        *self.last_pushed_text.borrow_mut() = Some(text.clone());
+        self.last_pushed_cursor.set(cursor);
+        *self.last_ime_epoch.borrow_mut() = Some(text.clone());
+        self.ime_states_seen.borrow_mut().clear();
+        self.ime_states_seen.borrow_mut().push((text.clone(), anchor, cursor, None));
+        self.deferred_ime_update.take();
+        if !self.set_game_text_input_state(TextInputState {
+            text,
+            selection: TextSpan { start: anchor, end: cursor },
+            compose_region: None,
+        }) {
+            // Nothing reached the gate: do not leave every later state
+            // behind a generation the gate never saw.
+            self.ime_generation.set(generation - 1);
         }
     }
 

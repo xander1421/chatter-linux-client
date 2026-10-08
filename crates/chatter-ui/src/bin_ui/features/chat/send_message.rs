@@ -598,6 +598,10 @@ pub fn restore_composer(w: &MainWindow, ui_ctx: &ChatterClient, send: ComposerSe
         return;
     }
     w.set_composer_text(send.text.into());
+    // Android: the accepted send consumed the IME's copy; the text going
+    // back in is a newer state than the emptied one it may still report.
+    #[cfg(target_os = "android")]
+    crate::platform::android::text_input::restore();
     if let Some(reply) = send.reply {
         show_reply(w, reply);
     }

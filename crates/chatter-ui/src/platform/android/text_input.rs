@@ -18,7 +18,7 @@ use super::activity::{activity, clear_exception, jni_env};
 pub struct Bridge;
 
 impl TextInputBridge for Bridge {
-    fn push(&self, push: &TextInputPush) {
+    fn push(&self, push: &TextInputPush) -> bool {
         let result = (|| -> Result<(), String> {
             let act = activity()?;
             let mut env = jni_env()?;
@@ -46,8 +46,12 @@ impl TextInputBridge for Bridge {
             }
             res.map(|_| ()).map_err(|e| e.to_string())
         })();
-        if let Err(e) = result {
-            tracing::error!("Android: textInputPush failed: {e}");
+        match result {
+            Ok(()) => true,
+            Err(e) => {
+                tracing::error!("Android: textInputPush failed: {e}");
+                false
+            }
         }
     }
 
@@ -83,6 +87,14 @@ impl TextInputBridge for Bridge {
 /// Call right after the composer is cleared, on the Slint thread.
 pub fn consume() {
     i_slint_backend_android_activity::consume_text_input();
+}
+
+/// The app put text back into the composer after a `consume` (the draft an
+/// edit held aside, a failed send's text): replace the IME's copy as of a
+/// new generation, so no snapshot of the emptied field can land on top of
+/// it. Call right after the composer is set, on the Slint thread.
+pub fn restore() {
+    i_slint_backend_android_activity::restore_text_input();
 }
 
 /// JNI: `ChatterTextInputGate.stateChanged` (UI thread). A snapshot the IME
