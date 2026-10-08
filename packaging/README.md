@@ -45,8 +45,12 @@ or read a private key. Operators must establish that the supplied CA and public
 pins match the actual production server; local syntax checks cannot prove that.
 The existing Rust compile-time guards remain active.
 
-It runs a locked release build with `--no-default-features --features desktop,jarvis`
-(full GStreamer decoding, LiveKit calls, desktop integration), targeting
+It runs a locked release build with
+`--no-default-features --features desktop,jarvis,mesh,quic`
+(full GStreamer decoding, LiveKit calls, desktop integration and the mesh/QUIC
+transports). Supplying the provisioned v3 `CHATTER_ONION_ADDR` also enables the
+onion feature; the script checks the hostname shape rather than inventing one.
+Public push configuration still uses `CHATTER_NTFY_URL`. The build targets
 `x86_64-unknown-linux-gnu` and `target-cpu=x86-64` rather than `native`. The existing
 mold and duplicate-definition linker arguments are preserved. C/C++ flags append
 baseline `-march=x86-64 -mtune=generic`. Use a clean release environment without

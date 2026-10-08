@@ -50,8 +50,13 @@ export CFLAGS="${CFLAGS:-} -march=x86-64 -mtune=generic"
 export CXXFLAGS="${CXXFLAGS:-} -march=x86-64 -mtune=generic"
 # Dedicated output avoids packaging the developer installer's old release binary.
 export CARGO_TARGET_DIR="$ROOT/target/linux-production"
+features='desktop,jarvis,mesh,quic'
+if [ -n "${CHATTER_ONION_ADDR:-}" ]; then
+    [[ "$CHATTER_ONION_ADDR" =~ ^[a-z2-7]{56}\.onion$ ]] || die 'CHATTER_ONION_ADDR must be the provisioned v3 onion hostname'
+    features+=',onion'
+fi
 cargo build --locked --release --target x86_64-unknown-linux-gnu -p chatter-ui \
-    --bin chatter-ui --no-default-features --features desktop,jarvis
+    --bin chatter-ui --no-default-features --features "$features"
 BIN="$CARGO_TARGET_DIR/x86_64-unknown-linux-gnu/release/chatter-ui"
 "$ROOT/packaging/check-linux-runtime.sh" "$BIN"
 OUT="$ROOT/target/linux-packages"
@@ -65,7 +70,7 @@ install -m 0755 "$ROOT/packaging/check-linux-runtime.sh" "$STAGE/$NAME/"
 cp "$ROOT/packaging/README.md" "$STAGE/$NAME/README.md"
 cp "$ROOT/assets/chatter-linux.desktop" "$STAGE/$NAME/assets/"
 cp "$ROOT/assets/"icon-*.png "$STAGE/$NAME/assets/"
-printf 'version=%s\ntarget=x86_64-unknown-linux-gnu\ncpu=x86-64\nfeatures=desktop,jarvis\nruntime=system GStreamer (not bundled)\n' "$CHATTER_LINUX_VERSION" > "$STAGE/$NAME/BUILD.txt"
+printf 'version=%s\ntarget=x86_64-unknown-linux-gnu\ncpu=x86-64\nfeatures=%s\nruntime=system GStreamer (not bundled)\n' "$CHATTER_LINUX_VERSION" "$features" > "$STAGE/$NAME/BUILD.txt"
 tar -C "$STAGE" -czf "$OUT/$NAME.tar.gz" "$NAME"
 (cd "$OUT" && sha256sum "$NAME.tar.gz" > "$NAME.tar.gz.sha256")
 echo "Package: $OUT/$NAME.tar.gz (requires system runtime; see packaging/README.md)"
