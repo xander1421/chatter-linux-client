@@ -167,10 +167,17 @@ export component MessageComposer inherits GlassSurface {
     property <bool> can-send: text != "" || text-input.preedit-text != "" || pending-attachments.length > 0;
     // Keep one native input alive across the inline/raised transition. Preedit
     // participates without being committed; attachments also raise the controls.
-    property <bool> raised-actions: text != "" || text-input.preedit-text != "" || root.has-attachments;
+    // A reply raises them too: its preview lives in the raised toolbar gap.
+    property <bool> raised-actions: text != "" || text-input.preedit-text != "" || root.has-attachments || root.is-replying;
     property <bool> show-attachment-action: !root.is-editing && (MeshGlobal.active-id == "" || MeshGlobal.active-kind != "dm");
     property <bool> show-terminal-action: root.can-send || (!root.is-editing && MeshGlobal.active-id == "");
-    property <length> raised-toolbar-height: raised-actions ? Spacing.touch-target-min + row-padding * 2 + Spacing.xs : 0px;
+    property <length> action-shell-height: Spacing.touch-target-min + row-padding * 2;
+    // Reply preview sits in the first toolbar row's gap; with attachments too,
+    // the strip takes a second gap row below it so the two never overlap.
+    property <length> reply-row-height: is-replying ? max(action-shell-height, 48px * Appearance.text-grow) : 0px;
+    property <length> raised-toolbar-height: !raised-actions ? 0px
+        : (is-replying ? reply-row-height + Spacing.xs : 0px)
+            + (has-attachments || !is-replying ? action-shell-height + Spacing.xs : 0px);
     property <length> lower-terminal-width: show-terminal-action ? Spacing.touch-target-min + Spacing.xs : 0px;
     property <length> trailing-actions-width: (show-attachment-action ? Spacing.touch-target-min + Spacing.xs : 0px)
         + (show-terminal-action ? Spacing.touch-target-min + Spacing.xs : 0px);
@@ -222,7 +229,7 @@ export component MessageComposer inherits GlassSurface {
     property <length> max-input-height: root.mobile
         ? max(min-input-height, min(input-line-height * 6 + padding-vertical,
             available-pane-height * 0.4 - edit-bar-height
-                - reply-bar-height - format-bar-height - send-status-height - raised-toolbar-height - row-padding * 2))
+                - format-bar-height - send-status-height - raised-toolbar-height - row-padding * 2))
         : 400px;
     property <length> padding-vertical: Spacing.sm * 2;
     function reveal-cursor() {
@@ -256,7 +263,6 @@ export component MessageComposer inherits GlassSurface {
     // hold text, so they grow with the text size.
     property <length> send-status-height: send-status != "" ? 28px : 0px;
     property <length> edit-bar-height: is-editing ? Spacing.touch-target-min * Appearance.text-grow : 0px;
-    property <length> reply-bar-height: is-replying ? 48px * Appearance.text-grow : 0px;
 
     // Callbacks
     // Only clear the native draft/composition once core accepts ownership.
@@ -339,7 +345,7 @@ export component MessageComposer inherits GlassSurface {
 
     // Layout - dynamic height based on content (includes Bento Box when expanded)
     property <length> recording-height: max(112px, recording-layout.preferred-height + row-padding * 2);
-    height: root.collapsed ? 0px : VoiceRecording.active ? recording-height : content-height + raised-toolbar-height + edit-bar-height + reply-bar-height + format-bar-height + send-status-height + row-padding * 2;
+    height: root.collapsed ? 0px : VoiceRecording.active ? recording-height : content-height + raised-toolbar-height + edit-bar-height + format-bar-height + send-status-height + row-padding * 2;
     // Action/input positions change immediately with text/preedit on every
     // platform. Settle the shell with them so the focused native field remains
     // inside its bounds between consecutive key events.
@@ -354,7 +360,7 @@ export component MessageComposer inherits GlassSurface {
         y: 0px;
         visible: root.raised-actions && !VoiceRecording.active && self.height > 0px;
         width: root.width;
-        height: root.edit-bar-height + root.reply-bar-height + root.format-bar-height + root.send-status-height;
+        height: root.edit-bar-height + root.format-bar-height + root.send-status-height;
         material-level: root.material-level;
         elevation: root.elevation;
         backdrop-paused: root.backdrop-paused;
@@ -427,96 +433,6 @@ export component MessageComposer inherits GlassSurface {
                             // (OPEN-ITEMS §112g).
                             root.reset-composition();
                             root.cancel-edit();
-                        }
-                    }
-                }
-            }
-        }
-
-        // Reply mode indicator bar
-        if root.is-replying: Rectangle {
-            width: 100%;
-            height: root.reply-bar-height;
-            background: Colors.primary.transparentize(0.95);
-
-            HorizontalLayout {
-                padding-left: Spacing.md;
-                padding-right: Spacing.md;
-                spacing: Spacing.sm;
-                alignment: space-between;
-
-                HorizontalLayout {
-                    spacing: Spacing.sm;
-                    alignment: start;
-
-                    // Reply accent bar
-                    Rectangle {
-                        width: 4px;
-                        height: parent.height - Spacing.sm * 2;
-                        y: Spacing.sm;
-                        background: Colors.primary;
-                        border-radius: 2px;
-                    }
-
-                    // Thumbnail preview for image replies
-                    if root.reply-has-thumbnail: Rectangle {
-                        width: 36px;
-                        height: 36px;
-                        border-radius: Spacing.radius-sm;
-                        clip: true;
-                        background: Colors.surface-hover;
-
-                        Image {
-                            width: 100%;
-                            height: 100%;
-                            source: root.reply-thumbnail;
-                            image-fit: cover;
-                        }
-                    }
-
-                    VerticalLayout {
-                        alignment: center;
-                        spacing: Spacing.xxs;
-
-                        Text {
-                            text: "Reply to " + root.reply-to-sender;
-                            color: Colors.primary;
-                            font-size: Typography.sm;
-                            font-weight: 600;
-                            overflow: elide;
-                        }
-
-                        Text {
-                            text: root.reply-to-preview;
-                            color: Colors.text-secondary;
-                            font-size: Typography.sm;
-                            overflow: elide;
-                        }
-                    }
-                }
-
-                // Cancel reply button — a 48dp box, glyph centred in it
-                Rectangle {
-                    width: Spacing.touch-target-min;
-                    height: Spacing.touch-target-min;
-                    background: cancel-reply-touch.has-hover ? Colors.error.transparentize(0.8) : transparent;
-                    border-radius: Spacing.radius-sm;
-                    accessible-role: button;
-                    accessible-label: "Cancel reply";
-
-                    Image {
-                        source: Icons.x;
-                        width: 18px;
-                        height: 18px;
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
-                        colorize: Colors.text-secondary;
-                    }
-
-                    cancel-reply-touch := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => {
-                            root.cancel-reply();
                         }
                     }
                 }
@@ -747,11 +663,109 @@ export component MessageComposer inherits GlassSurface {
                 backdrop-paused: root.backdrop-paused;
             }
 
-            // Bounded previews occupy only the gap between the individual action shells.
-            if root.has-attachments: attachment-strip := Rectangle {
+            // Reply preview in the gap between the raised emoji and attach shells.
+            if root.is-replying: reply-chip := GlassSurface {
                 x: left-action-surface.width + Spacing.xs;
                 y: 0px;
-                width: max(0px, parent.width - (root.show-attachment-action ? Spacing.touch-target-min + root.row-padding * 2 : 0px) - self.x - Spacing.xs);
+                width: max(0px, parent.width - (root.show-attachment-action ? root.action-shell-height : 0px) - self.x - Spacing.xs);
+                height: root.reply-row-height;
+                border-radius: Spacing.radius-chrome;
+                clip: true;
+                material-level: root.material-level;
+                elevation: root.elevation;
+                backdrop-paused: root.backdrop-paused;
+
+                HorizontalLayout {
+                    padding-left: Spacing.md;
+                    padding-right: root.row-padding;
+                    spacing: Spacing.sm;
+
+                    // Reply accent bar
+                    Rectangle {
+                        width: 4px;
+                        height: parent.height - Spacing.sm * 2;
+                        y: Spacing.sm;
+                        background: Colors.primary;
+                        border-radius: 2px;
+                    }
+
+                    // Thumbnail preview for image replies
+                    if root.reply-has-thumbnail: VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: 36px;
+                            height: 36px;
+                            border-radius: Spacing.radius-sm;
+                            clip: true;
+                            background: Colors.surface-hover;
+
+                            Image {
+                                width: 100%;
+                                height: 100%;
+                                source: root.reply-thumbnail;
+                                image-fit: cover;
+                            }
+                        }
+                    }
+
+                    VerticalLayout {
+                        horizontal-stretch: 1;
+                        alignment: center;
+                        spacing: Spacing.xxs;
+
+                        Text {
+                            text: "Reply to " + root.reply-to-sender;
+                            color: Colors.primary;
+                            font-size: Typography.sm;
+                            font-weight: 600;
+                            overflow: elide;
+                        }
+
+                        Text {
+                            text: root.reply-to-preview;
+                            color: Colors.text-secondary;
+                            font-size: Typography.sm;
+                            overflow: elide;
+                        }
+                    }
+
+                    // Cancel reply button — a 48dp box, glyph centred in it
+                    VerticalLayout {
+                        alignment: center;
+                        Rectangle {
+                            width: Spacing.touch-target-min;
+                            height: Spacing.touch-target-min;
+                            background: cancel-reply-touch.has-hover ? Colors.error.transparentize(0.8) : transparent;
+                            border-radius: Spacing.radius-chrome-inner;
+                            accessible-role: button;
+                            accessible-label: "Cancel reply";
+
+                            Image {
+                                source: Icons.x;
+                                width: 18px;
+                                height: 18px;
+                                x: (parent.width - self.width) / 2;
+                                y: (parent.height - self.height) / 2;
+                                colorize: Colors.text-secondary;
+                            }
+
+                            cancel-reply-touch := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => {
+                                    root.cancel-reply();
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Bounded previews occupy only the gap between the individual action shells,
+            // one row below the reply preview when both are present.
+            if root.has-attachments: attachment-strip := Rectangle {
+                x: left-action-surface.width + Spacing.xs;
+                y: root.is-replying ? root.reply-row-height + Spacing.xs : 0px;
+                width: max(0px, parent.width - (root.show-attachment-action ? root.action-shell-height : 0px) - self.x - Spacing.xs);
                 height: Spacing.touch-target-min + root.row-padding * 2;
                 clip: true;
                 background: transparent;
@@ -1117,7 +1131,8 @@ export component MessageComposer inherits GlassSurface {
             // slide up locks. Mesh has its own file transport, not this path.
             if !root.can-send && !root.is-editing && MeshGlobal.active-id == "": Rectangle {
                 x: parent.width - root.row-padding - Spacing.touch-target-min;
-                y: parent.action-y;
+                // Raised by a reply alone: mic takes Send's slot beside the field.
+                y: root.raised-actions ? parent.lower-action-y : parent.action-y;
                 width: Spacing.touch-target-min;
                 height: Spacing.touch-target-min;
                 accessible-role: button;
