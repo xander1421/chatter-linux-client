@@ -194,3 +194,18 @@ are GL on a SurfaceView, so `dumpsys gfxinfo` does not see them).
   move to the end would land mid-text under the new generation), and takes
   an empty text too, so an app clear without a consumption (Cancel with an
   empty stash) is fenced the same way.
+  RC89 publication: a consume or restore whose JNI call never reached the
+  gate used to roll its generation back while the echo guards already
+  described the new state: the render's Update was then an echo (never
+  pushed), and a snapshot of the old text, current again, replaced the new
+  text in Slint. Now the generation stays (the field changed whether or
+  not the gate heard; old snapshots stay dropped), `publish_pending` is set
+  at the one boundary (`set_game_text_input_state`), the next outbound
+  Update bypasses every dedupe guard, the next frame (`do_render`) or
+  input wake (`process_inputs`) re-publishes the field's current text and
+  caret regardless (Slint raises an Update only while the field differs
+  from its own last published text, so one failed retry would otherwise
+  be the last), and a push that reaches the gate clears the flag (and
+  `reset_pending`, since it stands in for the reset the gate never got).
+  A change of IME client retires it. No timer, no redraw request, no
+  content rule.

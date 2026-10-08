@@ -150,6 +150,17 @@ pub struct AndroidWindowAdapter {
     /// of that generation. While set, the IME's copy may still hold the
     /// consumed text; nothing cached about it is replayed (`finish_composing`).
     reset_pending: Cell<bool>,
+    /// Chatter patch: the last state handed to the gate did not reach it
+    /// (`set_game_text_input_state` returned false). The generation it was
+    /// computed under stays advanced, so every snapshot the IME produced of
+    /// the field as it was is still dropped by provenance; the echo guards,
+    /// set as if the state had been applied, are bypassed by the next
+    /// outbound Update, and the next frame or input wake re-publishes the
+    /// field's state under that generation regardless. Cleared by
+    /// a push that reached the gate (that push is then the one the gate
+    /// knows; a consumption it stood in for is acknowledged by it) and by a
+    /// change of IME client, whose first push establishes its own owner.
+    publish_pending: Cell<bool>,
 }
 
 /// Chatter patch: a Slint text state for the IME's copy of the field, as
@@ -431,6 +442,10 @@ impl i_slint_core::window::WindowAdapterInternal for AndroidWindowAdapter {
         let compose = (!props.preedit_text.is_empty())
             .then_some((props.preedit_offset, props.preedit_offset + props.preedit_text.len()));
 
+        // Chatter patch: a state that never reached the gate is owed: the
+        // guards below describe a state the IME does not hold, so none of
+        // them applies until a push lands (`publish_pending`).
+        if !self.publish_pending.get() {
         // Chatter patch: skip pushing an unchanged state back to GameTextInput.
         // Echoing the IME's own change triggers restartInput, which Slint then
         // sees as a change and echoes again — a feedback loop that restarts the
@@ -530,6 +545,7 @@ impl i_slint_core::window::WindowAdapterInternal for AndroidWindowAdapter {
             break 'push;
         }
         self.ime_states_seen.borrow_mut().push(key);
+        }
         self.had_compose.set(compose.is_some());
         *self.last_pushed_text.borrow_mut() = Some(text.clone());
         self.last_pushed_cursor.set(sel_end);
@@ -592,6 +608,7 @@ impl AndroidWindowAdapter {
         // (`handle_text_input_ack`), so the flag would otherwise keep
         // `finish_composing` inert for the next field.
         self.reset_pending.set(false);
+        self.publish_pending.set(false);
         self.had_compose.set(false);
         *self.last_ime_text.borrow_mut() = None;
         self.last_ime_selection.set((0, 0));
@@ -678,6 +695,7 @@ impl AndroidWindowAdapter {
             ime_owner: Cell::new(0),
             ime_generation: Cell::new(0),
             reset_pending: Cell::new(false),
+            publish_pending: Cell::new(false),
         })
     }
 
@@ -828,7 +846,8 @@ impl AndroidWindowAdapter {
 
     /// Convert every outbound state, including finish_composing and clears,
     /// at the boundary. Echo guards and pending cursor state remain UTF-8.
-    /// `false` only when a bound gate could not be reached.
+    /// `false` only when a bound gate could not be reached; the state is then
+    /// owed (`publish_pending`) and the next outbound Update re-publishes.
     fn set_game_text_input_state(
         &self,
         mut state: android_activity::input::TextInputState,
@@ -847,7 +866,7 @@ impl AndroidWindowAdapter {
             TextSpan { start, end }
         });
         let bridge = self.text_bridge.borrow().clone();
-        match bridge {
+        let reached = match bridge {
             Some(bridge) => bridge.push(&TextInputPush {
                 text: state.text,
                 selection: (state.selection.start, state.selection.end),
@@ -859,7 +878,18 @@ impl AndroidWindowAdapter {
                 self.app.set_text_input_state(state);
                 true
             }
+        };
+        if reached {
+            // A push standing in for a consumption or restore the gate never
+            // received: the gate now holds this generation's state, and no
+            // reset of it will be acknowledged (none reached the gate).
+            if self.publish_pending.replace(false) {
+                self.reset_pending.set(false);
+            }
+        } else {
+            self.publish_pending.set(true);
         }
+        reached
     }
 
     pub(crate) fn set_text_input_bridge(&self, bridge: Rc<dyn TextInputBridge>) {
@@ -912,11 +942,13 @@ impl AndroidWindowAdapter {
         match bridge {
             Some(bridge) => {
                 if !bridge.consume(self.ime_owner.get(), generation) {
-                    // Nothing reached the gate: no reset will be applied or
-                    // acknowledged, so do not leave every later state behind
-                    // a generation the gate never saw.
-                    self.ime_generation.set(generation - 1);
-                    self.reset_pending.set(false);
+                    // Nothing reached the gate. The generation stays: the
+                    // field was consumed whether or not the gate heard, and
+                    // a snapshot of the consumed text must not come back as
+                    // typing. The render's Update("") re-publishes it as a
+                    // push under this generation (`publish_pending`), which
+                    // the gate applies in place of the reset it never got.
+                    self.publish_pending.set(true);
                 }
             }
             None => {
@@ -1012,22 +1044,66 @@ impl AndroidWindowAdapter {
         self.stale_commit_cursor.set(None);
         // The state the IME will hold: the render's own Update of the same
         // text and caret is then an echo and is not pushed again.
-        *self.last_ime_text.borrow_mut() = Some(text.clone());
-        self.last_ime_selection.set((anchor, cursor));
-        *self.last_pushed_text.borrow_mut() = Some(text.clone());
-        self.last_pushed_cursor.set(cursor);
-        *self.last_ime_epoch.borrow_mut() = Some(text.clone());
-        self.ime_states_seen.borrow_mut().clear();
-        self.ime_states_seen.borrow_mut().push((text.clone(), anchor, cursor, None));
+        self.note_app_state(&text, anchor, cursor);
         self.deferred_ime_update.take();
-        if !self.set_game_text_input_state(TextInputState {
+        // If this does not reach the gate the generation stays advanced and
+        // `publish_pending` has the frame, input and Update paths re-publish
+        // the field's state: it holds the new text whether or not the gate
+        // heard, and a snapshot of the old text must not replace it.
+        self.set_game_text_input_state(TextInputState {
             text,
             selection: TextSpan { start: anchor, end: cursor },
             compose_region: None,
+        });
+    }
+
+    /// Chatter patch: the echo guards as of an app-initiated state of the
+    /// field (`restore_text_input`, a re-publication of an owed state).
+    fn note_app_state(&self, text: &str, anchor: usize, cursor: usize) {
+        *self.last_ime_text.borrow_mut() = Some(text.to_string());
+        self.last_ime_selection.set((anchor, cursor));
+        *self.last_pushed_text.borrow_mut() = Some(text.to_string());
+        self.last_pushed_cursor.set(cursor);
+        *self.last_ime_epoch.borrow_mut() = Some(text.to_string());
+        self.ime_states_seen.borrow_mut().clear();
+        self.ime_states_seen.borrow_mut().push((text.to_string(), anchor, cursor, None));
+    }
+
+    /// Chatter patch: a state owed to the gate (`publish_pending`) is
+    /// re-published from the paths the event loop runs anyway: a frame
+    /// (`do_render`) and an input wake (`process_inputs`, before the input
+    /// iterator takes the app lock), besides any outbound Update. Slint's
+    /// render raises an Update only while the field's text differs from
+    /// its own last published one, so after one failed retry an unchanged
+    /// field would raise none. The field's current text and caret are what
+    /// is pushed; nothing is requested (no redraw, no timer): a failed JNI
+    /// call returns at once and the next frame or wake tries again, a
+    /// push that lands clears the flag.
+    fn republish_owed_text_input(&self) {
+        use android_activity::input::{TextInputState, TextSpan};
+        if !self.publish_pending.get() {
+            return;
+        }
+        let Some(client) = self.ime_client.borrow().as_ref().and_then(|c| c.upgrade()) else {
+            return;
+        };
+        let Some(field) = client.downcast::<i_slint_core::items::TextInput>() else {
+            return;
+        };
+        let field = field.as_pin_ref();
+        if !field.preedit_text().is_empty() {
+            return;
+        }
+        let text = field.text().to_string();
+        let clamp = |offset: i32| (offset.max(0) as usize).min(text.len());
+        let anchor = clamp(field.anchor_position_byte_offset());
+        let cursor = clamp(field.cursor_position_byte_offset());
+        if self.set_game_text_input_state(TextInputState {
+            text: text.clone(),
+            selection: TextSpan { start: anchor, end: cursor },
+            compose_region: None,
         }) {
-            // Nothing reached the gate: do not leave every later state
-            // behind a generation the gate never saw.
-            self.ime_generation.set(generation - 1);
+            self.note_app_state(&text, anchor, cursor);
         }
     }
 
@@ -1165,6 +1241,9 @@ impl AndroidWindowAdapter {
     }
 
     fn process_inputs(&self) -> Result<(), PlatformError> {
+        // Chatter patch: before the app lock, which the gate's UI thread
+        // takes inside `onTextInputEventNative`.
+        self.republish_owed_text_input();
         let mut iter =
             self.app.input_events_iter().map_err(|e| PlatformError::Other(e.to_string()))?;
         loop {
@@ -1503,6 +1582,7 @@ impl AndroidWindowAdapter {
     /// loop can tell a presented frame from one that was skipped (no native
     /// window, an occluded or timed-out surface) and pace itself either way.
     pub fn do_render(&self) -> Result<bool, PlatformError> {
+        self.republish_owed_text_input();
         let Some(win) = self.app.native_window() else { return Ok(false) };
         let o = self.offset.get();
         let outcome = self.renderer.render_transformed_with_post_callback(
