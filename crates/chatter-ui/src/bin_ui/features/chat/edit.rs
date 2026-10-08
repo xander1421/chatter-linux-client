@@ -14,10 +14,22 @@ use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::UserId;
 use chatter_core::state::ActiveConversation;
 
-/// The newest Edit tap. Its text lookup runs off the UI thread; only the
-/// request that is still the newest may fill the composer, so two quick taps
-/// end on the second message's text, not whichever lookup finished last.
-static ENTER_EDIT: AtomicU64 = AtomicU64::new(0);
+/// The edit session generation. Bumped by every Edit tap and by every way out
+/// of an edit (`end_edit`: send, cancel, opening a conversation, sign-out).
+/// A tap's text lookup and a send's completion run off the UI thread and
+/// apply only while the generation they captured is still current, so two
+/// quick taps end on the second message's text, a lookup cancelled before it
+/// returned never re-enters edit mode, and an old send that finishes after
+/// the same message was reopened for editing leaves the new session alone.
+static EDIT_GENERATION: AtomicU64 = AtomicU64::new(0);
+
+fn current_generation() -> u64 {
+    EDIT_GENERATION.load(Ordering::SeqCst)
+}
+
+fn next_generation() -> u64 {
+    EDIT_GENERATION.fetch_add(1, Ordering::SeqCst) + 1
+}
 
 /// Wire edit-message callback - enters edit mode by populating composer.
 pub fn wire_edit_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
@@ -34,7 +46,7 @@ pub fn wire_edit_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         // Session + conversation epoch at the tap: a logout, a reload or
         // another conversation opened meanwhile retires this request.
         let owner = HistoryOwner::capture(&ui_ctx, conversation);
-        let request = ENTER_EDIT.fetch_add(1, Ordering::SeqCst) + 1;
+        let generation = next_generation();
 
         // Move service lookups to background task
         tokio::spawn(async move {
@@ -63,15 +75,10 @@ pub fn wire_edit_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
-                        // Still the same session/conversation, still the
-                        // newest Edit tap, and no other edit session opened
-                        // since: otherwise this text would replace a newer
-                        // draft.
-                        let current_key = w.get_composer_edit_message_id();
-                        if !owner.is_current()
-                            || ENTER_EDIT.load(Ordering::SeqCst) != request
-                            || !(current_key.is_empty() || current_key.as_str() == composite_key)
-                        {
+                        // Still the same session/conversation and still the
+                        // newest edit session: otherwise this text would
+                        // replace a newer draft or re-enter a cancelled edit.
+                        if !owner.is_current() || current_generation() != generation {
                             return;
                         }
                         // Editing borrows the composer; keep the unsent draft
@@ -123,17 +130,25 @@ pub fn wire_send_edit(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let weak = weak_window.clone();
         let ui_ctx = ui_ctx.clone();
         let owner = HistoryOwner::capture(&ui_ctx, conversation);
+        let generation = current_generation();
 
         let target_sent_timestamp: u64 = match timestamp_ns_str.parse() {
             Ok(ts) => ts,
             Err(_) => return,
         };
 
-        // Validate sender id up front so we keep Signal-style logging.
-        let _: UserId = match sender_id_str.parse() {
+        // The author is part of the key; core refuses any author but us.
+        let target_author: UserId = match sender_id_str.parse() {
             Ok(id) => id,
             Err(_) => return,
         };
+
+        // The edit is accepted: the composer resets right after this
+        // callback (`reset-after-send`), and on Android the input method's
+        // own copy of the text must go with it, as a normal send does
+        // (`take_composer_send`), or it comes back into the emptied box.
+        #[cfg(target_os = "android")]
+        crate::platform::android::text_input::consume();
 
         tokio::spawn(async move {
             // The tap bound this edit to its session and conversation; a
@@ -142,7 +157,10 @@ pub fn wire_send_edit(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 return;
             }
             let handle = ui_ctx.conversation(conversation);
-            if let Err(e) = handle.send_edit(target_sent_timestamp, &new_text_str).await {
+            if let Err(e) = handle
+                .send_edit(&target_author, target_sent_timestamp, &new_text_str)
+                .await
+            {
                 tracing::error!(error = %e, "Failed to send edit");
                 return;
             }
@@ -153,11 +171,12 @@ pub fn wire_send_edit(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
                     // Only this edit's own session may be closed: the same
-                    // session/conversation and the same edit key. The
-                    // composer was emptied when this edit was sent; text
-                    // typed since is a newer draft and stays, so the stash
-                    // is not restored over it.
+                    // session/conversation, edit generation and edit key.
+                    // The composer was emptied when this edit was sent;
+                    // text typed since is a newer draft and stays, so the
+                    // stash is not restored over it.
                     if !owner.is_current()
+                        || current_generation() != generation
                         || w.get_composer_edit_message_id().as_str() != composite_key_str
                     {
                         return;
@@ -165,6 +184,7 @@ pub fn wire_send_edit(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     if w.get_composer_text().is_empty() {
                         end_edit(&w);
                     } else {
+                        next_generation();
                         w.set_composer_stash("".into());
                         w.set_composer_stash_held(false);
                         w.set_composer_edit_message_id("".into());
@@ -198,6 +218,7 @@ pub fn wire_cancel_edit(window: &MainWindow) {
 /// only the flags left the edit text in the box as a plain draft, and Send
 /// then posted it as a new message.
 pub(crate) fn end_edit(w: &MainWindow) {
+    next_generation();
     if w.get_composer_stash_held() {
         w.set_composer_text(w.get_composer_stash());
         w.set_composer_stash_held(false);

@@ -224,17 +224,36 @@ impl ConversationHandle {
     }
 
     /// Where this conversation's rows are stored (`SavedMessages` only with
-    /// authenticated own identity and matching channel metadata).
+    /// authenticated own identity and matching channel metadata). A Saved
+    /// channel that is not the signed-in account's — a handle built before a
+    /// sign-out or account switch — is refused outright rather than resolved
+    /// to a plain channel, which would let a remote control be sent to a
+    /// user id.
     fn storage_scope(&self) -> ConversationResult<crate::domain::reaction::ReactionScope> {
         let channel = self
             .conversation
             .channel_id()
             .and_then(|id| self.client.get_channel_local(&id));
-        message_storage_scope(
+        let scope = message_storage_scope(
             &self.conversation,
             self.client.auth_state().get().current_user_id,
             channel.as_ref(),
-        )
+        )?;
+        if scope.kind != ConversationType::SavedMessages
+            && channel.is_some_and(|c| {
+                c.channel_type == crate::domain::channel::ChannelType::SavedMessages
+            })
+        {
+            return Err(ConversationError::Other(
+                "Saved Messages belongs to another account".into(),
+            ));
+        }
+        Ok(scope)
+    }
+
+    /// The storage kind this handle resolves to (see [`Self::storage_scope`]).
+    pub fn storage_kind(&self) -> ConversationResult<ConversationType> {
+        Ok(self.storage_scope()?.kind)
     }
 
     fn require_remote_message_actions(&self) -> ConversationResult {
@@ -638,13 +657,26 @@ impl ConversationHandle {
     /// Emits `DomainEvent::MessageEdited` on success so UI subscribers
     /// refresh uniformly across conversation kinds — no UI-side branching
     /// on anon vs DM/channel needed.
+    ///
+    /// `target_author` is the key the menu was opened with. A Saved edit
+    /// refuses any author but the signed-in user before looking anything up,
+    /// so a stale or malformed menu key cannot pick a Saved row by clock
+    /// alone. The other kinds keep their own-message lookup (`persist_edit`)
+    /// and the peer's authorship check; an anonymous group's menu key is not
+    /// byte-identical to its stored sender id (see `stored_message`).
     pub async fn send_edit(
         &self,
+        target_author: &UserId,
         target_sent_timestamp: u64,
         new_text: &str,
     ) -> ConversationResult {
         let scope = self.storage_scope()?;
         if scope.kind == ConversationType::SavedMessages {
+            if self.client.auth_state().get().current_user_id != Some(*target_author) {
+                return Err(ConversationError::Other(
+                    "Only your own Saved message can be edited".into(),
+                ));
+            }
             return self.edit_saved_message(&scope, target_sent_timestamp, new_text);
         }
         let result = self.send_edit_inner(target_sent_timestamp, new_text).await;
@@ -671,15 +703,21 @@ impl ConversationHandle {
         target_sent_timestamp: u64,
         new_text: &str,
     ) -> ConversationResult {
-        let own = self
-            .client
-            .auth_state()
-            .get()
+        let auth = self.client.auth_state().get();
+        let own = auth
             .current_user_id
             .ok_or_else(|| ConversationError::Other("Editing requires a signed-in user".into()))?;
         let repo = &self.client.messages().message_repo;
         let stored = scoped_stored_message(repo, scope, &own, target_sent_timestamp)?;
         let edited = edited_saved_record(&stored, own, new_text)?;
+        // The scope was resolved under this account and session; the write
+        // happens under the same ones or not at all.
+        let now = self.client.auth_state().get();
+        if now.current_user_id != Some(own) || now.session_revision != auth.session_revision {
+            return Err(ConversationError::Other(
+                "Account changed while editing".into(),
+            ));
+        }
         repo.update(&edited)?;
         self.client
             .event_bus()

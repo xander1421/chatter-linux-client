@@ -10989,7 +10989,7 @@ async fn v45_reactions_edits_pins_roundtrip_in_channel() {
     let edited = format!("EDITED-{}", unique_marker());
     client_b
         .conversation(ActiveConversation::Channel(chan.id.clone()))
-        .send_edit(e_ts, &edited)
+        .send_edit(&uid_b, e_ts, &edited)
         .await
         .expect("B send_edit failed");
     let mut edit_ok = false;
@@ -11141,7 +11141,7 @@ async fn v46_reactions_edits_pins_roundtrip_in_dm() {
     let edited = format!("EDITED-{}", unique_marker());
     client_b
         .conversation(ActiveConversation::ServerDm { peer_id: uid_a })
-        .send_edit(e_ts, &edited)
+        .send_edit(&uid_b, e_ts, &edited)
         .await
         .expect("B send_edit failed");
     let mut edit_ok = false;

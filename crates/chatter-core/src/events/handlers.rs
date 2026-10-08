@@ -209,20 +209,39 @@ impl EventHandlers {
                 message_id,
                 new_content,
                 channel_id,
-                ..  // conversation_type, target_sent_timestamp
+                conversation_type,
+                ..  // target_sent_timestamp
             } => {
                 trace!(?channel_id, ?message_id, "Updating message content in state + DB");
+                // A Saved edit is durable before its event is sent
+                // (`ConversationHandle::edit_saved_message`), so the stored
+                // row is the truth: a queued older event must neither show
+                // nor write its body over a newer edit.
+                let new_content = if conversation_type
+                    == crate::domain::message::ConversationType::SavedMessages
+                {
+                    let Some(stored) = self
+                        .message_service
+                        .as_ref()
+                        .and_then(|svc| svc.message_repo.get(&message_id).ok().flatten())
+                    else {
+                        return;
+                    };
+                    stored.content
+                } else {
+                    // Persist to DB so is_edited survives reload
+                    if let Some(ref svc) = self.message_service {
+                        if let Err(e) = svc.update_message_body(&message_id, &new_content) {
+                            tracing::warn!(?message_id, error = %e, "Failed to persist edit to DB");
+                        }
+                    }
+                    new_content
+                };
                 self.message_state
                     .update_message(&channel_id, &message_id, |msg| {
                         msg.content = new_content.clone();
                         msg.is_edited = true;
                     });
-                // Persist to DB so is_edited survives reload
-                if let Some(ref svc) = self.message_service {
-                    if let Err(e) = svc.update_message_body(&message_id, &new_content) {
-                        tracing::warn!(?message_id, error = %e, "Failed to persist edit to DB");
-                    }
-                }
             }
 
             DomainEvent::MessageDeleted {
@@ -1143,6 +1162,30 @@ mod tests {
         assert_eq!(messages.len(), 1);
         assert!(messages[0].is_edited);
         assert_eq!(messages[0].content, new_content);
+    }
+
+    /// A Saved edit event carries no authority: without the stored row to
+    /// read back, nothing is shown or written.
+    #[test]
+    fn saved_edit_event_never_applies_its_own_body() {
+        let handlers = create_handlers();
+        let channel_id = ChannelId::new();
+        let mut message = create_test_message(channel_id);
+        message.conversation_type = ConversationType::SavedMessages;
+        let message_id = message.id;
+        let original = message.content.clone();
+        handlers.handle_domain_event(DomainEvent::MessageReceived { message });
+        handlers.handle_domain_event(DomainEvent::MessageEdited {
+            message_id,
+            new_content: MessageContent::Text("queued older body".to_string()),
+            channel_id,
+            conversation_type: ConversationType::SavedMessages,
+            author_id: UserId::new(),
+            target_sent_timestamp: 0,
+        });
+        let messages = handlers.message_state.get_messages(&channel_id);
+        assert_eq!(messages[0].content, original);
+        assert!(!messages[0].is_edited);
     }
 
     #[test]

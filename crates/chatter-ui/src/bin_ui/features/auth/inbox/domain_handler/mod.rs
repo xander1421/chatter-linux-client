@@ -250,9 +250,9 @@ pub async fn handle_domain_event(
             message_id,
             new_content,
             channel_id,
+            conversation_type,
             author_id,
             target_sent_timestamp,
-            ..
         } => {
             use chatter_core::domain::message::MessageContent;
             let new_text = match &new_content {
@@ -265,6 +265,7 @@ pub async fn handle_domain_event(
                 window,
                 ui_ctx,
                 channel_id,
+                conversation_type,
                 &message_id.to_string(),
                 author_id,
                 target_sent_timestamp,

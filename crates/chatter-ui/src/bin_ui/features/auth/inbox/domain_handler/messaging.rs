@@ -399,30 +399,47 @@ pub(super) fn handle_reaction_update(
 /// Only in the conversation on screen, and only the bubble whose Signal-style
 /// key (author, sent timestamp) matches — a timestamp alone let one member
 /// rewrite another member's bubble by reusing its timestamp.
+/// `conversation_type` is the event's storage kind. A `SavedMessages` edit
+/// is applied only when the open conversation resolves to this account's
+/// Saved scope, and with the body read back from the stored row (the edit
+/// is durable before its event), so a delayed event cannot show an older
+/// body or patch a same-id channel row. Other kinds keep the id-keyed path
+/// (an encrypted channel stores as `AnonGroup` under its real channel id).
+#[allow(clippy::too_many_arguments)]
 pub(super) fn handle_message_edit(
     window: &Weak<MainWindow>,
     ui_ctx: &Arc<ChatterClient>,
     conversation_id: ChannelId,
+    conversation_type: chatter_core::domain::message::ConversationType,
     message_id: &str,
     author_id: UserId,
     target_sent_timestamp: u64,
     new_text: &str,
 ) {
+    use chatter_core::domain::message::ConversationType;
     // The chat-list row previews the edited text too, open or not.
     crate::bin_ui::features::sidebar::history_changed(window, ui_ctx);
     if !ui_ctx.is_showing_conversation(conversation_id) {
         return;
     }
-    let message_id = message_id.to_string();
-    let author = author_id.to_string();
-    let new_text = new_text.to_string();
-
     let conversation = ui_ctx.chat_state().active_conversation();
-    let ui_ctx = ui_ctx.clone();
-    crate::run_ui!(window, |w| {
-        if ui_ctx.chat_state().active_conversation() != conversation {
+    let owner = crate::bin_ui::features::history_owner::HistoryOwner::capture(ui_ctx, conversation);
+    let mut new_text = new_text.to_string();
+    if conversation_type == ConversationType::SavedMessages {
+        let handle = ui_ctx.conversation(conversation);
+        if handle.storage_kind().ok() != Some(ConversationType::SavedMessages) {
             return;
         }
+        match handle.get_message_text(&author_id, target_sent_timestamp) {
+            Ok(Some(stored)) => new_text = stored,
+            _ => return,
+        }
+    }
+    let message_id = message_id.to_string();
+    let author = author_id.to_string();
+
+    let ui_ctx = ui_ctx.clone();
+    crate::run_history_ui!(window, owner, |w| {
         crate::bin_ui::features::thread::apply_thread_edit(
             &w,
             &message_id,

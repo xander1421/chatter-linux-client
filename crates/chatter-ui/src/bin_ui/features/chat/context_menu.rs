@@ -30,10 +30,19 @@ pub fn wire_more_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         if matches!(conversation, ActiveConversation::None) {
             return;
         }
+        // The menu is for this session and conversation: a lookup that
+        // finishes after a sign-out or another conversation opened must not
+        // publish a menu (whose Edit would then key the new conversation
+        // with the old author/clock).
+        let owner =
+            crate::bin_ui::features::history_owner::HistoryOwner::capture(&ui_ctx, conversation);
 
         let handle = ui_ctx.conversation(conversation);
 
         tokio::spawn(async move {
+            if !owner.is_current() {
+                return;
+            }
             let target_sender_id: UserId = match sender_id_str.parse() {
                 Ok(id) => id,
                 Err(e) => {
@@ -57,10 +66,8 @@ pub fn wire_more_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
             };
 
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak.upgrade() {
-                    set_context_menu(&w, sender_id_str, timestamp_ns_str, menu, menu_x, menu_y);
-                }
+            crate::run_history_ui!(weak, owner, |w| {
+                set_context_menu(&w, sender_id_str, timestamp_ns_str, menu, menu_x, menu_y);
             });
         });
     });
