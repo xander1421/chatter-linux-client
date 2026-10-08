@@ -5,7 +5,7 @@ use std::sync::Arc;
 use slint::{ComponentHandle, Model, SharedString};
 
 use chatter_core::client::ChatterClient;
-use chatter_core::domain::{Attachment, FileCategory, Message};
+use chatter_core::domain::{Attachment, FileCategory, Message, SharedCategory};
 use chatter_core::state::ActiveConversation;
 
 use crate::{MainWindow, MessageItemData};
@@ -19,10 +19,14 @@ fn generate_pinned_preview(message: &Message, attachments: &[Attachment]) -> Str
     }
     if !attachments.is_empty() {
         if attachments.len() == 1 {
-            let cat = attachments[0].metadata.category();
+            let meta = &attachments[0].metadata;
+            let cat = meta.category();
+            // Only an in-app recording is a voice note; picked audio is music.
+            let voice = SharedCategory::of(meta) == SharedCategory::Voice;
             let emoji = match cat {
                 FileCategory::Image => "📷",
                 FileCategory::Video => "🎬",
+                FileCategory::Audio if voice => "🎤",
                 FileCategory::Audio => "🎵",
                 FileCategory::Document => "📄",
                 FileCategory::Code => "📝",
@@ -32,7 +36,8 @@ fn generate_pinned_preview(message: &Message, attachments: &[Attachment]) -> Str
             let name = match cat {
                 FileCategory::Image => "Photo",
                 FileCategory::Video => "Video",
-                FileCategory::Audio => "Voice message",
+                FileCategory::Audio if voice => "Voice message",
+                FileCategory::Audio => "Music",
                 FileCategory::Document => "Document",
                 FileCategory::Code => "Code",
                 FileCategory::Archive => "Archive",

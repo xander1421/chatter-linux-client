@@ -560,7 +560,10 @@ pub(crate) fn jump_to_message(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, messa
     let Some(row) = row_of(w, message_id) else {
         match message_id.parse() {
             Ok(id) => load_older(w, ui_ctx, Some(id)),
-            Err(_) => tracing::debug!(message_id, "Jump target is not a stored message"),
+            Err(_) => {
+                tracing::debug!(message_id, "Jump target is not a stored message");
+                report_jump_unavailable(w);
+            }
         }
         return;
     };
@@ -575,6 +578,30 @@ pub(crate) fn jump_to_message(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, messa
         if let Some(w) = weak.upgrade() {
             w.set_highlighted_message_id(slint::SharedString::new());
             w.set_scroll_to_message_index(-1);
+        }
+    });
+}
+
+/// A jump whose target is not in this device's history (deleted, expired, a
+/// thread reply, never synced here) says so instead of doing nothing. Local
+/// history only: there is no server fetch behind a jump. UI thread.
+fn report_jump_unavailable(w: &MainWindow) {
+    w.set_toast_message("That message isn't available on this device.".into());
+    w.set_toast_variant("error".into());
+    w.set_toast_visible(true);
+}
+
+/// `report_jump_unavailable` from the history thread, for the request that
+/// is still current.
+fn report_jump_unavailable_later(
+    weak: slint::Weak<MainWindow>,
+    owner: super::history_owner::HistoryOwner,
+) {
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(w) = weak.upgrade() {
+            if owner.is_current() {
+                report_jump_unavailable(&w);
+            }
         }
     });
 }
@@ -601,6 +628,11 @@ fn load_older(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, until: Option<Message
         return;
     };
     let Some(owner) = super::history_owner::HistoryOwner::admit_older(ui_ctx, conversation) else {
+        if until.is_some() {
+            w.set_toast_message("History is still loading. Try again in a moment.".into());
+            w.set_toast_variant("info".into());
+            w.set_toast_visible(true);
+        }
         return;
     };
     let weak = w.as_weak();
@@ -635,11 +667,17 @@ fn load_older(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, until: Option<Message
             Ok(msgs) => msgs,
             Err(e) => {
                 tracing::error!("Failed to load more messages: {}", e);
+                if until.is_some() {
+                    report_jump_unavailable_later(weak, owner);
+                }
                 return;
             }
         };
         if older_messages.is_empty() {
             tracing::debug!("No older messages for channel: {}", channel_id);
+            if until.is_some() {
+                report_jump_unavailable_later(weak, owner);
+            }
             return;
         }
 
@@ -707,6 +745,8 @@ fn load_older(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, until: Option<Message
             if let Some(target) = until.map(|id| id.to_string()) {
                 if row_of(&w, &target).is_some() {
                     jump_to_message(&w, &ui_ctx, &target);
+                } else {
+                    report_jump_unavailable(&w);
                 }
             }
         });

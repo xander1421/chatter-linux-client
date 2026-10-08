@@ -25,6 +25,9 @@ export struct PrivateGroupFriend {
     username: string,
     selected: bool,
     role: string,
+    avatar-source: image,
+    // Reached through an anon DM: purple anonymous ring.
+    anonymous: bool,
 }
 
 export struct AIProviderOption {
@@ -607,6 +610,8 @@ export component CreateChannelModal inherits Rectangle {
 
                                     Avatar {
                                         size: 32px;
+                                        source: friend.avatar-source;
+                                        anonymous: friend.anonymous;
                                         name: friend.display-name;
                                     }
 

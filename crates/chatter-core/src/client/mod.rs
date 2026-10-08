@@ -23,7 +23,7 @@ pub mod channels;
 mod composer;
 #[cfg(feature = "media")]
 mod group_ring_lifecycle;
-pub use composer::{ComposerReply, ComposerSend};
+pub use composer::{ComposerDraft, ComposerReply, ComposerSend};
 pub mod events;
 #[cfg(feature = "jarvis")]
 mod jarvis;
@@ -394,10 +394,10 @@ pub struct ChatterClient {
     /// Signed-out startup has not contacted the server yet, and won't until a
     /// sign-in action calls `connect` — see `startup_connect`.
     server_contact_deferred: AtomicBool,
-    /// Unsent composer text per conversation id, so a draft stays with the
-    /// conversation it was typed in. See `swap_composer_draft`.
+    /// Unsent composer text and reply target per conversation id, so a draft
+    /// stays with the conversation it was typed in. See `swap_composer_draft`.
     // in-memory, lost on restart.
-    composer_drafts: Mutex<std::collections::HashMap<String, String>>,
+    composer_drafts: Mutex<std::collections::HashMap<String, ComposerDraft>>,
     composer_draft_revision: Mutex<u64>,
     /// Failed composed sends kept until their composer has room for them.
     /// See `recover_composer_send`. In memory, like the drafts.
@@ -3331,9 +3331,14 @@ impl ChatterClient {
 
     // ── Drafts (façade) ─────────────────────────────────────────────
 
-    /// Conversation switch: park `text` under `leaving`, return the draft
-    /// parked under `entering` (empty if none). Empty text clears the slot.
-    pub fn swap_composer_draft(&self, leaving: &str, text: String, entering: &str) -> String {
+    /// Conversation switch: park `draft` under `leaving`, return the draft
+    /// parked under `entering` (empty if none). An empty draft clears the slot.
+    pub fn swap_composer_draft(
+        &self,
+        leaving: &str,
+        draft: ComposerDraft,
+        entering: &str,
+    ) -> ComposerDraft {
         let mut drafts = self.composer_drafts.lock();
         let revision = self.auth_state().get().session_revision;
         let mut draft_revision = self.composer_draft_revision.lock();
@@ -3345,10 +3350,10 @@ impl ChatterClient {
             *draft_revision = revision;
         }
         if !changed_session && !leaving.is_empty() {
-            if text.is_empty() {
+            if draft.is_empty() {
                 drafts.remove(leaving);
             } else {
-                drafts.insert(leaving.to_owned(), text);
+                drafts.insert(leaving.to_owned(), draft);
             }
         }
         *self.composer_owner.lock() = entering.to_owned();

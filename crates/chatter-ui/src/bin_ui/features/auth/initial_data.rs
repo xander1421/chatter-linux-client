@@ -306,6 +306,10 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
         // back on top.
 
         // Set blocked users
+        let blocked_users_slint: Vec<crate::BlockedUserData> = blocked_users_slint
+            .into_iter()
+            .map(crate::bin_ui::features::modals::friends::BlockedUserRow::to_slint)
+            .collect();
         w.set_friends_blocked_users(ModelRc::new(VecModel::from(blocked_users_slint)));
 
         // Set sidebar badge count for message requests

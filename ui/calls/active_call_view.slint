@@ -22,6 +22,8 @@ component ParticipantTile inherits Rectangle {
     in property <image> video-frame;
     in property <bool> is-local: false;
     in property <bool> show-video: true;
+    // Anonymous call: every participant is an anonymous identity.
+    in property <bool> anonymous: false;
     callback clicked();
 
     TouchArea {
@@ -77,6 +79,7 @@ component ParticipantTile inherits Rectangle {
                 Avatar {
                     size: avatar-size;
                     source: participant.avatar-source;
+                    anonymous: root.anonymous;
                     fallback-text: participant.initials;
                 }
             }
@@ -265,6 +268,7 @@ export component ActiveCallView inherits Rectangle {
             // or a 1:1 call still ringing — then the callee's tile is listed
             // first and shown instead of our own.
             if maximized-index < 0 && call-data.participant-count == 1: ParticipantTile {
+                anonymous: root.call-data.is-anonymous-call;
                 x: Spacing.sm;
                 y: Spacing.sm;
                 width: parent.width - 2 * Spacing.sm;
@@ -287,6 +291,7 @@ export component ActiveCallView inherits Rectangle {
                 background: transparent;
 
                 ParticipantTile {
+                    anonymous: root.call-data.is-anonymous-call;
                     width: 100%;
                     height: 100%;
                     participant: call-data.participants[0];
@@ -295,6 +300,7 @@ export component ActiveCallView inherits Rectangle {
                 }
 
                 ParticipantTile {
+                    anonymous: root.call-data.is-anonymous-call;
                     property <length> pip-width: clamp(parent.width * 0.24, 120px, 200px);
                     width: pip-width;
                     height: pip-width * 0.62;
@@ -308,6 +314,7 @@ export component ActiveCallView inherits Rectangle {
             }
 
             if maximized-index < 0 && call-data.participant-count == 2 && !any-video: ParticipantTile {
+                anonymous: root.call-data.is-anonymous-call;
                 x: Spacing.sm;
                 y: Spacing.sm;
                 width: parent.width - 2 * Spacing.sm;
@@ -325,12 +332,14 @@ export component ActiveCallView inherits Rectangle {
                     spacing: Spacing.sm;
 
                     ParticipantTile {
+                        anonymous: root.call-data.is-anonymous-call;
                         horizontal-stretch: 1;
                         participant: call-data.participants[0];
                         video-frame: remote-video-frames.length > 0 ? remote-video-frames[0] : local-video-frame;
                         clicked => { root.user-focus = 0; }
                     }
                     ParticipantTile {
+                        anonymous: root.call-data.is-anonymous-call;
                         horizontal-stretch: 1;
                         participant: call-data.participants.length > 1 ? call-data.participants[1] : call-data.participants[0];
                         video-frame: remote-video-frames.length > 1 ? remote-video-frames[1] : local-video-frame;
@@ -342,12 +351,14 @@ export component ActiveCallView inherits Rectangle {
                     spacing: Spacing.sm;
 
                     ParticipantTile {
+                        anonymous: root.call-data.is-anonymous-call;
                         horizontal-stretch: 1;
                         participant: call-data.participants.length > 2 ? call-data.participants[2] : call-data.participants[0];
                         video-frame: remote-video-frames.length > 2 ? remote-video-frames[2] : local-video-frame;
                         clicked => { root.user-focus = 2; }
                     }
                     ParticipantTile {
+                        anonymous: root.call-data.is-anonymous-call;
                         horizontal-stretch: 1;
                         participant: call-data.participants.length > 3 ? call-data.participants[3] : call-data.participants[0];
                         video-frame: local-video-frame;
@@ -366,6 +377,7 @@ export component ActiveCallView inherits Rectangle {
             // Fullscreen + maximized fills (cover) so ultrawide screen-share
             // captures aren't squashed into a thin letterboxed band.
             if maximized-index >= 0 && maximized-index < call-data.participant-count: ParticipantTile {
+                anonymous: root.call-data.is-anonymous-call;
                 x: Spacing.sm;
                 y: Spacing.sm;
                 width: parent.width - 2 * Spacing.sm;

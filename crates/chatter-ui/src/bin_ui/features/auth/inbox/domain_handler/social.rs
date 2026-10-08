@@ -45,6 +45,18 @@ pub(super) async fn handle_friend_requests_updated(
             .unwrap_or_default()
     };
     let sent_names: Vec<String> = sent.iter().map(peer_name).collect();
+    // Outgoing rows show the peer's avatar when a local profile already has it.
+    let sent_avatars: Vec<Option<(u32, u32, Vec<u8>)>> = sent
+        .iter()
+        .map(|r| {
+            r.user_id
+                .parse::<UserId>()
+                .ok()
+                .and_then(|u| ui_ctx.user_avatar(&u))
+                .as_deref()
+                .and_then(decode_avatar_rgba)
+        })
+        .collect();
     let mut prepped: Vec<Prepped> = Vec::with_capacity(received.len());
     for r in &received {
         let p = match r.user_id.parse::<UserId>() {
@@ -98,14 +110,22 @@ pub(super) async fn handle_friend_requests_updated(
             let sent_model: Vec<crate::FriendRequestData> = sent
                 .into_iter()
                 .zip(sent_names)
-                .map(|(r, display_name)| {
+                .zip(sent_avatars)
+                .map(|((r, display_name), avatar)| {
+                    let (avatar_source, has_avatar) = match avatar {
+                        Some((aw, ah, px)) => (
+                            crate::bin_ui::slint_conversions::rgba_to_slint_image(&px, aw, ah),
+                            true,
+                        ),
+                        None => (slint::Image::default(), false),
+                    };
                     // Name resolved by core (`friend_request_peer_name`).
                     crate::FriendRequestData {
                         user_id: r.user_id.into(),
                         display_name: display_name.into(),
                         username: r.username.into(),
-                        avatar_source: slint::Image::default(),
-                        has_avatar: false,
+                        avatar_source,
+                        has_avatar,
                         sent_at: "".into(),
                         note: "".into(),
                     }

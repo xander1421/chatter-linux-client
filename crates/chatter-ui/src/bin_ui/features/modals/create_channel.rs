@@ -400,24 +400,23 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let weak = weak_window.clone();
         let ui_ctx = ui_ctx_tpl.clone();
         tokio::spawn(async move {
-            let friend_data: Vec<PrivateGroupFriend> = ui_ctx
+            let candidates: Vec<_> = ui_ctx
                 .list_anon_group_invite_candidates(None)
                 .into_iter()
-                .map(|c| PrivateGroupFriend {
-                    user_id: c.user_id.to_string().into(),
-                    display_name: c.display_name.into(),
-                    username: if c.is_anonymous {
-                        "(anonymous)".into()
-                    } else {
-                        "".into()
-                    },
-                    selected: false,
-                    role: "member".into(),
+                .map(|c| {
+                    let avatar = crate::bin_ui::converters::invite_candidate_avatar(&ui_ctx, &c);
+                    (c, avatar)
                 })
                 .collect();
 
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
+                    let friend_data: Vec<PrivateGroupFriend> = candidates
+                        .into_iter()
+                        .map(|(c, avatar)| {
+                            crate::bin_ui::converters::invite_candidate_to_slint(c, avatar)
+                        })
+                        .collect();
                     w.set_create_channel_available_friends(ModelRc::new(VecModel::from(
                         friend_data,
                     )));

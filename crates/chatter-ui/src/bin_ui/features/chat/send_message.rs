@@ -371,6 +371,23 @@ pub fn take_composer_send(w: &MainWindow, ui_ctx: &ChatterClient) -> Result<Comp
     Ok(send)
 }
 
+/// Show `reply` in the composer's reply bar.
+pub(crate) fn show_reply(w: &MainWindow, reply: ComposerReply) {
+    w.set_composer_reply_to_sender(reply.sender_id.into());
+    w.set_composer_reply_to_timestamp(reply.timestamp.into());
+    w.set_composer_reply_to_sender_name(reply.sender_name.into());
+    w.set_composer_reply_preview(reply.preview.into());
+    let thumbnail = reply.thumbnail.map(|(bytes, width, height)| {
+        slint::Image::from_rgba8(
+            slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(&bytes, width, height),
+        )
+    });
+    w.set_composer_reply_has_thumbnail(thumbnail.is_some());
+    w.set_composer_reply_thumbnail(thumbnail.unwrap_or_default());
+    w.set_composer_placeholder("Type your reply...".into());
+    w.set_composer_is_replying(true);
+}
+
 /// Put a failed send back into the (empty) composer it came from.
 pub fn restore_composer(w: &MainWindow, ui_ctx: &ChatterClient, send: ComposerSend) {
     let chat = ui_ctx.chat_state().get();
@@ -381,21 +398,7 @@ pub fn restore_composer(w: &MainWindow, ui_ctx: &ChatterClient, send: ComposerSe
     }
     w.set_composer_text(send.text.into());
     if let Some(reply) = send.reply {
-        w.set_composer_reply_to_sender(reply.sender_id.into());
-        w.set_composer_reply_to_timestamp(reply.timestamp.into());
-        w.set_composer_reply_to_sender_name(reply.sender_name.into());
-        w.set_composer_reply_preview(reply.preview.into());
-        let thumbnail = reply.thumbnail.map(|(bytes, width, height)| {
-            slint::Image::from_rgba8(
-                slint::SharedPixelBuffer::<slint::Rgba8Pixel>::clone_from_slice(
-                    &bytes, width, height,
-                ),
-            )
-        });
-        w.set_composer_reply_has_thumbnail(thumbnail.is_some());
-        w.set_composer_reply_thumbnail(thumbnail.unwrap_or_default());
-        w.set_composer_placeholder("Type your reply...".into());
-        w.set_composer_is_replying(true);
+        show_reply(w, reply);
     }
     for attachment in send.attachments {
         ui_ctx.chat_state().add_pending_attachment_for(

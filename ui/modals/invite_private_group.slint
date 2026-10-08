@@ -75,6 +75,8 @@ export component InvitePrivateGroupModal inherits Rectangle {
 
                                 Avatar {
                                     size: 36px;
+                                    source: friend.avatar-source;
+                                    anonymous: friend.anonymous;
                                     name: friend.display-name;
                                     fallback-text: "?";
                                 }

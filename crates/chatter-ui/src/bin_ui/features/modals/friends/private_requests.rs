@@ -272,18 +272,49 @@ async fn refresh_private_requests(
     });
 }
 
+/// Send-safe Friends › Blocked row; `to_slint` decodes the avatar on the
+/// UI thread.
+pub(crate) struct BlockedUserRow {
+    user_id: String,
+    display_name: String,
+    anon: bool,
+    anon_chat: bool,
+    avatar: Option<Vec<u8>>,
+}
+
+impl BlockedUserRow {
+    pub(crate) fn to_slint(self) -> crate::BlockedUserData {
+        crate::BlockedUserData {
+            user_id: self.user_id.into(),
+            display_name: self.display_name.into(),
+            username: "Private".into(),
+            blocked_at: String::new().into(),
+            anon: self.anon,
+            anon_chat: self.anon_chat,
+            avatar_source: self
+                .avatar
+                .as_deref()
+                .and_then(crate::bin_ui::converters::avatar_bytes_to_image)
+                .unwrap_or_default(),
+        }
+    }
+}
+
 /// Friends › Blocked rows, as core lists them (`blocked_users`).
-pub(crate) fn blocked_user_rows(ui_ctx: &Arc<ChatterClient>) -> Vec<crate::BlockedUserData> {
+pub(crate) fn blocked_user_rows(ui_ctx: &Arc<ChatterClient>) -> Vec<BlockedUserRow> {
     ui_ctx
         .blocked_users()
         .into_iter()
-        .map(|c| crate::BlockedUserData {
-            user_id: c.id.to_string().into(),
-            display_name: ui_ctx.display_name(&c.id).into(),
-            username: "Private".into(),
-            blocked_at: String::new().into(),
+        .map(|c| BlockedUserRow {
+            user_id: c.id.to_string(),
+            display_name: ui_ctx.display_name(&c.id),
             anon: c.anon,
             anon_chat: c.anon_chat,
+            avatar: if c.anon {
+                ui_ctx.anon_dm_peer_avatar(&c.id)
+            } else {
+                ui_ctx.user_avatar(&c.id)
+            },
         })
         .collect()
 }
@@ -297,7 +328,11 @@ pub(crate) fn refresh_blocked_users(
 
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak_window.upgrade() {
-            w.set_friends_blocked_users(ModelRc::new(VecModel::from(blocked_data)));
+            let rows: Vec<crate::BlockedUserData> = blocked_data
+                .into_iter()
+                .map(BlockedUserRow::to_slint)
+                .collect();
+            w.set_friends_blocked_users(ModelRc::new(VecModel::from(rows)));
         }
     });
 }

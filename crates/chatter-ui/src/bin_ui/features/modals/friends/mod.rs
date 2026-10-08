@@ -13,7 +13,7 @@ mod friends_list;
 mod private_requests;
 mod requests;
 
-pub(crate) use private_requests::{blocked_user_rows, refresh_blocked_users};
+pub(crate) use private_requests::{BlockedUserRow, blocked_user_rows, refresh_blocked_users};
 
 use std::sync::Arc;
 

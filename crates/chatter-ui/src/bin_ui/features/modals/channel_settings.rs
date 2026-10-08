@@ -1444,25 +1444,24 @@ fn wire_invite_members(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
             };
 
-            let friend_data: Vec<PrivateGroupFriend> = ui_ctx
+            let candidates: Vec<_> = ui_ctx
                 .list_anon_group_invite_candidates(Some(&group_id))
                 .into_iter()
-                .map(|c| PrivateGroupFriend {
-                    user_id: c.user_id.to_string().into(),
-                    display_name: c.display_name.into(),
-                    username: if c.is_anonymous {
-                        "(anonymous)".into()
-                    } else {
-                        "".into()
-                    },
-                    selected: false,
-                    role: "member".into(),
+                .map(|c| {
+                    let avatar = crate::bin_ui::converters::invite_candidate_avatar(&ui_ctx, &c);
+                    (c, avatar)
                 })
                 .collect();
 
             // Update UI - close settings modal and open invite modal
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {
+                    let friend_data: Vec<PrivateGroupFriend> = candidates
+                        .into_iter()
+                        .map(|(c, avatar)| {
+                            crate::bin_ui::converters::invite_candidate_to_slint(c, avatar)
+                        })
+                        .collect();
                     // Store the group ID for the invite
                     w.set_invite_private_group_id(group_id_str.into());
                     w.set_invite_private_group_friends(ModelRc::new(VecModel::from(friend_data)));

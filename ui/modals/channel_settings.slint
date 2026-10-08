@@ -1053,6 +1053,8 @@ export component ChannelSettingsModal inherits Rectangle {
                                         Avatar {
                                             size: 36px;
                                             source: member.avatar-source;
+                                            // Private-group members are anonymous identities.
+                                            anonymous: root.is-private-group;
                                             name: member.display-name;
                                             fallback-text: "?";
                                         }

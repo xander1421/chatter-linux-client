@@ -115,6 +115,42 @@ impl FriendRequestExt for FriendRequestSendData {
     }
 }
 
+/// Avatar bytes for a private-group invite candidate: anon-DM peers keep
+/// theirs on the anon DM row, friends on their local profile.
+pub fn invite_candidate_avatar(
+    ctx: &chatter_core::client::ChatterClient,
+    c: &chatter_core::client::AnonGroupInviteCandidate,
+) -> Option<Vec<u8>> {
+    if c.is_anonymous {
+        ctx.anon_dm_peer_avatar(&c.user_id)
+    } else {
+        ctx.user_avatar(&c.user_id)
+    }
+}
+
+/// Private-group picker row. UI thread only (decodes the avatar).
+pub fn invite_candidate_to_slint(
+    c: chatter_core::client::AnonGroupInviteCandidate,
+    avatar: Option<Vec<u8>>,
+) -> crate::PrivateGroupFriend {
+    crate::PrivateGroupFriend {
+        user_id: c.user_id.to_string().into(),
+        display_name: c.display_name.into(),
+        username: if c.is_anonymous {
+            "(anonymous)".into()
+        } else {
+            "".into()
+        },
+        selected: false,
+        role: "member".into(),
+        avatar_source: avatar
+            .as_deref()
+            .and_then(avatar_bytes_to_image)
+            .unwrap_or_default(),
+        anonymous: c.is_anonymous,
+    }
+}
+
 /// Thin presentation mapping: core member → UI row. UI thread only (decodes
 /// the avatar into a `slint::Image`).
 pub fn member_to_slint(

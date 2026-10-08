@@ -20,6 +20,22 @@ pub struct ComposerReply {
     pub thumbnail: Option<(Vec<u8>, u32, u32)>,
 }
 
+/// What a conversation's composer holds while another conversation is open:
+/// unsent text and the reply bar's target. Staged files live in the
+/// per-conversation attachment trays.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct ComposerDraft {
+    pub text: String,
+    pub reply: Option<ComposerReply>,
+}
+
+impl ComposerDraft {
+    #[must_use]
+    pub fn is_empty(&self) -> bool {
+        self.text.is_empty() && self.reply.is_none()
+    }
+}
+
 /// Everything one send commits to: where it goes and what it carries.
 #[derive(Clone, Debug)]
 pub struct ComposerSend {
@@ -233,7 +249,7 @@ mod tests {
         client
             .chat_state()
             .set_active_conversation(ActiveConversation::Channel(id));
-        client.swap_composer_draft("", String::new(), &id.to_string());
+        client.swap_composer_draft("", ComposerDraft::default(), &id.to_string());
     }
 
     #[tokio::test]
@@ -301,7 +317,14 @@ mod tests {
         client
             .chat_state()
             .add_pending_attachment(staged("private.png"));
-        client.swap_composer_draft(&channel.to_string(), "private draft".into(), "elsewhere");
+        client.swap_composer_draft(
+            &channel.to_string(),
+            ComposerDraft {
+                text: "private draft".into(),
+                reply: None,
+            },
+            "elsewhere",
+        );
 
         client.clear_composer_session();
         assert_eq!(
@@ -310,14 +333,21 @@ mod tests {
         );
         assert!(client.chat_state().get_pending_attachments().is_empty());
         assert!(!client.composer_session_is_current(send.session_revision));
-        client.swap_composer_draft(&channel.to_string(), "late old UI draft".into(), "");
+        client.swap_composer_draft(
+            &channel.to_string(),
+            ComposerDraft {
+                text: "late old UI draft".into(),
+                reply: None,
+            },
+            "",
+        );
         client
             .auth_state()
             .set_logged_in(crate::domain::ids::UserId::new(), 1, "B".into());
         open(&client, channel);
         assert!(
             client
-                .swap_composer_draft("", String::new(), &channel.to_string())
+                .swap_composer_draft("", ComposerDraft::default(), &channel.to_string())
                 .is_empty()
         );
         assert!(client.take_parked_send(true).is_none());
@@ -450,7 +480,7 @@ mod tests {
             client.recover_composer_send(send, true).is_none(),
             "A's send restored into B's composer"
         );
-        client.swap_composer_draft(&b.to_string(), String::new(), &a.to_string());
+        client.swap_composer_draft(&b.to_string(), ComposerDraft::default(), &a.to_string());
         assert_eq!(client.take_parked_send(true).unwrap().text, "for A");
     }
 }

@@ -77,9 +77,12 @@ fn wire_per_conversation_drafts(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
     let mut current = key(&initial);
     let mut current_revision = initial.attachment_revision;
     // The composer starts out holding `current`'s draft.
-    let draft = ui_ctx.swap_composer_draft("", String::new(), &current);
-    if !draft.is_empty() {
-        window.set_composer_text(draft.into());
+    let draft = ui_ctx.swap_composer_draft("", Default::default(), &current);
+    if !draft.text.is_empty() {
+        window.set_composer_text(draft.text.into());
+    }
+    if let Some(reply) = draft.reply {
+        crate::bin_ui::features::chat::send_message::show_reply(window, reply);
     }
     let weak = slint::ComponentHandle::as_weak(window);
     let ctx = ui_ctx.clone();
@@ -140,9 +143,17 @@ pub fn switch_composer_draft(w: &MainWindow, ctx: &ChatterClient, leaving: &str,
     // Left mid-edit: the edit is cancelled and the draft it
     // held aside is what gets parked, not the edit text.
     crate::bin_ui::features::chat::edit::end_edit(w);
-    let text = w.get_composer_text().to_string();
+    // The reply bar's target stays with its conversation, like the text.
+    let leaving_draft = chatter_core::client::ComposerDraft {
+        text: w.get_composer_text().to_string(),
+        reply: crate::bin_ui::features::chat::send_message::composer_reply(w),
+    };
     crate::bin_ui::features::chat::send_message::clear_reply(w);
-    w.set_composer_text(ctx.swap_composer_draft(leaving, text, entering).into());
+    let entering_draft = ctx.swap_composer_draft(leaving, leaving_draft, entering);
+    w.set_composer_text(entering_draft.text.into());
+    if let Some(reply) = entering_draft.reply {
+        crate::bin_ui::features::chat::send_message::show_reply(w, reply);
+    }
     render_attachments(w, &ctx.chat_state().get_pending_attachments());
     // A GIF send that failed while this conversation was not open.
     let empty = crate::bin_ui::features::chat::send_message::composer_is_empty(w);
