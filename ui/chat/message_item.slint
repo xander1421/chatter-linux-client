@@ -549,6 +549,40 @@ export component MessageItem inherits Rectangle {
                         border-color: Elevation.raised-rim;
                     }
 
+                    // Send progress: a thin line along the bubble's bottom edge
+                    // while this message is on its way, red once it is not
+                    // going. On the bubble, so it says which message is in
+                    // flight and never moves the composer; a 2px line, so the
+                    // bubble keeps its final height from the first frame. Core
+                    // reports no byte progress for an upload, so the sending
+                    // sweep is indeterminate and only the state is real:
+                    // sending / landed (line gone, tick) / failed.
+                    if root.is-own && !root.mesh-delivery
+                        && (root.delivery-status == "sending" || root.delivery-status == "failed"): send-line := Rectangle {
+                        property <bool> failed: root.delivery-status == "failed";
+                        // Inset past the bottom corners' curve so the line
+                        // never pokes out of the rounded fill.
+                        x: root.r-round;
+                        width: parent.width - root.r-round * 2;
+                        height: 2px;
+                        y: bubble-content.preferred-height - self.height - Elevation.rim-width - 1px;
+                        border-radius: 1px;
+                        clip: true;
+                        background: failed ? Colors.error : Colors.primary.transparentize(0.8);
+                        accessible-role: progress-indicator;
+                        accessible-label: failed ? "Not sent" : "Sending";
+
+                        // One sweep per 1.4s; `animation-tick` only ticks while
+                        // this element exists, i.e. while a send is pending.
+                        if !send-line.failed: Rectangle {
+                            width: parent.width * 0.35;
+                            x: (parent.width + self.width) * (Math.mod(animation-tick(), 1400ms) / 1400ms) - self.width;
+                            height: parent.height;
+                            border-radius: parent.border-radius;
+                            background: Colors.primary;
+                        }
+                    }
+
                     // AI message left accent bar
                     if root.is-ai: Rectangle {
                         x: 0;

@@ -20,6 +20,165 @@ use super::typing::clear_outgoing_typing;
 use crate::MainWindow;
 use crate::bin_ui::converters::attachment_to_display_data;
 
+/// The row a send occupies in the open list while it is on the wire.
+///
+/// The composer is cleared the instant send is tapped and the message is not
+/// stored until the round trip returns — a window of up to 10s + 30s per
+/// attachment. This row is the evidence that something is happening: the text
+/// and the staged files as they will look, with `delivery-status` "sending",
+/// which the bubble draws as the word plus a thin progress line. It claims
+/// nothing about arrival; a send that fails removes it and puts the draft
+/// back, and a send that lands replaces it in place with the stored message.
+///
+/// It used to be a label in the composer. That label grew the composer by a
+/// row on every send and shrank it again on the append, and on a phone that
+/// geometry change landed under the soft keyboard, so the composer visibly
+/// jumped twice per message.
+fn pending_message_id(send: &ComposerSend) -> String {
+    format!("pending:{}", send.attempt_id)
+}
+
+/// Put the pending row for `send` into the open list, if that is the
+/// conversation it is going to.
+fn show_pending_bubble(
+    weak: &slint::Weak<MainWindow>,
+    ui_ctx: &Arc<ChatterClient>,
+    send: &ComposerSend,
+    user_id: &str,
+    user_name: &str,
+) {
+    let mut attachments: Vec<_> = send
+        .attachments
+        .iter()
+        .map(pending_attachment_to_display_data)
+        .collect();
+    let (reply_sender_name, reply_preview) = send
+        .reply
+        .as_ref()
+        .map(|r| (r.sender_name.clone(), r.preview.clone()))
+        .unwrap_or_default();
+    let reply_thumbnail = send.reply.as_ref().and_then(|r| r.thumbnail.clone());
+    let row = pending_message_id(send);
+    let text = send.text.clone();
+    let conversation = send.conversation;
+    let session_revision = send.session_revision;
+    let user_id = user_id.to_string();
+    let user_name = user_name.to_string();
+    let weak = weak.clone();
+    let ui_ctx = ui_ctx.clone();
+    // Thumbnails decode here, off the UI thread, like the stored message's.
+    tokio::task::spawn_blocking(move || {
+        for att in &mut attachments {
+            att.decode_thumbnail();
+        }
+        let _ = slint::invoke_from_event_loop(move || {
+            if !ui_ctx.composer_session_is_current(session_revision)
+                || ui_ctx.chat_state().active_conversation() != conversation
+            {
+                return;
+            }
+            let Some(w) = weak.upgrade() else { return };
+            let (thumb, has_thumb, thumb_w, thumb_h) = reply_thumbnail
+                .map(|(rgba, tw, th)| {
+                    (
+                        crate::bin_ui::slint_conversions::rgba_to_slint_image(&rgba, tw, th),
+                        true,
+                        tw as i32,
+                        th as i32,
+                    )
+                })
+                .unwrap_or_else(|| (slint::Image::default(), false, 0, 0));
+            let item = super::helpers::build_own_message_item(
+                &row,
+                &user_id,
+                &user_name,
+                &text,
+                &chatter_core::ui::chat_data::format_timestamp(chrono::Utc::now()),
+                0,
+                attachments.iter().map(|a| a.to_slint()).collect(),
+                !reply_sender_name.is_empty(),
+                &reply_sender_name,
+                &reply_preview,
+                thumb,
+                has_thumb,
+                thumb_w,
+                thumb_h,
+                &Default::default(),
+                "sending",
+            );
+            upsert_message_in_ui(&w, &row, item);
+        });
+    });
+}
+
+/// Replace the row `pending_id` with `item`, or append `item` when the row is
+/// not there (the list was reloaded by a conversation switch meanwhile).
+fn upsert_message_in_ui(w: &MainWindow, pending_id: &str, item: crate::MessageItemData) {
+    use slint::Model;
+    let mut item = Some(item);
+    super::helpers::edit_messages(w, |model| {
+        if let Some(i) = (0..model.row_count()).rev().find(|&i| {
+            model
+                .row_data(i)
+                .is_some_and(|m| m.message_id.as_str() == pending_id)
+        }) {
+            model.set_row_data(i, item.take().expect("set once"));
+        }
+    });
+    if let Some(item) = item {
+        // `append_message_to_ui` clears the composer; the next draft the
+        // user has started typing meanwhile is theirs to keep.
+        let draft = w.get_composer_text();
+        super::helpers::append_message_to_ui(w, item);
+        w.set_composer_text(draft);
+    }
+    w.set_is_at_bottom(true);
+}
+
+/// Take the pending row for `send` out of the open list: the send did not go.
+fn remove_pending_bubble(w: &MainWindow, send: &ComposerSend) {
+    let pending_id = pending_message_id(send);
+    super::helpers::remove_messages_where(w, |m| m.message_id.as_str() == pending_id);
+}
+
+/// A staged file as the pending row shows it: the local file stands in for
+/// the stored attachment until the send returns one.
+fn pending_attachment_to_display_data(
+    attachment: &chatter_core::state::PendingAttachment,
+) -> crate::bin_ui::converters::AttachmentDisplayData {
+    use crate::bin_ui::converters::{
+        category_to_icon_and_color, format_file_size, mime_to_category,
+    };
+    use chatter_core::domain::attachment::FileCategory;
+    let category = mime_to_category(&attachment.mime_type);
+    let (icon, icon_color) = category_to_icon_and_color(category);
+    crate::bin_ui::converters::AttachmentDisplayData {
+        id: attachment.id.to_string(),
+        filename: attachment.filename.clone(),
+        size_display: format_file_size(attachment.size),
+        mime_type: attachment.mime_type.clone(),
+        category: category.to_string(),
+        thumbnail_url: String::new(),
+        download_url: String::new(),
+        local_path: Some(attachment.path.to_string_lossy().into_owned()),
+        is_image: attachment.mime_type.starts_with("image/"),
+        is_video: FileCategory::from_mime_and_filename(&attachment.mime_type, &attachment.filename)
+            == FileCategory::Video,
+        width: 0,
+        height: 0,
+        is_playing: false,
+        icon: icon.to_string(),
+        icon_color,
+        waveform: vec![10; 32],
+        duration_display: String::new(),
+        is_uploading: false,
+        is_downloading: false,
+        progress: 0.0,
+        thumbnail_bytes: Vec::new(),
+        thumbnail_pixels: None,
+    }
+}
+
 /// Tell the user a send did not happen.
 ///
 /// Every early return in the send pipeline has already cleared the composer, the
@@ -30,53 +189,10 @@ use crate::bin_ui::converters::attachment_to_display_data;
 ///
 /// The message text itself comes from chatter-core (`format_send_error`); this
 /// only carries it to the surface.
-/// Say that a send is on the wire, or (with "") that it no longer is.
-///
-/// The composer is cleared the instant send is tapped and the message is not
-/// appended until the round trip returns — a window of up to 10s + 30s per
-/// attachment during which the app showed no evidence that anything had been
-/// sent. This is the evidence. It is deliberately a status line rather than an
-/// optimistic bubble: a bubble that might still fail is a claim we cannot make
-/// yet, and this app has an explicit rule against saying a thing arrived before
-/// it has.
-fn set_send_status(
-    weak: &slint::Weak<MainWindow>,
-    ui_ctx: &Arc<ChatterClient>,
-    session_revision: u64,
-    conversation: ActiveConversation,
-    status: &str,
-) {
-    let weak = weak.clone();
-    let ui_ctx = ui_ctx.clone();
-    let status = status.to_string();
-    let _ = slint::invoke_from_event_loop(move || {
-        if !ui_ctx.composer_session_is_current(session_revision) {
-            return;
-        }
-        if let Some(w) = weak.upgrade() {
-            show_send_status(&w, &ui_ctx, conversation, &status);
-        }
-    });
-}
-
-/// The status line belongs to the composer of the conversation sending; a
-/// send that outlived a switch says nothing in the chat now open.
-fn show_send_status(
-    w: &MainWindow,
-    ui_ctx: &ChatterClient,
-    conversation: ActiveConversation,
-    status: &str,
-) {
-    if ui_ctx.chat_state().active_conversation() == conversation {
-        w.set_composer_send_status(status.into());
-    }
-}
-
 fn report_send_failure(
     weak: &slint::Weak<MainWindow>,
     ui_ctx: &Arc<ChatterClient>,
     session_revision: u64,
-    conversation: ActiveConversation,
     message: String,
 ) {
     let weak = weak.clone();
@@ -86,11 +202,32 @@ fn report_send_failure(
             return;
         }
         let Some(w) = weak.upgrade() else { return };
-        show_send_status(&w, &ui_ctx, conversation, "");
         w.set_toast_message(message.into());
         w.set_toast_variant("error".into());
         w.set_toast_visible(true);
         w.global::<crate::Haptics>().invoke_error();
+    });
+}
+
+/// A plain toast about a send still in flight (not an error: nothing failed).
+fn notice(
+    weak: &slint::Weak<MainWindow>,
+    ui_ctx: &Arc<ChatterClient>,
+    session_revision: u64,
+    message: &str,
+) {
+    let weak = weak.clone();
+    let ui_ctx = ui_ctx.clone();
+    let message = message.to_string();
+    let _ = slint::invoke_from_event_loop(move || {
+        if !ui_ctx.composer_session_is_current(session_revision) {
+            return;
+        }
+        if let Some(w) = weak.upgrade() {
+            w.set_toast_message(message.into());
+            w.set_toast_variant("info".into());
+            w.set_toast_visible(true);
+        }
     });
 }
 
@@ -444,6 +581,24 @@ pub async fn deliver(
     send: ComposerSend,
     send_started: std::time::Instant,
 ) -> bool {
+    let frozen = send.clone();
+    let sent = deliver_inner(weak.clone(), ui_ctx.clone(), send, send_started).await;
+    if !sent {
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(w) = weak.upgrade() {
+                remove_pending_bubble(&w, &frozen);
+            }
+        });
+    }
+    sent
+}
+
+async fn deliver_inner(
+    weak: slint::Weak<MainWindow>,
+    ui_ctx: Arc<ChatterClient>,
+    send: ComposerSend,
+    send_started: std::time::Instant,
+) -> bool {
     if !ui_ctx.composer_session_is_current(send.session_revision) {
         return false;
     }
@@ -469,6 +624,14 @@ pub async fn deliver(
         .get()
         .display_name
         .unwrap_or_else(|| "Me".to_string());
+    let pending_id = pending_message_id(&send_for_delivery);
+    show_pending_bubble(
+        &weak,
+        &ui_ctx,
+        &send_for_delivery,
+        &current_user_id,
+        &current_user_name,
+    );
 
     // Quote reference — preview text is filled in by core.
     let is_reply = reply.is_some();
@@ -500,22 +663,6 @@ pub async fn deliver(
         std::time::Duration::from_secs(10 + 30 * pending_attachments.len() as u64)
     };
 
-    // Attachments are the case that hurts — they carry the long timeout
-    // and the big upload — so they get counted. A plain text send is
-    // usually sub-second, but it is the same black hole when the server
-    // is slow, so it says so too.
-    set_send_status(
-        &weak,
-        &ui_ctx,
-        session_revision,
-        conversation,
-        &match pending_attachments.len() {
-            0 => "Sending\u{2026}".to_string(),
-            1 => "Sending 1 attachment\u{2026}".to_string(),
-            n => format!("Sending {n} attachments\u{2026}"),
-        },
-    );
-
     tracing::info!(
         ?conversation,
         text_len = text.len(),
@@ -525,11 +672,12 @@ pub async fn deliver(
         ui_ctx.send_composer_message(&send_for_delivery, quote),
         send_timeout,
         || {
-            set_send_status(
+            // The pending row keeps showing "sending"; this says why it is
+            // taking so long, once.
+            notice(
                 &weak,
                 &ui_ctx,
                 session_revision,
-                conversation,
                 "Delivery is taking longer. Waiting for the original attempt; do not resend.",
             )
         },
@@ -555,6 +703,8 @@ pub async fn deliver(
                         return;
                     }
                     if let Some(w) = weak.upgrade() {
+                        // Not taken: the earlier attempt still owns the wire.
+                        remove_pending_bubble(&w, &frozen);
                         if let Some(send) =
                             ui_ctx.recover_composer_send(frozen, composer_is_empty(&w))
                         {
@@ -573,15 +723,10 @@ pub async fn deliver(
                 gateway::SendError::DeliveryUnconfirmed
                     | gateway::SendError::AttemptAlreadyConfirmed
             ) {
-                set_send_status(
-                    &weak,
-                    &ui_ctx,
-                    session_revision,
-                    conversation,
-                    &e.to_string(),
-                );
-                // Taken by core, outcome unresolved. In particular GIF/voice
+                // Taken by core, outcome unresolved: the pending row stays
+                // "sending", which is the truth. In particular GIF/voice
                 // wrappers must not restore it as a new composer send.
+                notice(&weak, &ui_ctx, session_revision, &e.to_string());
                 return true;
             }
 
@@ -593,7 +738,6 @@ pub async fn deliver(
                 &weak,
                 &ui_ctx,
                 session_revision,
-                conversation,
                 ui_ctx.format_send_error(&e, "send"),
             );
             // A refusal means we are muted or were removed, and no
@@ -661,10 +805,6 @@ pub async fn deliver(
             tracing::error!("[UI_SEND] weak.upgrade() returned None; own bubble dropped");
             return;
         };
-        // The bubble is about to be appended, so the status line has
-        // done its job. Cleared here rather than earlier so the two
-        // never both go missing for a frame.
-        show_send_status(&w, &ui_ctx, conversation, "");
         // Only into the conversation it was sent to. A send that outlived a
         // switch (an upload takes up to 30s per file) is in the store, and
         // shows when its conversation is opened again.
@@ -715,13 +855,12 @@ pub async fn deliver(
                 );
             }
             msg_item.failure_reason = failure_reason.into();
-            let draft = w.get_composer_text();
-            super::helpers::append_message_to_ui(&w, msg_item);
+            // In place of the pending row, so the bubble does not move.
+            upsert_message_in_ui(&w, &pending_id, msg_item);
             tracing::debug!(
                 elapsed_ms = send_started.elapsed().as_millis(),
                 "send: bubble appended"
             );
-            w.set_composer_text(draft);
             {
                 use slint::Model;
                 tracing::info!(

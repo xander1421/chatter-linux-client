@@ -106,7 +106,6 @@ pub fn reset_session(window: &MainWindow, ui_ctx: &ChatterClient) {
     crate::bin_ui::features::chat::edit::end_edit(window);
     window.set_composer_text("".into());
     crate::bin_ui::features::chat::send_message::clear_reply(window);
-    window.set_composer_send_status("".into());
     render_attachments(window, &[]);
 }
 
@@ -206,8 +205,6 @@ fn mesh_draft_key(w: &MainWindow) -> String {
 pub fn switch_composer_draft(w: &MainWindow, ctx: &ChatterClient, leaving: &str, entering: &str) {
     w.set_composer_emoji_picker_visible(false);
     w.set_composer_gif_picker_visible(false);
-    // The send status line belongs to the conversation being left.
-    w.set_composer_send_status("".into());
     // A word the input method is still composing belongs to the conversation
     // being left; fold it in and end the composition before the text moves.
     // The settle reads a mirror kept by `changed` handlers. Slint runs those

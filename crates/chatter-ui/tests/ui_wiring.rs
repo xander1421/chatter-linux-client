@@ -6308,13 +6308,7 @@ fn a_gif_completing_after_navigation_never_touches_the_other_chat() {
     h.stage("a.png");
     let (tx, task) = h.pick();
 
-    h.w.set_composer_send_status("Sending 2 attachments…".into());
     h.open(h.b);
-    assert_eq!(
-        h.w.get_composer_send_status().as_str(),
-        "",
-        "A's send status followed the user into B"
-    );
     h.w.set_composer_text("for B".into());
     h.stage("b.png");
 

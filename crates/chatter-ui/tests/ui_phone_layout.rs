@@ -295,10 +295,8 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     assert!(composer_native_item(&w) == original_input);
     assert_action_geometry(&w, false);
 
-    // Status is an actual 28px row in both inline and raised layouts. A long
-    // draft saturates the pane cap, proving that status consumes its budget
-    // rather than simply growing the root beyond the available history space.
-    let status = "Sending geometry fixture";
+    // A send in flight is a pending row in the list, not a composer row: the
+    // composer's geometry must not change with the status property at all.
     for (draft, raised) in [
         ("".to_owned(), false),
         ("status budget words ".repeat(100), true),
@@ -306,32 +304,13 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
         w.set_composer_text(draft.into());
         pump_size(&w, PHONE_W, 460.0);
         let field_without_status = one(&w, "Message input").size().height;
-        w.set_composer_send_status(status.into());
+        let shell_without_status = composer_shell_height(&w);
+        w.set_composer_send_status("Sending geometry fixture".into());
         pump_size(&w, PHONE_W, 460.0);
         assert_action_geometry(&w, raised);
-        assert_send_status_geometry(&w, false, raised);
-        let field_with_status = one(&w, "Message input").size().height;
-        if raised {
-            assert!(
-                (field_without_status - field_with_status - 28.0).abs() < 0.5,
-                "status must consume 28px of the saturated input budget"
-            );
-        } else {
-            assert!((field_without_status - field_with_status).abs() < 0.5);
-        }
-        // Drawer height is deducted before applying the same 40% pane cap.
-        w.set_composer_emoji_picker_visible(true);
-        pump_size(&w, PHONE_W, PHONE_H);
-        assert_action_geometry(&w, raised);
-        assert_send_status_geometry(&w, true, raised);
-        w.set_composer_emoji_picker_visible(false);
-        w.set_composer_send_status("".into());
-        pump_size(&w, PHONE_W, 460.0);
-        assert!(
-            testing::ElementHandle::find_by_element_id(&w, "MessageComposer::send-status-row")
-                .all(|e| e.size().height == 0.0)
-        );
         assert!((one(&w, "Message input").size().height - field_without_status).abs() < 0.5);
+        assert!((composer_shell_height(&w) - shell_without_status).abs() < 0.5);
+        w.set_composer_send_status("".into());
     }
     w.set_composer_text("".into());
     pump_size(&w, PHONE_W, 460.0);
@@ -1622,30 +1601,12 @@ fn assert_composer_caps(w: &MainWindow, drawer: bool, accessories: f32) {
     );
 }
 
-fn assert_send_status_geometry(w: &MainWindow, drawer: bool, raised: bool) {
-    let shell = testing::ElementHandle::find_by_element_type_name(w, "MessageComposer")
+fn composer_shell_height(w: &MainWindow) -> f32 {
+    testing::ElementHandle::find_by_element_type_name(w, "MessageComposer")
         .find(|e| e.type_name().is_some_and(|t| t == "MessageComposer") && e.size().height > 0.0)
-        .expect("actual composer root");
-    let status = testing::ElementHandle::find_by_element_id(w, "MessageComposer::send-status-row")
-        .find(|e| e.size().height > 0.0)
-        .expect("actual send status row");
-    let (sx, sy, sw, sh) = rect(&shell);
-    let (tx, ty, tw, th) = rect(&status);
-    let (fx, fy, _, fh) = rect(&one(w, "Message input"));
-    assert!((th - 28.0).abs() < 0.5, "status row must be exactly 28px");
-    assert!((tx - sx).abs() < 0.5 && (ty - sy).abs() < 0.5 && (tw - sw).abs() < 0.5);
-    let toolbar = if raised { 60.0 } else { 0.0 };
-    assert!(
-        (sh - (fh + toolbar + 28.0 + 8.0)).abs() < 0.5,
-        "actual root height must include exactly one status row: {:?}",
-        rect(&shell)
-    );
-    assert!((fy - (ty + th) - toolbar - 4.0).abs() < 0.5);
-    if raised {
-        assert!((fx - sx - 4.0).abs() < 0.5);
-    }
-    assert!((sy + sh - fy - fh - 4.0).abs() < 0.5);
-    assert_composer_caps(w, drawer, 28.0);
+        .expect("actual composer root")
+        .size()
+        .height
 }
 
 /// Check actual controls against the actual field: no duplicate layout model.

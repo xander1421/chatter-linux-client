@@ -124,17 +124,12 @@ export component MessageComposer inherits GlassSurface {
     in property <bool> disabled: false;
     in property <[PendingAttachmentData]> pending-attachments: [];
 
-    // What the last send is doing, or "" when nothing is in flight.
-    //
-    // Sending clears the composer immediately and the message does not appear
-    // until the round trip finishes — which for attachments is a 10s + 30s-per-
-    // file budget. Between those two moments the app showed nothing at all: an
-    // emptied composer, an unchanged conversation, and no indication anything
-    // was happening. People re-tapped send, or gave up and assumed it failed.
-    //
-    // A line, not a modal or a disabled composer: the send is already detached
-    // from the input by then, so there is no reason to stop the user writing the
-    // next message while this one is on its way.
+    // Unused. A send in flight is now the pending bubble itself (its thin
+    // progress line, message_item.slint), not a label here: the label grew the
+    // composer 28px on every send and shrank it again on the append, and on a
+    // phone that geometry change landed under the soft keyboard. Kept only
+    // because app.slint / chat_layout.slint still bind `composer-send-status`;
+    // delete it with them.
     in property <string> send-status: "";
 
     // Edit mode properties
@@ -233,7 +228,7 @@ export component MessageComposer inherits GlassSurface {
     property <length> max-input-height: root.mobile
         ? max(min-input-height, min(input-line-height * 6 + padding-vertical,
             available-pane-height * 0.4 - edit-bar-height
-                - format-bar-height - send-status-height - raised-toolbar-height - row-padding * 2))
+                - format-bar-height - raised-toolbar-height - row-padding * 2))
         : 400px;
     property <length> padding-vertical: Spacing.sm * 2;
     function reveal-cursor() {
@@ -265,7 +260,6 @@ export component MessageComposer inherits GlassSurface {
 
     // Bar heights. Each bar is drawn at exactly this height, and the bars
     // hold text, so they grow with the text size.
-    property <length> send-status-height: send-status != "" ? 28px : 0px;
     property <length> edit-bar-height: is-editing ? Spacing.touch-target-min * Appearance.text-grow : 0px;
 
     // Callbacks
@@ -348,7 +342,7 @@ export component MessageComposer inherits GlassSurface {
 
     // Layout - dynamic height based on content (includes Bento Box when expanded)
     property <length> recording-height: max(112px, recording-layout.preferred-height + row-padding * 2);
-    height: root.collapsed ? 0px : VoiceRecording.active ? recording-height : content-height + raised-toolbar-height + edit-bar-height + format-bar-height + send-status-height + row-padding * 2;
+    height: root.collapsed ? 0px : VoiceRecording.active ? recording-height : content-height + raised-toolbar-height + edit-bar-height + format-bar-height + row-padding * 2;
     // Action/input positions change immediately with text/preedit on every
     // platform. Settle the shell with them so the focused native field remains
     // inside its bounds between consecutive key events.
@@ -363,7 +357,7 @@ export component MessageComposer inherits GlassSurface {
         y: 0px;
         visible: root.raised-actions && !VoiceRecording.active && self.height > 0px;
         width: root.width;
-        height: root.edit-bar-height + root.format-bar-height + root.send-status-height;
+        height: root.edit-bar-height + root.format-bar-height;
         material-level: root.material-level;
         elevation: root.elevation;
         backdrop-paused: root.backdrop-paused;
@@ -607,27 +601,6 @@ export component MessageComposer inherits GlassSurface {
             }
         }
 
-        // In-flight send. Sits above the input so it reads as a property of the
-        // conversation, and disappears the moment the message lands or fails —
-        // failure additionally raises the error toast.
-        if root.send-status != "": send-status-row := Rectangle {
-            width: 100%;
-            height: root.send-status-height;
-            background: transparent;
-            HorizontalLayout {
-                padding-left: Spacing.md;
-                padding-right: Spacing.md;
-                spacing: Spacing.sm;
-                alignment: start;
-                Text {
-                    text: root.send-status;
-                    color: Colors.text-muted;
-                    font-size: Typography.xs;
-                    vertical-alignment: center;
-                }
-            }
-        }
-
         // Populated actions have compact shells with transparent space between them.
         // Absolute geometry changes neither the native input nor focus/selection.
         Rectangle {
@@ -783,16 +756,23 @@ export component MessageComposer inherits GlassSurface {
                 attachment-scroll := Flickable {
                     width: 100%;
                     height: 100%;
-                    // Center short strips; scroll longer strips inside the reserved gap.
-                    viewport-width: max(self.width, (180px + Spacing.xs) * root.pending-attachments.length + Spacing.touch-target-min);
+                    // The viewport is exactly the cards plus the add button, or
+                    // the strip when that is wider: a strip that fits is centred
+                    // in the gap, a longer one scrolls. The row was `start`-
+                    // aligned (and the estimate below omitted the padding), so a
+                    // single staged image sat hard left with dead space on the
+                    // right (S9, RC88).
+                    viewport-width: max(self.width, attachment-cards.preferred-width);
                     viewport-height: self.height;
                     interactive: true;
 
-                    HorizontalLayout {
+                    attachment-cards := HorizontalLayout {
+                        width: attachment-scroll.viewport-width;
+                        height: attachment-scroll.viewport-height;
                         padding-left: root.row-padding;
                         padding-right: root.row-padding;
                         spacing: Spacing.xs;
-                        alignment: start;
+                        alignment: center;
 
                         // Pending attachment items: inset wells, concentric with
                         // the shell (radius-chrome-inner − chrome-inset).
