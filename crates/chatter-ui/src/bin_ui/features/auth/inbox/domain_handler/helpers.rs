@@ -91,7 +91,7 @@ pub(super) fn handle_pin_ui_update(
     let handle = ui_ctx.conversation(conversation);
     if !handle
         .storage_kind()
-        .is_ok_and(|active| accepts_event_kind(active, conversation_type))
+        .is_ok_and(|active| accepts_event_kind(active, conversation_type.clone()))
     {
         return;
     }

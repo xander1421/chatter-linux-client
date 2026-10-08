@@ -175,7 +175,7 @@ pub fn wire_pin_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             // key: foreign, deleted or missing paints nothing.
             crate::run_history_ui!(weak, owner, |w| {
                 let handle = ui_ctx.conversation(conversation);
-                if handle.storage_kind().ok() != Some(kind) {
+                if handle.storage_kind().ok() != Some(kind.clone()) {
                     return;
                 }
                 let saved = kind == chatter_core::domain::ConversationType::SavedMessages;

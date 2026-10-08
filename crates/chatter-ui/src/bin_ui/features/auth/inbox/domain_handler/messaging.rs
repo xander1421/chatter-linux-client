@@ -432,7 +432,7 @@ pub(super) fn handle_message_edit(
     let Ok(active_kind) = handle.storage_kind() else {
         return;
     };
-    if !super::helpers::accepts_event_kind(active_kind, conversation_type) {
+    if !super::helpers::accepts_event_kind(active_kind, conversation_type.clone()) {
         return;
     }
     let saved = conversation_type == ConversationType::SavedMessages;
