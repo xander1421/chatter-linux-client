@@ -92,7 +92,7 @@ export component ChannelListItem inherits Rectangle {
     // Collapsed, the state fill belongs to the slot below, not to a
     // full-width plate across the rail.
     background: root.collapsed ? transparent
-              : root.selected ? Colors.inset
+              : root.selected ? Colors.selected
               : touch.has-hover ? Colors.surface-hover
               : transparent;
 

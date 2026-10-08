@@ -86,7 +86,8 @@ export component VideoPlayer inherits Rectangle {
                     Text {
                         text: root.filename;
                         horizontal-stretch: 1;
-                        color: Colors.on-media;
+                        // Themed glass header: theme foreground (see image_viewer).
+                        color: Colors.text-primary;
                         font-size: Typography.base;
                         font-weight: Typography.medium;
                         overflow: elide;

@@ -48,7 +48,7 @@ component ConvRow inherits Rectangle {
     // them the whole trip — and at 40px this was the shortest target on screen.
     height: Spacing.touch-target-min * Appearance.text-grow;
     border-radius: Spacing.radius-sm;
-    background: root.selected ? Colors.inset : touch.has-hover ? Colors.surface-hover : transparent;
+    background: root.selected ? Colors.selected : touch.has-hover ? Colors.surface-hover : transparent;
 
     touch := TouchArea {
         mouse-cursor: pointer;
@@ -120,7 +120,7 @@ component MsgRow inherits Rectangle {
 
     height: 56px * Appearance.text-grow;
     border-radius: Spacing.radius-sm;
-    background: root.selected ? Colors.inset : touch.has-hover ? Colors.surface-hover : transparent;
+    background: root.selected ? Colors.selected : touch.has-hover ? Colors.surface-hover : transparent;
 
     touch := TouchArea {
         mouse-cursor: pointer;

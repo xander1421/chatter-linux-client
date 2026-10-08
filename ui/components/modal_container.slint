@@ -166,6 +166,12 @@ export component ModalContainer inherits Rectangle {
                     width: body.width;
                     height: root.full-screen || root.fill-height ? body.height
                         : max(self.preferred-height, body.height);
+                    // Hidden the moment the dialog is logically closed: an
+                    // invisible subtree gets no pointer, key, focus or
+                    // accessible default action (i-slint-core window.rs
+                    // skips key input to an invisible focus item). The shell
+                    // and scrim finish their exit on their own.
+                    visible: root.show;
 
                     // The actual content provided by users of ModalContainer
                     @children

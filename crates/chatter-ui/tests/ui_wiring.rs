@@ -1195,7 +1195,7 @@ fn jarvis_memory_browser_is_wired() {
     );
     let app_src = include_str!("../../../ui/app.slint");
     assert!(
-        app_src.contains(r#"if active-modal == "jarvis-memory": JarvisMemoryModal"#),
+        app_src.contains(r#"if root.presented-modal == "jarvis-memory": JarvisMemoryModal"#),
         "app must route active-modal='jarvis-memory' to the modal"
     );
     assert!(

@@ -51,6 +51,13 @@ export component ThreadPanel inherits Rectangle {
     callback more-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
     callback quote-clicked(string);  // parent message id
     callback sender-profile-requested(string);
+    // Media, exactly as the main list forwards it (message_list.slint).
+    callback view-attachment(string);
+    callback audio-seek(string, float);
+    in property <string> current-playing-attachment-id: "";
+    in property <bool> is-media-playing: false;
+    in property <float> audio-progress: 0.0;
+    in property <string> audio-elapsed: "0:00";
     in property <bool> menu-open: false;
     callback reaction-toggled(string, string, string);  // (sender_id, timestamp_ns, emoji)
 
@@ -376,6 +383,12 @@ export component ThreadPanel inherits Rectangle {
                         reply-to-thumbnail-height: item.reply-to-thumbnail-height;
                         quote-clicked(id) => { root.quote-clicked(id); }
                         sender-profile-requested(user-id) => { root.sender-profile-requested(user-id); }
+                        current-playing-attachment-id: root.current-playing-attachment-id;
+                        is-media-playing: root.is-media-playing;
+                        audio-progress: root.audio-progress;
+                        audio-elapsed: root.audio-elapsed;
+                        attachment-clicked(id) => { root.view-attachment(id); }
+                        audio-seek(id, pos) => { root.audio-seek(id, pos); }
                         reply-clicked(sender-id, timestamp-ns) => { root.reply-clicked(sender-id, timestamp-ns); }
                         more-clicked(sender-id, timestamp-ns, x, y) => { root.more-clicked(sender-id, timestamp-ns, x, y); }
 

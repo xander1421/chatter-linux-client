@@ -122,16 +122,6 @@ pub fn wire_reaction_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
                 return;
             };
             let session_revision = auth.session_revision;
-            // Every reaction route (picker, quick bar, tapping a chip) lands
-            // here, so this is where the account's recent emoji learn a pick —
-            // under the owner and session captured for this very reaction.
-            ui_ctx.record_recent_emoji(
-                chatter_core::client::PickerHistoryScope {
-                    owner,
-                    session_revision,
-                },
-                &emoji_str,
-            );
             let scope = match ui_ctx
                 .conversation(conversation.clone())
                 .reaction_snapshot(&target_author, target_sent_timestamp)
@@ -151,12 +141,23 @@ pub fn wire_reaction_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
                     session_revision,
                     target_author,
                     target_sent_timestamp,
-                    emoji: emoji_str,
+                    emoji: emoji_str.clone(),
                 })
                 .is_err()
             {
                 tracing::error!("Reaction intent consumer stopped");
+                return;
             }
+            // Accepted intent (valid target scope, queued): every reaction
+            // route lands here, so this is where the account's recent emoji
+            // learn the pick — under the owner and session captured above.
+            ui_ctx.record_recent_emoji(
+                chatter_core::client::PickerHistoryScope {
+                    owner,
+                    session_revision,
+                },
+                &emoji_str,
+            );
         },
     );
 }

@@ -65,14 +65,17 @@ export component ImageViewer inherits Rectangle {
                     Text {
                         text: root.filename;
                         overflow: elide;
-                        color: Colors.on-media;
+                        // The header is a themed GlassSurface (near-white in light),
+                        // so its text is the theme's; only labels drawn straight on
+                        // the dark scrim use on-media.
+                        color: Colors.text-primary;
                         font-size: Typography.base;
                         font-weight: Typography.medium;
                     }
 
                     if root.size-display != "": Text {
                         text: root.size-display;
-                        color: Colors.on-media-muted;
+                        color: Colors.text-muted;
                         font-size: Typography.xs;
                     }
                 }

@@ -132,13 +132,13 @@ pub fn wire_emoji_loader(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let weak = weak.clone();
         let ui_ctx = ui_ctx.clone();
         move |emoji| {
-            // The pick belongs to whoever is signed in at this moment.
-            if let Some(scope) = ui_ctx.picker_history_scope() {
-                ui_ctx.record_recent_emoji(scope, &emoji);
-            }
-
             if let Some(w) = weak.upgrade() {
-                w.invoke_insert_composer_emoji(emoji);
+                // Inserted first; then the pick is remembered for whoever is
+                // signed in at this moment.
+                w.invoke_insert_composer_emoji(emoji.clone());
+                if let Some(scope) = ui_ctx.picker_history_scope() {
+                    ui_ctx.record_recent_emoji(scope, &emoji);
+                }
                 // The Recent tab reorders in place, so a repeat pick needs no
                 // tab round trip to show up first.
                 if w.get_composer_emoji_category() == RECENT_CATEGORY

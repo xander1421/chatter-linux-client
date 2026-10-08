@@ -110,7 +110,7 @@ export component NewChatPicker inherits Rectangle {
                     border-radius: Spacing.radius-md;
                     accessible-role: button;
                     accessible-label: friend.display-name;
-                    accessible-action-default => { root.pick(friend.user-id); }
+                    accessible-action-default => { if root.show { root.pick(friend.user-id); } }
                     HorizontalLayout {
                         padding: Spacing.sm;
                         spacing: Spacing.sm;

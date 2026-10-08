@@ -618,7 +618,7 @@ export component MainWindow inherits Window {
     // then unmounts. A push while it fades replaces it at once; reduced
     // motion unmounts at once. Each dialog's `if` reads THIS.
     private property <string> presented-modal: "none";
-    changed active-modal => {
+    function present-active-modal() {
         if root.active-modal != "none" {
             root.presented-modal = root.active-modal;
             modal-exit.running = false;
@@ -1427,13 +1427,15 @@ export component MainWindow inherits Window {
         }
     }
     changed active-modal => {
+        root.present-active-modal();
         root.calls-more-menu-visible = false;
         root.cancel-composer-keyboard-handover();
         if root.active-modal != "" { VoiceRecording.cancel(); }
         root.secure-screen(root.active-modal == "recovery-codes");
         // On open too: taking focus off the composer is what hides the soft
         // keyboard (a TextInput's FocusOut sends InputMethodRequest::Disable),
-        // which otherwise stays up over the modal (F78).
+        // which otherwise stays up over the modal (F78). On close it is also
+        // what takes focus out of the dialog that is still fading out.
         back-scope.focus();
     }
     // Modals scroll their card clear of the keyboard only while it is up
@@ -2226,6 +2228,12 @@ export component MainWindow inherits Window {
                         reply-clicked(sender-id, timestamp-ns) => { root.reply-clicked(sender-id, timestamp-ns); }
                         quote-clicked(id) => { root.quote-clicked(id); }
                         sender-profile-requested(user-id) => { root.sender-profile-requested(user-id); }
+                        current-playing-attachment-id: root.current-playing-attachment-id;
+                        is-media-playing: root.is-media-playing;
+                        audio-progress: root.audio-progress;
+                        audio-elapsed: root.audio-elapsed;
+                        view-attachment(id) => { root.view-attachment(id); }
+                        audio-seek(id, pos) => { root.audio-seek(id, pos); }
                         more-clicked(sender-id, timestamp-ns, x, y) => {
                             // The panel's own header is the menu's ceiling.
                             root.context-menu-content-top = self.absolute-position.y;
@@ -3116,13 +3124,18 @@ export component MainWindow inherits Window {
         }
 
         // Jarvis memory browser (centered modal over the backdrop)
-        if active-modal == "jarvis-memory": Rectangle {
+        if root.presented-modal == "jarvis-memory": Rectangle {
+            property <bool> shown: root.active-modal == "jarvis-memory";
             width: root.width;
             height: root.height;
             background: Materials.scrim;
-            TouchArea { clicked => { root.nav-close("jarvis-memory"); } }
+            opacity: self.shown ? 1 : 0;
+            animate opacity { duration: Materials.sheet-duration; easing: ease-out; }
+            visible: self.shown || self.opacity > 0;
+            TouchArea { enabled: parent.shown; clicked => { root.nav-close("jarvis-memory"); } }
         }
-        if active-modal == "jarvis-memory": JarvisMemoryModal {
+        if root.presented-modal == "jarvis-memory": JarvisMemoryModal {
+            show: root.active-modal == "jarvis-memory";
             width: min(860px, parent.width - 32px);
             height: min(560px, parent.height - 48px);
             x: (parent.width - self.width) / 2;

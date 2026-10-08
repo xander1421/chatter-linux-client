@@ -49,6 +49,10 @@ pub fn reset_session(window: &MainWindow, ui_ctx: &ChatterClient) {
     window.global::<crate::VoiceRecording>().invoke_cancel();
     window.set_composer_emoji_picker_visible(false);
     window.set_composer_gif_picker_visible(false);
+    // The old account's GIF rows and their animation frames do not outlive it.
+    window.set_composer_gif_picker_results(slint::ModelRc::new(slint::VecModel::<crate::GifData>::default()));
+    window.set_composer_gif_picker_recent(slint::ModelRc::new(slint::VecModel::<crate::GifData>::default()));
+    crate::bin_ui::gif_state::clear_picker_gifs();
     window.invoke_release_text_focus();
     window.invoke_settle_composer();
     crate::bin_ui::features::chat::edit::end_edit(window);

@@ -139,6 +139,8 @@ export component ReactionPicker inherits Rectangle {
                 search-query <=> root.search-query;
 
                 emoji-selected(emoji) => {
+                    // Not after a logical close: the picker is only fading.
+                    if !root.show { return; }
                     root.reaction-selected(root.sender-id, root.timestamp-ns, root.message-id, emoji);
                     root.close();
                 }
