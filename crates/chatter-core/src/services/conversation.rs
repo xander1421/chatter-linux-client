@@ -175,12 +175,12 @@ fn edited_saved_record(
     Ok(edited)
 }
 
-/// The full Saved row as it is stored after our pin or unpin: the same row
-/// with only `is_pinned` flipped and `updated_at` moved. `pinned_at`, the
-/// pinned list's order, is the repository's (`MessageRepository::update`
-/// sets it on the transition to pinned and clears it on unpin), the same as
-/// every other kind's pin. Gated exactly like the menu's `pin` flag for
-/// Saved (`stored_message_menu`), so the menu and the write cannot drift.
+/// The Saved row as it reads after our pin or unpin: only `is_pinned`
+/// flipped and `updated_at` moved. The write itself is the repository's
+/// column-scoped `set_pinned_scoped` (`pinned_at`, the pinned list's order,
+/// set on the transition to pinned and cleared on unpin); this is the gate
+/// and the shape, exactly the menu's `pin` flag for Saved
+/// (`stored_message_menu`), so the menu and the write cannot drift.
 fn pinned_saved_record(
     message: &crate::domain::Message,
     own: UserId,
@@ -261,15 +261,20 @@ impl ConversationHandle {
     /// resolved to a plain channel, which would let a remote control be sent
     /// to a user id. A DM or anonymous handle sharing that id is unaffected.
     fn storage_scope(&self) -> ConversationResult<crate::domain::reaction::ReactionScope> {
+        self.storage_scope_as(self.client.auth_state().get().current_user_id)
+    }
+
+    /// [`Self::storage_scope`] under one account snapshot, so a caller that
+    /// also writes under that account resolves and writes as the same user.
+    fn storage_scope_as(
+        &self,
+        own_user: Option<UserId>,
+    ) -> ConversationResult<crate::domain::reaction::ReactionScope> {
         let channel = self
             .conversation
             .channel_id()
             .and_then(|id| self.client.get_channel_local(&id));
-        let scope = message_storage_scope(
-            &self.conversation,
-            self.client.auth_state().get().current_user_id,
-            channel.as_ref(),
-        )?;
+        let scope = message_storage_scope(&self.conversation, own_user, channel.as_ref())?;
         if matches!(self.conversation, ActiveConversation::Channel(_))
             && scope.kind != ConversationType::SavedMessages
             && channel.is_some_and(|c| {
@@ -620,9 +625,22 @@ impl ConversationHandle {
         target_sent_timestamp: u64,
         unpin: bool,
     ) -> ConversationResult {
-        let scope = self.storage_scope()?;
+        // One account snapshot resolves the scope and, for Saved, owns the
+        // write: the scope's own-user and the writer are the same user.
+        let auth = self.client.auth_state().get();
+        let scope = self.storage_scope_as(auth.current_user_id)?;
         if scope.kind == ConversationType::SavedMessages {
-            return self.pin_saved_message(&scope, target_author, target_sent_timestamp, unpin);
+            let own = auth.current_user_id.ok_or_else(|| {
+                ConversationError::Other("Pinning requires a signed-in user".into())
+            })?;
+            return self.pin_saved_message(
+                &scope,
+                own,
+                auth.session_revision,
+                target_author,
+                target_sent_timestamp,
+                unpin,
+            );
         }
         let new_pinned = !unpin;
         // Sub-services on the proto side still take &str.
@@ -690,27 +708,29 @@ impl ConversationHandle {
 
     /// Pin or unpin one of our Saved records. Local only, like
     /// [`Self::edit_saved_message`]: the stored row is read in the Saved
-    /// scope, rewritten by [`pinned_saved_record`] and written back whole
-    /// (`MessageRepository::update`), so a storage failure is this call's
-    /// error, never a silent success. Nothing goes to the server — the Saved
+    /// scope, gated by [`pinned_saved_record`] and its pin columns written
+    /// at that key (`MessageRepository::set_pinned_scoped`, never the whole
+    /// row, so a body edit landing in between is kept), and a storage
+    /// failure or a vanished row is this call's error, never a silent
+    /// success. Nothing goes to the server — the Saved
     /// id is our own user id, not a channel a pin control may be sent to —
     /// and nothing reaches linked devices: `SavedMessageSync` carries no pin
     /// state, so a sibling device keeps its own pins until that proto grows
     /// one. The emitted `MessagePinned`/`MessageUnpinned` carries the real
     /// row id and the `SavedMessages` kind, so a same-id channel or DM view
-    /// never takes it.
+    /// never takes it. `own` and `session_revision` are the snapshot the
+    /// scope was resolved under; the write happens under the same ones or
+    /// not at all.
     fn pin_saved_message(
         &self,
         scope: &crate::domain::reaction::ReactionScope,
+        own: UserId,
+        session_revision: u64,
         target_author: &UserId,
         target_sent_timestamp: u64,
         unpin: bool,
     ) -> ConversationResult {
         use crate::events::DomainEvent;
-        let auth = self.client.auth_state().get();
-        let own = auth
-            .current_user_id
-            .ok_or_else(|| ConversationError::Other("Pinning requires a signed-in user".into()))?;
         if *target_author != own {
             return Err(ConversationError::Other(
                 "Only your own Saved message can be pinned".into(),
@@ -719,15 +739,17 @@ impl ConversationHandle {
         let repo = &self.client.messages().message_repo;
         let stored = scoped_stored_message(repo, scope, &own, target_sent_timestamp)?;
         let row = pinned_saved_record(&stored, own, !unpin)?;
-        // The scope was resolved under this account and session; the write
-        // happens under the same ones or not at all.
         let now = self.client.auth_state().get();
-        if now.current_user_id != Some(own) || now.session_revision != auth.session_revision {
+        if now.current_user_id != Some(own) || now.session_revision != session_revision {
             return Err(ConversationError::Other(
                 "Account changed while pinning".into(),
             ));
         }
-        repo.update(&row)?;
+        if !repo.set_pinned_scoped(scope, &own, target_sent_timestamp, row.is_pinned)? {
+            return Err(ConversationError::Other(
+                "Saved message is no longer there".into(),
+            ));
+        }
         let event = if unpin {
             DomainEvent::MessageUnpinned {
                 message_id: row.id,
@@ -815,7 +837,20 @@ impl ConversationHandle {
                 "Account changed while editing".into(),
             ));
         }
-        repo.update(&edited)?;
+        // Body columns only, at the Saved key: a pin of this row landing
+        // between the read above and this write keeps its pin.
+        let edited_at = edited.edited_at.unwrap_or_else(chrono::Utc::now);
+        if !repo.set_body_scoped(
+            scope,
+            &own,
+            target_sent_timestamp,
+            &edited.content,
+            edited_at,
+        )? {
+            return Err(ConversationError::Other(
+                "Saved message is no longer there".into(),
+            ));
+        }
         self.client
             .event_bus()
             .emit_domain(crate::events::DomainEvent::MessageEdited {

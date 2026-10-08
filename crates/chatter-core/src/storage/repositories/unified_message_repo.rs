@@ -1870,6 +1870,65 @@ impl UnifiedMessageRepository {
         Ok(rows > 0)
     }
 
+    /// Pin or unpin the one row at this scope's Signal-style key
+    /// (conversation, kind, author, sent clock), undeleted. One UPDATE of the
+    /// pin columns only — `pinned_at` set on the transition to pinned and
+    /// cleared on unpin — so a concurrent body edit of the same row is never
+    /// overwritten by a stale copy of it. `Ok(false)`: no such row.
+    pub fn set_pinned_scoped(
+        &self,
+        scope: &ReactionScope,
+        author: &UserId,
+        sent_at: u64,
+        pinned: bool,
+    ) -> Result<bool, StorageError> {
+        let conn = self.db.connection()?;
+        let rows = conn.execute(
+            "UPDATE messages SET pinned_at = CASE WHEN ?1 = 0 THEN NULL WHEN is_pinned = 0 THEN ?7 ELSE pinned_at END, is_pinned = ?1, updated_at = ?2
+             WHERE conversation_id = ?3 AND conversation_type = ?4 AND sender_id = ?5 AND sent_at = ?6 AND is_deleted = 0",
+            params![
+                pinned as i32,
+                Utc::now().to_rfc3339(),
+                scope.id.to_string(),
+                scope.kind.as_str(),
+                author.to_string(),
+                sent_at as i64,
+                Utc::now().timestamp_nanos_opt().unwrap_or_default(),
+            ],
+        )?;
+        Ok(rows > 0)
+    }
+
+    /// Replace the body of the one row at this scope's Signal-style key,
+    /// undeleted, marking it edited at `edited_at`. One UPDATE of the body
+    /// columns only, so a concurrent pin of the same row keeps its pin.
+    /// `Ok(false)`: no such row.
+    pub fn set_body_scoped(
+        &self,
+        scope: &ReactionScope,
+        author: &UserId,
+        sent_at: u64,
+        content: &MessageContent,
+        edited_at: DateTime<Utc>,
+    ) -> Result<bool, StorageError> {
+        let conn = self.db.connection()?;
+        let content_json = serde_json::to_string(content)
+            .map_err(|e| StorageError::InvalidData(format!("serialize content: {}", e)))?;
+        let rows = conn.execute(
+            "UPDATE messages SET content_json = ?1, is_edited = 1, edited_at = ?2, updated_at = ?2
+             WHERE conversation_id = ?3 AND conversation_type = ?4 AND sender_id = ?5 AND sent_at = ?6 AND is_deleted = 0",
+            params![
+                content_json,
+                edited_at.to_rfc3339(),
+                scope.id.to_string(),
+                scope.kind.as_str(),
+                author.to_string(),
+                sent_at as i64,
+            ],
+        )?;
+        Ok(rows > 0)
+    }
+
     /// Update message text by (conversation_id, sent_at) — for edits.
     pub fn update_text_by_timestamp(
         &self,

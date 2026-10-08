@@ -3025,7 +3025,8 @@ export component MainWindow inherits Window {
             show: root.active-modal == "chat-menu";
             show-video-call: root.chat-menu-video;
             show-settings: root.chat-menu-settings;
-            show-pinned: root.pinned-total-count > 0;
+            show-pinned: root.pinned-total-count > 0
+                || root.conversation-kind == ConversationKind.saved-messages;
             pinned => { root.nav-close("chat-menu"); root.pinned-show-clicked(); }
             card-x: root.width - self.card-width - Spacing.sm;
             card-y: (root.is-mobile-platform ? Spacing.xs + Spacing.header-height-touch : Spacing.header-height) + Spacing.xs;

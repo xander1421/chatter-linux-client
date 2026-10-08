@@ -42,13 +42,18 @@ fn saved_lookup_menu_and_local_delete_preserve_colliding_channel_and_dm() {
     assert!(menu.actions.edit && menu.actions.pin && !menu.actions.react);
     assert!(!menu.pinned);
     assert!(require_remote_message_kind(&saved.conversation_type).is_err());
-    // Exactly the write `pin_saved_message` makes: the whole row back with
-    // `is_pinned` flipped; `pinned_at` orders the list and is cleared by unpin.
+    // Exactly the write `pin_saved_message` makes: the pin columns at the
+    // Saved key; `pinned_at` orders the list and is cleared by unpin. The
+    // same-id channel and DM rows with the same author and clock are not it.
     let pinned = pinned_saved_record(&saved, own, true).unwrap();
     assert!(pinned.is_pinned && pinned.id == saved.id && pinned.content == saved.content);
     assert!(pinned_saved_record(&saved, peer, true).is_err());
     assert!(pinned_saved_record(&records[1], own, true).is_err());
-    repo.update(&pinned).unwrap();
+    assert!(repo.set_pinned_scoped(&scope, &own, now, true).unwrap());
+    assert!(!repo.set_pinned_scoped(&scope, &peer, now, true).unwrap());
+    for untouched in &records[1..] {
+        assert!(!repo.get(&untouched.id).unwrap().unwrap().is_pinned);
+    }
     let listed = repo
         .list_pinned_all(&id, &ConversationType::SavedMessages)
         .unwrap();
@@ -63,8 +68,11 @@ fn saved_lookup_menu_and_local_delete_preserve_colliding_channel_and_dm() {
     );
     let stored = scoped_stored_message(&repo, &scope, &own, now).unwrap();
     assert!(stored_message_menu(&stored, true, now).pinned);
-    repo.update(&pinned_saved_record(&stored, own, false).unwrap())
-        .unwrap();
+    let unpinned = pinned_saved_record(&stored, own, false).unwrap();
+    assert!(
+        repo.set_pinned_scoped(&scope, &own, now, unpinned.is_pinned)
+            .unwrap()
+    );
     assert!(
         repo.list_pinned_all(&id, &ConversationType::SavedMessages)
             .unwrap()
@@ -138,7 +146,7 @@ fn saved_storage_requires_matching_own_identity_and_metadata() {
 }
 
 #[test]
-fn saved_edit_rewrites_only_the_body_and_persists_the_whole_row() {
+fn saved_edit_rewrites_only_the_body_and_keeps_a_concurrent_pin() {
     use crate::domain::ids::{AttachmentId, MessageId};
     use crate::domain::message::{MessageContent, MixedContent, REMOTE_ACTION_WINDOW_NS};
     let dir = tempfile::tempdir().unwrap();
@@ -197,11 +205,35 @@ fn saved_edit_rewrites_only_the_body_and_persists_the_whole_row() {
             saved.reply_to_author_id
         )
     );
+    // A pin landing between the edit's read and its write survives it: the
+    // edit writes body columns only, at the Saved key.
+    assert!(repo.set_pinned_scoped(&scope, &own, sent, true).unwrap());
     // Exactly the write `edit_saved_message` makes.
-    repo.update(&edited).unwrap();
+    assert!(
+        repo.set_body_scoped(
+            &scope,
+            &own,
+            sent,
+            &edited.content,
+            edited.edited_at.unwrap()
+        )
+        .unwrap()
+    );
+    assert!(
+        !repo
+            .set_body_scoped(
+                &scope,
+                &other,
+                sent,
+                &edited.content,
+                edited.edited_at.unwrap()
+            )
+            .unwrap()
+    );
     let stored = scoped_stored_message(&repo, &scope, &own, sent).unwrap();
     assert_eq!(stored.as_text(), Some("new"));
     assert!(stored.is_edited && stored.edited_at.is_some());
+    assert!(stored.is_pinned);
     assert_eq!(stored.attachments, saved.attachments);
     assert_eq!(stored.reply_to, saved.reply_to);
     assert_eq!(stored.reply_to_author_id, saved.reply_to_author_id);

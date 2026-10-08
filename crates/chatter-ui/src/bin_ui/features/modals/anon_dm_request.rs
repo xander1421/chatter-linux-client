@@ -415,9 +415,13 @@ fn spawn_action_stream(
                 // (which handles all conversation types). Handling them here too caused double-counting.
                 chatter_core::inbox::DomainEvent::ReactionAdded { .. }
                 | chatter_core::inbox::DomainEvent::ReactionRemoved { .. } => {}
+                // Anonymous DM pins only: a channel, DM or Saved pin is the
+                // domain handler's, and this `Channel` source would otherwise
+                // take a Saved pin for the same-id view (an alias).
                 chatter_core::inbox::DomainEvent::MessagePinned {
                     message_id,
                     channel_id,
+                    conversation_type: chatter_core::domain::message::ConversationType::AnonDm,
                     ..
                 } => {
                     // Use message_id's timestamp for matching
@@ -438,6 +442,7 @@ fn spawn_action_stream(
                 chatter_core::inbox::DomainEvent::MessageUnpinned {
                     message_id,
                     channel_id,
+                    conversation_type: chatter_core::domain::message::ConversationType::AnonDm,
                     ..
                 } => {
                     let target_sent_timestamp = message_id

@@ -107,6 +107,13 @@ pub fn wire_pin_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             .unwrap_or((false, String::new(), String::new()));
 
         let unpin = is_currently_pinned;
+        // The pin is for this session, conversation and history epoch: a
+        // send that finishes after a sign-out, another conversation opened
+        // or a reload must move neither the pinned substate nor the rows
+        // (`HistoryOwner`, checked before every current-state change and
+        // again inside the UI closure).
+        let owner =
+            crate::bin_ui::features::history_owner::HistoryOwner::capture(&ui_ctx, conversation);
         let handle = ui_ctx.conversation(conversation);
         let ui_ctx = ui_ctx.clone();
         let weak = weak_window.clone();
@@ -119,6 +126,14 @@ pub fn wire_pin_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     return;
                 }
             };
+            // The storage kind the menu was opened against; the publication
+            // below requires the open view to still resolve to it.
+            let Ok(kind) = handle.storage_kind() else {
+                return;
+            };
+            if !owner.is_current() {
+                return;
+            }
             // Send pin/unpin via ConversationHandle (dispatches to correct service)
             if let Err(e) = handle
                 .send_pin(&target_author, target_sent_timestamp, unpin)
@@ -132,33 +147,18 @@ pub fn wire_pin_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
             let new_pinned_state = !unpin;
 
-            // Update pinned-bar substate
-            if let Ok(msg_id) = msg_id_str.parse::<chatter_core::domain::ids::MessageId>() {
-                if new_pinned_state {
-                    ui_ctx.chat_state().add_pinned_message(msg_id);
-                } else {
-                    ui_ctx.chat_state().remove_pinned_message(&msg_id);
-                }
-            }
-            let pinned_count = ui_ctx.chat_state().pinned_total_count();
-
             // For DM/Channel, generate preview from stored message + attachments.
             // A Saved row keeps the UI model's preview: the lookup below is
             // keyed by author and clock alone, not by the Saved scope.
             let preview_text = match handle.conversation() {
                 ActiveConversation::ServerDm { .. } | ActiveConversation::Channel(_)
-                    if handle.storage_kind().ok()
-                        != Some(chatter_core::domain::ConversationType::SavedMessages) =>
+                    if kind != chatter_core::domain::ConversationType::SavedMessages =>
                 {
-                    if let Ok(sender_id) = sender_id_str.parse::<chatter_core::domain::UserId>() {
-                        if let Some(message) = ui_ctx
-                            .get_message_by_sender_timestamp(&sender_id, target_sent_timestamp)
-                        {
-                            let attachments = resolve_attachments(&message, &ui_ctx);
-                            generate_pinned_preview(&message, &attachments)
-                        } else {
-                            preview_text
-                        }
+                    if let Some(message) = ui_ctx
+                        .get_message_by_sender_timestamp(&target_author, target_sent_timestamp)
+                    {
+                        let attachments = resolve_attachments(&message, &ui_ctx);
+                        generate_pinned_preview(&message, &attachments)
                     } else {
                         preview_text
                     }
@@ -166,38 +166,46 @@ pub fn wire_pin_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 _ => preview_text,
             };
 
-            // Update UI (unified across all conversation types)
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak.upgrade() {
-                    if ui_ctx.chat_state().active_conversation() != conversation {
-                        return;
-                    }
-                    super::edit_messages(&w, |model| {
-                        for i in 0..model.row_count() {
-                            let Some(mut m) = model.row_data(i) else {
-                                continue;
-                            };
-                            if m.sender_id.as_str() == sender_id_str.as_str()
-                                && m.timestamp_ns.as_str() == timestamp_ns_str.as_str()
-                            {
-                                m.is_pinned = new_pinned_state;
-                                model.set_row_data(i, m);
-                            }
-                        }
-                    });
-                    w.set_has_pinned_messages(pinned_count > 0);
-                    if new_pinned_state {
-                        w.set_pinned_message_preview(preview_text.into());
-                        w.set_pinned_current_index(pinned_count as i32);
-                        w.set_pinned_total_count(pinned_count as i32);
-                    } else {
-                        w.set_pinned_total_count(pinned_count as i32);
-                        if pinned_count == 0 {
-                            w.set_pinned_message_preview("".into());
-                        }
-                    }
-                    crate::bin_ui::features::header::refresh_pinned_ui(&w, &ui_ctx);
+            // Update UI (unified across all conversation types). The pinned
+            // substate is moved here, on the UI thread, for the view that is
+            // still current and still stored under the menu's kind.
+            crate::run_history_ui!(weak, owner, |w| {
+                if ui_ctx.conversation(conversation).storage_kind().ok() != Some(kind) {
+                    return;
                 }
+                if let Ok(msg_id) = msg_id_str.parse::<chatter_core::domain::ids::MessageId>() {
+                    if new_pinned_state {
+                        ui_ctx.chat_state().add_pinned_message(msg_id);
+                    } else {
+                        ui_ctx.chat_state().remove_pinned_message(&msg_id);
+                    }
+                }
+                let pinned_count = ui_ctx.chat_state().pinned_total_count();
+                super::edit_messages(&w, |model| {
+                    for i in 0..model.row_count() {
+                        let Some(mut m) = model.row_data(i) else {
+                            continue;
+                        };
+                        if m.sender_id.as_str() == sender_id_str.as_str()
+                            && m.timestamp_ns.as_str() == timestamp_ns_str.as_str()
+                        {
+                            m.is_pinned = new_pinned_state;
+                            model.set_row_data(i, m);
+                        }
+                    }
+                });
+                w.set_has_pinned_messages(pinned_count > 0);
+                if new_pinned_state {
+                    w.set_pinned_message_preview(preview_text.into());
+                    w.set_pinned_current_index(pinned_count as i32);
+                    w.set_pinned_total_count(pinned_count as i32);
+                } else {
+                    w.set_pinned_total_count(pinned_count as i32);
+                    if pinned_count == 0 {
+                        w.set_pinned_message_preview("".into());
+                    }
+                }
+                crate::bin_ui::features::header::refresh_pinned_ui(&w, &ui_ctx);
             });
         });
     });

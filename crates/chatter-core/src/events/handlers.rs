@@ -185,6 +185,74 @@ impl EventHandlers {
         })
     }
 
+    /// A pin event into state and, for every kind but Saved, the DB.
+    ///
+    /// A Saved pin is durable before its event is sent
+    /// (`ConversationHandle::pin_saved_message`), so the stored row is the
+    /// truth: it is not written again, and the flag state takes is the row's
+    /// current `is_pinned`, not the event's, so a queued older pin cannot
+    /// replay over a later unpin, edit or delete. The row read back by id
+    /// must be that Saved row — same kind and conversation, our own
+    /// authorship, undeleted — or the event is dropped, and the pinned bar
+    /// is only moved while that Saved channel is the open conversation
+    /// (`ActiveConversation::Channel`; a DM or anonymous conversation
+    /// sharing the id is not it). Other kinds keep their path: the event's
+    /// flag is persisted and applied.
+    fn apply_pin_event(
+        &self,
+        message_id: crate::domain::ids::MessageId,
+        channel_id: crate::domain::ids::ChannelId,
+        conversation_type: crate::domain::message::ConversationType,
+        actor: crate::domain::ids::UserId,
+        pinned: bool,
+    ) {
+        let pinned = if conversation_type == crate::domain::message::ConversationType::SavedMessages
+        {
+            let Some(stored) = self
+                .message_service
+                .as_ref()
+                .and_then(|svc| svc.message_repo.get(&message_id).ok().flatten())
+                .filter(|stored| {
+                    stored.conversation_type == conversation_type
+                        && stored.conversation_id == channel_id
+                        && stored.sender_id == Some(actor)
+                        && !stored.is_deleted
+                })
+            else {
+                return;
+            };
+            let open = matches!(
+                self.chat_state.active_conversation(),
+                crate::state::ActiveConversation::Channel(id) if id == channel_id
+            );
+            if !open {
+                self.message_state
+                    .update_message(&channel_id, &message_id, |msg| {
+                        msg.is_pinned = stored.is_pinned;
+                    });
+                return;
+            }
+            stored.is_pinned
+        } else {
+            if let Some(ref svc) = self.message_service {
+                if let Err(e) = svc.set_message_pinned(&message_id, pinned) {
+                    tracing::warn!(?message_id, pinned, error = %e, "Failed to persist pin to DB");
+                }
+            }
+            pinned
+        };
+        self.message_state
+            .update_message(&channel_id, &message_id, |msg| {
+                msg.is_pinned = pinned;
+            });
+        if pinned {
+            self.chat_state.add_pinned_message(message_id);
+        } else {
+            self.chat_state.remove_pinned_message(&message_id);
+        }
+        tracing::debug!(?channel_id, ?message_id, pinned, "Applied pin state");
+    }
+
     /// Handle a single domain event by dispatching to the appropriate state store.
     ///
     /// This method maps each DomainEvent variant to the corresponding state
@@ -408,6 +476,7 @@ impl EventHandlers {
                 message_id,
                 channel_id,
                 pinner_id,
+                conversation_type,
                 ..
             } => {
                 tracing::info!(
@@ -416,23 +485,14 @@ impl EventHandlers {
                     ?pinner_id,
                     "Inbox event: MessagePinned received"
                 );
-
-                self.message_state
-                    .update_message(&channel_id, &message_id, |msg| {
-                        msg.is_pinned = true;
-                    });
-                self.chat_state.add_pinned_message(message_id);
-                if let Some(ref svc) = self.message_service {
-                    if let Err(e) = svc.set_message_pinned(&message_id, true) {
-                        tracing::warn!(?message_id, error = %e, "Failed to persist pin to DB");
-                    }
-                }
+                self.apply_pin_event(message_id, channel_id, conversation_type, pinner_id, true);
             }
 
             DomainEvent::MessageUnpinned {
                 message_id,
                 channel_id,
                 unpinner_id,
+                conversation_type,
                 ..
             } => {
                 tracing::info!(
@@ -441,21 +501,7 @@ impl EventHandlers {
                     ?unpinner_id,
                     "Inbox event: MessageUnpinned received"
                 );
-
-                self.message_state
-                    .update_message(&channel_id, &message_id, |msg| {
-                        msg.is_pinned = false;
-                    });
-                if let Some(ref svc) = self.message_service {
-                    if let Err(e) = svc.set_message_pinned(&message_id, false) {
-                        tracing::warn!(?message_id, error = %e, "Failed to persist unpin to DB");
-                    }
-                }
-
-                // Remove from pinned state
-                self.chat_state.remove_pinned_message(&message_id);
-
-                tracing::debug!(?channel_id, ?message_id, "Marked message as unpinned in state and DB");
+                self.apply_pin_event(message_id, channel_id, conversation_type, unpinner_id, false);
             }
 
             // ================================================================

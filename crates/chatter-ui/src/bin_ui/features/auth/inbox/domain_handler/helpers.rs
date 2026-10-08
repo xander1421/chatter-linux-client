@@ -76,23 +76,25 @@ pub(super) fn handle_pin_ui_update(
         return;
     }
     // The bubble is matched by clock alone below, so the event's storage
-    // kind has to be the open view's (`accepts_event_kind`).
-    let handle = ui_ctx.conversation(ui_ctx.chat_state().active_conversation());
+    // kind has to be the open view's (`accepts_event_kind`), and the view
+    // this was queued for has to be the one still open when it runs — same
+    // session, conversation and history epoch (`HistoryOwner`), checked
+    // again inside the UI closure before any state is moved.
+    let conversation = ui_ctx.chat_state().active_conversation();
+    let owner = crate::bin_ui::features::history_owner::HistoryOwner::capture(ui_ctx, conversation);
+    let handle = ui_ctx.conversation(conversation);
     if !handle
         .storage_kind()
         .is_ok_and(|active| accepts_event_kind(active, conversation_type))
     {
         return;
     }
-    let weak = window.clone();
     let refresh_ctx = ui_ctx.clone();
     let chat_state = ui_ctx.chat_state().clone();
     let channel_id_str = channel_id.to_string();
     let target_ts_str = target_sent_timestamp.to_string();
 
-    let _ = slint::invoke_from_event_loop(move || {
-        let Some(w) = weak.upgrade() else { return };
-
+    crate::run_history_ui!(window, owner, |w| {
         let messages = w.get_messages();
         let new_pinned = !unpin;
         let mut preview = String::new();
