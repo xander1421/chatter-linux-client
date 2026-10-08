@@ -7,7 +7,10 @@ use slint::{
     ComponentHandle, ModelRc, VecModel,
     platform::{PointerEventButton, WindowEvent},
 };
-use std::{cell::Cell, rc::Rc};
+use std::{
+    cell::{Cell, RefCell},
+    rc::Rc,
+};
 
 fn settle(w: &MainWindow) {
     w.window().set_size(slint::LogicalSize::new(412.0, 891.0));
@@ -45,6 +48,12 @@ fn selection_scope_requires_eligibility_and_confirmation_in_both_themes() {
     w.set_mobile_show_chat(true);
     w.set_conversation_kind(ConversationKind::ServerDm);
     w.set_channel_name("Owned pin/delete fixture".into());
+    let weak = w.as_weak();
+    w.on_back_pressed(move || {
+        if let Some(w) = weak.upgrade() {
+            chatter_ui::bin_ui::features::back::handle_back(&w);
+        }
+    });
     let local = Rc::new(Cell::new(0));
     let both = Rc::new(Cell::new(0));
     let l = local.clone();
@@ -63,7 +72,8 @@ fn selection_scope_requires_eligibility_and_confirmation_in_both_themes() {
         thumbnail,
     }])));
     for dark in [false, true] {
-        w.global::<Appearance>().set_theme(if dark { "dark" } else { "light" }.into());
+        w.global::<Appearance>()
+            .set_theme(if dark { "dark" } else { "light" }.into());
         w.set_selection_mode(false);
         settle(&w);
         let bar = testing::ElementHandle::find_by_element_type_name(&w, "PinnedBar")
@@ -168,6 +178,100 @@ fn selection_scope_requires_eligibility_and_confirmation_in_both_themes() {
         assert_eq!(w.get_delete_confirm_count(), 0);
         assert_eq!(single.get(), 0, "Back cancels the scope choice");
     }
+
+    // Every remote label must name the true destructive audience. Use real
+    // pointer clicks through both stages and inspect the final target payload.
+    let remote_target = Rc::new(RefCell::new(Vec::<(String, String)>::new()));
+    let capture = remote_target.clone();
+    w.on_delete_everyone_message(move |author, stamp| {
+        capture
+            .borrow_mut()
+            .push((author.to_string(), stamp.to_string()));
+    });
+    let local_target = Rc::new(RefCell::new(Vec::<(String, String)>::new()));
+    let capture = local_target.clone();
+    w.on_delete_message(move |author, stamp| {
+        capture
+            .borrow_mut()
+            .push((author.to_string(), stamp.to_string()));
+    });
+    for (kind, label) in [
+        (ConversationKind::ServerDm, "Delete for both"),
+        (ConversationKind::AnonDm, "Delete for both"),
+        (ConversationKind::Channel, "Delete for everyone"),
+        (ConversationKind::AnonGroup, "Delete for everyone"),
+    ] {
+        w.set_conversation_kind(kind);
+        let flags = w.global::<MessageMenuActions>();
+        flags.set_delete_for_me(true);
+        flags.set_delete_for_everyone(true);
+        for remote in [false, true] {
+            w.set_context_menu_sender_id("exact-author".into());
+            w.set_context_menu_timestamp_ns("987654321".into());
+            w.set_context_menu_visible(true);
+            settle(&w);
+            click(&w, "More");
+            click(&w, "Delete");
+            assert!(visible(&w, label).is_some());
+            let wrong = if label == "Delete for both" {
+                "Delete for everyone"
+            } else {
+                "Delete for both"
+            };
+            assert!(visible(&w, wrong).is_none());
+            let before = (remote_target.borrow().len(), local_target.borrow().len());
+            let choice = if remote { label } else { "Delete for me" };
+            click(&w, choice);
+            assert_eq!(
+                (remote_target.borrow().len(), local_target.borrow().len()),
+                before
+            );
+            click(&w, choice);
+            let target = if remote {
+                remote_target.borrow()
+            } else {
+                local_target.borrow()
+            };
+            assert_eq!(
+                target.last(),
+                Some(&("exact-author".into(), "987654321".into()))
+            );
+            assert_eq!(
+                (remote_target.borrow().len(), local_target.borrow().len()),
+                if remote {
+                    (before.0 + 1, before.1)
+                } else {
+                    (before.0, before.1 + 1)
+                }
+            );
+        }
+        // Actual Escape dispatch must dismiss either stage without deletion.
+        for confirm in [false, true] {
+            w.set_context_menu_visible(true);
+            settle(&w);
+            click(&w, "More");
+            click(&w, "Delete");
+            if confirm {
+                click(&w, label);
+            }
+            let before = (remote_target.borrow().len(), local_target.borrow().len());
+            let text: slint::SharedString = slint::platform::Key::Escape.into();
+            w.window()
+                .dispatch_event(WindowEvent::KeyPressed { text: text.clone() });
+            w.window().dispatch_event(WindowEvent::KeyReleased { text });
+            settle(&w);
+            assert_eq!(
+                w.get_delete_confirm_count(),
+                0,
+                "Escape cancels either delete stage"
+            );
+            assert_eq!(
+                (remote_target.borrow().len(), local_target.borrow().len()),
+                before
+            );
+        }
+    }
+    w.set_conversation_kind(ConversationKind::ServerDm);
 
     // The real wire must refuse a stale eligibility snapshot when a selected
     // row disappeared before confirmation, without deleting another subset.

@@ -30,8 +30,8 @@ import { ReactionPicker } from "chat/reaction_picker.slint";
 import { MessageContextMenu, MessageMenuActions } from "chat/message_context_menu.slint";
 import { SelectionBar, SelectionChrome } from "chat/selection_bar.slint";
 import { DeleteConfirm } from "chat/delete_confirm.slint";
-import { EmojiPicker, EmojiData } from "components/emoji_picker.slint";
-import { GifPicker, GifData } from "components/gif_picker.slint";
+import { EmojiData } from "components/emoji_picker.slint";
+import { GifData } from "components/gif_picker.slint";
 import { MentionAutocomplete, MentionSuggestion } from "components/mention_autocomplete.slint";
 
 // Import modals
@@ -1415,8 +1415,8 @@ export component MainWindow inherits Window {
         key-pressed(event) => {
             if (event.text == Key.Back || (event.text == Key.Escape
                 && root.active-modal == "none"
-                && (root.calls-more-menu-visible || root.composer-emoji-picker-visible || root.composer-gif-picker-visible))) {
-                if (event.text == Key.Escape && root.calls-more-menu-visible) {
+                && (root.delete-confirm-count > 0 || root.calls-more-menu-visible || root.composer-emoji-picker-visible || root.composer-gif-picker-visible))) {
+                if (event.text == Key.Escape && (root.calls-more-menu-visible || root.delete-confirm-count > 0)) {
                     self.calls-menu-escape-consumed = true;
                 }
                 root.back-pressed();
@@ -1481,7 +1481,7 @@ export component MainWindow inherits Window {
                 }
                 // Escape: close the top modal, else leave a non-Chats tab
                 if (event.text == Key.Escape) {
-                    if (root.calls-more-menu-visible) {
+                    if (root.calls-more-menu-visible || root.delete-confirm-count > 0) {
                         root.back-pressed();
                         return accept;
                     }
@@ -3573,6 +3573,7 @@ export component MainWindow inherits Window {
         // empty and deletes the selection with its confirmed scope.
         if root.delete-confirm-count > 0: DeleteConfirm {
             count: root.delete-confirm-count;
+            is-dm: root.conversation-kind == ConversationKind.server-dm || root.conversation-kind == ConversationKind.anon-dm;
             for-everyone: root.delete-confirm-everyone;
             choosing: root.delete-choosing;
             can-delete-everyone: root.delete-choice-everyone;
