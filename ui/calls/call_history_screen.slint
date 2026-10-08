@@ -291,11 +291,16 @@ export component CallHistoryScreen inherits Rectangle {
             // ── The list ─────────────────────────────────────────────────
             // Rows exist only while they fit the viewport (ListView above):
             // the runtime creates and destroys them as the user scrolls and
-            // estimates the total from their average. Every row is the same
-            // height, so the estimate is exact and `viewport-y` is a plain
-            // offset. Pages: the screen asks for more when the loaded end is
-            // within a screen of the viewport; Rust appends to the model, so
-            // nothing on screen moves.
+            // estimates the total from the average of the live ones. The
+            // cards are one height; only the first and last rows carry an
+            // inset, so the estimate is within those insets of the truth and
+            // `viewport-y` is as good as a plain offset. Pages: the screen
+            // asks for more when the loaded end is within a screen of the
+            // viewport; Rust appends to the model, so nothing on screen
+            // moves. A page that lands with no visible row (core hides this
+            // process's live calls) is followed by Rust itself, since no
+            // row-count change re-arms `load-more` and an empty first page
+            // has no list at all (history.rs `EMPTY_PAGES`).
             if !root.loading && root.rows.length > 0: list-slot := Rectangle {
                 vertical-stretch: 1;
                 property <length> chrome-inset: self.absolute-position.y - root.absolute-position.y;

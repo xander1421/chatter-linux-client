@@ -25,7 +25,18 @@ thread_local! {
     /// end asks once, and set again by the paint that lands it.
     static NEXT_CURSOR: std::cell::RefCell<Option<CallHistoryCursor>> =
         const { std::cell::RefCell::new(None) };
+    /// Consecutive pages that landed with no visible row but a cursor (core
+    /// drops this process's live calls from a Missed page after reading it).
+    /// Each one is followed by a request for the next, so an empty page can
+    /// never strand the cursor — bounded by `MAX_EMPTY_PAGES`, reset by a
+    /// page with rows or a fresh first-page read.
+    static EMPTY_PAGES: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
+
+/// Longest chain of empty pages followed automatically. Live calls in one
+/// process are a handful; this is a ceiling, not an expectation. Past it the
+/// cursor stays set and the list's own near-end `load-more` resumes paging.
+const MAX_EMPTY_PAGES: u32 = 8;
 
 /// How a landed page meets the model: the first page replaces it, a later
 /// one is appended under the rows already on screen.
@@ -411,6 +422,10 @@ fn request_page(
         PAINTED.with(|p| p.set(None));
         NEXT_CURSOR.with(|c| c.borrow_mut().take());
     }
+    if cursor.is_none() {
+        // A read from the newest call starts the empty-page budget over.
+        EMPTY_PAGES.with(|n| n.set(0));
+    }
     window.set_call_history_error("".into());
 
     let weak = window.as_weak();
@@ -419,7 +434,7 @@ fn request_page(
         let page = load_page(&ui_ctx, filter, limit, cursor).await;
         let client = ui_ctx.clone();
         run_ui!(weak, |w| {
-            complete_load(
+            let continue_paging = complete_load(
                 &w,
                 request,
                 HISTORY_GENERATION.load(Ordering::SeqCst),
@@ -427,6 +442,16 @@ fn request_page(
                 page,
                 paint,
             );
+            // The page landed without a visible row but with a cursor: no
+            // ListView exists to ask for the next one (an empty first page)
+            // or its arming never fired (an appended page of zero rows), so
+            // ask here. One hop per landed page — a chain of event-loop
+            // tasks, not a loop — each a fresh request behind the same
+            // generation/session fence, each strictly older by the
+            // repository's cursor, each dropping the page before it.
+            if continue_paging {
+                load_more(&w, &client);
+            }
         });
     });
 }
@@ -472,6 +497,8 @@ async fn load_page(
         })
 }
 
+/// Applies the page if it is still the current request. Returns whether the
+/// caller should ask for the next page at once (see `paint`).
 fn complete_load(
     window: &MainWindow,
     request: HistoryRequest,
@@ -479,31 +506,34 @@ fn complete_load(
     session: u64,
     page: Result<PreparedHistoryPage, chatter_core::client::ClientError>,
     paint: Paint,
-) {
-    if request.matches(generation, session) {
-        apply_page(window, page, paint);
-    }
+) -> bool {
+    request.matches(generation, session) && apply_page(window, page, paint)
 }
 
 fn apply_page(
     window: &MainWindow,
     page: Result<PreparedHistoryPage, chatter_core::client::ClientError>,
     how: Paint,
-) {
+) -> bool {
     match page {
         Ok(page) => {
             window.set_call_history_error("".into());
-            paint(window, page, how);
+            paint(window, page, how)
         }
         Err(error) => {
             tracing::error!(%error, "Failed to load call history");
             window.set_call_history_loading(false);
             window.set_call_history_error("Load failed; showing previous calls.".into());
+            false
         }
     }
 }
 
-fn paint(window: &MainWindow, prepared: PreparedHistoryPage, how: Paint) {
+/// Returns true when the page had no visible row but names a next one and
+/// the empty-page budget allows following it: the caller requests it, and
+/// `loading` stays up meanwhile so an empty first page does not flash the
+/// empty state before the rows behind the hidden live calls arrive.
+fn paint(window: &MainWindow, prepared: PreparedHistoryPage, how: Paint) -> bool {
     let page = prepared.page;
     let filter = match window.get_call_history_filter().as_str() {
         "missed" => CallHistoryFilter::Missed,
@@ -514,6 +544,19 @@ fn paint(window: &MainWindow, prepared: PreparedHistoryPage, how: Paint) {
         // must not reach a call that arrived while the user paged down.
         PAINTED.with(|p| p.set(Some((filter, page.snapshot_at))));
     }
+    let continue_paging = if page.rows.is_empty() && page.next_cursor.is_some() {
+        let empty = EMPTY_PAGES.with(|n| n.replace(n.get() + 1) + 1);
+        if empty > MAX_EMPTY_PAGES {
+            tracing::warn!(
+                empty,
+                "call history: stopped following empty pages; the list resumes on scroll"
+            );
+        }
+        empty <= MAX_EMPTY_PAGES
+    } else {
+        EMPTY_PAGES.with(|n| n.set(0));
+        false
+    };
     NEXT_CURSOR.with(|c| *c.borrow_mut() = page.next_cursor);
     let rows: Vec<CallHistoryRow> = page
         .rows
@@ -557,8 +600,11 @@ fn paint(window: &MainWindow, prepared: PreparedHistoryPage, how: Paint) {
             }
         }
     }
-    window.set_call_history_loading(false);
+    if !continue_paging {
+        window.set_call_history_loading(false);
+    }
     window.set_missed_call_count(page.missed_count as i32);
+    continue_paging
 }
 
 #[cfg(test)]

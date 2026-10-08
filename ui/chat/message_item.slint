@@ -568,13 +568,19 @@ export component MessageItem inherits Rectangle {
                         y: bubble-content.preferred-height - self.height - Elevation.rim-width - 1px;
                         border-radius: 1px;
                         clip: true;
-                        background: failed ? Colors.error : Colors.primary.transparentize(0.8);
+                        // Reduce animations: the line is a solid, still
+                        // "Sending" mark — same state, no sweep, no tick.
+                        background: failed ? Colors.error
+                            : Appearance.reduce-motion ? Colors.primary
+                            : Colors.primary.transparentize(0.8);
                         accessible-role: progress-indicator;
                         accessible-label: failed ? "Not sent" : "Sending";
 
                         // One sweep per 1.4s; `animation-tick` only ticks while
-                        // this element exists, i.e. while a send is pending.
-                        if !send-line.failed: Rectangle {
+                        // this element exists, i.e. while a send is pending
+                        // and the user has not asked for reduced motion (then
+                        // the element is never created, so nothing ticks).
+                        if !send-line.failed && !Appearance.reduce-motion: Rectangle {
                             width: parent.width * 0.35;
                             x: (parent.width + self.width) * (Math.mod(animation-tick(), 1400ms) / 1400ms) - self.width;
                             height: parent.height;
