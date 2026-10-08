@@ -33,9 +33,13 @@ thread_local! {
     static EMPTY_PAGES: std::cell::Cell<u32> = const { std::cell::Cell::new(0) };
 }
 
-/// Longest chain of empty pages followed automatically. Live calls in one
-/// process are a handful; this is a ceiling, not an expectation. Past it the
-/// cursor stays set and the list's own near-end `load-more` resumes paging.
+/// Longest chain of empty pages followed automatically: a first page plus
+/// this many follow-ups, 9 × `HISTORY_PAGE` stored rows read. Open rows do
+/// accumulate — an expired incoming offer files its chat bubble without
+/// closing its history row (call_worker.rs `IncomingMissed`) — so this is
+/// reachable, not theoretical. Past it the cursor stays set, the screen
+/// shows `paging-paused` with a "Load older calls" control, and that control
+/// restarts the budget from the saved cursor (`resume_paging`).
 const MAX_EMPTY_PAGES: u32 = 8;
 
 /// How a landed page meets the model: the first page replaces it, a later
@@ -126,13 +130,14 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             reload(&w, &client);
         }
     });
-    // The list is within a screen of its loaded end (`load-more` in
-    // call_history_screen.slint, forwarded by app.slint).
+    // The user asked for older calls: the list is within a screen of its
+    // loaded end, or the "Load older calls" control after a paused chain
+    // (`load-more` in call_history_screen.slint, forwarded by app.slint).
     let weak = window.as_weak();
     let client = ui_ctx.clone();
     window.on_call_history_load_more(move || {
         if let Some(w) = weak.upgrade() {
-            load_more(&w, &client);
+            resume_paging(&w, &client);
         }
     });
     // Paint the tab badge at startup — missed calls from a previous session
@@ -394,8 +399,27 @@ fn refresh_in_place(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     request_page(window, ui_ctx, loaded.max(HISTORY_PAGE), None, Paint::Replace);
 }
 
-/// The list is within a screen of its loaded end. Nothing to do once the
-/// last page is in, or while one is in flight.
+/// A user request for older calls (scroll near the end, or the control shown
+/// while paused): a fresh empty-page budget, then the saved cursor. Only
+/// user actions come here; the automatic chain calls `load_more` directly
+/// and keeps counting. Nothing to do once the last page is in, or while one
+/// is in flight — `loading` is raised only when a page will actually be
+/// asked for, so no spinner can outlive its request.
+fn resume_paging(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    if NEXT_CURSOR.with(|c| c.borrow().is_none()) {
+        return;
+    }
+    EMPTY_PAGES.with(|n| n.set(0));
+    window.set_call_history_paging_paused(false);
+    if window.get_call_history_rows().row_count() == 0 {
+        // Nothing on screen to append under: show the read as a load.
+        window.set_call_history_loading(true);
+    }
+    load_more(window, ui_ctx);
+}
+
+/// Request the page after the saved cursor. Nothing to do once the last
+/// page is in, or while one is in flight.
 fn load_more(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let Some(cursor) = NEXT_CURSOR.with(|c| c.borrow_mut().take()) else {
         return;
@@ -426,6 +450,8 @@ fn request_page(
         // A read from the newest call starts the empty-page budget over.
         EMPTY_PAGES.with(|n| n.set(0));
     }
+    // Any new request ends a pause; the page that lands decides again.
+    window.set_call_history_paging_paused(false);
     window.set_call_history_error("".into());
 
     let weak = window.as_weak();
@@ -546,15 +572,20 @@ fn paint(window: &MainWindow, prepared: PreparedHistoryPage, how: Paint) -> bool
     }
     let continue_paging = if page.rows.is_empty() && page.next_cursor.is_some() {
         let empty = EMPTY_PAGES.with(|n| n.replace(n.get() + 1) + 1);
-        if empty > MAX_EMPTY_PAGES {
+        let paused = empty > MAX_EMPTY_PAGES;
+        if paused {
             tracing::warn!(
                 empty,
-                "call history: stopped following empty pages; the list resumes on scroll"
+                "call history: empty-page budget spent with older calls left; paused"
             );
         }
-        empty <= MAX_EMPTY_PAGES
+        // Paused: cursor kept below, budget kept spent until the user asks.
+        window.set_call_history_paging_paused(paused);
+        !paused
     } else {
+        // Rows, or the end of the list: nothing is paused.
         EMPTY_PAGES.with(|n| n.set(0));
+        window.set_call_history_paging_paused(false);
         false
     };
     NEXT_CURSOR.with(|c| *c.borrow_mut() = page.next_cursor);

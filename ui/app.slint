@@ -1274,6 +1274,8 @@ export component MainWindow inherits Window {
     // Call history (Calls screen). Rows come from core pre-formatted.
     in property <[CallHistoryRow]> call-history-rows: [];
     in property <bool> call-history-loading: false;
+    // Automatic paging stopped at its empty-page budget with older calls left.
+    in property <bool> call-history-paging-paused: false;
     in-out property <string> call-history-error: "";
     // Shared with the Calls screen so root Back dismisses its local overlay first.
     in-out property <bool> calls-more-menu-visible: false;
@@ -2646,6 +2648,7 @@ export component MainWindow inherits Window {
             show-modal: true;
             rows: root.call-history-rows;
             loading: root.call-history-loading;
+            paging-paused: root.call-history-paging-paused;
             error-message: root.call-history-error;
             active-filter: root.call-history-filter;
             show-more-menu <=> root.calls-more-menu-visible;

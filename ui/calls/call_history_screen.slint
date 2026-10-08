@@ -49,6 +49,10 @@ export component CallHistoryScreen inherits Rectangle {
     in property <bool> root-screen: false;
     in property <[CallHistoryRow]> rows: [];
     in property <bool> loading: false;
+    // Rust followed its budget of empty pages (core hides this process's
+    // live calls) and stopped with older calls still unread. The cursor is
+    // kept; the control below resumes from it. Shown with or without rows.
+    in property <bool> paging-paused: false;
     in property <string> error-message: "";
     callback retry();
     in property <string> active-filter: "all";  // "all" or "missed"
@@ -324,7 +328,7 @@ export component CallHistoryScreen inherits Rectangle {
                     // confirmation is visible, end at the allocated list slot:
                     // root.height would carry rows through the footer below it.
                     height: root.mobile-mode
-                        ? (root.show-clear-confirm ? parent.height + parent.chrome-inset : root.height)
+                        ? (root.show-clear-confirm || root.paging-paused ? parent.height + parent.chrome-inset : root.height)
                         : parent.height;
 
                     // Created fresh on every load (it lives under `!loading`),
@@ -559,6 +563,41 @@ export component CallHistoryScreen inherits Rectangle {
                         // the tab dock floats over the list.
                         if idx == root.rows.length - 1: VerticalLayout {
                             padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.md : Spacing.none;
+                        }
+                    }
+                }
+            }
+
+            // Paging paused at its budget: the one way to older calls under
+            // this filter, since an empty screen has no list to scroll and a
+            // list whose appended pages were all empty never re-arms. Same
+            // slot discipline as the confirmation card below: fixed at its
+            // wrapped height, the list takes the shortage; a shield so
+            // whitespace beside the button is not a row.
+            if !root.loading && root.paging-paused: Rectangle {
+                vertical-stretch: 0;
+                height: resume-body.preferred-height;
+                TouchArea {}
+
+                resume-body := VerticalLayout {
+                    spacing: Spacing.sm;
+                    padding: Spacing.sm;
+
+                    Text {
+                        text: "Older calls were not checked yet.";
+                        color: Colors.text-muted;
+                        font-size: Typography.sm;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                    }
+
+                    HorizontalLayout {
+                        alignment: center;
+
+                        Button {
+                            text: "Load older calls";
+                            variant: "secondary";
+                            clicked => { root.load-more(); }
                         }
                     }
                 }
