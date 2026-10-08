@@ -140,8 +140,7 @@ export component MessageContextMenu inherits Rectangle {
     callback select-clicked(string);                // (message_id) — enters selection mode
     callback reply-clicked(string, string);
     callback edit-clicked(string, string);
-    callback delete-clicked(string, string);           // Delete for me (local only)
-    callback delete-everyone-clicked(string, string);  // Delete for everyone
+    callback delete-clicked(string, string);           // Choose deletion scope
     callback pin-clicked(string, string);
     callback forward-clicked(string, string);
     callback copy-clicked(string, string);
@@ -352,19 +351,9 @@ export component MessageContextMenu inherits Rectangle {
                     clicked => { root.more-actions = true; menu-scroll.viewport-y = 0px; }
                 }
 
-                if MessageMenuActions.delete-for-everyone && root.more-actions: MenuItem {
+                if (MessageMenuActions.delete-for-me || MessageMenuActions.delete-for-everyone) && root.more-actions: MenuItem {
                     icon: Icons.trash;
-                    label: "Delete for Everyone";
-                    destructive: true;
-                    clicked => {
-                        root.delete-everyone-clicked(root.sender-id, root.timestamp-ns);
-                        root.close();
-                    }
-                }
-
-                if MessageMenuActions.delete-for-me && root.more-actions: MenuItem {
-                    icon: Icons.trash;
-                    label: "Delete for Me";
+                    label: "Delete";
                     destructive: true;
                     clicked => {
                         root.delete-clicked(root.sender-id, root.timestamp-ns);

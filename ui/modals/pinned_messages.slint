@@ -32,23 +32,32 @@ export component PinnedMessagesModal inherits Rectangle {
                 rows := VerticalLayout {
                     spacing: Spacing.xs;
                     for item in root.items: Rectangle {
-                        height: max(56px, content.preferred-height + Spacing.md * 2);
+                        accessible-role: button;
+                        accessible-label: item.preview;
+                        // The content layout already includes its padding.
+                        height: max(56px, content.preferred-height);
                         background: touch.has-hover ? Colors.surface-hover : Colors.surface;
                         border-radius: Spacing.radius-md;
                         content := HorizontalLayout {
                             padding: Spacing.md;
                             spacing: Spacing.sm;
-                            if item.thumbnail.width > 0: Image {
-                                source: item.thumbnail;
+                            if item.thumbnail.width > 0: Rectangle {
                                 width: 40px;
-                                height: 40px;
-                                image-fit: cover;
+                                min-height: 40px;
+                                vertical-stretch: 1;
+                                Rectangle {
+                                    width: 40px; height: 40px;
+                                    y: (parent.height - self.height) / 2;
+                                    border-radius: Spacing.radius-sm; clip: true;
+                                    Image { accessible-label: "Pinned message image"; source: item.thumbnail; width: 100%; height: 100%; image-fit: cover; }
+                                }
                             }
                             Text {
                                 text: item.preview;
                                 color: Colors.text-primary;
                                 font-size: Typography.sm;
                                 wrap: word-wrap;
+                                vertical-alignment: center;
                                 horizontal-stretch: 1;
                             }
                         }

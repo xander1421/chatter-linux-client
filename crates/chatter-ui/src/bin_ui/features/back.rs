@@ -155,6 +155,11 @@ pub fn handle_back(window: &MainWindow) -> bool {
         return true;
     }
 
+    if window.get_delete_confirm_count() > 0 {
+        window.set_delete_confirm_count(0);
+        return true;
+    }
+
     if window.get_selection_mode() {
         // Both halves are required, and this is the same pair the selection
         // bar's own close button fires (ui/app.slint:2579-2580). The flag drives

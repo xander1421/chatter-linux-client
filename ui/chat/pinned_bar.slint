@@ -102,11 +102,15 @@ export component PinnedBar inherits GlassSurface {
         }
 
         if root.thumbnail.width > 0: Rectangle {
+            // Layouts own child positions: center the thumbnail inside a full-height cell.
+            vertical-stretch: 1;
             width: 36px;
-            height: 36px;
-            border-radius: Spacing.radius-sm;
-            clip: true;
-            Image { source: root.thumbnail; width: 100%; height: 100%; image-fit: cover; }
+            Rectangle {
+                width: 36px; height: 36px;
+                y: (parent.height - self.height) / 2;
+                border-radius: Spacing.radius-sm; clip: true;
+                Image { accessible-label: "Pinned message image"; source: root.thumbnail; width: 100%; height: 100%; image-fit: cover; }
+            }
             TouchArea { clicked => { root.go-to-message(); } }
         }
 

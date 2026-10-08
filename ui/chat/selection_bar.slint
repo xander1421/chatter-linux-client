@@ -106,20 +106,10 @@ export component SelectionBar inherits GlassSurface {
             backdrop-paused: root.backdrop-paused;
             touch: root.touch;
             icon: Icons.trash;
-            label: "Delete selected for me";
+            label: "Delete selected";
             destructive: true;
             enabled: root.count > 0;
             clicked => { root.delete-clicked(); }
-        }
-
-        HeaderButton {
-            backdrop-paused: root.backdrop-paused;
-            touch: root.touch;
-            icon: Icons.trash;
-            label: "Delete selected for everyone";
-            destructive: true;
-            enabled: root.count > 0 && SelectionChrome.can-delete-everyone;
-            clicked => { SelectionChrome.delete-everyone(); }
         }
     }
 }

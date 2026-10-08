@@ -52,7 +52,12 @@ fn refresh_delete_everyone(
 ) {
     let handle = ui_ctx.conversation(ui_ctx.chat_state().active_conversation());
     let model = w.get_messages();
+    let resolved_count = model
+        .iter()
+        .filter(|row| selected_ids.contains(row.message_id.as_str()))
+        .count();
     let all_ok = !selected_ids.is_empty()
+        && resolved_count == selected_ids.len()
         && model
             .iter()
             .filter(|row| selected_ids.contains(row.message_id.as_str()))
@@ -259,18 +264,23 @@ pub fn wire_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     model
                         .iter()
                         .filter(|row| set.contains(row.message_id.as_str()))
-                        .filter(|row| {
-                            row.sender_id
-                                .parse()
-                                .ok()
-                                .zip(row.timestamp_ns.parse().ok())
-                                .is_some_and(|(author, ts)| {
-                                    handle.can_delete_for_everyone(&author, ts).unwrap_or(false)
-                                })
-                        })
                         .map(|row| (row.sender_id.clone(), row.timestamp_ns.clone()))
                         .collect()
                 };
+                // Recheck the entire selection at confirmation time. Never silently
+                // delete only an eligible subset or substitute delete-for-me.
+                if targets.is_empty() || targets.len() != selected_ids.borrow().len()
+                    || !targets.iter().all(|(author, ts)| {
+                        author.parse().ok().zip(ts.parse().ok()).is_some_and(|(author, ts)| {
+                            handle.can_delete_for_everyone(&author, ts).unwrap_or(false)
+                        })
+                    })
+                {
+                    refresh_delete_everyone(&w, &ui_ctx, &selected_ids.borrow());
+                    w.set_toast_message("These messages can no longer be deleted for both.".into());
+                    w.set_toast_visible(true);
+                    return;
+                }
                 tracing::info!(
                     count = targets.len(),
                     "UI callback: bulk delete-for-everyone"

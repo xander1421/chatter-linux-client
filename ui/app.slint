@@ -27,8 +27,8 @@ import { ChatLayout, MessageItemData, MessageAttachmentData, PendingAttachmentDa
 import { ThreadPanel } from "chat/thread_panel.slint";
 import { ConversationKind } from "chat/conversation_kind.slint";
 import { ReactionPicker } from "chat/reaction_picker.slint";
-import { MessageContextMenu } from "chat/message_context_menu.slint";
-import { SelectionBar } from "chat/selection_bar.slint";
+import { MessageContextMenu, MessageMenuActions } from "chat/message_context_menu.slint";
+import { SelectionBar, SelectionChrome } from "chat/selection_bar.slint";
 import { DeleteConfirm } from "chat/delete_confirm.slint";
 import { EmojiPicker, EmojiData } from "components/emoji_picker.slint";
 import { GifPicker, GifData } from "components/gif_picker.slint";
@@ -552,11 +552,14 @@ export component MainWindow inherits Window {
     callback delete-message(string, string);         // (delete for me)
     // A delete waiting on its confirm: how many messages (0 = none), for a
     // single one which (sender, timestamp-ns), and whether it is a delete for
-    // everyone ("Delete for everyone?") rather than for me ("Delete message?").
-    property <int> delete-confirm-count: 0;
+    // both ("Delete for both?") or for me ("Delete message?").
+    in-out property <int> delete-confirm-count: 0;
     property <string> delete-confirm-sender;
     property <string> delete-confirm-timestamp;
     property <bool> delete-confirm-everyone: false;
+    property <bool> delete-choosing: false;
+    property <bool> delete-choice-everyone: false;
+    property <bool> delete-choice-me: true;
     callback delete-everyone-message(string, string); // (delete for everyone)
     callback pin-message(string, string);
     callback forward-message-action(string, string);
@@ -1935,6 +1938,9 @@ export component MainWindow inherits Window {
                                 root.selection-cleared();
                             }
                             delete-clicked => {
+                                root.delete-choosing = true;
+                                root.delete-choice-everyone = SelectionChrome.can-delete-everyone;
+                                root.delete-choice-me = true;
                                 root.delete-confirm-sender = "";
                                 root.delete-confirm-everyone = false;
                                 root.delete-confirm-count = root.selected-message-count;
@@ -3537,16 +3543,12 @@ export component MainWindow inherits Window {
             }
             delete-clicked(sender-id, timestamp-ns) => {
                 root.context-menu-visible = false;
+                root.delete-choosing = true;
+                root.delete-choice-everyone = MessageMenuActions.delete-for-everyone;
+                root.delete-choice-me = MessageMenuActions.delete-for-me;
                 root.delete-confirm-sender = sender-id;
                 root.delete-confirm-timestamp = timestamp-ns;
                 root.delete-confirm-everyone = false;
-                root.delete-confirm-count = 1;
-            }
-            delete-everyone-clicked(sender-id, timestamp-ns) => {
-                root.context-menu-visible = false;
-                root.delete-confirm-sender = sender-id;
-                root.delete-confirm-timestamp = timestamp-ns;
-                root.delete-confirm-everyone = true;
                 root.delete-confirm-count = 1;
             }
             pin-clicked(sender-id, timestamp-ns) => {
@@ -3568,15 +3570,26 @@ export component MainWindow inherits Window {
         }
 
         // A single delete names its message; a multi-select leaves the sender
-        // empty and deletes the selection (for me only).
+        // empty and deletes the selection with its confirmed scope.
         if root.delete-confirm-count > 0: DeleteConfirm {
             count: root.delete-confirm-count;
             for-everyone: root.delete-confirm-everyone;
+            choosing: root.delete-choosing;
+            can-delete-everyone: root.delete-choice-everyone;
+            can-delete-me: root.delete-choice-me;
+            scope-chosen(everyone) => {
+                root.delete-confirm-everyone = everyone;
+                root.delete-choosing = false;
+            }
             cancelled => { root.delete-confirm-count = 0; }
             confirmed => {
                 root.delete-confirm-count = 0;
                 if root.delete-confirm-everyone {
-                    root.delete-everyone-message(root.delete-confirm-sender, root.delete-confirm-timestamp);
+                    if root.delete-confirm-sender == "" {
+                        SelectionChrome.delete-everyone();
+                    } else {
+                        root.delete-everyone-message(root.delete-confirm-sender, root.delete-confirm-timestamp);
+                    }
                 } else if root.delete-confirm-sender != "" {
                     root.delete-message(root.delete-confirm-sender, root.delete-confirm-timestamp);
                 } else {
