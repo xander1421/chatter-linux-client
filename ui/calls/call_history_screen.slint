@@ -217,7 +217,7 @@ export component CallHistoryScreen inherits Rectangle {
                         horizontal-stretch: 1;
                         border-radius: Spacing.radius-chrome-inner;
                         background: root.active-filter == tab.id ? Colors.tint-strong : (tab-touch.pressed ? Materials.pressed : tab-touch.has-hover ? Materials.hover : transparent);
-                        accessible-role: tab;
+                        accessible-role: AccessibleRole.tab;
                         accessible-label: tab.label;
                         accessible-item-selected: root.active-filter == tab.id;
                         accessible-action-default => { root.filter-changed(tab.id); }
