@@ -3573,7 +3573,22 @@ impl ChatterClient {
             if c.is_owner(me) {
                 return Some(crate::domain::channel::MemberRole::Owner);
             }
-            members.iter().find(|m| &m.user_id == me).map(|m| m.role)
+            // This page's row is freshest; when our row is on another page,
+            // use our stored membership (kept current by roster sync), so
+            // moderation flags do not depend on which page is displayed.
+            // Display only — the server still authorizes every action.
+            members
+                .iter()
+                .find(|m| &m.user_id == me)
+                .map(|m| m.role)
+                .or_else(|| {
+                    self.channels()
+                        .channel_repo
+                        .get_membership(channel_id, me)
+                        .ok()
+                        .flatten()
+                        .map(|m| m.role)
+                })
         });
         Ok(members
             .into_iter()

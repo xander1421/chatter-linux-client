@@ -26,6 +26,27 @@ fn unregister_message_gifs(message: &MessageItemData) {
     }
 }
 
+/// Show a single-action failure only while the account and login session that
+/// requested it still own the UI. The message row is left in place.
+pub(super) fn notify_action_failed(
+    weak: &slint::Weak<MainWindow>,
+    client: &Arc<ChatterClient>,
+    owner: UserId,
+    session_revision: u64,
+    message: String,
+) {
+    let client = client.clone();
+    run_ui!(weak, |w| {
+        let auth = client.auth_state().get();
+        if auth.current_user_id != Some(owner) || auth.session_revision != session_revision {
+            return;
+        }
+        w.set_toast_message(message.into());
+        w.set_toast_variant("error".into());
+        w.set_toast_visible(true);
+    });
+}
+
 /// Wire delete-message callback for DM and channel conversations.
 /// Delete-for-me: deletes locally and syncs to own devices, does not notify peer/channel.
 /// Uses Signal-style (sender_id, timestamp_ns) for message identification.
@@ -43,6 +64,11 @@ pub fn wire_delete_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         );
 
         let conversation = ui_ctx.chat_state().active_conversation();
+        let auth = ui_ctx.auth_state().get();
+        let Some(owner) = auth.current_user_id else {
+            return;
+        };
+        let session_revision = auth.session_revision;
         let ui_ctx_spawn = ui_ctx.clone();
         let weak = weak_window.clone();
         let sender_for_ui = sender_id_str.clone();
@@ -70,6 +96,13 @@ pub fn wire_delete_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 .await
             {
                 tracing::error!(error = %e, "Failed to delete-for-me");
+                notify_action_failed(
+                    &weak,
+                    &ui_ctx_spawn,
+                    owner,
+                    session_revision,
+                    format!("Could not delete the message: {e}"),
+                );
                 return;
             }
 
@@ -114,6 +147,11 @@ pub fn wire_delete_everyone_message(window: &MainWindow, ui_ctx: &Arc<ChatterCli
         );
 
         let conversation = ui_ctx.chat_state().active_conversation();
+        let auth = ui_ctx.auth_state().get();
+        let Some(owner) = auth.current_user_id else {
+            return;
+        };
+        let session_revision = auth.session_revision;
         let ui_ctx_spawn = ui_ctx.clone();
         let weak = weak_window.clone();
         let sender_for_ui = sender_id_str.clone();
@@ -141,6 +179,13 @@ pub fn wire_delete_everyone_message(window: &MainWindow, ui_ctx: &Arc<ChatterCli
                 .await
             {
                 tracing::error!(error = %e, "Failed to send delete-for-everyone");
+                notify_action_failed(
+                    &weak,
+                    &ui_ctx_spawn,
+                    owner,
+                    session_revision,
+                    format!("Could not delete the message for everyone: {e}"),
+                );
                 return;
             }
 

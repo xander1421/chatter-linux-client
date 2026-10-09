@@ -8,8 +8,51 @@ use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::channel::{ChannelConfig, ChannelType, MessagePersistence};
 use chatter_core::domain::ids::UserId;
+use chatter_core::state::ActiveConversation;
 
 use crate::{AIModelOption, CreateChannelConfig, MainWindow, PrivateGroupFriend};
+
+/// What owned the UI when a create/join request started. A late completion
+/// keeps its server result, but navigates or closes the requesting surface only
+/// if the same login session, conversation and modal stack are still showing.
+pub(super) struct RequestFence {
+    owner: UserId,
+    session_revision: u64,
+    conversation: ActiveConversation,
+    stack: Vec<SharedString>,
+}
+
+impl RequestFence {
+    /// Call on the UI thread when the request is submitted.
+    pub(super) fn capture(w: &MainWindow, client: &ChatterClient) -> Option<Self> {
+        let auth = client.auth_state().get();
+        Some(Self {
+            owner: auth.current_user_id?,
+            session_revision: auth.session_revision,
+            conversation: client.chat_state().active_conversation(),
+            stack: w.get_modal_stack().iter().collect(),
+        })
+    }
+
+    pub(super) fn session_current(&self, client: &ChatterClient) -> bool {
+        let auth = client.auth_state().get();
+        auth.current_user_id == Some(self.owner) && auth.session_revision == self.session_revision
+    }
+
+    /// Call on the UI thread at completion.
+    pub(super) fn owns_ui(&self, w: &MainWindow, client: &ChatterClient) -> bool {
+        self.session_current(client)
+            && client.chat_state().active_conversation() == self.conversation
+            && w.get_modal_stack().iter().eq(self.stack.iter().cloned())
+    }
+}
+
+/// Success the user navigated away from: say so without moving them.
+pub(super) fn notify_background_success(w: &MainWindow, message: String) {
+    w.set_toast_message(message.into());
+    w.set_toast_variant("success".into());
+    w.set_toast_visible(true);
+}
 
 fn toggle_selected(friend: &mut PrivateGroupFriend) {
     friend.selected = !friend.selected;
@@ -141,6 +184,12 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 Some(PathBuf::from(&icon_path_str))
             };
             tracing::info!(has_icon = pending_icon.is_some(), "[CHANNEL_ICON] on_create_channel entry");
+            let Some(fence) = weak
+                .upgrade()
+                .and_then(|w| RequestFence::capture(&w, &ui_ctx))
+            else {
+                return;
+            };
 
             tokio::spawn(async move {
                 let weak_loading = weak.clone();
@@ -181,8 +230,7 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     Ok(channel) => {
                         let channel_id = channel.id;
                         let channel_id_str: SharedString = channel_id.to_string().into();
-
-                        chat_state.set_active_channel(channel_id);
+                        let channel_name = channel.name.clone();
 
                         // FEAT-5: this branch is unreachable in a default build
                         // — the "AI assistant" template is gated off on
@@ -231,7 +279,18 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         crate::bin_ui::features::sidebar::rebuild_chat_list(&weak, &ui_ctx);
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(w) = weak_modal.upgrade() {
+                                if !fence.session_current(&ui_ctx) {
+                                    return;
+                                }
                                 w.set_create_channel_loading(false);
+                                if !fence.owns_ui(&w, &ui_ctx) {
+                                    notify_background_success(
+                                        &w,
+                                        format!("Channel \"{channel_name}\" created."),
+                                    );
+                                    return;
+                                }
+                                chat_state.set_active_channel(channel_id);
                                 w.set_create_channel_name("".into());
                                 w.set_create_channel_description("".into());
                                 w.set_create_channel_icon_url("".into());
@@ -247,6 +306,9 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         let error_msg = e.to_string();
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(w) = weak.upgrade() {
+                                if !fence.session_current(&ui_ctx) {
+                                    return;
+                                }
                                 w.set_create_channel_loading(false);
                                 w.set_create_channel_error(error_msg.into());
                             }
@@ -353,6 +415,12 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             if selected_friends.is_empty() {
                 return;
             }
+            let Some(fence) = weak
+                .upgrade()
+                .and_then(|w| RequestFence::capture(&w, &ui_ctx))
+            else {
+                return;
+            };
 
             let weak_loading = weak.clone();
             let _ = slint::invoke_from_event_loop(move || {
@@ -372,7 +440,17 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         let weak_success = weak.clone();
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(w) = weak_success.upgrade() {
+                                if !fence.session_current(&ui_ctx) {
+                                    return;
+                                }
                                 w.set_create_channel_loading(false);
+                                if !fence.owns_ui(&w, &ui_ctx) {
+                                    notify_background_success(
+                                        &w,
+                                        format!("Private group \"{name}\" created."),
+                                    );
+                                    return;
+                                }
                                 crate::bin_ui::features::back::close(&w, "create-channel");
                             }
                         });
@@ -381,6 +459,9 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         let error_msg = e.to_string();
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(w) = weak.upgrade() {
+                                if !fence.session_current(&ui_ctx) {
+                                    return;
+                                }
                                 w.set_create_channel_loading(false);
                                 w.set_create_channel_error(error_msg.into());
                             }

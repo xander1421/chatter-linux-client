@@ -168,6 +168,12 @@ pub fn wire_join_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let ui_ctx = ui_ctx.clone();
         let chat_state = chat_state.clone();
         let channel_id_str = channel_id_str.to_string();
+        let Some(fence) = weak
+            .upgrade()
+            .and_then(|w| super::create_channel::RequestFence::capture(&w, &ui_ctx))
+        else {
+            return;
+        };
         tokio::spawn(async move {
             // Set joining state
             let weak_loading = weak.clone();
@@ -184,9 +190,7 @@ pub fn wire_join_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 Ok(channel) => {
                     let channel_id = channel.id;
                     let channel_id_str: SharedString = channel_id.to_string().into();
-
-                    // Set the joined channel as active
-                    chat_state.set_active_channel(channel_id);
+                    let channel_name = channel.name.clone();
 
                     // The joined channel's row comes from core, like every row.
                     crate::bin_ui::features::sidebar::rebuild_chat_list(&weak, &ui_ctx);
@@ -194,8 +198,21 @@ pub fn wire_join_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     let channel_id_for_ui = channel_id_str.clone();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak_modal.upgrade() {
-                            // Close modal and clear form
+                            if !fence.session_current(&ui_ctx) {
+                                return;
+                            }
                             w.set_join_channel_joining(false);
+                            // Membership is kept either way; only the screen
+                            // that asked may be closed or replaced.
+                            if !fence.owns_ui(&w, &ui_ctx) {
+                                super::create_channel::notify_background_success(
+                                    &w,
+                                    format!("Joined \"{channel_name}\"."),
+                                );
+                                return;
+                            }
+                            chat_state.set_active_channel(channel_id);
+                            // Close modal and clear form
                             w.set_join_channel_search_query("".into());
                             w.set_join_channel_selected_id("".into());
                             w.global::<MembershipGlobal>().set_join_input_is_link(false);
@@ -232,6 +249,9 @@ pub fn wire_join_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
+                            if !fence.session_current(&ui_ctx) {
+                                return;
+                            }
                             w.set_join_channel_joining(false);
                             w.set_join_channel_error(error_msg.into());
                         }

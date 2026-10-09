@@ -404,17 +404,17 @@ pub fn open_channel_settings(
         // Core shapes the rows; the images are decoded on the UI thread below
         // (a slint::Image is not Send). This await must stay after the local
         // present above: the roster RPC is what used to hide the screen.
-        let (members, bans, member_error) = load_member_lists(&ui_ctx, &channel_id).await;
+        let (members, bans, member_error, complete) = load_member_lists(&ui_ctx, &channel_id).await;
         paint_if_current(weak_window, ui_ctx, opened, channel_id_str, move |w| {
             if let Some(message) = member_error {
                 if !members.is_empty() {
-                    apply_member_lists(w, &members, bans.as_deref());
+                    apply_member_lists(w, &members, bans.as_deref(), complete);
                 }
                 w.set_channel_settings_loading(false);
                 w.set_channel_settings_error(message.into());
                 return;
             }
-            apply_member_lists(w, &members, bans.as_deref());
+            apply_member_lists(w, &members, bans.as_deref(), complete);
             w.set_channel_settings_loading(false);
             w.set_channel_settings_error("".into());
         });
@@ -425,7 +425,8 @@ type BannedMembers = Option<Vec<chatter_core::domain::channel::BannedMember>>;
 
 /// Fetch the members pane's two lists. Bans come after members: the member
 /// fetch refreshes our local role, which decides whether core fetches bans
-/// at all (`None` = our role cannot see them).
+/// at all (`None` = our role cannot see them). The last field is whether the
+/// member list is the whole roster.
 async fn load_member_lists(
     ui_ctx: &ChatterClient,
     channel_id: &ChannelId,
@@ -433,14 +434,54 @@ async fn load_member_lists(
     Vec<chatter_core::domain::channel::MemberWithProfile>,
     BannedMembers,
     Option<String>,
+    bool,
 ) {
-    let members = match ui_ctx.list_members_with_profiles(channel_id, 100, 0).await {
-        Ok(members) => members,
-        Err(e) => {
-            tracing::warn!(error = %e, "Failed to list channel members");
-            return (vec![], None, Some(format!("Couldn't load members: {e}")));
+    // The server pages the roster; read every page so members past the first
+    // are reachable and the "total" is true. The cap only bounds a runaway
+    // server; reaching it is reported, never shown as the total.
+    const PAGE: u32 = 100;
+    const MAX_PAGES: u32 = 100;
+    let mut members: Vec<chatter_core::domain::channel::MemberWithProfile> = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    let mut page = 0;
+    loop {
+        let rows = match ui_ctx
+            .list_members_with_profiles(channel_id, PAGE, page * PAGE)
+            .await
+        {
+            Ok(rows) => rows,
+            Err(e) => {
+                tracing::warn!(error = %e, page, "Failed to list channel members");
+                let message = if members.is_empty() {
+                    format!("Couldn't load members: {e}")
+                } else {
+                    format!("Couldn't load all members ({} shown): {e}", members.len())
+                };
+                return (members, None, Some(message), false);
+            }
+        };
+        let last = (rows.len() as u32) < PAGE;
+        // A roster change between pages can shift a row onto two pages.
+        members.extend(
+            rows.into_iter()
+                .filter(|m| seen.insert(m.membership.user_id)),
+        );
+        page += 1;
+        if last {
+            break;
         }
-    };
+        if page == MAX_PAGES {
+            return (
+                members,
+                None,
+                Some(format!(
+                    "Only the first {} members are shown.",
+                    PAGE * MAX_PAGES
+                )),
+                false,
+            );
+        }
+    }
     let bans = match ui_ctx.list_banned_members(channel_id).await {
         Ok(bans) => bans,
         Err(e) => {
@@ -449,23 +490,29 @@ async fn load_member_lists(
                 members,
                 None,
                 Some(format!("Couldn't load banned members: {e}")),
+                true,
             );
         }
     };
-    (members, bans, None)
+    (members, bans, None, true)
 }
 
-/// UI thread only (decodes avatars into `slint::Image`s).
+/// UI thread only (decodes avatars into `slint::Image`s). A partial roster
+/// leaves the member count from channel settings rather than calling the
+/// rows that loaded the total.
 fn apply_member_lists(
     w: &MainWindow,
     members: &[chatter_core::domain::channel::MemberWithProfile],
     bans: Option<&[chatter_core::domain::channel::BannedMember]>,
+    complete: bool,
 ) {
     let rows: Vec<ChannelMemberData> = members
         .iter()
         .map(crate::bin_ui::converters::member_to_slint)
         .collect();
-    w.set_channel_settings_member_count(rows.len() as i32);
+    if complete {
+        w.set_channel_settings_member_count(rows.len() as i32);
+    }
     w.set_channel_settings_members(ModelRc::new(VecModel::from(rows)));
     w.set_channel_settings_can_view_bans(bans.is_some());
     let banned: Vec<BannedMemberData> = bans
@@ -484,7 +531,7 @@ fn refresh_member_lists(
     channel_id: ChannelId,
 ) {
     tokio::spawn(async move {
-        let (members, bans, error) = load_member_lists(&ui_ctx, &channel_id).await;
+        let (members, bans, error, complete) = load_member_lists(&ui_ctx, &channel_id).await;
         paint_if_current(
             weak,
             ui_ctx,
@@ -494,7 +541,7 @@ fn refresh_member_lists(
                 if let Some(error) = error {
                     w.set_channel_settings_error(error.into());
                 } else {
-                    apply_member_lists(w, &members, bans.as_deref());
+                    apply_member_lists(w, &members, bans.as_deref(), complete);
                 }
             },
         );

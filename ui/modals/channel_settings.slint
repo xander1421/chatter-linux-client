@@ -196,19 +196,23 @@ export component ChannelSettingsModal inherits Rectangle {
             // left the right pane too narrow: the name/description inputs and
             // the Save Changes button were CLIPPED off the right edge, so
             // channel settings could not be saved at all (§112z). Collapse to
-            // icons there.
+            // icons there — each one a full 48px touch target with a spoken
+            // name, since the visible label is gone.
             Rectangle {
-                width: root.narrow ? 44px : 160px;
+                width: root.narrow ? Spacing.touch-target-min : 160px;
                 background: Colors.inset;
                 border-radius: Spacing.radius-md;
 
                 VerticalLayout {
-                    padding: Spacing.sm;
+                    padding: root.narrow ? 0px : Spacing.sm;
                     spacing: Spacing.xs;
                     alignment: start;
 
                     // General section — Neo nav item
                     Rectangle {
+                        accessible-role: button;
+                        accessible-label: "General";
+                        accessible-action-default => { root.active-section = "general"; }
                         height: root.narrow ? Spacing.touch-target-min : Spacing.button-height;
                         background: root.active-section == "general" ? Colors.surface-hover : transparent;
                         border-radius: Spacing.radius-sm;
@@ -217,9 +221,9 @@ export component ChannelSettingsModal inherits Rectangle {
                             clicked => { root.active-section = "general"; }
 
                             HorizontalLayout {
-                                padding-left: Spacing.sm;
-                                padding-right: Spacing.sm;
-                                alignment: start;
+                                padding-left: root.narrow ? 0px : Spacing.sm;
+                                padding-right: root.narrow ? 0px : Spacing.sm;
+                                alignment: root.narrow ? LayoutAlignment.center : LayoutAlignment.start;
 
                                 // U+2699 and U+26A0 are tofu boxes on the
                                 // Galaxy S9; the whole nav uses the icon set
@@ -230,7 +234,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                     height: 14px;
                                     colorize: root.active-section == "general" ? Colors.text-primary : Colors.text-secondary;
                                 }
-                                Rectangle { width: Spacing.sm; }
+                                if !root.narrow: Rectangle { width: Spacing.sm; }
                                 if !root.narrow: Text {
                                     text: "General";
                                     color: root.active-section == "general" ? Colors.text-primary : Colors.text-secondary;
@@ -243,6 +247,9 @@ export component ChannelSettingsModal inherits Rectangle {
 
                     // Notifications section — Neo nav item
                     Rectangle {
+                        accessible-role: button;
+                        accessible-label: "Notifications";
+                        accessible-action-default => { root.active-section = "notifications"; }
                         height: root.narrow ? Spacing.touch-target-min : Spacing.button-height;
                         background: root.active-section == "notifications" ? Colors.surface-hover : transparent;
                         border-radius: Spacing.radius-sm;
@@ -251,9 +258,9 @@ export component ChannelSettingsModal inherits Rectangle {
                             clicked => { root.active-section = "notifications"; }
 
                             HorizontalLayout {
-                                padding-left: Spacing.sm;
-                                padding-right: Spacing.sm;
-                                alignment: start;
+                                padding-left: root.narrow ? 0px : Spacing.sm;
+                                padding-right: root.narrow ? 0px : Spacing.sm;
+                                alignment: root.narrow ? LayoutAlignment.center : LayoutAlignment.start;
 
                                 Image {
                                     source: Icons.bell;
@@ -261,7 +268,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                     height: 14px;
                                     colorize: root.active-section == "notifications" ? Colors.text-primary : Colors.text-secondary;
                                 }
-                                Rectangle { width: Spacing.sm; }
+                                if !root.narrow: Rectangle { width: Spacing.sm; }
                                 if !root.narrow: Text {
                                     text: "Notifications";
                                     color: root.active-section == "notifications" ? Colors.text-primary : Colors.text-secondary;
@@ -276,6 +283,7 @@ export component ChannelSettingsModal inherits Rectangle {
                     if root.can-manage-members || root.members.length > 0: Rectangle {
                         accessible-role: button;
                         accessible-label: "Members";
+                        accessible-action-default => { root.active-section = "members"; }
                         height: root.narrow ? Spacing.touch-target-min : Spacing.button-height;
                         background: root.active-section == "members" ? Colors.surface-hover : transparent;
                         border-radius: Spacing.radius-sm;
@@ -284,9 +292,9 @@ export component ChannelSettingsModal inherits Rectangle {
                             clicked => { root.active-section = "members"; }
 
                             HorizontalLayout {
-                                padding-left: Spacing.sm;
-                                padding-right: Spacing.sm;
-                                alignment: start;
+                                padding-left: root.narrow ? 0px : Spacing.sm;
+                                padding-right: root.narrow ? 0px : Spacing.sm;
+                                alignment: root.narrow ? LayoutAlignment.center : LayoutAlignment.start;
 
                                 // U+1F465 is a tofu box on the Galaxy S9 (§112u).
                                 Image {
@@ -295,7 +303,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                     height: 14px;
                                     colorize: root.active-section == "members" ? Colors.text-primary : Colors.text-secondary;
                                 }
-                                Rectangle { width: Spacing.sm; }
+                                if !root.narrow: Rectangle { width: Spacing.sm; }
                                 if !root.narrow: Text {
                                     text: "Members";
                                     color: root.active-section == "members" ? Colors.text-primary : Colors.text-secondary;
@@ -308,6 +316,9 @@ export component ChannelSettingsModal inherits Rectangle {
 
                     // Access section — join links, join requests, who can read.
                     if root.has-access-pane: Rectangle {
+                        accessible-role: button;
+                        accessible-label: "Access";
+                        accessible-action-default => { root.active-section = "access"; }
                         height: root.narrow ? Spacing.touch-target-min : Spacing.button-height;
                         background: root.active-section == "access" ? Colors.surface-hover : transparent;
                         border-radius: Spacing.radius-sm;
@@ -316,9 +327,9 @@ export component ChannelSettingsModal inherits Rectangle {
                             clicked => { root.active-section = "access"; }
 
                             HorizontalLayout {
-                                padding-left: Spacing.sm;
-                                padding-right: Spacing.sm;
-                                alignment: start;
+                                padding-left: root.narrow ? 0px : Spacing.sm;
+                                padding-right: root.narrow ? 0px : Spacing.sm;
+                                alignment: root.narrow ? LayoutAlignment.center : LayoutAlignment.start;
 
                                 Image {
                                     source: Icons.link;
@@ -326,7 +337,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                     height: 14px;
                                     colorize: root.active-section == "access" ? Colors.text-primary : Colors.text-secondary;
                                 }
-                                Rectangle { width: Spacing.sm; }
+                                if !root.narrow: Rectangle { width: Spacing.sm; }
                                 if !root.narrow: Text {
                                     text: "Access";
                                     color: root.active-section == "access" ? Colors.text-primary : Colors.text-secondary;
@@ -340,6 +351,9 @@ export component ChannelSettingsModal inherits Rectangle {
                     // Danger zone section: every member can at least leave
                     // (a group's owner can transfer, and block, there).
                     if root.can-archive || root.can-delete || root.can-leave || root.is-private-group: Rectangle {
+                        accessible-role: button;
+                        accessible-label: "Danger Zone";
+                        accessible-action-default => { root.active-section = "destructive"; }
                         height: root.narrow ? Spacing.touch-target-min : Spacing.button-height;
                         background: root.active-section == "destructive" ? Colors.error.with-alpha(0.1) : transparent;
                         border-radius: Spacing.radius-sm;
@@ -348,9 +362,9 @@ export component ChannelSettingsModal inherits Rectangle {
                             clicked => { root.active-section = "destructive"; }
 
                             HorizontalLayout {
-                                padding-left: Spacing.sm;
-                                padding-right: Spacing.sm;
-                                alignment: start;
+                                padding-left: root.narrow ? 0px : Spacing.sm;
+                                padding-right: root.narrow ? 0px : Spacing.sm;
+                                alignment: root.narrow ? LayoutAlignment.center : LayoutAlignment.start;
 
                                 Image {
                                     source: Icons.alert-triangle;
@@ -358,7 +372,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                     height: 14px;
                                     colorize: root.active-section == "destructive" ? Colors.error : Colors.text-secondary;
                                 }
-                                Rectangle { width: Spacing.sm; }
+                                if !root.narrow: Rectangle { width: Spacing.sm; }
                                 if !root.narrow: Text {
                                     text: "Danger Zone";
                                     color: root.active-section == "destructive" ? Colors.error : Colors.text-secondary;
@@ -649,8 +663,12 @@ export component ChannelSettingsModal inherits Rectangle {
 
                             // All messages — Neo selection card
                             Rectangle {
-                                min-height: 44px;
+                                min-height: Spacing.touch-target-min;
                                 background: root.notification-preference == "all" ? Colors.inset : transparent;
+                                accessible-role: button;
+                                accessible-label: "All messages";
+                                accessible-description: root.notification-preference == "all" ? "Selected" : "";
+                                accessible-action-default => { root.change-notification("all"); }
                                 border-radius: Spacing.radius-sm;
 
                                 HorizontalLayout {
@@ -692,8 +710,12 @@ export component ChannelSettingsModal inherits Rectangle {
 
                             // Mentions only — Neo selection card
                             Rectangle {
-                                min-height: 44px;
+                                min-height: Spacing.touch-target-min;
                                 background: root.notification-preference == "mentions" ? Colors.inset : transparent;
+                                accessible-role: button;
+                                accessible-label: "Mentions only";
+                                accessible-description: root.notification-preference == "mentions" ? "Selected" : "";
+                                accessible-action-default => { root.change-notification("mentions"); }
                                 border-radius: Spacing.radius-sm;
 
                                 HorizontalLayout {
@@ -735,8 +757,12 @@ export component ChannelSettingsModal inherits Rectangle {
 
                             // None — Neo selection card
                             Rectangle {
-                                min-height: 44px;
+                                min-height: Spacing.touch-target-min;
                                 background: root.notification-preference == "none" ? Colors.inset : transparent;
+                                accessible-role: button;
+                                accessible-label: "Nothing";
+                                accessible-description: root.notification-preference == "none" ? "Selected" : "";
+                                accessible-action-default => { root.change-notification("none"); }
                                 border-radius: Spacing.radius-sm;
 
                                 HorizontalLayout {
@@ -995,8 +1021,11 @@ export component ChannelSettingsModal inherits Rectangle {
 
                                 // Invite button for private groups (admins/owners only)
                                 if root.is-private-group && root.can-manage-members: Rectangle {
-                                    width: invite-btn-text.width + Spacing.md * 2;
-                                    height: Spacing.button-height;
+                                    width: max(invite-btn-text.width + Spacing.md * 2, Spacing.touch-target-min);
+                                    height: Spacing.touch-target-min;
+                                    accessible-role: button;
+                                    accessible-label: "Invite members";
+                                    accessible-action-default => { root.invite-members(); }
                                     background: invite-btn-touch.has-hover ? Colors.action-hover : Colors.action-fill;
                                     border-radius: Spacing.radius-sm;
 
@@ -1017,8 +1046,11 @@ export component ChannelSettingsModal inherits Rectangle {
 
                                 // Invite button for regular channels (admins/owners only)
                                 if !root.is-private-group && root.can-manage-members: Rectangle {
-                                    width: invite-ch-btn-text.width + Spacing.md * 2;
-                                    height: Spacing.button-height;
+                                    width: max(invite-ch-btn-text.width + Spacing.md * 2, Spacing.touch-target-min);
+                                    height: Spacing.touch-target-min;
+                                    accessible-role: button;
+                                    accessible-label: "Invite members";
+                                    accessible-action-default => { root.invite-channel-members(); }
                                     background: invite-ch-btn-touch.has-hover ? Colors.action-hover : Colors.action-fill;
                                     border-radius: Spacing.radius-sm;
 
@@ -1151,13 +1183,16 @@ export component ChannelSettingsModal inherits Rectangle {
                                         // action row below. Only if can manage and not owner.
                                         // Also for a moderator/admin who can only mute or ban.
                                         if (root.can-manage-members && member.role != "owner") || member.can-ban || member.can-mute || member.can-make-owner || member.can-block: Rectangle {
-                                            width: 44px;
-                                            height: 44px;
+                                            width: Spacing.touch-target-min;
+                                            height: Spacing.touch-target-min;
                                             border-radius: Spacing.radius-sm;
                                             background: member-more.has-hover || root.role-picker-user == member.user-id
                                                 ? Colors.surface-hover : transparent;
                                             accessible-role: button;
-                                            accessible-label: "Member actions";
+                                            accessible-label: "Actions for " + member.display-name;
+                                            accessible-action-default => {
+                                                root.role-picker-user = root.role-picker-user == member.user-id ? "" : member.user-id;
+                                            }
 
                                             // Icons.more-vertical, not U+22EE (no glyph in Inter).
                                             Image {

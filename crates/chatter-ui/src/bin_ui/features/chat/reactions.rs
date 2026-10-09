@@ -54,6 +54,13 @@ pub fn wire_reaction_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
                     tracing::error!(error = %e, conversation_type = ?conversation,
                     sender_id = %target_author, timestamp = target_sent_timestamp,
                     "Failed to toggle reaction");
+                    super::delete::notify_action_failed(
+                        &weak_window,
+                        &client,
+                        owner,
+                        session_revision,
+                        format!("Could not update the reaction: {e}"),
+                    );
                     return;
                 }
                 let auth = client.auth_state().get();
