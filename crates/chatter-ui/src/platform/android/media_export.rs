@@ -12,6 +12,10 @@ pub struct ExportSession {
 
 impl ExportSession {
     pub fn begin(name: &str, mime: &str, copy: bool) -> Result<Self, String> {
+        Self::begin_kind(name, mime, copy, false)
+    }
+
+    fn begin_kind(name: &str, mime: &str, copy: bool, pdf: bool) -> Result<Self, String> {
         let mut env = activity::jni_env()?;
         let activity = activity::activity()?;
         let name = env
@@ -20,7 +24,11 @@ impl ExportSession {
         let mime = env.new_string(mime).map_err(|_| "Type conversion failed")?;
         let result = env.call_method(
             activity.as_obj(),
-            "beginViewerMediaExport",
+            if pdf {
+                "beginViewerPdfExport"
+            } else {
+                "beginViewerMediaExport"
+            },
             "(Ljava/lang/String;Ljava/lang/String;Z)[J",
             &[
                 JValue::Object(&name),
@@ -57,7 +65,7 @@ impl ExportSession {
     pub fn finish(mut self) -> Result<(), String> {
         self.file.take(); // close before publishing the MediaStore row / clipboard URI
         let result = finish(self.token, true);
-        self.completed = true;
+        self.completed = result.is_ok();
         result
     }
 }
@@ -101,4 +109,66 @@ pub fn open_downloads() -> Result<(), String> {
     } else {
         Ok(())
     }
+}
+
+/// Export authenticated attachment ranges without allocating whole plaintext.
+pub fn save_attachment(
+    client: &chatter_core::client::ChatterClient,
+    id: &chatter_core::domain::ids::AttachmentId,
+    revision: u64,
+) -> Result<(), String> {
+    use std::io::Write;
+    use zeroize::Zeroize;
+    let check = || {
+        if client.auth_state().get().session_revision == revision {
+            Ok(())
+        } else {
+            Err("Session changed".to_string())
+        }
+    };
+    check()?;
+    let attachment = client.get_attachment(id).ok_or("Attachment unavailable")?;
+    // Existing helper authenticates ciphertext before a destination is created.
+    let reader = client
+        .open_attachment_range(id)
+        .map_err(|_| "Authenticated source unavailable")?;
+    check()?;
+    let mut session = ExportSession::begin(
+        &attachment.metadata.name,
+        &attachment.metadata.mime_type,
+        false,
+    )?;
+    let output = session
+        .file
+        .as_mut()
+        .ok_or("Export descriptor unavailable")?;
+    let mut offset = 0;
+    while offset < reader.plaintext_size() {
+        check()?;
+        let expected = (reader.plaintext_size() - offset).min(64 * 1024);
+        let mut chunk = reader.read_range(offset, expected);
+        if chunk.len() != expected {
+            chunk.zeroize();
+            return Err("Incomplete authenticated read".into());
+        }
+        let result = output.write_all(&chunk);
+        chunk.zeroize();
+        result.map_err(|_| "Download write failed")?;
+        offset += expected;
+    }
+    output.sync_all().map_err(|_| "Unable to finish download")?;
+    check()?;
+    session.finish()
+}
+
+/// Only explicit PDF export can create a file in the provider's PDF directory.
+pub fn prepare_pdf(name: &str, data: &[u8]) -> Result<ExportSession, String> {
+    use std::io::Write;
+    let mut session = ExportSession::begin_kind(name, "application/pdf", false, true)?;
+    let file = session.file.as_mut().ok_or("PDF descriptor unavailable")?;
+    for chunk in data.chunks(64 * 1024) {
+        file.write_all(chunk).map_err(|_| "PDF write failed")?;
+    }
+    file.sync_all().map_err(|_| "Unable to finish PDF")?;
+    Ok(session)
 }

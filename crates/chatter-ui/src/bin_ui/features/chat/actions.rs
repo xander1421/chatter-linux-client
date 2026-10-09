@@ -261,6 +261,8 @@ pub fn copy_text(text: &str) {
 /// Downloads all attachments from a message to the user's Downloads folder.
 pub fn wire_download_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
+    #[cfg(target_os = "android")]
+    let weak = window.as_weak();
 
     window.on_download_message(move |sender_id: SharedString, timestamp_ns: SharedString| {
         let sender_id_str = sender_id.to_string();
@@ -268,6 +270,10 @@ pub fn wire_download_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let ui_ctx = ui_ctx.clone();
 
         let conversation = ui_ctx.chat_state().active_conversation();
+        #[cfg(target_os = "android")]
+        let weak = weak.clone();
+        #[cfg(target_os = "android")]
+        let revision = ui_ctx.auth_state().get().session_revision;
 
         std::thread::spawn(move || {
             // Parse sender_id for Signal-style lookup
@@ -303,6 +309,7 @@ pub fn wire_download_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 return;
             }
 
+            #[cfg(not(target_os = "android"))]
             let download_dir = dirs::download_dir().unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
 
             for att_id in attachment_ids {
@@ -314,6 +321,37 @@ pub fn wire_download_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     }
                 };
 
+                #[cfg(target_os = "android")]
+                {
+                    let client = ui_ctx.clone();
+                    let weak = weak.clone();
+                    ui_ctx.runtime_handle().spawn(async move {
+                        let result = async {
+                            if client.auth_state().get().session_revision != revision {
+                                return Err("Session changed".to_string());
+                            }
+                            if attachment.content_location == chatter_core::domain::attachment::ContentLocation::NotDownloaded {
+                                client.download_attachment_to_filesystem(&att_id).await
+                                    .map_err(|_| "Unable to download attachment".to_string())?;
+                            }
+                            crate::platform::android::media_export::save_attachment(&client, &att_id, revision)
+                        }.await;
+                        let _ = weak.upgrade_in_event_loop(move |w| {
+                            if client.auth_state().get().session_revision != revision { return; }
+                            let (message, variant) = match result {
+                                Ok(()) => ("Saved to Chatter downloads".to_string(), "success"),
+                                Err(error) => (error, "error"),
+                            };
+                            w.set_toast_message(message.into());
+                            w.set_toast_variant(variant.into());
+                            w.set_toast_visible(true);
+                        });
+                    });
+                    continue;
+                }
+
+                #[cfg(not(target_os = "android"))]
+                {
                 let filename = attachment.metadata.name.clone();
                 let dest_path = download_dir.join(&filename);
 
@@ -360,6 +398,7 @@ pub fn wire_download_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             tracing::error!(error = %e, "Failed to decrypt attachment");
                         }
                     }
+                }
                 }
             }
         });

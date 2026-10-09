@@ -330,6 +330,34 @@ fn handle_local_attachment(
         }
     }
 
+    #[cfg(target_os = "android")]
+    if !is_audio
+        && !is_image
+        && FileCategory::from_mime_and_filename(&mime_type, &filename) != FileCategory::Video
+        && !FileMetadata::is_code_file(&filename, &mime_type)
+        && mime_type != "application/pdf"
+        && !filename.to_lowercase().ends_with(".pdf")
+    {
+        let revision = ui_ctx.auth_state().get().session_revision;
+        let result =
+            crate::platform::android::media_export::save_attachment(&ui_ctx, &att_id, revision);
+        let _ = weak.upgrade_in_event_loop(move |w| {
+            if !super::media_viewer::is_current(request)
+                || ui_ctx.auth_state().get().session_revision != revision
+            {
+                return;
+            }
+            let (message, variant) = match result {
+                Ok(()) => ("Saved to Chatter downloads".to_string(), "success"),
+                Err(error) => (error, "error"),
+            };
+            w.set_toast_message(message.into());
+            w.set_toast_variant(variant.into());
+            w.set_toast_visible(true);
+        });
+        return;
+    }
+
     // Decrypt synchronously (we're already in a background thread)
     let secure_buffer = match ui_ctx.decrypt_attachment_auto(&att_id) {
         Ok(buffer) => buffer,
@@ -474,7 +502,23 @@ fn display_decrypted_content(
         // For other files, show Save As dialog. Spawned, never blocked on:
         // this runs both on a plain thread and inside a runtime task, and
         // `block_on` in the latter panics.
+        #[cfg(not(target_os = "android"))]
         handle.spawn(save_file_from_buffer(secure_buffer, filename.to_string()));
+        #[cfg(target_os = "android")]
+        {
+            // Android generic files are exported from authenticated ranges
+            // before decryption; refuse a bypass of that session-guarded path.
+            let _ = (secure_buffer, filename);
+            let _ = weak.upgrade_in_event_loop(move |w| {
+                if !super::media_viewer::is_current(request) {
+                    return;
+                }
+                w.set_toast_message("Unable to save attachment. Reopen it and try again.".into());
+                w.set_toast_variant("error".into());
+                w.set_toast_visible(true);
+            });
+            let _ = handle;
+        }
     }
 }
 
@@ -849,9 +893,7 @@ fn display_code_from_buffer(
     let filename_for_ui = filename.to_string();
     let filename_for_state = filename.to_string();
 
-    // Store content for "open external" feature
-    preview_state::set_code_preview_content(filename_for_state, data);
-
+    // Install content only after validating the viewer request on the UI thread.
     let line_count = text.lines().count() as i32;
 
     let _ = slint::invoke_from_event_loop(move || {
@@ -859,6 +901,8 @@ fn display_code_from_buffer(
             if !super::media_viewer::is_current(request) {
                 return;
             }
+            preview_state::clear_code_preview();
+            preview_state::set_code_preview_content(filename_for_state, data);
             w.set_code_preview_filename(filename_for_ui.into());
             w.set_code_preview_language("".into());
             w.set_code_preview_line_count(line_count);
@@ -878,23 +922,27 @@ fn display_pdf_from_buffer(
     let data = secure_buffer.as_slice().to_vec();
     let filename_for_ui = filename.to_string();
     let filename_for_state = filename.to_string();
+    #[cfg(feature = "desktop")]
     let data_for_render = data.clone();
 
-    // Store content for "open external" feature
-    preview_state::set_pdf_preview_content(filename_for_state, data);
-
+    // Install content only after validating the viewer request on the UI thread.
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak.upgrade() {
             if !super::media_viewer::is_current(request) {
                 return;
             }
+            preview_state::clear_pdf_preview();
+            preview_state::set_pdf_preview_content(filename_for_state, data);
             w.set_pdf_preview_filename(filename_for_ui.into());
             w.set_pdf_preview_page_count(0);
             w.set_pdf_preview_error("".into());
             w.set_pdf_preview_visible(true);
 
             // Render first page inline (desktop only — uses pdfium-render)
+            #[cfg(feature = "desktop")]
             super::pdf_preview::render_pdf_preview(&w, &data_for_render);
+            #[cfg(not(feature = "desktop"))]
+            super::pdf_preview::render_pdf_preview(&w, &[]);
 
             tracing::info!("Opened PDF preview");
         }
@@ -937,7 +985,7 @@ async fn save_file_from_buffer(
     }
 }
 
-#[cfg(any(target_os = "android", target_os = "ios"))]
+#[cfg(target_os = "ios")]
 async fn save_file_from_buffer(
     _secure_buffer: chatter_core::prelude::SecureBuffer,
     _filename: String,
@@ -1027,6 +1075,28 @@ fn handle_download_attachment(
                     file_size,
                     cfg!(target_os = "android"),
                 ) {
+                    handle_local_attachment(
+                        weak,
+                        ui_ctx_for_task.clone(),
+                        att_id,
+                        att_id_str.into(),
+                        &file_name,
+                        file_size,
+                        &mime_type,
+                        request,
+                    );
+                    return;
+                }
+
+                #[cfg(target_os = "android")]
+                if !mime_type.starts_with("audio/")
+                    && !FileMetadata::is_image_file(&file_name, &mime_type)
+                    && FileCategory::from_mime_and_filename(&mime_type, &file_name)
+                        != FileCategory::Video
+                    && !FileMetadata::is_code_file(&file_name, &mime_type)
+                    && mime_type != "application/pdf"
+                    && !file_name.to_lowercase().ends_with(".pdf")
+                {
                     handle_local_attachment(
                         weak,
                         ui_ctx_for_task.clone(),

@@ -27,7 +27,21 @@ pub fn wire_code_preview_callbacks(window: &MainWindow) {
         if let Some(w) = weak_window.upgrade() {
             let content = w.get_code_preview_plain_text().to_string();
             let line_count = w.get_code_preview_line_count();
-            #[cfg(any(target_os = "android", target_os = "ios"))]
+            #[cfg(target_os = "android")]
+            {
+                let result = crate::platform::android::clipboard::set_text("Code", &content);
+                let (message, variant) = match result {
+                    Ok(()) => (format!("Copied {line_count} lines"), "success"),
+                    Err(error) => {
+                        tracing::error!(%error, "Code copy failed");
+                        ("Unable to copy code".to_string(), "error")
+                    }
+                };
+                w.set_toast_message(message.into());
+                w.set_toast_variant(variant.into());
+                w.set_toast_visible(true);
+            }
+            #[cfg(target_os = "ios")]
             let _ = (content, line_count);
             #[cfg(not(any(target_os = "android", target_os = "ios")))]
             std::thread::spawn(move || {

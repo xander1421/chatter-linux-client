@@ -8,7 +8,6 @@ use chatter_core::media::{FilePicker, FilePickerConfig};
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use chatter_core::system::ExternalOpener;
 
-#[cfg(feature = "desktop")]
 use slint::ComponentHandle;
 
 use crate::MainWindow;
@@ -18,6 +17,7 @@ use crate::bin_ui::preview_state;
 pub fn wire_pdf_preview_callbacks(window: &MainWindow) {
     // Close PDF preview
     window.on_close_pdf_preview(|| {
+        super::media_viewer::invalidate();
         preview_state::clear_pdf_preview();
         #[cfg(feature = "desktop")]
         pdf_renderer::clear();
@@ -25,7 +25,34 @@ pub fn wire_pdf_preview_callbacks(window: &MainWindow) {
     });
 
     // Open PDF in external viewer - uses Save As for secure export
-    window.on_open_pdf_external(|| {
+    let weak = window.as_weak();
+    window.on_open_pdf_external(move || {
+        #[cfg(target_os = "android")]
+        if let Some(mut content) = preview_state::get_pdf_preview_content() {
+            let weak = weak.clone();
+            let request = super::media_viewer::current_request();
+            std::thread::spawn(move || {
+                let result = crate::platform::android::media_export::prepare_pdf(&content.filename, &content.data);
+                zeroize::Zeroize::zeroize(&mut content.data);
+                let _ = weak.upgrade_in_event_loop(move |w| {
+                    // Dropping a stale session removes its unpublished cache file.
+                    if !super::media_viewer::is_current(request) || !w.get_pdf_preview_visible() {
+                        return;
+                    }
+                    let result = result.and_then(|session| session.finish());
+                    if let Err(error) = result {
+                        tracing::warn!(%error, "PDF external open failed");
+                        w.set_pdf_preview_error("Unable to open PDF. Install a PDF viewer and try Open externally again.".into());
+                    }
+                });
+            });
+        } else if let Some(w) = weak.upgrade() {
+            w.set_pdf_preview_error(
+                "PDF content is no longer available. Reopen the attachment.".into(),
+            );
+        }
+        #[cfg(not(target_os = "android"))]
+        let _ = &weak;
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         if let Some(content) = preview_state::get_pdf_preview_content() {
             // Show Save As dialog then open with system handler
@@ -56,7 +83,7 @@ pub fn wire_pdf_preview_callbacks(window: &MainWindow) {
         } else {
             tracing::warn!("No PDF content available for external open");
         }
-        #[cfg(any(target_os = "android", target_os = "ios"))]
+        #[cfg(target_os = "ios")]
         tracing::warn!("Open external not supported on mobile");
     });
 
@@ -90,8 +117,9 @@ pub fn render_pdf_preview(window: &MainWindow, pdf_data: &[u8]) {
 }
 
 #[cfg(not(feature = "desktop"))]
-pub fn render_pdf_preview(_window: &MainWindow, _pdf_data: &[u8]) {
-    // No in-app rendering on mobile — external viewer only
+pub fn render_pdf_preview(window: &MainWindow, _pdf_data: &[u8]) {
+    window.set_pdf_preview_image(slint::Image::default());
+    window.set_pdf_preview_error("Inline PDF preview is unavailable on this device. Use Open externally to view this PDF in another app.".into());
 }
 
 // ==========================================================================

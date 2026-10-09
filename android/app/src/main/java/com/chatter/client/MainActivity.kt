@@ -52,6 +52,10 @@ class MainActivity : GameActivity() {
         ViewerMediaExport.begin(this, name, mime, copy)
 
     @Suppress("unused")
+    fun beginViewerPdfExport(name: String, mime: String, copy: Boolean): LongArray? =
+        ViewerMediaExport.begin(this, name, mime, copy, pdf = true)
+
+    @Suppress("unused")
     fun finishViewerMediaExport(token: Long, success: Boolean): Boolean =
         ViewerMediaExport.finish(this, token, success)
 
