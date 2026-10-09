@@ -617,8 +617,9 @@ impl ConversationHandle {
         }
     }
 
-    /// Send a pin/unpin and persist locally. A Saved pin never leaves this
-    /// device ([`Self::pin_saved_message`]); the other kinds send the control.
+    /// Send a pin/unpin and persist locally. A Saved pin is written here and
+    /// snapshot-synced to our own devices only ([`Self::pin_saved_message`]);
+    /// the other kinds send the control.
     pub async fn send_pin(
         &self,
         target_author: &UserId,
@@ -633,14 +634,16 @@ impl ConversationHandle {
             let own = auth.current_user_id.ok_or_else(|| {
                 ConversationError::Other("Pinning requires a signed-in user".into())
             })?;
-            return self.pin_saved_message(
-                &scope,
-                own,
-                auth.session_revision,
-                target_author,
-                target_sent_timestamp,
-                unpin,
-            );
+            return self
+                .pin_saved_message(
+                    &scope,
+                    own,
+                    auth.session_revision,
+                    target_author,
+                    target_sent_timestamp,
+                    unpin,
+                )
+                .await;
         }
         let new_pinned = !unpin;
         // Sub-services on the proto side still take &str.
@@ -706,22 +709,22 @@ impl ConversationHandle {
         }
     }
 
-    /// Pin or unpin one of our Saved records. Local only, like
-    /// [`Self::edit_saved_message`]: the stored row is read in the Saved
-    /// scope, gated by [`pinned_saved_record`] and its pin columns written
-    /// at that key (`MessageRepository::set_pinned_scoped`, never the whole
-    /// row, so a body edit landing in between is kept), and a storage
+    /// Pin or unpin one of our Saved records, then sync it. The stored row
+    /// is read in the Saved scope, gated by [`pinned_saved_record`], and its
+    /// pin columns written at that key together with the record's pin clock
+    /// (`SavedSyncRepository::apply_local_pin`: one transaction, never the
+    /// whole row, so a body edit landing in between is kept); a storage
     /// failure or a vanished row is this call's error, never a silent
-    /// success. Nothing goes to the server — the Saved
-    /// id is our own user id, not a channel a pin control may be sent to —
-    /// and nothing reaches linked devices: `SavedMessageSync` carries no pin
-    /// state, so a sibling device keeps its own pins until that proto grows
-    /// one. The emitted `MessagePinned`/`MessageUnpinned` carries the real
-    /// row id and the `SavedMessages` kind, so a same-id channel or DM view
-    /// never takes it. `own` and `session_revision` are the snapshot the
-    /// scope was resolved under; the write happens under the same ones or
-    /// not at all.
-    fn pin_saved_message(
+    /// success. Nothing goes to the server — the Saved id is our own user
+    /// id, not a channel a pin control may be sent to. The row as stored
+    /// then goes to our linked devices as a `SavedMessageSync` snapshot
+    /// (`MessageService::sync_saved_record`, best effort: a device that was
+    /// unreachable is not retried from here). The emitted
+    /// `MessagePinned`/`MessageUnpinned` carries the real row id and the
+    /// `SavedMessages` kind, so a same-id channel or DM view never takes it.
+    /// `own` and `session_revision` are the snapshot the scope was resolved
+    /// under; the write happens under the same ones or not at all.
+    async fn pin_saved_message(
         &self,
         scope: &crate::domain::reaction::ReactionScope,
         own: UserId,
@@ -731,12 +734,14 @@ impl ConversationHandle {
         unpin: bool,
     ) -> ConversationResult {
         use crate::events::DomainEvent;
+        use crate::storage::repositories::{PinWrite, SavedSyncRepository};
         if *target_author != own {
             return Err(ConversationError::Other(
                 "Only your own Saved message can be pinned".into(),
             ));
         }
-        let repo = &self.client.messages().message_repo;
+        let messages = self.client.messages();
+        let repo = &messages.message_repo;
         let stored = scoped_stored_message(repo, scope, &own, target_sent_timestamp)?;
         let row = pinned_saved_record(&stored, own, !unpin)?;
         let now = self.client.auth_state().get();
@@ -745,10 +750,21 @@ impl ConversationHandle {
                 "Account changed while pinning".into(),
             ));
         }
-        if !repo.set_pinned_scoped(scope, &own, target_sent_timestamp, row.is_pinned)? {
-            return Err(ConversationError::Other(
-                "Saved message is no longer there".into(),
-            ));
+        let now_ns = crate::util::time::TimestampNanos::now().as_u64();
+        match SavedSyncRepository::new(repo.db()).apply_local_pin(
+            scope,
+            &own,
+            target_sent_timestamp,
+            &row.id,
+            row.is_pinned,
+            now_ns,
+        )? {
+            PinWrite::Applied { .. } => {}
+            PinWrite::NoRow | PinWrite::Stale => {
+                return Err(ConversationError::Other(
+                    "Saved message is no longer there".into(),
+                ));
+            }
         }
         let event = if unpin {
             DomainEvent::MessageUnpinned {
@@ -768,6 +784,10 @@ impl ConversationHandle {
             }
         };
         self.client.event_bus().emit_domain(event);
+        // The row as it is now stored, pin clock included, is what siblings get.
+        if let Ok(Some(written)) = repo.get(&row.id) {
+            messages.sync_saved_record(&written).await;
+        }
         Ok(())
     }
 
@@ -796,7 +816,9 @@ impl ConversationHandle {
                     "Only your own Saved message can be edited".into(),
                 ));
             }
-            return self.edit_saved_message(&scope, target_sent_timestamp, new_text);
+            return self
+                .edit_saved_message(&scope, target_sent_timestamp, new_text)
+                .await;
         }
         let result = self.send_edit_inner(target_sent_timestamp, new_text).await;
         if result.is_ok() {
@@ -805,18 +827,19 @@ impl ConversationHandle {
         result
     }
 
-    /// Edit one of our Saved records in place. Local only: the stored row is
-    /// read in the Saved scope, rewritten by [`edited_saved_record`] and
-    /// written back whole (`MessageRepository::update`), so a storage
-    /// failure is this call's error, never a silent success. Nothing goes to
-    /// the server — the Saved id is our own user id, not a channel a
-    /// sender-key control may be sent to — and nothing reaches linked
-    /// devices: `SavedMessageSync` has no edit form and a re-sent one is
-    /// dropped as a duplicate on arrival (`store_synced_saved_message`), so a
-    /// sibling device keeps the old text until that proto grows an edit. The
-    /// emitted `MessageEdited` carries the real row id and the
-    /// `SavedMessages` kind, so a same-id channel or DM row is never patched.
-    fn edit_saved_message(
+    /// Edit one of our Saved records in place, then sync it. The stored row
+    /// is read in the Saved scope, rewritten by [`edited_saved_record`] and
+    /// its body columns written back (`MessageRepository::set_body_scoped`),
+    /// so a storage failure is this call's error, never a silent success.
+    /// Nothing goes to the server — the Saved id is our own user id, not a
+    /// channel a sender-key control may be sent to. The row as stored then
+    /// goes to our linked devices as a `SavedMessageSync` snapshot whose
+    /// `edited_at` orders it against their copy
+    /// (`MessageService::sync_saved_record`, best effort: a device that was
+    /// unreachable is not retried from here). The emitted `MessageEdited`
+    /// carries the real row id and the `SavedMessages` kind, so a same-id
+    /// channel or DM row is never patched.
+    async fn edit_saved_message(
         &self,
         scope: &crate::domain::reaction::ReactionScope,
         target_sent_timestamp: u64,
@@ -826,7 +849,8 @@ impl ConversationHandle {
         let own = auth
             .current_user_id
             .ok_or_else(|| ConversationError::Other("Editing requires a signed-in user".into()))?;
-        let repo = &self.client.messages().message_repo;
+        let messages = self.client.messages();
+        let repo = &messages.message_repo;
         let stored = scoped_stored_message(repo, scope, &own, target_sent_timestamp)?;
         let edited = edited_saved_record(&stored, own, new_text)?;
         // The scope was resolved under this account and session; the write
@@ -861,6 +885,10 @@ impl ConversationHandle {
                 author_id: own,
                 target_sent_timestamp,
             });
+        // The row as it is now stored, edit clock included, is what siblings get.
+        if let Ok(Some(written)) = repo.get(&edited.id) {
+            messages.sync_saved_record(&written).await;
+        }
         Ok(())
     }
 

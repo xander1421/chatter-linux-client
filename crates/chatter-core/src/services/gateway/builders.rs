@@ -360,23 +360,14 @@ pub fn build_delete_for_me_content(
 
 /// Create a Content proto for saved message sync (Note to Self multi-device).
 ///
-/// Follows Signal's approach: the message content is sent as a sync message
-/// to the user's own devices. Signal Protocol device sessions provide encryption —
-/// no application-level encryption needed.
-pub fn build_saved_message_sync_content(
-    message_id: &str,
-    text: &str,
-    sent_at: u64,
-    attachment_ids: Vec<String>,
-) -> Content {
+/// `sync` is the full snapshot of one Saved record (see the proto): creation,
+/// edit and pin all send this. Signal Protocol device sessions provide the
+/// encryption — no application-level encryption needed. The envelope clock
+/// is the snapshot's newest part, so each change is a distinct transcript.
+pub fn build_saved_message_sync_content(sync: SavedMessageSync) -> Content {
     Content {
-        timestamp: sent_at,
-        content: Some(content::Content::SavedMessageSync(SavedMessageSync {
-            text: text.to_string(),
-            message_id: message_id.to_string(),
-            sent_at,
-            attachment_ids,
-        })),
+        timestamp: sync.sent_at.max(sync.edited_at).max(sync.pin_changed_at),
+        content: Some(content::Content::SavedMessageSync(sync)),
         ..Default::default()
     }
 }

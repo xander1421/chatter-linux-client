@@ -178,19 +178,14 @@ pub enum InboxEvent {
         /// the 48h edit window is measured on it, as Signal does.
         server_timestamp: u64,
     },
-    /// Saved message synced from another device (Note to Self). `sender_id`
-    /// is the sealed-sender identity; only our own is accepted.
+    /// Snapshot of one Saved record (Note to Self) from another of our
+    /// devices: creation, edit or pin. `sender_id` is the sealed-sender
+    /// identity; only our own is accepted.
     SavedMessageSync {
         /// Sender (must be our own user).
         sender_id: UserId,
-        /// Message ID (UUID, same across all devices).
-        message_id: String,
-        /// Message text.
-        text: String,
-        /// When the message was sent (nanoseconds since epoch).
-        sent_at: u64,
-        /// Attachment IDs.
-        attachment_ids: Vec<String>,
+        /// The snapshot, applied whole by `MessageService::apply_saved_message_sync`.
+        sync: crate::proto::content_v1::SavedMessageSync,
     },
     /// Delete for everyone received (peer wants us to delete).
     DmDeleteForEveryone {

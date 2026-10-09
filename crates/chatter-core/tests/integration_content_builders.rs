@@ -415,15 +415,29 @@ fn test_build_delete_for_everyone() {
 /// Test building a saved message sync content.
 #[test]
 fn test_build_saved_message_sync() {
-    let content = build_saved_message_sync_content(
-        "msg-id-123",
-        "Important note",
-        9999,
-        vec!["att-1".to_string(), "att-2".to_string()],
-    );
+    use chatter_core::proto::content_v1::SavedMessageSync;
+    let content = build_saved_message_sync_content(SavedMessageSync {
+        text: "Important note".into(),
+        message_id: "msg-id-123".into(),
+        sent_at: 9999,
+        attachment_ids: vec!["att-1".to_string(), "att-2".to_string()],
+        edited_at: 12_000,
+        pinned: true,
+        pin_changed_at: 15_000,
+        ..Default::default()
+    });
 
-    // Saved message sync wraps text and attachment IDs for multi-device sync
-    assert!(content.content.is_some(), "Should have content");
+    // The snapshot travels whole; the envelope clock is its newest part so
+    // an edit or pin of the same record is a distinct transcript.
+    assert_eq!(content.timestamp, 15_000);
+    match content.content {
+        Some(content::Content::SavedMessageSync(sync)) => {
+            assert_eq!(sync.message_id, "msg-id-123");
+            assert_eq!(sync.attachment_ids.len(), 2);
+            assert!(sync.pinned);
+        }
+        other => panic!("expected SavedMessageSync, got {other:?}"),
+    }
 }
 
 // ---------------------------------------------------------------------------

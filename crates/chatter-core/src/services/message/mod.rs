@@ -22,6 +22,7 @@ pub mod conversion;
 pub mod core;
 mod pin;
 mod saved;
+pub use saved::SavedSyncOutcome;
 mod server_dm;
 pub use call_event::ChannelCallPhase;
 mod receipts;

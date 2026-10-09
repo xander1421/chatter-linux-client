@@ -29,6 +29,15 @@ pub struct UnifiedMessageRepository {
     db: Arc<Database>,
 }
 
+impl UnifiedMessageRepository {
+    /// The database this repository writes, for sibling repositories that
+    /// must write a row of theirs in the same transaction as a message
+    /// (`SavedSyncRepository`).
+    pub(crate) fn db(&self) -> Arc<Database> {
+        Arc::clone(&self.db)
+    }
+}
+
 /// Visible projection changes and exact outgoing completion are separate contracts.
 pub(crate) struct ReactionWriteOutcome {
     pub changed: bool,

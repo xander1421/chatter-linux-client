@@ -1155,34 +1155,66 @@ impl InboxEventProcessor {
                 }
             }
 
-            InboxEvent::SavedMessageSync {
-                sender_id,
-                message_id,
-                text,
-                sent_at,
-                attachment_ids,
-            } => {
+            InboxEvent::SavedMessageSync { sender_id, sync } => {
                 // A peer must never write into our Saved Messages.
-                if self.message_service.current_user_id().ok().as_ref() != Some(sender_id) {
+                let own = self.message_service.current_user_id().ok();
+                if own.as_ref() != Some(sender_id) {
                     tracing::warn!(sender_id = %sender_id, "SavedMessageSync from another user dropped");
                     return;
                 }
-                // Saved message from another device — store locally
-                match self.message_service.store_synced_saved_message(
-                    message_id,
-                    text,
-                    *sent_at,
-                    attachment_ids.clone(),
-                ) {
-                    Ok(message) => {
+                let Some(own) = own else { return };
+                // The snapshot is applied to storage first; the events then
+                // carry the stored row, the same ones a local edit or pin
+                // emits, so state and UI take them on the one path.
+                use crate::services::message::SavedSyncOutcome;
+                match self.message_service.apply_saved_message_sync(sync) {
+                    Ok(SavedSyncOutcome::Created(message)) => {
                         self.event_bus
                             .emit_domain(DomainEvent::SavedMessageSynced { message });
                     }
+                    Ok(SavedSyncOutcome::Updated {
+                        message,
+                        body_changed,
+                        pin_changed,
+                    }) => {
+                        if body_changed {
+                            self.event_bus.emit_domain(DomainEvent::MessageEdited {
+                                message_id: message.id,
+                                new_content: message.content.clone(),
+                                channel_id: message.conversation_id,
+                                conversation_type: message.conversation_type,
+                                author_id: own,
+                                target_sent_timestamp: message.sent_at,
+                            });
+                        }
+                        match pin_changed {
+                            Some(true) => {
+                                self.event_bus.emit_domain(DomainEvent::MessagePinned {
+                                    message_id: message.id,
+                                    pinner_id: own,
+                                    channel_id: message.conversation_id,
+                                    conversation_type: message.conversation_type,
+                                    target_sent_timestamp: message.sent_at,
+                                });
+                            }
+                            Some(false) => {
+                                self.event_bus.emit_domain(DomainEvent::MessageUnpinned {
+                                    message_id: message.id,
+                                    unpinner_id: own,
+                                    channel_id: message.conversation_id,
+                                    conversation_type: message.conversation_type,
+                                    target_sent_timestamp: message.sent_at,
+                                });
+                            }
+                            None => {}
+                        }
+                    }
+                    Ok(SavedSyncOutcome::Unchanged) => {}
                     Err(e) => {
                         tracing::warn!(
-                            message_id,
+                            message_id = %sync.message_id,
                             error = %e,
-                            "Failed to store synced saved message"
+                            "Failed to apply synced saved message"
                         );
                     }
                 }

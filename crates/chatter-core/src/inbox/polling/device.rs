@@ -2130,13 +2130,10 @@ pub fn dispatch_control_content(
             });
             stats.write().messages_processed += 1;
         }
-        content::Content::SavedMessageSync(msg) => {
+        content::Content::SavedMessageSync(sync) => {
             let _ = event_tx.send(InboxEvent::SavedMessageSync {
                 sender_id: *sender_id,
-                message_id: msg.message_id,
-                text: msg.text,
-                sent_at: msg.sent_at,
-                attachment_ids: msg.attachment_ids,
+                sync,
             });
             stats.write().messages_processed += 1;
         }
