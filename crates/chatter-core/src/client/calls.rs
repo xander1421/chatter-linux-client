@@ -539,12 +539,21 @@ impl ChatterClient {
         // replace-active policy, which group calls don't use). Without this,
         // `end_active_call` finds no active slot and never leaves the room.
         use crate::services::call_worker::{CallHandle, OrchestratedCallKind};
-        call_worker.orch_mark_connected(
-            CallHandle::from(call.id.to_string().as_str()),
-            OrchestratedCallKind::GroupChannel,
-            crate::domain::ids::UserId::from_uuid(uuid::Uuid::nil()),
-            matches!(call_type, crate::domain::call::CallType::Video),
-        );
+        // Await admission: a dropped best-effort notification leaves a live
+        // room without an active slot or the recorder's connected timestamp.
+        let handle = CallHandle::from(call.id.to_string().as_str());
+        if let Err(error) = call_worker
+            .orch_mark_connected_reliably(
+                handle.clone(),
+                OrchestratedCallKind::GroupChannel,
+                crate::domain::ids::UserId::from_uuid(uuid::Uuid::nil()),
+                matches!(call_type, crate::domain::call::CallType::Video),
+            )
+            .await
+        {
+            call_worker.rollback_setup(handle).await;
+            return Err(ClientError::Inbox(error.to_string()));
+        }
 
         let is_video = matches!(call_type, crate::domain::call::CallType::Video);
         if call.initiator_id != user_id {
