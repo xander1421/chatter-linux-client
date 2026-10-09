@@ -25,9 +25,17 @@ internal object ViewerMediaExport {
     private val next = AtomicLong(1)
     @Volatile private var lastLegacyDownload: Pair<Uri, String>? = null
 
-    fun begin(context: Context, name: String, mime: String, copy: Boolean, pdf: Boolean = false): LongArray? {
-        val safeName = name.substringAfterLast('/').substringAfterLast('\\')
-            .filterNot { it.isISOControl() }.let { value ->
+    @Synchronized fun begin(context: Context, name: String, mime: String, copy: Boolean, pdf: Boolean = false): LongArray? {
+        if (!started || !cacheReady) return null
+        val basename = name.substringAfterLast('/').substringAfterLast('\\')
+        val safeName = buildString {
+            var offset = 0
+            while (offset < basename.length) {
+                val codePoint = basename.codePointAt(offset)
+                if (!Character.isISOControl(codePoint) && Character.getType(codePoint) != Character.FORMAT.toInt()) appendCodePoint(codePoint)
+                offset += Character.charCount(codePoint)
+            }
+        }.let { value ->
                 var end = value.length
                 while (end > 0 && value.substring(0, end).toByteArray(Charsets.UTF_8).size > 180) {
                     end -= if (end >= 2 && Character.isLowSurrogate(value[end - 1]) && Character.isHighSurrogate(value[end - 2])) 2 else 1
@@ -87,7 +95,7 @@ internal object ViewerMediaExport {
         }
     }
 
-    fun finish(context: Context, token: Long, success: Boolean): Boolean {
+    @Synchronized fun finish(context: Context, token: Long, success: Boolean): Boolean {
         val item = pending.remove(token) ?: return false
         fun discard() {
             if (item.uri != null) try { context.contentResolver.delete(item.uri, null, null) } catch (_: Exception) {}
@@ -117,6 +125,62 @@ internal object ViewerMediaExport {
             }
             true
         } catch (_: Exception) { discard(); false }
+    }
+
+    private var started = false
+    private var sessionRevision: Long? = null
+    private var cacheReady = false
+
+    /** Once per process, before the native Activity starts exporting. */
+    @Synchronized fun startup(context: Context) {
+        if (started) return
+        started = true
+        cacheReady = clearPrivateExports(context)
+    }
+
+    /** Retire tokens before deleting files, so late finish cannot publish a URI. */
+    @Synchronized fun sessionChanged(context: Context, revision: Long): Boolean {
+        if (sessionRevision == revision) return cacheReady
+        sessionRevision = revision
+        cacheReady = clearPrivateExports(context)
+        return cacheReady
+    }
+
+    private fun clearPrivateExports(context: Context): Boolean {
+        var ok = true
+        val retired = pending.values.toList()
+        pending.clear()
+        retired.forEach { item ->
+            if (item.uri != null) try { context.contentResolver.delete(item.uri, null, null) } catch (_: Exception) { ok = false }
+            if (item.file != null && item.file.exists() && !item.file.delete()) ok = false
+        }
+        lastLegacyDownload = null
+        // Do not erase an unrelated clipboard item. Access can be denied in
+        // background; revocation and unlinking below remain authoritative.
+        try {
+            val clipboard = context.getSystemService(ClipboardManager::class.java)
+            val clip = clipboard.primaryClip
+            val ours = clip != null && (0 until clip.itemCount).any {
+                val uri = clip.getItemAt(it).uri
+                uri?.authority == "${context.packageName}.viewer-media" && uri.path?.startsWith("/viewer-clipboard/") == true
+            }
+            if (ours) {
+                if (Build.VERSION.SDK_INT >= 28) clipboard.clearPrimaryClip()
+                else clipboard.setPrimaryClip(ClipData.newPlainText("", ""))
+            }
+        } catch (_: Exception) { /* clipboard service may refuse background reads */ }
+        listOf("viewer-pdf", "viewer-clipboard").forEach { name ->
+            val folder = File(context.cacheDir, name)
+            folder.listFiles()?.forEach { file ->
+                try {
+                    val uri = FileProvider.getUriForFile(context, "${context.packageName}.viewer-media", file)
+                    context.revokeUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION)
+                } catch (_: Exception) { ok = false }
+                if (file.exists() && !file.delete()) ok = false
+            }
+            if (folder.exists() && !folder.delete()) ok = false
+        }
+        return ok
     }
 
     fun openDownloads(context: Context) {

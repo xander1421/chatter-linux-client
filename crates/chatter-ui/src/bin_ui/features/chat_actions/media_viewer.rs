@@ -16,7 +16,7 @@ use crate::MainWindow;
 static WINDOW: OnceLock<slint::Weak<MainWindow>> = OnceLock::new();
 static REQUEST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
-pub(super) fn invalidate() {
+pub(crate) fn invalidate() {
     REQUEST.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
 }
 pub(crate) fn is_current(request: u64) -> bool {
@@ -114,6 +114,8 @@ pub(crate) fn native_can_navigate(delta: i32) -> bool {
 }
 
 pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
+    #[cfg(target_os = "android")]
+    crate::platform::android::media_export::wire_session(client);
     let _ = WINDOW.set(window.as_weak());
     let weak = window.as_weak();
     window.on_media_viewer_navigate(move |delta| {
@@ -132,12 +134,17 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
         let id = selected
             .parse::<AttachmentId>()
             .unwrap_or_else(|_| AttachmentId::from_cdn_key(selected.as_str()));
+        let revision = client.auth_state().get().session_revision;
+        let request = current_request();
         let client = client.clone();
         let weak = weak.clone();
         // Decryption, image decoding and file operations stay off the UI thread.
         std::thread::spawn(move || {
             let result = export(&client, &id, copy);
             let _ = weak.upgrade_in_event_loop(move |w| {
+                if client.auth_state().get().session_revision != revision || !is_current(request) {
+                    return;
+                }
                 match result {
                     Ok(message) => {
                         w.set_toast_message(message.into());
@@ -170,11 +177,13 @@ static CLIPBOARD: std::sync::Mutex<Option<arboard::Clipboard>> = std::sync::Mute
 fn stream_export(
     reader: &chatter_core::services::attachment::CbcRangeDecryptor,
     output: &mut std::fs::File,
+    check: impl Fn() -> Result<(), String>,
 ) -> Result<(), String> {
     use std::io::Write;
     use zeroize::Zeroize;
     let mut offset = 0;
     while offset < reader.plaintext_size() {
+        check()?;
         let expected = (reader.plaintext_size() - offset).min(64 * 1024);
         let mut chunk = reader.read_range(offset, expected);
         if chunk.len() != expected {
@@ -188,15 +197,29 @@ fn stream_export(
     }
     output
         .sync_all()
-        .map_err(|_| "Unable to finish download".to_string())
+        .map_err(|_| "Unable to finish download".to_string())?;
+    check()
 }
 
-fn export(client: &ChatterClient, id: &AttachmentId, copy: bool) -> Result<String, String> {
+pub(crate) fn export(
+    client: &ChatterClient,
+    id: &AttachmentId,
+    copy: bool,
+) -> Result<String, String> {
+    let revision = client.auth_state().get().session_revision;
+    let check = || {
+        if client.auth_state().get().session_revision == revision {
+            Ok(())
+        } else {
+            Err("Session changed".to_string())
+        }
+    };
     let attachment = client.get_attachment(id).ok_or("Attachment unavailable")?;
     // Whole-file authentication precedes creating any plaintext destination.
     let reader = client
         .open_attachment_range(id)
         .map_err(|_| "Authenticated source unavailable")?;
+    check()?;
     #[cfg(target_os = "android")]
     {
         let mut session = crate::platform::android::media_export::ExportSession::begin(
@@ -210,6 +233,7 @@ fn export(client: &ChatterClient, id: &AttachmentId, copy: bool) -> Result<Strin
                 .file
                 .as_mut()
                 .ok_or("Export descriptor unavailable")?,
+            check,
         )?;
         session.finish()?;
         return Ok(if copy {
@@ -232,6 +256,7 @@ fn export(client: &ChatterClient, id: &AttachmentId, copy: bool) -> Result<Strin
             .map_err(|_| "Image decoding failed")?
             .to_rgba8();
             let (width, height) = image.dimensions();
+            check()?;
             // Keep ownership for the application lifetime on Wayland and X11.
             let mut clipboard = CLIPBOARD.lock().map_err(|_| "Clipboard unavailable")?;
             if clipboard.is_none() {
@@ -252,48 +277,11 @@ fn export(client: &ChatterClient, id: &AttachmentId, copy: bool) -> Result<Strin
             .ok_or("Downloads folder unavailable")?
             .join("Chatter");
         std::fs::create_dir_all(&folder).map_err(|_| "Unable to create download folder")?;
-        let raw = attachment
-            .metadata
-            .name
-            .rsplit(['/', '\\'])
-            .next()
-            .filter(|s| !s.is_empty() && *s != "." && *s != "..")
-            .unwrap_or("media");
-        let mut safe: String = raw
-            .chars()
-            .filter(|c| !c.is_control() && !"<>:\"|?*".contains(*c))
-            .collect();
-        while safe.len() > 180 {
-            safe.pop();
-        }
-        if safe.is_empty() {
-            safe = "media".into();
-        }
-        let mut created = None;
-        for suffix in 0..1024 {
-            let path = folder.join(if suffix == 0 {
-                format!("{id}-{safe}")
-            } else {
-                format!("{id}-{suffix}-{safe}")
-            });
-            let mut options = std::fs::OpenOptions::new();
-            options.write(true).create_new(true);
-            #[cfg(unix)]
-            {
-                use std::os::unix::fs::OpenOptionsExt;
-                options.mode(0o600);
-            }
-            match options.open(&path) {
-                Ok(file) => {
-                    created = Some((path, file));
-                    break;
-                }
-                Err(e) if e.kind() == std::io::ErrorKind::AlreadyExists => continue,
-                Err(_) => return Err("Download cannot be created".into()),
-            }
-        }
-        let (path, mut output) = created.ok_or("Download name unavailable")?;
-        if let Err(error) = stream_export(&reader, &mut output) {
+        let safe = export_basename(&attachment.metadata.name);
+        let destination = folder.join(format!("{id}-{safe}"));
+        let (path, mut output) =
+            create_export_file(&destination).map_err(|_| "Download cannot be created")?;
+        if let Err(error) = stream_export(&reader, &mut output, check) {
             drop(output);
             let _ = std::fs::remove_file(path);
             return Err(error);
@@ -304,5 +292,122 @@ fn export(client: &ChatterClient, id: &AttachmentId, copy: bool) -> Result<Strin
     {
         let _ = (attachment, reader, copy);
         Err("Media export unavailable".into())
+    }
+}
+
+// Unicode General_Category=Cf, including bidi overrides/isolates and invisible
+// direction marks. These must never disguise the type of an exported file.
+fn is_format_char(c: char) -> bool {
+    matches!(c as u32, 0x00AD | 0x0600..=0x0605 | 0x061C | 0x06DD | 0x070F |
+        0x0890..=0x0891 | 0x08E2 | 0x180E | 0x200B..=0x200F | 0x202A..=0x202E |
+        0x2060..=0x2064 | 0x2066..=0x206F | 0xFEFF | 0xFFF9..=0xFFFB |
+        0x110BD | 0x110CD | 0x13430..=0x1343F | 0x1BCA0..=0x1BCA3 |
+        0x1D173..=0x1D17A | 0xE0001 | 0xE0020..=0xE007F)
+}
+
+/// Basename only, portable filename characters and a bounded UTF-8 length.
+pub(crate) fn export_basename(name: &str) -> String {
+    let raw = name.rsplit(['/', '\\']).next().unwrap_or("");
+    let mut safe: String = raw
+        .chars()
+        .filter(|c| !c.is_control() && !is_format_char(*c) && !"<>:\"|?*".contains(*c))
+        .collect();
+    while safe.len() > 180 {
+        safe.pop();
+    }
+    let safe = safe.trim_end_matches(['.', ' ']);
+    if safe.is_empty() {
+        "attachment".into()
+    } else {
+        safe.into()
+    }
+}
+
+/// Claim a fresh destination without following a colliding file or symlink.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+fn create_export_file(
+    destination: &std::path::Path,
+) -> std::io::Result<(std::path::PathBuf, std::fs::File)> {
+    for suffix in 0..1024 {
+        let path = if suffix == 0 {
+            destination.to_path_buf()
+        } else {
+            let mut name = destination.file_stem().unwrap_or_default().to_os_string();
+            name.push(format!(" ({suffix})"));
+            if let Some(ext) = destination.extension() {
+                name.push(".");
+                name.push(ext);
+            }
+            destination.with_file_name(name)
+        };
+        let mut options = std::fs::OpenOptions::new();
+        options.write(true).create_new(true);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::OpenOptionsExt;
+            options.mode(0o600);
+        }
+        match options.open(&path) {
+            Ok(file) => return Ok((path, file)),
+            Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(std::io::Error::new(
+        std::io::ErrorKind::AlreadyExists,
+        "No unused export name",
+    ))
+}
+
+/// Even a Save-As picker cannot authorize a race-time replacement by another
+/// writer. A collision keeps the original and chooses a numbered sibling.
+#[cfg(not(any(target_os = "android", target_os = "ios")))]
+pub(crate) fn save_export(
+    destination: &std::path::Path,
+    data: &[u8],
+) -> std::io::Result<std::path::PathBuf> {
+    use std::io::Write;
+    let (path, mut file) = create_export_file(destination)?;
+    if let Err(error) = file.write_all(data).and_then(|_| file.sync_all()) {
+        drop(file);
+        let _ = std::fs::remove_file(&path);
+        return Err(error);
+    }
+    Ok(path)
+}
+
+#[cfg(test)]
+mod export_regressions {
+    use super::*;
+
+    #[test]
+    fn peer_names_remain_basenames_without_bidi_or_invisible_formats() {
+        for (raw, expected) in [
+            ("/abs/x", "x"),
+            ("../x", "x"),
+            ("..\\x", "x"),
+            ("C:\\x", "x"),
+            ("a\u{202e}txt.exe", "atxt.exe"),
+            ("a\u{2066}b\u{2069}.txt", "ab.txt"),
+            (".", "attachment"),
+            ("", "attachment"),
+        ] {
+            assert_eq!(export_basename(raw), expected);
+        }
+        let name = export_basename(&"é".repeat(200));
+        assert!(name.len() <= 180);
+    }
+
+    #[cfg(not(any(target_os = "android", target_os = "ios")))]
+    #[test]
+    fn export_collision_keeps_existing_file_and_suffix_preserves_extension() {
+        let folder = tempfile::tempdir().unwrap();
+        let destination = folder.path().join("report.pdf");
+        std::fs::write(&destination, b"original").unwrap();
+        let saved = save_export(&destination, b"new").unwrap();
+        assert_ne!(saved, destination);
+        assert_eq!(saved.extension().unwrap(), "pdf");
+        assert_eq!(std::fs::read(&destination).unwrap(), b"original");
+        assert_eq!(std::fs::read(saved).unwrap(), b"new");
     }
 }

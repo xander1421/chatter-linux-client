@@ -270,9 +270,7 @@ pub fn wire_download_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let ui_ctx = ui_ctx.clone();
 
         let conversation = ui_ctx.chat_state().active_conversation();
-        #[cfg(target_os = "android")]
         let weak = weak.clone();
-        #[cfg(target_os = "android")]
         let revision = ui_ctx.auth_state().get().session_revision;
 
         std::thread::spawn(move || {
@@ -308,9 +306,6 @@ pub fn wire_download_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 tracing::debug!("No attachments to download");
                 return;
             }
-
-            #[cfg(not(target_os = "android"))]
-            let download_dir = dirs::download_dir().unwrap_or_else(|| std::path::PathBuf::from("/tmp"));
 
             for att_id in attachment_ids {
                 let attachment = match ui_ctx.get_attachment(&att_id) {
@@ -352,53 +347,33 @@ pub fn wire_download_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
                 #[cfg(not(target_os = "android"))]
                 {
-                let filename = attachment.metadata.name.clone();
-                let dest_path = download_dir.join(&filename);
-
-                // Check if attachment needs downloading first
-                let needs_download = attachment.content_location == chatter_core::domain::attachment::ContentLocation::NotDownloaded
-                    && attachment.remote_url.is_some()
-                    && attachment.encryption_key.is_some();
-
-                if needs_download {
-                    // Download first, then save
-                    let ui_ctx_dl = ui_ctx.clone();
+                    let client = ui_ctx.clone();
+                    let weak = weak.clone();
                     ui_ctx.runtime_handle().spawn(async move {
-                        match ui_ctx_dl.download_attachment_to_filesystem(&att_id).await {
-                            Ok(()) => {
-                                match ui_ctx_dl.decrypt_attachment_auto(&att_id) {
-                                    Ok(buffer) => {
-                                        if let Err(e) = std::fs::write(&dest_path, buffer.as_slice()) {
-                                            tracing::error!(error = %e, "Failed to save attachment");
-                                        } else {
-                                            tracing::info!("Downloaded attachment to {}", dest_path.display());
-                                        }
-                                    }
-                                    Err(e) => {
-                                        tracing::error!(error = %e, "Failed to decrypt attachment");
-                                    }
-                                }
+                        let result = async {
+                            if client.auth_state().get().session_revision != revision {
+                                return Err("Session changed".to_string());
                             }
-                            Err(e) => {
-                                tracing::error!(error = %e, "Failed to download attachment");
+                            if attachment.content_location == chatter_core::domain::attachment::ContentLocation::NotDownloaded {
+                                client.download_attachment_to_filesystem(&att_id).await
+                                    .map_err(|_| "Unable to download attachment".to_string())?;
                             }
-                        }
+                            if client.auth_state().get().session_revision != revision {
+                                return Err("Session changed".to_string());
+                            }
+                            crate::bin_ui::features::chat_actions::media_viewer::export(&client, &att_id, false)
+                        }.await;
+                        let _ = weak.upgrade_in_event_loop(move |w| {
+                            if client.auth_state().get().session_revision != revision { return; }
+                            let (message, variant) = match result {
+                                Ok(message) => (message, "success"),
+                                Err(error) => (error, "error"),
+                            };
+                            w.set_toast_message(message.into());
+                            w.set_toast_variant(variant.into());
+                            w.set_toast_visible(true);
+                        });
                     });
-                } else {
-                    // Already downloaded, just decrypt and save
-                    match ui_ctx.decrypt_attachment_auto(&att_id) {
-                        Ok(buffer) => {
-                            if let Err(e) = std::fs::write(&dest_path, buffer.as_slice()) {
-                                tracing::error!(error = %e, "Failed to save attachment");
-                            } else {
-                                tracing::info!("Saved attachment to {}", dest_path.display());
-                            }
-                        }
-                        Err(e) => {
-                            tracing::error!(error = %e, "Failed to decrypt attachment");
-                        }
-                    }
-                }
                 }
             }
         });

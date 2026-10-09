@@ -172,3 +172,46 @@ pub fn prepare_pdf(name: &str, data: &[u8]) -> Result<ExportSession, String> {
     file.sync_all().map_err(|_| "Unable to finish PDF")?;
     Ok(session)
 }
+
+/// Drop private plaintext/grants on every authentication generation change.
+/// Subscribe before launch; lagged events reconcile from the current snapshot.
+pub fn wire_session(client: &std::sync::Arc<chatter_core::client::ChatterClient>) {
+    let auth = client.auth_state().clone();
+    let mut events = auth.subscribe();
+    client.runtime_handle().spawn(async move {
+        let mut previous = None;
+        loop {
+            let revision = auth.get().session_revision;
+            if previous != Some(revision) {
+                crate::bin_ui::features::chat_actions::media_viewer::invalidate();
+                let result = (|| -> Result<(), String> {
+                    let mut env = activity::jni_env()?;
+                    let activity = activity::activity()?;
+                    let result = env.call_method(
+                        activity.as_obj(),
+                        "clearViewerSession",
+                        "(J)Z",
+                        &[JValue::Long(revision as i64)],
+                    );
+                    let success = result.and_then(|v| v.z()).unwrap_or(false);
+                    let _ = env.exception_clear();
+                    if success {
+                        Ok(())
+                    } else {
+                        Err("Private viewer cache cleanup failed".into())
+                    }
+                })();
+                if let Err(error) = result {
+                    tracing::warn!(%error, "Viewer session cleanup");
+                }
+                previous = Some(revision);
+            }
+            if matches!(
+                events.recv().await,
+                Err(tokio::sync::broadcast::error::RecvError::Closed)
+            ) {
+                break;
+            }
+        }
+    });
+}

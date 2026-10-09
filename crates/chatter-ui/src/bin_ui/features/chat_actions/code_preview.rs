@@ -60,7 +60,7 @@ pub fn wire_code_preview_callbacks(window: &MainWindow) {
     window.on_open_code_external(|| {
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         if let Some(content) = preview_state::get_code_preview_content() {
-            let filename = content.filename.clone();
+            let filename = super::media_viewer::export_basename(&content.filename);
             let data = content.data.clone();
             tokio::spawn(async move {
                 let config = FilePickerConfig::new()
@@ -72,8 +72,8 @@ pub fn wire_code_preview_callbacks(window: &MainWindow) {
                     );
 
                 if let Some(destination) = FilePicker::save_file(config).await {
-                    match std::fs::write(&destination, &data) {
-                        Ok(()) => {
+                    match super::media_viewer::save_export(&destination, &data) {
+                        Ok(destination) => {
                             tracing::info!("Exported code to {}", destination.display());
                             let opener = ExternalOpener;
                             if let Err(e) = opener.open_file(&destination) {

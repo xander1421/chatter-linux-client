@@ -358,6 +358,71 @@ fn handle_local_attachment(
         return;
     }
 
+    // Preview allocation is bounded by the authenticated reader's actual
+    // plaintext length, not the peer-supplied display metadata.
+    let preview_limit = if FileMetadata::is_code_file(&filename, &mime_type) {
+        Some(4 * 1024 * 1024u64)
+    } else if mime_type == "application/pdf" || filename.to_lowercase().ends_with(".pdf") {
+        Some(32 * 1024 * 1024u64)
+    } else {
+        None
+    };
+    if let Some(limit) = preview_limit {
+        let revision = ui_ctx.auth_state().get().session_revision;
+        let reader = match ui_ctx.open_attachment_range(&att_id) {
+            Ok(reader) => reader,
+            Err(error) => {
+                tracing::warn!(%error, "Authenticated preview source unavailable");
+                let _ = weak.upgrade_in_event_loop(move |w| {
+                    if !super::media_viewer::is_current(request) {
+                        return;
+                    }
+                    w.set_toast_message("Unable to open attachment".into());
+                    w.set_toast_variant("error".into());
+                    w.set_toast_visible(true);
+                });
+                return;
+            }
+        };
+        if reader.plaintext_size() > limit {
+            let result = super::media_viewer::export(&ui_ctx, &att_id, false);
+            let _ = weak.upgrade_in_event_loop(move |w| {
+                if !super::media_viewer::is_current(request)
+                    || ui_ctx.auth_state().get().session_revision != revision
+                {
+                    return;
+                }
+                let (message, variant) = match result {
+                    Ok(message) => (format!("Too large to preview. {message}"), "success"),
+                    Err(error) => (format!("Too large to preview. {error}"), "error"),
+                };
+                w.set_toast_message(message.into());
+                w.set_toast_variant(variant.into());
+                w.set_toast_visible(true);
+            });
+            return;
+        }
+        let buffer =
+            chatter_core::prelude::SecureBuffer::new(reader.read_range(0, reader.plaintext_size()));
+        if buffer.as_slice().len() as u64 != reader.plaintext_size()
+            || ui_ctx.auth_state().get().session_revision != revision
+            || !super::media_viewer::is_current(request)
+        {
+            return;
+        }
+        display_decrypted_content(
+            ui_ctx.runtime_handle(),
+            weak,
+            buffer,
+            attachment_id.as_str(),
+            &filename,
+            file_size,
+            &mime_type,
+            request,
+        );
+        return;
+    }
+
     // Decrypt synchronously (we're already in a background thread)
     let secure_buffer = match ui_ctx.decrypt_attachment_auto(&att_id) {
         Ok(buffer) => buffer,
@@ -962,14 +1027,14 @@ async fn save_file_from_buffer(
         .with_default_path(
             dirs::download_dir()
                 .unwrap_or_else(|| std::path::PathBuf::from("/tmp"))
-                .join(&filename_for_save),
+                .join(super::media_viewer::export_basename(&filename_for_save)),
         );
 
     let destination = FilePicker::save_file(config).await;
 
     if let Some(destination) = destination {
-        match std::fs::write(&destination, &data) {
-            Ok(()) => {
+        match super::media_viewer::save_export(&destination, &data) {
+            Ok(destination) => {
                 tracing::info!("Exported attachment to {}", destination.display());
                 let opener = ExternalOpener;
                 if let Err(e) = opener.open_file(&destination) {
@@ -1110,20 +1175,13 @@ fn handle_download_attachment(
                     return;
                 }
 
-                // Now decrypt to memory and display
-                let secure_buffer = match ui_ctx_for_task.decrypt_attachment_auto(&att_id) {
-                    Ok(buffer) => buffer,
-                    Err(e) => {
-                        tracing::error!("Failed to decrypt downloaded attachment: {}", e);
-                        return;
-                    }
-                };
-
-                display_decrypted_content(
-                    ui_ctx_for_task.runtime_handle(),
+                // Reuse local classification so downloaded PDF/code paths
+                // enforce the same authenticated preview bound.
+                handle_local_attachment(
                     weak,
-                    secure_buffer,
-                    &att_id_str,
+                    ui_ctx_for_task.clone(),
+                    att_id,
+                    att_id_str.into(),
                     &file_name,
                     file_size,
                     &mime_type,

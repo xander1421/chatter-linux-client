@@ -56,6 +56,10 @@ class MainActivity : GameActivity() {
         ViewerMediaExport.begin(this, name, mime, copy, pdf = true)
 
     @Suppress("unused")
+    @androidx.annotation.Keep
+    fun clearViewerSession(revision: Long): Boolean =
+        ViewerMediaExport.sessionChanged(this, revision)
+
     fun finishViewerMediaExport(token: Long, success: Boolean): Boolean =
         ViewerMediaExport.finish(this, token, success)
 
@@ -103,6 +107,7 @@ class MainActivity : GameActivity() {
     private external fun nativeReleasePendingVideo(token: Long)
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        ViewerMediaExport.startup(this)
         // Until Slint's first frame the window background is all there is.
         // themes.xml resolves it from the SYSTEM night mode, so a Light app on
         // a dark phone launched on ~1.4 s of black. Paint the app's own theme,
