@@ -63,7 +63,7 @@ impl InboxEventProcessor {
                         message_id: message.id,
                         new_content: message.content.clone(),
                         channel_id: message.conversation_id,
-                        conversation_type: message.conversation_type,
+                        conversation_type: message.conversation_type.clone(),
                         author_id: own,
                         target_sent_timestamp: message.sent_at,
                     });
