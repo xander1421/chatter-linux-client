@@ -559,11 +559,19 @@ impl ChatterClient {
         self.persist_composer_drafts(&drafts);
     }
 
-    /// Give a thread reply that did not leave back to its thread's draft,
-    /// for the thread to show when it is next opened. Nothing is written
-    /// when the session that composed it is over, or when the thread's draft
-    /// already holds text typed since: newer input is never written over.
-    /// Returns whether the text was kept.
+    /// A failed reply parked beside the thread's draft, under its own key,
+    /// so neither a newer draft nor a newer sent reply writes over it.
+    fn failed_thread_reply_key(root: &MessageId) -> String {
+        format!("thread-failed:{root}")
+    }
+
+    /// Give a thread reply that did not leave back to its thread. It becomes
+    /// the thread's draft when that is empty; when text typed since is there,
+    /// it is parked under [`Self::failed_thread_reply_key`] instead (a second
+    /// failure joins the first), where [`Self::take_failed_thread_reply`]
+    /// finds it. Nothing is written when the session that composed it is
+    /// over. Newer input is never written over; nothing is ever resent on
+    /// its own. Returns whether the text was kept.
     pub fn restore_thread_draft(
         &self,
         root: &MessageId,
@@ -576,17 +584,55 @@ impl ChatterClient {
         let (mut drafts, _) = self.composer_drafts_for_session();
         let key = Self::thread_draft_key(root);
         if drafts.get(&key).is_some_and(|held| !held.text.is_empty()) {
-            return false;
+            let parked = drafts
+                .entry(Self::failed_thread_reply_key(root))
+                .or_default();
+            if !parked.text.is_empty() {
+                parked.text.push_str("\n\n");
+            }
+            parked.text.push_str(text);
+            parked.reply = None;
+        } else {
+            drafts.insert(
+                key,
+                ComposerDraft {
+                    text: text.to_owned(),
+                    reply: None,
+                },
+            );
         }
-        drafts.insert(
-            key,
-            ComposerDraft {
-                text: text.to_owned(),
-                reply: None,
-            },
-        );
         self.persist_composer_drafts(&drafts);
         true
+    }
+
+    /// Whether a failed reply is parked for `root` (the draft was busy when
+    /// it failed). For the UI's feedback; it does not move anything.
+    pub fn has_failed_thread_reply(&self, root: &MessageId) -> bool {
+        let (drafts, _) = self.composer_drafts_for_session();
+        drafts
+            .get(&Self::failed_thread_reply_key(root))
+            .is_some_and(|held| !held.text.is_empty())
+    }
+
+    /// Move the parked failed reply for `root` into the thread's draft, if
+    /// that draft is empty (nothing typed since), and return its text for the
+    /// box. It is the draft from here on, so a kill before the UI's autosave
+    /// loses nothing. `None` when nothing is parked or the draft is busy.
+    pub fn take_failed_thread_reply(&self, root: &MessageId) -> Option<String> {
+        let (mut drafts, _) = self.composer_drafts_for_session();
+        let key = Self::thread_draft_key(root);
+        if drafts.get(&key).is_some_and(|held| !held.text.is_empty()) {
+            return None;
+        }
+        let parked = drafts.remove(&Self::failed_thread_reply_key(root))?;
+        if parked.text.is_empty() {
+            self.persist_composer_drafts(&drafts);
+            return None;
+        }
+        let text = parked.text.clone();
+        drafts.insert(key, parked);
+        self.persist_composer_drafts(&drafts);
+        Some(text)
     }
 
     // ── Recovery: staged files and parked sends ─────────────────────
@@ -1546,10 +1592,28 @@ mod tests {
         assert!(client.restore_thread_draft(&root, "failed reply", revision));
         assert_eq!(client.thread_draft(&root), "failed reply");
         client.set_thread_draft(&root, "typed since");
-        assert!(!client.restore_thread_draft(&root, "failed reply", revision));
+        // Newer text is busy: the failed reply is parked beside it, and a
+        // second failure joins the first. Neither touches the draft.
+        assert!(client.restore_thread_draft(&root, "failed reply", revision));
+        assert!(client.restore_thread_draft(&root, "and again", revision));
         assert_eq!(client.thread_draft(&root), "typed since");
+        assert!(client.has_failed_thread_reply(&root));
+        assert!(client.take_failed_thread_reply(&root).is_none(), "took over typed text");
+        // The newer reply goes out: its draft clears, the parked one survives
+        // a restart and comes back only into the empty draft.
+        client.set_thread_draft(&root, "");
+        drop(client);
+        let client = client_in(&dir);
+        client.auth_state().set_logged_in(user, 1, "A".into());
+        assert_eq!(
+            client.take_failed_thread_reply(&root).as_deref(),
+            Some("failed reply\n\nand again")
+        );
+        assert_eq!(client.thread_draft(&root), "failed reply\n\nand again");
+        assert!(client.take_failed_thread_reply(&root).is_none(), "restored twice");
         client.set_thread_draft(&root, "");
         assert!(!client.restore_thread_draft(&root, "failed reply", revision + 1));
         assert!(client.thread_draft(&root).is_empty());
+        assert!(!client.has_failed_thread_reply(&root));
     }
 }

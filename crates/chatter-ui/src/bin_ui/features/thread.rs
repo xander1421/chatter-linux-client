@@ -105,12 +105,20 @@ fn wire_send_thread_reply(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     // never over what was typed since (core keeps the newer).
                     let shown = owner.is_current()
                         && w.get_thread_root_message_id().as_str() == root.to_string();
-                    if shown && w.get_thread_composer_text().is_empty() {
+                    let message = if shown && w.get_thread_composer_text().is_empty() {
                         w.set_thread_composer_text(text.into());
+                        "Couldn't send your reply. Try again."
                     } else {
                         ui_ctx.restore_thread_draft(&root, &text, session_revision);
-                    }
-                    w.set_toast_message("Couldn't send your reply. Try again.".into());
+                        if ui_ctx.has_failed_thread_reply(&root) {
+                            // Parked behind newer text; it comes back once
+                            // the box and the draft are empty.
+                            "Couldn't send your reply. It's kept with this thread."
+                        } else {
+                            "Couldn't send your reply. It's saved as this thread's draft."
+                        }
+                    };
+                    w.set_toast_message(message.into());
                     w.set_toast_variant("error".into());
                     w.set_toast_visible(true);
                 });
@@ -144,11 +152,31 @@ fn wire_send_thread_reply(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             reply.to_slint_with_user(&current_user_id),
                             true,
                         );
+                        // The box is free again: an earlier reply that did
+                        // not leave comes back into it, never sent on its own.
+                        if w.get_thread_root_message_id().as_str() == root_id.to_string()
+                            && w.get_thread_composer_text().is_empty()
+                        {
+                            offer_failed_thread_reply(&w, &ui_ctx, &root_id);
+                        }
                     }
                 });
             }
         });
     });
+}
+
+/// Put the failed reply parked for `root` into the empty thread box and say
+/// so. Core moves it only when the thread's draft is empty too; the user
+/// still taps send — nothing is resent on its own.
+fn offer_failed_thread_reply(w: &MainWindow, ui_ctx: &ChatterClient, root: &MessageId) {
+    let Some(text) = ui_ctx.take_failed_thread_reply(root) else {
+        return;
+    };
+    w.set_thread_composer_text(text.into());
+    w.set_toast_message("Your earlier reply that didn't send is back in the box.".into());
+    w.set_toast_variant("info".into());
+    w.set_toast_visible(true);
 }
 
 fn wire_load_more_thread_replies(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
@@ -415,6 +443,11 @@ pub fn load_thread_data(
                     w.set_thread_root_message_id(root_id.into());
                     if switching {
                         w.set_thread_composer_text(draft.into());
+                        // Nothing typed for this thread: a reply that failed
+                        // behind newer text, if any, comes back into the box.
+                        if w.get_thread_composer_text().is_empty() {
+                            offer_failed_thread_reply(&w, &ctx, &root_message_id);
+                        }
                     }
                     w.set_thread_root_sender_name(sender_name.into());
                     w.set_thread_root_content_preview(content_preview.into());
