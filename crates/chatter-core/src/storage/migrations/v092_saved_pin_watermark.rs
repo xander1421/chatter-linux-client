@@ -17,6 +17,14 @@ impl Migration for V092SavedPinWatermark {
         "CREATE TABLE saved_pin_watermarks (
             message_id TEXT PRIMARY KEY,
             changed_at INTEGER NOT NULL
-        );"
+        );
+        INSERT INTO saved_pin_watermarks (message_id, changed_at)
+        SELECT id, MAX(COALESCE(pinned_at, sent_at), sent_at, 1)
+        FROM messages
+        WHERE conversation_type = 'saved_messages' AND conversation_id = sender_id
+          AND is_pinned = 1 AND is_deleted = 0;
+        UPDATE messages SET pinned_at = (
+            SELECT changed_at FROM saved_pin_watermarks WHERE message_id = messages.id
+        ) WHERE id IN (SELECT message_id FROM saved_pin_watermarks);"
     }
 }

@@ -581,9 +581,26 @@ impl EventHandlers {
             }
 
             DomainEvent::SavedMessageSynced { message } => {
+                let message = if let Some(service) = &self.message_service {
+                    let Some(stored) = service.message_repo.get(&message.id).ok().flatten()
+                        .filter(|stored| stored.conversation_type == message.conversation_type
+                            && stored.conversation_id == message.conversation_id
+                            && stored.sender_id == message.sender_id
+                            && stored.sent_at == message.sent_at && !stored.is_deleted)
+                    else { return };
+                    stored
+                } else {
+                    message
+                };
                 let channel_id = message.conversation_id;
                 trace!(?channel_id, message_id = ?message.id, "SavedMessageSynced: adding to state");
-                self.message_state.append_message(channel_id, message);
+                if self.message_state.get_messages(&channel_id).iter().any(|m| m.id == message.id) {
+                    self.message_state.update_message(&channel_id, &message.id, |stored| {
+                        *stored = message.clone();
+                    });
+                } else {
+                    self.message_state.append_message(channel_id, message);
+                }
             }
 
             DomainEvent::DeviceLinked {

@@ -64,11 +64,12 @@ fn nanos(at: Option<chrono::DateTime<chrono::Utc>>) -> u64 {
 pub(crate) fn attachment_pointer_from_record(att: &Attachment) -> Option<AttachmentPointer> {
     let cdn_key = att.remote_url.clone().filter(|k| !k.is_empty())?;
     let encryption_key = att.encryption_key.clone().filter(|k| !k.is_empty())?;
+    let digest = att.encryption_iv.clone().filter(|d| !d.is_empty())?;
     let m = &att.metadata;
     Some(AttachmentPointer {
         cdn_key,
         encryption_key,
-        digest: att.encryption_iv.clone().unwrap_or_default(),
+        digest,
         plaintext_size: m.size,
         content_type: m.mime_type.clone(),
         file_name: m.name.clone(),
@@ -317,6 +318,11 @@ impl MessageService {
         };
         let pin_changed_at =
             SavedSyncRepository::new(self.message_repo.db()).pin_watermark(&message.id)?;
+        if message.is_pinned && pin_changed_at == 0 {
+            return Err(MessageError::InvalidContent(
+                "Pinned Saved row without watermark".into(),
+            ));
+        }
         Ok(SavedMessageSync {
             text: message.as_text().unwrap_or_default().to_string(),
             message_id: message.id.to_string(),
@@ -330,10 +336,9 @@ impl MessageService {
             } else {
                 0
             },
-            // A pinned row whose watermark was never written (pinned before
-            // v092) cannot be ordered by a receiver; it is sent unpinned
-            // until its pin state changes here again.
-            pinned: message.is_pinned && pin_changed_at != 0,
+            // v092 seeds clocks for legacy pins; never silently advertise an
+            // inconsistent pinned row as unpinned.
+            pinned: message.is_pinned,
             pin_changed_at,
         })
     }
@@ -370,6 +375,117 @@ impl MessageService {
         synced
     }
 
+    /// Apply a snapshot through the shared storage-only receive path.
+    pub fn apply_saved_message_sync(
+        &self,
+        sync: &SavedMessageSync,
+    ) -> Result<SavedSyncOutcome, MessageError> {
+        SavedSnapshotStore {
+            message_repo: self.message_repo.clone(),
+            attachment_repo: self.attachment_repo.clone(),
+            settings_repo: self.settings_repo.clone(),
+        }
+        .apply_saved_message_sync(sync)
+    }
+
+    /// Get messages from a channel.
+    ///
+    /// Fetches messages from the server and stores them locally.
+    pub async fn get_messages(
+        &self,
+        message_client: &mut MessageClient,
+        channel_id: &ChannelId,
+        limit: u32,
+        before: Option<&MessageId>,
+    ) -> Result<Vec<Message>, MessageError> {
+        use crate::proto::chat_v1::MessageSortDirection;
+
+        // Check logged in
+        let _ = self.settings_repo.current_user_id()?;
+
+        // Fetch from server
+        let response = message_client
+            .get_messages(
+                &channel_id.to_string(),
+                limit as i32,
+                None, // thread_root_id
+                None, // page_token
+                MessageSortDirection::SortNewestFirst,
+                before.map(|id| id.to_string()).as_deref(),
+                None, // reference_time
+            )
+            .await?;
+
+        // Convert proto messages to domain messages and store locally
+        let mut messages = Vec::with_capacity(response.messages.len());
+        for proto in &response.messages {
+            // Parse sender ID from proto author_id
+            let sender_id: Option<UserId> = if proto.author_id.is_empty() {
+                None
+            } else {
+                proto.author_id.parse().ok()
+            };
+
+            // Saved-messages RPC only returns messages in the current
+            // user's personal vault channel — ConversationType is
+            // unambiguously SavedMessages regardless of what the channel
+            // row says.
+            let message = proto_to_domain_message_with_sender(
+                proto,
+                sender_id,
+                crate::domain::message::ConversationType::SavedMessages,
+            )?;
+
+            // Upsert to local storage (insert or update)
+            match self.message_repo.get(&message.id)? {
+                Some(_) => self.message_repo.update(&message)?,
+                None => self.message_repo.insert(&message)?,
+            }
+
+            messages.push(message);
+        }
+
+        Ok(messages)
+    }
+}
+
+/// The synchronous writer shared by the service and device inbox: receipt
+/// must be durable before that inbox acknowledges the encrypted envelope.
+struct SavedSnapshotStore {
+    message_repo: std::sync::Arc<crate::storage::MessageRepository>,
+    attachment_repo: std::sync::Arc<crate::storage::AttachmentRepository>,
+    settings_repo: std::sync::Arc<crate::storage::SettingsRepository>,
+}
+
+pub(crate) fn persist_saved_device_snapshot(
+    gateway: &crate::services::gateway::MessageGateway,
+    sender: UserId,
+    sync: &SavedMessageSync,
+) -> Result<SavedSyncOutcome, crate::error::ServiceError> {
+    use crate::error::ServiceError;
+    let own = gateway.settings_repo.current_user_id()?;
+    if sender != own {
+        return Err(ServiceError::Validation(
+            "Saved snapshot from another user".into(),
+        ));
+    }
+    SavedSnapshotStore {
+        message_repo: gateway.message_repo.clone(),
+        attachment_repo: std::sync::Arc::new(crate::storage::AttachmentRepository::new(
+            gateway.message_repo.db(),
+        )),
+        settings_repo: gateway.settings_repo.clone(),
+    }
+    .apply_saved_message_sync(sync)
+    .map_err(|e| match e {
+        MessageError::Storage(e) => ServiceError::Storage(e),
+        MessageError::NotLoggedIn => ServiceError::NotLoggedIn,
+        MessageError::InvalidContent(e) => ServiceError::Validation(e),
+        e => ServiceError::Internal(e.to_string()),
+    })
+}
+
+impl SavedSnapshotStore {
     /// The reply context a snapshot's quote gives a Saved row here. The
     /// parent is named by its real id: held here, the preview and thumbnail
     /// come from it, as a local reply's do (`fill_reply_context`); not held
@@ -476,10 +592,11 @@ impl MessageService {
     /// as a received message's are), quote resolved in our Saved scope, edit
     /// and pin state — unless we deleted it (tombstone), which it stays. A
     /// record we hold takes the body only when the snapshot's `edited_at`
-    /// is newer than ours, and the pin only when `pin_changed_at` is newer
+    /// is newer than ours (lexically greater text breaks an equal edit clock),
+    /// and the pin only when `pin_changed_at` is newer
     /// than the last pin change applied here, each written with its clock
     /// so the next snapshot orders against it. Identity, attachments and
-    /// quote of an existing row never change. Nothing here sends: a
+    /// quote identity of an existing row never change; an absent quote is hydrated. Nothing here sends: a
     /// received snapshot is applied, never re-synced, so two devices cannot
     /// echo one change back and forth.
     pub fn apply_saved_message_sync(
@@ -504,11 +621,19 @@ impl MessageService {
         let pins = SavedSyncRepository::new(self.message_repo.db());
 
         let Some(stored) = self.own_saved_row(own, &id)? else {
-            return self.store_saved_snapshot(own, id, &scope, sync, &pins);
+            return self.store_saved_snapshot(own, id, &scope, sync);
         };
         if stored.is_deleted {
             return Ok(SavedSyncOutcome::Unchanged);
         }
+        if stored.sent_at != sync.sent_at {
+            return Err(MessageError::InvalidContent(
+                "Saved snapshot changed sent_at".into(),
+            ));
+        }
+        // Replays also register full pointers: a legacy sender could have
+        // named the CDN key without its crypto record.
+        self.register_saved_attachments(sync)?;
 
         // A row stored before its parent's snapshot arrived, or by a sender
         // that sent no quote, takes this snapshot's quote once; a row that
@@ -521,7 +646,12 @@ impl MessageService {
         }
 
         let mut body_changed = false;
-        if body_supersedes(nanos(stored.edited_at), sync) {
+        if body_supersedes(nanos(stored.edited_at), sync)
+            || (sync.edited_at != 0
+                && sync.edited_at == nanos(stored.edited_at)
+                && !sync.text.trim().is_empty()
+                && sync.text.trim() > stored.as_text().unwrap_or_default())
+        {
             let content = edited_body(&stored.content, sync.text.trim());
             let edited_at = chrono::DateTime::from_timestamp_nanos(sync.edited_at as i64);
             body_changed = self.message_repo.set_body_scoped(
@@ -570,6 +700,42 @@ impl MessageService {
         })
     }
 
+    /// Register every pointer and refuse to publish a row with missing records.
+    /// Stable ids are derived from real CDN keys, never internal sender ids.
+    fn register_saved_attachments(
+        &self,
+        sync: &SavedMessageSync,
+    ) -> Result<Vec<AttachmentId>, MessageError> {
+        if sync
+            .attachments
+            .iter()
+            .any(|p| p.cdn_key.is_empty() || p.encryption_key.is_empty() || p.digest.is_empty())
+        {
+            return Err(MessageError::InvalidContent(
+                "Incomplete Saved attachment pointer".into(),
+            ));
+        }
+        let mut ids = AttachmentService::new_local(self.attachment_repo.clone())
+            .create_from_pointers(&sync.attachments);
+        for pointer in &sync.attachments {
+            let id = AttachmentId::from_cdn_key(&pointer.cdn_key);
+            if self.attachment_repo.get(&id)?.is_none() {
+                return Err(MessageError::Storage(
+                    crate::error::StorageError::InvalidData(format!(
+                        "Saved attachment {id} was not registered"
+                    )),
+                ));
+            }
+        }
+        for key in sync.attachment_ids.iter().filter(|k| !k.is_empty()) {
+            let legacy = AttachmentId::from_cdn_key(key);
+            if !ids.contains(&legacy) {
+                ids.push(legacy);
+            }
+        }
+        Ok(ids)
+    }
+
     /// Store a snapshot of a record we do not hold, whole.
     fn store_saved_snapshot(
         &self,
@@ -577,19 +743,8 @@ impl MessageService {
         id: MessageId,
         scope: &ReactionScope,
         sync: &SavedMessageSync,
-        pins: &SavedSyncRepository,
     ) -> Result<SavedSyncOutcome, MessageError> {
-        // Attachment records from the pointers, exactly as a received
-        // message's are; a CDN key without its pointer (an older sender)
-        // keeps the id so the row still names it.
-        let mut attachment_ids = AttachmentService::new_local(self.attachment_repo.clone())
-            .create_from_pointers(&sync.attachments);
-        for key in sync.attachment_ids.iter().filter(|k| !k.is_empty()) {
-            let legacy = AttachmentId::from_cdn_key(key);
-            if !attachment_ids.contains(&legacy) {
-                attachment_ids.push(legacy);
-            }
-        }
+        let attachment_ids = self.register_saved_attachments(sync)?;
 
         let mut message = Message::new_text(
             scope.id,
@@ -616,77 +771,18 @@ impl MessageService {
             message.reply_to_thumbnail_mime = reply.thumbnail_mime;
         }
 
-        // Watermark first, then the row (two writes, two connections; see
-        // `SavedSyncRepository::record_pin_watermark` for why this order
-        // and how an equal-clock replay repairs a crash between them).
-        pins.record_pin_watermark(&id, sync.pin_changed_at)?;
-        self.message_repo.insert(&message)?;
+        if !self
+            .message_repo
+            .insert_saved_snapshot(&message, sync.pin_changed_at)?
+        {
+            return Ok(SavedSyncOutcome::Unchanged);
+        }
         let stored = self
             .message_repo
             .get(&id)?
             .ok_or(MessageError::MessageNotFound(id))?;
         tracing::info!(message_id = %id, "SavedMessages: stored snapshot from another device");
         Ok(SavedSyncOutcome::Created(stored))
-    }
-
-    /// Get messages from a channel.
-    ///
-    /// Fetches messages from the server and stores them locally.
-    pub async fn get_messages(
-        &self,
-        message_client: &mut MessageClient,
-        channel_id: &ChannelId,
-        limit: u32,
-        before: Option<&MessageId>,
-    ) -> Result<Vec<Message>, MessageError> {
-        use crate::proto::chat_v1::MessageSortDirection;
-
-        // Check logged in
-        let _ = self.settings_repo.current_user_id()?;
-
-        // Fetch from server
-        let response = message_client
-            .get_messages(
-                &channel_id.to_string(),
-                limit as i32,
-                None, // thread_root_id
-                None, // page_token
-                MessageSortDirection::SortNewestFirst,
-                before.map(|id| id.to_string()).as_deref(),
-                None, // reference_time
-            )
-            .await?;
-
-        // Convert proto messages to domain messages and store locally
-        let mut messages = Vec::with_capacity(response.messages.len());
-        for proto in &response.messages {
-            // Parse sender ID from proto author_id
-            let sender_id: Option<UserId> = if proto.author_id.is_empty() {
-                None
-            } else {
-                proto.author_id.parse().ok()
-            };
-
-            // Saved-messages RPC only returns messages in the current
-            // user's personal vault channel — ConversationType is
-            // unambiguously SavedMessages regardless of what the channel
-            // row says.
-            let message = proto_to_domain_message_with_sender(
-                proto,
-                sender_id,
-                crate::domain::message::ConversationType::SavedMessages,
-            )?;
-
-            // Upsert to local storage (insert or update)
-            match self.message_repo.get(&message.id)? {
-                Some(_) => self.message_repo.update(&message)?,
-                None => self.message_repo.insert(&message)?,
-            }
-
-            messages.push(message);
-        }
-
-        Ok(messages)
     }
 }
 
@@ -912,9 +1008,7 @@ mod tests {
             PinWrite::Applied { changed_at: 12_000 }
         );
         assert_eq!(pinned_at(&saved.id), Some(12_000));
-        // Crash recovery: the watermark was recorded for a newer unpin (13_000)
-        // but the row was then inserted from an older snapshot, pinned. The
-        // replayed unpin has an equal clock and a different state: applied.
+        // Same-clock conflict: unpin wins, regardless of delivery order.
         pins.record_pin_watermark(&saved.id, 13_000).unwrap();
         assert!(repo.get(&saved.id).unwrap().unwrap().is_pinned);
         assert_eq!(

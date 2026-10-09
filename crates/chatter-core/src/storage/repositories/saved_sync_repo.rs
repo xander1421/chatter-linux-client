@@ -67,11 +67,8 @@ impl SavedSyncRepository {
     /// Apply a pin change made on a sibling device: `pinned` as of
     /// `changed_at`, to the undeleted own Saved row `id` at the scope's
     /// Signal-style key. A clock older than the watermark writes nothing.
-    /// An equal clock writes only when the stored pin state differs: that
-    /// is the row a crash left behind — watermark recorded, row inserted
-    /// later from an older snapshot — converging on the replayed newer
-    /// state instead of refusing it forever. Row columns and watermark move
-    /// in one transaction.
+    /// At equal clocks unpin wins, independent of arrival order. Row columns
+    /// and watermark move in one transaction; initial insertion is atomic too.
     pub fn apply_synced_pin(
         &self,
         scope: &ReactionScope,
@@ -82,7 +79,7 @@ impl SavedSyncRepository {
         changed_at: u64,
     ) -> Result<PinWrite, StorageError> {
         self.write_pin(scope, author, sent_at, id, pinned, |watermark, stored| {
-            (changed_at > watermark || (changed_at == watermark && stored != pinned))
+            (changed_at > watermark || (changed_at == watermark && stored && !pinned))
                 .then_some(changed_at)
         })
     }
@@ -140,15 +137,9 @@ impl SavedSyncRepository {
         Ok(rows > 0)
     }
 
-    /// Record the clock of a pin state stored with a freshly created row
-    /// (a snapshot that arrived pinned). The row insert is a separate
-    /// write (`UnifiedMessageRepository::insert`, its own connection), so
-    /// this goes first: a crash between the two leaves a watermark without
-    /// its row, and the row an older snapshot then inserts carries that
-    /// older pin state — which the newer snapshot's replay repairs, since
-    /// `apply_synced_pin` accepts an equal clock when the stored state
-    /// differs. The other order would leave a pinned row an older unpin
-    /// could flip.
+    /// Low-level watermark helper retained for storage regression fixtures.
+    /// Production initial insertion uses `insert_saved_snapshot` atomically.
+    #[cfg(test)]
     pub fn record_pin_watermark(
         &self,
         id: &MessageId,
@@ -182,6 +173,12 @@ impl SavedSyncRepository {
         pinned: bool,
         clock: impl FnOnce(u64, bool) -> Option<u64>,
     ) -> Result<PinWrite, StorageError> {
+        if scope.kind != crate::domain::message::ConversationType::SavedMessages
+            || scope.id != crate::domain::ids::ChannelId::from(*author)
+            || sent_at > i64::MAX as u64
+        {
+            return Ok(PinWrite::NoRow);
+        }
         let conn = self.db.connection()?;
         let tx = conn.unchecked_transaction()?;
         let watermark = Self::watermark_with(&tx, id)?;
@@ -216,7 +213,7 @@ impl SavedSyncRepository {
         // transition to pinned it is the pin's own clock, the same on every
         // device that applies this change, and unpin clears it.
         let rows = tx.execute(
-            "UPDATE messages SET pinned_at = CASE WHEN ?1 = 0 THEN NULL WHEN is_pinned = 0 THEN ?8 ELSE pinned_at END, is_pinned = ?1, updated_at = ?2
+            "UPDATE messages SET pinned_at = CASE WHEN ?1 = 0 THEN NULL ELSE ?8 END, is_pinned = ?1, updated_at = ?2
              WHERE id = ?7 AND conversation_id = ?3 AND conversation_type = ?4 AND sender_id = ?5 AND sent_at = ?6 AND is_deleted = 0",
             params![
                 pinned as i32,

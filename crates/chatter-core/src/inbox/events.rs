@@ -187,6 +187,11 @@ pub enum InboxEvent {
         /// The snapshot, applied whole by `MessageService::apply_saved_message_sync`.
         sync: crate::proto::content_v1::SavedMessageSync,
     },
+    /// Snapshot already durably applied before acknowledging its envelope.
+    SavedSnapshotApplied {
+        sender_id: UserId,
+        outcome: crate::services::message::SavedSyncOutcome,
+    },
     /// Delete for everyone received (peer wants us to delete).
     DmDeleteForEveryone {
         target_author_aci: Option<String>,

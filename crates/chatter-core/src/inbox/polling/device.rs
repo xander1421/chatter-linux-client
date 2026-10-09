@@ -561,6 +561,34 @@ async fn process_sender_key_message(
             match Content::decode(plaintext.as_slice()) {
                 Ok(content_proto) => {
                     if let Some(inner) = content_proto.content {
+                        if let content::Content::SavedMessageSync(sync) = &inner {
+                            match crate::services::message::persist_saved_device_snapshot(
+                                message_gateway,
+                                *sender_id,
+                                sync,
+                            ) {
+                                Ok(outcome) => {
+                                    let _ = event_tx.send(InboxEvent::SavedSnapshotApplied {
+                                        sender_id: *sender_id,
+                                        outcome,
+                                    });
+                                    stats.write().messages_processed += 1;
+                                    retry_budget.forget(&msg.message_guid);
+                                    return AckDecision::Ack;
+                                }
+                                Err(error) => {
+                                    return device_failure_decision(
+                                        Some(*sender_id),
+                                        msg.server_timestamp,
+                                        &error,
+                                        message_repo,
+                                        domain_tx,
+                                        &msg.message_guid,
+                                        retry_budget,
+                                    );
+                                }
+                            }
+                        }
                         dispatch_control_content(
                             inner,
                             sender_id,
@@ -1163,6 +1191,34 @@ async fn process_identified_sender_message(
             content,
         }) => {
             if let Some(inner) = content.content {
+                if let content::Content::SavedMessageSync(sync) = &inner {
+                    match crate::services::message::persist_saved_device_snapshot(
+                        message_gateway,
+                        actual_sender,
+                        sync,
+                    ) {
+                        Ok(outcome) => {
+                            let _ = event_tx.send(InboxEvent::SavedSnapshotApplied {
+                                sender_id: actual_sender,
+                                outcome,
+                            });
+                            stats.write().messages_processed += 1;
+                            retry_budget.forget(&msg.message_guid);
+                            return AckDecision::Ack;
+                        }
+                        Err(error) => {
+                            return device_failure_decision(
+                                Some(actual_sender),
+                                msg.server_timestamp,
+                                &error,
+                                message_repo,
+                                domain_tx,
+                                &msg.message_guid,
+                                retry_budget,
+                            );
+                        }
+                    }
+                }
                 dispatch_control_content(
                     inner,
                     &actual_sender,
@@ -1542,6 +1598,34 @@ async fn process_sealed_sender_message(
             content,
         }) => {
             if let Some(inner) = content.content {
+                if let content::Content::SavedMessageSync(sync) = &inner {
+                    match crate::services::message::persist_saved_device_snapshot(
+                        message_gateway,
+                        actual_sender,
+                        sync,
+                    ) {
+                        Ok(outcome) => {
+                            let _ = event_tx.send(InboxEvent::SavedSnapshotApplied {
+                                sender_id: actual_sender,
+                                outcome,
+                            });
+                            stats.write().messages_processed += 1;
+                            retry_budget.forget(&msg.message_guid);
+                            return AckDecision::Ack;
+                        }
+                        Err(error) => {
+                            return device_failure_decision(
+                                Some(actual_sender),
+                                msg.server_timestamp,
+                                &error,
+                                message_repo,
+                                domain_tx,
+                                &msg.message_guid,
+                                retry_budget,
+                            );
+                        }
+                    }
+                }
                 dispatch_control_content(
                     inner,
                     &actual_sender,

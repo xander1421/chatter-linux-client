@@ -123,14 +123,14 @@ impl UnifiedMessageRepository {
     /// deleted before it arrived is tombstoned and not stored. A caller that
     /// announces the message uses [`insert_received`](Self::insert_received).
     pub fn insert(&self, message: &Message) -> Result<(), StorageError> {
-        self.store(message, false).map(|_| ())
+        self.store(message, false, None).map(|_| ())
     }
 
     /// [`insert`](Self::insert), returning the message as stored — with any
     /// early modifier applied — or `None` when an early delete-for-everyone
     /// kept it out. What a receive path must announce, not what it decoded.
     pub fn insert_received(&self, message: &Message) -> Result<Option<Message>, StorageError> {
-        if !self.store(message, false)? {
+        if !self.store(message, false, None)? {
             return Ok(None);
         }
         self.get(&message.id)
@@ -142,7 +142,7 @@ impl UnifiedMessageRepository {
     /// `false` too for a message its author deleted for everyone before it
     /// arrived (see [`insert`](Self::insert)).
     pub fn insert_or_ignore(&self, message: &Message) -> Result<bool, StorageError> {
-        self.store(message, true)
+        self.store(message, true, None)
     }
 
     /// [`insert_or_ignore`](Self::insert_or_ignore), returning the message as
@@ -151,18 +151,56 @@ impl UnifiedMessageRepository {
         &self,
         message: &Message,
     ) -> Result<Option<Message>, StorageError> {
-        if !self.store(message, true)? {
+        if !self.store(message, true, None)? {
             return Ok(None);
         }
         self.get(&message.id)
     }
 
+    /// Store an own Saved snapshot and its initial pin clock atomically.
+    pub(crate) fn insert_saved_snapshot(
+        &self,
+        message: &Message,
+        pin_changed_at: u64,
+    ) -> Result<bool, StorageError> {
+        use crate::services::current_user::CurrentUserProvider;
+        let own = super::settings_repo::SettingsRepository::new(self.db.clone())
+            .current_user_id()
+            .map_err(|e| StorageError::InvalidData(format!("Saved identity: {e}")))?;
+        if message.conversation_type != ConversationType::SavedMessages
+            || message.conversation_id != ChannelId::from(own)
+            || message.sender_id != Some(own)
+            || pin_changed_at > i64::MAX as u64
+            || (message.is_pinned && pin_changed_at == 0)
+        {
+            return Err(StorageError::InvalidData(
+                "Invalid own Saved snapshot".into(),
+            ));
+        }
+        self.store(message, false, Some(pin_changed_at))
+    }
+
     /// The one write behind every insert: `true` when a row was written.
-    fn store(&self, message: &Message, or_ignore: bool) -> Result<bool, StorageError> {
+    fn store(
+        &self,
+        message: &Message,
+        or_ignore: bool,
+        saved_pin_clock: Option<u64>,
+    ) -> Result<bool, StorageError> {
         let is_read = self.stored_is_read(message);
         let conn = self.db.connection()?;
         let tx = conn.unchecked_transaction()?;
-        let (message, reactions) =
+        if saved_pin_clock.is_some()
+            && tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM deleted_messages WHERE id = ?1)",
+                params![message.id.to_string()],
+                |r| r.get::<_, bool>(0),
+            )?
+        {
+            return Ok(false);
+        }
+        let initial_saved_pin = saved_pin_clock.map(|_| message.is_pinned);
+        let (mut message, reactions) =
             match super::message_modifier_repo::take_on_arrival(&tx, message)? {
                 super::message_modifier_repo::Arrival::Store { message, reactions } => {
                     (message, reactions)
@@ -180,6 +218,11 @@ impl UnifiedMessageRepository {
                     return Ok(false);
                 }
             };
+        if let Some(pinned) = initial_saved_pin {
+            // Saved snapshots have their own durable clock, rather than the
+            // ordinary pin modifier's receipt-time ordering.
+            message.to_mut().is_pinned = pinned;
+        }
         let message = &*message;
         let content_json = serde_json::to_string(&message.content)
             .map_err(|e| StorageError::InvalidData(format!("serialize content: {}", e)))?;
@@ -246,9 +289,20 @@ impl UnifiedMessageRepository {
                 tx.execute(
                     "UPDATE messages SET pinned_at=?1 WHERE id=?2",
                     params![
-                        Utc::now().timestamp_nanos_opt().unwrap_or_default(),
+                        saved_pin_clock
+                            .map(|clock| clock as i64)
+                            .unwrap_or_else(|| Utc::now()
+                                .timestamp_nanos_opt()
+                                .unwrap_or_default()),
                         message.id.to_string()
                     ],
+                )?;
+            }
+            if let Some(clock) = saved_pin_clock {
+                tx.execute(
+                    "INSERT INTO saved_pin_watermarks (message_id, changed_at) VALUES (?1, ?2)
+                     ON CONFLICT(message_id) DO UPDATE SET changed_at = excluded.changed_at",
+                    params![message.id.to_string(), clock as i64],
                 )?;
             }
             index_shared_content(&tx, message);

@@ -20,6 +20,22 @@ pub(super) fn handle_message_received(
     ui_ctx: &Arc<ChatterClient>,
     message: Message,
 ) {
+    let message = if message.conversation_type
+        == chatter_core::domain::message::ConversationType::SavedMessages
+    {
+        let Some(stored) = ui_ctx.get_message_local(&message.id).filter(|stored| {
+            stored.conversation_type == message.conversation_type
+                && stored.conversation_id == message.conversation_id
+                && stored.sender_id == message.sender_id
+                && stored.sent_at == message.sent_at
+                && !stored.is_deleted
+        }) else {
+            return;
+        };
+        stored
+    } else {
+        message
+    };
     if chatter_core::services::disappearing::is_timer_notice(&message) {
         return;
     }
@@ -229,6 +245,24 @@ pub(super) fn handle_message_received(
                 &new_sender,
             ) {
                 chatter_core::domain::message::InsertPosition::Duplicate => {
+                    // A Saved snapshot may hydrate its quote after creation.
+                    // Replace only that row, keeping the model, viewport anchor
+                    // and selection; ordinary receive dedup still skips.
+                    if conv_type == chatter_core::domain::message::ConversationType::SavedMessages {
+                        if let Some(row) = current_model.iter().position(|m| {
+                            m.message_id == new_msg.message_id
+                                && m.sender_id == new_msg.sender_id
+                                && m.timestamp_ns == new_msg.timestamp_ns
+                        }) {
+                            if let Some(previous) = current_model.row_data(row) {
+                                new_msg.selected = previous.selected;
+                                new_msg.show_date_separator = previous.show_date_separator;
+                                new_msg.date_separator_text = previous.date_separator_text;
+                                new_msg.is_continuation = previous.is_continuation;
+                            }
+                            current_model.set_row_data(row, new_msg);
+                        }
+                    }
                     tracing::info!(
                         existing = current_model.row_count(),
                         "[UI_RECV] duplicate, skipped"

@@ -36,6 +36,64 @@ pub struct InboxEventProcessor {
 }
 
 impl InboxEventProcessor {
+    fn publish_saved_snapshot(
+        &self,
+        own: UserId,
+        outcome: crate::services::message::SavedSyncOutcome,
+    ) {
+        use crate::services::message::SavedSyncOutcome;
+        match outcome {
+            SavedSyncOutcome::Created(message) => {
+                self.event_bus
+                    .emit_domain(DomainEvent::SavedMessageSynced { message });
+            }
+            SavedSyncOutcome::Updated {
+                message,
+                body_changed,
+                pin_changed,
+                quote_hydrated,
+            } => {
+                if quote_hydrated {
+                    self.event_bus.emit_domain(DomainEvent::SavedMessageSynced {
+                        message: message.clone(),
+                    });
+                }
+                if body_changed {
+                    self.event_bus.emit_domain(DomainEvent::MessageEdited {
+                        message_id: message.id,
+                        new_content: message.content.clone(),
+                        channel_id: message.conversation_id,
+                        conversation_type: message.conversation_type,
+                        author_id: own,
+                        target_sent_timestamp: message.sent_at,
+                    });
+                }
+                match pin_changed {
+                    Some(true) => {
+                        self.event_bus.emit_domain(DomainEvent::MessagePinned {
+                            message_id: message.id,
+                            pinner_id: own,
+                            channel_id: message.conversation_id,
+                            conversation_type: message.conversation_type,
+                            target_sent_timestamp: message.sent_at,
+                        });
+                    }
+                    Some(false) => {
+                        self.event_bus.emit_domain(DomainEvent::MessageUnpinned {
+                            message_id: message.id,
+                            unpinner_id: own,
+                            channel_id: message.conversation_id,
+                            conversation_type: message.conversation_type,
+                            target_sent_timestamp: message.sent_at,
+                        });
+                    }
+                    None => {}
+                }
+            }
+            SavedSyncOutcome::Unchanged => {}
+        }
+    }
+
     /// Create from a CoreServices (convenience constructor).
     pub fn from_client(client: &Arc<crate::client::ChatterClient>) -> Self {
         // Durable reaction intents already in this profile must not wait for
@@ -1166,61 +1224,16 @@ impl InboxEventProcessor {
                 // The snapshot is applied to storage first; the events then
                 // carry the stored row, the same ones a local edit or pin
                 // emits, so state and UI take them on the one path.
-                use crate::services::message::SavedSyncOutcome;
                 match self.message_service.apply_saved_message_sync(sync) {
-                    Ok(SavedSyncOutcome::Created(message)) => {
-                        self.event_bus
-                            .emit_domain(DomainEvent::SavedMessageSynced { message });
-                    }
-                    // A hydrated quote alone has no event: the row reads
-                    // right on the next load of the conversation.
-                    Ok(SavedSyncOutcome::Updated {
-                        message,
-                        body_changed,
-                        pin_changed,
-                        quote_hydrated: _,
-                    }) => {
-                        if body_changed {
-                            self.event_bus.emit_domain(DomainEvent::MessageEdited {
-                                message_id: message.id,
-                                new_content: message.content.clone(),
-                                channel_id: message.conversation_id,
-                                conversation_type: message.conversation_type,
-                                author_id: own,
-                                target_sent_timestamp: message.sent_at,
-                            });
-                        }
-                        match pin_changed {
-                            Some(true) => {
-                                self.event_bus.emit_domain(DomainEvent::MessagePinned {
-                                    message_id: message.id,
-                                    pinner_id: own,
-                                    channel_id: message.conversation_id,
-                                    conversation_type: message.conversation_type,
-                                    target_sent_timestamp: message.sent_at,
-                                });
-                            }
-                            Some(false) => {
-                                self.event_bus.emit_domain(DomainEvent::MessageUnpinned {
-                                    message_id: message.id,
-                                    unpinner_id: own,
-                                    channel_id: message.conversation_id,
-                                    conversation_type: message.conversation_type,
-                                    target_sent_timestamp: message.sent_at,
-                                });
-                            }
-                            None => {}
-                        }
-                    }
-                    Ok(SavedSyncOutcome::Unchanged) => {}
+                    Ok(outcome) => self.publish_saved_snapshot(own, outcome),
                     Err(e) => {
-                        tracing::warn!(
-                            message_id = %sync.message_id,
-                            error = %e,
-                            "Failed to apply synced saved message"
-                        );
+                        tracing::warn!(message_id = %sync.message_id, error = %e, "Failed to apply synced saved message")
                     }
                 }
+            }
+
+            InboxEvent::SavedSnapshotApplied { sender_id, outcome } => {
+                self.publish_saved_snapshot(*sender_id, outcome.clone());
             }
 
             InboxEvent::ReadSync { sender_id, sync } => {

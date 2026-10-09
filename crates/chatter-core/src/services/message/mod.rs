@@ -23,6 +23,7 @@ pub mod core;
 mod pin;
 mod saved;
 pub use saved::SavedSyncOutcome;
+pub(crate) use saved::persist_saved_device_snapshot;
 mod server_dm;
 pub use call_event::ChannelCallPhase;
 mod receipts;
