@@ -116,6 +116,36 @@ impl UnifiedMessageRepository {
         self.insert(&sent)
     }
 
+    /// Read the row and its durable pin clock from one consistent DB snapshot.
+    pub(crate) fn saved_sync_snapshot_row(
+        &self,
+        owner: &UserId,
+        id: &MessageId,
+    ) -> Result<Option<(Message, u64)>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let tx = conn.unchecked_transaction()?;
+        let row = tx.query_row(
+            &format!("SELECT {} FROM messages WHERE id = ?1 AND sender_id = ?2 AND conversation_id = ?2 AND conversation_type = 'saved_messages' AND is_deleted = 0 AND NOT EXISTS (SELECT 1 FROM deleted_messages WHERE id = ?1)", message_columns("messages")),
+            params![id.to_string(), owner.to_string()], row_to_message,
+        ).optional()?.transpose()?;
+        let clock: Option<i64> = tx
+            .query_row(
+                "SELECT changed_at FROM saved_pin_watermarks WHERE message_id = ?1",
+                params![id.to_string()],
+                |r| r.get(0),
+            )
+            .optional()?;
+        tx.commit()?;
+        Ok(row.map(|row| (row, clock.unwrap_or_default() as u64)))
+    }
+
+    /// Store a local Saved creation and its sync obligation in one transaction.
+    pub(crate) fn insert_saved_outgoing(&self, message: &Message) -> Result<(), StorageError> {
+        let mut sent = message.clone();
+        sent.is_read = true;
+        self.store(&sent, false, None, true).map(|_| ())
+    }
+
     /// Insert a new message.
     ///
     /// An edit, delete-for-everyone, reaction or pin that arrived first is
@@ -123,14 +153,14 @@ impl UnifiedMessageRepository {
     /// deleted before it arrived is tombstoned and not stored. A caller that
     /// announces the message uses [`insert_received`](Self::insert_received).
     pub fn insert(&self, message: &Message) -> Result<(), StorageError> {
-        self.store(message, false, None).map(|_| ())
+        self.store(message, false, None, false).map(|_| ())
     }
 
     /// [`insert`](Self::insert), returning the message as stored — with any
     /// early modifier applied — or `None` when an early delete-for-everyone
     /// kept it out. What a receive path must announce, not what it decoded.
     pub fn insert_received(&self, message: &Message) -> Result<Option<Message>, StorageError> {
-        if !self.store(message, false, None)? {
+        if !self.store(message, false, None, false)? {
             return Ok(None);
         }
         self.get(&message.id)
@@ -142,7 +172,7 @@ impl UnifiedMessageRepository {
     /// `false` too for a message its author deleted for everyone before it
     /// arrived (see [`insert`](Self::insert)).
     pub fn insert_or_ignore(&self, message: &Message) -> Result<bool, StorageError> {
-        self.store(message, true, None)
+        self.store(message, true, None, false)
     }
 
     /// [`insert_or_ignore`](Self::insert_or_ignore), returning the message as
@@ -151,7 +181,7 @@ impl UnifiedMessageRepository {
         &self,
         message: &Message,
     ) -> Result<Option<Message>, StorageError> {
-        if !self.store(message, true, None)? {
+        if !self.store(message, true, None, false)? {
             return Ok(None);
         }
         self.get(&message.id)
@@ -177,7 +207,7 @@ impl UnifiedMessageRepository {
                 "Invalid own Saved snapshot".into(),
             ));
         }
-        self.store(message, false, Some(pin_changed_at))
+        self.store(message, false, Some(pin_changed_at), false)
     }
 
     /// The one write behind every insert: `true` when a row was written.
@@ -186,11 +216,12 @@ impl UnifiedMessageRepository {
         message: &Message,
         or_ignore: bool,
         saved_pin_clock: Option<u64>,
+        local_saved: bool,
     ) -> Result<bool, StorageError> {
         let is_read = self.stored_is_read(message);
         let conn = self.db.connection()?;
         let tx = conn.unchecked_transaction()?;
-        if saved_pin_clock.is_some()
+        if (saved_pin_clock.is_some() || local_saved)
             && tx.query_row(
                 "SELECT EXISTS(SELECT 1 FROM deleted_messages WHERE id = ?1)",
                 params![message.id.to_string()],
@@ -303,6 +334,21 @@ impl UnifiedMessageRepository {
                     "INSERT INTO saved_pin_watermarks (message_id, changed_at) VALUES (?1, ?2)
                      ON CONFLICT(message_id) DO UPDATE SET changed_at = excluded.changed_at",
                     params![message.id.to_string(), clock as i64],
+                )?;
+            }
+            if local_saved {
+                let owner = message
+                    .sender_id
+                    .ok_or_else(|| StorageError::InvalidData("Saved sender missing".into()))?;
+                if message.conversation_type != ConversationType::SavedMessages
+                    || message.conversation_id != ChannelId::from(owner)
+                {
+                    return Err(StorageError::InvalidData("Invalid own Saved row".into()));
+                }
+                super::saved_sync_repo::SavedSyncRepository::mark_dirty_with(
+                    &tx,
+                    &owner,
+                    &message.id,
                 )?;
             }
             index_shared_content(&tx, message);
@@ -2074,6 +2120,9 @@ impl UnifiedMessageRepository {
                 "UPDATE messages SET content_type = ?1, content_json = ?2, attachments_blob = ?3, is_edited = CASE WHEN ?4 THEN 1 ELSE is_edited END, edited_at = ?5, updated_at = ?6 WHERE id = ?7",
                 params![content_type_discriminant(&stored.content), content_json, db_serialize(&stored.attachments)?, body_changed, stored.edited_at.map(|t| t.to_rfc3339()), Utc::now().to_rfc3339(), id.to_string()],
             )?;
+        }
+        if local && body_changed {
+            super::saved_sync_repo::SavedSyncRepository::mark_dirty_with(&tx, author, id)?;
         }
         tx.commit()?;
         Ok(Some((body_changed, attachments_changed)))

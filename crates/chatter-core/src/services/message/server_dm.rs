@@ -1142,6 +1142,8 @@ impl MessageService {
         uak: Option<&[u8; 16]>,
         client_request_id: &str,
     ) -> Result<(SendSealedMessageResponse, bool), crate::error::NetworkError> {
+        crate::services::gateway::submission::check_send_session()
+            .map_err(|error| crate::error::NetworkError::InvalidRequest(error.to_string()))?;
         let mut uak_rejected = false;
         if let Some(uak) = uak {
             match self
@@ -1167,6 +1169,8 @@ impl MessageService {
                 other => return other.map(|response| (response, false)),
             }
         }
+        crate::services::gateway::submission::check_send_session()
+            .map_err(|error| crate::error::NetworkError::InvalidRequest(error.to_string()))?;
         message_client
             .send_sealed_messages(recipient_id, messages, delivery, client_request_id)
             .await

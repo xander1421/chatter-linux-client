@@ -1,5 +1,4 @@
-//! Pin clock for Saved records synced between our own devices (migration
-//! v092).
+//! Saved pin ordering (v092) and durable local sync intent (v093).
 //!
 //! A `SavedMessageSync` snapshot carries `pin_changed_at`; a receiver applies
 //! its `pinned` only when that clock is newer than the last pin change it
@@ -47,6 +46,121 @@ impl SavedSyncRepository {
         Self { db }
     }
 
+    /// Called inside the local row mutation transaction, never on receive.
+    pub(crate) fn mark_dirty_with(
+        conn: &rusqlite::Connection,
+        owner: &UserId,
+        id: &MessageId,
+    ) -> Result<(), StorageError> {
+        crate::services::gateway::submission::check_send_session()?;
+        let current: Option<String> = conn
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'auth.current_user_id'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if current
+            .and_then(|value| serde_json::from_str::<String>(&value).ok())
+            .as_deref()
+            != Some(owner.to_string().as_str())
+        {
+            return Err(StorageError::InvalidData(
+                "Saved mutation owner changed".into(),
+            ));
+        }
+        conn.execute(
+            "INSERT INTO saved_sync_outbox (owner_id, message_id) VALUES (?1, ?2)
+             ON CONFLICT(owner_id, message_id) DO UPDATE SET generation = generation + 1,
+                 attempts = 0, next_attempt_at = 0",
+            params![owner.to_string(), id.to_string()],
+        )?;
+        Ok(())
+    }
+
+    pub(crate) fn pending(
+        &self,
+        owner: &UserId,
+        id: &MessageId,
+    ) -> Result<Option<i64>, StorageError> {
+        Ok(self
+            .db
+            .read_connection()?
+            .query_row(
+                "SELECT generation FROM saved_sync_outbox WHERE owner_id = ?1 AND message_id = ?2",
+                params![owner.to_string(), id.to_string()],
+                |r| r.get(0),
+            )
+            .optional()?)
+    }
+
+    /// Only acknowledge the generation actually sent; a concurrent edit survives.
+    pub(crate) fn finish(
+        &self,
+        owner: &UserId,
+        id: &MessageId,
+        generation: i64,
+        acknowledged: bool,
+    ) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        if acknowledged {
+            conn.execute("DELETE FROM saved_sync_outbox WHERE owner_id = ?1 AND message_id = ?2 AND generation = ?3", params![owner.to_string(), id.to_string(), generation])?;
+        } else {
+            conn.execute(
+                "UPDATE saved_sync_outbox SET attempts = MIN(attempts + 1, 10),
+                   next_attempt_at = ?4 + MIN(5 * (1 << MIN(attempts, 6)), 300)
+                 WHERE owner_id = ?1 AND message_id = ?2 AND generation = ?3",
+                params![
+                    owner.to_string(),
+                    id.to_string(),
+                    generation,
+                    chrono::Utc::now().timestamp()
+                ],
+            )?;
+        }
+        Ok(())
+    }
+
+    pub(crate) fn due(
+        &self,
+        owner: &UserId,
+        reconnect: bool,
+    ) -> Result<Vec<MessageId>, StorageError> {
+        let conn = self.db.connection()?;
+        // A deleted or tombstoned record must never be resurrected by recovery.
+        conn.execute("DELETE FROM saved_sync_outbox WHERE owner_id = ?1 AND NOT EXISTS (
+            SELECT 1 FROM messages WHERE id = saved_sync_outbox.message_id
+              AND sender_id = ?1 AND conversation_id = ?1 AND conversation_type = 'saved_messages'
+              AND is_deleted = 0 AND NOT EXISTS (SELECT 1 FROM deleted_messages WHERE id = messages.id))", params![owner.to_string()])?;
+        if reconnect {
+            conn.execute(
+                "UPDATE saved_sync_outbox SET next_attempt_at = 0 WHERE owner_id = ?1",
+                params![owner.to_string()],
+            )?;
+        }
+        let mut stmt = conn.prepare("SELECT message_id FROM saved_sync_outbox WHERE owner_id = ?1 AND next_attempt_at <= ?2 ORDER BY next_attempt_at, message_id LIMIT 4")?;
+        let ids = stmt
+            .query_map(
+                params![owner.to_string(), chrono::Utc::now().timestamp()],
+                |r| r.get::<_, String>(0),
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut due = Vec::new();
+        for id in ids {
+            match id.parse() {
+                Ok(id) => due.push(id),
+                Err(_) => {
+                    tracing::warn!(%id, "Discarding malformed Saved outbox identity");
+                    conn.execute(
+                        "DELETE FROM saved_sync_outbox WHERE owner_id = ?1 AND message_id = ?2",
+                        params![owner.to_string(), id],
+                    )?;
+                }
+            }
+        }
+        Ok(due)
+    }
+
     /// Clock of the last pin change applied to this record; 0 when none.
     pub fn pin_watermark(&self, id: &MessageId) -> Result<u64, StorageError> {
         let conn = self.db.read_connection()?;
@@ -78,10 +192,18 @@ impl SavedSyncRepository {
         pinned: bool,
         changed_at: u64,
     ) -> Result<PinWrite, StorageError> {
-        self.write_pin(scope, author, sent_at, id, pinned, |watermark, stored| {
-            (changed_at > watermark || (changed_at == watermark && stored && !pinned))
-                .then_some(changed_at)
-        })
+        self.write_pin(
+            scope,
+            author,
+            sent_at,
+            id,
+            pinned,
+            false,
+            |watermark, stored| {
+                (changed_at > watermark || (changed_at == watermark && stored && !pinned))
+                    .then_some(changed_at)
+            },
+        )
     }
 
     /// Apply a pin change made here, dated now — or one tick past the
@@ -97,7 +219,7 @@ impl SavedSyncRepository {
         pinned: bool,
         now_ns: u64,
     ) -> Result<PinWrite, StorageError> {
-        self.write_pin(scope, author, sent_at, id, pinned, |watermark, _| {
+        self.write_pin(scope, author, sent_at, id, pinned, true, |watermark, _| {
             Some(now_ns.max(sent_at).max(watermark.saturating_add(1)))
         })
     }
@@ -172,6 +294,7 @@ impl SavedSyncRepository {
         sent_at: u64,
         id: &MessageId,
         pinned: bool,
+        local: bool,
         clock: impl FnOnce(u64, bool) -> Option<u64>,
     ) -> Result<PinWrite, StorageError> {
         if scope.kind != crate::domain::message::ConversationType::SavedMessages
@@ -187,7 +310,8 @@ impl SavedSyncRepository {
             .query_row(
                 "SELECT is_pinned FROM messages
                  WHERE id = ?1 AND conversation_id = ?2 AND conversation_type = ?3
-                   AND sender_id = ?4 AND sent_at = ?5 AND is_deleted = 0",
+                   AND sender_id = ?4 AND sent_at = ?5 AND is_deleted = 0
+                   AND NOT EXISTS (SELECT 1 FROM deleted_messages WHERE id = ?1)",
                 params![
                     id.to_string(),
                     scope.id.to_string(),
@@ -235,6 +359,9 @@ impl SavedSyncRepository {
              ON CONFLICT(message_id) DO UPDATE SET changed_at = excluded.changed_at",
             params![id.to_string(), changed_at as i64],
         )?;
+        if local {
+            Self::mark_dirty_with(&tx, author, id)?;
+        }
         tx.commit()?;
         Ok(PinWrite::Applied { changed_at })
     }

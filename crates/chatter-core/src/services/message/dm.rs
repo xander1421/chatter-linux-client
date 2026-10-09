@@ -190,16 +190,40 @@ impl MessageService {
     pub(crate) async fn sync_to_own_devices(
         &self,
         auth_client: &mut AuthClient,
-        mut sync: crate::proto::content_v1::Content,
+        sync: crate::proto::content_v1::Content,
     ) -> usize {
+        self.sync_to_own_devices_result(auth_client, sync, false)
+            .await
+            .0
+    }
+
+    /// A durable Saved obligation needs acknowledgement of the entire own-device set.
+    pub(crate) async fn sync_to_own_devices_acknowledged(
+        &self,
+        auth_client: &mut AuthClient,
+        sync: crate::proto::content_v1::Content,
+    ) -> (usize, bool) {
+        if crate::services::gateway::submission::check_send_session().is_err() {
+            return (0, false);
+        }
+        self.sync_to_own_devices_result(auth_client, sync, true)
+            .await
+    }
+
+    async fn sync_to_own_devices_result(
+        &self,
+        auth_client: &mut AuthClient,
+        mut sync: crate::proto::content_v1::Content,
+        strict: bool,
+    ) -> (usize, bool) {
         use crate::storage::repositories::settings_repo::keys;
 
         if let Err(error) = self.populate_sync_receipt_targets(&mut sync) {
             tracing::warn!(%error, "Could not snapshot own-device receipt targets");
-            return 0;
+            return (0, false);
         }
         let Ok(me_id) = self.current_user_id() else {
-            return 0;
+            return (0, false);
         };
         let me = me_id.to_string();
         if !self.shield_mode.load(std::sync::atomic::Ordering::Acquire) {
@@ -217,13 +241,39 @@ impl MessageService {
             // transcripts in the send log as it does the message
             // (`SendMessage.preload.ts` `sendSyncMessage`, Resendable).
             self.record_dm_send(me_id, &sync, &outcome.deposits);
-            return outcome.delivered;
+            let acknowledged = outcome.error.is_none()
+                && outcome.registration_ids.keys().all(|device| {
+                    outcome
+                        .deposits
+                        .iter()
+                        .any(|(delivered, _)| delivered == device)
+                });
+            return (outcome.delivered, acknowledged);
         }
         let this_device = self
             .settings_repo
             .get::<u32>(keys::CURRENT_DEVICE_ID)
             .ok()
             .flatten();
+        // Shield can send only existing sessions, but those cannot stand in
+        // for the full registered set when acknowledging a durable obligation.
+        let expected = if strict {
+            match auth_client.list_devices().await {
+                Ok(response) => Some(
+                    response
+                        .devices
+                        .into_iter()
+                        .filter(|device| {
+                            !device.is_current && Some(device.device_id) != this_device
+                        })
+                        .map(|device| device.device_id)
+                        .collect::<std::collections::HashSet<_>>(),
+                ),
+                Err(_) => return (0, false),
+            }
+        } else {
+            None
+        };
         let devices = self
             .signal_service
             .session_devices(&me)
@@ -238,11 +288,14 @@ impl MessageService {
             Ok(devices) => devices,
             Err(e) => {
                 tracing::warn!(error = %e, "Own-device sync: device lookup failed");
-                return 0;
+                return (0, false);
             }
         };
         if devices.is_empty() {
-            return 0;
+            return (
+                0,
+                expected.as_ref().is_some_and(|devices| devices.is_empty()),
+            );
         }
         Self::pad_content_to_bucket(&mut sync);
         let ciphertexts = match self
@@ -253,7 +306,7 @@ impl MessageService {
             Ok(c) => c,
             Err(e) => {
                 tracing::warn!(error = %e, "Own-device sync: encrypt failed");
-                return 0;
+                return (0, false);
             }
         };
         let outcome = self
@@ -262,7 +315,16 @@ impl MessageService {
         // What that device's DecryptionErrorMessage will name
         // (`resend_dm_on_decryption_error`).
         self.record_dm_send(me_id, &sync, &outcome.deposits);
-        outcome.delivered
+        let acknowledged = outcome.error.is_none()
+            && expected.as_ref().is_some_and(|devices| {
+                devices.iter().all(|device| {
+                    outcome
+                        .deposits
+                        .iter()
+                        .any(|(delivered, _)| delivered == device)
+                })
+            });
+        (outcome.delivered, acknowledged)
     }
 
     /// Seal `plaintext` for one peer device and deposit it in its mailbox.

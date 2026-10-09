@@ -237,10 +237,10 @@ impl MessageService {
             };
             self.fill_reply_context(&mut message, &scoped, Some(original));
         }
-        self.message_repo.insert_outgoing(&message)?;
+        self.message_repo.insert_saved_outgoing(&message)?;
 
-        // Sync to other devices. Failures are logged there and non-fatal:
-        // the message is stored locally. The row as stored is the snapshot.
+        // The local row and intent are committed. A failed immediate send
+        // remains queued for startup/reconnect recovery.
         let stored = self
             .message_repo
             .get(&message.id)?
@@ -261,7 +261,11 @@ impl MessageService {
     /// Whole or not at all: an attachment the row names that cannot be
     /// read, has no record, or has no CDN key and key material is an error,
     /// never a snapshot quietly missing media.
-    fn saved_snapshot(&self, message: &Message) -> Result<SavedMessageSync, MessageError> {
+    fn saved_snapshot(
+        &self,
+        message: &Message,
+        pin_changed_at: u64,
+    ) -> Result<SavedMessageSync, MessageError> {
         let mut attachments = Vec::with_capacity(message.attachments.len());
         let mut attachment_ids = Vec::with_capacity(message.attachments.len());
         for id in &message.attachments {
@@ -318,8 +322,6 @@ impl MessageService {
             }
             None => (None, String::new()),
         };
-        let pin_changed_at =
-            SavedSyncRepository::new(self.message_repo.db()).pin_watermark(&message.id)?;
         if message.is_pinned && pin_changed_at == 0 {
             return Err(MessageError::InvalidContent(
                 "Pinned Saved row without watermark".into(),
@@ -345,35 +347,66 @@ impl MessageService {
         })
     }
 
-    /// Sync one of our stored Saved records to the user's other linked
-    /// devices, through the one own-device path every sync transcript
-    /// takes ([`Self::sync_to_own_devices`]): padded, this device
-    /// excluded, the device set checked by the server and reconciled when
-    /// it changed, and in Shield only devices we already hold a session
-    /// with. Best effort, once: a device that was unreachable gets no
-    /// retry from here, and a Shield device without a session is skipped;
-    /// returns how many devices it reached. A record whose snapshot cannot
-    /// be built whole ([`Self::saved_snapshot`]) is not sent at all, and
-    /// that is logged as an error. `message` is the row as stored — the
-    /// caller re-reads it after its write, so the snapshot is what this
-    /// device holds, not what it meant to write.
+    /// Send the current full row; retain the durable obligation until every
+    /// own device is acknowledged. Incoming snapshots never enqueue intent.
     pub(crate) async fn sync_saved_record(&self, message: &Message) -> usize {
-        let snapshot = match self.saved_snapshot(message) {
-            Ok(snapshot) => snapshot,
+        let _gate = self.saved_sync_gate.lock().await;
+        let Ok(owner) = self.current_user_id() else {
+            return 0;
+        };
+        let journal = SavedSyncRepository::new(self.message_repo.db());
+        let generation = match journal.pending(&owner, &message.id) {
+            Ok(Some(generation)) => generation,
+            _ => return 0,
+        };
+        let (current, pin_changed_at) = match self
+            .message_repo
+            .saved_sync_snapshot_row(&owner, &message.id)
+        {
+            Ok(Some(snapshot)) => snapshot,
+            Ok(None) => {
+                let _ = journal.finish(&owner, &message.id, generation, true);
+                return 0;
+            }
             Err(error) => {
-                tracing::error!(
-                    message_id = %message.id,
-                    %error,
-                    "SavedMessages: snapshot not built; nothing sent to linked devices"
-                );
+                tracing::warn!(%error, "Saved recovery row unavailable");
+                let _ = journal.finish(&owner, &message.id, generation, false);
                 return 0;
             }
         };
+        let snapshot = match self.saved_snapshot(&current, pin_changed_at) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                tracing::warn!(message_id = %current.id, %error, "Saved snapshot remains pending");
+                let _ = journal.finish(&owner, &current.id, generation, false);
+                return 0;
+            }
+        };
+        // If a local write raced snapshot construction, its generation
+        // supersedes this attempt and stays pending for the next pass.
+        if journal.pending(&owner, &current.id).ok().flatten() != Some(generation)
+            || crate::services::gateway::submission::check_send_session().is_err()
+        {
+            return 0;
+        }
         let content = build_saved_message_sync_content(snapshot);
-        let synced = self
-            .sync_to_own_devices(&mut self.auth_client(), content)
-            .await;
-        tracing::debug!(message_id = %message.id, synced, "SavedMessages: own-device sync done");
+        let (synced, acknowledged) = match tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            self.sync_to_own_devices_acknowledged(&mut self.auth_client(), content),
+        )
+        .await
+        {
+            Ok(outcome) => outcome,
+            Err(_) => (0, false),
+        };
+        if self.current_user_id().ok() == Some(owner)
+            && crate::services::gateway::submission::check_send_session().is_ok()
+        {
+            if let Err(error) = journal.finish(&owner, &current.id, generation, acknowledged) {
+                tracing::warn!(%error, "Saved sync acknowledgement could not be persisted");
+            }
+        }
+        tracing::debug!(message_id = %current.id, synced, acknowledged, "Saved own-device fanout");
         synced
     }
 
@@ -941,6 +974,12 @@ mod tests {
         let repo = MessageRepository::new(db.clone());
         let pins = SavedSyncRepository::new(db.clone());
         let own = UserId::new();
+        crate::storage::repositories::settings_repo::SettingsRepository::new(db.clone())
+            .set(
+                crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID,
+                &own.to_string(),
+            )
+            .unwrap();
         let scope = ReactionScope::new(ChannelId::from(own), ConversationType::SavedMessages);
         let sent_at = 5_000;
         let saved = Message::new_text(scope.id, scope.kind, Some(own), "saved".into(), sent_at);
@@ -1076,4 +1115,68 @@ mod tests {
         );
         assert!(repo.get(&twin.id).unwrap().unwrap().reply_to.is_none());
     }
+}
+
+/// Session-owned startup/reconnect recovery with a bounded batch and durable backoff.
+pub(crate) fn spawn_saved_sync_recovery(
+    client: &std::sync::Arc<crate::client::ChatterClient>,
+) -> tokio::task::JoinHandle<()> {
+    let weak = std::sync::Arc::downgrade(client);
+    let mut connectivity = client.offline_state().subscribe();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(5));
+        interval.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut previous = None;
+        loop {
+            interval.tick().await;
+            let Some(client) = weak.upgrade() else {
+                break;
+            };
+            let mut reconnected = false;
+            loop {
+                match connectivity.try_recv() {
+                    Ok(state) => reconnected |= state.is_online,
+                    Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_)) => {
+                        reconnected = true
+                    }
+                    Err(_) => break,
+                }
+            }
+            let state = client.auth_state().get();
+            let Some(owner) = state
+                .current_user_id
+                .filter(|_| client.offline_state().connection_state().is_connected())
+            else {
+                previous = None;
+                continue;
+            };
+            let session = (owner, state.session_revision);
+            let messages = client.messages();
+            let journal = SavedSyncRepository::new(messages.database.clone());
+            let due = match journal.due(&owner, reconnected || previous != Some(session)) {
+                Ok(due) => due,
+                Err(error) => {
+                    tracing::warn!(%error, "Saved recovery journal unavailable");
+                    continue;
+                }
+            };
+            previous = Some(session);
+            use crate::services::gateway::submission::{SEND_SESSION, SendSession};
+            let send_session = SendSession::capture(client.auth_state());
+            for id in due {
+                let now = client.auth_state().get();
+                if now.current_user_id != Some(owner)
+                    || now.session_revision != session.1
+                    || !client.offline_state().connection_state().is_connected()
+                {
+                    break;
+                }
+                if let Ok(Some(row)) = messages.message_repo.get(&id) {
+                    SEND_SESSION
+                        .scope(send_session.clone(), messages.sync_saved_record(&row))
+                        .await;
+                }
+            }
+        }
+    })
 }

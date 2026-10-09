@@ -718,8 +718,8 @@ impl ConversationHandle {
     /// success. Nothing goes to the server — the Saved id is our own user
     /// id, not a channel a pin control may be sent to. The row as stored
     /// then goes to our linked devices as a `SavedMessageSync` snapshot
-    /// (`MessageService::sync_saved_record`, best effort: a device that was
-    /// unreachable is not retried from here). The emitted
+    /// (`MessageService::sync_saved_record`, durable retry: a device that was
+    /// unreachable remains queued for lifecycle recovery). The emitted
     /// `MessagePinned`/`MessageUnpinned` carries the real row id and the
     /// `SavedMessages` kind, so a same-id channel or DM view never takes it.
     /// `own` and `session_revision` are the snapshot the scope was resolved
@@ -744,6 +744,8 @@ impl ConversationHandle {
         let repo = &messages.message_repo;
         let stored = scoped_stored_message(repo, scope, &own, target_sent_timestamp)?;
         let row = pinned_saved_record(&stored, own, !unpin)?;
+        let saved_session =
+            crate::services::gateway::submission::SendSession::capture(self.client.auth_state());
         let now = self.client.auth_state().get();
         if now.current_user_id != Some(own) || now.session_revision != session_revision {
             return Err(ConversationError::Other(
@@ -751,13 +753,18 @@ impl ConversationHandle {
             ));
         }
         let now_ns = crate::util::time::TimestampNanos::now().as_u64();
-        match SavedSyncRepository::new(repo.db()).apply_local_pin(
-            scope,
-            &own,
-            target_sent_timestamp,
-            &row.id,
-            row.is_pinned,
-            now_ns,
+        match crate::services::gateway::submission::SEND_SESSION.sync_scope(
+            saved_session.clone(),
+            || {
+                SavedSyncRepository::new(repo.db()).apply_local_pin(
+                    scope,
+                    &own,
+                    target_sent_timestamp,
+                    &row.id,
+                    row.is_pinned,
+                    now_ns,
+                )
+            },
         )? {
             PinWrite::Applied { .. } => {}
             PinWrite::NoRow | PinWrite::Stale => {
@@ -787,7 +794,9 @@ impl ConversationHandle {
         // The row as it is now stored, pin clock included, is what siblings get.
         match repo.get(&row.id) {
             Ok(Some(written)) => {
-                messages.sync_saved_record(&written).await;
+                crate::services::gateway::submission::SEND_SESSION
+                    .scope(saved_session, messages.sync_saved_record(&written))
+                    .await;
             }
             Ok(None) => {
                 tracing::warn!(message_id = %row.id, "Saved local write succeeded but sync reread found no row; snapshot not sent")
@@ -843,8 +852,8 @@ impl ConversationHandle {
     /// channel a sender-key control may be sent to. The row as stored then
     /// goes to our linked devices as a `SavedMessageSync` snapshot whose
     /// `edited_at` orders it against their copy
-    /// (`MessageService::sync_saved_record`, best effort: a device that was
-    /// unreachable is not retried from here). The emitted `MessageEdited`
+    /// (`MessageService::sync_saved_record`, durable retry: a device that was
+    /// unreachable remains queued for lifecycle recovery). The emitted `MessageEdited`
     /// carries the real row id and the `SavedMessages` kind, so a same-id
     /// channel or DM row is never patched.
     async fn edit_saved_message(
@@ -863,6 +872,8 @@ impl ConversationHandle {
         let edited = edited_saved_record(&stored, own, new_text)?;
         // The scope was resolved under this account and session; the write
         // happens under the same ones or not at all.
+        let saved_session =
+            crate::services::gateway::submission::SendSession::capture(self.client.auth_state());
         let now = self.client.auth_state().get();
         if now.current_user_id != Some(own) || now.session_revision != auth.session_revision {
             return Err(ConversationError::Other(
@@ -871,17 +882,19 @@ impl ConversationHandle {
         }
         // Body columns only, at the Saved key: a pin of this row landing
         // between the read above and this write keeps its pin.
-        if repo
-            .write_saved_body(
-                scope,
-                &own,
-                target_sent_timestamp,
-                &edited.id,
-                new_text.trim(),
-                crate::util::time::TimestampNanos::now().as_u64(),
-                true,
-                &[],
-            )?
+        if crate::services::gateway::submission::SEND_SESSION
+            .sync_scope(saved_session.clone(), || {
+                repo.write_saved_body(
+                    scope,
+                    &own,
+                    target_sent_timestamp,
+                    &edited.id,
+                    new_text.trim(),
+                    crate::util::time::TimestampNanos::now().as_u64(),
+                    true,
+                    &[],
+                )
+            })?
             .is_none()
         {
             return Err(ConversationError::Other(
@@ -901,7 +914,9 @@ impl ConversationHandle {
         // The row as it is now stored, edit clock included, is what siblings get.
         match repo.get(&edited.id) {
             Ok(Some(written)) => {
-                messages.sync_saved_record(&written).await;
+                crate::services::gateway::submission::SEND_SESSION
+                    .scope(saved_session, messages.sync_saved_record(&written))
+                    .await;
             }
             Ok(None) => {
                 tracing::warn!(message_id = %edited.id, "Saved local write succeeded but sync reread found no row; snapshot not sent")

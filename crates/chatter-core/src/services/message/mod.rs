@@ -24,6 +24,7 @@ mod pin;
 mod saved;
 pub use saved::SavedSyncOutcome;
 pub(crate) use saved::persist_saved_device_snapshot;
+pub(crate) use saved::spawn_saved_sync_recovery;
 mod server_dm;
 pub use call_event::ChannelCallPhase;
 mod receipts;
@@ -353,6 +354,8 @@ pub struct MessageService {
     /// `MessageGateway`, which honours a resend's carried server id only
     /// against an entry here, and consumes it.
     pub(crate) solicited_resends: SolicitedResends,
+    /// Serialize immediate and lifecycle Saved attempts across service clones.
+    pub(crate) saved_sync_gate: Arc<tokio::sync::Mutex<()>>,
     /// Our own device list as the server last gave it: (fetched at, epoch
     /// nanos; device ids). See [`MessageService::is_retired_device`].
     pub(crate) own_devices: Arc<tokio::sync::Mutex<Option<(u64, std::collections::HashSet<u32>)>>>,
@@ -506,6 +509,7 @@ impl MessageService {
                 std::collections::HashSet::new(),
             )),
             solicited_resends,
+            saved_sync_gate: Arc::new(tokio::sync::Mutex::new(())),
             own_devices: Arc::new(tokio::sync::Mutex::new(None)),
             retired_peer_devices: Arc::new(parking_lot::Mutex::new(
                 std::collections::HashMap::new(),

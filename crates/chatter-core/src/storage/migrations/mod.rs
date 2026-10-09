@@ -89,6 +89,7 @@ mod v088_reaction_normalization;
 mod v089_pin_added_order;
 mod v090_delete_batch_retry;
 mod v092_saved_pin_watermark;
+mod v093_saved_sync_outbox;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -181,6 +182,7 @@ pub use v088_reaction_normalization::V088ReactionNormalization;
 pub use v089_pin_added_order::V089PinAddedOrder;
 pub use v090_delete_batch_retry::V090DeleteBatchRetry;
 pub use v092_saved_pin_watermark::V092SavedPinWatermark;
+pub use v093_saved_sync_outbox::V093SavedSyncOutbox;
 
 /// Trait for database migrations.
 ///
@@ -404,4 +406,5 @@ pub fn default_migrations() -> MigrationRunner {
         .register(V089PinAddedOrder)
         .register(V090DeleteBatchRetry)
         .register(V092SavedPinWatermark)
+        .register(V093SavedSyncOutbox)
 }
