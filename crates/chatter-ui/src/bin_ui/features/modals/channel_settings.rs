@@ -1501,7 +1501,7 @@ pub fn open_private_group_invite_modal(
         let allowed = ui_ctx.session_current_user_id().is_some_and(|uid| {
             ui_ctx
                 .get_anon_group(&group_id)
-                .is_some_and(|g| g.is_current_user_owner(&uid) && g.my_role.can_invite())
+                .is_some_and(|g| g.owner_id == uid && g.my_role.can_invite())
         });
         let candidates = if allowed {
             ui_ctx
@@ -1740,7 +1740,8 @@ fn wire_invite_channel_members(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
             let attempted = selected_user_ids.len();
             let _ = slint::invoke_from_event_loop(move || {
                 let Some(w) = weak.upgrade() else { return };
-    
+                w.set_invite_member_loading(false);
+
                 if success_count == 0 {
                     // Stay open: the selection is still there and retrying is
                     // one tap, which is the right thing to offer here.
