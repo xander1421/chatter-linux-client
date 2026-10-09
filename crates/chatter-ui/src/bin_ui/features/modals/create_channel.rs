@@ -20,6 +20,7 @@ pub(super) struct RequestFence {
     session_revision: u64,
     conversation: ActiveConversation,
     stack: Vec<SharedString>,
+    modal_generation: i32,
 }
 
 impl RequestFence {
@@ -31,6 +32,7 @@ impl RequestFence {
             session_revision: auth.session_revision,
             conversation: client.chat_state().active_conversation(),
             stack: w.get_modal_stack().iter().collect(),
+            modal_generation: w.get_modal_generation(),
         })
     }
 
@@ -44,6 +46,7 @@ impl RequestFence {
         self.session_current(client)
             && client.chat_state().active_conversation() == self.conversation
             && w.get_modal_stack().iter().eq(self.stack.iter().cloned())
+            && w.get_modal_generation() == self.modal_generation
     }
 }
 

@@ -849,6 +849,7 @@ export component MainWindow inherits Window {
     // Sessions modal properties
     in property <[SessionInfo]> sessions: [];
     in-out property <int> sessions-generation: 0;
+    in-out property <int> modal-generation: 0;
     in property <string> sessions-error: "";
     in property <bool> sessions-loaded: false;
     in property <bool> sessions-loading: false;
@@ -1475,6 +1476,7 @@ export component MainWindow inherits Window {
         }
     }
     changed active-modal => {
+        root.modal-generation += 1;
         root.sessions-generation += 1;
         if root.active-modal == "sessions" { root.settings-view-sessions(); }
         root.present-active-modal();
