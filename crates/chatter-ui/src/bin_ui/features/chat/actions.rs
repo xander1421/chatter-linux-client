@@ -261,7 +261,6 @@ pub fn copy_text(text: &str) {
 /// Downloads all attachments from a message to the user's Downloads folder.
 pub fn wire_download_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
-    #[cfg(target_os = "android")]
     let weak = window.as_weak();
 
     window.on_download_message(move |sender_id: SharedString, timestamp_ns: SharedString| {
