@@ -3897,8 +3897,9 @@ export component MainWindow inherits Window {
                 height: 24px;
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
-                // Accent on the shared glass surface stays legible in both themes.
-                colorize: Colors.primary;
+                // The accent tuned for glass: Colors.primary over dark glass
+                // on a bright backdrop fell to ~3.0:1.
+                colorize: Colors.glass-accent;
             }
             fab-touch := TouchArea { mouse-cursor: pointer; clicked => { root.nav-push("create-menu"); } }
         }

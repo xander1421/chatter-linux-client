@@ -309,8 +309,8 @@ pub(super) fn handle_message_received(
 /// Handle DM bootstrap completed event.
 ///
 /// Core emits it once the messages queued behind the key exchange were sent,
-/// so this only clears the composer placeholder and flips the queued bubbles
-/// ("sending") to "sent".
+/// and when the sealed DM outbox confirms a replay, so this only ends the
+/// bootstrap placeholder and flips the queued bubbles ("sending") to "sent".
 pub(super) fn handle_dm_bootstrap_completed(
     window: &Weak<MainWindow>,
     ui_ctx: &Arc<ChatterClient>,
@@ -319,12 +319,22 @@ pub(super) fn handle_dm_bootstrap_completed(
 ) {
     let is_active = ui_ctx.active_conversation().matches_dm_peer(&peer_id);
     crate::run_ui!(window, |w| {
-        w.set_composer_placeholder("Type a message...".into());
+        end_bootstrap_placeholder(&w);
         if is_active {
             set_own_status_at(&w, &sent_timestamps, "sent");
         }
         tracing::debug!(peer_id = %peer_id, "DM bootstrap complete - composer enabled");
     });
+}
+
+/// Clear the Shield bootstrap placeholder. Background settlements (the
+/// bootstrap flush, the sealed DM outbox) arrive whatever conversation is
+/// open, so any other placeholder (reply, attachments, read-only) is left.
+fn end_bootstrap_placeholder(w: &MainWindow) {
+    use crate::bin_ui::features::chat::send_message::BOOTSTRAP_PLACEHOLDER;
+    if w.get_composer_placeholder().as_str() == BOOTSTRAP_PLACEHOLDER {
+        w.set_composer_placeholder("Type a message...".into());
+    }
 }
 
 /// Set the status of our own bubbles sent at `timestamps` (`timestamp_ns`) in
@@ -569,9 +579,8 @@ pub(super) fn handle_message_send_failed(
     let weak = window.clone();
     let _ = slint::invoke_from_event_loop(move || {
         let Some(w) = weak.upgrade() else { return };
-        // The only background send is the post-bootstrap flush; its
-        // "Setting up secure channel…" placeholder ends here too.
-        w.set_composer_placeholder("Type a message...".into());
+        // A post-bootstrap flush failure ends its placeholder too.
+        end_bootstrap_placeholder(&w);
         // The bubble says it too: "not sent", never the ticks of a delivery.
         // Only our own bubbles at these timestamps, so another open chat is
         // untouched.

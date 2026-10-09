@@ -20,6 +20,10 @@ use super::typing::clear_outgoing_typing;
 use crate::MainWindow;
 use crate::bin_ui::converters::attachment_to_display_data;
 
+/// Composer placeholder while a Shield key exchange holds the sent messages.
+/// Only the bootstrap's own settlement may clear it, and only it.
+pub(crate) const BOOTSTRAP_PLACEHOLDER: &str = "Setting up secure channel...";
+
 /// The row a send occupies in the open list while it is on the wire.
 ///
 /// The composer is cleared the instant send is tapped and the message is not
@@ -922,7 +926,7 @@ async fn deliver_inner(
             }
 
             if bootstrap_initiated {
-                w.set_composer_placeholder("Setting up secure channel...".into());
+                w.set_composer_placeholder(BOOTSTRAP_PLACEHOLDER.into());
             }
 
             crate::bin_ui::gif_state::auto_register_gifs_from_messages(

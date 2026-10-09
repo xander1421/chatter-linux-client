@@ -218,6 +218,24 @@ impl ChatterClient {
                     release(db, &key, &pending.attempt_id)?;
                     return Ok(());
                 }
+                // A claim journalled before `started` existed, on a friend DM
+                // the outbox does not hold: nothing will ever settle it, so it
+                // would block this conversation for good. Fail closed but
+                // recoverable: the row becomes a failed bubble ("Delivery
+                // unconfirmed") the user may retry under its original sent_at,
+                // which the receiver deduplicates. Never resent on its own.
+                if pending.started.is_none()
+                    && row.as_ref().is_some_and(|m| {
+                        m.conversation_type == crate::domain::message::ConversationType::ServerDm
+                            && matches!(m.delivery_status.as_str(), "sending" | "failed")
+                    })
+                {
+                    db.connection().map_err(storage_error)?
+                        .execute("UPDATE messages SET delivery_status='failed',failure_reason='Delivery unconfirmed' WHERE id=?1 AND delivery_status='sending'", params![row_id])
+                        .map_err(|e| storage_error(StorageError::Database(e)))?;
+                    release(db, &key, &pending.attempt_id)?;
+                    return Ok(());
+                }
             }
             if abandoned_before_submission(&pending) {
                 self.recover_abandoned_preparation(conversation, &key, pending)?;

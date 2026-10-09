@@ -2886,12 +2886,31 @@ impl ChatterClient {
                     self.finish_send_attempt(&key, attempt, None, true)?;
                     return Ok(result);
                 }
+                // Normal mode returns a friend DM it could not confirm as a
+                // `sending` row with no error: queued in the sealed outbox.
+                let outbox_queued = !result.bootstrap_initiated && result.send_error.is_none();
                 if !confirmed {
                     if let Some(message) = result.message.as_mut() {
-                        *message = self
-                            .messages()
-                            .finish_retry_row(&message.id, "sending", Some("Delivery unconfirmed"))
-                            .map_err(|_| SendError::DeliveryUnconfirmed)?;
+                        *message = if outbox_queued
+                            && message.conversation_type
+                                == crate::domain::message::ConversationType::ServerDm
+                        {
+                            // The sealed DM outbox owns this row and settles
+                            // it, possibly already: relabelling could revive a
+                            // row it just settled `failed` as an orphan
+                            // `sending`. Show what it stored.
+                            self.messages()
+                                .get_message_local(&message.id)?
+                                .unwrap_or_else(|| message.clone())
+                        } else {
+                            self.messages()
+                                .finish_retry_row(
+                                    &message.id,
+                                    "sending",
+                                    Some("Delivery unconfirmed"),
+                                )
+                                .map_err(|_| SendError::DeliveryUnconfirmed)?
+                        };
                     }
                 }
                 self.finish_send_attempt(
@@ -3195,7 +3214,13 @@ impl ChatterClient {
                     updated.delivery_status.as_str(),
                     "sent" | "delivered" | "read"
                 );
-                if !confirmed {
+                // A friend DM retry that returned is settled by its owner (the
+                // sealed DM outbox or the Shield bootstrap); relabelling could
+                // revive a row the outbox just settled `failed`.
+                if !confirmed
+                    && updated.conversation_type
+                        != crate::domain::message::ConversationType::ServerDm
+                {
                     updated = service.finish_retry_row(
                         &updated.id,
                         "sending",

@@ -333,21 +333,44 @@ impl MessageService {
             _ => None,
         };
 
-        let (content, _, ttl) = self.server_dm_content(
+        let (mut content, _, _) = self.server_dm_content(
             &peer_id,
             message.as_text().unwrap_or(""),
             pointers,
             message.sent_at,
             quote.as_ref(),
         )?;
+        // The TTL stamped when the message was composed, kept (clock stopped)
+        // in its `ephemeral_messages` row, not the conversation's timer now:
+        // sender and receiver copies must live alike. Version 0 states no
+        // conversation timer, as any resend of an old message
+        // (`disappearing::stated_timer`).
+        let ttl = {
+            use rusqlite::OptionalExtension as _;
+            self.database
+                .read_connection()?
+                .query_row(
+                    "SELECT ttl_seconds FROM ephemeral_messages WHERE message_id=?1",
+                    [message.id.to_string()],
+                    |r| r.get::<_, u32>(0),
+                )
+                .optional()
+                .map_err(crate::error::StorageError::from)?
+        }
+        .filter(|s| *s > 0);
+        if let Some(crate::proto::content_v1::content::Content::DataMessage(dm)) =
+            content.content.as_mut()
+        {
+            dm.ephemeral = ttl.is_some();
+            dm.ephemeral_ttl_seconds = ttl.unwrap_or(0);
+            dm.expire_timer_version = 0;
+            dm.disappearing_enabled_until = 0;
+            dm.disappearing_activation_seconds = 0;
+        }
         // The devices this message was encrypted for, not the peer's devices
         // now. A device linked after the send is not in that set. No fallback
         // when the set is empty: we do not know who the original was for.
         let devices = self.original_dm_devices(peer_id, message.sent_at)?;
-        if let Some(secs) = ttl {
-            // The retry states this TTL; the clock still waits for confirmation.
-            let _ = self.ephemeral_service.track_armed(message.id, secs);
-        }
         if !self.shield_mode.load(std::sync::atomic::Ordering::Acquire) {
             // Through the outbox, so an unconfirmed retry is replayed exactly
             // rather than encrypted again.
@@ -1135,6 +1158,17 @@ impl MessageService {
         // A queued DM stores these exact envelopes before the first byte goes.
         super::dm_outbox::retain_request(recipient_id, &messages, delivery, uak, client_request_id)
             .map_err(|error| crate::error::NetworkError::ServerError(error.to_string()))?;
+        // Shield turned on during a queued DM's attempt: this transport names
+        // the recipient, so the stored envelope waits instead.
+        let shield_fence = || {
+            if super::dm_outbox::request_id().is_some()
+                && self.shield_mode.load(std::sync::atomic::Ordering::Acquire)
+            {
+                return Err(crate::error::NetworkError::Unavailable);
+            }
+            Ok(())
+        };
+        shield_fence()?;
         let mut uak_rejected = false;
         if let Some(uak) = uak {
             match self
@@ -1162,6 +1196,7 @@ impl MessageService {
         }
         crate::services::gateway::submission::check_send_session()
             .map_err(|error| crate::error::NetworkError::InvalidRequest(error.to_string()))?;
+        shield_fence()?;
         message_client
             .send_sealed_messages(recipient_id, messages, delivery, client_request_id)
             .await

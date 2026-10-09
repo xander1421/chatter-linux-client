@@ -886,6 +886,13 @@ export component MessageList inherits Rectangle {
                 easing: ease-out;
             }
 
+            // Hover/press overlay, as on the FAB: the pill is already thick,
+            // so retinting it to thick on hover showed nothing.
+            Rectangle {
+                border-radius: parent.border-radius;
+                background: scroll-btn.pressed ? Materials.pressed : scroll-btn.has-hover ? Materials.hover : transparent;
+            }
+
             pill-content := HorizontalLayout {
                 alignment: center;
                 spacing: Spacing.sm;
@@ -932,12 +939,6 @@ export component MessageList inherits Rectangle {
                 }
             }
 
-            // Hover effect
-            states [
-                hover when scroll-btn.has-hover: {
-                    material-tint: Materials.thick;
-                }
-            ]
         }
     }
 

@@ -12,6 +12,16 @@
 //! encrypts, under a generation fence, so two workers cannot both deposit
 //! fresh encryptions.
 //!
+//! A stored envelope carries the sender certificate it was sealed with, and
+//! the receiver checks that certificate at the server's (fresh) timestamp. So
+//! an envelope is replayed only inside [`REPLAY_WINDOW_SECONDS`] of sealing.
+//! Past it the stored envelope is discarded, never sent again, and the content
+//! is sealed once more (Signal re-encrypts on retry) under a new GUID: the old
+//! GUID could make the server deduplicate the new copy behind a queued dead
+//! one. If an earlier copy did land, the receiver drops the second on its
+//! (conversation, sender, sent_at). The ratchet only advances, so the skipped
+//! counter is an ordinary gap.
+//!
 //! Shield (mailbox) DMs do not enter: their bootstrap queue owns them, and
 //! the worker waits while Shield is on rather than leak the recipient.
 use super::{MessageError, MessageService};
@@ -37,6 +47,19 @@ const RETENTION_SECONDS: i64 = 30 * 24 * 3600;
 const LEASE_SECONDS: i64 = 60;
 /// Attempts per worker tick.
 const BATCH: i64 = 4;
+/// How long after sealing a stored envelope may still be replayed. A sender
+/// certificate is used only until 12 h before its 24 h expiry
+/// (`internal/services/auth/service/sealed_sender.go:26-29`, refresh in
+/// `signal/session.rs` `get_cached_sender_certificate`), so a sealed envelope
+/// has at least 12 h left. Two hours of that are margin for this device's
+/// clock against the server's, which stamps the replay.
+const REPLAY_WINDOW_SECONDS: i64 = 10 * 3600;
+
+/// Whether an envelope sealed at `sealed_at` still carries a certificate the
+/// receiver accepts. Unknown seal time, or a clock that went backwards: no.
+fn replayable(sealed_at: Option<i64>, now: i64) -> bool {
+    sealed_at.is_some_and(|t| (t..t + REPLAY_WINDOW_SECONDS).contains(&now))
+}
 
 fn now() -> i64 {
     chrono::Utc::now().timestamp()
@@ -86,10 +109,20 @@ pub(super) fn retain_request(
                 delivery: delivery as i32,
             }
             .encode_to_vec();
+            // The earliest seal time is kept: a narrowed replay (410) or a
+            // re-encryption for added devices (409) never extends the window.
             let changed = slot.db.connection()?.execute(
-                "UPDATE dm_outbox SET request=?4, uak=?5 WHERE owner_id=?1 AND message_id=?2 AND generation=?3
+                "UPDATE dm_outbox SET request=?4, uak=?5, sealed_at=COALESCE(sealed_at,?6)
+                 WHERE owner_id=?1 AND message_id=?2 AND generation=?3
                  AND EXISTS(SELECT 1 FROM messages WHERE id=?2 AND is_deleted=0)",
-                params![slot.owner, slot.id, slot.generation, request, uak.map(|k| k.to_vec())],
+                params![
+                    slot.owner,
+                    slot.id,
+                    slot.generation,
+                    request,
+                    uak.map(|k| k.to_vec()),
+                    now()
+                ],
             )?;
             if changed != 1 {
                 return Err(invalid("Sealed DM send was taken over or deleted"));
@@ -117,6 +150,7 @@ struct Entry {
     request: Option<Vec<u8>>,
     uak: Option<Vec<u8>>,
     devices: Option<Vec<u32>>,
+    sealed_at: Option<i64>,
 }
 
 /// Outcome of the attempt made inside the composing send.
@@ -195,7 +229,7 @@ impl MessageService {
         let conn = self.database.read_connection()?;
         let row = conn
             .query_row(
-                "SELECT peer_id,device_id,request_id,content,request,uak,devices FROM dm_outbox
+                "SELECT peer_id,device_id,request_id,content,request,uak,devices,sealed_at FROM dm_outbox
                  WHERE owner_id=?1 AND message_id=?2 AND generation=?3",
                 params![owner, id, generation],
                 |r| {
@@ -207,11 +241,13 @@ impl MessageService {
                         r.get::<_, Option<Vec<u8>>>(4)?,
                         r.get::<_, Option<Vec<u8>>>(5)?,
                         r.get::<_, Option<String>>(6)?,
+                        r.get::<_, Option<i64>>(7)?,
                     ))
                 },
             )
             .optional()?;
-        let Some((peer, device, request_id, content, request, uak, devices)) = row else {
+        let Some((peer, device, request_id, content, request, uak, devices, sealed_at)) = row
+        else {
             return Ok(None);
         };
         Ok(Some(Entry {
@@ -224,7 +260,55 @@ impl MessageService {
             devices: devices
                 .map(|d| serde_json::from_str(&d).map_err(|_| invalid("Invalid outbox devices")))
                 .transpose()?,
+            sealed_at,
         }))
+    }
+
+    /// Discard a stored envelope whose certificate window has passed, so it
+    /// is never sent again, and set the entry up to be sealed once more: a
+    /// new GUID, and the devices the old envelope was for (no device linked
+    /// since). Fenced like `retain_request`.
+    fn reseal_outbox_entry(
+        &self,
+        owner: &str,
+        id: &str,
+        generation: &str,
+        mut entry: Entry,
+    ) -> Result<Entry, MessageError> {
+        let raw = entry.request.take().unwrap_or_default();
+        let devices: Vec<u32> = SendSealedMessageRequest::decode(raw.as_slice())
+            .map_err(|_| invalid("Invalid outbox request"))?
+            .messages
+            .iter()
+            .map(|m| m.device_id)
+            .collect();
+        let request_id = uuid::Uuid::new_v4().to_string();
+        let changed = self.database.connection()?.execute(
+            "UPDATE dm_outbox SET request=NULL, uak=NULL, sealed_at=NULL, request_id=?4, devices=?5
+             WHERE owner_id=?1 AND message_id=?2 AND generation=?3
+             AND EXISTS(SELECT 1 FROM messages WHERE id=?2 AND is_deleted=0)",
+            params![
+                owner,
+                id,
+                generation,
+                request_id,
+                serde_json::to_string(&devices).map_err(|_| invalid("Cannot retain devices"))?
+            ],
+        )?;
+        if changed != 1 {
+            return Err(MessageError::Storage(invalid(
+                "Sealed DM send was taken over or deleted",
+            )));
+        }
+        tracing::info!(
+            message_id = id,
+            "Sealed DM envelope past its certificate window; sealing again"
+        );
+        entry.uak = None;
+        entry.sealed_at = None;
+        entry.request_id = request_id;
+        entry.devices = Some(devices);
+        Ok(entry)
     }
 
     /// One delivery attempt of the entry this generation owns. Encrypts only
@@ -235,7 +319,7 @@ impl MessageService {
         generation: &str,
     ) -> Result<(), MessageError> {
         let owner = self.current_user_id()?.to_string();
-        let entry = self
+        let mut entry = self
             .load_outbox_entry(&owner, &id.to_string(), generation)?
             .ok_or_else(|| MessageError::Storage(invalid("Sealed DM send was taken over")))?;
         // Waiting, not failing: this transport names the recipient.
@@ -249,6 +333,9 @@ impl MessageService {
         }
         let content = Content::decode(entry.content.as_slice())
             .map_err(|_| invalid("Invalid outbox content"))?;
+        if entry.request.is_some() && !replayable(entry.sealed_at, now()) {
+            entry = self.reseal_outbox_entry(&owner, &id.to_string(), generation, entry)?;
+        }
         let peer = entry.peer.to_string();
         let mut auth_client = self.auth_client();
         let mut message_client = self.message_client();
@@ -341,22 +428,30 @@ impl MessageService {
     /// starts its disappearing clock) and the entry and any send journal
     /// bound to the row go in one transaction. Otherwise the entry waits with
     /// backoff; `final_failure` or a non-transient error settles it `failed`.
+    ///
+    /// Every branch acts only while `generation` still owns this account's
+    /// entry: an attempt that lost its lease (or whose entry was settled or
+    /// dropped meanwhile) records nothing, and the current owner decides.
+    /// Returns whether the outcome was recorded.
     pub(super) fn settle_sealed_dm(
         &self,
         id: &MessageId,
         generation: &str,
         result: &Result<(), MessageError>,
         final_failure: bool,
-    ) -> Result<(), MessageError> {
+    ) -> Result<bool, MessageError> {
         let owner = self.current_user_id()?.to_string();
         let mut conn = self.database.connection()?;
         let tx = conn.transaction()?;
-        let finish = |status: &str, reason: Option<&str>| -> Result<(), StorageError> {
+        let finish = |status: &str, reason: Option<&str>| -> Result<bool, StorageError> {
+            if tx.execute(
+                "DELETE FROM dm_outbox WHERE owner_id=?1 AND message_id=?2 AND generation=?3",
+                params![owner, id.to_string(), generation],
+            )? != 1
+            {
+                return Ok(false);
+            }
             tx.execute("UPDATE messages SET delivery_status=CASE WHEN delivery_status IN ('sent','delivered','read') THEN delivery_status ELSE ?2 END, failure_reason=CASE WHEN delivery_status IN ('sent','delivered','read') OR ?2='sent' THEN NULL ELSE ?3 END WHERE id=?1", params![id.to_string(), status, reason])?;
-            tx.execute(
-                "DELETE FROM dm_outbox WHERE owner_id=?1 AND message_id=?2",
-                params![owner, id.to_string()],
-            )?;
             // The bound admission claim is resolved with the row. A sent
             // one is tombstoned like `send_attempt::release`, so its attempt
             // id stays spent; a failed one may be composed again.
@@ -365,9 +460,9 @@ impl MessageService {
                 tx.execute("INSERT OR IGNORE INTO settings(key,value,updated_at) SELECT key || ':confirmed:' || json_extract(value,'$.attempt_id'),json_object('attempt_id',json_extract(value,'$.attempt_id'),'message_id',json_extract(value,'$.message_id')),updated_at FROM settings WHERE key LIKE ?1 AND key NOT LIKE '%:confirmed:%' AND json_extract(value,'$.message_id')=?2 AND json_extract(value,'$.attempt_id') IS NOT NULL", params![pattern, id.to_string()])?;
             }
             tx.execute("DELETE FROM settings WHERE key LIKE ?1 AND key NOT LIKE '%:confirmed:%' AND json_extract(value,'$.message_id')=?2 AND json_extract(value,'$.attempt_id') IS NOT NULL", params![pattern, id.to_string()])?;
-            Ok(())
+            Ok(true)
         };
-        match result {
+        let recorded = match result {
             Ok(()) => finish("sent", None)?,
             Err(error) if final_failure || !transient(error) => finish(
                 "failed",
@@ -378,16 +473,19 @@ impl MessageService {
                 ),
             )?,
             Err(_) => {
-                tx.execute(
+                let waiting = tx.execute(
                     "UPDATE dm_outbox SET attempts=MIN(attempts+1,6), next_attempt_at=?4+(5 << MIN(attempts,6))
                      WHERE owner_id=?1 AND message_id=?2 AND generation=?3",
                     params![owner, id.to_string(), generation, now()],
-                )?;
-                tx.execute("UPDATE messages SET failure_reason='Waiting for connection' WHERE id=?1 AND delivery_status='sending'", params![id.to_string()])?;
+                )? == 1;
+                if waiting {
+                    tx.execute("UPDATE messages SET failure_reason='Waiting for connection' WHERE id=?1 AND delivery_status='sending'", params![id.to_string()])?;
+                }
+                waiting
             }
-        }
+        };
         tx.commit()?;
-        Ok(())
+        Ok(recorded)
     }
 
     /// The first attempt of a just-enqueued DM, inside the composing send.
@@ -406,16 +504,22 @@ impl MessageService {
             return Ok(FirstAttempt::Queued);
         }
         let error = match result {
+            // Not recorded: this attempt lost its lease and the worker decides.
             Ok(()) => {
-                self.settle_sealed_dm(id, generation, &Ok(()), false)?;
-                return Ok(FirstAttempt::Sent);
+                return Ok(if self.settle_sealed_dm(id, generation, &Ok(()), false)? {
+                    FirstAttempt::Sent
+                } else {
+                    FirstAttempt::Queued
+                });
             }
             Err(error) => error,
         };
         if !transient(&error) && !crate::services::gateway::submission::submission_started() {
             // Refused before any ratchet step or request byte: plainly failed.
             let result = Err(error);
-            self.settle_sealed_dm(id, generation, &result, true)?;
+            if !self.settle_sealed_dm(id, generation, &result, true)? {
+                return Ok(FirstAttempt::Queued);
+            }
             return Ok(FirstAttempt::Refused(result.unwrap_err()));
         }
         tracing::warn!(message_id = %id, error = %error, "Sealed DM not confirmed; queued for replay");
@@ -441,7 +545,7 @@ fn claim_due(
 ) -> Result<
     (
         Vec<(MessageId, String, ChannelId, u64)>,
-        Vec<(MessageId, ChannelId, u64)>,
+        Vec<(MessageId, String, ChannelId, u64)>,
     ),
     StorageError,
 > {
@@ -485,15 +589,16 @@ fn claim_due(
         let conversation: ChannelId = conversation
             .parse()
             .map_err(|_| invalid("Invalid outbox conversation"))?;
-        if created < now() - RETENTION_SECONDS || entry_device != device {
-            expired.push((message_id, conversation, sent_at as u64));
-            continue;
-        }
+        // Leased either way, so settling it is fenced like any attempt.
         let generation = uuid::Uuid::new_v4().to_string();
         tx.execute(
             "UPDATE dm_outbox SET generation=?3, next_attempt_at=?4 WHERE owner_id=?1 AND message_id=?2",
             params![owner_s, id, generation, now() + LEASE_SECONDS],
         )?;
+        if created < now() - RETENTION_SECONDS || entry_device != device {
+            expired.push((message_id, generation, conversation, sent_at as u64));
+            continue;
+        }
         due.push((message_id, generation, conversation, sent_at as u64));
     }
     tx.commit()?;
@@ -548,21 +653,22 @@ pub(crate) fn spawn_dm_send_recovery(
                     .unwrap_or("Not delivered")
                     .to_owned();
                 match messages.settle_sealed_dm(id, generation, &Err(error), true) {
-                    Ok(()) => client.event_bus().emit_domain(
+                    Ok(true) => client.event_bus().emit_domain(
                         crate::events::DomainEvent::MessageSendFailed {
                             channel_id: conversation,
                             error: reason,
                             message_timestamps: vec![sent_at],
                         },
                     ),
+                    Ok(false) => {}
                     Err(error) => tracing::warn!(%error, "Sealed DM failure not recorded"),
                 }
             };
-            for (id, conversation, sent_at) in expired {
+            for (id, generation, conversation, sent_at) in expired {
                 tracing::warn!(message_id = %id, "Sealed DM unconfirmed past retention or from a previous device; marked failed");
                 fail(
                     &id,
-                    "",
+                    &generation,
                     conversation,
                     sent_at,
                     MessageError::DmError("expired".into()),
@@ -596,12 +702,13 @@ pub(crate) fn spawn_dm_send_recovery(
                 let final_failure = matches!(&result, Err(e) if !transient(e));
                 match result {
                     Ok(()) => match messages.settle_sealed_dm(&id, &generation, &Ok(()), false) {
-                        Ok(()) => client.event_bus().emit_domain(
+                        Ok(true) => client.event_bus().emit_domain(
                             crate::events::DomainEvent::DmBootstrapCompleted {
                                 peer_id: UserId::from_uuid(*conversation.as_uuid()),
                                 sent_timestamps: vec![sent_at],
                             },
                         ),
+                        Ok(false) => {}
                         Err(error) => {
                             tracing::warn!(%error, "Sealed DM confirmation not recorded; it will replay")
                         }
@@ -627,6 +734,21 @@ pub(crate) fn spawn_dm_send_recovery(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A stored envelope is replayed only while the certificate sealed into
+    /// it is still valid: never with an unknown seal time, never at or past
+    /// the window, never across a clock that went backwards.
+    #[test]
+    fn replay_stays_inside_the_certificate_window() {
+        let sealed = 1_000_000;
+        assert!(replayable(Some(sealed), sealed));
+        assert!(replayable(Some(sealed), sealed + REPLAY_WINDOW_SECONDS - 1));
+        assert!(!replayable(Some(sealed), sealed + REPLAY_WINDOW_SECONDS));
+        assert!(!replayable(Some(sealed), sealed - 1));
+        assert!(!replayable(None, sealed));
+        // Inside the 12 h a used certificate has left, with margin.
+        assert!(REPLAY_WINDOW_SECONDS < 12 * 3600);
+    }
 
     /// Only the generation that owns the entry may store envelopes, only for
     /// its peer, and never for a message the user deleted meanwhile.
@@ -711,6 +833,19 @@ mod tests {
         attempt("g2", peer.to_string(), "guid").await.unwrap();
         let request = SendSealedMessageRequest::decode(stored().unwrap().as_slice()).unwrap();
         assert_eq!(request.client_request_id, "guid");
+        // A replay re-stores the envelope but never moves its seal time.
+        let sealed_at = || -> Option<i64> {
+            db.read_connection()
+                .unwrap()
+                .query_row("SELECT sealed_at FROM dm_outbox", [], |r| r.get(0))
+                .unwrap()
+        };
+        db.connection()
+            .unwrap()
+            .execute("UPDATE dm_outbox SET sealed_at=5", [])
+            .unwrap();
+        attempt("g2", peer.to_string(), "guid").await.unwrap();
+        assert_eq!(sealed_at(), Some(5));
         assert_eq!(request.messages, vec![envelope]);
         assert!(owns(&db, &me.to_string(), &row.id.to_string()).unwrap());
         assert!(!owns(&db, &peer.to_string(), &row.id.to_string()).unwrap());
