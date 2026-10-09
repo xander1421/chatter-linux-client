@@ -143,56 +143,71 @@ fn delete_selection(
     // Keep the UI-owned selection on the event loop; network/storage work runs
     // on Tokio. Register completion before starting any destructive work.
     if let Err(error) = slint::spawn_local(async move {
-        let task_targets = targets.clone();
+        let (completed, mut completions) = tokio::sync::mpsc::unbounded_channel();
         let task_client = ui_ctx.clone();
-        let result = tokio::spawn(async move {
+        let task = tokio::spawn(async move {
             super::delete::delete_selected_messages(
                 &handle,
-                &task_targets,
+                &targets,
                 everyone,
                 &task_client,
                 account,
                 session_revision,
+                completed,
             )
             .await
-        })
-        .await;
+        });
+        let mut expected_generation = selection_revision;
+        let mut expected_ids = submitted_ids;
+        let mut selection_current = true;
+        while let Some(completed_targets) = completions.recv().await {
+            let auth = ui_ctx.auth_state().get();
+            if auth.current_user_id != Some(account) || auth.session_revision != session_revision {
+                selection_current = false;
+                continue;
+            }
+            // Every confirmed persistence change affects the sidebar, even if
+            // another target later fails or the user has left this selection.
+            crate::bin_ui::features::sidebar::history_changed(&weak, &ui_ctx);
+            let Some(w) = weak.upgrade() else { continue };
+            selection_current &= ui_ctx.chat_state().active_conversation() == conversation
+                && generation.get() == expected_generation
+                && *selected_ids.borrow() == expected_ids;
+            if !selection_current {
+                continue;
+            }
+            super::delete::remove_selected_messages_from_ui(&w, &completed_targets);
+            // The shared row-removal callback reconciles exact selected IDs
+            // and advances the generation. Accept only our own synchronous
+            // change; intervening user/background changes still fence us out.
+            expected_generation = generation.get();
+            expected_ids = selected_ids.borrow().clone();
+        }
+        let result = task.await;
         pending_completion.set(false);
         let Some(w) = weak.upgrade() else { return };
+        let auth = ui_ctx.auth_state().get();
+        if auth.current_user_id != Some(account) || auth.session_revision != session_revision {
+            return;
+        }
+        if !selection_current
+            || ui_ctx.chat_state().active_conversation() != conversation
+            || generation.get() != expected_generation
+            || *selected_ids.borrow() != expected_ids
+        {
+            return;
+        }
         let error = match result {
             Ok(Ok(())) => None,
             Ok(Err(error)) => Some(error.to_string()),
             Err(error) => Some(error.to_string()),
         };
-        if ui_ctx.auth_state().get().session_revision != session_revision {
-            return;
-        }
-        if error.is_none() {
-            crate::bin_ui::features::sidebar::history_changed(&weak, &ui_ctx);
-        }
-        if ui_ctx.chat_state().active_conversation() != conversation
-            || generation.get() != selection_revision
-            || *selected_ids.borrow() != submitted_ids
-        {
-            return;
-        }
         if let Some(error) = error {
             tracing::warn!(%error, everyone, "Selected-message deletion failed");
             w.set_toast_message(
                 format!("Could not finish deleting selected messages: {error}").into(),
             );
             w.set_toast_visible(true);
-            refresh_delete_everyone(&w, &ui_ctx, &selected_ids.borrow());
-            return;
-        }
-        super::delete::remove_selected_messages_from_ui(&w, &targets);
-        selected_ids
-            .borrow_mut()
-            .retain(|id| !submitted_ids.contains(id));
-        if selected_ids.borrow().is_empty() {
-            exit(&w, &selected_ids, &generation);
-        } else {
-            sync_model(&w, &selected_ids.borrow());
             refresh_delete_everyone(&w, &ui_ctx, &selected_ids.borrow());
         }
     }) {
@@ -355,7 +370,7 @@ pub fn wire_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         });
     }
 
-    // Delete-for-me waits for the whole operation before dropping selection.
+    // Delete-for-me drops each confirmed row while retaining failures for retry.
     {
         let weak = window.as_weak();
         let selected_ids = selected_ids.clone();

@@ -203,7 +203,8 @@ pub fn wire_delete_everyone_message(window: &MainWindow, ui_ctx: &Arc<ChatterCli
     });
 }
 
-/// Selection deletion is one awaited operation, never a loop over UI callbacks.
+/// Report only persisted deletions, including successes before a later failure.
+/// Delete-for-everyone remains one batch with no optimistic partial removal.
 /// Core owns server authorization, transport limitations, and local persistence.
 pub(super) async fn delete_selected_messages(
     handle: &chatter_core::services::conversation::ConversationHandle,
@@ -212,11 +213,14 @@ pub(super) async fn delete_selected_messages(
     client: &ChatterClient,
     account: UserId,
     session_revision: u64,
+    completed: tokio::sync::mpsc::UnboundedSender<Vec<(UserId, u64)>>,
 ) -> chatter_core::services::conversation::ConversationResult {
     if everyone {
         handle
             .send_delete_batch_fenced(targets, account, session_revision)
-            .await
+            .await?;
+        let _ = completed.send(targets.to_vec());
+        Ok(())
     } else {
         for (author, timestamp) in targets {
             let auth = client.auth_state().get();
@@ -228,6 +232,7 @@ pub(super) async fn delete_selected_messages(
                 );
             }
             handle.delete_for_me(author, *timestamp).await?;
+            let _ = completed.send(vec![(*author, *timestamp)]);
         }
         Ok(())
     }
