@@ -113,13 +113,15 @@ pub fn wire_pdf_preview_callbacks(window: &MainWindow) {
 /// rendering. Falls back to metadata-only display if PDFium is unavailable.
 #[cfg(feature = "desktop")]
 pub fn render_pdf_preview(window: &MainWindow, pdf_data: &[u8]) {
+    window.set_pdf_preview_external_only(false);
     pdf_renderer::load_and_render(window, pdf_data);
 }
 
 #[cfg(not(feature = "desktop"))]
 pub fn render_pdf_preview(window: &MainWindow, _pdf_data: &[u8]) {
+    window.set_pdf_preview_external_only(true);
     window.set_pdf_preview_image(slint::Image::default());
-    window.set_pdf_preview_error("Inline PDF preview is unavailable on this device. Use Open externally to view this PDF in another app.".into());
+    window.set_pdf_preview_error("".into());
 }
 
 // ==========================================================================

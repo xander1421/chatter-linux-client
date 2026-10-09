@@ -461,6 +461,7 @@ export component MainWindow inherits Window {
     in property <int> pdf-preview-page-count: 0;
     in property <int> pdf-preview-current-page: 1;
     in property <string> pdf-preview-error: "";
+    in property <bool> pdf-preview-external-only: false;
     in property <image> pdf-preview-image;
     callback close-pdf-preview();
     callback open-pdf-external();
@@ -3592,6 +3593,7 @@ export component MainWindow inherits Window {
                     page-count: root.pdf-preview-page-count;
                     current-page: root.pdf-preview-current-page;
                     error-message: root.pdf-preview-error;
+                    external-only: root.pdf-preview-external-only;
                     page-image: root.pdf-preview-image;
 
                     close-clicked => {

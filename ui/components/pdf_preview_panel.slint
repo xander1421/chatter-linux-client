@@ -10,6 +10,7 @@ import { Icons } from "../theme/icons.slint";
 import { HeaderButton } from "header_button.slint";
 import { DismissButton } from "dismiss_button.slint";
 import { Typography } from "../theme/typography.slint";
+import { Button } from "button.slint";
 
 export component PdfPreviewPanel inherits Rectangle {
     // File info
@@ -17,6 +18,7 @@ export component PdfPreviewPanel inherits Rectangle {
     in property <int> page-count: 0;
     in property <int> current-page: 1;
     in property <string> error-message: "";
+    in property <bool> external-only: false;
     in property <image> page-image;
 
     // Callbacks
@@ -146,8 +148,35 @@ export component PdfPreviewPanel inherits Rectangle {
                 image-fit: contain;
             }
 
-            // Loading/fallback state (no image yet, no error)
-            if !root.has-error && !root.has-image: VerticalLayout {
+            if root.external-only && !root.has-error: VerticalLayout {
+                alignment: center;
+                spacing: Spacing.md;
+                padding: Spacing.xl;
+                Text {
+                    text: "PDF document";
+                    color: Colors.text-primary;
+                    font-size: Typography.md;
+                    font-weight: Typography.semibold;
+                    horizontal-alignment: center;
+                }
+                Text {
+                    text: "View this PDF in another app.";
+                    color: Colors.text-secondary;
+                    font-size: Typography.sm;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+                HorizontalLayout {
+                    alignment: center;
+                    Button {
+                        text: "Open PDF";
+                        clicked => { root.open-external-clicked(); }
+                    }
+                }
+            }
+
+            // Loading state is reserved for an actual inline renderer.
+            if !root.external-only && !root.has-error && !root.has-image: VerticalLayout {
                 alignment: center;
                 spacing: Spacing.md;
                 padding: Spacing.xl;
