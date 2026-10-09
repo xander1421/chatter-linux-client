@@ -171,13 +171,21 @@ impl SavedSyncRepository {
     }
 
     /// Includes completed local deletions, making a UI retry after recovery a no-op.
+    /// A timestamp reused by a different live row is ambiguous, never a success.
     pub(crate) fn deleted_identity(
         &self,
         owner: &UserId,
         sent_at: u64,
     ) -> Result<Option<MessageId>, StorageError> {
         let conn = self.db.read_connection()?;
-        let mut stmt = conn.prepare("SELECT message_id FROM saved_delete_tombstones WHERE owner_id = ?1 AND sent_at = ?2 ORDER BY message_id LIMIT 2")?;
+        let mut stmt = conn.prepare(
+            "SELECT message_id FROM saved_delete_tombstones WHERE owner_id = ?1 AND sent_at = ?2
+             UNION
+             SELECT id FROM messages WHERE conversation_type = 'saved_messages'
+               AND conversation_id = ?1 AND sender_id = ?1 AND sent_at = ?2 AND is_deleted = 0
+               AND EXISTS (SELECT 1 FROM saved_delete_tombstones WHERE owner_id = ?1 AND sent_at = ?2)
+             ORDER BY message_id LIMIT 2",
+        )?;
         let ids = stmt
             .query_map(params![owner.to_string(), sent_at as i64], |r| {
                 r.get::<_, String>(0)
@@ -272,27 +280,62 @@ impl SavedSyncRepository {
         owner: &UserId,
         reconnect: bool,
     ) -> Result<Vec<MessageId>, StorageError> {
+        crate::services::gateway::submission::check_send_session()?;
         let conn = self.db.connection()?;
+        let tx = conn.unchecked_transaction()?;
+        let current: Option<String> = tx
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'auth.current_user_id'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if current
+            .and_then(|value| serde_json::from_str::<String>(&value).ok())
+            .as_deref()
+            != Some(owner.to_string().as_str())
+        {
+            return Err(StorageError::InvalidData(
+                "Saved deletion owner changed".into(),
+            ));
+        }
         if reconnect {
-            conn.execute(
+            tx.execute(
                 "UPDATE saved_delete_outbox SET next_attempt_at = 0 WHERE owner_id = ?1",
                 params![owner.to_string()],
             )?;
         }
-        let mut stmt = conn.prepare("SELECT message_id FROM saved_delete_outbox WHERE owner_id = ?1 AND next_attempt_at <= ?2 ORDER BY next_attempt_at, message_id LIMIT 4")?;
-        let ids = stmt
-            .query_map(
-                params![owner.to_string(), chrono::Utc::now().timestamp()],
-                |r| r.get::<_, String>(0),
-            )?
-            .collect::<Result<Vec<_>, _>>()?;
-        ids.into_iter()
-            .map(|id| {
-                id.parse().map_err(|_| {
-                    StorageError::InvalidData("Invalid Saved deletion outbox identity".into())
-                })
-            })
-            .collect()
+        let now = chrono::Utc::now().timestamp();
+        let ids = {
+            let mut stmt = tx.prepare("SELECT message_id, generation FROM saved_delete_outbox WHERE owner_id = ?1 AND next_attempt_at <= ?2 ORDER BY next_attempt_at, message_id LIMIT 4")?;
+            let rows = stmt.query_map(params![owner.to_string(), now], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, i64>(1)?))
+            })?;
+            rows.collect::<Result<Vec<_>, _>>()?
+        };
+        let mut due = Vec::new();
+        for (raw_id, generation) in ids {
+            match raw_id.parse() {
+                Ok(id) => due.push(id),
+                Err(_) => {
+                    // Retain the intent and tombstone for repair, but let later
+                    // valid rows progress on the next pass. Quarantine until
+                    // reconnect/session change so corrupt rows cannot cycle
+                    // ahead of valid rows. Never log raw data.
+                    tx.execute(
+                        "UPDATE saved_delete_outbox SET next_attempt_at = ?4
+                         WHERE owner_id = ?1 AND message_id = ?2 AND generation = ?3",
+                        params![owner.to_string(), raw_id, generation, i64::MAX],
+                    )?;
+                    tracing::warn!(
+                        "Malformed Saved deletion identity quarantined until reconnect; intent retained"
+                    );
+                }
+            }
+        }
+        crate::services::gateway::submission::check_send_session()?;
+        tx.commit()?;
+        Ok(due)
     }
 
     /// Clock of the last pin change applied to this record; 0 when none.

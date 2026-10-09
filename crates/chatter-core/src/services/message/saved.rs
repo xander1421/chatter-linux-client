@@ -429,6 +429,11 @@ impl MessageService {
                 .prepare_own_saved_delete(&owner, &id, sent_at)?;
         }
         let journal = SavedSyncRepository::new(self.database.clone());
+        if !prepare && journal.deleted_identity(&owner, sent_at)? != Some(id) {
+            return Err(MessageError::InvalidContent(
+                "Saved deletion identity changed".into(),
+            ));
+        }
         let Some((generation, clock)) = journal.pending_delete(&owner, &id)? else {
             return Ok(true);
         };
@@ -1216,14 +1221,18 @@ pub(crate) fn spawn_saved_sync_recovery(
                     continue;
                 }
             };
-            let deletes =
-                match journal.due_deletes(&owner, reconnected || previous != Some(session)) {
-                    Ok(due) => due,
-                    Err(error) => {
-                        tracing::warn!(%error, "Saved deletion journal unavailable");
-                        Vec::new()
-                    }
-                };
+            let deletes = match SEND_SESSION
+                .scope(send_session.clone(), async {
+                    journal.due_deletes(&owner, reconnected || previous != Some(session))
+                })
+                .await
+            {
+                Ok(due) => due,
+                Err(error) => {
+                    tracing::warn!(%error, "Saved deletion journal unavailable");
+                    Vec::new()
+                }
+            };
             previous = Some(session);
             for id in deletes {
                 let now = client.auth_state().get();
