@@ -171,6 +171,29 @@ pub fn handle_back(window: &MainWindow) -> bool {
         return true;
     }
 
+    // Direct media overlays are not on the modal stack. Dismiss the topmost
+    // one with its normal cleanup callback before navigating the chat.
+    if window.get_pdf_preview_visible() {
+        window.set_pdf_preview_visible(false);
+        window.invoke_close_pdf_preview();
+        return true;
+    }
+    if window.get_code_preview_visible() {
+        window.set_code_preview_visible(false);
+        window.invoke_close_code_preview();
+        return true;
+    }
+    if window.get_video_player_visible() {
+        window.set_video_player_visible(false);
+        window.invoke_close_video_player();
+        return true;
+    }
+    if window.get_image_viewer_visible() {
+        window.set_image_viewer_visible(false);
+        window.invoke_close_image_viewer();
+        return true;
+    }
+
     // Calls row selection: leave it before the overflow or the tab. The
     // marks live in `features::calls::history`, which this callback clears.
     if window.get_call_history_selecting() {

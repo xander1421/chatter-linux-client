@@ -124,32 +124,51 @@ fn wire_copy(window: &MainWindow) {
             return;
         }
 
-        // Same wl-copy → xclip fallback as friend_code.rs.
-        std::thread::spawn(move || {
-            let result = std::process::Command::new("wl-copy")
-                .arg(&url)
-                .status()
-                .or_else(|_| {
-                    std::process::Command::new("xclip")
-                        .args(["-selection", "clipboard"])
-                        .stdin(std::process::Stdio::piped())
-                        .spawn()
-                        .and_then(|mut child| {
-                            use std::io::Write;
-                            if let Some(stdin) = child.stdin.as_mut() {
-                                stdin.write_all(url.as_bytes())?;
-                            }
-                            child.wait()
-                        })
-                });
-            match result {
-                Ok(s) if s.success() => tracing::info!("Copied link URL to clipboard"),
-                Ok(s) => tracing::warn!("Clipboard command exit: {s}"),
-                Err(e) => tracing::warn!("Clipboard copy failed: {e}"),
-            }
-        });
+        #[cfg(target_os = "android")]
+        {
+            let message = match crate::platform::android::clipboard::set_text("Device link", &url) {
+                Ok(()) => "Link copied to clipboard.",
+                Err(_) => "Unable to copy link. Please try again.",
+            };
+            w.set_link_device_status(message.into());
+        }
+        #[cfg(target_os = "ios")]
+        w.set_link_device_status("Clipboard copy is unavailable on this device.".into());
 
-        set_status(&weak, "Link copied to clipboard.");
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        let weak = weak.clone();
+        #[cfg(not(any(target_os = "android", target_os = "ios")))]
+        std::thread::spawn(move || {
+            let wayland = std::process::Command::new("wl-copy").arg(&url).status();
+            let result = match wayland {
+                Ok(status) if status.success() => Ok(status),
+                _ => std::process::Command::new("xclip")
+                    .args(["-selection", "clipboard"])
+                    .stdin(std::process::Stdio::piped())
+                    .spawn()
+                    .and_then(|mut child| {
+                        use std::io::Write;
+                        if let Some(stdin) = child.stdin.as_mut() {
+                            stdin.write_all(url.as_bytes())?;
+                        }
+                        child.wait()
+                    }),
+            };
+            let copied = result.is_ok_and(|status| status.success());
+            let _ = weak.upgrade_in_event_loop(move |w| {
+                // A completed old copy must not change a replacement link page.
+                if w.get_current_view().as_str() != "link-device"
+                    || w.get_link_device_url().as_str() != url
+                {
+                    return;
+                }
+                w.set_link_device_status(if copied {
+                    "Link copied to clipboard.".into()
+                } else {
+                    "Unable to copy link. Please try again.".into()
+                });
+            });
+        });
     });
 }
 

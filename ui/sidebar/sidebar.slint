@@ -139,8 +139,8 @@ export component Sidebar inherits Rectangle {
     // 48px shell and 26px glyph were the biggest things in a panel whose own
     // glyphs are 24px (quick links) and 18px (rail). Draw them at the
     // footer's 36px with a 20px glyph; the 48px touch box is unchanged.
-    property <length> header-control-shell: root.touch ? 36px : Spacing.header-action-box;
-    property <length> header-control-glyph: root.touch ? 20px : Spacing.header-glyph;
+    property <length> header-control-shell: root.touch ? (root.mobile-mode ? 36px : 28px) : Spacing.header-action-box;
+    property <length> header-control-glyph: root.touch ? (root.mobile-mode ? 20px : 16px) : Spacing.header-glyph;
     // Quick-link icons sit in the conversation rows' avatar column: the same
     // leading inset (ChatList's xs + the row's sm) and a slot as wide as a
     // row's avatar ring, icon centred in it — so the lens, bookmark and the
@@ -599,8 +599,12 @@ export component Sidebar inherits Rectangle {
                 // The traffic lights own the leading edge of this row on macOS
                 // (0px elsewhere), so the search entry starts after them.
                 padding-left: root.quick-link-inset + root.traffic-lights-width;
-                padding-right: Spacing.sm; spacing: Spacing.sm; alignment: start;
-                VerticalLayout { alignment: center; horizontal-stretch: 0; width: root.quick-link-slot;
+                padding-right: Spacing.sm;
+                spacing: root.touch && !root.mobile-mode ? Spacing.xs : Spacing.sm;
+                alignment: start;
+                // Search has one line, so the tablet does not need the avatar
+                // column's wide slot between its lens and label.
+                VerticalLayout { alignment: center; horizontal-stretch: 0; width: root.touch && !root.mobile-mode ? root.quick-link-icon-size : root.quick-link-slot;
                     HorizontalLayout { alignment: center; Image { source: Icons.search; width: root.quick-link-icon-size; height: root.quick-link-icon-size; colorize: Colors.text-secondary; } }
                 }
                 Text { text: "Search"; color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; }

@@ -505,6 +505,7 @@ impl AudioPlayback {
         tokio::spawn(async move {
             let mut first_nonzero = true;
             let mut first_frame = true;
+            let mut last_output_probe = std::time::Instant::now();
             let mut evidence_tick = tokio::time::interval(std::time::Duration::from_millis(100));
             evidence_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
             loop {
@@ -514,6 +515,14 @@ impl AudioPlayback {
                     _ = evidence_tick.tick() => {
                         if rendered_evidence.compare_exchange(1, 2, Ordering::Relaxed, Ordering::Relaxed).is_ok() {
                             tracing::info!(stage = "remote_pcm_rendered", "Nonzero mixed PCM consumed by audio output callback (not decryption or audibility proof)");
+                        }
+                        // Sample again off the real-time callback so a later
+                        // reconnect can establish fresh output evidence. This
+                        // shared flag describes the mixed output, never a peer.
+                        if last_output_probe.elapsed() >= std::time::Duration::from_secs(5)
+                            && rendered_evidence.compare_exchange(2, 0, Ordering::Relaxed, Ordering::Relaxed).is_ok()
+                        {
+                            last_output_probe = std::time::Instant::now();
                         }
                     },
                     frame = audio_stream.next() => {
