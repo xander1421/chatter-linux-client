@@ -2635,6 +2635,8 @@ impl ChatterClient {
 
         // ── Channel + DM services ───────────────────────────────────
         let h_saved_sync_retry = crate::services::message::spawn_saved_sync_recovery(self);
+        let h_channel_send_retry = crate::services::message::spawn_channel_send_recovery(self);
+        let h_dm_send_retry = crate::services::message::spawn_dm_send_recovery(self);
         let h_delete_batch_retry = crate::services::conversation::spawn_delete_batch_recovery(self);
         let h_channel_stream = self.ctx.start_channel_event_stream();
         // Live channel messages. This is the ONLY subscriber of the
@@ -2759,6 +2761,8 @@ impl ChatterClient {
             h_channel_stream,
             h_delete_batch_retry,
             h_saved_sync_retry,
+            h_channel_send_retry,
+            h_dm_send_retry,
             h_channel_messages,
             h_channel_bootstrap,
             h_dm_bootstrap,
@@ -2854,6 +2858,23 @@ impl ChatterClient {
             .await;
         match outcome {
             Ok(mut result) => {
+                // A durable channel queue knows terminal authorization/content
+                // refusal separately from transient or uncertain submission.
+                if let Some(message) = result.message.as_ref() {
+                    if self
+                        .messages()
+                        .terminal_channel_send(message)
+                        .map_err(|_| SendError::DeliveryUnconfirmed)?
+                    {
+                        self.finish_send_attempt(
+                            &key,
+                            attempt,
+                            Some(message.id.to_string()),
+                            true,
+                        )?;
+                        return Ok(result);
+                    }
+                }
                 let confirmed = !result.bootstrap_initiated
                     && result.send_error.is_none()
                     && !result.message.as_ref().is_some_and(|m| {

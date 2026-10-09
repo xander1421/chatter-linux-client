@@ -86,6 +86,15 @@ impl MessageClient {
             deletion_token_hash,
         };
 
+        self.send_prepared_message(request).await
+    }
+
+    /// Submit a previously persisted channel request without changing its
+    /// request identity, ciphertext, timestamp, or deletion-token hash.
+    pub async fn send_prepared_message(
+        &mut self,
+        request: SendMessageRequest,
+    ) -> Result<Message, NetworkError> {
         self.inner
             .send_message(request)
             .await

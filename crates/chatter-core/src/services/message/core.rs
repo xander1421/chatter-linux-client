@@ -249,25 +249,31 @@ impl MessageService {
         // token per message, of which the server keeps just the SHA-256.
         let deletion_token = sealed_deletion_token(&content_to_send);
         crate::services::gateway::submission::mark_submission_started()?;
-        let proto_message = message_client
-            .send_message(
-                &channel_id.to_string(),
-                content_to_send.clone(),
-                thread_id.map(|id| id.to_string()).as_deref(),
-                ephemeral,
-                ephemeral_ttl,
-                mentioned_integrations
-                    .iter()
-                    .map(|id| id.to_string())
-                    .collect(),
-                targets_ai_bot,
-                attachment_ids.iter().map(|id| id.to_string()).collect(),
-                deletion_token
-                    .as_ref()
-                    .map(deletion_token_hash)
-                    .unwrap_or_default(),
-            )
-            .await?;
+        let request = chat_v1::SendMessageRequest {
+            channel_id: channel_id.to_string(),
+            content: Some(content_to_send.clone()),
+            parent_id: thread_id.map(ToString::to_string).unwrap_or_default(),
+            ephemeral,
+            ephemeral_ttl,
+            client_request_id: uuid::Uuid::new_v4().to_string(),
+            mentioned_integrations: mentioned_integrations
+                .iter()
+                .map(ToString::to_string)
+                .collect(),
+            targets_ai_bot,
+            mentioned_file_ids: attachment_ids.iter().map(ToString::to_string).collect(),
+            deletion_token_hash: deletion_token
+                .as_ref()
+                .map(deletion_token_hash)
+                .unwrap_or_default(),
+        };
+        let request = super::channel_send::retain_channel_request(
+            request,
+            deletion_token.as_ref(),
+            group_state.as_ref().map(|state| state.state_hash.to_vec()),
+        )?;
+        let proto_message = message_client.send_prepared_message(request).await?;
+        super::channel_send::retain_channel_response(&proto_message)?;
         crate::services::gateway::submission::bind_original_row(proto_message.id.clone())?;
         tracing::info!(
             channel_id = %channel_id,
@@ -320,7 +326,7 @@ impl MessageService {
             is_dm || require_encryption,
         )?;
         message.attachments = attachment_ids;
-        if !(is_dm || require_encryption) {
+        if !(is_dm || require_encryption) && !super::channel_send::has_channel_queue() {
             crate::storage::repositories::message_receipt_repo::MessageReceiptRepository::new(
                 self.database.clone(),
             )
@@ -346,6 +352,12 @@ impl MessageService {
 
         // For sent messages, store original plaintext locally (not encrypted server response)
         message.content = MessageContent::Text(trimmed_text.to_string());
+
+        // The durable queue checkpoints the accepted response, then replaces
+        // its parked bubble without colliding with author/timestamp dedupe.
+        if super::channel_send::has_channel_queue() {
+            return Ok(message);
+        }
 
         // Store locally
         tracing::info!(
@@ -464,6 +476,29 @@ impl MessageService {
         targets_ai_bot: bool,
         quote: Option<&crate::services::gateway::QuoteIntent>,
     ) -> Result<Message, MessageError> {
+        // Text-only real channels have a durable predeposit queue. Other
+        // transports and attachment preparation retain their existing owner.
+        if attachment_ids.is_empty()
+            && attachment_pointers.is_empty()
+            && self.channel_repo.get(channel_id)?.is_some_and(|channel| {
+                matches!(
+                    channel.channel_type,
+                    crate::domain::channel::ChannelType::Public
+                        | crate::domain::channel::ChannelType::Private
+                )
+            })
+        {
+            return self
+                .send_durable_channel_text(
+                    channel_id,
+                    text,
+                    thread_id,
+                    mentioned_integrations,
+                    targets_ai_bot,
+                    quote,
+                )
+                .await;
+        }
         let mut message_client = self.message_client();
         let mut auth_client = self.auth_client();
         let mut channel_client = self.channel_client();
@@ -542,6 +577,9 @@ impl MessageService {
             return Err(MessageError::InvalidContent(
                 "message cannot be retried".into(),
             ));
+        }
+        if let Some(queued) = self.durable_channel_retry(&failed)? {
+            return Ok(queued);
         }
         let pointers = self.pointers_for_resend(&failed.attachments).await?;
         let quote = match (failed.reply_to_author_id, failed.reply_to) {

@@ -73,10 +73,18 @@ impl MessageService {
         let author = self.current_user_id()?;
         let mut targets = Vec::new();
         let mut author_is_member = false;
-        for member in channels
+        let members = channels
             .get_all_channel_members(&channel.to_string())
-            .await?
+            .await?;
+        // A successful membership fetch is authoritative. Never distribute
+        // keys or resume a parked post after our membership was revoked.
+        if !members
+            .iter()
+            .any(|member| member.user_id == author.to_string())
         {
+            return Err(MessageError::NotAuthor);
+        }
+        for member in members {
             let peer: UserId = member
                 .user_id
                 .parse()
@@ -89,7 +97,10 @@ impl MessageService {
                 .signal_service
                 .ensure_sessions_all_devices(auth, &peer.to_string())
                 .await
-                .map_err(|error| MessageError::EncryptionFailed(error.to_string()))?;
+                .map_err(|error| match error {
+                    crate::error::ServiceError::Network(error) => MessageError::Network(error),
+                    other => MessageError::EncryptionFailed(other.to_string()),
+                })?;
             targets.extend(devices.into_iter().map(|device| (peer, DeviceId(device))));
         }
         let receipts = MessageReceiptRepository::new(self.database.clone());
