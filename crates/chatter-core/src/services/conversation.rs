@@ -1439,9 +1439,45 @@ impl ConversationHandle {
                 // Our own other devices only: a peer's (or channel member's)
                 // device would apply it and delete its own copy.
                 let messages = self.client.messages();
-                messages
-                    .sync_to_own_devices(&mut messages.auth_client(), content)
-                    .await;
+                if msg.conversation_type == ConversationType::SavedMessages {
+                    // Saved has no remote history to repair a missed delete.
+                    // Keep the local row available for retry until the whole
+                    // own-device set has accepted the control.
+                    let auth = self.client.auth_state().get();
+                    if auth.current_user_id != msg.sender_id || auth.current_user_id.is_none() {
+                        return Err(crate::services::MessageError::NotLoggedIn.into());
+                    }
+                    let session = crate::services::gateway::submission::SendSession::capture(
+                        self.client.auth_state(),
+                    );
+                    let acknowledged = crate::services::gateway::submission::SEND_SESSION
+                        .scope(session, async {
+                            tokio::time::timeout(
+                                std::time::Duration::from_secs(30),
+                                messages.sync_to_own_devices_acknowledged(
+                                    &mut messages.auth_client(),
+                                    content,
+                                ),
+                            )
+                            .await
+                            .is_ok_and(|(_, acknowledged)| acknowledged)
+                        })
+                        .await;
+                    let current = self.client.auth_state().get();
+                    if !acknowledged
+                        || current.current_user_id != auth.current_user_id
+                        || current.session_revision != auth.session_revision
+                    {
+                        return Err(ConversationError::Other(
+                            "Saved deletion was not confirmed on linked devices; retry when connected"
+                                .into(),
+                        ));
+                    }
+                } else {
+                    messages
+                        .sync_to_own_devices(&mut messages.auth_client(), content)
+                        .await;
+                }
                 messages
                     .delete_message_local(&msg.id)
                     .map_err(ConversationError::Message)
