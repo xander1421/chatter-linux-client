@@ -2,30 +2,40 @@ import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
+import { GlassSurface } from "../components/glass_surface.slint";
 import { DisappearingGlobal } from "disappearing_global.slint";
 
 export component DisappearingStatus inherits Rectangle {
-    background: Colors.primary.mix(Colors.background, 0.08);
-    min-height: 32px;
-    HorizontalLayout {
-        padding-left: Spacing.md;
-        padding-right: Spacing.md;
-        padding-top: Spacing.xs;
-        padding-bottom: Spacing.xs;
-        spacing: Spacing.sm;
-        VerticalLayout {
-            alignment: center;
-            horizontal-stretch: 0;
-            Image { source: Icons.clock; width: 16px; height: 16px; colorize: Colors.primary; }
-        }
-        Text {
-            text: DisappearingGlobal.status-label;
-            color: Colors.text-muted;
-            font-size: Typography.xs;
-            vertical-alignment: center;
-            wrap: word-wrap;
-            accessible-role: text;
-            accessible-label: self.text;
+    background: transparent;
+    min-height: max(36px, status-content.preferred-height + 2 * Spacing.xs);
+    GlassSurface {
+        x: Spacing.md;
+        y: Spacing.xs;
+        width: max(0px, root.width - 2 * Spacing.md);
+        height: max(0px, root.height - 2 * Spacing.xs);
+        elevation: 0;
+        material-level: 2;
+        border-radius: Spacing.radius-chrome;
+        status-content := HorizontalLayout {
+            padding-left: Spacing.md;
+            padding-right: Spacing.md;
+            padding-top: Spacing.xs;
+            padding-bottom: Spacing.xs;
+            spacing: Spacing.sm;
+            VerticalLayout {
+                alignment: center;
+                horizontal-stretch: 0;
+                Image { source: Icons.clock; width: 16px; height: 16px; colorize: Colors.primary; }
+            }
+            Text {
+                text: DisappearingGlobal.status-label;
+                color: Colors.text-muted;
+                font-size: Typography.xs;
+                vertical-alignment: center;
+                wrap: word-wrap;
+                accessible-role: text;
+                accessible-label: self.text;
+            }
         }
     }
 }

@@ -3882,7 +3882,12 @@ export component MainWindow inherits Window {
             x: parent.width - self.width - Spacing.xl;
             y: root.fab-y;
             border-radius: self.width / 2;
-            material-tint: (fab-touch.pressed ? Colors.action-hover : Colors.action-fill).with-alpha(0.97);
+            material-level: 2;
+            material-tint: Materials.regular;
+            Rectangle {
+                border-radius: parent.border-radius;
+                background: fab-touch.pressed ? Materials.pressed : fab-touch.has-hover ? Materials.hover : transparent;
+            }
             accessible-role: button;
             accessible-label: "Create";
             accessible-action-default => { root.nav-push("create-menu"); }
@@ -3892,8 +3897,8 @@ export component MainWindow inherits Window {
                 height: 24px;
                 x: (parent.width - self.width) / 2;
                 y: (parent.height - self.height) / 2;
-                // Same glyph colour as the composer's send button on primary.
-                colorize: Colors.on-action;
+                // Accent on the shared glass surface stays legible in both themes.
+                colorize: Colors.primary;
             }
             fab-touch := TouchArea { mouse-cursor: pointer; clicked => { root.nav-push("create-menu"); } }
         }
