@@ -235,10 +235,17 @@ export component ChatLayout inherits Rectangle {
     callback remove-attachment(string);
     callback typing-changed(bool);  // true when started typing, false when stopped
 
+    // Tablet two-pane canvas: match the rounded header silhouette behind it.
+    in property <bool> rounded-page-top: false;
+
     // Layout — Neo 2.0 surface continuity: deepest background as base plane
     background: Colors.background;
 
     message-list := MessageList {
+        border-top-left-radius: root.rounded-page-top && !root.hide-header
+            ? (root.mobile ? Spacing.header-height-touch : Spacing.header-height) / 2 : 0px;
+        border-top-right-radius: self.border-top-left-radius;
+        clip: root.rounded-page-top;
         sender-profile-requested(user-id) => { root.sender-profile-requested(user-id); }
         width: 100%;
         height: 100%;
