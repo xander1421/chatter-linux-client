@@ -52,6 +52,9 @@ impl EphemeralRepository {
     /// `countdown_started = 1` and `expires_at = start + ttl`, which is what
     /// the reaper (`list_expired`) collects. A message
     /// not stored yet counts as read, so the timer never waits forever.
+    /// An own message that is still `sending` or `failed` keeps its stamped
+    /// TTL with the clock stopped; the `ephemeral_countdown_on_sent` trigger
+    /// (v097) starts it when any path confirms the send.
     ///
     /// Takes arbitrary `ttl_seconds` (a peer's timer need not be a preset).
     /// `INSERT OR REPLACE` so re-arming the same message (a retry, a
@@ -69,7 +72,8 @@ impl EphemeralRepository {
                     strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now', '+' || ?2 || ' seconds'),
                     CASE WHEN read THEN strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now') END,
                     read
-             FROM (SELECT COALESCE((SELECT is_read FROM messages WHERE id = ?1), 1) AS read)",
+             FROM (SELECT COALESCE((SELECT is_read AND delivery_status NOT IN ('sending', 'failed')
+                                    FROM messages WHERE id = ?1), 1) AS read)",
             params![message_id.to_string(), i64::from(ttl_seconds)],
         )?;
         Ok(())
@@ -208,7 +212,8 @@ pub(crate) fn start_read_countdowns(conn: &rusqlite::Connection) -> Result<(), S
              read_at = strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now'),
              expires_at = strftime('%Y-%m-%dT%H:%M:%f+00:00', 'now', '+' || ttl_seconds || ' seconds')
          WHERE countdown_started = 0
-           AND message_id IN (SELECT id FROM messages WHERE is_read = 1)",
+           AND message_id IN (SELECT id FROM messages WHERE is_read = 1
+                              AND delivery_status NOT IN ('sending', 'failed'))",
         [],
     )?;
     Ok(())

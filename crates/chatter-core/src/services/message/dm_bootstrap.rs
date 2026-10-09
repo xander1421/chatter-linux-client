@@ -1227,15 +1227,14 @@ mod tests {
             "no device ratchet may advance on size refusal"
         );
         // Small real encryption is admitted. Its deliberately offline deposit
-        // loses confirmation, so the public journal must now remain held.
+        // loses confirmation; the outbox keeps the exact envelope to replay.
         let small = client
             .send_text(conversation, "small after cap refusal")
             .await
             .unwrap();
-        assert!(!matches!(
-            small.send_error,
-            Some(MessageError::InvalidContent(_))
-        ));
+        assert!(small.send_error.is_none());
+        let small = small.message.unwrap();
+        assert_eq!(small.delivery_status, "sending");
         assert_ne!(
             before,
             ms.signal_service
@@ -1243,9 +1242,24 @@ mod tests {
                 .list_sessions_for_user(&friend.to_string())
                 .unwrap()
         );
-        assert!(client.ensure_send_available(conversation).is_err());
-        // A new send must not erase this uncertainty, even if it is tiny.
-        assert!(client.send_text(conversation, "another").await.is_err());
+        let envelope = |id: &crate::domain::ids::MessageId| -> Option<Vec<u8>> {
+            ms.database
+                .read_connection()
+                .unwrap()
+                .query_row(
+                    "SELECT request FROM dm_outbox WHERE message_id=?1",
+                    [id.to_string()],
+                    |r| r.get(0),
+                )
+                .unwrap()
+        };
+        let retained = envelope(&small.id).expect("exact envelope stored before the deposit");
+        // A replayable envelope is not a reason to hold the conversation: a
+        // new send is a new message, and the queued one is never re-encrypted.
+        client.ensure_send_available(conversation).unwrap();
+        let another = client.send_text(conversation, "another").await.unwrap();
+        assert_eq!(another.message.unwrap().delivery_status, "sending");
+        assert_eq!(envelope(&small.id), Some(retained));
     }
 
     /// Shield uses every cached device, newest first, skipping one the server

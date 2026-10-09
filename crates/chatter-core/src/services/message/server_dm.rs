@@ -6,8 +6,10 @@
 //! `ChannelId::from(peer_id)`, `ConversationType::ServerDm`) whichever
 //! transport carried a message, so switching modes never hides history.
 //!
-//! The transport is picked per send by Shield mode, in exactly one place —
-//! [`MessageService::send_friend_dm_content`]:
+//! The transport is picked per send by Shield mode — in
+//! [`MessageService::send_friend_dm_content`], and for a user's post (which
+//! normal mode delivers through the replaying `dm_outbox`) in
+//! [`MessageService::send_server_dm`] / `retry_server_dm`:
 //!
 //! - **Normal**: sealed sender, streaming. A message is Signal-Protocol-
 //!   encrypted once per recipient device and deposited directly into that
@@ -38,7 +40,7 @@ use super::{DmSendResult, MessageError, MessageService};
 // and sealed-sender wrapping add bytes; neither compresses the encoded Content.
 const MAX_SEALED_BODY_BYTES: usize = crate::crypto::signal::sealed_sender::MAX_SEALED_BODY_BYTES;
 
-fn validate_sealed_plaintext_size(encoded_len: usize) -> Result<(), MessageError> {
+pub(super) fn validate_sealed_plaintext_size(encoded_len: usize) -> Result<(), MessageError> {
     // Cheap lower-bound refusal. The bounded actor also checks every actual
     // envelope against this cap before committing any ratchet state.
     if encoded_len > MAX_SEALED_BODY_BYTES {
@@ -90,25 +92,6 @@ impl MessageService {
         let (content, reply_ctx, disappearing_ttl_secs) =
             self.server_dm_content(peer_id, text, attachment_pointers, sent_at, quote)?;
 
-        // Shield, mailbox not established with this friend yet: the content is
-        // queued and goes out when the bootstrap completes. Stored now like a
-        // sent message so it survives switching conversations.
-        //
-        // A delivery failure is stored too, as a "failed" bubble the user can
-        // retry (`retry_server_dm`), Signal's "Not sent, tap to retry" — not
-        // handed back as an error that leaves the text in the composer.
-        let (bootstrap_initiated, send_error) = match self
-            .send_friend_dm_content(peer_id, content)
-            .await
-        {
-            Ok(()) => (false, None),
-            Err(MessageError::BootstrapInitiated) => (true, None),
-            Err(e) => {
-                tracing::warn!(peer_id = %peer_id, error = %e, sent_at, "Friend DM not sent; stored as failed");
-                (false, Some(e))
-            }
-        };
-
         let current_user_id = self.settings_repo.current_user_id()?;
         let conversation_id: ChannelId = (*peer_id).into();
         let mut message = Message::new_text(
@@ -118,14 +101,10 @@ impl MessageService {
             text.to_string(),
             sent_at,
         );
-        // Queued, not sent: the flush's outcome later makes it "sent" or
-        // "failed" (`DmBootstrapCompleted` / `MessageSendFailed`).
-        if bootstrap_initiated {
-            message.delivery_status = "sending".into();
-        } else if let Some(error) = &send_error {
-            message.delivery_status = "failed".into();
-            message.failure_reason = error.permanent_send_failure_reason().map(str::to_owned);
-        }
+        // Stored as "sending", and bound to the send's admission claim, before
+        // anything is encrypted: a crash past here leaves a visible row that
+        // the claim and the outbox both name, never a sent message without one.
+        message.delivery_status = "sending".into();
 
         if !attachment_ids.is_empty() {
             message.attachments = attachment_ids.clone();
@@ -149,14 +128,12 @@ impl MessageService {
             message.reply_to_thumbnail_mime = parts.reply_to_thumbnail_mime;
         }
 
-        if let Err(e) = self.message_repo.insert_outgoing(&message) {
-            tracing::warn!(
-                peer_id = %peer_id,
-                error = %e,
-                "Failed to store sent ServerDm locally"
-            );
-        } else if let Some(secs) = disappearing_ttl_secs {
-            // SENDER local half for sealed DMs: arm our own copy for reaping.
+        self.message_repo.insert_outgoing(&message)?;
+        crate::services::gateway::submission::bind_original_row(message.id.to_string())?;
+        if let Some(secs) = disappearing_ttl_secs {
+            // SENDER local half for sealed DMs. The stamped TTL is kept with
+            // its clock stopped; it starts when a send of this row is
+            // confirmed, on whichever path (v097 `ephemeral_countdown_on_sent`).
             if let Err(e) = self.ephemeral_service.track_armed(message.id, secs) {
                 tracing::warn!(
                     peer_id = %peer_id,
@@ -166,8 +143,63 @@ impl MessageService {
             }
         }
 
+        // Shield, mailbox not established with this friend yet: the content is
+        // queued and goes out when the bootstrap completes (`DmBootstrapCompleted`
+        // / `MessageSendFailed` settle the row).
+        //
+        // Normal mode: the sealed outbox owns the row (`dm_outbox`). A send
+        // that is not confirmed now stays "sending" and is replayed, exact, on
+        // reconnect and after a restart, not handed back as an error.
+        //
+        // A definite failure is stored as a "failed" bubble the user can retry
+        // (`retry_server_dm`), Signal's "Not sent, tap to retry".
+        let (bootstrap_initiated, send_error) = if self
+            .shield_mode
+            .load(std::sync::atomic::Ordering::Acquire)
+        {
+            match self.send_dm(peer_id, content, &self.mailbox_manager).await {
+                Ok(()) => {
+                    self.finish_retry_row(&message.id, "sent", None)?;
+                    (false, None)
+                }
+                Err(MessageError::BootstrapInitiated) => (true, None),
+                Err(e) => {
+                    tracing::warn!(peer_id = %peer_id, error = %e, sent_at, "Friend DM not sent; stored as failed");
+                    self.finish_retry_row(
+                        &message.id,
+                        "failed",
+                        e.permanent_send_failure_reason(),
+                    )?;
+                    (false, Some(e))
+                }
+            }
+        } else {
+            match self.enqueue_sealed_dm(&message.id, peer_id, &content, None) {
+                Ok(generation) => match self
+                    .first_sealed_dm_attempt(&message.id, &generation)
+                    .await?
+                {
+                    super::dm_outbox::FirstAttempt::Refused(e) => {
+                        tracing::warn!(peer_id = %peer_id, error = %e, sent_at, "Friend DM refused before submission; stored as failed");
+                        (false, Some(e))
+                    }
+                    _ => (false, None),
+                },
+                Err(e) => {
+                    tracing::warn!(peer_id = %peer_id, error = %e, sent_at, "Friend DM not queued; stored as failed");
+                    self.finish_retry_row(
+                        &message.id,
+                        "failed",
+                        e.permanent_send_failure_reason(),
+                    )?;
+                    (false, Some(e))
+                }
+            }
+        };
+
         if let Some(stored) = self.message_repo.get(&message.id)? {
             message.delivery_status = stored.delivery_status;
+            message.failure_reason = stored.failure_reason;
         }
         Ok(DmSendResult {
             message: Some(message),
@@ -301,7 +333,7 @@ impl MessageService {
             _ => None,
         };
 
-        let (content, _, _) = self.server_dm_content(
+        let (content, _, ttl) = self.server_dm_content(
             &peer_id,
             message.as_text().unwrap_or(""),
             pointers,
@@ -312,8 +344,27 @@ impl MessageService {
         // now. A device linked after the send is not in that set. No fallback
         // when the set is empty: we do not know who the original was for.
         let devices = self.original_dm_devices(peer_id, message.sent_at)?;
+        if let Some(secs) = ttl {
+            // The retry states this TTL; the clock still waits for confirmation.
+            let _ = self.ephemeral_service.track_armed(message.id, secs);
+        }
+        if !self.shield_mode.load(std::sync::atomic::Ordering::Acquire) {
+            // Through the outbox, so an unconfirmed retry is replayed exactly
+            // rather than encrypted again.
+            let generation =
+                self.enqueue_sealed_dm(&message.id, &peer_id, &content, Some(&devices))?;
+            self.finish_retry_row(&message.id, "sending", None)?;
+            return match self
+                .first_sealed_dm_attempt(&message.id, &generation)
+                .await?
+            {
+                super::dm_outbox::FirstAttempt::Sent => Ok("sent"),
+                super::dm_outbox::FirstAttempt::Queued => Ok("sending"),
+                super::dm_outbox::FirstAttempt::Refused(e) => Err(e),
+            };
+        }
         let status = match self
-            .send_friend_dm_to_original_devices(&peer_id, content, &devices)
+            .send_shield_dm_to_devices(&peer_id, content, &devices)
             .await
         {
             Ok(()) => "sent",
@@ -449,8 +500,8 @@ impl MessageService {
     }
 
     /// Deliver `content` (text, receipt, typing, reaction, edit, delete, …) to
-    /// a friend over the transport the current mode allows. The ONLY place a
-    /// friend DM's transport is decided.
+    /// a friend over the transport the current mode allows. User posts take
+    /// the same decision in `send_server_dm`, through the outbox when sealed.
     ///
     /// Shield: the ephemeral mailbox over onion. A single receipt or typing
     /// indicator over sealed-sender streaming re-creates the recipient+timing
@@ -495,71 +546,6 @@ impl MessageService {
             ));
         }
         Ok(devices)
-    }
-
-    /// Retry delivery to `devices` only. Does not enumerate the peer's current
-    /// devices, and does not copy the message to our own other devices: those
-    /// were not recipients of the original send.
-    async fn send_friend_dm_to_original_devices(
-        &self,
-        peer_id: &UserId,
-        content: crate::proto::content_v1::Content,
-        devices: &[u32],
-    ) -> Result<(), MessageError> {
-        if self.shield_mode.load(std::sync::atomic::Ordering::Acquire) {
-            self.send_shield_dm_to_devices(peer_id, content, devices)
-                .await
-        } else {
-            self.send_sealed_dm_to_devices(peer_id, content, devices)
-                .await
-        }
-    }
-
-    /// Sealed retry to a caller-chosen device list. Encrypts each device on
-    /// its own session and deposits that ciphertext. Does not snapshot again
-    /// and does not ask the server who the peer's devices are now.
-    async fn send_sealed_dm_to_devices(
-        &self,
-        peer_id: &UserId,
-        content: crate::proto::content_v1::Content,
-        devices: &[u32],
-    ) -> Result<(), MessageError> {
-        if self.shield_mode.load(std::sync::atomic::Ordering::Acquire) {
-            return Err(MessageError::DmError(
-                "Shield mode: refusing the sealed-sender streaming transport for a DM".into(),
-            ));
-        }
-        if devices.is_empty() {
-            return Err(MessageError::InvalidContent(
-                "no original device of this message can be retried".into(),
-            ));
-        }
-        validate_sealed_plaintext_size(content.encoded_len())?;
-        let plaintext = content.encode_to_vec();
-        let peer = peer_id.to_string();
-        let mut auth_client = self.auth_client();
-        let ciphertexts = self
-            .signal_service
-            .encrypt_message_devices_bounded(&mut auth_client, &peer, devices, &plaintext)
-            .await
-            .map_err(|e| MessageError::from_signal_send(e, "device encryption"))?
-            .into_iter()
-            .map(|(device, sealed)| (device, sealed.ciphertext))
-            .collect();
-        let uak = self.sealed_access_key(&peer, false);
-        let mut message_client = self.message_client();
-        let outcome = self
-            .deposit_sealed_ciphertexts(&mut message_client, &peer, ciphertexts, uak.as_ref())
-            .await;
-        if outcome.delivered == 0 {
-            return Err(outcome.error.unwrap_or_else(|| {
-                MessageError::DmError(format!(
-                    "Failed to deliver sealed DM retry to any original device of {peer_id}"
-                ))
-            }));
-        }
-        self.record_dm_send(*peer_id, &content, &outcome.deposits);
-        Ok(())
     }
 
     /// Send an arbitrary `Content` proto (reactions, typing, pin, edit,
@@ -774,7 +760,8 @@ impl MessageService {
         recipient_id: &str,
         plaintext: &[u8],
     ) -> DepositOutcome {
-        let client_request_id = uuid::Uuid::new_v4().to_string();
+        let client_request_id =
+            super::dm_outbox::request_id().unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
         let mismatch = match self
             .deposit_sealed_to_session_devices(
                 auth_client,
@@ -1047,7 +1034,8 @@ impl MessageService {
             })
             .collect();
         messages.sort_by_key(|m| m.device_id);
-        let client_request_id = uuid::Uuid::new_v4().to_string();
+        let client_request_id =
+            super::dm_outbox::request_id().unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
 
         let mut error = None;
         for _attempt in 0..2 {
@@ -1144,6 +1132,9 @@ impl MessageService {
     ) -> Result<(SendSealedMessageResponse, bool), crate::error::NetworkError> {
         crate::services::gateway::submission::check_send_session()
             .map_err(|error| crate::error::NetworkError::InvalidRequest(error.to_string()))?;
+        // A queued DM stores these exact envelopes before the first byte goes.
+        super::dm_outbox::retain_request(recipient_id, &messages, delivery, uak, client_request_id)
+            .map_err(|error| crate::error::NetworkError::ServerError(error.to_string()))?;
         let mut uak_rejected = false;
         if let Some(uak) = uak {
             match self

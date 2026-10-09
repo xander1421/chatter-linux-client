@@ -1,6 +1,10 @@
 //! Durable fail-closed admission for composed sends. An absent response is not
 //! evidence of non-delivery. Until exact-envelope retries exist for every
 //! transport, an unresolved attempt must not be replaced or encrypted again.
+//! A claim stops holding its conversation once its row is gone, once the
+//! sealed DM outbox (`dm_outbox`) or the channel queue (`channel_send`) holds
+//! the row's exact request, or when a dead process left it before the
+//! submission boundary.
 use super::{ChatterClient, SendOptions};
 use crate::domain::ids::MessageId;
 use crate::error::StorageError;
@@ -23,6 +27,22 @@ struct PendingSend {
     original_row: Option<serde_json::Value>,
     #[serde(default)]
     fresh_post: bool,
+    /// `Some(false)` until the submission boundary durably starts
+    /// (`SendBoundary::start`). `None` is a journal written before this field
+    /// existed and is treated as started: fail closed.
+    #[serde(default)]
+    started: Option<bool>,
+    /// The process that claimed it. A claim from another process that never
+    /// started was abandoned by a dead process, not by a send still running.
+    #[serde(default)]
+    process: Option<String>,
+}
+
+static PROCESS: std::sync::LazyLock<String> =
+    std::sync::LazyLock::new(|| uuid::Uuid::new_v4().to_string());
+
+fn abandoned_before_submission(pending: &PendingSend) -> bool {
+    pending.started == Some(false) && pending.process.as_deref() != Some(PROCESS.as_str())
 }
 
 fn confirmation_row_id(pending: &PendingSend) -> Option<MessageId> {
@@ -44,6 +64,13 @@ fn confirmation_row_id(pending: &PendingSend) -> Option<MessageId> {
 
 fn pending_key(owner: &str, conversation: ActiveConversation) -> String {
     format!("send.unresolved.v1:{owner}:{conversation:?}")
+}
+fn key_owner(key: &str) -> String {
+    key.trim_start_matches("send.unresolved.v1:")
+        .split(':')
+        .next()
+        .unwrap_or_default()
+        .to_owned()
 }
 fn storage_error(error: impl Into<StorageError>) -> SendError {
     crate::services::message::MessageError::Storage(error.into()).into()
@@ -174,6 +201,28 @@ impl ChatterClient {
     pub fn ensure_send_available(&self, conversation: ActiveConversation) -> Result<(), SendError> {
         let key = self.send_attempt_key(conversation)?;
         if let Some(pending) = read_pending(&self.services.database, &key)? {
+            if let Some(id) = confirmation_row_id(&pending) {
+                let db = &self.services.database;
+                let row = self.messages().get_message_local(&id)?;
+                // The sealed DM outbox or the durable channel queue holds this
+                // row's exact request and replays only that, so a new send
+                // cannot duplicate it.
+                let (owner, row_id) = (key_owner(&key), id.to_string());
+                let owned = crate::services::message::dm_outbox::owns(db, &owner, &row_id)
+                    .map_err(storage_error)?
+                    || crate::services::message::channel_send_owns(db, &owner, &row_id)
+                        .map_err(storage_error)?;
+                // Deleted (by the user or the disappearing reaper): no retry
+                // of that row can exist any more, and a new send is not one.
+                if owned || row.as_ref().is_none_or(|m| m.is_deleted) {
+                    release(db, &key, &pending.attempt_id)?;
+                    return Ok(());
+                }
+            }
+            if abandoned_before_submission(&pending) {
+                self.recover_abandoned_preparation(conversation, &key, pending)?;
+                return Ok(());
+            }
             // A bootstrap/receipt can confirm a retained stored row later.
             // A failed/sending row is never treated as proof of non-delivery.
             if let Some(id) = confirmation_row_id(&pending) {
@@ -229,6 +278,7 @@ impl ChatterClient {
             attachments: attachments.iter().map(|a| serde_json::json!({"id":a.id.to_string(),"filename":a.filename,"path":a.path,"size":a.size,"mime_type":a.mime_type,"pointer":a.pointer.as_ref().map(|p|p.encode_to_vec())})).collect(),
             quote: quote.map(|q|serde_json::json!({"author":q.target_author_id.to_string(),"timestamp":q.target_timestamp,"preview":q.target_preview})),
             options:options.map(|o|format!("{o:?}")), message_id:None, original_row:None, fresh_post:false,
+            started: Some(false), process: Some(PROCESS.clone()),
         };
         claim(&self.services.database, &key, &pending)?;
         Ok(key)
@@ -274,9 +324,89 @@ impl ChatterClient {
                                     | crate::domain::channel::ChannelType::SavedMessages
                             )
                         }),
+                started: Some(false),
+                process: Some(PROCESS.clone()),
             },
         )?;
         Ok((key, attempt))
+    }
+
+    /// A dead process's claim that never reached encryption: nothing was
+    /// submitted. A stored row becomes a retryable failure; otherwise the
+    /// composed intent (an attachment upload that died, say) is parked for
+    /// the composer, then the claim is dropped. Parking first means a crash
+    /// in between leaves a duplicate draft, never a lost one.
+    fn recover_abandoned_preparation(
+        &self,
+        conversation: ActiveConversation,
+        key: &str,
+        pending: PendingSend,
+    ) -> Result<(), SendError> {
+        let db = &self.services.database;
+        if let Some(id) = pending.message_id.as_ref() {
+            db.connection().map_err(storage_error)?
+                .execute("UPDATE messages SET delivery_status='failed',failure_reason='Message not submitted' WHERE id=?1 AND delivery_status NOT IN ('sent','delivered','read')", params![id])
+                .map_err(|e| storage_error(StorageError::Database(e)))?;
+        } else if !pending.text.is_empty() || !pending.attachments.is_empty() {
+            let reply = pending.quote.as_ref().and_then(|q| {
+                let author = q.get("author")?.as_str()?.to_owned();
+                let name = author
+                    .parse::<crate::domain::ids::UserId>()
+                    .map(|id| self.quote_author_name(&id, || author.clone()))
+                    .unwrap_or_else(|_| author.clone());
+                Some(super::ComposerReply {
+                    sender_id: author,
+                    timestamp: q.get("timestamp")?.as_u64()?.to_string(),
+                    sender_name: name,
+                    preview: q
+                        .get("preview")
+                        .and_then(serde_json::Value::as_str)
+                        .unwrap_or_default()
+                        .to_owned(),
+                    thumbnail: None,
+                })
+            });
+            let attachments = pending
+                .attachments
+                .iter()
+                .filter_map(|a| {
+                    Some(PendingAttachment {
+                        id: a.get("id")?.as_str()?.parse().ok()?,
+                        filename: a.get("filename")?.as_str()?.to_owned(),
+                        path: a.get("path")?.as_str()?.into(),
+                        size: a.get("size")?.as_u64()?,
+                        mime_type: a.get("mime_type")?.as_str()?.to_owned(),
+                        pointer: a
+                            .get("pointer")
+                            .and_then(|p| serde_json::from_value::<Vec<u8>>(p.clone()).ok())
+                            .and_then(|bytes| {
+                                crate::proto::content_v1::AttachmentPointer::decode(
+                                    bytes.as_slice(),
+                                )
+                                .ok()
+                            }),
+                    })
+                })
+                .collect();
+            // Returns the send only when the composer has room, which an
+            // empty-composer claim never asserts here: it is always parked.
+            let _ = self.recover_composer_send(
+                super::ComposerSend {
+                    attempt_id: uuid::Uuid::new_v4(),
+                    session_revision: self.auth_state().get().session_revision,
+                    conversation,
+                    text: pending.text.clone(),
+                    reply,
+                    attachments,
+                },
+                false,
+            );
+        }
+        tracing::info!(
+            ?conversation,
+            "send abandoned before submission by an earlier process; claim released"
+        );
+        discard_preparation(db, key, &pending.attempt_id)
     }
 
     pub(super) fn finish_send_attempt(
@@ -322,6 +452,8 @@ mod tests {
             message_id: None,
             original_row: None,
             fresh_post: false,
+            started: Some(false),
+            process: Some(PROCESS.clone()),
         }
     }
     #[test]
@@ -607,6 +739,35 @@ mod tests {
             claim(&db, "bounded", &next),
             Err(SendError::AttemptAlreadyConfirmed)
         ));
+    }
+
+    #[test]
+    fn only_a_dead_process_claim_that_never_started_is_abandoned() {
+        let mut claim = pending();
+        assert!(
+            !abandoned_before_submission(&claim),
+            "this process may still upload"
+        );
+        claim.process = Some("dead-process".into());
+        assert!(abandoned_before_submission(&claim));
+        claim.started = Some(true);
+        assert!(
+            !abandoned_before_submission(&claim),
+            "may have reached the server"
+        );
+        claim.started = None;
+        assert!(
+            !abandoned_before_submission(&claim),
+            "pre-flag journal fails closed"
+        );
+        let owner = uuid::Uuid::new_v4().to_string();
+        let key = pending_key(
+            &owner,
+            ActiveConversation::ServerDm {
+                peer_id: crate::domain::ids::UserId::new(),
+            },
+        );
+        assert_eq!(key_owner(&key), owner);
     }
 
     #[test]

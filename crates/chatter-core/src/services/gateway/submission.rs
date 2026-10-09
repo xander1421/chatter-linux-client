@@ -294,9 +294,7 @@ impl SubmissionPermit {
             session.check()?;
         }
         if let Some(boundary) = &self.boundary {
-            boundary
-                .started
-                .store(true, std::sync::atomic::Ordering::SeqCst);
+            boundary.start()?;
         }
         Ok(())
     }
@@ -304,15 +302,25 @@ impl SubmissionPermit {
 
 pub(crate) fn mark_submission_started() -> Result<(), StorageError> {
     check_send_session()?;
-    mark_existing_submission();
-    Ok(())
+    SEND_BOUNDARY
+        .try_with(|boundary| boundary.start())
+        .unwrap_or(Ok(()))
+}
+/// Whether the current send's boundary started (`false` outside any send).
+pub(crate) fn submission_started() -> bool {
+    SEND_BOUNDARY
+        .try_with(|boundary| boundary.started.load(std::sync::atomic::Ordering::SeqCst))
+        .unwrap_or(false)
 }
 // An existing unconfirmed envelope stays ambiguous even after session expiry.
+// Best effort durably: its own admission record already refuses a re-encrypt.
 pub(crate) fn mark_existing_submission() {
-    let _ = SEND_BOUNDARY.try_with(|started| {
-        started
-            .started
-            .store(true, std::sync::atomic::Ordering::SeqCst);
+    let _ = SEND_BOUNDARY.try_with(|boundary| {
+        if boundary.start().is_err() {
+            boundary
+                .started
+                .store(true, std::sync::atomic::Ordering::SeqCst);
+        }
     });
 }
 
@@ -320,6 +328,22 @@ pub(crate) struct SendBoundary {
     started: std::sync::atomic::AtomicBool,
     row: std::sync::Mutex<Option<String>>,
     journal: Option<(std::sync::Arc<Database>, String, String)>,
+}
+impl SendBoundary {
+    /// Durable before in-memory, and both before the first ratchet commit or
+    /// request byte: a journal a dead process left with `started = false`
+    /// provably never reached encryption, so it can be handed back instead of
+    /// blocking its conversation (`send_attempt::ensure_send_available`).
+    fn start(&self) -> Result<(), StorageError> {
+        if !self.started.load(std::sync::atomic::Ordering::SeqCst) {
+            if let Some((db, key, attempt)) = &self.journal {
+                db.connection()?.execute("UPDATE settings SET value=json_set(value,'$.started',json('true')) WHERE key=?1 AND json_extract(value,'$.attempt_id')=?2", params![key, attempt])?;
+            }
+        }
+        self.started
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
 }
 
 pub(crate) fn bind_original_row(id: String) -> Result<(), StorageError> {
@@ -403,6 +427,51 @@ mod boundary_tests {
         let ((_, local_started, _), (_, partial_started, _)) = tokio::join!(local, partial);
         assert!(!local_started);
         assert!(partial_started);
+    }
+
+    #[tokio::test]
+    async fn started_boundary_is_durable_so_a_dead_process_claim_is_classified() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = std::sync::Arc::new(
+            Database::open(&dir.path().join("started.db"), "test-only").unwrap(),
+        );
+        db.run_migrations().unwrap();
+        let started = |db: &Database| -> bool {
+            db.read_connection()
+                .unwrap()
+                .query_row(
+                    "SELECT json_extract(value,'$.started') FROM settings WHERE key='claim'",
+                    [],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        };
+        db.connection()
+            .unwrap()
+            .execute(
+                "INSERT INTO settings(key,value,updated_at) VALUES ('claim',?1,'now')",
+                params![serde_json::json!({"attempt_id":"a","started":false}).to_string()],
+            )
+            .unwrap();
+        let journal = Some((db.clone(), "claim".into(), "a".into()));
+        track_submission(async {}, journal.clone()).await;
+        assert!(!started(&db), "preparation alone never marks the claim");
+        let permit = track_submission(async { SubmissionPermit::capture() }, journal)
+            .await
+            .0;
+        assert!(!started(&db));
+        // The actor's permit, outside the task, still writes the claim first.
+        let (_, in_memory, _) = track_submission(
+            async move {
+                std::thread::spawn(move || permit.start().unwrap())
+                    .join()
+                    .unwrap()
+            },
+            None,
+        )
+        .await;
+        assert!(started(&db));
+        assert!(!in_memory, "only the captured send's boundary moved");
     }
 
     #[tokio::test]

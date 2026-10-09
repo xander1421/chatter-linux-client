@@ -497,6 +497,57 @@ mod tests {
         );
     }
 
+    /// Signal-Desktop `expirationStartTimestamp`: an own DM that is queued
+    /// or failed keeps its stamped TTL with the clock stopped, through reads
+    /// too, and the clock starts when any path confirms the send.
+    #[test]
+    fn own_unsent_messages_do_not_disappear_until_sent() {
+        use crate::storage::repositories::ephemeral_repo::EphemeralRepository;
+        use crate::storage::repositories::settings_repo::keys;
+
+        let dir = tempfile::tempdir().expect("tempdir");
+        let db = Arc::new(Database::open(&dir.path().join("t.db"), "testpass").expect("db"));
+        db.run_migrations().expect("migrations");
+        let (me, peer) = (UserId::new(), UserId::new());
+        SettingsRepository::new(db.clone())
+            .set_string(keys::CURRENT_USER_ID, &me.to_string())
+            .expect("me");
+        let messages = MessageRepository::new(db.clone());
+        let ephemeral = EphemeralRepository::new(db.clone());
+        let conv = ChannelId::from(peer);
+        let mut ids = Vec::new();
+        for (status, sent_at) in [("sending", 1), ("failed", 2)] {
+            let mut m = Message::new_text(
+                conv,
+                ConversationType::ServerDm,
+                Some(me),
+                "hi".into(),
+                sent_at,
+            );
+            m.delivery_status = status.into();
+            messages.insert_outgoing(&m).expect("insert");
+            ephemeral.insert_armed(&m.id, 0).expect("arm");
+            ids.push(m.id);
+        }
+        messages
+            .mark_conversation_read(&conv, &ConversationType::ServerDm)
+            .expect("read");
+        assert!(
+            reap_expired(&db).expect("reap").is_empty(),
+            "unsent: clock stopped"
+        );
+
+        messages
+            .update_delivery_status_by_timestamps(&conv, &ConversationType::ServerDm, &[2], "sent")
+            .expect("confirm");
+        let reaped: Vec<_> = reap_expired(&db)
+            .expect("reap")
+            .iter()
+            .map(|m| m.id)
+            .collect();
+        assert_eq!(reaped, [ids[1]], "confirmation starts the stamped clock");
+    }
+
     fn repos() -> (tempfile::TempDir, SettingsRepository, MessageRepository) {
         let dir = tempfile::tempdir().expect("tempdir");
         let db = Arc::new(Database::open(&dir.path().join("t.db"), "testpass").expect("db"));
