@@ -46,6 +46,18 @@ pub enum SessionError {
     #[error("not logged in")]
     NotLoggedIn,
 
+    #[error("session changed; reopen Active sessions")]
+    SessionChanged,
+
+    #[error(
+        "revoked {revoked} session(s); failed devices: {failed:?}; protected primary devices: {protected:?}"
+    )]
+    PartialRevocation {
+        revoked: usize,
+        failed: Vec<(u32, String)>,
+        protected: Vec<u32>,
+    },
+
     /// Network operation failed.
     #[error("network error: {0}")]
     Network(#[from] NetworkError),

@@ -1595,22 +1595,45 @@ impl ChatterClient {
             .map_err(crate::services::session_service::SessionError::Device)
     }
 
-    /// Revoke every session except the current one, with sender-key rotation
-    /// per revoked device. Primary-device revokes are rejected server-side
-    /// (`CannotRevokePrimary`) and skipped with a warning.
+    /// Revoke other sessions, retaining primary-device protection and reporting
+    /// partial failures with the affected device IDs.
     pub async fn revoke_all_other_sessions(
         &self,
     ) -> Result<(), crate::services::session_service::SessionError> {
+        use crate::services::session_service::SessionError;
+        let owner = self.session_current_user_id();
+        let revision = self.auth_state().get().session_revision;
         let sessions = self.list_sessions().await?;
+        let mut revoked = 0;
+        let mut failed = Vec::new();
+        let mut protected = Vec::new();
         for session in sessions {
+            if self.session_current_user_id() != owner
+                || self.auth_state().get().session_revision != revision
+            {
+                return Err(SessionError::SessionChanged);
+            }
             if session.is_current {
                 continue;
             }
-            if let Err(e) = self.revoke_session(session.device_id).await {
-                tracing::warn!(device_id = session.device_id, error = %e, "failed to revoke session");
+            if session.device_id == 1 {
+                protected.push(session.device_id);
+                continue;
+            }
+            match self.revoke_session(session.device_id).await {
+                Ok(()) => revoked += 1,
+                Err(e) => failed.push((session.device_id, e.to_string())),
             }
         }
-        Ok(())
+        if failed.is_empty() && protected.is_empty() {
+            Ok(())
+        } else {
+            Err(SessionError::PartialRevocation {
+                revoked,
+                failed,
+                protected,
+            })
+        }
     }
 
     // ── Sidebar sections (custom grouping) façade ────────────────────────

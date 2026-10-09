@@ -28,6 +28,8 @@ export struct PendingLinkInfo {
 export component SessionsModal inherits Rectangle {
     in property <bool> show-modal: false;
     in property <[SessionInfo]> sessions: [];
+    in property <string> error: "";
+    in property <bool> loaded: false;
     in property <bool> loading: false;
     in property <bool> revoking: false;
     in property <[PendingLinkInfo]> pending-links: [];
@@ -55,6 +57,14 @@ export component SessionsModal inherits Rectangle {
         VerticalLayout {
             spacing: Spacing.md;
 
+            if root.error != "": Text {
+                text: root.error;
+                color: Colors.text-secondary;
+                font-size: Typography.sm;
+                wrap: word-wrap;
+            }
+            if root.revoking: Text { text: "Updating sessions..."; color: Colors.text-secondary; }
+
             // Header: count + actions. On a phone the two buttons do not fit
             // beside the count (they clipped to "Link new devic" and
             // "Revoke All Other"), so they stack full-width under it.
@@ -62,7 +72,7 @@ export component SessionsModal inherits Rectangle {
                 spacing: Spacing.md;
 
                 Text {
-                    text: root.sessions.length + " active session" + (root.sessions.length != 1 ? "s" : "");
+                    text: root.loaded ? root.sessions.length + " active session" + (root.sessions.length != 1 ? "s" : "") : "Sessions not loaded";
                     color: Colors.text-secondary;
                     font-size: Typography.sm;
                     vertical-alignment: center;
@@ -72,7 +82,7 @@ export component SessionsModal inherits Rectangle {
                 if !root.narrow: Button {
                     text: "Link new device";
                     variant: "primary";
-                    disabled: root.revoking;
+                    disabled: root.revoking || root.loading;
                     clicked => { root.link-new-device(); }
                 }
 
@@ -81,7 +91,7 @@ export component SessionsModal inherits Rectangle {
             if root.narrow: Button {
                 text: "Link new device";
                 variant: "primary";
-                disabled: root.revoking;
+                disabled: root.revoking || root.loading;
                 clicked => { root.link-new-device(); }
             }
 
@@ -128,7 +138,7 @@ export component SessionsModal inherits Rectangle {
                         Button {
                             text: "Cancel";
                             variant: "ghost";
-                            disabled: root.revoking;
+                            disabled: root.revoking || root.loading;
                             clicked => { root.cancel-pending-link(link.uuid); }
                         }
                     }
@@ -142,7 +152,7 @@ export component SessionsModal inherits Rectangle {
                 vertical-stretch: 1;
 
                 // Empty state
-                if root.sessions.length == 0 && !root.loading: Rectangle {
+                if root.sessions.length == 0 && !root.loading && root.loaded && root.error == "": Rectangle {
                     width: 100%;
                     height: 100%;
 
@@ -279,7 +289,7 @@ export component SessionsModal inherits Rectangle {
                                     Button {
                                         text: "Revoke";
                                         variant: "ghost";
-                                        disabled: root.revoking;
+                                        disabled: root.revoking || root.loading;
                                         clicked => {
                                             root.revoke-session(session.device-id);
                                         }
@@ -296,7 +306,7 @@ export component SessionsModal inherits Rectangle {
             if root.sessions.length > 1 && !root.confirm-revoke-all: Button {
                 text: "Revoke all other sessions";
                 variant: "ghost";
-                disabled: root.revoking;
+                disabled: root.revoking || root.loading;
                 clicked => { root.confirm-revoke-all = true; }
             }
 
@@ -304,7 +314,7 @@ export component SessionsModal inherits Rectangle {
                 spacing: Spacing.sm;
 
                 Text {
-                    text: "Log out every other device? Each one has to be linked again to use this account.";
+                    text: "Log out other linked devices? The primary device is protected. Revoked devices must be linked again.";
                     color: Colors.text-secondary;
                     font-size: Typography.sm;
                     wrap: word-wrap;
@@ -323,7 +333,7 @@ export component SessionsModal inherits Rectangle {
                     Button {
                         text: "Revoke all";
                         variant: "destructive";
-                        disabled: root.revoking;
+                        disabled: root.revoking || root.loading;
                         clicked => {
                             root.confirm-revoke-all = false;
                             root.revoke-all-others();
