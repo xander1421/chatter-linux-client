@@ -785,8 +785,16 @@ impl ConversationHandle {
         };
         self.client.event_bus().emit_domain(event);
         // The row as it is now stored, pin clock included, is what siblings get.
-        if let Ok(Some(written)) = repo.get(&row.id) {
-            messages.sync_saved_record(&written).await;
+        match repo.get(&row.id) {
+            Ok(Some(written)) => {
+                messages.sync_saved_record(&written).await;
+            }
+            Ok(None) => {
+                tracing::warn!(message_id = %row.id, "Saved local write succeeded but sync reread found no row; snapshot not sent")
+            }
+            Err(error) => {
+                tracing::error!(message_id = %row.id, %error, "Saved local write succeeded but sync reread failed; snapshot not sent")
+            }
         }
         Ok(())
     }
@@ -829,7 +837,7 @@ impl ConversationHandle {
 
     /// Edit one of our Saved records in place, then sync it. The stored row
     /// is read in the Saved scope, rewritten by [`edited_saved_record`] and
-    /// its body columns written back (`MessageRepository::set_body_scoped`),
+    /// its body columns written back with a monotonic clock in one transaction,
     /// so a storage failure is this call's error, never a silent success.
     /// Nothing goes to the server — the Saved id is our own user id, not a
     /// channel a sender-key control may be sent to. The row as stored then
@@ -863,14 +871,19 @@ impl ConversationHandle {
         }
         // Body columns only, at the Saved key: a pin of this row landing
         // between the read above and this write keeps its pin.
-        let edited_at = edited.edited_at.unwrap_or_else(chrono::Utc::now);
-        if !repo.set_body_scoped(
-            scope,
-            &own,
-            target_sent_timestamp,
-            &edited.content,
-            edited_at,
-        )? {
+        if repo
+            .write_saved_body(
+                scope,
+                &own,
+                target_sent_timestamp,
+                &edited.id,
+                new_text.trim(),
+                crate::util::time::TimestampNanos::now().as_u64(),
+                true,
+                &[],
+            )?
+            .is_none()
+        {
             return Err(ConversationError::Other(
                 "Saved message is no longer there".into(),
             ));
@@ -886,8 +899,16 @@ impl ConversationHandle {
                 target_sent_timestamp,
             });
         // The row as it is now stored, edit clock included, is what siblings get.
-        if let Ok(Some(written)) = repo.get(&edited.id) {
-            messages.sync_saved_record(&written).await;
+        match repo.get(&edited.id) {
+            Ok(Some(written)) => {
+                messages.sync_saved_record(&written).await;
+            }
+            Ok(None) => {
+                tracing::warn!(message_id = %edited.id, "Saved local write succeeded but sync reread found no row; snapshot not sent")
+            }
+            Err(error) => {
+                tracing::error!(message_id = %edited.id, %error, "Saved local write succeeded but sync reread failed; snapshot not sent")
+            }
         }
         Ok(())
     }

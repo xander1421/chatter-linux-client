@@ -92,12 +92,14 @@ pub(crate) fn attachment_pointer_from_record(att: &Attachment) -> Option<Attachm
 
 /// Whether a snapshot's body supersedes the stored row's: a newer edit
 /// clock with a body to write. Equal clocks are the same edit replayed.
+#[cfg(test)]
 pub(crate) fn body_supersedes(stored_edited_at: u64, snapshot: &SavedMessageSync) -> bool {
     snapshot.edited_at > stored_edited_at && !snapshot.text.trim().is_empty()
 }
 
 /// The stored body after a synced edit: text replaced, a `Mixed` body keeps
 /// its attachment ids (the record's attachments never change).
+#[cfg(test)]
 pub(crate) fn edited_body(stored: &MessageContent, text: &str) -> MessageContent {
     match stored {
         MessageContent::Mixed(mixed) => MessageContent::Mixed(MixedContent {
@@ -595,8 +597,8 @@ impl SavedSnapshotStore {
     /// is newer than ours (lexically greater text breaks an equal edit clock),
     /// and the pin only when `pin_changed_at` is newer
     /// than the last pin change applied here, each written with its clock
-    /// so the next snapshot orders against it. Identity, attachments and
-    /// quote identity of an existing row never change; an absent quote is hydrated. Nothing here sends: a
+    /// so the next snapshot orders against it. Identity and quote identity of an existing row never change; missing
+    /// legacy attachment records can be repaired from compatible full pointers; an absent quote is hydrated. Nothing here sends: a
     /// received snapshot is applied, never re-synced, so two devices cannot
     /// echo one change back and forth.
     pub fn apply_saved_message_sync(
@@ -634,6 +636,11 @@ impl SavedSnapshotStore {
         // Replays also register full pointers: a legacy sender could have
         // named the CDN key without its crypto record.
         self.register_saved_attachments(sync)?;
+        let full_attachments: Vec<_> = sync
+            .attachments
+            .iter()
+            .map(|pointer| AttachmentId::from_cdn_key(&pointer.cdn_key))
+            .collect();
 
         // A row stored before its parent's snapshot arrived, or by a sender
         // that sent no quote, takes this snapshot's quote once; a row that
@@ -645,23 +652,19 @@ impl SavedSnapshotStore {
             }
         }
 
-        let mut body_changed = false;
-        if body_supersedes(nanos(stored.edited_at), sync)
-            || (sync.edited_at != 0
-                && sync.edited_at == nanos(stored.edited_at)
-                && !sync.text.trim().is_empty()
-                && sync.text.trim() > stored.as_text().unwrap_or_default())
-        {
-            let content = edited_body(&stored.content, sync.text.trim());
-            let edited_at = chrono::DateTime::from_timestamp_nanos(sync.edited_at as i64);
-            body_changed = self.message_repo.set_body_scoped(
-                &scope,
-                &own,
-                stored.sent_at,
-                &content,
-                edited_at,
-            )?;
-        }
+        let Some((body_changed, attachments_changed)) = self.message_repo.write_saved_body(
+            &scope,
+            &own,
+            stored.sent_at,
+            &id,
+            sync.text.trim(),
+            sync.edited_at,
+            false,
+            &full_attachments,
+        )?
+        else {
+            return Ok(SavedSyncOutcome::Unchanged);
+        };
 
         let mut pin_changed = None;
         if sync.pin_changed_at != 0 {
@@ -678,7 +681,7 @@ impl SavedSnapshotStore {
             }
         }
 
-        if !body_changed && pin_changed.is_none() && !quote_hydrated {
+        if !body_changed && pin_changed.is_none() && !quote_hydrated && !attachments_changed {
             return Ok(SavedSyncOutcome::Unchanged);
         }
         let message = self
@@ -688,13 +691,15 @@ impl SavedSnapshotStore {
         tracing::info!(
             message_id = %id,
             body_changed,
+            attachments_changed,
             ?pin_changed,
             quote_hydrated,
             "SavedMessages: applied snapshot from another device"
         );
         Ok(SavedSyncOutcome::Updated {
             message,
-            body_changed,
+            // Attachment repair also changes the bubble's visible body.
+            body_changed: body_changed || attachments_changed,
             pin_changed,
             quote_hydrated,
         })

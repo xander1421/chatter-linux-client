@@ -86,6 +86,7 @@ impl SavedSyncRepository {
 
     /// Apply a pin change made here, dated now — or one tick past the
     /// watermark if this clock reads earlier than a change already applied,
+    /// and never before the message was sent,
     /// so the snapshot we then send is ordered after everything we hold.
     pub fn apply_local_pin(
         &self,
@@ -97,7 +98,7 @@ impl SavedSyncRepository {
         now_ns: u64,
     ) -> Result<PinWrite, StorageError> {
         self.write_pin(scope, author, sent_at, id, pinned, |watermark, _| {
-            Some(now_ns.max(watermark.saturating_add(1)))
+            Some(now_ns.max(sent_at).max(watermark.saturating_add(1)))
         })
     }
 

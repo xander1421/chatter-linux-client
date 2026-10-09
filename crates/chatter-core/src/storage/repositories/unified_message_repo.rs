@@ -1962,6 +1962,123 @@ impl UnifiedMessageRepository {
         Ok(rows > 0)
     }
 
+    /// Order Saved body edits against the current row inside the write transaction.
+    /// Local clocks advance beyond both creation and the last stored edit.
+    /// Trusted full pointers can repair missing legacy records at matching slots;
+    /// valid references and every other row column remain intact.
+    pub(crate) fn write_saved_body(
+        &self,
+        scope: &ReactionScope,
+        author: &UserId,
+        sent_at: u64,
+        id: &MessageId,
+        text: &str,
+        clock: u64,
+        local: bool,
+        full_attachments: &[AttachmentId],
+    ) -> Result<Option<(bool, bool)>, StorageError> {
+        if scope.kind != ConversationType::SavedMessages
+            || scope.id != ChannelId::from(*author)
+            || sent_at > i64::MAX as u64
+        {
+            return Ok(None);
+        }
+        let conn = self.db.connection()?;
+        let tx = conn.unchecked_transaction()?;
+        let stored = tx.query_row(
+            &format!("SELECT {} FROM messages WHERE id = ?1 AND conversation_id = ?2 AND conversation_type = ?3 AND sender_id = ?4 AND sent_at = ?5 AND is_deleted = 0 AND NOT EXISTS (SELECT 1 FROM deleted_messages WHERE id = ?1)", message_columns("messages")),
+            params![id.to_string(), scope.id.to_string(), scope.kind.as_str(), author.to_string(), sent_at as i64],
+            row_to_message,
+        ).optional()?.transpose()?;
+        let Some(mut stored) = stored else {
+            return Ok(None);
+        };
+        let stored_clock = stored
+            .edited_at
+            .and_then(|t| t.timestamp_nanos_opt())
+            .unwrap_or_default()
+            .max(0) as u64;
+        let clock =
+            if local {
+                clock.max(stored_clock.max(sent_at).checked_add(1).ok_or_else(|| {
+                    StorageError::InvalidData("Saved edit clock exhausted".into())
+                })?)
+            } else {
+                clock
+            };
+        if clock > i64::MAX as u64 {
+            return Err(StorageError::InvalidData(
+                "Saved edit clock out of range".into(),
+            ));
+        }
+        let body_changed = !text.is_empty()
+            && (local
+                || clock > stored_clock
+                || (clock != 0
+                    && clock == stored_clock
+                    && text > stored.as_text().unwrap_or_default()));
+        if body_changed {
+            stored.content = match &stored.content {
+                MessageContent::Mixed(mixed) => {
+                    MessageContent::Mixed(crate::domain::message::MixedContent {
+                        text: Some(text.to_string()),
+                        attachment_ids: mixed.attachment_ids.clone(),
+                    })
+                }
+                _ => MessageContent::Text(text.to_string()),
+            };
+            stored.edited_at = Some(DateTime::from_timestamp_nanos(clock as i64));
+        }
+        let mut attachments_changed = false;
+        if !full_attachments.is_empty() && full_attachments.len() == stored.attachments.len() {
+            let mut repaired = stored.attachments.clone();
+            let mut compatible = true;
+            for (current, incoming) in repaired.iter_mut().zip(full_attachments) {
+                let exists: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM attachments WHERE id = ?1)",
+                    params![current.to_string()],
+                    |r| r.get(0),
+                )?;
+                let incoming_exists: bool = tx.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM attachments WHERE id = ?1)",
+                    params![incoming.to_string()],
+                    |r| r.get(0),
+                )?;
+                if !incoming_exists || (exists && current != incoming) {
+                    compatible = false;
+                    break;
+                }
+                if !exists && current != incoming {
+                    *current = *incoming;
+                }
+            }
+            if compatible && repaired != stored.attachments {
+                // A Mixed body must describe the same attachment sequence.
+                if let MessageContent::Mixed(mixed) = &mut stored.content {
+                    if mixed.attachment_ids != stored.attachments {
+                        compatible = false;
+                    } else {
+                        mixed.attachment_ids = repaired.clone();
+                    }
+                }
+                if compatible {
+                    stored.attachments = repaired;
+                    attachments_changed = true;
+                }
+            }
+        }
+        if body_changed || attachments_changed {
+            let content_json = serde_json::to_string(&stored.content)
+                .map_err(|e| StorageError::InvalidData(e.to_string()))?;
+            tx.execute(
+                "UPDATE messages SET content_type = ?1, content_json = ?2, attachments_blob = ?3, is_edited = CASE WHEN ?4 THEN 1 ELSE is_edited END, edited_at = ?5, updated_at = ?6 WHERE id = ?7",
+                params![content_type_discriminant(&stored.content), content_json, db_serialize(&stored.attachments)?, body_changed, stored.edited_at.map(|t| t.to_rfc3339()), Utc::now().to_rfc3339(), id.to_string()],
+            )?;
+        }
+        tx.commit()?;
+        Ok(Some((body_changed, attachments_changed)))
+    }
+
     /// Replace the body of the one row at this scope's Signal-style key,
     /// undeleted, marking it edited at `edited_at`. One UPDATE of the body
     /// columns only — `content_json` with its `content_type` discriminant
