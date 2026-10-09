@@ -797,6 +797,13 @@ fn handle_orchestrator_event(
                 CallEndReason::RemoteHangup => Some(("Call ended", "info")),
                 CallEndReason::Declined => Some(("Call declined", "info")),
                 CallEndReason::NoAnswer => Some(("No answer", "info")),
+                // An established session the SDK and one fresh-token rejoin
+                // could not bring back is a loss, not a failed connect.
+                CallEndReason::Error(ref message)
+                    if message == chatter_core::services::call_worker::CONNECTION_LOST =>
+                {
+                    Some(("Connection lost", "error"))
+                }
                 CallEndReason::Error(_) => Some((super::outgoing::CALL_FAILED, "error")),
             };
             let weak = weak.clone();

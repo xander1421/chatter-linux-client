@@ -68,8 +68,32 @@ pub enum RoomState {
         room_name: String,
         participant_count: usize,
     },
-    /// Connection failed.
+    /// The SDK is recovering the session on its own (resume or full
+    /// restart, up to its own attempt budget). Keys stay installed; nothing
+    /// application-side may join again while this lasts.
+    Reconnecting {
+        room_name: String,
+        participant_count: usize,
+    },
+    /// Connection failed, or an established session was lost for good: the
+    /// SDK gave up (or the server removed us). Terminal for this connection;
+    /// only an application reconnect with a fresh token can follow.
     Failed { reason: String },
+}
+
+/// Whether a server-reported disconnect is worth one application-level
+/// reconnect (fresh token, new session) or ends the call outright.
+fn loss_is_retryable(reason: livekit::DisconnectReason) -> bool {
+    use livekit::DisconnectReason as R;
+    matches!(
+        reason,
+        R::UnknownReason
+            | R::SignalClose
+            | R::ConnectionTimeout
+            | R::StateMismatch
+            | R::JoinFailure
+            | R::MediaFailure
+    )
 }
 
 /// Room event for UI updates.
@@ -77,6 +101,14 @@ pub enum RoomState {
 pub enum RoomEvent {
     /// Connection state changed.
     StateChanged(RoomState),
+    /// An established session is gone and the SDK will not bring it back
+    /// (`StateChanged(Failed)` precedes this). `generation` identifies the
+    /// connection that died, so a late notice cannot act on a newer one.
+    ConnectionLost {
+        generation: u64,
+        reason: String,
+        retryable: bool,
+    },
     /// Participant joined.
     ParticipantJoined {
         identity: String,
@@ -232,6 +264,10 @@ pub struct RoomManager {
     e2ee: Arc<RwLock<E2eeState>>,
     /// Handle to the spawned event handler task so disconnect() can await it.
     event_task: Arc<RwLock<Option<tokio::task::JoinHandle<()>>>>,
+    /// Bumped per connect attempt. The event handler of a connection carries
+    /// its own value, so a detached old handler (disconnect join timed out)
+    /// can neither mark a newer connection disconnected nor report its loss.
+    connection_generation: Arc<std::sync::atomic::AtomicU64>,
     /// Shared frame store the UI reads. Kept here (not just inside
     /// `video_playback`) so the capture path can tee the LOCAL camera/screen
     /// feed into it for the self-preview tile.
@@ -289,6 +325,7 @@ impl RoomManager {
                 epoch: 0,
             })),
             event_task: Arc::new(RwLock::new(None)),
+            connection_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             shared_frames,
         };
         (manager, event_rx)
@@ -942,6 +979,10 @@ impl RoomManager {
         };
         replace_timing_slot(&self.timing, timing.clone());
         timing.mark("room_connect_begin");
+        let generation = self
+            .connection_generation
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst)
+            + 1;
         self.set_state(RoomState::Connecting);
 
         // Store key provider for later ratcheting
@@ -1129,6 +1170,7 @@ impl RoomManager {
         // 1. Call worker runs on a LocalSet with new_current_thread() runtime
         // 2. LiveKit Room/events are !Send and must stay on the same thread
         let event_task_slot = self.event_task.clone();
+        let generation_slot = self.connection_generation.clone();
         let handle = tokio::task::spawn_local(async move {
             tracing::info!("Room event handler started");
             let mut cryptor_evidence = ReceiverCryptorEvidence::default();
@@ -1146,8 +1188,12 @@ impl RoomManager {
                         );
                     }
                 }
+                // A detached handler (disconnect join timed out) must not
+                // mirror its dead connection's lifecycle onto a newer one.
+                let live = generation_slot.load(std::sync::atomic::Ordering::SeqCst) == generation;
                 Self::handle_room_event(
                     event,
+                    (generation, live),
                     &event_tx,
                     &state,
                     &room_arc,
@@ -1168,8 +1214,17 @@ impl RoomManager {
                 playback.stop();
             }
             video_playback.read().stop();
-            *state.write() = RoomState::Disconnected;
-            let _ = event_tx.try_send(RoomEvent::StateChanged(RoomState::Disconnected));
+            // Only this connection's handler may close its state, and a
+            // terminal loss already recorded stays recorded (the worker
+            // fences its cleanup on `Failed`).
+            if generation_slot.load(std::sync::atomic::Ordering::SeqCst) == generation {
+                let mut guard = state.write();
+                if !matches!(*guard, RoomState::Failed { .. }) {
+                    *guard = RoomState::Disconnected;
+                    drop(guard);
+                    let _ = event_tx.try_send(RoomEvent::StateChanged(RoomState::Disconnected));
+                }
+            }
         });
         *event_task_slot.write() = Some(handle);
 
@@ -1252,20 +1307,32 @@ impl RoomManager {
         self.state.read().clone()
     }
 
-    /// Check if connected.
+    /// The session is alive: connected, or being recovered by the SDK with
+    /// its keys still installed. Media publish gates that need a working
+    /// transport check for `Connected` specifically.
     pub fn is_connected(&self) -> bool {
-        matches!(self.state(), RoomState::Connected { .. })
+        matches!(
+            self.state(),
+            RoomState::Connected { .. } | RoomState::Reconnecting { .. }
+        )
+    }
+
+    /// Identity of the current connect attempt ([`RoomEvent::ConnectionLost`]).
+    pub fn connection_generation(&self) -> u64 {
+        self.connection_generation
+            .load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Get current participant count.
     pub fn participant_count(&self) -> usize {
-        if let RoomState::Connected {
-            participant_count, ..
-        } = self.state()
-        {
-            participant_count
-        } else {
-            0
+        match self.state() {
+            RoomState::Connected {
+                participant_count, ..
+            }
+            | RoomState::Reconnecting {
+                participant_count, ..
+            } => participant_count,
+            _ => 0,
         }
     }
 
@@ -1448,6 +1515,7 @@ impl RoomManager {
 
     fn handle_room_event(
         event: livekit::RoomEvent,
+        (generation, live): (u64, bool),
         event_tx: &mpsc::Sender<RoomEvent>,
         state: &Arc<RwLock<RoomState>>,
         room: &Arc<RwLock<Option<Room>>>,
@@ -1488,13 +1556,18 @@ impl RoomManager {
                     if let Some(r) = room_guard.as_ref() {
                         let count = r.remote_participants().len() + 1;
                         let state_guard = state.read();
-                        if let RoomState::Connected { room_name, .. } = &*state_guard {
-                            Some(RoomState::Connected {
+                        match &*state_guard {
+                            RoomState::Connected { room_name, .. } => Some(RoomState::Connected {
                                 room_name: room_name.clone(),
                                 participant_count: count,
-                            })
-                        } else {
-                            None
+                            }),
+                            RoomState::Reconnecting { room_name, .. } => {
+                                Some(RoomState::Reconnecting {
+                                    room_name: room_name.clone(),
+                                    participant_count: count,
+                                })
+                            }
+                            _ => None,
                         }
                     } else {
                         None
@@ -1664,7 +1737,104 @@ impl RoomManager {
                     speakers.iter().map(|p| p.identity().to_string()).collect();
                 let _ = event_tx.try_send(RoomEvent::ActiveSpeakersChanged { speaker_identities });
             }
+            // SDK-owned recovery: the session, its tracks and its installed
+            // keys survive; we only mirror the phase. Never join again here.
+            livekit::RoomEvent::Reconnecting => {
+                if !live {
+                    return;
+                }
+                let next = match &*state.read() {
+                    RoomState::Connected {
+                        room_name,
+                        participant_count,
+                    } => Some(RoomState::Reconnecting {
+                        room_name: room_name.clone(),
+                        participant_count: *participant_count,
+                    }),
+                    _ => None,
+                };
+                if let Some(next) = next {
+                    tracing::warn!("Room connection interrupted; SDK reconnecting");
+                    *state.write() = next.clone();
+                    let _ = event_tx.try_send(RoomEvent::StateChanged(next));
+                }
+            }
+            livekit::RoomEvent::Reconnected => {
+                if !live {
+                    return;
+                }
+                let count = room
+                    .read()
+                    .as_ref()
+                    .map(|r| r.remote_participants().len() + 1)
+                    .unwrap_or(1);
+                let next = match &*state.read() {
+                    RoomState::Reconnecting { room_name, .. } => Some(RoomState::Connected {
+                        room_name: room_name.clone(),
+                        participant_count: count,
+                    }),
+                    _ => None,
+                };
+                if let Some(next) = next {
+                    tracing::info!("Room connection recovered by SDK");
+                    *state.write() = next.clone();
+                    let _ = event_tx.try_send(RoomEvent::StateChanged(next));
+                }
+            }
+            // Terminal for this connection: the SDK closes the room next and
+            // the stream-end branch below stops playback. `ClientInitiated` is
+            // our own `disconnect()`, already recorded there.
+            livekit::RoomEvent::Disconnected { reason } => {
+                if !live || reason == livekit::DisconnectReason::ClientInitiated {
+                    return;
+                }
+                let lost = matches!(
+                    &*state.read(),
+                    RoomState::Connected { .. } | RoomState::Reconnecting { .. }
+                );
+                if !lost {
+                    return;
+                }
+                let reason_text = format!("{reason:?}");
+                tracing::warn!(reason = %reason_text, "Room connection lost");
+                let failed = RoomState::Failed {
+                    reason: reason_text.clone(),
+                };
+                *state.write() = failed.clone();
+                let _ = event_tx.try_send(RoomEvent::StateChanged(failed));
+                let _ = event_tx.try_send(RoomEvent::ConnectionLost {
+                    generation,
+                    reason: reason_text,
+                    retryable: loss_is_retryable(reason),
+                });
+            }
+            // Redundant with Reconnecting/Reconnected/Disconnected above.
+            livekit::RoomEvent::ConnectionStateChanged(_) => {}
             _ => {}
+        }
+    }
+}
+
+#[cfg(test)]
+mod loss_policy_tests {
+    use super::loss_is_retryable;
+    use livekit::DisconnectReason as R;
+
+    #[test]
+    fn only_transport_losses_earn_an_application_reconnect() {
+        for reason in [R::SignalClose, R::ConnectionTimeout, R::UnknownReason] {
+            assert!(loss_is_retryable(reason), "{reason:?}");
+        }
+        for reason in [
+            R::ClientInitiated,
+            R::DuplicateIdentity,
+            R::ParticipantRemoved,
+            R::RoomDeleted,
+            R::RoomClosed,
+            R::ServerShutdown,
+            R::UserRejected,
+        ] {
+            assert!(!loss_is_retryable(reason), "{reason:?}");
         }
     }
 }

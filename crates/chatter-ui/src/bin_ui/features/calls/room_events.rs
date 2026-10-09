@@ -7,7 +7,7 @@ use std::sync::Arc;
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use crate::{CallParticipantData, MainWindow};
-use chatter_core::calls::{LiveKitRoomEvent, tiles};
+use chatter_core::calls::{LiveKitRoomEvent, RoomState, tiles};
 use chatter_core::client::ChatterClient;
 use chatter_core::ui::initials_from_name;
 
@@ -88,19 +88,49 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         };
 
         tracing::info!("Started room events listener");
+        // The call whose session is being recovered (SDK retry, or core's
+        // fresh-token rejoin after `Failed`): its next `Connected` is a
+        // recovery, not a first connect. Keyed by call id so a new call
+        // started after a lost one never inherits the notice.
+        let mut recovering_call: Option<String> = None;
 
         while let Some(event) = rx.recv().await {
             tracing::debug!("UI received room event: {:?}", event);
             let weak = weak.clone();
+            // Recovery under way: the SDK's own, or core's fresh-token rejoin.
+            // `Failed` alone is not one: core decides between rejoin and
+            // teardown, and says which through `ConnectionLost { retryable }`
+            // or the orchestrator's `ActiveEnded`.
+            let recovering = matches!(
+                &event,
+                LiveKitRoomEvent::StateChanged(RoomState::Reconnecting { .. })
+                    | LiveKitRoomEvent::ConnectionLost { retryable: true, .. }
+            );
+            let connected = matches!(
+                &event,
+                LiveKitRoomEvent::StateChanged(RoomState::Connected { .. })
+            );
 
             match event {
-                LiveKitRoomEvent::StateChanged(_)
+                LiveKitRoomEvent::ConnectionLost { .. }
+                | LiveKitRoomEvent::StateChanged(_)
                 | LiveKitRoomEvent::ParticipantJoined { .. }
                 | LiveKitRoomEvent::ParticipantLeft { .. } => {
                     // Events are wakeups, not membership decisions: mount may
                     // have overwritten earlier joins, and departures may lag.
                     let Some(snapshot) = ui_ctx.call_room_snapshot().await else {
                         continue;
+                    };
+                    let call_id = snapshot.call.id.to_string();
+                    let notice = if recovering {
+                        let first = recovering_call.as_deref() != Some(call_id.as_str());
+                        recovering_call = Some(call_id);
+                        first.then_some(("Reconnecting…", "info"))
+                    } else if connected && recovering_call.as_deref() == Some(call_id.as_str()) {
+                        recovering_call = None;
+                        Some(("Reconnected", "info"))
+                    } else {
+                        None
                     };
                     let _ = slint::invoke_from_event_loop(move || {
                         let Some(w) = weak.upgrade() else { return };
@@ -117,6 +147,11 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         if let Some(remotes) = snapshot.remotes {
                             reconcile_roster(&mut data, remotes);
                             w.set_active_call_data(data);
+                        }
+                        if let Some((message, variant)) = notice {
+                            w.set_toast_message(message.into());
+                            w.set_toast_variant(variant.into());
+                            w.set_toast_visible(true);
                         }
                     });
                 }

@@ -115,6 +115,10 @@ pub enum CallEndReason {
     Error(String),
 }
 
+/// `CallEndReason::Error` text for a session the SDK could not recover and
+/// one fresh-token reconnect did not bring back. The UI keys its notice on it.
+pub const CONNECTION_LOST: &str = "Connection lost";
+
 /// Events emitted by the orchestrator. Consumers (UI, notification service,
 /// call history) subscribe via [`CallWorkerHandle::take_call_events`].
 #[derive(Debug, Clone, PartialEq)]
@@ -677,6 +681,15 @@ enum CallCommand {
     Reconnect {
         response: oneshot::Sender<Result<(), CallError>>,
     },
+    /// Internal: the room-events forwarder saw the SDK give up on a session.
+    /// `call` and `generation` were captured when the loss was observed; the
+    /// handler acts only if both still name the live call and connection.
+    RoomLost {
+        call: CallHandle,
+        generation: u64,
+        retryable: bool,
+        reason: String,
+    },
     /// Rotate the encryption key (for member-leave key rotation).
     /// Replaces the current key entirely with a new random key.
     RotateKey {
@@ -933,6 +946,7 @@ impl CallWorkerHandle {
         let incoming_presentation = IncomingCallPresentationState::new();
         let presentation_for_worker = incoming_presentation.clone();
         let room_events_broadcast_for_worker = room_events_broadcast.clone();
+        let internal_tx = cmd_tx.clone();
 
         // Spawn dedicated thread for call operations
         std::thread::Builder::new()
@@ -940,6 +954,7 @@ impl CallWorkerHandle {
             .spawn(move || {
                 run_call_worker(
                     cmd_rx,
+                    internal_tx,
                     events_tx,
                     call_client,
                     shared_frames_for_worker,
@@ -1905,6 +1920,7 @@ fn derive_call_handle(state: &ActiveCallState) -> CallHandle {
 /// This creates a single-threaded tokio runtime with LocalSet for non-Send futures.
 fn run_call_worker(
     mut cmd_rx: mpsc::Receiver<CallCommand>,
+    internal_tx: mpsc::Sender<CallCommand>,
     events_tx: mpsc::Sender<LiveKitRoomEvent>,
     call_client: CallClient,
     shared_video_frames: SharedVideoFrames,
@@ -1954,10 +1970,24 @@ fn run_call_worker(
         // core-side policy subscribers (e.g. key rotation) via broadcast.
         let events_tx_clone = events_tx.clone();
         let room_bus = room_events_broadcast.clone();
+        let lost_call = active_call.clone();
         tokio::task::spawn_local(async move {
             tracing::info!("Room events forwarder started");
             while let Some(event) = room_events_rx.recv().await {
                 tracing::info!("Forwarding room event: {:?}", event);
+                if let LiveKitRoomEvent::ConnectionLost { generation, ref reason, retryable } = event {
+                    // Queue behind whatever the user already asked for: a
+                    // hangup ahead of this clears the call and the handler
+                    // finds nothing to recover.
+                    if let Some(call) = lost_call.borrow().as_ref().map(derive_call_handle) {
+                        let _ = internal_tx.try_send(CallCommand::RoomLost {
+                            call,
+                            generation,
+                            retryable,
+                            reason: reason.clone(),
+                        });
+                    }
+                }
                 // Fire-and-forget broadcast — no subscribers is fine.
                 let _ = room_bus.send(event.clone());
                 if events_tx_clone.try_send(event).is_err() {
@@ -2449,6 +2479,13 @@ fn run_call_worker(
                 }
 
                 CallCommand::Reconnect { response } => {
+                    // A live or SDK-recovering session is never joined twice.
+                    if room_manager.is_connected()
+                        || matches!(room_manager.state(), RoomState::Connecting)
+                    {
+                        let _ = response.send(Err(CallError::AlreadyInCall));
+                        continue;
+                    }
                     let result = suspend_for_reconnect(
                         &ratchet_cancel,
                         reconnect_impl(&call_client, &room_manager, &active_call),
@@ -2458,6 +2495,67 @@ fn run_call_worker(
                         restore_reconnected_media(&room_manager, &active_call).await;
                     }
                     let _ = response.send(result);
+                }
+
+                CallCommand::RoomLost { call, generation, retryable, reason } => {
+                    let same_call = || active_call.borrow().as_ref().map(derive_call_handle).as_ref() == Some(&call);
+                    // Stale notice: the user ended the call, a newer call
+                    // owns the room manager, or a newer connect is under way.
+                    if !same_call()
+                        || room_manager.connection_generation() != generation
+                        || !matches!(room_manager.state(), RoomState::Failed { .. })
+                    {
+                        tracing::info!(call = %call.as_str(), generation, "Stale room-loss notice ignored");
+                        continue;
+                    }
+                    // A session that outlived its presentation session (account
+                    // switch) is torn down, never rejoined.
+                    let session_ok = orchestrator
+                        .active
+                        .as_ref()
+                        .filter(|a| a.call == call)
+                        .is_none_or(|a| incoming_presentation.accepts_session(a.session_revision));
+                    tracing::warn!(call = %call.as_str(), %reason, retryable, "Room session lost");
+                    // ponytail: one fresh-token rejoin after the SDK's own
+                    // budget (10 attempts); a second only if the field shows it.
+                    let recovered = if retryable && session_ok {
+                        let result = suspend_for_reconnect(
+                            &ratchet_cancel,
+                            reconnect_impl(&call_client, &room_manager, &active_call),
+                            || start_key_ratchet_timer(&room_manager, &ratchet_cancel, &active_call),
+                        ).await;
+                        match result {
+                            // The loop awaited the whole attempt, so no command
+                            // changed the active call meanwhile; check anyway.
+                            Ok(()) if same_call() => {
+                                restore_reconnected_media(&room_manager, &active_call).await;
+                                tracing::info!(call = %call.as_str(), "Room session recovered");
+                                true
+                            }
+                            Ok(()) => true,
+                            Err(error) => {
+                                tracing::warn!(call = %call.as_str(), %error, "Fresh-token reconnect failed");
+                                false
+                            }
+                        }
+                    } else {
+                        false
+                    };
+                    if recovered || !same_call() {
+                        continue;
+                    }
+                    // Terminal: same teardown a hangup does, so the server's
+                    // final-participant lifecycle runs and the UI is told.
+                    stop_key_ratchet_timer(&ratchet_cancel);
+                    let _ = leave_call_impl(&call_client, &room_manager, &active_call).await;
+                    if orchestrator.active.as_ref().map(|a| a.call == call).unwrap_or(false) {
+                        orchestrator.active = None;
+                    }
+                    orchestrator.outgoing.remove(&call);
+                    let _ = call_events_tx.send(CallOrchestratorEvent::ActiveEnded {
+                        call,
+                        reason: CallEndReason::Error(CONNECTION_LOST.to_string()),
+                    });
                 }
 
                 // ============================================================
