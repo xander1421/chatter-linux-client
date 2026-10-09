@@ -199,6 +199,7 @@ impl ClientBuilder {
             composer_draft_revision: Mutex::new(0),
             composer_draft_owner: Mutex::new(None),
             parked_sends: Mutex::new(Vec::new()),
+            composer_recovery_unread: AtomicBool::new(false),
             composer_owner: Mutex::new(String::new()),
             expired_messages: tokio::sync::broadcast::channel(16).0,
         }))
@@ -408,6 +409,9 @@ pub struct ChatterClient {
     /// Failed composed sends kept until their composer has room for them.
     /// See `recover_composer_send`. In memory, like the drafts.
     parked_sends: Mutex<Vec<ComposerSend>>,
+    /// The signed-in account's recovery row could not be read this session,
+    /// so it is not written over. See `restore_composer_recovery`.
+    composer_recovery_unread: AtomicBool,
     /// The conversation whose draft the composer holds: the `entering` of the
     /// last `swap_composer_draft`. Lags the active conversation until the
     /// UI's draft watcher has run.

@@ -107,29 +107,34 @@ impl From<&PendingAttachment> for StagedAttachment {
 }
 
 impl StagedAttachment {
-    /// Back into a tray entry, if it can still be sent: a pointer-backed
-    /// attachment needs no file; a file-backed one needs its file.
-    fn into_pending(self) -> Option<PendingAttachment> {
-        let pointer = match self.pointer {
-            Some(bytes) => Some(
-                <crate::proto::content_v1::AttachmentPointer as prost::Message>::decode(
-                    bytes.as_slice(),
-                )
-                .ok()?,
-            ),
-            None => None,
-        };
-        if pointer.is_none() && !self.path.is_file() {
-            return None;
-        }
-        Some(PendingAttachment {
+    /// Back into a tray entry, as the row recorded it. An attachment whose
+    /// file is gone, or whose stored pointer no longer decodes, comes back
+    /// too: it is what the user staged, the chip is the evidence of it, and
+    /// the send it is part of fails as a whole (`upload_attachments` stops
+    /// at the first unreadable file) until the user removes it. Dropping it
+    /// here would send the remainder as if it were everything.
+    fn into_pending(self) -> PendingAttachment {
+        let pointer = self.pointer.and_then(|bytes| {
+            <crate::proto::content_v1::AttachmentPointer as prost::Message>::decode(
+                bytes.as_slice(),
+            )
+            .map_err(|e| {
+                tracing::warn!(
+                    filename = %self.filename,
+                    error = %e,
+                    "staged attachment pointer no longer decodes; kept as unsendable evidence"
+                );
+            })
+            .ok()
+        });
+        PendingAttachment {
             id: self.id,
             filename: self.filename,
             path: self.path,
             size: self.size,
             mime_type: self.mime_type,
             pointer,
-        })
+        }
     }
 }
 
@@ -554,6 +559,36 @@ impl ChatterClient {
         self.persist_composer_drafts(&drafts);
     }
 
+    /// Give a thread reply that did not leave back to its thread's draft,
+    /// for the thread to show when it is next opened. Nothing is written
+    /// when the session that composed it is over, or when the thread's draft
+    /// already holds text typed since: newer input is never written over.
+    /// Returns whether the text was kept.
+    pub fn restore_thread_draft(
+        &self,
+        root: &MessageId,
+        text: &str,
+        session_revision: u64,
+    ) -> bool {
+        if text.is_empty() || !self.composer_session_is_current(session_revision) {
+            return false;
+        }
+        let (mut drafts, _) = self.composer_drafts_for_session();
+        let key = Self::thread_draft_key(root);
+        if drafts.get(&key).is_some_and(|held| !held.text.is_empty()) {
+            return false;
+        }
+        drafts.insert(
+            key,
+            ComposerDraft {
+                text: text.to_owned(),
+                reply: None,
+            },
+        );
+        self.persist_composer_drafts(&drafts);
+        true
+    }
+
     // ── Recovery: staged files and parked sends ─────────────────────
 
     fn composer_recovery_key(owner: UserId) -> String {
@@ -575,6 +610,14 @@ impl ChatterClient {
     fn recovery_owner(&self) -> Option<UserId> {
         let auth = self.auth_state().get();
         if *self.composer_draft_revision.lock() != auth.session_revision {
+            return None;
+        }
+        if self
+            .composer_recovery_unread
+            .load(std::sync::atomic::Ordering::SeqCst)
+        {
+            // The row could not be read this session: whatever it holds
+            // must not be written over. See `restore_composer_recovery`.
             return None;
         }
         let owner = *self.composer_draft_owner.lock();
@@ -682,24 +725,40 @@ impl ChatterClient {
         }
     }
 
-    /// Load `owner`'s row into the trays and the parked list, dropping what
-    /// can no longer be sent, then sweep the staging directory of files the
-    /// row does not name. Runs once per session, under the drafts lock.
+    /// Load `owner`'s row into the trays and the parked list, then sweep
+    /// the staging directory of files the row does not name. Runs once per
+    /// session, under the drafts lock; nothing in here takes it again.
+    ///
+    /// Only a row that was read, or confirmed absent, is acted on. A read
+    /// or decode failure is unknown state: nothing is restored, nothing is
+    /// swept, and `recovery_owner` returns `None` for the rest of the
+    /// session so no tray change writes over the row. The next session
+    /// reads it again; sign-out deletes it as always.
     fn restore_composer_recovery(&self, owner: UserId, session_revision: u64) {
-        let recovery: ComposerRecovery = self
-            .settings_repo()
-            .get(&Self::composer_recovery_key(owner))
-            .ok()
-            .flatten()
-            .unwrap_or_default();
+        let key = Self::composer_recovery_key(owner);
+        let recovery = match self.settings_repo().get::<ComposerRecovery>(&key) {
+            Ok(row) => row.unwrap_or_default(),
+            Err(e) => {
+                tracing::warn!(
+                    error = %e,
+                    "composer recovery row not read; row and staged files left as they are"
+                );
+                self.composer_recovery_unread
+                    .store(true, std::sync::atomic::Ordering::SeqCst);
+                return;
+            }
+        };
+        self.composer_recovery_unread
+            .store(false, std::sync::atomic::Ordering::SeqCst);
         let mut keep = HashSet::new();
         let chat = self.chat_state();
         let revision = chat.get().attachment_revision;
         for (id, attachments) in recovery.trays {
             let Ok(channel) = id.parse::<ChannelId>() else {
+                tracing::warn!(tray = %id, "staged attachments under an unparsable tray key; dropped");
                 continue;
             };
-            for attachment in attachments.into_iter().filter_map(StagedAttachment::into_pending) {
+            for attachment in attachments.into_iter().map(StagedAttachment::into_pending) {
                 keep.insert(attachment.path.clone());
                 // Trays are keyed by channel id alone, so the variant does
                 // not matter here: a DM's tray has the DM's derived id.
@@ -715,7 +774,7 @@ impl ChatterClient {
             let attachments: Vec<PendingAttachment> = send
                 .attachments
                 .into_iter()
-                .filter_map(StagedAttachment::into_pending)
+                .map(StagedAttachment::into_pending)
                 .collect();
             if send.text.is_empty() && send.reply.is_none() && attachments.is_empty() {
                 continue;
@@ -1319,7 +1378,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_file_deleted_from_disk_is_not_restored_and_orphans_are_swept() {
+    async fn a_file_deleted_from_disk_stays_as_evidence_and_orphans_are_swept() {
         let (client, dir) = client();
         let user = crate::domain::ids::UserId::new();
         client.auth_state().set_logged_in(user, 1, "A".into());
@@ -1334,8 +1393,65 @@ mod tests {
         let client = client_in(&dir);
         client.auth_state().set_logged_in(user, 1, "A".into());
         open(&client, a);
-        assert!(client.chat_state().get_pending_attachments().is_empty());
+        // The chip comes back so the user sees what was staged; its send
+        // fails whole at upload until they remove it.
+        let tray = client.chat_state().get_pending_attachments();
+        assert_eq!(tray.len(), 1);
+        assert_eq!(tray[0].path, gone.path);
         assert!(!orphan.exists(), "orphaned staged file survived the sweep");
+    }
+
+    #[tokio::test]
+    async fn a_parked_send_with_a_missing_file_keeps_the_file_in_the_restored_send() {
+        let (client, dir) = client();
+        let user = crate::domain::ids::UserId::new();
+        client.auth_state().set_logged_in(user, 1, "A".into());
+        let (a, b) = (ChannelId::new(), ChannelId::new());
+        open(&client, a);
+        let kept = stage(&client, picked(&dir, "kept.png"));
+        let lost = stage(&client, picked(&dir, "lost.png"));
+        let send = client.begin_composer_send("both".into(), None).unwrap();
+        open(&client, b);
+        assert!(client.recover_composer_send(send, true).is_none());
+        std::fs::remove_file(&lost.path).unwrap();
+        drop(client);
+
+        let client = client_in(&dir);
+        client.auth_state().set_logged_in(user, 1, "A".into());
+        open(&client, a);
+        let back = client.take_parked_send(true).expect("parked send lost");
+        assert_eq!(back.text, "both");
+        let paths: Vec<_> = back.attachments.iter().map(|a| a.path.clone()).collect();
+        assert_eq!(paths, vec![kept.path.clone(), lost.path.clone()], "partial send prepared");
+        assert!(kept.path.is_file());
+    }
+
+    #[tokio::test]
+    async fn an_unreadable_recovery_row_is_neither_swept_nor_written_over() {
+        let (client, dir) = client();
+        let user = crate::domain::ids::UserId::new();
+        client.auth_state().set_logged_in(user, 1, "A".into());
+        let a = ChannelId::new();
+        open(&client, a);
+        let file = stage(&client, picked(&dir, "safe.png"));
+        // Whatever wrote this row, this build cannot decode it.
+        let key = ChatterClient::composer_recovery_key(user);
+        client.settings_repo().set(&key, &"not a recovery row").unwrap();
+        drop(client);
+
+        let client = client_in(&dir);
+        client.auth_state().set_logged_in(user, 1, "A".into());
+        open(&client, a);
+        assert!(client.chat_state().get_pending_attachments().is_empty());
+        assert!(file.path.is_file(), "file of an unread row was swept");
+        // A tray change this session must not replace the unread row.
+        stage(&client, picked(&dir, "new.png"));
+        let row: Option<String> = client.settings_repo().get(&key).unwrap();
+        assert_eq!(row.as_deref(), Some("not a recovery row"));
+        // Sign-out is the one explicit cleanup and still clears it.
+        client.clear_composer_session();
+        let row: Option<String> = client.settings_repo().get(&key).unwrap();
+        assert!(row.is_none());
     }
 
     #[tokio::test]
@@ -1423,5 +1539,17 @@ mod tests {
         let client = client_in(&dir);
         client.auth_state().set_logged_in(user, 1, "A".into());
         assert!(client.thread_draft(&root).is_empty(), "sent reply came back");
+
+        // A reply that failed after the tap goes back to its thread, unless
+        // something newer was typed there or the session is over.
+        let revision = client.auth_state().get().session_revision;
+        assert!(client.restore_thread_draft(&root, "failed reply", revision));
+        assert_eq!(client.thread_draft(&root), "failed reply");
+        client.set_thread_draft(&root, "typed since");
+        assert!(!client.restore_thread_draft(&root, "failed reply", revision));
+        assert_eq!(client.thread_draft(&root), "typed since");
+        client.set_thread_draft(&root, "");
+        assert!(!client.restore_thread_draft(&root, "failed reply", revision + 1));
+        assert!(client.thread_draft(&root).is_empty());
     }
 }

@@ -66,10 +66,14 @@ fn wire_send_thread_reply(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         };
         // The panel cleared its composer on tap: the persisted draft goes
         // now, not after the autosave delay, so a restart cannot resend it.
+        // A reply that then fails is given back below.
         ui_ctx.set_thread_draft(&thread.root_message_id, "");
+        let session_revision = ui_ctx.auth_state().get().session_revision;
         let owner = HistoryOwner::thread(&ui_ctx, thread.root_message_id, false);
         tokio::spawn(async move {
             if !owner.is_current() {
+                // Not sent, but the draft is already cleared: give it back.
+                ui_ctx.restore_thread_draft(&thread.root_message_id, &text, session_revision);
                 return;
             }
             let sent = ui_ctx
@@ -84,26 +88,35 @@ fn wire_send_thread_reply(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     false,
                 )
                 .await;
-            if !owner.is_current() {
-                return;
-            }
             if let Err(e) = &sent {
                 // The panel cleared its composer on tap. A reply that did not
                 // leave must say so and give the text back — it used to vanish.
                 tracing::error!(error = %e, "thread reply send failed");
+                let root = thread.root_message_id;
                 let _ = slint::invoke_from_event_loop(move || {
-                    if !owner.is_current() {
+                    if !ui_ctx.composer_session_is_current(session_revision) {
                         return;
                     }
-                    if let Some(w) = weak.upgrade() {
-                        if w.get_thread_composer_text().is_empty() {
-                            w.set_thread_composer_text(text.into());
-                        }
-                        w.set_toast_message("Couldn't send your reply. Try again.".into());
-                        w.set_toast_variant("error".into());
-                        w.set_toast_visible(true);
+                    let Some(w) = weak.upgrade() else { return };
+                    // Still this thread's panel with nothing typed since:
+                    // straight back into the box, and its autosave follows.
+                    // Any other panel, or newer text in this one: back to the
+                    // thread's own draft, where opening it finds the text —
+                    // never over what was typed since (core keeps the newer).
+                    let shown = owner.is_current()
+                        && w.get_thread_root_message_id().as_str() == root.to_string();
+                    if shown && w.get_thread_composer_text().is_empty() {
+                        w.set_thread_composer_text(text.into());
+                    } else {
+                        ui_ctx.restore_thread_draft(&root, &text, session_revision);
                     }
+                    w.set_toast_message("Couldn't send your reply. Try again.".into());
+                    w.set_toast_variant("error".into());
+                    w.set_toast_visible(true);
                 });
+                return;
+            }
+            if !owner.is_current() {
                 return;
             }
             if let Ok(msg) = sent {
@@ -123,7 +136,8 @@ fn wire_send_thread_reply(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         return;
                     }
                     if let Some(w) = weak.upgrade() {
-                        w.set_thread_composer_text(SharedString::default());
+                        // The panel cleared its box on tap; clearing it again
+                        // here would wipe a reply typed since.
                         apply_live_thread_reply(
                             &w,
                             &root_id,
