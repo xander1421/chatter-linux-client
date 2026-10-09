@@ -73,7 +73,7 @@ fn wire_send_thread_reply(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         tokio::spawn(async move {
             if !owner.is_current() {
                 // Not sent, but the draft is already cleared: give it back.
-                ui_ctx.restore_thread_draft(&thread.root_message_id, &text, session_revision);
+                ui_ctx.park_failed_thread_reply(&thread.root_message_id, &text, session_revision);
                 return;
             }
             let sent = ui_ctx
@@ -106,10 +106,13 @@ fn wire_send_thread_reply(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     let shown = owner.is_current()
                         && w.get_thread_root_message_id().as_str() == root.to_string();
                     let message = if shown && w.get_thread_composer_text().is_empty() {
-                        w.set_thread_composer_text(text.into());
+                        ui_ctx.park_failed_thread_reply(&root, &text, session_revision);
+                        if let Some(restored) = ui_ctx.take_failed_thread_reply(&root) {
+                            w.set_thread_composer_text(restored.into());
+                        }
                         "Couldn't send your reply. Try again."
                     } else {
-                        ui_ctx.restore_thread_draft(&root, &text, session_revision);
+                        ui_ctx.park_failed_thread_reply(&root, &text, session_revision);
                         if ui_ctx.has_failed_thread_reply(&root) {
                             // Parked behind newer text; it comes back once
                             // the box and the draft are empty.

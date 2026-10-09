@@ -250,6 +250,11 @@ pub async fn finish_gif_send(
     // A logout/login may complete while the upload is in flight. An old
     // account's content must neither be sent nor restored in the new session.
     if !ui_ctx.composer_session_is_current(send.session_revision) {
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(w) = weak.upgrade() {
+                crate::bin_ui::features::chat::send_message::remove_pending_bubble(&w, &send);
+            }
+        });
         return None;
     }
     let started = std::time::Instant::now();

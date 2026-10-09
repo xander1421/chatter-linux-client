@@ -6,8 +6,9 @@
 //! whatever the composer and the active conversation hold when the upload
 //! finishes.
 
-use std::collections::{HashMap, HashSet};
-use std::path::{Path, PathBuf};
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::sync::atomic::Ordering;
 
 use super::ChatterClient;
 use crate::domain::anon_dm::AnonDmId;
@@ -185,7 +186,11 @@ impl ParkedSend {
             conversation: ConversationKey::of(send.conversation)?,
             text: send.text.clone(),
             reply: send.reply.clone(),
-            attachments: send.attachments.iter().map(StagedAttachment::from).collect(),
+            attachments: send
+                .attachments
+                .iter()
+                .map(StagedAttachment::from)
+                .collect(),
         })
     }
 }
@@ -201,30 +206,6 @@ struct ComposerRecovery {
 impl ComposerRecovery {
     fn is_empty(&self) -> bool {
         self.trays.is_empty() && self.parked.is_empty()
-    }
-}
-
-/// Delete every staged file under `dir` that `keep` does not name, and the
-/// per-file directories left empty. Files staged and never persisted (the
-/// process died in between) and files of sends that went out go this way.
-fn sweep_staging(dir: &Path, keep: &HashSet<PathBuf>) {
-    let Ok(entries) = std::fs::read_dir(dir) else {
-        return;
-    };
-    for entry in entries.flatten() {
-        let sub = entry.path();
-        if !sub.is_dir() {
-            let _ = std::fs::remove_file(&sub);
-            continue;
-        }
-        if let Ok(files) = std::fs::read_dir(&sub) {
-            for file in files.flatten() {
-                if !keep.contains(&file.path()) {
-                    let _ = std::fs::remove_file(file.path());
-                }
-            }
-        }
-        let _ = std::fs::remove_dir(&sub);
     }
 }
 
@@ -319,7 +300,7 @@ impl ChatterClient {
     }
 
     /// Account-local drafts and failed sends never survive sign-out, on disk
-    /// included. Exactly one row is deleted: the signed-in account's, whether
+    /// included. Both metadata rows are deleted for the signed-in account, whether
     /// or not its drafts were ever loaded this session (sign-out straight
     /// from the list, before any conversation was opened), or, when the
     /// caller already signed the account out (`delete_account`), the one the
@@ -328,27 +309,31 @@ impl ChatterClient {
     /// its row. Only the explicit sign-out paths call this; `shutdown`
     /// invalidates the session without touching the row.
     pub fn clear_composer_session(&self) {
+        let mut drafts = self.composer_drafts.lock();
         let signed_in = self.auth_state().get().current_user_id;
         self.auth_state().invalidate_session();
         self.parked_sends.lock().clear();
-        let mut drafts = self.composer_drafts.lock();
         drafts.clear();
         let loaded = self.composer_draft_owner.lock().take();
         if let Some(owner) = signed_in.or(loaded) {
             let repo = self.settings_repo();
-            if repo.delete(&Self::composer_drafts_key(owner)).is_err()
-                || repo.delete(&Self::composer_recovery_key(owner)).is_err()
-            {
+            let drafts_deleted = repo.delete(&Self::composer_drafts_key(owner));
+            let recovery_deleted = repo.delete(&Self::composer_recovery_key(owner));
+            if drafts_deleted.is_err() || recovery_deleted.is_err() {
                 tracing::warn!("persisted composer drafts not deleted at sign-out");
             }
             // The account's staged copies go with its row.
             let _ = std::fs::remove_dir_all(self.staging_dir(owner));
         }
-        drop(drafts);
+        self.composer_drafts_dirty.store(false, Ordering::SeqCst);
+        self.composer_recovery_dirty.store(false, Ordering::SeqCst);
+        self.composer_drafts_unread.store(false, Ordering::SeqCst);
+        self.composer_recovery_unread.store(false, Ordering::SeqCst);
         self.composer_owner.lock().clear();
         self.chat_state().clear_attachment_trays();
         self.chat_state()
             .set_active_conversation(ActiveConversation::None);
+        drop(drafts);
     }
 
     /// Hand a failed send back. `Some`: restore it now — its conversation is
@@ -366,11 +351,16 @@ impl ChatterClient {
         if self.composer_has_room(send.conversation, composer_empty) {
             return Some(send);
         }
+        let (_drafts, _) = self.composer_drafts_for_session();
+        if !self.composer_session_is_current(send.session_revision) {
+            return None;
+        }
         // Owner before the parked lock: the session loader holds the drafts
         // lock while it fills the parked list, and asks for nothing else.
         let owner = self.recovery_owner();
         let mut parked = self.parked_sends.lock();
         parked.push(send);
+        self.composer_recovery_dirty.store(true, Ordering::SeqCst);
         if let Some(owner) = owner {
             self.persist_recovery_with(owner, &parked);
         }
@@ -384,15 +374,82 @@ impl ChatterClient {
         if !self.composer_has_room(active, composer_empty) {
             return None;
         }
-        let owner = self.recovery_owner();
+        let (mut drafts, _) = self.composer_drafts_for_session();
+        if !self.composer_has_room(active, composer_empty) {
+            return None;
+        }
+        let owner = self.recovery_owner()?;
+        if self.composer_drafts_unread.load(Ordering::SeqCst) {
+            return None;
+        }
         let mut parked = self.parked_sends.lock();
         let revision = self.auth_state().get().session_revision;
-        parked.retain(|send| send.session_revision == revision);
-        let at = parked.iter().position(|s| s.conversation == active)?;
-        let send = parked.remove(at);
-        if let Some(owner) = owner {
-            self.persist_recovery_with(owner, &parked);
+        let at = parked
+            .iter()
+            .position(|s| s.conversation == active && s.session_revision == revision)?;
+        let send = parked[at].clone();
+        let key = active.channel_id()?.to_string();
+        let mut next_drafts = drafts.clone();
+        next_drafts.insert(
+            key.clone(),
+            ComposerDraft {
+                text: send.text.clone(),
+                reply: send.reply.clone(),
+            },
+        );
+        let mut next_parked = parked.clone();
+        next_parked.remove(at);
+        let mut recovery = self.composer_recovery_snapshot(&next_parked);
+        if !send.attachments.is_empty() {
+            recovery.trays.insert(
+                key,
+                send.attachments
+                    .iter()
+                    .map(StagedAttachment::from)
+                    .collect(),
+            );
         }
+        // Both destinations replace the parked intent in one encrypted DB
+        // transaction, before the UI takes possession of it.
+        let written = (|| -> Result<(), crate::error::StorageError> {
+            let mut conn = self.services.database.connection()?;
+            let tx = conn.transaction()?;
+            let now = chrono::Utc::now().to_rfc3339();
+            for (key, value) in [
+                (
+                    Self::composer_drafts_key(owner),
+                    serde_json::to_string(&next_drafts),
+                ),
+                (
+                    Self::composer_recovery_key(owner),
+                    serde_json::to_string(&recovery),
+                ),
+            ] {
+                let value =
+                    value.map_err(|e| crate::error::StorageError::InvalidData(e.to_string()))?;
+                tx.execute("INSERT INTO settings (key, value, updated_at) VALUES (?1, ?2, ?3) ON CONFLICT(key) DO UPDATE SET value = excluded.value, updated_at = excluded.updated_at", rusqlite::params![key, value, now])?;
+            }
+            tx.commit()?;
+            Ok(())
+        })();
+        if written.is_err() {
+            self.composer_drafts_dirty.store(true, Ordering::SeqCst);
+            self.composer_recovery_dirty.store(true, Ordering::SeqCst);
+            tracing::warn!("parked composer transfer not saved; intent remains parked");
+            return None;
+        }
+        let chat_revision = self.chat_state().get().attachment_revision;
+        for attachment in send.attachments.iter().cloned() {
+            self.chat_state().add_pending_attachment_for(
+                send.conversation,
+                chat_revision,
+                attachment,
+            );
+        }
+        *drafts = next_drafts;
+        *parked = next_parked;
+        self.composer_drafts_dirty.store(false, Ordering::SeqCst);
+        self.composer_recovery_dirty.store(false, Ordering::SeqCst);
         Some(send)
     }
 
@@ -445,15 +502,20 @@ impl ChatterClient {
         if changed_session {
             *draft_revision = auth.session_revision;
             *self.composer_draft_owner.lock() = auth.current_user_id;
-            *drafts = auth
-                .current_user_id
-                .and_then(|owner| {
-                    self.settings_repo()
-                        .get(&Self::composer_drafts_key(owner))
-                        .ok()
-                        .flatten()
-                })
-                .unwrap_or_default();
+            self.composer_drafts_dirty.store(false, Ordering::SeqCst);
+            self.composer_recovery_dirty.store(false, Ordering::SeqCst);
+            self.composer_drafts_unread.store(false, Ordering::SeqCst);
+            *drafts = match auth.current_user_id {
+                Some(owner) => match self.settings_repo().get(&Self::composer_drafts_key(owner)) {
+                    Ok(row) => row.unwrap_or_default(),
+                    Err(e) => {
+                        self.composer_drafts_unread.store(true, Ordering::SeqCst);
+                        tracing::warn!(error = %e, "draft row unread; existing row protected");
+                        HashMap::new()
+                    }
+                },
+                None => HashMap::new(),
+            };
             // Nothing staged or parked crosses a session: the previous
             // account's trays would otherwise be shown to, and from here on
             // persisted under, the new one. Its parked sends can never be
@@ -474,7 +536,17 @@ impl ChatterClient {
         &self,
         drafts: &std::collections::HashMap<String, ComposerDraft>,
     ) {
-        let Some(owner) = *self.composer_draft_owner.lock() else {
+        self.composer_drafts_dirty.store(true, Ordering::SeqCst);
+        if self.composer_drafts_unread.load(Ordering::SeqCst) {
+            return;
+        }
+        let auth = self.auth_state().get();
+        if *self.composer_draft_revision.lock() != auth.session_revision {
+            return;
+        }
+        let Some(owner) = (*self.composer_draft_owner.lock())
+            .filter(|owner| Some(*owner) == auth.current_user_id)
+        else {
             return;
         };
         if self
@@ -483,6 +555,8 @@ impl ChatterClient {
             .is_err()
         {
             tracing::warn!("composer draft not saved");
+        } else {
+            self.composer_drafts_dirty.store(false, Ordering::SeqCst);
         }
     }
 
@@ -505,6 +579,9 @@ impl ChatterClient {
             .get(&owner)
             .map_or(draft.is_empty(), |held| *held == draft);
         if same {
+            if self.composer_drafts_dirty.load(Ordering::SeqCst) {
+                self.persist_composer_drafts(&drafts);
+            }
             return;
         }
         if draft.is_empty() {
@@ -513,6 +590,35 @@ impl ChatterClient {
             drafts.insert(owner, draft);
         }
         self.persist_composer_drafts(&drafts);
+    }
+
+    /// Retry every dirty row at a lifecycle checkpoint, including parked replies.
+    pub fn flush_composer_persistence(&self) -> bool {
+        self.flush_composer_rows(true)
+    }
+
+    pub fn retry_dirty_composer_persistence(&self) -> bool {
+        self.flush_composer_rows(false)
+    }
+
+    fn flush_composer_rows(&self, recovery_checkpoint: bool) -> bool {
+        {
+            let (drafts, _) = self.composer_drafts_for_session();
+            if self.composer_drafts_dirty.load(Ordering::SeqCst) {
+                self.persist_composer_drafts(&drafts);
+            }
+        }
+        if recovery_checkpoint || self.composer_recovery_dirty.load(Ordering::SeqCst) {
+            self.persist_composer_recovery();
+        }
+        self.composer_persistence_pending()
+    }
+
+    pub fn composer_persistence_pending(&self) -> bool {
+        self.composer_drafts_dirty.load(Ordering::SeqCst)
+            || self.composer_recovery_dirty.load(Ordering::SeqCst)
+            || self.composer_drafts_unread.load(Ordering::SeqCst)
+            || self.composer_recovery_unread.load(Ordering::SeqCst)
     }
 
     // ── Thread drafts ───────────────────────────────────────────────
@@ -539,10 +645,13 @@ impl ChatterClient {
             return;
         }
         let key = Self::thread_draft_key(root);
-        let same = drafts
-            .get(&key)
-            .map_or(text.is_empty(), |held| held.text == text && held.reply.is_none());
+        let same = drafts.get(&key).map_or(text.is_empty(), |held| {
+            held.text == text && held.reply.is_none()
+        });
         if same {
+            if self.composer_drafts_dirty.load(Ordering::SeqCst) {
+                self.persist_composer_drafts(&drafts);
+            }
             return;
         }
         if text.is_empty() {
@@ -578,12 +687,36 @@ impl ChatterClient {
         text: &str,
         session_revision: u64,
     ) -> bool {
+        self.keep_failed_thread_reply(root, text, session_revision, false)
+    }
+
+    /// The UI's box may contain newer text that has not reached autosave.
+    /// Park independently of the last persisted draft in that case.
+    pub fn park_failed_thread_reply(
+        &self,
+        root: &MessageId,
+        text: &str,
+        session_revision: u64,
+    ) -> bool {
+        self.keep_failed_thread_reply(root, text, session_revision, true)
+    }
+
+    fn keep_failed_thread_reply(
+        &self,
+        root: &MessageId,
+        text: &str,
+        session_revision: u64,
+        always_park: bool,
+    ) -> bool {
         if text.is_empty() || !self.composer_session_is_current(session_revision) {
             return false;
         }
-        let (mut drafts, _) = self.composer_drafts_for_session();
+        let (mut drafts, changed_session) = self.composer_drafts_for_session();
+        if changed_session || !self.composer_session_is_current(session_revision) {
+            return false;
+        }
         let key = Self::thread_draft_key(root);
-        if drafts.get(&key).is_some_and(|held| !held.text.is_empty()) {
+        if always_park || drafts.get(&key).is_some_and(|held| !held.text.is_empty()) {
             let parked = drafts
                 .entry(Self::failed_thread_reply_key(root))
                 .or_default();
@@ -677,13 +810,16 @@ impl ChatterClient {
     /// can own it or the move fails, in which case the file still sends, it
     /// is only not sheltered. Never call this with a file the user owns.
     pub fn stage_owned_file(&self, path: PathBuf) -> PathBuf {
+        let (_drafts, _) = self.composer_drafts_for_session();
         let Some(owner) = self.recovery_owner() else {
             return path;
         };
         let Some(name) = path.file_name() else {
             return path;
         };
-        let dir = self.staging_dir(owner).join(uuid::Uuid::new_v4().to_string());
+        let dir = self
+            .staging_dir(owner)
+            .join(uuid::Uuid::new_v4().to_string());
         if std::fs::create_dir_all(&dir).is_err() {
             return path;
         }
@@ -730,20 +866,29 @@ impl ChatterClient {
     /// Write the trays and the parked sends under the signed-in account.
     /// The UI's chat-state watcher calls this on every tray change; the
     /// parked-send paths call it themselves.
-    pub fn persist_composer_recovery(&self) {
+    pub fn persist_composer_recovery(&self) -> bool {
+        let (_drafts, _) = self.composer_drafts_for_session();
+        if self.auth_state().get().current_user_id.is_none() {
+            return true;
+        }
+        self.composer_recovery_dirty.store(true, Ordering::SeqCst);
         let Some(owner) = self.recovery_owner() else {
-            return;
+            return false;
         };
         let parked = self.parked_sends.lock();
-        self.persist_recovery_with(owner, &parked);
+        self.persist_recovery_with(owner, &parked)
     }
 
-    fn persist_recovery_with(&self, owner: UserId, parked: &[ComposerSend]) {
+    fn composer_recovery_snapshot(&self, parked: &[ComposerSend]) -> ComposerRecovery {
         let chat = self.chat_state().get();
         let mut recovery = ComposerRecovery::default();
         let mut trays: Vec<(Option<ChannelId>, &[PendingAttachment])> =
             vec![(chat.active_channel_id, chat.pending_attachments.as_slice())];
-        trays.extend(chat.attachment_trays.iter().map(|(k, v)| (*k, v.as_slice())));
+        trays.extend(
+            chat.attachment_trays
+                .iter()
+                .map(|(k, v)| (*k, v.as_slice())),
+        );
         for (key, attachments) in trays {
             // A mesh scope keys its tray as `None`; it is no conversation
             // core can restore.
@@ -759,6 +904,15 @@ impl ChatterClient {
             );
         }
         recovery.parked = parked.iter().filter_map(ParkedSend::of).collect();
+        recovery
+    }
+
+    fn persist_recovery_with(&self, owner: UserId, parked: &[ComposerSend]) -> bool {
+        self.composer_recovery_dirty.store(true, Ordering::SeqCst);
+        if self.recovery_owner() != Some(owner) {
+            return false;
+        }
+        let recovery = self.composer_recovery_snapshot(parked);
         let repo = self.settings_repo();
         let key = Self::composer_recovery_key(owner);
         let written = if recovery.is_empty() {
@@ -768,11 +922,15 @@ impl ChatterClient {
         };
         if written.is_err() {
             tracing::warn!("composer recovery state not saved");
+            false
+        } else {
+            self.composer_recovery_dirty.store(false, Ordering::SeqCst);
+            true
         }
     }
 
-    /// Load `owner`'s row into the trays and the parked list, then sweep
-    /// the staging directory of files the row does not name. Runs once per
+    /// Load `owner`'s row into the trays and the parked list, preserving
+    /// files not named by a successfully acknowledged row. Runs once per
     /// session, under the drafts lock; nothing in here takes it again.
     ///
     /// Only a row that was read, or confirmed absent, is acted on. A read
@@ -796,16 +954,16 @@ impl ChatterClient {
         };
         self.composer_recovery_unread
             .store(false, std::sync::atomic::Ordering::SeqCst);
-        let mut keep = HashSet::new();
+
         let chat = self.chat_state();
         let revision = chat.get().attachment_revision;
         for (id, attachments) in recovery.trays {
             let Ok(channel) = id.parse::<ChannelId>() else {
-                tracing::warn!(tray = %id, "staged attachments under an unparsable tray key; dropped");
+                tracing::warn!(tray = %id, "unparsable tray key; recovery row and files protected");
+                self.composer_recovery_unread.store(true, Ordering::SeqCst);
                 continue;
             };
             for attachment in attachments.into_iter().map(StagedAttachment::into_pending) {
-                keep.insert(attachment.path.clone());
                 // Trays are keyed by channel id alone, so the variant does
                 // not matter here: a DM's tray has the DM's derived id.
                 chat.add_pending_attachment_for(
@@ -825,7 +983,6 @@ impl ChatterClient {
             if send.text.is_empty() && send.reply.is_none() && attachments.is_empty() {
                 continue;
             }
-            keep.extend(attachments.iter().map(|a| a.path.clone()));
             parked.push(ComposerSend {
                 attempt_id: uuid::Uuid::new_v4(),
                 session_revision,
@@ -836,7 +993,8 @@ impl ChatterClient {
             });
         }
         drop(parked);
-        sweep_staging(&self.staging_dir(owner), &keep);
+        // Unreferenced files can be unacknowledged staging writes. Keep them
+        // until explicit removal/send/sign-out rather than guessing ownership.
     }
 }
 

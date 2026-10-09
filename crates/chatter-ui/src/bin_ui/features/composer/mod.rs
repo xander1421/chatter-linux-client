@@ -39,6 +39,49 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     wire_thread_draft_autosave(window, ui_ctx);
 }
 
+/// Retry failed writes without needing another edit. Keep the timer alive in
+/// a window callback; writes still happen only for dirty state, never per key.
+fn wire_persistence_retry(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) -> slint::Timer {
+    let timer = slint::Timer::default();
+    let weak = slint::ComponentHandle::as_weak(window);
+    let ctx = ui_ctx.clone();
+    let mut warned = false;
+    timer.start(
+        slint::TimerMode::Repeated,
+        std::time::Duration::from_secs(5),
+        move || {
+            let Some(w) = weak.upgrade() else { return };
+            if ctx.composer_persistence_pending() {
+                let pending = ctx.retry_dirty_composer_persistence();
+                if pending && !warned {
+                    show_persistence_failure(&w);
+                }
+                warned = pending;
+            } else {
+                warned = false;
+            }
+        },
+    );
+    timer
+}
+
+fn show_persistence_failure(w: &MainWindow) {
+    w.set_toast_message(
+        "Couldn't save drafts on this device. New changes are kept only while the app is open."
+            .into(),
+    );
+    w.set_toast_variant("error".into());
+    w.set_toast_visible(true);
+}
+
+pub fn flush_drafts(w: &MainWindow, ctx: &ChatterClient) {
+    autosave_composer_draft(w, ctx);
+    autosave_thread_draft(w, ctx);
+    if ctx.flush_composer_persistence() {
+        show_persistence_failure(w);
+    }
+}
+
 /// Store what the composer shows right now under the conversation it belongs
 /// to, so an app restart brings it back. Core decides the owner and whether
 /// the session is still the one the text was typed under. Edit mode borrows
@@ -106,10 +149,12 @@ fn wire_thread_draft_autosave(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
 /// rather than storing whatever the composer shows by then; core checks the
 /// same two things again under its lock.
 fn wire_draft_autosave(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let retry_timer = wire_persistence_retry(window, ui_ctx);
     let weak = slint::ComponentHandle::as_weak(window);
     let ctx = ui_ctx.clone();
     let timer = slint::Timer::default();
     window.on_composer_draft_changed(move || {
+        let _ = &retry_timer;
         let weak = weak.clone();
         let ctx = ctx.clone();
         let session = crate::bin_ui::features::history_owner::SessionOwner::capture(&ctx);
@@ -142,8 +187,12 @@ pub fn reset_session(window: &MainWindow, ui_ctx: &ChatterClient) {
     window.set_composer_emoji_picker_visible(false);
     window.set_composer_gif_picker_visible(false);
     // The old account's GIF rows and their animation frames do not outlive it.
-    window.set_composer_gif_picker_results(slint::ModelRc::new(slint::VecModel::<crate::GifData>::default()));
-    window.set_composer_gif_picker_recent(slint::ModelRc::new(slint::VecModel::<crate::GifData>::default()));
+    window.set_composer_gif_picker_results(slint::ModelRc::new(
+        slint::VecModel::<crate::GifData>::default(),
+    ));
+    window.set_composer_gif_picker_recent(slint::ModelRc::new(
+        slint::VecModel::<crate::GifData>::default(),
+    ));
     crate::bin_ui::gif_state::clear_picker_gifs();
     window.invoke_release_text_focus();
     window.invoke_settle_composer();
@@ -211,9 +260,8 @@ fn wire_per_conversation_drafts(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             };
             let staged = trays(&snapshot);
-            if staged != current_trays {
+            if staged != current_trays && ctx.persist_composer_recovery() {
                 current_trays = staged;
-                ctx.persist_composer_recovery();
             }
             let entering = key(&snapshot);
             if entering == current && snapshot.attachment_revision == current_revision {
@@ -296,7 +344,9 @@ pub fn switch_composer_draft(w: &MainWindow, ctx: &ChatterClient, leaving: &str,
     render_attachments(w, &ctx.chat_state().get_pending_attachments());
     // A GIF send that failed while this conversation was not open.
     let empty = crate::bin_ui::features::chat::send_message::composer_is_empty(w);
-    if let Some(send) = ctx.take_parked_send(empty) {
+    if let Some(mut send) = ctx.take_parked_send(empty) {
+        // Core installed these trays as part of the durable intent transfer.
+        send.attachments.clear();
         crate::bin_ui::features::chat::send_message::restore_composer(w, ctx, send);
     }
 }

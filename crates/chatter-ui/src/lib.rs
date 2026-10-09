@@ -108,9 +108,11 @@ fn android_main(app: i_slint_backend_android_activity::AndroidApp) {
                         // The process may be killed while paused: store the
                         // draft now rather than after the autosave delay.
                         if let Some(client) = listener_client.get() {
-                            crate::bin_ui::features::composer::autosave_composer_draft(&window, client);
-                            crate::bin_ui::features::composer::autosave_thread_draft(&window, client);
+                            crate::bin_ui::features::composer::flush_drafts(&window, client);
                         }
+                    } else if let Some(client) = listener_client.get() {
+                        // Recovery still needs a lifecycle checkpoint without a UI handle.
+                        client.flush_composer_persistence();
                     }
                 }
                 if let Some(client) = listener_client.get() {
@@ -745,8 +747,7 @@ fn app_run(state: AppState) {
     // Shutdown
     tracing::info!("Window closed, signaling shutdown...");
     // Whatever the composer still holds outlives this exit.
-    bin_ui::features::composer::autosave_composer_draft(&state.window, &state.ui_ctx);
-    bin_ui::features::composer::autosave_thread_draft(&state.window, &state.ui_ctx);
+    bin_ui::features::composer::flush_drafts(&state.window, &state.ui_ctx);
     state.shutdown_token.cancel();
     tracing::info!("Shutting down services...");
 
