@@ -23,6 +23,14 @@ const LEASE_SECONDS: i64 = 60;
 const MAX_PENDING: i64 = 64;
 /// Phases that still hold delivery or deletion work.
 const LIVE: &str = "('queued','preparing','submitted','accepted','deleting')";
+/// The retained (`unresolved`) shape of a journal whose bubble the user
+/// deleted: the plaintext entry and lease fields go, while the exact request,
+/// token, response, canonical id and intent stay. `?2` is now.
+const RETAIN: &str = "json_set(json_remove(value,'$.entry','$.generation','$.attempts','$.next_at'),'$.phase','unresolved','$.row_id',COALESCE(json_extract(value,'$.row_id'),json_extract(value,'$.entry.row.id')),'$.channel_id',COALESCE(json_extract(value,'$.channel_id'),json_extract(value,'$.entry.row.conversation_id')),'$.retained_at',COALESCE(json_extract(value,'$.retained_at'),?2))";
+/// After the server forgets a client_request_id (`SendRequestRetention`, 7d,
+/// server `types.go:21`; one day of clock margin here) retained request bytes
+/// can resolve nothing. Only they are dropped; token and identities stay.
+const REQUEST_WINDOW: i64 = 8 * 24 * 60 * 60;
 /// A prepared request may be replayed only below sealed-sender freshness.
 fn replayable(prepared: &Prepared) -> bool {
     // Tolerate a small backward clock step instead of expiring at once.
@@ -63,6 +71,26 @@ fn now() -> i64 {
 }
 fn invalid(text: &str) -> StorageError {
     StorageError::InvalidData(text.into())
+}
+
+/// Settle a journal whose bubble was deleted. Delete-for-me and expiry stay
+/// local. Only an explicit delete-for-everyone (`remote_delete`) on a known
+/// canonical id goes on to `deleting`. Nothing is replayed to learn an
+/// unknown id: an uncertain deposit keeps its exact request, token and
+/// intent. A known canonical id is suppressed so catch-up cannot restore it.
+/// Returns true when server deletion is due.
+fn retire_deleted(conn: &rusqlite::Connection, key: &str) -> Result<bool, StorageError> {
+    conn.execute("INSERT OR IGNORE INTO deleted_messages(id) SELECT json_extract(value,'$.server_id') FROM settings WHERE key=?1 AND json_extract(value,'$.server_id') IS NOT NULL",params![key])?;
+    conn.execute("DELETE FROM messages WHERE id=(SELECT json_extract(value,'$.server_id') FROM settings WHERE key=?1)",params![key])?;
+    // Never handed to the transport: nothing can exist on the server.
+    if conn.execute("DELETE FROM settings WHERE key=?1 AND json_extract(value,'$.prepared') IS NULL AND json_extract(value,'$.response') IS NULL",params![key])? == 1 {
+        return Ok(false);
+    }
+    if conn.execute("UPDATE settings SET value=json_set(value,'$.phase','deleting','$.next_at',0) WHERE key=?1 AND json_extract(value,'$.server_id') IS NOT NULL AND json_extract(value,'$.remote_delete')",params![key])? == 1 {
+        return Ok(true);
+    }
+    conn.execute(&format!("UPDATE settings SET value={RETAIN} WHERE key=?1"),params![key,now()])?;
+    Ok(false)
 }
 
 pub(crate) fn owns(db: &Database, owner: &str, id: &str) -> Result<bool, StorageError> {
@@ -113,13 +141,22 @@ pub(super) fn retain_channel_response(
 ) -> Result<(), StorageError> {
     CHANNEL_DEPOSIT.try_with(|deposit| {
         let raw = serde_json::to_string(&proto.encode_to_vec()).map_err(|_|invalid("Cannot retain channel response"))?;
-        let changed = deposit.db.connection()?.execute("UPDATE settings SET value=json_set(value,'$.phase','accepted','$.response',json(?3),'$.next_at',0) WHERE key=?1 AND json_extract(value,'$.generation')=?2",params![deposit.key,deposit.generation,raw])?;
+        let changed = deposit.db.connection()?.execute("UPDATE settings SET value=json_set(value,'$.phase','accepted','$.response',json(?3),'$.server_id',?4,'$.next_at',0) WHERE key=?1 AND json_extract(value,'$.generation')=?2",params![deposit.key,deposit.generation,raw,proto.id])?;
         if changed != 1 { return Err(invalid("Channel response lease expired")); }
         Ok(())
     }).unwrap_or(Ok(()))
 }
 
 impl MessageService {
+    /// Record an explicit delete-for-everyone on a channel send the journal
+    /// still owns, before its bubble is deleted locally. Without it a deleted
+    /// bubble never touches the server copy. A no-op for any other message.
+    pub(crate) fn mark_channel_remote_delete(&self, id: &MessageId) -> Result<(), MessageError> {
+        let owner = self.current_user_id()?;
+        self.database.connection()?.execute("UPDATE settings SET value=json_set(value,'$.remote_delete',json('true')) WHERE key=?1",params![key(owner,*id)])?;
+        Ok(())
+    }
+
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn send_durable_channel_text(
         &self,
@@ -517,14 +554,14 @@ impl MessageService {
                     let tx = conn.transaction()?;
                     let deleted: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM deleted_messages WHERE id IN (?1,?2)) OR EXISTS(SELECT 1 FROM messages WHERE id IN (?1,?2) AND is_deleted=1)",params![row.id.to_string(),sent.id.to_string()],|r|r.get(0))?;
                     if deleted {
-                        // Deleted while the post was accepted. Keep the request,
-                        // token and response for `finish_channel_deletion`, and
-                        // suppress the canonical id so catch-up cannot restore
-                        // it. Only this generation may do so: a stale future
-                        // finishing after the confirm (journal gone, parked id
-                        // tombstoned by it) must not touch the server copy.
-                        let fenced = tx.execute("UPDATE settings SET value=json_set(value,'$.phase','deleting','$.next_at',0) WHERE key=?1 AND json_extract(value,'$.generation')=?2",params![journal_key,generation])?;
-                        if fenced == 1 {
+                        // Deleted while the post was accepted: suppress both
+                        // ids so catch-up cannot restore it and retire the
+                        // journal (`retire_deleted`). Only this generation may
+                        // do so: a stale future finishing after the confirm
+                        // (journal gone, parked id tombstoned by it) must not
+                        // touch the server copy.
+                        let owned: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM settings WHERE key=?1 AND json_extract(value,'$.generation')=?2)",params![journal_key,generation],|r|r.get(0))?;
+                        if owned {
                             settle_admission(
                                 &tx,
                                 row.sender_id.ok_or(MessageError::NotLoggedIn)?,
@@ -540,6 +577,7 @@ impl MessageService {
                                     params![id.to_string()],
                                 )?;
                             }
+                            retire_deleted(&tx, journal_key)?;
                         }
                         tx.commit()?;
                         return Err(MessageError::MessageNotFound(row.id));
@@ -681,13 +719,11 @@ impl MessageService {
 }
 
 impl MessageService {
-    /// The parked row was deleted after its request may have reached the
-    /// server (a retained request or response). Fail closed: learn the
-    /// canonical id from the stored response or an exact replay (the server
-    /// returns the original for the same bytes), suppress it locally and
-    /// remove the server copy with the retained token. The journal, and with
-    /// it the only deletion authority for a sealed post, is dropped only
-    /// after the server confirms the copy is gone or was never kept.
+    /// The user deleted this bubble for everyone and the canonical id is
+    /// known from the stored response (`retire_deleted`). Remove the server
+    /// copy with the retained token. The journal, and with it the only
+    /// deletion authority for a sealed post, is dropped only after the server
+    /// confirms the copy is gone. Anything else keeps it retained.
     async fn finish_channel_deletion(
         &self,
         journal_key: &str,
@@ -695,75 +731,22 @@ impl MessageService {
         entry: &Entry,
     ) -> Result<(), MessageError> {
         let row = &entry.row;
-        let held: Option<(Option<String>, Option<String>)> = self.database.read_connection()?.query_row(
-            "SELECT json_extract(value,'$.response'),json_extract(value,'$.prepared') FROM settings WHERE key=?1 AND json_extract(value,'$.generation')=?2 AND json_extract(value,'$.phase')='deleting'",
+        let held: Option<(Option<String>, String)> = self.database.read_connection()?.query_row(
+            "SELECT json_extract(value,'$.prepared'),json_extract(value,'$.server_id') FROM settings WHERE key=?1 AND json_extract(value,'$.generation')=?2 AND json_extract(value,'$.phase')='deleting' AND json_extract(value,'$.remote_delete') AND json_extract(value,'$.response') IS NOT NULL AND json_extract(value,'$.server_id') IS NOT NULL",
             params![journal_key, generation], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
-        let Some((response, prepared)) = held else {
-            return Ok(());
-        };
-        let finish = |phase: Option<&str>| -> Result<(), MessageError> {
-            let conn = self.database.connection()?;
-            match phase {
-                // Unresolvable here: keep request and token, stop retrying.
-                Some(phase) => conn.execute("UPDATE settings SET value=json_set(value,'$.phase',?3) WHERE key=?1 AND json_extract(value,'$.generation')=?2",params![journal_key,generation,phase])?,
-                None => conn.execute("DELETE FROM settings WHERE key=?1 AND json_extract(value,'$.generation')=?2",params![journal_key,generation])?,
-            };
+        let retain = || -> Result<(), MessageError> {
+            self.database.connection()?.execute(&format!("UPDATE settings SET value={RETAIN} WHERE key=?1 AND json_extract(value,'$.generation')=?3"),params![journal_key,now(),generation])?;
             Ok(())
+        };
+        let Some((prepared, server_id)) = held else {
+            // No explicit intent or no canonical id: never replay to learn one.
+            return retain();
         };
         let prepared: Option<Prepared> = prepared
             .map(|raw| serde_json::from_str(&raw))
             .transpose()
             .map_err(|_| invalid("Invalid prepared channel request"))?;
-        let proto = match response {
-            Some(raw) => {
-                let bytes: Vec<u8> =
-                    serde_json::from_str(&raw).map_err(|_| invalid("Invalid accepted response"))?;
-                crate::proto::chat_v1::Message::decode(bytes.as_slice())
-                    .map_err(|_| invalid("Invalid accepted response protobuf"))?
-            }
-            None => {
-                let Some(prepared) = prepared.as_ref() else {
-                    return finish(None); // never deposited
-                };
-                let request = SendMessageRequest::decode(prepared.request.as_slice())
-                    .map_err(|_| invalid("Invalid retained channel request protobuf"))?;
-                crate::services::gateway::submission::check_send_session()?;
-                if !replayable(prepared)
-                    || request.client_request_id != row.id.to_string()
-                    || row.sender_id != Some(self.current_user_id()?)
-                    || self.settings_repo.get::<u32>(keys::CURRENT_DEVICE_ID)? != Some(entry.device)
-                {
-                    tracing::warn!(message_id=%row.id, "Deleted channel send may hold an undeletable server copy; token retained");
-                    return finish(Some("unresolved"));
-                }
-                match tokio::time::timeout(
-                    std::time::Duration::from_secs(30),
-                    self.message_client().send_prepared_message(request),
-                )
-                .await
-                .unwrap_or(Err(NetworkError::Timeout))
-                {
-                    Ok(proto) => {
-                        let raw = serde_json::to_string(&proto.encode_to_vec())
-                            .map_err(|_| invalid("Cannot retain channel response"))?;
-                        self.database.connection()?.execute("UPDATE settings SET value=json_set(value,'$.response',json(?3)) WHERE key=?1 AND json_extract(value,'$.generation')=?2",params![journal_key,generation,raw])?;
-                        proto
-                    }
-                    // AlreadyExists / FailedPrecondition: the server keeps no
-                    // live copy under these exact bytes (`network_error.rs`).
-                    Err(NetworkError::InvalidRequest(_)) => return finish(None),
-                    Err(e) if e.is_retryable() || e.is_transport_error() => return Err(e.into()),
-                    // PermissionDenied and the like: the server re-authorizes
-                    // before answering a duplicate, so a copy may still exist.
-                    Err(e) => {
-                        tracing::warn!(error=%e, message_id=%row.id, "Deleted channel send unresolved; token retained");
-                        return finish(Some("unresolved"));
-                    }
-                }
-            }
-        };
-        let server_id: MessageId = proto
-            .id
+        let server_id: MessageId = server_id
             .parse()
             .map_err(|_| invalid("Invalid accepted message id"))?;
         {
@@ -779,6 +762,13 @@ impl MessageService {
             )?;
             tx.commit()?;
         }
+        crate::services::gateway::submission::check_send_session()?;
+        if row.sender_id != Some(self.current_user_id()?)
+            || self.settings_repo.get::<u32>(keys::CURRENT_DEVICE_ID)? != Some(entry.device)
+        {
+            tracing::warn!(message_id=%server_id, "Channel delete-for-everyone sender changed; token retained");
+            return retain();
+        }
         let token = prepared
             .and_then(|p| p.deletion_token)
             .map(|t| t.to_vec())
@@ -786,7 +776,7 @@ impl MessageService {
         match tokio::time::timeout(
             std::time::Duration::from_secs(30),
             self.message_client().delete_message(
-                &proto.id,
+                &server_id.to_string(),
                 &row.conversation_id.to_string(),
                 token,
             ),
@@ -794,11 +784,21 @@ impl MessageService {
         .await
         .unwrap_or(Err(NetworkError::Timeout))
         {
-            Ok(()) | Err(NetworkError::NotFound(_)) => finish(None),
-            Err(e) if e.is_retryable() || e.is_transport_error() => Err(e.into()),
+            Ok(()) | Err(NetworkError::NotFound(_)) => {
+                self.database.connection()?.execute("DELETE FROM settings WHERE key=?1 AND json_extract(value,'$.generation')=?2",params![journal_key,generation])?;
+                Ok(())
+            }
+            // An expired session or a cancelled call is not a refusal.
+            Err(e)
+                if e.is_retryable()
+                    || e.is_transport_error()
+                    || matches!(e, NetworkError::Unauthenticated | NetworkError::Unknown(_)) =>
+            {
+                Err(e.into())
+            }
             Err(e) => {
-                tracing::warn!(error=%e, message_id=%server_id, "Server refused deleting a cancelled channel post; token retained");
-                finish(Some("unresolved"))
+                tracing::warn!(error=%e, message_id=%server_id, "Server refused deleting a channel post; token retained");
+                retain()
             }
         }
     }
@@ -862,10 +862,19 @@ pub(crate) fn spawn_channel_send_recovery(
                 let tx = conn.transaction()?;
                 let pattern = format!("{PREFIX}{owner}:%");
                 // A deleted refusal that never reached the server is forgotten;
-                // one holding a request or response may be live, so it moves
-                // to deletion with its token.
+                // one holding a request or response is retired with its token.
                 tx.execute("DELETE FROM settings WHERE key LIKE ?1 AND json_extract(value,'$.phase')='terminal' AND json_extract(value,'$.prepared') IS NULL AND json_extract(value,'$.response') IS NULL AND (EXISTS(SELECT 1 FROM deleted_messages WHERE id=COALESCE(json_extract(settings.value,'$.row_id'),json_extract(settings.value,'$.entry.row.id'))) OR EXISTS(SELECT 1 FROM messages WHERE id=COALESCE(json_extract(settings.value,'$.row_id'),json_extract(settings.value,'$.entry.row.id')) AND is_deleted=1))",params![pattern])?;
-                tx.execute("UPDATE settings SET value=json_set(value,'$.phase','deleting','$.next_at',0) WHERE key LIKE ?1 AND json_extract(value,'$.phase')='terminal' AND (json_extract(value,'$.prepared') IS NOT NULL OR json_extract(value,'$.response') IS NOT NULL) AND (EXISTS(SELECT 1 FROM deleted_messages WHERE id=json_extract(settings.value,'$.entry.row.id')) OR EXISTS(SELECT 1 FROM messages WHERE id=json_extract(settings.value,'$.entry.row.id') AND is_deleted=1))",params![pattern])?;
+                let refused: Vec<String> = {
+                    let mut stmt = tx.prepare("SELECT key FROM settings WHERE key LIKE ?1 AND json_extract(value,'$.phase')='terminal' AND (json_extract(value,'$.prepared') IS NOT NULL OR json_extract(value,'$.response') IS NOT NULL) AND (EXISTS(SELECT 1 FROM deleted_messages WHERE id=json_extract(settings.value,'$.entry.row.id')) OR EXISTS(SELECT 1 FROM messages WHERE id=json_extract(settings.value,'$.entry.row.id') AND is_deleted=1))")?;
+                    let mapped = stmt.query_map(params![pattern], |r| r.get(0))?;
+                    mapped.collect::<Result<_, _>>()?
+                };
+                for key in refused {
+                    retire_deleted(&tx, &key)?;
+                }
+                // Bound retained metadata: request bytes are kept only while
+                // they could still resolve an unknown canonical id.
+                tx.execute("UPDATE settings SET value=json_remove(value,'$.prepared.request','$.prepared.state_hash','$.response') WHERE key LIKE ?1 AND json_extract(value,'$.phase')='unresolved' AND json_extract(value,'$.prepared.request') IS NOT NULL AND (json_extract(value,'$.server_id') IS NOT NULL OR json_extract(value,'$.prepared.at')<?2)",params![pattern,now()-REQUEST_WINDOW])?;
                 if reconnected {
                     tx.execute("UPDATE settings SET value=json_set(value,'$.next_at',0) WHERE key LIKE ?1 AND json_extract(value,'$.phase')='queued'",params![pattern])?;
                 }
@@ -896,11 +905,8 @@ pub(crate) fn spawn_channel_send_recovery(
                     let deleted: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM deleted_messages WHERE id=?1) OR EXISTS(SELECT 1 FROM messages WHERE id=?1 AND is_deleted=1)",params![entry.row.id.to_string()],|r|r.get(0))?;
                     if deleted && !deleting {
                         settle_admission(&tx, owner, &[entry.row.id])?;
-                        // A retained request or response may already be a
-                        // live server post: keep its token for deletion.
-                        deleting = tx.execute("UPDATE settings SET value=json_set(value,'$.phase','deleting') WHERE key=?1 AND (json_extract(value,'$.prepared') IS NOT NULL OR json_extract(value,'$.response') IS NOT NULL)",params![key])? == 1;
+                        deleting = retire_deleted(&tx, &key)?;
                         if !deleting {
-                            tx.execute("DELETE FROM settings WHERE key=?1", params![key])?;
                             continue;
                         }
                     }

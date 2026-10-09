@@ -1102,6 +1102,9 @@ impl ConversationHandle {
                         &call_id.to_string(),
                     )?;
                 } else {
+                    // Explicit delete-for-everyone: a still-unconfirmed channel
+                    // send may now remove its server copy (`channel_send.rs`).
+                    self.client.messages().mark_channel_remote_delete(&target.id)?;
                     self.client.messages().delete_message_local(&target.id)?;
                 }
                 Ok(())
@@ -1395,6 +1398,9 @@ impl ConversationHandle {
             )?;
             return Ok(());
         }
+        self.client
+            .messages()
+            .mark_channel_remote_delete(&target.message_id)?;
         match self
             .client
             .messages()
