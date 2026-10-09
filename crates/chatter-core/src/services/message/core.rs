@@ -19,6 +19,10 @@ use crate::services::current_user::CurrentUserProvider;
 
 use super::{MessageError, MessageService};
 
+/// A send that may or may not have landed and is not resent on its own: the
+/// user's retry decides. Carried by `MessageError::DmError`.
+pub(crate) const DELIVERY_UNCONFIRMED: &str = "Delivery unconfirmed";
+
 impl MessageError {
     /// User-facing label for a send that did not land.
     ///
@@ -40,6 +44,9 @@ impl MessageError {
             | Self::InvalidMessage(_) => Some("Message rejected"),
             Self::NotLoggedIn | Self::Network(NetworkError::Unauthenticated) => {
                 Some("Sign in required")
+            }
+            Self::DmError(reason) if reason.as_str() == DELIVERY_UNCONFIRMED => {
+                Some(DELIVERY_UNCONFIRMED)
             }
             Self::RecipientIdentityChanged { .. } => Some("Identity changed"),
             Self::RecipientKeyUnverified { .. } => Some("Key not verified"),

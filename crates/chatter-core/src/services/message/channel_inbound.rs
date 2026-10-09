@@ -211,7 +211,9 @@ impl ChannelInbound {
             .id
             .parse::<crate::domain::ids::MessageId>()
             .map_err(|_| MessageError::InvalidContent("invalid resync message id".into()))?;
-        if self.messages.message_repo.is_tombstoned(&id)? {
+        if self.messages.message_repo.is_tombstoned(&id)?
+            || self.cancelled_own_post(proto_msg, channel_id)?
+        {
             return Ok(());
         }
         // Validate the server envelope even when ciphertext was already consumed.
@@ -324,6 +326,18 @@ impl ChannelInbound {
                         "Failed to check delete tombstone; dropping");
                     return Err(Ingested::RetryableFailure);
                 }
+            }
+        }
+
+        // A deleted send whose canonical id never came back: held off like a
+        // tombstoned one (`channel_send::suppresses_own_post`).
+        match self.cancelled_own_post(proto_msg, channel_id) {
+            Ok(false) => {}
+            Ok(true) => return Err(Ingested::Dropped),
+            Err(e) => {
+                tracing::warn!(%channel_id, error = %e,
+                    "Failed to check cancelled sends; dropping");
+                return Err(Ingested::RetryableFailure);
             }
         }
 
@@ -615,6 +629,36 @@ impl ChannelInbound {
         // (`UnifiedMessageRepository::stored_is_read`), on this path and every other.
 
         Ok((message, authenticated_identity))
+    }
+
+    /// This account's post from this device (or an unknown device, as
+    /// `prepare` treats it), not held here, that a user-deleted, uncertain
+    /// send may have made. A post already held is ours to keep updating.
+    fn cancelled_own_post(
+        &self,
+        proto_msg: &chat_v1::Message,
+        channel_id: ChannelId,
+    ) -> Result<bool, crate::error::StorageError> {
+        let Ok(owner) = self.messages.settings_repo.current_user_id() else {
+            return Ok(false);
+        };
+        let device = proto_msg.author_device_id;
+        if proto_msg.author_id.parse::<UserId>().ok() != Some(owner)
+            || (device != 0 && Some(device) != self.current_device_id())
+        {
+            return Ok(false);
+        }
+        if let Ok(id) = proto_msg.id.parse::<crate::domain::ids::MessageId>() {
+            if self.messages.message_repo.get(&id)?.is_some() {
+                return Ok(false);
+            }
+        }
+        super::channel_send::suppresses_own_post(
+            &self.messages.database,
+            owner,
+            channel_id,
+            proto_msg.timestamp,
+        )
     }
 
     fn current_device_id(&self) -> Option<u32> {

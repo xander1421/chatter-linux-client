@@ -15,12 +15,11 @@
 //! A stored envelope carries the sender certificate it was sealed with, and
 //! the receiver checks that certificate at the server's (fresh) timestamp. So
 //! an envelope is replayed only inside [`REPLAY_WINDOW_SECONDS`] of sealing.
-//! Past it the stored envelope is discarded, never sent again, and the content
-//! is sealed once more (Signal re-encrypts on retry) under a new GUID: the old
-//! GUID could make the server deduplicate the new copy behind a queued dead
-//! one. If an earlier copy did land, the receiver drops the second on its
-//! (conversation, sender, sent_at). The ratchet only advances, so the skipped
-//! counter is an ordinary gap.
+//! Past it the entry fails closed as "Delivery unconfirmed" with the stored
+//! envelope dropped, and the user decides whether to retry. Sealing again on
+//! our own would be a second deposit under a new GUID: if the first copy did
+//! land, the receiver's only guard is its live (sender, sent_at) row, which a
+//! delete-for-me or an expiry hard-deletes, so the message would come back.
 //!
 //! Shield (mailbox) DMs do not enter: their bootstrap queue owns them, and
 //! the worker waits while Shield is on rather than leak the recipient.
@@ -53,7 +52,7 @@ const BATCH: i64 = 4;
 /// `signal/session.rs` `get_cached_sender_certificate`), so a sealed envelope
 /// has at least 12 h left. Two hours of that are margin for this device's
 /// clock against the server's, which stamps the replay.
-const REPLAY_WINDOW_SECONDS: i64 = 10 * 3600;
+pub(super) const REPLAY_WINDOW_SECONDS: i64 = 10 * 3600;
 
 /// Whether an envelope sealed at `sealed_at` still carries a certificate the
 /// receiver accepts. Unknown seal time, or a clock that went backwards: no.
@@ -264,53 +263,6 @@ impl MessageService {
         }))
     }
 
-    /// Discard a stored envelope whose certificate window has passed, so it
-    /// is never sent again, and set the entry up to be sealed once more: a
-    /// new GUID, and the devices the old envelope was for (no device linked
-    /// since). Fenced like `retain_request`.
-    fn reseal_outbox_entry(
-        &self,
-        owner: &str,
-        id: &str,
-        generation: &str,
-        mut entry: Entry,
-    ) -> Result<Entry, MessageError> {
-        let raw = entry.request.take().unwrap_or_default();
-        let devices: Vec<u32> = SendSealedMessageRequest::decode(raw.as_slice())
-            .map_err(|_| invalid("Invalid outbox request"))?
-            .messages
-            .iter()
-            .map(|m| m.device_id)
-            .collect();
-        let request_id = uuid::Uuid::new_v4().to_string();
-        let changed = self.database.connection()?.execute(
-            "UPDATE dm_outbox SET request=NULL, uak=NULL, sealed_at=NULL, request_id=?4, devices=?5
-             WHERE owner_id=?1 AND message_id=?2 AND generation=?3
-             AND EXISTS(SELECT 1 FROM messages WHERE id=?2 AND is_deleted=0)",
-            params![
-                owner,
-                id,
-                generation,
-                request_id,
-                serde_json::to_string(&devices).map_err(|_| invalid("Cannot retain devices"))?
-            ],
-        )?;
-        if changed != 1 {
-            return Err(MessageError::Storage(invalid(
-                "Sealed DM send was taken over or deleted",
-            )));
-        }
-        tracing::info!(
-            message_id = id,
-            "Sealed DM envelope past its certificate window; sealing again"
-        );
-        entry.uak = None;
-        entry.sealed_at = None;
-        entry.request_id = request_id;
-        entry.devices = Some(devices);
-        Ok(entry)
-    }
-
     /// One delivery attempt of the entry this generation owns. Encrypts only
     /// when no envelope was stored; otherwise replays the stored one.
     pub(super) async fn deliver_sealed_dm(
@@ -319,7 +271,7 @@ impl MessageService {
         generation: &str,
     ) -> Result<(), MessageError> {
         let owner = self.current_user_id()?.to_string();
-        let mut entry = self
+        let entry = self
             .load_outbox_entry(&owner, &id.to_string(), generation)?
             .ok_or_else(|| MessageError::Storage(invalid("Sealed DM send was taken over")))?;
         // Waiting, not failing: this transport names the recipient.
@@ -333,8 +285,17 @@ impl MessageService {
         }
         let content = Content::decode(entry.content.as_slice())
             .map_err(|_| invalid("Invalid outbox content"))?;
+        // Past the certificate window the stored envelope can no longer be
+        // replayed, and whether it landed is unknown: fail closed, never seal
+        // again behind the user's back (module doc). Settling drops the entry.
         if entry.request.is_some() && !replayable(entry.sealed_at, now()) {
-            entry = self.reseal_outbox_entry(&owner, &id.to_string(), generation, entry)?;
+            tracing::warn!(
+                message_id = %id,
+                "Sealed DM envelope past its certificate window; delivery unconfirmed"
+            );
+            return Err(MessageError::DmError(
+                super::core::DELIVERY_UNCONFIRMED.into(),
+            ));
         }
         let peer = entry.peer.to_string();
         let mut auth_client = self.auth_client();

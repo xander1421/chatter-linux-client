@@ -31,11 +31,39 @@ const RETAIN: &str = "json_set(json_remove(value,'$.entry','$.generation','$.att
 /// server `types.go:21`; one day of clock margin here) retained request bytes
 /// can resolve nothing. Only they are dropped; token and identities stay.
 const REQUEST_WINDOW: i64 = 8 * 24 * 60 * 60;
+/// Longest replay of a prepared (unsealed) request after `prepared.at`.
+const REPLAY_HORIZON: i64 = 23 * 60 * 60;
+/// This device's clock against the server's, which stamps a plaintext post.
+const CLOCK_SKEW: i64 = 2 * 60 * 60;
 /// A prepared request may be replayed only below sealed-sender freshness.
+/// A sealed (deletion-token) request embeds our sender certificate, which
+/// has only 12 h left when used: it gets the sealed DM outbox's window.
 fn replayable(prepared: &Prepared) -> bool {
     // Tolerate a small backward clock step instead of expiring at once.
     let age = now() - prepared.at;
-    (-300..23 * 60 * 60).contains(&age)
+    let horizon = if prepared.deletion_token.is_some() {
+        super::dm_outbox::REPLAY_WINDOW_SECONDS
+    } else {
+        REPLAY_HORIZON
+    };
+    (-300..horizon).contains(&age)
+}
+
+/// Whether a server post by `owner` from this device in `channel`, stamped
+/// `server_nanos`, may be the uncertain deposit of a send the user deleted.
+/// Its canonical id was never learned, so a tombstone cannot hold it, and
+/// nothing is posted to find out: ingest drops any such own post from the
+/// retained journal's first hand-off (`prepared.at`) to its last possible
+/// replay, with clock margin. The account is the journal key's owner. Rows
+/// with a known id are already tombstoned and are not consulted.
+pub(crate) fn suppresses_own_post(
+    db: &Database,
+    owner: UserId,
+    channel: ChannelId,
+    server_nanos: u64,
+) -> Result<bool, StorageError> {
+    let at = (server_nanos / 1_000_000_000) as i64;
+    db.read_connection()?.query_row("SELECT EXISTS(SELECT 1 FROM settings WHERE key LIKE ?1 AND json_extract(value,'$.phase')='unresolved' AND json_extract(value,'$.server_id') IS NULL AND json_extract(value,'$.channel_id')=?2 AND ?3 BETWEEN json_extract(value,'$.prepared.at')-?4 AND json_extract(value,'$.prepared.at')+?5)",params![format!("{PREFIX}{owner}:%"),channel.to_string(),at,CLOCK_SKEW,REPLAY_HORIZON+CLOCK_SKEW],|r|r.get(0)).map_err(Into::into)
 }
 #[derive(Serialize, Deserialize)]
 struct Quote {
@@ -976,4 +1004,50 @@ pub(crate) fn spawn_channel_send_recovery(
             }
         }
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// An uncertain, user-deleted send holds off this account's own posts in
+    /// its channel over its hand-off window only; a known id, another
+    /// channel, another account or a time outside the window are not held.
+    #[test]
+    fn deleted_uncertain_send_suppresses_only_its_window() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(&dir.path().join("journal.db"), "test-only").unwrap();
+        db.run_migrations().unwrap();
+        let (me, other, channel) = (UserId::new(), UserId::new(), ChannelId::new());
+        let at = 2_000_000_000_i64;
+        let put = |owner: UserId, value: serde_json::Value| {
+            db.connection()
+                .unwrap()
+                .execute(
+                    "INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,'now')",
+                    params![key(owner, MessageId::new()), value.to_string()],
+                )
+                .unwrap();
+        };
+        put(
+            me,
+            serde_json::json!({"phase":"unresolved","channel_id":channel,"prepared":{"at":at}}),
+        );
+        let nanos = |secs: i64| (secs as u64) * 1_000_000_000;
+        let held = |owner, ch, secs| suppresses_own_post(&db, owner, ch, nanos(secs)).unwrap();
+        assert!(held(me, channel, at));
+        assert!(held(me, channel, at - CLOCK_SKEW));
+        assert!(held(me, channel, at + REPLAY_HORIZON + CLOCK_SKEW));
+        assert!(!held(me, channel, at - CLOCK_SKEW - 1));
+        assert!(!held(me, channel, at + REPLAY_HORIZON + CLOCK_SKEW + 1));
+        assert!(!held(me, ChannelId::new(), at));
+        assert!(!held(other, channel, at));
+        // A known canonical id is tombstoned instead, never windowed.
+        let known = ChannelId::new();
+        put(
+            me,
+            serde_json::json!({"phase":"unresolved","channel_id":known,"server_id":"x","prepared":{"at":at}}),
+        );
+        assert!(!held(me, known, at));
+    }
 }
