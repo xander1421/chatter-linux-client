@@ -8,6 +8,7 @@ use std::fs::File;
 use std::io::{BufReader, Cursor, Read, Seek};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use crate::error::MediaError;
@@ -56,7 +57,9 @@ enum AudioSource {
 /// Can load audio from files or from memory for secure playback.
 pub struct AudioPlayer {
     /// Output stream (must be kept alive for playback).
-    _stream: OutputStream,
+    stream: Option<OutputStream>,
+    /// Output errors are reported on the audio thread; retire it on the caller.
+    output_failed: Arc<AtomicBool>,
     /// Current playback sink.
     sink: Option<Sink>,
     /// Currently loaded audio source.
@@ -76,14 +79,11 @@ impl AudioPlayer {
     ///
     /// # Errors
     ///
-    /// Returns an error if the audio output stream cannot be created.
+    /// Hardware output is opened lazily by `play`, which reports output errors.
     pub fn new() -> Result<Self, MediaError> {
-        let stream = OutputStreamBuilder::open_default_stream().map_err(|e| {
-            MediaError::PlaybackError(format!("failed to create audio output: {}", e))
-        })?;
-
         Ok(Self {
-            _stream: stream,
+            stream: None,
+            output_failed: Arc::new(AtomicBool::new(false)),
             sink: None,
             current_source: None,
             current_duration: None,
@@ -251,6 +251,13 @@ impl AudioPlayer {
     ///
     /// Returns an error if no audio is loaded or playback fails.
     pub fn play(&mut self) -> Result<(), MediaError> {
+        if self.current_source.is_none() {
+            return Err(MediaError::PlaybackError("no audio loaded".to_string()));
+        }
+        if self.output_failed.load(Ordering::Acquire) {
+            tracing::warn!("Retiring failed audio output; replay starts at the beginning");
+            self.stop();
+        }
         // If we have a sink and it's paused, just resume
         if let Some(ref sink) = self.sink {
             if sink.is_paused() {
@@ -270,7 +277,32 @@ impl AudioPlayer {
             .ok_or_else(|| MediaError::PlaybackError("no audio loaded".to_string()))?
             .clone();
 
-        let sink = Sink::connect_new(self._stream.mixer());
+        if self.stream.is_none() {
+            // Each output owns its flag, so an old callback cannot invalidate
+            // a replacement stream. Never close/reopen on the audio thread.
+            let failed = Arc::new(AtomicBool::new(false));
+            let callback_failed = failed.clone();
+            let stream = OutputStreamBuilder::from_default_device()
+                .map_err(|e| {
+                    MediaError::PlaybackError(format!("failed to select audio output: {e}"))
+                })?
+                .with_error_callback(move |error| {
+                    callback_failed.store(true, Ordering::Release);
+                    tracing::error!(%error, "Attachment audio output stream failed");
+                })
+                .open_stream_or_fallback()
+                .map_err(|e| {
+                    MediaError::PlaybackError(format!("failed to create audio output: {e}"))
+                })?;
+            self.output_failed = failed;
+            self.stream = Some(stream);
+        }
+        let sink = Sink::connect_new(
+            self.stream
+                .as_ref()
+                .ok_or_else(|| MediaError::PlaybackError("no audio output".to_string()))?
+                .mixer(),
+        );
 
         match source {
             AudioSource::File(ref path) => {
@@ -306,6 +338,12 @@ impl AudioPlayer {
         }
 
         self.sink = Some(sink);
+        if self.output_failed.load(Ordering::Acquire) {
+            self.stop();
+            return Err(MediaError::PlaybackError(
+                "audio output stream failed".to_string(),
+            ));
+        }
         Ok(())
     }
 
@@ -321,6 +359,10 @@ impl AudioPlayer {
         if let Some(sink) = self.sink.take() {
             sink.stop();
         }
+        // A route change can disconnect Android's retained AAudio output.
+        // Loading another source must open fresh hardware instead of queueing
+        // it onto a mixer whose device callback no longer runs.
+        self.stream.take();
     }
 
     /// Seeks to a specific position.
@@ -331,6 +373,11 @@ impl AudioPlayer {
     ///
     /// Returns an error if no audio is loaded or seek fails.
     pub fn seek(&mut self, position: Duration) -> Result<(), MediaError> {
+        if self.output_failed.load(Ordering::Acquire) {
+            return Err(MediaError::PlaybackError(
+                "audio output stream failed".to_string(),
+            ));
+        }
         if self.current_source.is_none() {
             return Err(MediaError::PlaybackError("no audio loaded".to_string()));
         }
@@ -370,6 +417,9 @@ impl AudioPlayer {
 
     /// Gets the current playback state.
     pub fn state(&self) -> PlaybackState {
+        if self.output_failed.load(Ordering::Acquire) {
+            return PlaybackState::Stopped;
+        }
         let duration = match self.current_duration {
             Some(d) => d,
             None => return PlaybackState::Stopped,
@@ -393,6 +443,9 @@ impl AudioPlayer {
     ///
     /// Uses rodio's native `get_pos()` for accurate position tracking.
     pub fn position(&self) -> Duration {
+        if self.output_failed.load(Ordering::Acquire) {
+            return Duration::ZERO;
+        }
         self.sink
             .as_ref()
             .map(|s| s.get_pos())
@@ -406,6 +459,9 @@ impl AudioPlayer {
 
     /// Returns true if audio is currently playing.
     pub fn is_playing(&self) -> bool {
+        if self.output_failed.load(Ordering::Acquire) {
+            return false;
+        }
         self.sink
             .as_ref()
             .map(|s| !s.is_paused() && !s.empty())
@@ -414,6 +470,9 @@ impl AudioPlayer {
 
     /// Returns true if audio is paused.
     pub fn is_paused(&self) -> bool {
+        if self.output_failed.load(Ordering::Acquire) {
+            return false;
+        }
         self.sink.as_ref().map(|s| s.is_paused()).unwrap_or(false)
     }
 
