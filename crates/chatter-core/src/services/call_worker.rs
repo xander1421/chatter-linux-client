@@ -5,7 +5,7 @@
 //! communicates with the worker via channels.
 
 use std::cell::RefCell;
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::rc::Rc;
 use std::str::FromStr;
 use std::sync::Arc;
@@ -1979,40 +1979,54 @@ fn run_call_worker(
                     // Queue behind whatever the user already asked for: a
                     // hangup ahead of this clears the call and the handler
                     // finds nothing to recover.
-                    if let Some(call) = lost_call.borrow().as_ref().map(derive_call_handle) {
-                        let _ = internal_tx.try_send(CallCommand::RoomLost {
+                    let call = lost_call.borrow().as_ref().map(derive_call_handle);
+                    if let Some(call) = call {
+                        let _ = internal_tx.send(CallCommand::RoomLost {
                             call,
                             generation,
                             retryable,
                             reason: reason.clone(),
-                        });
+                        }).await;
                     }
                 }
                 // Fire-and-forget broadcast — no subscribers is fine.
                 let _ = room_bus.send(event.clone());
-                if events_tx_clone.try_send(event).is_err() {
-                    tracing::warn!("Failed to forward room event - receiver dropped");
-                    break;
+                match events_tx_clone.try_send(event) {
+                    Ok(()) => {},
+                    Err(mpsc::error::TrySendError::Full(_)) => {
+                        tracing::warn!("Room event UI queue full; keeping room-loss forwarding alive");
+                    }
+                    Err(mpsc::error::TrySendError::Closed(_)) => {
+                        // Core recovery and broadcast subscribers still need losses
+                        // even when the optional UI receiver has been dropped.
+                    }
                 }
             }
             tracing::info!("Room events forwarder stopped");
         });
 
+        // Recovery parks ordinary commands, but gives an admitted owner hangup
+        // priority so it can use the normal teardown/response arm immediately.
+        let mut deferred_commands = VecDeque::new();
         // Process commands
         loop {
             let deadline = orchestrator.incoming.values().map(|p| p.deadline).min();
-            let cmd = tokio::select! {
-                biased;
-                _ = async {
-                    match deadline {
-                        Some(deadline) => tokio::time::sleep_until(deadline).await,
-                        None => std::future::pending::<()>().await,
+            let cmd = if let Some(cmd) = deferred_commands.pop_front() {
+                cmd
+            } else {
+                tokio::select! {
+                    biased;
+                    _ = async {
+                        match deadline {
+                            Some(deadline) => tokio::time::sleep_until(deadline).await,
+                            None => std::future::pending::<()>().await,
+                        }
+                    } => {
+                        orchestrator.withdraw_expired(tokio::time::Instant::now(), &incoming_presentation, &call_events_tx);
+                        continue;
                     }
-                } => {
-                    orchestrator.withdraw_expired(tokio::time::Instant::now(), &incoming_presentation, &call_events_tx);
-                    continue;
+                    cmd = cmd_rx.recv() => match cmd { Some(cmd) => cmd, None => break },
                 }
-                cmd = cmd_rx.recv() => match cmd { Some(cmd) => cmd, None => break },
             };
 
             orchestrator.generation = orchestrator.generation.checked_add(1)
@@ -2486,14 +2500,27 @@ fn run_call_worker(
                         let _ = response.send(Err(CallError::AlreadyInCall));
                         continue;
                     }
-                    let result = suspend_for_reconnect(
-                        &ratchet_cancel,
-                        reconnect_impl(&call_client, &room_manager, &active_call),
-                        || start_key_ratchet_timer(&room_manager, &ratchet_cancel, &active_call),
+                    let call = active_call.borrow().as_ref().map(derive_call_handle);
+                    let Some(call) = call else {
+                        let _ = response.send(Err(CallError::NotInCall));
+                        continue;
+                    };
+                    let result = recover_session(
+                        &call_client, &room_manager, &active_call, &ratchet_cancel,
+                        &mut cmd_rx, &mut deferred_commands, &incoming_presentation, &call,
+                        orchestrator.active.as_ref().filter(|active| active.call == call)
+                            .map(|active| active.session_revision),
                     ).await;
-                    if result.is_ok() {
-                        restore_reconnected_media(&room_manager, &active_call).await;
+                    if matches!(&result, Err(RecoveryFailure::Failed(_))) {
+                        finish_failed_recovery(
+                            &call_client, &room_manager, &active_call, &ratchet_cancel,
+                            &mut orchestrator, &call_events_tx, call,
+                        ).await;
                     }
+                    let result = result.map_err(|failure| match failure {
+                        RecoveryFailure::Cancelled => CallError::CallEnded,
+                        RecoveryFailure::Failed(error) => error,
+                    });
                     let _ = response.send(result);
                 }
 
@@ -2516,46 +2543,31 @@ fn run_call_worker(
                         .filter(|a| a.call == call)
                         .is_none_or(|a| incoming_presentation.accepts_session(a.session_revision));
                     tracing::warn!(call = %call.as_str(), %reason, retryable, "Room session lost");
-                    // ponytail: one fresh-token rejoin after the SDK's own
-                    // budget (10 attempts); a second only if the field shows it.
-                    let recovered = if retryable && session_ok {
-                        let result = suspend_for_reconnect(
-                            &ratchet_cancel,
-                            reconnect_impl(&call_client, &room_manager, &active_call),
-                            || start_key_ratchet_timer(&room_manager, &ratchet_cancel, &active_call),
-                        ).await;
-                        match result {
-                            // The loop awaited the whole attempt, so no command
-                            // changed the active call meanwhile; check anyway.
-                            Ok(()) if same_call() => {
-                                restore_reconnected_media(&room_manager, &active_call).await;
-                                tracing::info!(call = %call.as_str(), "Room session recovered");
-                                true
-                            }
-                            Ok(()) => true,
-                            Err(error) => {
-                                tracing::warn!(call = %call.as_str(), %error, "Fresh-token reconnect failed");
-                                false
+                    let recovery = if retryable && session_ok {
+                        recover_session(
+                            &call_client, &room_manager, &active_call, &ratchet_cancel,
+                            &mut cmd_rx, &mut deferred_commands, &incoming_presentation, &call,
+                            orchestrator.active.as_ref().filter(|active| active.call == call)
+                                .map(|active| active.session_revision),
+                        ).await
+                    } else {
+                        Err(RecoveryFailure::Failed(CallError::CallEnded))
+                    };
+                    match recovery {
+                        Ok(()) => tracing::info!(call = %call.as_str(), "Room session recovered"),
+                        // The admitted hangup is next, preserving its reason, server
+                        // notification policy and reply through the existing arm.
+                        Err(RecoveryFailure::Cancelled) => {},
+                        Err(RecoveryFailure::Failed(error)) => {
+                            tracing::warn!(call = %call.as_str(), %error, "Fresh-token recovery ended");
+                            if same_call() {
+                                finish_failed_recovery(
+                                    &call_client, &room_manager, &active_call, &ratchet_cancel,
+                                    &mut orchestrator, &call_events_tx, call,
+                                ).await;
                             }
                         }
-                    } else {
-                        false
-                    };
-                    if recovered || !same_call() {
-                        continue;
                     }
-                    // Terminal: same teardown a hangup does, so the server's
-                    // final-participant lifecycle runs and the UI is told.
-                    stop_key_ratchet_timer(&ratchet_cancel);
-                    let _ = leave_call_impl(&call_client, &room_manager, &active_call).await;
-                    if orchestrator.active.as_ref().map(|a| a.call == call).unwrap_or(false) {
-                        orchestrator.active = None;
-                    }
-                    orchestrator.outgoing.remove(&call);
-                    let _ = call_events_tx.send(CallOrchestratorEvent::ActiveEnded {
-                        call,
-                        reason: CallEndReason::Error(CONNECTION_LOST.to_string()),
-                    });
                 }
 
                 // ============================================================
@@ -2758,7 +2770,9 @@ fn run_call_worker(
                     let handle = CallHandle::from(call.id.to_string().as_str());
                     let key_state = CallKeyState::new(&[8; 32], handle.as_str()).unwrap();
                     *active_call.borrow_mut() = Some(ActiveCallState {
-                        reconnect_media: None, call, key_state,
+                        reconnect_media: None,
+                        fresh_rejoin_used: false,
+                        call, key_state,
                         room_name: handle.as_str().to_string(), livekit_url: String::new(),
                         publish_gate: PublishGate::default(),
                     });
@@ -2923,6 +2937,8 @@ struct ActiveCallState {
     publish_gate: PublishGate,
     /// Retained across failed reconnect attempts, since teardown clears capture.
     reconnect_media: Option<ReconnectMedia>,
+    /// One fresh-token recovery for the lifetime of this call, including explicit reconnects.
+    fresh_rejoin_used: bool,
 }
 
 /// The same helper serves production snapshots and state-transition regressions.
@@ -3372,6 +3388,7 @@ async fn initiate_call_impl(
     // Store active call
     *active_call.borrow_mut() = Some(ActiveCallState {
         reconnect_media: None,
+        fresh_rejoin_used: false,
         call: call.clone(),
         key_state,
         room_name: response.room_name,
@@ -3484,6 +3501,7 @@ async fn join_call_impl(
     };
     *active_call.borrow_mut() = Some(ActiveCallState {
         reconnect_media: None,
+        fresh_rejoin_used: false,
         call: call.clone(),
         key_state,
         room_name: call_info.room_name,
@@ -3564,6 +3582,7 @@ async fn connect_with_token_impl(
     // Store active call info
     *active_call.borrow_mut() = Some(ActiveCallState {
         reconnect_media: None,
+        fresh_rejoin_used: false,
         call: call.clone(),
         key_state,
         room_name: room_name.clone(),
@@ -3637,22 +3656,136 @@ async fn end_call_impl(
             .ok_or(CallError::NotInCall)?
     };
 
-    // End on server
-    {
+    // Final local cleanup runs even if signaling fails or times out.
+    let result = tokio::time::timeout(std::time::Duration::from_secs(3), async {
         let mut client = call_client.lock().await;
-        client
-            .end_call(&call_id, reason.unwrap_or(""))
-            .await
-            .map_err(|e| CallError::ServerError(e.to_string()))?;
-    }
-
-    // Disconnect from LiveKit
+        client.end_call(&call_id, reason.unwrap_or(""))
+            .await.map_err(|e| CallError::ServerError(e.to_string()))
+    }).await.unwrap_or_else(|_| Err(CallError::ServerError("End call timed out".into())));
     room_manager.disconnect().await;
-
-    // Clear active call
     *active_call.borrow_mut() = None;
+    result
+}
 
-    Ok(())
+/// Recovery consumes the actual admitted command, rather than a separate
+/// intent counter that can race admission or cancel the wrong call.
+enum RecoveryFailure {
+    Cancelled,
+    Failed(CallError),
+}
+
+fn cancels_recovery(
+    command: &CallCommand,
+    call: &CallHandle,
+    presentation: &IncomingCallPresentationState,
+) -> bool {
+    match command {
+        CallCommand::LeaveCall { .. } => true,
+        CallCommand::EndCall { session_revision, .. } => {
+            session_revision.is_none() || presentation.accepts_session(*session_revision)
+        }
+        CallCommand::DisconnectLocal { call: target, session_revision, .. } => {
+            (target.is_none() || target.as_ref() == Some(call))
+                && (session_revision.is_none() || presentation.accepts_session(*session_revision))
+        }
+        _ => false,
+    }
+}
+
+async fn recover_session(
+    call_client: &Arc<TokioMutex<CallClient>>,
+    room_manager: &Arc<RoomManager>,
+    active_call: &Rc<RefCell<Option<ActiveCallState>>>,
+    ratchet_cancel: &Rc<RefCell<Option<oneshot::Sender<()>>>>,
+    commands: &mut mpsc::Receiver<CallCommand>,
+    deferred: &mut VecDeque<CallCommand>,
+    presentation: &IncomingCallPresentationState,
+    call: &CallHandle,
+    owner_session: Option<Option<u64>>,
+) -> Result<(), RecoveryFailure> {
+    stop_key_ratchet_timer(ratchet_cancel);
+    let session_current = || owner_session.is_none_or(|revision| presentation.accepts_session(revision));
+    let mut session_changes = presentation.changes.subscribe();
+    if !session_current() {
+        return Err(RecoveryFailure::Failed(CallError::CallEnded));
+    }
+    if let Some(index) = deferred.iter().position(|cmd| cancels_recovery(cmd, call, presentation)) {
+        let command = deferred.remove(index).unwrap();
+        deferred.push_front(command);
+        return Err(RecoveryFailure::Cancelled);
+    }
+    {
+        let mut active = active_call.borrow_mut();
+        let state = active.as_mut().ok_or(RecoveryFailure::Failed(CallError::NotInCall))?;
+        if derive_call_handle(state) != *call || state.fresh_rejoin_used {
+            return Err(RecoveryFailure::Failed(CallError::CallEnded));
+        }
+        // Consume even on timeout/error: no rapid success/loss cycle can renew it.
+        state.fresh_rejoin_used = true;
+    }
+    let recovery = async {
+        suspend_for_reconnect(
+            ratchet_cancel,
+            reconnect_impl(call_client, room_manager, active_call),
+            || start_key_ratchet_timer(room_manager, ratchet_cancel, active_call),
+        ).await?;
+        if !session_current()
+            || active_call.borrow().as_ref().map(derive_call_handle).as_ref() != Some(call) {
+            return Err(CallError::CallEnded);
+        }
+        restore_reconnected_media(room_manager, active_call).await;
+        Ok(())
+    };
+    tokio::pin!(recovery);
+    let deadline = tokio::time::sleep(std::time::Duration::from_secs(30));
+    tokio::pin!(deadline);
+    loop {
+        tokio::select! {
+            biased;
+            _ = &mut deadline => return Err(RecoveryFailure::Failed(
+                CallError::ServerError("Call recovery timed out".into()),
+            )),
+            _ = session_changes.changed() => {
+                if !session_current() {
+                    return Err(RecoveryFailure::Failed(CallError::CallEnded));
+                }
+            }
+            command = commands.recv() => {
+                let Some(command) = command else {
+                    return Err(RecoveryFailure::Failed(CallError::WorkerShutdown));
+                };
+                if cancels_recovery(&command, call, presentation) {
+                    // Priority is deliberate: run the original owner hangup next;
+                    // ordinary commands retain FIFO order and their response senders.
+                    deferred.push_front(command);
+                    stop_key_ratchet_timer(ratchet_cancel);
+                    return Err(RecoveryFailure::Cancelled);
+                }
+                deferred.push_back(command);
+            }
+            result = &mut recovery => return result.map_err(RecoveryFailure::Failed),
+        }
+    }
+}
+
+async fn finish_failed_recovery(
+    call_client: &Arc<TokioMutex<CallClient>>,
+    room_manager: &Arc<RoomManager>,
+    active_call: &Rc<RefCell<Option<ActiveCallState>>>,
+    ratchet_cancel: &Rc<RefCell<Option<oneshot::Sender<()>>>>,
+    orchestrator: &mut OrchestratorState,
+    events: &broadcast::Sender<CallOrchestratorEvent>,
+    call: CallHandle,
+) {
+    stop_key_ratchet_timer(ratchet_cancel);
+    let _ = leave_call_impl(call_client, room_manager, active_call).await;
+    if orchestrator.active.as_ref().is_some_and(|active| active.call == call) {
+        orchestrator.active = None;
+    }
+    orchestrator.outgoing.remove(&call);
+    let _ = events.send(CallOrchestratorEvent::ActiveEnded {
+        call, reason: CallEndReason::Error(CONNECTION_LOST.to_string()),
+    });
 }
 
 /// The actor suspends before polling any reconnect await, and replaces the
@@ -5055,6 +5188,7 @@ mod group_key_install_tests {
         call.id = CALL.parse().unwrap();
         ActiveCallState {
             reconnect_media: None,
+            fresh_rejoin_used: false,
             call,
             key_state: CallKeyState::new(&root, CALL).unwrap(),
             room_name: String::new(),
@@ -5267,6 +5401,7 @@ mod media_key_install_failure_tests {
         let key_state = CallKeyState::new(&[1; 32], &call.id.to_string()).unwrap();
         Rc::new(RefCell::new(Some(ActiveCallState {
             reconnect_media: None,
+            fresh_rejoin_used: false,
             call,
             key_state,
             room_name: String::new(),
@@ -5377,6 +5512,7 @@ mod reconnect_timer_boundary_tests {
             livekit_url: String::new(),
             publish_gate: PublishGate::awaiting_key(false),
             reconnect_media: None,
+            fresh_rejoin_used: false,
         })))
     }
 
@@ -5673,6 +5809,7 @@ mod verification_snapshot_tests {
             livekit_url: String::new(),
             publish_gate: PublishGate::default(),
             reconnect_media: None,
+            fresh_rejoin_used: false,
         }
     }
 
