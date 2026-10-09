@@ -23,10 +23,28 @@ export CARGO_TARGET_DIR="$TARGET_DIR"
 
 # Explicit Android metadata; debug retains the historical defaults.
 # Validate before bootstrap/download/build work. Android caps codes at 2100000000.
+# RELEASE=1 also checks every production input here, before any download or
+# build: no dev keys/auto-register, a public non-local endpoint, provisioned
+# pins and CA (packaging/check-release-inputs.sh), and an external release
+# signer. Nothing is defaulted; see packaging/README.md for the exact inputs.
 if [ "${RELEASE:-0}" = "1" ]; then
-    for v in CHATTER_ANDROID_VERSION_CODE CHATTER_ANDROID_VERSION_NAME; do
+    [ "${MULTI_INSTANCE:-0}" = "0" ] || { echo "FATAL: MULTI_INSTANCE=1 is debug-only" >&2; exit 1; }
+    [ "${1:-}" != "install" ] || { echo "FATAL: RELEASE=1 never installs or tunnels to the dev stack; adb install the APK yourself" >&2; exit 1; }
+    [ "${DEV_TRUST_ROOT:-1}" = "0" ] && [ "${DEV_AUTO_REGISTER:-1}" = "0" ] \
+        || { echo "FATAL: RELEASE=1 needs DEV_TRUST_ROOT=0 and DEV_AUTO_REGISTER=0" >&2; exit 1; }
+    for v in CHATTER_ANDROID_VERSION_CODE CHATTER_ANDROID_VERSION_NAME \
+        CHATTER_KEYSTORE CHATTER_KEYSTORE_PASSWORD CHATTER_KEY_ALIAS CHATTER_KEY_PASSWORD; do
         [ -n "${!v:-}" ] || { echo "FATAL: RELEASE=1 needs $v" >&2; exit 1; }
     done
+    [ -f "$CHATTER_KEYSTORE" ] || { echo "FATAL: CHATTER_KEYSTORE is not a file" >&2; exit 1; }
+    # A keystore under the repository is one `git add` from being published.
+    case "$(realpath "$CHATTER_KEYSTORE")/" in
+        "$(realpath "$PROJECT_ROOT/..")"/*) echo "FATAL: CHATTER_KEYSTORE must live outside the repository" >&2; exit 1 ;;
+    esac
+    # Same precedence as chatter-core app/server_endpoint.rs on Android.
+    RELEASE_SERVER_URL="${CHATTER_ANDROID_SERVER:-${CHATTER_SERVER_URL:-}}"
+    [ -n "$RELEASE_SERVER_URL" ] || { echo "FATAL: RELEASE=1 needs CHATTER_SERVER_URL (or CHATTER_ANDROID_SERVER)" >&2; exit 1; }
+    "$PROJECT_ROOT/packaging/check-release-inputs.sh" "$RELEASE_SERVER_URL"
 fi
 export CHATTER_ANDROID_VERSION_CODE="${CHATTER_ANDROID_VERSION_CODE-1}"
 export CHATTER_ANDROID_VERSION_NAME="${CHATTER_ANDROID_VERSION_NAME-0.1.0}"
@@ -196,19 +214,11 @@ fi
 RUST_PROFILE=debug; CARGO_PROFILE_FLAG=""; GRADLE_TASK=assembleDebug; APK="app/build/outputs/apk/debug/app-debug.apk"
 GRADLE_ARGS=()
 if [ "${MULTI_INSTANCE:-0}" = "1" ]; then
-    [ "${RELEASE:-0}" != "1" ] || { echo "FATAL: MULTI_INSTANCE=1 is debug-only"; exit 1; }
     GRADLE_ARGS+=(-PmultiInstance=true)
     APK="app/build/outputs/apk/base/debug/app-base-debug.apk"
 fi
 if [ "${RELEASE:-0}" = "1" ]; then
-    if [ -n "$TRUST_ROOT_FEATURE" ] || [ -n "$DEV_AUTO_REGISTER_FEATURE" ]; then
-        echo "FATAL: RELEASE=1 needs DEV_TRUST_ROOT=0 and DEV_AUTO_REGISTER=0"
-        exit 1
-    fi
-    [ -z "${CHATTER_KT_VRF_PUBLIC_KEY_HEX:-}" ] && { echo "FATAL: RELEASE=1 needs CHATTER_KT_VRF_PUBLIC_KEY_HEX"; exit 1; }
-    for v in CHATTER_KEYSTORE CHATTER_KEYSTORE_PASSWORD CHATTER_KEY_ALIAS CHATTER_KEY_PASSWORD; do
-        [ -z "${!v:-}" ] && { echo "FATAL: RELEASE=1 needs $v"; exit 1; }
-    done
+    # Inputs were refused above; this only selects the release profile.
     RUST_PROFILE=release; CARGO_PROFILE_FLAG="--release"; GRADLE_TASK=assembleRelease
     APK="app/build/outputs/apk/release/app-release.apk"
     echo ">> RELEASE build: production keys, signed"
@@ -244,6 +254,17 @@ fi
 # Gradle 8.10 needs a supported JDK; Android Studio may bundle a newer one.
 JAVA_HOME="${JAVA_HOME:-/usr/lib/jvm/java-17-openjdk}" ./gradlew :app:$GRADLE_TASK "${GRADLE_ARGS[@]}" --no-daemon
 [ -f "$APK" ] || { echo "FATAL: $APK missing (unsigned release?)"; exit 1; }
+if [ "${RELEASE:-0}" = "1" ]; then
+    # Prove the shipped APK carries the release signer, never the debug key.
+    APKSIGNER="$(ls -d "$ANDROID_HOME"/build-tools/*/apksigner 2>/dev/null | sort -V | tail -1)"
+    [ -x "$APKSIGNER" ] || { echo "FATAL: apksigner not found under $ANDROID_HOME/build-tools"; exit 1; }
+    SIGNER="$("$APKSIGNER" verify --print-certs "$APK")" || { echo "FATAL: $APK signature does not verify"; exit 1; }
+    if grep -q 'certificate DN: .*CN=Android Debug' <<<"$SIGNER"; then
+        rm -f "$APK"; echo "FATAL: release APK is signed with the Android debug key; removed"; exit 1
+    fi
+    echo "$SIGNER" | grep -E 'certificate (DN|SHA-256 digest):'
+    (cd "$(dirname "$APK")" && sha256sum "$(basename "$APK")" > "$(basename "$APK").sha256")
+fi
 echo "------------------------------------------------------------"
 echo "Build complete: $APK"
 if [ "${MULTI_INSTANCE:-0}" = "1" ]; then

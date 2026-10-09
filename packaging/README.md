@@ -9,25 +9,54 @@ and `CHATTER_ANDROID_VERSION_NAME`. Codes must be decimal 1..2100000000 without
 leading zeros; names are 1..64 ASCII letters/digits or `.`, `_`, `+`, `-`, beginning
 with a digit. Both the shell and Gradle validate supplied values.
 
-For production, provide both explicitly, choose a code greater than the last
-published code, and retain the production signing identity for upgrades:
+`RELEASE=1` is the production path. It defaults nothing: before any download or
+build it refuses a missing or invalid input, `DEV_TRUST_ROOT`/`DEV_AUTO_REGISTER`
+other than an explicit `0`, `MULTI_INSTANCE=1`, and the `install` argument (the
+release path never installs over the developer app or opens dev tunnels).
+Endpoint, pin and CA checks are shared with the Linux archive in
+`check-release-inputs.sh`. After Gradle it runs `apksigner verify`, deletes and
+refuses an APK signed by the Android debug certificate, prints the signer
+certificate DN and SHA-256 digest, and writes `app-release.apk.sha256`.
+`app/build.gradle.kts` refuses any direct release task without all four signing
+values, so a release APK is never silently unsigned or debug-signed.
+
+Operator inputs, all required unless marked optional:
+
+| Input | Source |
+|---|---|
+| `CHATTER_ANDROID_VERSION_CODE` | greater than the last published code |
+| `CHATTER_ANDROID_VERSION_NAME` | e.g. `1.0.0` |
+| `CHATTER_SERVER_URL` (or `CHATTER_ANDROID_SERVER`, which wins on Android) | public `https://<dns-host>[:port]` RPC origin; no IP literal, localhost, `.local`/`.test`/`.internal`/example domains |
+| `CHATTER_TLS_ROOT_CA_PEM` | provisioned private CA PEM (not expired, `CA:TRUE`, not the committed `dev_tls_root_ca.pem`) |
+| `CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX`, `CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX`, `CHATTER_KT_VRF_PUBLIC_KEY_HEX` | provisioned 32-byte hex pins, never the `scripts/anchors.sh` dev values |
+| `CHATTER_KEYSTORE` | release keystore file **outside** the repository |
+| `CHATTER_KEYSTORE_PASSWORD`, `CHATTER_KEY_ALIAS`, `CHATTER_KEY_PASSWORD` | the established external signing setup |
+| `CHATTER_NTFY_URL` (optional) | public HTTPS push edge or v3 onion; without it no push wake |
+| `CHATTER_ONION_ADDR` (optional) | provisioned v3 `.onion`; without it Shield cannot hide network location |
+
+The four anchors are resolved and cross-checked against the server by
+`scripts/anchors.sh exec` (repository root), so the reproducible command is:
 
 ```sh
-RELEASE=1 DEV_TRUST_ROOT=0 DEV_AUTO_REGISTER=0 \
+cd linux-client
+ENV_FILE=.env.alpha ../scripts/anchors.sh exec env \
+  RELEASE=1 DEV_TRUST_ROOT=0 DEV_AUTO_REGISTER=0 \
   CHATTER_ANDROID_VERSION_CODE=100 CHATTER_ANDROID_VERSION_NAME=1.0.0 \
+  CHATTER_SERVER_URL=https://<provisioned-host> \
   ./android/build-android.sh
 ```
 
-Before that command, export existing provisioned public pins
-`CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX`, `CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX`,
-`CHATTER_KT_VRF_PUBLIC_KEY_HEX`, `CHATTER_TLS_ROOT_CA_PEM`, and the public
-`CHATTER_SERVER_URL` (or Android endpoint override `CHATTER_ANDROID_SERVER`).
-Export `CHATTER_KEYSTORE`, `CHATTER_KEYSTORE_PASSWORD`, `CHATTER_KEY_ALIAS`, and
-`CHATTER_KEY_PASSWORD` through the established external signing setup. This
-change neither creates nor rotates a signer. Direct Gradle release task names
-also require version metadata; generic Gradle task aliases should use `RELEASE=1`.
-Push wake requires the optional public `CHATTER_NTFY_URL`; onion transport needs
-`CHATTER_ONION_ADDR`. Neither is invented by packaging.
+with the signing variables (and optional push/onion) already exported. Output:
+`android/app/build/outputs/apk/release/app-release.apk` plus its `.sha256`.
+This neither creates nor rotates a signer, and does not provision anchors. Keep
+the release keystore and its passwords backed up outside the repository:
+losing them means no upgrade path for installed copies. The release APK has a
+different signer from the developer debug APK, so it cannot install over it;
+uninstall the debug build first (that erases its local data).
+
+Checks are syntactic. They cannot prove the CA and pins match the running
+production server, nor that `CHATTER_SERVER_URL` is the right host; run
+`../scripts/anchors.sh check` against the target first.
 
 ## Linux x86_64 system-runtime archive
 

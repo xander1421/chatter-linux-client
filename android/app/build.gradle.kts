@@ -53,9 +53,16 @@ android {
     }
 
     // Release signing comes from the environment (build-android.sh RELEASE=1);
-    // the keystore lives outside the repository. Without it, assembleRelease
-    // yields only an unsigned APK, which build-android.sh refuses to ship.
+    // the keystore lives outside the repository. A release task without all
+    // four values fails here rather than producing an unsigned or debug-signed
+    // APK; build-android.sh additionally rejects the debug certificate.
     val releaseKeystore = System.getenv("CHATTER_KEYSTORE")
+    if (productionRequested) {
+        val missing = listOf("CHATTER_KEYSTORE", "CHATTER_KEYSTORE_PASSWORD", "CHATTER_KEY_ALIAS", "CHATTER_KEY_PASSWORD")
+            .filter { System.getenv(it).isNullOrEmpty() }
+        require(missing.isEmpty()) { "Release requires signing inputs: ${missing.joinToString()}" }
+        require(file(releaseKeystore!!).isFile) { "CHATTER_KEYSTORE is not a file" }
+    }
     signingConfigs {
         if (releaseKeystore != null) {
             create("release") {
