@@ -569,6 +569,9 @@ pub fn wire_invite_to_private_group(window: &MainWindow, ui_ctx: &Arc<ChatterCli
             return;
         }
 
+        let Some(fence) = weak.upgrade().and_then(|w| RequestFence::capture(&w, &ui_ctx)) else {
+            return;
+        };
         // Set loading state
         let weak_loading = weak.clone();
         let _ = slint::invoke_from_event_loop(move || {
@@ -600,8 +603,13 @@ pub fn wire_invite_to_private_group(window: &MainWindow, ui_ctx: &Arc<ChatterCli
                     tracing::info!("Successfully invited members to group {}", group_id);
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
-                            w.set_invite_private_group_loading(false);
-                            crate::bin_ui::features::back::close(&w, "create-channel");
+                            if !fence.session_current(&ui_ctx) { return; }
+                            if fence.owns_ui(&w, &ui_ctx) {
+                                w.set_invite_private_group_loading(false);
+                                crate::bin_ui::features::back::close(&w, "invite-private-group");
+                            } else {
+                                notify_background_success(&w, "Invitations sent".into());
+                            }
                         }
                     });
                 }
@@ -609,7 +617,13 @@ pub fn wire_invite_to_private_group(window: &MainWindow, ui_ctx: &Arc<ChatterCli
                     tracing::error!("Failed to invite members: {}", e);
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
-                            w.set_invite_private_group_loading(false);
+                            if !fence.session_current(&ui_ctx) { return; }
+                            if fence.owns_ui(&w, &ui_ctx) {
+                                w.set_invite_private_group_loading(false);
+                            }
+                            w.set_toast_message("Unable to send all invitations. Check the member list before retrying.".into());
+                            w.set_toast_variant("error".into());
+                            w.set_toast_visible(true);
                         }
                     });
                 }
