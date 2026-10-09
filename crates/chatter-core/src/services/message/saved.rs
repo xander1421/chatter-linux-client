@@ -649,7 +649,9 @@ impl SavedSnapshotStore {
             }
         }
 
-        if self.message_repo.is_tombstoned(&id)? {
+        if self.message_repo.is_tombstoned(&id)?
+            || self.message_repo.is_saved_tombstoned(&own, &id)?
+        {
             tracing::debug!(message_id = %id, "SavedMessages sync: record deleted here, snapshot ignored");
             return Ok(SavedSyncOutcome::Unchanged);
         }

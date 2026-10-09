@@ -197,6 +197,8 @@ pub enum DomainEvent {
         target_author_id: UserId,
         target_message_id: MessageId,
         timestamp: u64,
+        /// Exact own Saved deletion was committed during admission.
+        saved_deletion_persisted: bool,
     },
     /// Messages in these conversations were read — here
     /// (`mark_conversation_read`) or on another of our devices (`ReadSync`,
@@ -842,6 +844,7 @@ mod tests {
             target_author_id: user_id,
             target_message_id: message_id,
             timestamp: 1704067200000,
+            saved_deletion_persisted: false,
         };
         assert_eq!(delete_sync.channel_id(), Some(channel_id));
         assert!(!delete_sync.is_transient());

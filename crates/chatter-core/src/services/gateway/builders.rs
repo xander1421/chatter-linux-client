@@ -277,6 +277,7 @@ pub fn build_reaction_content_with_channel_at(
             target_author_aci: encoded_author,
             target_sent_timestamp,
             timestamp: now,
+            ..Default::default()
         })),
         ..Default::default()
     }

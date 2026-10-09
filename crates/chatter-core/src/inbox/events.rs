@@ -333,6 +333,8 @@ pub enum InboxEvent {
         target_author_aci: String,
         /// Target message timestamp.
         target_sent_timestamp: u64,
+        saved_message_id: String,
+        saved_messages_scope: bool,
     },
     /// Read/delivery receipt received from channel member.
     ChannelReceipt {

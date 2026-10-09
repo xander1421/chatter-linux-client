@@ -230,6 +230,18 @@ impl UnifiedMessageRepository {
         {
             return Ok(false);
         }
+        // Check under the same write transaction as insertion: a pre-arrival
+        // delete must win even if the caller's earlier read saw no tombstone.
+        if message.conversation_type == ConversationType::SavedMessages
+            && tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM saved_delete_tombstones
+                 WHERE owner_id = ?1 AND message_id = ?2)",
+                params![message.conversation_id.to_string(), message.id.to_string()],
+                |r| r.get::<_, bool>(0),
+            )?
+        {
+            return Ok(false);
+        }
         let initial_saved_pin = saved_pin_clock.map(|_| message.is_pinned);
         let (mut message, reactions) =
             match super::message_modifier_repo::take_on_arrival(&tx, message)? {
@@ -727,6 +739,74 @@ impl UnifiedMessageRepository {
             params![conversation_type.as_str()],
         )?;
         Ok(rows)
+    }
+
+    /// Commit an authenticated own Saved deletion, including before arrival.
+    /// The tombstone is scoped to Saved + owner, never a global arbitrary ID.
+    pub(crate) fn delete_own_saved_exact(
+        &self,
+        owner: &UserId,
+        id: &MessageId,
+        sent_at: u64,
+    ) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        let tx = conn.unchecked_transaction()?;
+        let invalid = || StorageError::InvalidData("Saved deletion identity mismatch".into());
+        let current: Option<String> = tx
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'auth.current_user_id'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if current
+            .and_then(|value| serde_json::from_str::<String>(&value).ok())
+            .as_deref()
+            != Some(owner.to_string().as_str())
+            || sent_at == 0
+            || sent_at > i64::MAX as u64
+        {
+            return Err(invalid());
+        }
+        let existing: Option<(String, String, Option<String>, i64)> = tx.query_row(
+            "SELECT conversation_type, conversation_id, sender_id, sent_at FROM messages WHERE id = ?1",
+            params![id.to_string()],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)),
+        ).optional()?;
+        if existing.is_some_and(|(kind, conversation, sender, clock)| {
+            kind != "saved_messages"
+                || conversation != owner.to_string()
+                || sender.as_deref() != Some(owner.to_string().as_str())
+                || clock != sent_at as i64
+        }) {
+            return Err(invalid());
+        }
+        tx.execute(
+            "INSERT OR IGNORE INTO saved_delete_tombstones (owner_id, message_id) VALUES (?1, ?2)",
+            params![owner.to_string(), id.to_string()],
+        )?;
+        tx.execute(
+            "DELETE FROM messages WHERE id = ?1 AND conversation_type = 'saved_messages'
+             AND conversation_id = ?2 AND sender_id = ?2 AND sent_at = ?3",
+            params![id.to_string(), owner.to_string(), sent_at as i64],
+        )?;
+        tx.execute(
+            "DELETE FROM saved_sync_outbox WHERE owner_id = ?1 AND message_id = ?2",
+            params![owner.to_string(), id.to_string()],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub(crate) fn is_saved_tombstoned(
+        &self,
+        owner: &UserId,
+        id: &MessageId,
+    ) -> Result<bool, StorageError> {
+        Ok(self.db.read_connection()?.query_row(
+            "SELECT EXISTS(SELECT 1 FROM saved_delete_tombstones WHERE owner_id = ?1 AND message_id = ?2)",
+            params![owner.to_string(), id.to_string()], |r| r.get(0),
+        )?)
     }
 
     /// Hard-delete one message and tombstone its id, so a server re-fetch of

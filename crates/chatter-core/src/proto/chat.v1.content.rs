@@ -710,6 +710,12 @@ pub struct DeleteForMeSync {
     /// When this sync was issued (nanoseconds since epoch)
     #[prost(fixed64, tag="4")]
     pub timestamp: u64,
+    /// Additive exact identity for own Saved deletes, including before arrival.
+    /// Both fields must be present together. Never interpreted for DM/channel.
+    #[prost(string, tag="5")]
+    pub saved_message_id: ::prost::alloc::string::String,
+    #[prost(bool, tag="6")]
+    pub saved_messages_scope: bool,
 }
 // =============================================================================
 // SavedMessageSync: Sync saved messages (Note to Self) across devices

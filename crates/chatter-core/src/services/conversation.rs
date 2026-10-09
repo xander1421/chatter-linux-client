@@ -1431,11 +1431,19 @@ impl ConversationHandle {
             _ => {
                 let msg = self.lookup_message(target_author, target_sent_timestamp)?;
                 let author_aci = msg.sender_id.map(|id| id.to_string()).unwrap_or_default();
-                let content = crate::services::build_delete_for_me_content(
+                let mut content = crate::services::build_delete_for_me_content(
                     &self.dm_or_channel_id(),
                     &author_aci,
                     target_sent_timestamp,
                 );
+                if msg.conversation_type == ConversationType::SavedMessages {
+                    if let Some(crate::proto::content_v1::content::Content::DeleteForMeSync(sync)) =
+                        content.content.as_mut()
+                    {
+                        sync.saved_message_id = msg.id.to_string();
+                        sync.saved_messages_scope = true;
+                    }
+                }
                 // Our own other devices only: a peer's (or channel member's)
                 // device would apply it and delete its own copy.
                 let messages = self.client.messages();

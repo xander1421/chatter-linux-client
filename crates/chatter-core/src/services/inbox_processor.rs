@@ -1323,16 +1323,35 @@ impl InboxEventProcessor {
                 conversation_id,
                 target_author_aci,
                 target_sent_timestamp,
+                saved_message_id,
+                saved_messages_scope,
             } => {
-                if let Err(error) = admit_delete_for_me_sync(
-                    &self.message_service.message_repo,
-                    &self.event_bus,
-                    self.message_service.current_user_id().ok(),
-                    *sender_id,
-                    conversation_id,
-                    target_author_aci,
-                    *target_sent_timestamp,
-                ) {
+                let result = if *saved_messages_scope || !saved_message_id.is_empty() {
+                    persist_saved_delete_for_me_sync(
+                        &self.message_service.message_repo,
+                        self.message_service.current_user_id().ok(),
+                        *sender_id,
+                        conversation_id,
+                        target_author_aci,
+                        *target_sent_timestamp,
+                        saved_message_id,
+                        *saved_messages_scope,
+                    )
+                    .map(|event| {
+                        self.event_bus.emit_domain(event);
+                    })
+                } else {
+                    admit_delete_for_me_sync(
+                        &self.message_service.message_repo,
+                        &self.event_bus,
+                        self.message_service.current_user_id().ok(),
+                        *sender_id,
+                        conversation_id,
+                        target_author_aci,
+                        *target_sent_timestamp,
+                    )
+                };
+                if let Err(error) = result {
                     tracing::warn!(%error, "DeleteForMeSync rejected");
                 }
             }
@@ -2061,6 +2080,44 @@ impl InboxEventProcessor {
     }
 }
 
+/// The additive exact identity is exclusively an authenticated own Saved control.
+pub(crate) fn persist_saved_delete_for_me_sync(
+    repo: &crate::storage::MessageRepository,
+    own: Option<UserId>,
+    sender: UserId,
+    conversation_id: &str,
+    author: &str,
+    sent_at: u64,
+    message_id: &str,
+    saved_scope: bool,
+) -> Result<DomainEvent, crate::error::StorageError> {
+    use crate::domain::ids::{ChannelId, MessageId};
+    use crate::error::StorageError;
+    let invalid = || StorageError::InvalidData("Invalid exact own Saved deletion".into());
+    let own = own.filter(|own| *own == sender).ok_or_else(invalid)?;
+    let conversation: ChannelId = conversation_id.parse().map_err(|_| invalid())?;
+    let author: UserId = author.parse().map_err(|_| invalid())?;
+    let id: MessageId = message_id.parse().map_err(|_| invalid())?;
+    if !saved_scope
+        || conversation != ChannelId::from(own)
+        || author != own
+        || sent_at == 0
+        || sent_at > i64::MAX as u64
+    {
+        return Err(invalid());
+    }
+    // Transaction rechecks current persisted account and any existing row's
+    // identity before recording a scoped tombstone, even when no row exists.
+    repo.delete_own_saved_exact(&own, &id, sent_at)?;
+    Ok(DomainEvent::DeleteForMeSync {
+        conversation_id: conversation,
+        target_author_id: own,
+        target_message_id: id,
+        timestamp: TimestampNanos::now().as_u64(),
+        saved_deletion_persisted: true,
+    })
+}
+
 /// Legacy sync has no storage-kind field. Resolve only within its exact ID,
 /// author and clock, and refuse collisions rather than guessing a kind.
 fn admit_delete_for_me_sync(
@@ -2115,6 +2172,7 @@ fn admit_delete_for_me_sync(
         target_author_id: author,
         target_message_id: target.id,
         timestamp: TimestampNanos::now().as_u64(),
+        saved_deletion_persisted: false,
     });
     Ok(())
 }

@@ -567,13 +567,14 @@ impl EventHandlers {
             DomainEvent::DeleteForMeSync {
                 conversation_id,
                 target_message_id,
+                saved_deletion_persisted,
                 ..
             } => {
                 trace!(?conversation_id, ?target_message_id, "DeleteForMeSync: removing message locally");
                 self.message_state
                     .remove_message(&conversation_id, &target_message_id);
                 // Persist deletion to DB
-                if let Some(ref svc) = self.message_service {
+                if !saved_deletion_persisted && let Some(ref svc) = self.message_service {
                     if let Err(e) = svc.delete_message_local(&target_message_id) {
                         tracing::warn!(?target_message_id, error = %e, "Failed to persist delete-for-me to DB");
                     }
@@ -1556,6 +1557,7 @@ mod tests {
             target_author_id: author_id,
             target_message_id: message_id,
             timestamp: 1234567890,
+            saved_deletion_persisted: false,
         });
 
         // Message should be removed

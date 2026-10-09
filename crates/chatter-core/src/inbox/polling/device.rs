@@ -561,6 +561,19 @@ async fn process_sender_key_message(
             match Content::decode(plaintext.as_slice()) {
                 Ok(content_proto) => {
                     if let Some(inner) = content_proto.content {
+                        if let Err(error) = persist_exact_saved_delete_before_ack(
+                            &inner,
+                            *sender_id,
+                            message_gateway,
+                        ) {
+                            tracing::warn!(%error, "Exact Saved deletion not admitted before acknowledgement");
+                            return match error {
+                                ServiceError::Storage(crate::error::StorageError::InvalidData(
+                                    _,
+                                )) => AckDecision::Ack,
+                                _ => AckDecision::Retain,
+                            };
+                        }
                         if let content::Content::SavedMessageSync(sync) = &inner {
                             match crate::services::message::persist_saved_device_snapshot(
                                 message_gateway,
@@ -1191,6 +1204,17 @@ async fn process_identified_sender_message(
             content,
         }) => {
             if let Some(inner) = content.content {
+                if let Err(error) =
+                    persist_exact_saved_delete_before_ack(&inner, actual_sender, message_gateway)
+                {
+                    tracing::warn!(%error, "Exact Saved deletion not admitted before acknowledgement");
+                    return match error {
+                        ServiceError::Storage(crate::error::StorageError::InvalidData(_)) => {
+                            AckDecision::Ack
+                        }
+                        _ => AckDecision::Retain,
+                    };
+                }
                 if let content::Content::SavedMessageSync(sync) = &inner {
                     match crate::services::message::persist_saved_device_snapshot(
                         message_gateway,
@@ -1598,6 +1622,17 @@ async fn process_sealed_sender_message(
             content,
         }) => {
             if let Some(inner) = content.content {
+                if let Err(error) =
+                    persist_exact_saved_delete_before_ack(&inner, actual_sender, message_gateway)
+                {
+                    tracing::warn!(%error, "Exact Saved deletion not admitted before acknowledgement");
+                    return match error {
+                        ServiceError::Storage(crate::error::StorageError::InvalidData(_)) => {
+                            AckDecision::Ack
+                        }
+                        _ => AckDecision::Retain,
+                    };
+                }
                 if let content::Content::SavedMessageSync(sync) = &inner {
                     match crate::services::message::persist_saved_device_snapshot(
                         message_gateway,
@@ -1956,6 +1991,34 @@ async fn process_sealed_sender_message(
     AckDecision::Ack
 }
 
+/// Exact Saved controls must commit before the encrypted inbox envelope is
+/// acknowledged. Storage failures retain it for retry; malformed/foreign
+/// controls are permanently rejected without touching any message.
+fn persist_exact_saved_delete_before_ack(
+    inner: &content::Content,
+    sender: UserId,
+    gateway: &MessageGateway,
+) -> Result<(), ServiceError> {
+    use crate::services::current_user::CurrentUserProvider;
+    if let content::Content::DeleteForMeSync(sync) = inner
+        && (sync.saved_messages_scope || !sync.saved_message_id.is_empty())
+    {
+        let own = gateway.settings_repo.current_user_id()?;
+        crate::services::inbox_processor::persist_saved_delete_for_me_sync(
+            &gateway.message_repo,
+            Some(own),
+            sender,
+            &sync.conversation_id,
+            &sync.target_author_aci,
+            sync.target_sent_timestamp,
+            &sync.saved_message_id,
+            sync.saved_messages_scope,
+        )
+        .map_err(ServiceError::Storage)?;
+    }
+    Ok(())
+}
+
 /// Dispatch channel control content based on type.
 ///
 /// Parses the Content proto inner type and emits appropriate channel events.
@@ -2233,6 +2296,8 @@ pub fn dispatch_control_content(
                 conversation_id: sync.conversation_id,
                 target_author_aci: sync.target_author_aci,
                 target_sent_timestamp: sync.target_sent_timestamp,
+                saved_message_id: sync.saved_message_id,
+                saved_messages_scope: sync.saved_messages_scope,
             });
             stats.write().messages_processed += 1;
         }
