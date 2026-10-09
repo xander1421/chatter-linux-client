@@ -1062,6 +1062,54 @@ impl AnonGroupRepository {
     // Pending Actions CRUD
     // ========================================================================
 
+    /// Retry only an existing, live pending admission; never allocate an incarnation.
+    pub fn can_retry_invitation(
+        &self,
+        group: &AnonGroupId,
+        user: &UserId,
+    ) -> Result<bool, StorageError> {
+        let conn = self.db.connection()?;
+        Ok(conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM anon_group_members m
+             JOIN anon_group_pending p ON p.group_id=m.group_id AND p.user_id=m.user_id AND p.action='invite'
+             LEFT JOIN anon_group_member_order o ON o.group_id=m.group_id AND o.user_id=m.user_id
+             WHERE m.group_id=?1 AND m.user_id=?2 AND m.mailbox_pk IS NULL
+             AND p.expires_at > ?3 AND COALESCE(o.admitted_at,0) >= COALESCE(o.removed_at,0)
+             AND (COALESCE(o.removed_at,0)=0 OR o.admitted_at > o.removed_at))",
+            params![group.to_string(), user.to_string(), Utc::now().to_rfc3339()],
+            |r| r.get(0),
+        )?)
+    }
+
+    /// Persist the bootstrap retry budget before network I/O. This self-targeted
+    /// pending row is bookkeeping only: it cannot admit any member.
+    pub fn claim_bootstrap_reannouncement(
+        &self,
+        group: &AnonGroupId,
+        user: &UserId,
+    ) -> Result<bool, StorageError> {
+        let mut conn = self.db.connection()?;
+        let tx = conn.transaction()?;
+        let pending = AnonGroupPending::new_invite(*group, *user);
+        tx.execute(
+            "INSERT OR IGNORE INTO anon_group_pending(id,group_id,user_id,action,created_at,expires_at,retry_count)
+             SELECT ?1,?2,?3,'invite',?4,?5,0 WHERE EXISTS
+             (SELECT 1 FROM anon_group_members WHERE group_id=?2 AND user_id=?3)",
+            params![pending.id, group.to_string(), user.to_string(), pending.created_at.to_rfc3339(), pending.expires_at.to_rfc3339()],
+        )?;
+        // At most three attempts across restarts, spaced by at least five minutes
+        // from creation. Exhaustion/expiry retains all user messages and drafts.
+        let claimed = tx.execute(
+            "UPDATE anon_group_pending SET retry_count=retry_count+1
+             WHERE group_id=?1 AND user_id=?2 AND action='invite' AND retry_count < 3
+             AND expires_at > ?3
+             AND julianday(?3) >= julianday(created_at) + retry_count * (5.0 / 1440.0)",
+            params![group.to_string(), user.to_string(), Utc::now().to_rfc3339()],
+        )? > 0;
+        tx.commit()?;
+        Ok(claimed)
+    }
+
     /// Insert a pending action.
     pub fn insert_pending(&self, pending: &AnonGroupPending) -> Result<(), StorageError> {
         let conn = self.db.connection()?;

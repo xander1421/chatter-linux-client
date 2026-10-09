@@ -209,6 +209,7 @@ impl AnonGroupService {
         use content_v1::content::Content as Kind;
         let scope = match content.content.as_ref() {
             Some(Kind::AnonGroupMessage(message)) => Some((&message.group_id, content.timestamp)),
+            Some(Kind::AnonGroupJoinAck(ack)) => Some((&ack.group_id, ack.timestamp)),
             Some(Kind::AnonGroupMemberList(list)) => Some((&list.group_id, list.timestamp)),
             Some(Kind::AnonGroupProfileShare(profile)) => {
                 Some((&profile.group_id, profile.timestamp))
@@ -276,6 +277,9 @@ impl AnonGroupService {
             .anon_group_repo
             .get_group(group_id)?
             .ok_or(AnonGroupError::GroupNotFound(*group_id))?;
+        if group.is_blocked() {
+            return Err(AnonGroupError::GroupBlocked(*group_id));
+        }
         let member = self.anon_group_repo.get_member(group_id, &current_user)?;
         if group.owner_id != current_user
             || group.my_role != AnonGroupRole::Owner
@@ -432,6 +436,28 @@ impl AnonGroupService {
         inviter_mailbox_pk: &[u8; 32],
         my_mailbox_pk: &[u8; 32],
     ) -> Result<(), AnonGroupError> {
+        let current = self.current_user_id()?;
+        let group = self
+            .anon_group_repo
+            .get_group(&group_id)?
+            .ok_or(AnonGroupError::GroupNotFound(group_id))?;
+        let now = TimestampNanos::now().as_u64();
+        if group.is_blocked()
+            || group.owner_id != *inviter_id
+            || !self
+                .anon_group_repo
+                .current_recipient(&group_id, &current, my_mailbox_pk, now)?
+            || !self.anon_group_repo.current_recipient(
+                &group_id,
+                inviter_id,
+                inviter_mailbox_pk,
+                now,
+            )?
+        {
+            return Err(AnonGroupError::InvalidData(
+                "JoinAck requires current self and owner membership".into(),
+            ));
+        }
         let profile_key = self.get_my_profile_key();
         let mut encrypted_display_name = None;
         let mut encrypted_avatar = None;
@@ -928,6 +954,18 @@ impl AnonGroupService {
             .apply_ordered_roster(&group_id, &sender_id, timestamp, &parsed)?)
     }
 
+    /// Owner-only eligibility for retrying the existing pending admission.
+    pub fn can_retry_pending_invitation(
+        &self,
+        group_id: &AnonGroupId,
+        invitee: &UserId,
+    ) -> Result<bool, AnonGroupError> {
+        self.require_invitation_owner(group_id)?;
+        Ok(self
+            .anon_group_repo
+            .can_retry_invitation(group_id, invitee)?)
+    }
+
     /// Invite additional members to an existing group with specified roles.
     ///
     /// Only the real owner can invite: v1 has no owner-authorized admin delegation.
@@ -964,19 +1002,25 @@ impl AnonGroupService {
         let mut invited_count = 0;
         let mut first_send_error = None;
         for (invitee, role) in invitees {
-            // Skip if already a member
-            if existing_members.contains(&invitee) {
+            // An explicit retry reuses the pending admission and its original role.
+            // Confirmed, expired and removed memberships are never reopened here.
+            let retry_pending = self
+                .anon_group_repo
+                .can_retry_invitation(group_id, &invitee)?;
+            if existing_members.contains(&invitee) && !retry_pending {
                 tracing::debug!("User {} is already a member of group {}", invitee, group_id);
                 continue;
             }
 
             // Add as pending member with specified role
             let member = AnonGroupMember::new(*group_id, invitee, role);
-            if !self.anon_group_repo.invite_ordered_member(
-                &member,
-                &current_user,
-                TimestampNanos::now().as_u64(),
-            )? {
+            if !retry_pending
+                && !self.anon_group_repo.invite_ordered_member(
+                    &member,
+                    &current_user,
+                    TimestampNanos::now().as_u64(),
+                )?
+            {
                 self.require_invitation_owner(group_id)?;
                 if self
                     .anon_group_repo

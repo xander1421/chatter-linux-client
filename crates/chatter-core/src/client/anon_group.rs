@@ -176,7 +176,8 @@ impl ChatterClient {
 
     /// Who can be invited to a private (anon) group: accepted friends and
     /// peers of ready anon DMs, de-duplicated, never this user, and — for an
-    /// existing `group` — never someone already in it. Read from local state,
+    /// existing `group` — include live pending invitations as explicit retries.
+    /// Confirmed members stay excluded. Read from local state,
     /// so there is no page cap on the friend list.
     ///
     /// In Shield mode friends are not offered — same rule as channel invites:
@@ -191,12 +192,20 @@ impl ChatterClient {
 
         let me = self.auth_state().get().current_user_id;
         let mut seen: HashSet<UserId> = me.into_iter().collect();
+        let mut retries = HashSet::new();
         if let Some(group) = group {
-            seen.extend(
-                self.get_anon_group_members(group)
-                    .into_iter()
-                    .map(|m| m.user_id),
-            );
+            for member in self.get_anon_group_members(group) {
+                if Some(member.user_id) != me
+                    && self
+                        .anon_groups()
+                        .can_retry_pending_invitation(group, &member.user_id)
+                        .unwrap_or(false)
+                {
+                    retries.insert(member.user_id);
+                } else {
+                    seen.insert(member.user_id);
+                }
+            }
         }
 
         let mut out = Vec::new();
@@ -220,6 +229,11 @@ impl ChatterClient {
                         .unwrap_or_else(|| self.fallback_display_name(&dm.peer_id)),
                     is_anonymous: true,
                 });
+            }
+        }
+        for candidate in &mut out {
+            if retries.contains(&candidate.user_id) {
+                candidate.display_name = format!("{} — Retry invitation", candidate.display_name);
             }
         }
         out

@@ -335,6 +335,46 @@ impl AnonGroupService {
     ) -> Result<AnonGroup, AnonGroupError> {
         let current_user = self.current_user_id()?;
 
+        // A repeated authenticated owner invitation repairs a lost JoinAck using
+        // the existing mailbox. It must never recreate membership or rotate keys.
+        if let Some(existing) = self.anon_group_repo.get_group(&group_id)? {
+            if existing.is_blocked() || existing.owner_id != owner_id || inviter_id != owner_id {
+                return Err(AnonGroupError::InvalidData(
+                    "Invitation does not match existing group owner".into(),
+                ));
+            }
+            let own = self
+                .anon_group_repo
+                .get_member(&group_id, &current_user)?
+                .ok_or(AnonGroupError::MemberNotFound(current_user))?;
+            let owner = self
+                .anon_group_repo
+                .get_member(&group_id, &owner_id)?
+                .ok_or(AnonGroupError::MemberNotFound(owner_id))?;
+            let mailbox = self
+                .anon_group_repo
+                .get_mailbox(&group_id)?
+                .ok_or_else(|| {
+                    AnonGroupError::InvalidData("Existing group mailbox unavailable".into())
+                })?;
+            if mailbox.is_expired()
+                || own.mailbox_pk != Some(mailbox.public_key)
+                || owner.mailbox_pk != Some(inviter_mailbox_pk)
+            {
+                return Err(AnonGroupError::InvalidData(
+                    "Invitation mailbox does not match current membership".into(),
+                ));
+            }
+            self.send_join_ack(
+                &owner_id,
+                group_id,
+                &inviter_mailbox_pk,
+                &mailbox.public_key,
+            )
+            .await?;
+            return Ok(existing);
+        }
+
         // 1. Create group locally as member
         let group = AnonGroup::from_invite(group_id, group_name, owner_id);
         self.anon_group_repo.insert_group(&group)?;

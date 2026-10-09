@@ -579,7 +579,44 @@ impl AnonGroupService {
     /// tokens are not adjacent in time to the authenticated request that
     /// fetched them (NDSS'21 §VI-F). Stops early when the batch is empty.
     pub async fn retry_parked_sends(&self) -> Result<(), AnonGroupError> {
+        let current = self.current_user_id()?;
         for group in self.anon_group_repo.list_active_groups()? {
+            // Before the first authoritative roster, the inviter is deliberately
+            // stored as Member. Reannounce only this incomplete bootstrap, using
+            // the existing mailbox and authenticated JoinAck protocol.
+            if !group.is_blocked() && group.owner_id != current {
+                let own = self.anon_group_repo.get_member(&group.id, &current)?;
+                let owner = self
+                    .anon_group_repo
+                    .get_member(&group.id, &group.owner_id)?;
+                let mailbox = self.anon_group_repo.get_mailbox(&group.id)?;
+                if let (Some(own), Some(owner), Some(mailbox)) = (own, owner, mailbox) {
+                    if owner.role == crate::domain::anon_group::AnonGroupRole::Member
+                        && own.mailbox_pk == Some(mailbox.public_key)
+                        && !mailbox.is_expired()
+                        && self.token_manager.available_token_count().unwrap_or(0) > 0
+                    {
+                        if let Some(owner_key) = owner.mailbox_pk {
+                            if self
+                                .anon_group_repo
+                                .claim_bootstrap_reannouncement(&group.id, &current)?
+                            {
+                                if let Err(error) = self
+                                    .send_join_ack(
+                                        &group.owner_id,
+                                        group.id,
+                                        &owner_key,
+                                        &mailbox.public_key,
+                                    )
+                                    .await
+                                {
+                                    tracing::warn!(%error, group_id=%group.id, "Bootstrap reannouncement failed; bounded retry retained");
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             for member in self.anon_group_repo.get_members_with_mailbox(&group.id)? {
                 if self.token_manager.available_token_count().unwrap_or(0) == 0 {
                     return Ok(());
