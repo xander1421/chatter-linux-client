@@ -69,11 +69,21 @@ fn send_request_key(owner: UserId, device: u32, channel: ChannelId, request: &st
 /// journal UUID being the request's client_request_id. A match learns the
 /// id: it is recorded on the journal and tombstoned, and any local copy is
 /// removed, so every later fetch drops it as an ordinary tombstone. Nothing
-/// else is held off, and nothing is sent: delete-for-me stays local.
+/// else is held off. Delete-for-me stays local; only a journal carrying the
+/// explicit delete-for-everyone intent (`remote_delete`) goes on to
+/// `deleting`, where the recovery worker removes the server copy with the
+/// retained token.
+///
+/// A journal retained before `RETAIN` kept `$.device` has no recorded
+/// sending device. The key commits to it, so the candidates (the post's own
+/// `author_device_id`, this install's `current_device`) are only tried, never
+/// trusted: a wrong one cannot produce the key. The matching device is then
+/// recorded on the journal.
 pub(crate) fn settle_cancelled_deposit(
     db: &Database,
     owner: UserId,
     channel: ChannelId,
+    current_device: Option<u32>,
     post: &crate::proto::chat_v1::Message,
 ) -> Result<bool, StorageError> {
     if post.send_request_key.len() != 32
@@ -85,28 +95,50 @@ pub(crate) fn settle_cancelled_deposit(
         return Ok(false);
     };
     let prefix = format!("{PREFIX}{owner}:");
-    let journals: Vec<(String, u32)> = {
+    let journals: Vec<(String, Option<u32>)> = {
         let conn = db.read_connection()?;
-        let mut stmt = conn.prepare("SELECT key,json_extract(value,'$.device') FROM settings WHERE key LIKE ?1 AND json_extract(value,'$.phase')='unresolved' AND json_extract(value,'$.server_id') IS NULL AND json_extract(value,'$.channel_id')=?2 AND json_extract(value,'$.device') IS NOT NULL")?;
+        let mut stmt = conn.prepare("SELECT key,COALESCE(json_extract(value,'$.device'),json_extract(value,'$.entry.device')) FROM settings WHERE key LIKE ?1 AND json_extract(value,'$.phase')='unresolved' AND json_extract(value,'$.server_id') IS NULL AND json_extract(value,'$.channel_id')=?2")?;
         let rows = stmt.query_map(params![format!("{prefix}%"), channel.to_string()], |r| Ok((r.get(0)?, r.get(1)?)))?;
         rows.collect::<Result<_, _>>()?
     };
-    let Some((key, _)) = journals.into_iter().find(|(key, device)| {
-        (post.author_device_id == 0 || post.author_device_id == *device)
-            && key.strip_prefix(&prefix).is_some_and(|request| {
-                send_request_key(owner, *device, channel, request)[..] == post.send_request_key[..]
-            })
+    let Some((key, device)) = journals.into_iter().find_map(|(key, device)| {
+        let request = key.strip_prefix(&prefix)?.to_owned();
+        let candidates = match device {
+            Some(device) => vec![device],
+            None => vec![post.author_device_id, current_device.unwrap_or(0)],
+        };
+        let device = candidates.into_iter().find(|device| {
+            *device != 0
+                && (post.author_device_id == 0 || post.author_device_id == *device)
+                && send_request_key(owner, *device, channel, &request)[..] == post.send_request_key[..]
+        })?;
+        Some((key, device))
     }) else {
         return Ok(false);
     };
     let mut conn = db.connection()?;
     let tx = conn.transaction()?;
-    tx.execute("UPDATE settings SET value=json_set(value,'$.server_id',?2) WHERE key=?1 AND json_extract(value,'$.server_id') IS NULL",params![key,id.to_string()])?;
+    let learned = tx.execute("UPDATE settings SET value=json_set(value,'$.server_id',?2,'$.device',?3) WHERE key=?1 AND json_extract(value,'$.phase')='unresolved' AND json_extract(value,'$.server_id') IS NULL",params![key,id.to_string(),device])? == 1;
+    // An explicit delete-for-everyone was waiting for exactly this id.
+    let remote = learned && tx.execute("UPDATE settings SET value=json_set(value,'$.phase','deleting','$.attempts',0,'$.next_at',0) WHERE key=?1 AND json_extract(value,'$.remote_delete')",params![key])? == 1;
     tx.execute("INSERT OR IGNORE INTO deleted_messages(id) VALUES(?1)", params![id.to_string()])?;
     tx.execute("DELETE FROM messages WHERE id=?1", params![id.to_string()])?;
     tx.commit()?;
-    tracing::info!(message_id = %id, "Deleted send's deposit recognised by its request key; tombstoned");
+    tracing::info!(message_id = %id, remote, "Deleted send's deposit recognised by its request key; tombstoned");
     Ok(true)
+}
+
+/// What removing a send's server copy needs once its plaintext entry may be
+/// gone (`RETAIN`): the channel and the sending device. The canonical id and
+/// the deletion token stay on the journal itself.
+struct Target {
+    channel: ChannelId,
+    device: u32,
+}
+
+enum Due {
+    Send(Entry),
+    Delete(Target),
 }
 #[derive(Serialize, Deserialize)]
 struct Quote {
@@ -219,13 +251,21 @@ pub(super) fn retain_channel_response(
 }
 
 impl MessageService {
-    /// Record an explicit delete-for-everyone on a channel send the journal
-    /// still owns, before its bubble is deleted locally. Without it a deleted
-    /// bubble never touches the server copy. A no-op for any other message.
-    pub(crate) fn mark_channel_remote_delete(&self, id: &MessageId) -> Result<(), MessageError> {
+    /// Explicit delete-for-everyone of a bubble: record the intent on a
+    /// channel send the journal still owns, then delete the bubble locally.
+    /// Without the intent a deleted bubble never touches the server copy; a
+    /// no-op for any other message. If the bubble was not deleted the intent
+    /// is withdrawn, so a later delete-for-me of it stays local. A bubble
+    /// already gone (`NotFound`) keeps the intent: it was asked for.
+    pub(crate) fn delete_channel_for_everyone_local(&self, id: &MessageId) -> Result<(), MessageError> {
         let owner = self.current_user_id()?;
-        self.database.connection()?.execute("UPDATE settings SET value=json_set(value,'$.remote_delete',json('true')) WHERE key=?1",params![key(owner,*id)])?;
-        Ok(())
+        let journal = key(owner, *id);
+        self.database.connection()?.execute("UPDATE settings SET value=json_set(value,'$.remote_delete',json('true')) WHERE key=?1",params![journal])?;
+        let result = self.delete_message_local(id);
+        if matches!(&result, Err(e) if !matches!(e, MessageError::Storage(StorageError::NotFound(_)))) {
+            self.database.connection()?.execute("UPDATE settings SET value=json_remove(value,'$.remote_delete') WHERE key=?1",params![journal])?;
+        }
+        result
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -791,19 +831,21 @@ impl MessageService {
 
 impl MessageService {
     /// The user deleted this bubble for everyone and the canonical id is
-    /// known from the stored response (`retire_deleted`). Remove the server
-    /// copy with the retained token. The journal, and with it the only
-    /// deletion authority for a sealed post, is dropped only after the server
-    /// confirms the copy is gone. Anything else keeps it retained.
+    /// known, from the stored response (`retire_deleted`) or from the exact
+    /// request key of the deposit (`settle_cancelled_deposit`). Remove the
+    /// server copy with the retained token; no plaintext entry is needed. The
+    /// journal, and with it the only deletion authority for a sealed post, is
+    /// dropped only after the server confirms the copy is gone. Anything else
+    /// keeps it retained.
     async fn finish_channel_deletion(
         &self,
         journal_key: &str,
         generation: &str,
-        entry: &Entry,
+        owner: UserId,
+        target: &Target,
     ) -> Result<(), MessageError> {
-        let row = &entry.row;
         let held: Option<(Option<String>, String)> = self.database.read_connection()?.query_row(
-            "SELECT json_extract(value,'$.prepared'),json_extract(value,'$.server_id') FROM settings WHERE key=?1 AND json_extract(value,'$.generation')=?2 AND json_extract(value,'$.phase')='deleting' AND json_extract(value,'$.remote_delete') AND json_extract(value,'$.response') IS NOT NULL AND json_extract(value,'$.server_id') IS NOT NULL",
+            "SELECT json_extract(value,'$.prepared'),json_extract(value,'$.server_id') FROM settings WHERE key=?1 AND json_extract(value,'$.generation')=?2 AND json_extract(value,'$.phase')='deleting' AND json_extract(value,'$.remote_delete') AND json_extract(value,'$.server_id') IS NOT NULL",
             params![journal_key, generation], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
         let retain = || -> Result<(), MessageError> {
             self.database.connection()?.execute(&format!("UPDATE settings SET value={RETAIN} WHERE key=?1 AND json_extract(value,'$.generation')=?3"),params![journal_key,now(),generation])?;
@@ -834,8 +876,8 @@ impl MessageService {
             tx.commit()?;
         }
         crate::services::gateway::submission::check_send_session()?;
-        if row.sender_id != Some(self.current_user_id()?)
-            || self.settings_repo.get::<u32>(keys::CURRENT_DEVICE_ID)? != Some(entry.device)
+        if owner != self.current_user_id()?
+            || self.settings_repo.get::<u32>(keys::CURRENT_DEVICE_ID)? != Some(target.device)
         {
             tracing::warn!(message_id=%server_id, "Channel delete-for-everyone sender changed; token retained");
             return retain();
@@ -848,7 +890,7 @@ impl MessageService {
             std::time::Duration::from_secs(30),
             self.message_client().delete_message(
                 &server_id.to_string(),
-                &row.conversation_id.to_string(),
+                &target.channel.to_string(),
                 token,
             ),
         )
@@ -874,12 +916,18 @@ impl MessageService {
         }
     }
 
-    async fn delete_channel_entry(&self, journal_key: &str, generation: &str, entry: &Entry) {
+    async fn delete_channel_entry(
+        &self,
+        journal_key: &str,
+        generation: &str,
+        owner: UserId,
+        target: &Target,
+    ) {
         if let Err(error) = self
-            .finish_channel_deletion(journal_key, generation, entry)
+            .finish_channel_deletion(journal_key, generation, owner, target)
             .await
         {
-            tracing::warn!(%error, message_id=%entry.row.id, "Channel deletion retained");
+            tracing::warn!(%error, journal = journal_key, "Channel deletion retained");
             if let Ok(conn) = self.database.connection() {
                 let _ = conn.execute("UPDATE settings SET value=json_set(value,'$.attempts',MIN(json_extract(value,'$.attempts')+1,6),'$.next_at',?3+MIN(300,5*(1 << MIN(json_extract(value,'$.attempts'),6)))) WHERE key=?1 AND json_extract(value,'$.generation')=?2",params![journal_key,generation,now()]);
             }
@@ -928,7 +976,7 @@ pub(crate) fn spawn_channel_send_recovery(
             if let Err(error) = messages.adopt_proven_unsent_channels(owner) {
                 tracing::warn!(%error,"Legacy predeposit channel recovery awaits storage");
             }
-            let due = (|| -> Result<Vec<(String, String, Entry, bool)>, StorageError> {
+            let due = (|| -> Result<Vec<(String, String, Due)>, StorageError> {
                 let mut conn = messages.database.connection()?;
                 let tx = conn.transaction()?;
                 let pattern = format!("{PREFIX}{owner}:%");
@@ -949,16 +997,33 @@ pub(crate) fn spawn_channel_send_recovery(
                 if reconnected {
                     tx.execute("UPDATE settings SET value=json_set(value,'$.next_at',0) WHERE key LIKE ?1 AND json_extract(value,'$.phase')='queued'",params![pattern])?;
                 }
-                let rows: Vec<(String, String, String)> = {
-                    let mut stmt = tx.prepare(&format!("SELECT key,json_extract(value,'$.entry'),json_extract(value,'$.phase') FROM settings WHERE key LIKE ?1 AND json_extract(value,'$.phase') IN {LIVE} AND json_extract(value,'$.next_at')<=?2 ORDER BY json_extract(value,'$.next_at'),key LIMIT 4"))?;
+                let rows: Vec<(String, Option<String>, String, Option<String>, Option<u32>)> = {
+                    let mut stmt = tx.prepare(&format!("SELECT key,json_extract(value,'$.entry'),json_extract(value,'$.phase'),COALESCE(json_extract(value,'$.channel_id'),json_extract(value,'$.entry.row.conversation_id')),COALESCE(json_extract(value,'$.device'),json_extract(value,'$.entry.device')) FROM settings WHERE key LIKE ?1 AND json_extract(value,'$.phase') IN {LIVE} AND json_extract(value,'$.next_at')<=?2 ORDER BY json_extract(value,'$.next_at'),key LIMIT 4"))?;
                     let mapped = stmt.query_map(params![pattern, now()], |r| {
-                        Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+                        Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
                     })?;
                     mapped.collect::<Result<_, _>>()?
                 };
                 let mut due = Vec::new();
-                for (key, raw, phase) in rows {
-                    let entry: Entry = match serde_json::from_str(&raw) {
+                for (key, raw, phase, channel, device) in rows {
+                    if phase == "deleting" {
+                        // Needs no entry: a send whose id was learned only
+                        // from its request key (`settle_cancelled_deposit`)
+                        // was retained without one. The journal is this
+                        // owner's by its key.
+                        let Some((channel, device)) = channel
+                            .and_then(|channel| channel.parse::<ChannelId>().ok())
+                            .zip(device)
+                        else {
+                            tx.execute(&format!("UPDATE settings SET value={RETAIN} WHERE key=?1"),params![key,now()])?;
+                            continue;
+                        };
+                        let generation = uuid::Uuid::new_v4().to_string();
+                        tx.execute("UPDATE settings SET value=json_set(value,'$.generation',?2,'$.next_at',?3) WHERE key=?1",params![key,generation,now()+LEASE_SECONDS])?;
+                        due.push((key, generation, Due::Delete(Target { channel, device })));
+                        continue;
+                    }
+                    let entry: Entry = match serde_json::from_str(raw.as_deref().unwrap_or_default()) {
                         Ok(entry) => entry,
                         Err(_) => {
                             tx.execute("UPDATE settings SET value=json_set(value,'$.phase','terminal') WHERE key=?1",params![key])?;
@@ -972,9 +1037,9 @@ pub(crate) fn spawn_channel_send_recovery(
                         tx.execute("UPDATE settings SET value=json_set(value,'$.phase','terminal') WHERE key=?1",params![key])?;
                         continue;
                     }
-                    let mut deleting = phase == "deleting";
+                    let mut deleting = false;
                     let deleted: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM deleted_messages WHERE id=?1) OR EXISTS(SELECT 1 FROM messages WHERE id=?1 AND is_deleted=1)",params![entry.row.id.to_string()],|r|r.get(0))?;
-                    if deleted && !deleting {
+                    if deleted {
                         settle_admission(&tx, owner, &[entry.row.id])?;
                         deleting = retire_deleted(&tx, &key)?;
                         if !deleting {
@@ -983,7 +1048,12 @@ pub(crate) fn spawn_channel_send_recovery(
                     }
                     let generation = uuid::Uuid::new_v4().to_string();
                     tx.execute("UPDATE settings SET value=json_set(value,'$.phase',?4,'$.generation',?2,'$.next_at',?3) WHERE key=?1",params![key,generation,now()+LEASE_SECONDS,if deleting {"deleting"} else {"preparing"}])?;
-                    due.push((key, generation, entry, deleting));
+                    let job = if deleting {
+                        Due::Delete(Target { channel: entry.row.conversation_id, device: entry.device })
+                    } else {
+                        Due::Send(entry)
+                    };
+                    due.push((key, generation, job));
                 }
                 tx.commit()?;
                 Ok(due)
@@ -995,7 +1065,7 @@ pub(crate) fn spawn_channel_send_recovery(
                     continue;
                 }
             };
-            for (key, generation, entry, deleting) in due {
+            for (key, generation, job) in due {
                 let current = client.auth_state().get();
                 if current.current_user_id != Some(owner)
                     || current.session_revision != state.session_revision
@@ -1003,15 +1073,18 @@ pub(crate) fn spawn_channel_send_recovery(
                 {
                     break;
                 }
-                if deleting {
-                    crate::services::gateway::submission::SEND_SESSION
-                        .scope(
-                            session.clone(),
-                            messages.delete_channel_entry(&key, &generation, &entry),
-                        )
-                        .await;
-                    continue;
-                }
+                let entry = match job {
+                    Due::Send(entry) => entry,
+                    Due::Delete(target) => {
+                        crate::services::gateway::submission::SEND_SESSION
+                            .scope(
+                                session.clone(),
+                                messages.delete_channel_entry(&key, &generation, owner, &target),
+                            )
+                            .await;
+                        continue;
+                    }
+                };
                 let result = crate::services::gateway::submission::SEND_SESSION
                     .scope(session.clone(), async {
                         messages.message_repo.insert_or_ignore(&entry.row)?;
@@ -1096,7 +1169,7 @@ mod tests {
             send_request_key: key.to_vec(),
             ..Default::default()
         };
-        let settles = |p: &crate::proto::chat_v1::Message| settle_cancelled_deposit(&db, me, channel, p).unwrap();
+        let settles = |p: &crate::proto::chat_v1::Message| settle_cancelled_deposit(&db, me, channel, Some(3), p).unwrap();
         let exact = send_request_key(me, 3, channel, &request.to_string());
         // Another send of ours in the same channel, at the same moment.
         assert!(!settles(&post(&me.to_string(), 3, send_request_key(me, 3, channel, &MessageId::new().to_string()))));
@@ -1104,7 +1177,7 @@ mod tests {
         assert!(!settles(&post(&me.to_string(), 3, send_request_key(me, 4, channel, &request.to_string()))));
         assert!(!settles(&post(&me.to_string(), 3, send_request_key(other, 3, channel, &request.to_string()))));
         assert!(!settles(&post(&me.to_string(), 3, send_request_key(me, 3, ChannelId::new(), &request.to_string()))));
-        assert!(!settle_cancelled_deposit(&db, other, channel, &post("", 3, exact)).unwrap());
+        assert!(!settle_cancelled_deposit(&db, other, channel, Some(3), &post("", 3, exact)).unwrap());
         // The exact key, but claimed by someone else's post.
         assert!(!settles(&post(&other.to_string(), 3, exact)));
         assert!(!settles(&post(&me.to_string(), 4, exact)));
@@ -1119,5 +1192,56 @@ mod tests {
         assert!(tombstoned);
         // Settled once: the journal now knows its id and matches nothing more.
         assert!(!settles(&post(&me.to_string(), 3, exact)));
+    }
+
+    /// A journal retained before `$.device` was kept still settles, by trying
+    /// the post's device and this install's device against the key (and
+    /// records the one that matched). Only one carrying the explicit
+    /// delete-for-everyone intent goes on to remote deletion.
+    #[test]
+    fn legacy_journal_settles_and_only_explicit_intent_deletes_remotely() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Database::open(&dir.path().join("journal.db"), "test-only").unwrap();
+        db.run_migrations().unwrap();
+        let (me, channel) = (UserId::new(), ChannelId::new());
+        let (local, remote) = (MessageId::new(), MessageId::new());
+        for (request, intent) in [(local, false), (remote, true)] {
+            let mut value = serde_json::json!({"phase":"unresolved","channel_id":channel,"prepared":{"at":now(),"deletion_token":[7u8;32]}});
+            if intent {
+                value["remote_delete"] = serde_json::json!(true);
+            }
+            db.connection()
+                .unwrap()
+                .execute(
+                    "INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,'now')",
+                    params![key(me, request), value.to_string()],
+                )
+                .unwrap();
+        }
+        let post = |request: MessageId, device: u32| crate::proto::chat_v1::Message {
+            id: MessageId::new().to_string(),
+            channel_id: channel.to_string(),
+            author_device_id: device,
+            send_request_key: send_request_key(me, 5, channel, &request.to_string()).to_vec(),
+            ..Default::default()
+        };
+        // Neither candidate is the sending device: no match.
+        assert!(!settle_cancelled_deposit(&db, me, channel, Some(6), &post(local, 0)).unwrap());
+        // Sealed post, device learned from this install; delete-for-me stays local.
+        assert!(settle_cancelled_deposit(&db, me, channel, Some(5), &post(local, 0)).unwrap());
+        // Post's own device, this install re-registered since.
+        assert!(settle_cancelled_deposit(&db, me, channel, Some(6), &post(remote, 5)).unwrap());
+        let journal = |request: MessageId| -> (String, u32) {
+            db.read_connection()
+                .unwrap()
+                .query_row(
+                    "SELECT json_extract(value,'$.phase'),json_extract(value,'$.device') FROM settings WHERE key=?1",
+                    params![key(me, request)],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .unwrap()
+        };
+        assert_eq!(journal(local), ("unresolved".into(), 5));
+        assert_eq!(journal(remote), ("deleting".into(), 5));
     }
 }

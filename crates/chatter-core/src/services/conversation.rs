@@ -1104,8 +1104,7 @@ impl ConversationHandle {
                 } else {
                     // Explicit delete-for-everyone: a still-unconfirmed channel
                     // send may now remove its server copy (`channel_send.rs`).
-                    self.client.messages().mark_channel_remote_delete(&target.id)?;
-                    self.client.messages().delete_message_local(&target.id)?;
+                    self.client.messages().delete_channel_for_everyone_local(&target.id)?;
                 }
                 Ok(())
             }
@@ -1398,13 +1397,10 @@ impl ConversationHandle {
             )?;
             return Ok(());
         }
-        self.client
-            .messages()
-            .mark_channel_remote_delete(&target.message_id)?;
         match self
             .client
             .messages()
-            .delete_message_local(&target.message_id)
+            .delete_channel_for_everyone_local(&target.message_id)
         {
             Ok(())
             | Err(crate::services::MessageError::Storage(crate::error::StorageError::NotFound(
