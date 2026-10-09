@@ -63,6 +63,8 @@ pub enum CallSignalingError {
     NoPendingCall,
     #[error("call ID mismatch: expected {expected}, got {actual}")]
     CallIdMismatch { expected: String, actual: String },
+    #[error("call answer peer does not match pending DM peer")]
+    PeerMismatch,
     #[error("key derivation failed: {0}")]
     KeyDerivationFailed(String),
     #[error("call worker error: {0}")]
@@ -1116,6 +1118,13 @@ impl CallSignalingService {
                 expected,
                 actual: call_id.to_string(),
             });
+        }
+
+        // `peer_id` comes from the authenticated Signal sender. A matching
+        // server-assigned call ID alone is not proof this is our callee.
+        if pending.peer_id != *peer_id {
+            call_worker.with_current_presentation_session(|| self.set_pending_dm_call(pending));
+            return Err(CallSignalingError::PeerMismatch);
         }
 
         tracing::info!(
@@ -2423,7 +2432,7 @@ mod rotation_recipient_tests {
 mod named_dm_completion_tests {
     use super::*;
     use crate::{
-        client::{calls::CallStartAttempt, ChatterClient},
+        client::{ChatterClient, calls::CallStartAttempt},
         domain::call::{Call, CallType},
         services::call_worker::CallOrchestratorEvent,
     };
@@ -2479,6 +2488,57 @@ mod named_dm_completion_tests {
                 "retired answer advertised connected"
             );
         }
+    }
+
+    #[tokio::test]
+    async fn dm_answer_from_other_peer_keeps_pending_and_never_derives() {
+        let (_dir, client, worker, revision) = fixture();
+        let service = client.call_signaling();
+        let call = Call::new(ChannelId::new(), UserId::new(), CallType::Voice);
+        let id = call.id.to_string();
+        pending(service, &call, &CallStartAttempt::default());
+        let result = service
+            .complete_dm_call_with_crypto(
+                &id,
+                &UserId::new(),
+                &worker.for_presentation_session(revision),
+                |_| async { panic!("unrelated peer must never reach key derivation") },
+            )
+            .await;
+        assert!(matches!(result, Err(CallSignalingError::PeerMismatch)));
+        let kept = service
+            .take_pending_dm_call()
+            .expect("valid peer can still answer");
+        assert_eq!(kept.peer_id, call.initiator_id);
+        assert_eq!(kept.call_id, call.id);
+    }
+
+    #[tokio::test]
+    async fn dm_hangup_authentication_keeps_peer_binding_after_connect() {
+        use crate::services::call_worker::OrchestratedCallKind;
+        let (_dir, _client, worker, revision) = fixture();
+        let worker = worker.for_presentation_session(revision);
+        let peer = UserId::new();
+        let other = UserId::new();
+        worker.orch_register_outgoing(
+            CallHandle::from("call"),
+            OrchestratedCallKind::DmStandard,
+            peer,
+            "Peer".into(),
+            false,
+        );
+        assert!(!worker.authenticate_dm_hangup("call", other, false).await);
+        assert!(!worker.authenticate_dm_hangup("unknown", peer, false).await);
+        assert!(worker.authenticate_dm_hangup("call", peer, false).await);
+        worker.orch_mark_connected(
+            CallHandle::from("call"),
+            OrchestratedCallKind::DmStandard,
+            peer,
+            false,
+        );
+        assert!(worker.authenticate_dm_hangup("call", peer, false).await);
+        assert!(!worker.authenticate_dm_hangup("call", other, false).await);
+        assert!(!worker.authenticate_dm_hangup("call", peer, true).await);
     }
 
     #[tokio::test]
@@ -2594,15 +2654,16 @@ mod named_dm_completion_tests {
         assert!(!late.set_encryption_key(vec![9; 32]).await);
         assert!(late.publish_microphone(None).await.is_err());
         assert!(late.publish_camera(None).await.is_err());
-        assert!(late
-            .orch_mark_connected_reliably(
+        assert!(
+            late.orch_mark_connected_reliably(
                 CallHandle::from(id.as_str()),
                 OrchestratedCallKind::DmStandard,
                 peer,
                 false
             )
             .await
-            .is_err());
+            .is_err()
+        );
         // An uncancelled late answer must still fail the exact media identity fence.
         let wrong_identity = old_worker.for_dm_answer(
             CallHandle::from(id.as_str()),
@@ -2611,15 +2672,17 @@ mod named_dm_completion_tests {
         assert!(!wrong_identity.set_encryption_key(vec![7; 32]).await);
         assert!(wrong_identity.publish_microphone(None).await.is_err());
         assert!(wrong_identity.publish_camera(None).await.is_err());
-        assert!(wrong_identity
-            .orch_mark_connected_reliably(
-                CallHandle::from(id.as_str()),
-                OrchestratedCallKind::DmStandard,
-                peer,
-                false
-            )
-            .await
-            .is_err());
+        assert!(
+            wrong_identity
+                .orch_mark_connected_reliably(
+                    CallHandle::from(id.as_str()),
+                    OrchestratedCallKind::DmStandard,
+                    peer,
+                    false
+                )
+                .await
+                .is_err()
+        );
         assert_eq!(worker.test_dm_answer_effects().await, (1, 1));
         assert_eq!(worker.active_call().await.unwrap().id, replacement_id);
         let presentations = worker

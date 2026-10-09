@@ -264,6 +264,7 @@ struct PendingOutgoing {
 /// the right slot to clear.
 #[derive(Debug, Clone)]
 struct OrchestratedActive {
+    peer_id: Option<UserId>,
     session_revision: Option<u64>,
     call: CallHandle,
     kind: OrchestratedCallKind,
@@ -592,6 +593,14 @@ enum CallCommand {
     /// BETWEEN complete operations — never mid-RPC — making the swap safe.
     SwapCallClient {
         client: CallClient,
+    },
+    /// Authenticate a Signal hangup before any domain/UI teardown.
+    AuthenticateDmHangup {
+        session_revision: Option<u64>,
+        call: CallHandle,
+        peer: UserId,
+        own_elsewhere: bool,
+        response: oneshot::Sender<bool>,
     },
     /// Get active call info.
     GetActiveCall {
@@ -1569,6 +1578,33 @@ impl CallWorkerHandle {
         }
     }
 
+    /// Reject a Signal hangup unless its sender owns this known DM call.
+    pub(crate) async fn authenticate_dm_hangup(
+        &self,
+        call: &str,
+        peer: UserId,
+        own_elsewhere: bool,
+    ) -> bool {
+        let (tx, rx) = oneshot::channel();
+        if self
+            .cmd_tx
+            .send(CallCommand::AuthenticateDmHangup {
+                session_revision: self
+                    .presentation_session
+                    .or_else(|| self.incoming_presentation.session_revision()),
+                call: CallHandle::from(call),
+                peer,
+                own_elsewhere,
+                response: tx,
+            })
+            .await
+            .is_err()
+        {
+            return false;
+        }
+        rx.await.unwrap_or(false)
+    }
+
     /// Get the currently active call.
     pub async fn active_call(&self) -> Option<Call> {
         let (tx, rx) = oneshot::channel();
@@ -2349,6 +2385,26 @@ fn run_call_worker(
                     tracing::info!("call worker: swapped gRPC call client for new transport");
                 }
 
+                CallCommand::AuthenticateDmHangup { session_revision, call, peer, own_elsewhere, response } => {
+                    if session_revision.is_none() || !incoming_presentation.accepts_session(session_revision) {
+                        let _ = response.send(false);
+                        continue;
+                    }
+                    let active = orchestrator.active.as_ref().filter(|a| a.call == call);
+                    let incoming = orchestrator.incoming.get(&call);
+                    let outgoing = orchestrator.outgoing.get(&call);
+                    let valid = if own_elsewhere {
+                        // Another of our devices may only withdraw a ring,
+                        // never tear down media this device has accepted.
+                        active.is_none() && incoming.is_some_and(|p| p.kind == OrchestratedCallKind::DmStandard)
+                    } else {
+                        active.is_some_and(|a| a.kind == OrchestratedCallKind::DmStandard && a.peer_id == Some(peer))
+                            || incoming.is_some_and(|p| p.kind == OrchestratedCallKind::DmStandard && p.peer_id == peer)
+                            || outgoing.is_some_and(|p| p.kind == OrchestratedCallKind::DmStandard && p.peer_id == peer)
+                    };
+                    let _ = response.send(valid);
+                }
+
                 CallCommand::GetActiveCall { response } => {
                     let call = active_call.borrow().as_ref().map(|a| a.call.clone());
                     let _ = response.send(call);
@@ -2795,6 +2851,7 @@ fn run_call_worker(
                     orchestrator.outgoing.remove(&call);
                     if let Some(pending) = orchestrator.incoming.remove(&call) { pending.seal_anon(); }
                     orchestrator.active = Some(OrchestratedActive {
+                        peer_id: Some(peer_id),
                         session_revision: session_revision.or(session_lease.session_revision),
                         call: call.clone(),
                         kind,
@@ -2872,6 +2929,7 @@ fn run_call_worker(
                         publish_gate: PublishGate::default(),
                     });
                     orchestrator.active = Some(OrchestratedActive {
+                        peer_id: None,
                         session_revision: None, call: handle, kind: OrchestratedCallKind::DmStandard,
                     });
                     let _ = response.send(());
@@ -4981,6 +5039,7 @@ mod orchestrator_kind_tests {
         // Connected: the active slot is what counts.
         orch.outgoing.remove(&call);
         orch.active = Some(OrchestratedActive {
+            peer_id: None,
             session_revision: None,
             call,
             kind: K::DmStandard,
@@ -5871,6 +5930,7 @@ mod verification_snapshot_tests {
     fn orchestrator(state: &ActiveCallState, kind: OrchestratedCallKind) -> OrchestratorState {
         OrchestratorState {
             active: Some(OrchestratedActive {
+                peer_id: None,
                 session_revision: None,
                 call: derive_call_handle(state),
                 kind,

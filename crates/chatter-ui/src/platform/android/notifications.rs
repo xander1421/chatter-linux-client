@@ -296,6 +296,14 @@ impl AndroidNotifications {
             &[JValue::Object(&j_body)],
         )
         .map_err(nerr)?;
+        private_lockscreen_version(
+            &mut env,
+            &context,
+            &builder,
+            CHANNEL_CALLS_ID,
+            IC_CALL,
+            "Incoming call",
+        )?;
         // PRIORITY_MAX (2) for heads-up on pre-26; category=call; ongoing so it
         // can't be swiped away while ringing; auto-timeout if unanswered,
         // when core stops ringing it too (setTimeoutAfter: API 26 = minSdk).
@@ -534,6 +542,14 @@ impl AndroidNotifications {
         )
         .map_err(|e| SystemError::NotificationSend(format!("setAutoCancel: {}", e)))?;
 
+        private_lockscreen_version(
+            &mut env,
+            &context,
+            &builder,
+            CHANNEL_ID,
+            IC_DIALOG_INFO,
+            "New message",
+        )?;
         // pre-API 26 compat priority
         let android_priority = match priority {
             5 => 2,
@@ -952,4 +968,68 @@ fn get_notification_manager<'a>(
         .map_err(|e| SystemError::NotificationInit(format!("manager cast: {}", e)))?;
 
     Ok(manager)
+}
+
+/// Android may show a public version on the lock screen even when the private
+/// notification follows the user's chosen detail level. Never put identifiers
+/// or call action capabilities in that public projection.
+fn private_lockscreen_version(
+    env: &mut JNIEnv<'_>,
+    context: &JObject<'_>,
+    builder: &JObject<'_>,
+    channel: &str,
+    icon: i32,
+    body: &str,
+) -> Result<(), SystemError> {
+    let channel = env.new_string(channel).map_err(nerr)?;
+    let public = env
+        .new_object(
+            "android/app/Notification$Builder",
+            "(Landroid/content/Context;Ljava/lang/String;)V",
+            &[JValue::Object(context), JValue::Object(&channel)],
+        )
+        .map_err(nerr)?;
+    let title = env.new_string("Chatter").map_err(nerr)?;
+    let body = env.new_string(body).map_err(nerr)?;
+    env.call_method(
+        &public,
+        "setSmallIcon",
+        "(I)Landroid/app/Notification$Builder;",
+        &[JValue::Int(icon)],
+    )
+    .map_err(nerr)?;
+    env.call_method(
+        &public,
+        "setContentTitle",
+        "(Ljava/lang/CharSequence;)Landroid/app/Notification$Builder;",
+        &[JValue::Object(&title)],
+    )
+    .map_err(nerr)?;
+    env.call_method(
+        &public,
+        "setContentText",
+        "(Ljava/lang/CharSequence;)Landroid/app/Notification$Builder;",
+        &[JValue::Object(&body)],
+    )
+    .map_err(nerr)?;
+    let notification = env
+        .call_method(&public, "build", "()Landroid/app/Notification;", &[])
+        .map_err(nerr)?
+        .l()
+        .map_err(nerr)?;
+    env.call_method(
+        builder,
+        "setVisibility",
+        "(I)Landroid/app/Notification$Builder;",
+        &[JValue::Int(0)],
+    )
+    .map_err(nerr)?; // VISIBILITY_PRIVATE
+    env.call_method(
+        builder,
+        "setPublicVersion",
+        "(Landroid/app/Notification;)Landroid/app/Notification$Builder;",
+        &[JValue::Object(&notification)],
+    )
+    .map_err(nerr)?;
+    Ok(())
 }

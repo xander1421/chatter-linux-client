@@ -842,6 +842,25 @@ impl InboxEventProcessor {
                     reason = %reason,
                     "Call hangup received - emitting domain event for cleanup"
                 );
+                #[cfg(feature = "media")]
+                {
+                    let own_elsewhere = self.user_service.current_user_id().ok() == Some(*peer_id)
+                        && matches!(
+                            reason,
+                            crate::services::gateway::CallHangupReason::AcceptedElsewhere
+                                | crate::services::gateway::CallHangupReason::DeclinedElsewhere
+                        );
+                    let Some(worker) = self.client.call_service().get() else {
+                        return;
+                    };
+                    if !worker
+                        .authenticate_dm_hangup(call_id, *peer_id, own_elsewhere)
+                        .await
+                    {
+                        tracing::warn!(%call_id, %peer_id, "Ignoring hangup from a sender unrelated to this DM call");
+                        return;
+                    }
+                }
                 self.event_bus.emit_domain(DomainEvent::CallHangupReceived {
                     call_id: call_id.clone(),
                     peer_id: *peer_id,

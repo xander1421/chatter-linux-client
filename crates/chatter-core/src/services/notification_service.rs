@@ -181,7 +181,12 @@ impl NotificationService {
         title: &str,
         body: &str,
     ) -> Result<(), SystemError> {
-        self.deliver(|sink| sink.show_incoming_call(call_id, title, body))
+        match self.detail_level() {
+            NotificationDetailLevel::None => {
+                self.deliver(|sink| sink.show_incoming_call(call_id, "Chatter", "Incoming call"))
+            }
+            _ => self.deliver(|sink| sink.show_incoming_call(call_id, title, body)),
+        }
     }
 
     /// Dismiss the incoming-call notification for `call_id` (accepted,
