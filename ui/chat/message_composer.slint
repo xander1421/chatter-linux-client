@@ -373,6 +373,9 @@ export component MessageComposer inherits GlassSurface {
             width: 100%;
             height: root.edit-bar-height;
             background: Colors.primary.transparentize(0.9);
+            // The tint is a separate layer above the rounded accessory shell.
+            // Match its corners so it cannot paint a square backing outside it.
+            border-radius: Spacing.radius-chrome;
 
             HorizontalLayout {
                 padding-left: Spacing.md;
