@@ -80,6 +80,12 @@ pub enum OrchestratedCallKind {
     GroupChannel,
 }
 
+pub(crate) enum SignalHangupDisposition {
+    Reject,
+    Forward,
+    GroupRingWithdrawn(u64),
+}
+
 impl OrchestratedCallKind {
     /// Which conversation flavour this transport belongs to. Total by
     /// construction — every call-capable conversation type has exactly one
@@ -600,7 +606,7 @@ enum CallCommand {
         call: CallHandle,
         peer: UserId,
         own_elsewhere: bool,
-        response: oneshot::Sender<bool>,
+        response: oneshot::Sender<SignalHangupDisposition>,
     },
     /// Get active call info.
     GetActiveCall {
@@ -1585,7 +1591,7 @@ impl CallWorkerHandle {
         call: &str,
         peer: UserId,
         own_elsewhere: bool,
-    ) -> bool {
+    ) -> SignalHangupDisposition {
         let (tx, rx) = oneshot::channel();
         if self
             .cmd_tx
@@ -1601,9 +1607,9 @@ impl CallWorkerHandle {
             .await
             .is_err()
         {
-            return false;
+            return SignalHangupDisposition::Reject;
         }
-        rx.await.unwrap_or(false)
+        rx.await.unwrap_or(SignalHangupDisposition::Reject)
     }
 
     /// Get the currently active call.
@@ -2387,13 +2393,32 @@ fn run_call_worker(
                 }
 
                 CallCommand::AuthenticateDmHangup { session_revision, call, peer, own_elsewhere, response } => {
-                    if session_revision.is_none() || !incoming_presentation.accepts_session(session_revision) {
-                        let _ = response.send(false);
+                    let session_lease = incoming_presentation.snapshot.read();
+                    if session_revision.is_none() || session_lease.session_revision != session_revision {
+                        let _ = response.send(SignalHangupDisposition::Reject);
                         continue;
                     }
                     let active = orchestrator.active.as_ref().filter(|a| a.call == call);
                     let incoming = orchestrator.incoming.get(&call);
                     let outgoing = orchestrator.outgoing.get(&call);
+                    if !own_elsewhere && active.is_none() && incoming.is_some_and(|p| {
+                        p.kind == OrchestratedCallKind::GroupChannel && p.peer_id == peer
+                            && p.session_revision == session_revision
+                    }) {
+                        // Consume the pending ring on this actor turn. Emitting a
+                        // generic hangup later could race acceptance and disconnect
+                        // media for an already accepted group call.
+                        if let Some(pending) = orchestrator.incoming.remove(&call) {
+                            pending.retire_anon();
+                            let _ = call_events_tx.send(CallOrchestratorEvent::IncomingWithdrawn {
+                                call, reason: CallEndReason::RemoteHangup,
+                            });
+                        }
+                        drop(session_lease);
+                        incoming_presentation.publish(&orchestrator);
+                        let _ = response.send(SignalHangupDisposition::GroupRingWithdrawn(session_revision.unwrap()));
+                        continue;
+                    }
                     let valid = if own_elsewhere {
                         // Another of our devices may only withdraw a ring,
                         // never tear down media this device has accepted.
@@ -2402,9 +2427,8 @@ fn run_call_worker(
                         active.is_some_and(|a| a.kind == OrchestratedCallKind::DmStandard && a.peer_id == Some(peer))
                             || incoming.is_some_and(|p| p.kind == OrchestratedCallKind::DmStandard && p.peer_id == peer)
                             || outgoing.is_some_and(|p| p.kind == OrchestratedCallKind::DmStandard && p.peer_id == peer)
-                            || (active.is_none() && incoming.is_some_and(|p| p.kind == OrchestratedCallKind::GroupChannel && p.peer_id == peer))
                     };
-                    let _ = response.send(valid);
+                    let _ = response.send(if valid { SignalHangupDisposition::Forward } else { SignalHangupDisposition::Reject });
                 }
 
                 CallCommand::GetActiveCall { response } => {

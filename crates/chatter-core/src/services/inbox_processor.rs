@@ -856,12 +856,21 @@ impl InboxEventProcessor {
                     let Some(worker) = self.client.call_service().get() else {
                         return;
                     };
-                    if !worker
+                    match worker
                         .authenticate_signal_hangup(call_id, *peer_id, own_elsewhere)
                         .await
                     {
-                        tracing::warn!(%call_id, %peer_id, "Ignoring hangup without a matching peer or pending group caller");
-                        return;
+                        super::call_worker::SignalHangupDisposition::Forward => {},
+                        super::call_worker::SignalHangupDisposition::GroupRingWithdrawn(revision) => {
+                            if self.client.auth_state().get().session_revision == revision {
+                                self.client.call_signaling().drop_ringing_group_call_invite(call_id);
+                            }
+                            return;
+                        },
+                        super::call_worker::SignalHangupDisposition::Reject => {
+                            tracing::warn!(%call_id, %peer_id, "Ignoring hangup without a matching peer or pending group caller");
+                            return;
+                        },
                     }
                 }
                 self.event_bus.emit_domain(DomainEvent::CallHangupReceived {
