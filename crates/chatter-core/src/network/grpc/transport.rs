@@ -63,6 +63,14 @@ where
     }
 
     fn call(&mut self, request: Request<Body>) -> Self::Future {
+        let device_auth = if requires_device_auth(request.uri().path()) {
+            request
+                .extensions()
+                .get::<super::interceptors::DeviceAuthRequest>()
+                .cloned()
+        } else {
+            None
+        };
         let future = self.inner.call(request);
         let record = self.record.clone();
         Box::pin(async move {
@@ -72,7 +80,16 @@ where
                     // trailers, proves contact. Unavailable/DeadlineExceeded
                     // sent by the server are application replies, not outages.
                     record(ServerStatus::Reachable);
-                    Ok(response.map(|inner| Body::new(RecordingBody { inner, record })))
+                    if let Some(auth) = &device_auth {
+                        auth.observe(response.headers());
+                    }
+                    Ok(response.map(|inner| {
+                        Body::new(RecordingBody {
+                            inner,
+                            record,
+                            device_auth,
+                        })
+                    }))
                 }
                 Err(error) => {
                     record(ServerStatus::Unreachable);
@@ -83,9 +100,43 @@ where
     }
 }
 
+// Mirror ProductionPublicMethods: rejecting a public credential/proof is not
+// evidence that the current device session ended, even if Basic was attached.
+fn requires_device_auth(path: &str) -> bool {
+    !matches!(
+        path,
+        "/chat.v1.AuthService/RequestRegistrationChallenge"
+            | "/chat.v1.AuthService/LoginStart"
+            | "/chat.v1.AuthService/LoginFinish"
+            | "/chat.v1.AuthService/Register"
+            | "/chat.v1.AuthService/UseRecoveryCodeStart"
+            | "/chat.v1.AuthService/UseRecoveryCodeFinish"
+            | "/chat.v1.mailbox.EphemeralMailboxService/CreateEphemeralMailbox"
+            | "/chat.v1.mailbox.EphemeralMailboxService/GetMailboxChallenge"
+            | "/chat.v1.mailbox.EphemeralMailboxService/PollEphemeralMailbox"
+            | "/chat.v1.mailbox.EphemeralMailboxService/SendToEphemeralMailbox"
+            | "/chat.v1.mailbox.EphemeralMailboxService/AcknowledgeMessages"
+            | "/chat.v1.mailbox.EphemeralMailboxService/GetBlindSignaturePublicKey"
+            | "/chat.v1.mailbox.EphemeralMailboxService/JoinAnonCallRoom"
+            | "/chat.v1.FileService/GetAttachmentUploadUrl"
+            | "/chat.v1.FileService/ConfirmAttachmentUpload"
+            | "/chat.v1.FileService/GetAttachmentDownloadUrl"
+            | "/chat.v1.FileService/CreateAttachmentMultipartUpload"
+            | "/chat.v1.FileService/CompleteAttachmentMultipartUpload"
+            | "/chat.v1.FileService/AbortAttachmentMultipartUpload"
+            | "/chat.v1.provisioning.DeviceProvisioningService/StartProvisioning"
+            | "/chat.v1.provisioning.DeviceProvisioningService/GetProvisioningMessage"
+            | "/chat.v1.provisioning.DeviceProvisioningService/CompleteDeviceLinking"
+            | "/chat.v1.provisioning.DeviceProvisioningService/GetTransferArchive"
+            | "/chat.v1.KeyTransparencyService/GetProof"
+            | "/chat.v1.KeyTransparencyService/GetConsistencyProof"
+    )
+}
+
 struct RecordingBody<R> {
     inner: Body,
     record: R,
+    device_auth: Option<super::interceptors::DeviceAuthRequest>,
 }
 
 impl<R: Fn(ServerStatus) + Unpin> http_body::Body for RecordingBody<R> {
@@ -98,6 +149,11 @@ impl<R: Fn(ServerStatus) + Unpin> http_body::Body for RecordingBody<R> {
     ) -> Poll<Option<Result<http_body::Frame<Self::Data>, Self::Error>>> {
         let this = self.get_mut();
         let frame = Pin::new(&mut this.inner).poll_frame(cx);
+        if let Poll::Ready(Some(Ok(frame))) = &frame {
+            if let (Some(auth), Some(trailers)) = (&this.device_auth, frame.trailers_ref()) {
+                auth.observe(trailers);
+            }
+        }
         // A failed response stream is local transport evidence. A gRPC error
         // trailer is a successful frame and retains Reachable, regardless of
         // its status code or message. Never inspect/log auth or payload data.

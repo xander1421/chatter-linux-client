@@ -15,6 +15,8 @@ use crate::state::store::Store;
 pub struct AuthStateData {
     /// Changes whenever a login or sign-out invalidates pending UI work.
     pub session_revision: u64,
+    /// Requires explicit reauthentication; persisted device and local data remain.
+    pub session_ended: bool,
     /// Currently logged in user ID, if any.
     pub current_user_id: Option<UserId>,
     /// Current device ID (1 = primary, 2-127 = linked devices).
@@ -94,6 +96,7 @@ impl AuthState {
     pub fn set_logged_in(&self, user_id: UserId, device_id: u32, display_name: String) {
         self.store.update(|state| {
             state.session_revision = state.session_revision.wrapping_add(1);
+            state.session_ended = false;
             state.current_user_id = Some(user_id);
             state.device_id = Some(device_id);
             state.display_name = Some(display_name);
@@ -114,6 +117,7 @@ impl AuthState {
     pub fn set_logged_out(&self) {
         self.store.update(|state| {
             state.session_revision = state.session_revision.wrapping_add(1);
+            state.session_ended = false;
             state.current_user_id = None;
             state.device_id = None;
             state.display_name = None;
@@ -148,6 +152,7 @@ impl AuthState {
         self.store.update(|state| {
             if state.session_revision == revision {
                 state.session_revision = state.session_revision.wrapping_add(1);
+                state.session_ended = false;
                 state.current_user_id = None;
                 state.device_id = None;
                 state.display_name = None;
@@ -156,6 +161,19 @@ impl AuthState {
             }
         });
         cleared
+    }
+
+    pub(crate) fn set_session_ended_if_current(&self, revision: u64) {
+        self.store.update(|state| {
+            if state.session_revision == revision {
+                state.session_revision = state.session_revision.wrapping_add(1);
+                state.current_user_id = None;
+                state.is_logging_in = false;
+                state.login_verifying = false;
+                state.session_ended = true;
+                state.login_error = Some("Your session ended. Sign in again to continue.".into());
+            }
+        });
     }
 
     /// Quick check if user is currently logged in.

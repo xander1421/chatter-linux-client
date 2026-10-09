@@ -208,7 +208,12 @@ fn wire_password_login(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
                     // Switch to main view
                     let weak_for_view = weak.clone();
+                    let view_client = ui_ctx.clone();
+                    let view_revision = ui_ctx.auth_state().get().session_revision;
                     let _ = slint::invoke_from_event_loop(move || {
+                        if !view_client.auth_state().session_is_current(view_revision) {
+                            return;
+                        }
                         if let Some(w) = weak_for_view.upgrade() {
                             w.global::<crate::AnonMode>().set_onboarding_progress("".into());
                             w.set_login_loading(false);

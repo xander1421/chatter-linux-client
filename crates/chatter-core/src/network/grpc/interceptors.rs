@@ -4,6 +4,7 @@
 
 use std::fmt;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
 
 use base64::Engine;
 use base64::engine::general_purpose::STANDARD as BASE64;
@@ -64,6 +65,8 @@ impl Drop for AuthMode {
 #[derive(Clone)]
 pub struct AuthInterceptor {
     auth: Arc<RwLock<AuthMode>>,
+    generation: Arc<AtomicU64>,
+    session_ended: Arc<RwLock<Option<Arc<dyn Fn(u64) + Send + Sync>>>>,
 }
 
 impl AuthInterceptor {
@@ -71,12 +74,14 @@ impl AuthInterceptor {
     pub fn new() -> Self {
         Self {
             auth: Arc::new(RwLock::new(AuthMode::None)),
+            generation: Arc::new(AtomicU64::new(0)),
+            session_ended: Arc::new(RwLock::new(None)),
         }
     }
 
     /// Set bearer token authentication (device token).
     pub fn set_bearer(&self, token: String) {
-        *self.auth.write() = AuthMode::Bearer(token);
+        self.set_mode(AuthMode::Bearer(token));
     }
 
     /// Set basic authentication (Signal-style device auth).
@@ -86,7 +91,7 @@ impl AuthInterceptor {
     /// * `username` - Format: `{uuid}.{device_id}` (e.g., "d04b0053-6557-48f9-86c2-e8ca389279bd.1")
     /// * `password` - Device authentication token
     pub fn set_basic(&self, username: String, password: String) {
-        *self.auth.write() = AuthMode::Basic { username, password };
+        self.set_mode(AuthMode::Basic { username, password });
     }
 
     /// Set sealed sender authentication with unidentified access key.
@@ -94,24 +99,34 @@ impl AuthInterceptor {
     /// Used for anonymous message sending where the server cannot
     /// identify the sender.
     pub fn set_sealed_sender(&self, access_key: [u8; 16]) {
-        *self.auth.write() = AuthMode::SealedSender { access_key };
+        self.set_mode(AuthMode::SealedSender { access_key });
     }
 
     /// Set anonymous authentication with a blind-signed token.
     ///
     /// Used for initial contact or anonymous services like GIF search.
     pub fn set_anonymous(&self, token: UnblindedToken) {
-        *self.auth.write() = AuthMode::Anonymous(token);
+        self.set_mode(AuthMode::Anonymous(token));
     }
 
     /// Set the authentication mode directly.
     pub fn set_mode(&self, mode: AuthMode) {
-        *self.auth.write() = mode;
+        let mut auth = self.auth.write();
+        self.generation.fetch_add(1, Ordering::SeqCst);
+        *auth = mode;
     }
 
     /// Clear authentication (set to None).
     pub fn clear(&self) {
-        *self.auth.write() = AuthMode::None;
+        self.set_mode(AuthMode::None);
+    }
+
+    pub(crate) fn generation(&self) -> u64 {
+        self.generation.load(Ordering::SeqCst)
+    }
+
+    pub(crate) fn on_session_ended(&self, callback: Arc<dyn Fn(u64) + Send + Sync>) {
+        *self.session_ended.write() = Some(callback);
     }
 
     /// Get the current auth mode (for inspection/debugging).
@@ -156,6 +171,26 @@ impl AuthInterceptor {
     }
 }
 
+/// Captures which credentials actually authorized a request, including streams.
+#[derive(Clone)]
+pub(crate) struct DeviceAuthRequest {
+    interceptor: AuthInterceptor,
+    generation: u64,
+}
+
+impl DeviceAuthRequest {
+    pub(crate) fn observe(&self, headers: &http::HeaderMap) {
+        if tonic::Status::from_header_map(headers)
+            .is_some_and(|status| status.code() == tonic::Code::Unauthenticated)
+            && self.interceptor.generation() == self.generation
+        {
+            if let Some(callback) = self.interceptor.session_ended.read().clone() {
+                callback(self.generation);
+            }
+        }
+    }
+}
+
 /// Authentication credentials extracted from AuthInterceptor.
 ///
 /// `token` is the device auth token (HTTP Basic password). `Debug` is
@@ -196,6 +231,14 @@ impl Default for AuthInterceptor {
 impl Interceptor for AuthInterceptor {
     fn call(&mut self, mut request: Request<()>) -> Result<Request<()>, Status> {
         let auth = self.auth.read();
+
+        // This extension is local only; it never becomes wire metadata.
+        if matches!(&*auth, AuthMode::Basic { .. } | AuthMode::Bearer(_)) {
+            request.extensions_mut().insert(DeviceAuthRequest {
+                interceptor: self.clone(),
+                generation: self.generation(),
+            });
+        }
 
         match &*auth {
             AuthMode::Bearer(token) => {

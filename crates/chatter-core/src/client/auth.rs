@@ -20,6 +20,39 @@ impl ClientError {
 }
 
 impl ChatterClient {
+    pub(super) fn install_session_recovery(self: &Arc<Self>) {
+        let weak = Arc::downgrade(self);
+        self.auth()
+            .auth_interceptor
+            .on_session_ended(Arc::new(move |generation| {
+                let Some(client) = weak.upgrade() else { return };
+                // This task is deliberately outside session tasks: teardown aborts
+                // those tasks and must not abort itself before clearing credentials.
+                tokio::spawn(async move {
+                    let _lifecycle = client.auth_lifecycle_lock.lock().await;
+                    if client.auth().auth_interceptor.generation() != generation {
+                        return;
+                    }
+                    // Flush existing drafts/recovery before advancing the revision;
+                    // the explicit logout path intentionally deletes these instead.
+                    {
+                        let (drafts, _) = client.composer_drafts_for_session();
+                        client.persist_composer_drafts(&drafts);
+                    }
+                    client.persist_composer_recovery();
+                    client.auth_state().invalidate_session();
+                    let teardown_revision = client.auth_state().get().session_revision;
+                    if let Err(error) = client.auth().end_session() {
+                        tracing::error!(%error, "could not persist ended session");
+                    }
+                    client.shutdown_session(teardown_revision).await;
+                    client
+                        .auth_state()
+                        .set_session_ended_if_current(teardown_revision);
+                });
+            }));
+    }
+
     /// Ensure the gRPC pool is connected before running an auth RPC.
     ///
     /// Called from [`Self::login`] and [`Self::register`]. The startup

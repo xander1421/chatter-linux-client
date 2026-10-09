@@ -400,6 +400,15 @@ impl AuthService {
 
     /// Check if a user is currently logged in.
     pub fn is_logged_in(&self) -> bool {
+        if self
+            .settings_repo
+            .get_bytes(keys::DEVICE_AUTH_TOKEN)
+            .ok()
+            .flatten()
+            .is_none()
+        {
+            return false;
+        }
         self.settings_repo
             .get_string(keys::CURRENT_USER_ID)
             .ok()
@@ -860,7 +869,7 @@ impl AuthService {
             user_id,
             device_id,
             display_name,
-            needs_prekey_upload: stored_device_id.is_none(), // New device needs prekey upload
+            needs_prekey_upload: stored_device_id != Some(device_id), // Server may replace a retired device
             keys_restored: false, // Set by caller after the SVR restore attempt
             // No local identity yet. The caller must resolve this before the
             // login can be called successful — see `ChatterClient::login`.
@@ -1422,6 +1431,15 @@ impl AuthService {
             key_recovery: None,
             recovery_codes,
         })
+    }
+
+    /// End authorization without retiring this device or touching its local data.
+    pub(crate) fn end_session(&self) -> Result<(), AuthError> {
+        self.auth_interceptor.clear();
+        self.settings_repo.delete(keys::DEVICE_AUTH_TOKEN)?;
+        // PIN authorization must be re-derived from user input as well.
+        self.settings_repo.delete(keys::PIN_FINGERPRINT)?;
+        Ok(())
     }
 
     /// Logout the current user.

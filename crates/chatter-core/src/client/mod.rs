@@ -172,7 +172,7 @@ impl ClientBuilder {
         )?;
         let services = ctx.core_services();
         let anon_mode = services.message_service.shield_mode.clone();
-        Ok(Arc::new(ChatterClient {
+        let client = Arc::new(ChatterClient {
             ctx,
             services,
             tasks: Mutex::new(Vec::new()),
@@ -205,7 +205,9 @@ impl ClientBuilder {
             composer_recovery_dirty: AtomicBool::new(false),
             composer_owner: Mutex::new(String::new()),
             expired_messages: tokio::sync::broadcast::channel(16).0,
-        }))
+        });
+        client.install_session_recovery();
+        Ok(client)
     }
 }
 
@@ -1908,7 +1910,7 @@ impl ChatterClient {
     }
 
     pub fn is_logged_in(&self) -> bool {
-        self.auth().is_logged_in()
+        !self.auth_state().get().session_ended && self.auth().is_logged_in()
     }
 
     pub fn has_registered_before(&self) -> bool {
