@@ -4360,6 +4360,15 @@ pub struct Message {
     pub deleted_at: u64,
     #[prost(message, repeated, tag="23")]
     pub reactions: ::prost::alloc::vec::Vec<ReactionUpdate>,
+    /// The idempotency key of the SendMessage that created this message, while
+    /// the server still remembers it (message_send_requests, 7 days; empty after
+    /// or for a send without client_request_id). It is SHA-256 over the sending
+    /// account, device, channel and client_request_id (send.go
+    /// setSendRequestIdempotency), so only the sender, who knows the random
+    /// request id, can recompute it: it lets the sender recognise its own
+    /// uncertain send exactly, and tells anyone else nothing.
+    #[prost(bytes="vec", tag="24")]
+    pub send_request_key: ::prost::alloc::vec::Vec<u8>,
 }
 /// Nested message and enum types in `Message`.
 pub mod message {

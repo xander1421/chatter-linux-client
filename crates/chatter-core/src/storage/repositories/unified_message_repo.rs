@@ -878,6 +878,7 @@ impl UnifiedMessageRepository {
             "INSERT OR IGNORE INTO deleted_messages (id) VALUES (?1)",
             params![id.to_string()],
         )?;
+        tombstone_dm_receipt(&conn, id)?;
         let rows = conn.execute(
             "DELETE FROM messages WHERE id = ?1",
             params![id.to_string()],
@@ -907,6 +908,7 @@ impl UnifiedMessageRepository {
                 "INSERT OR IGNORE INTO deleted_messages (id) VALUES (?1)",
                 params![id.to_string()],
             )?;
+            tombstone_dm_receipt(&conn, id)?;
         }
         let placeholders: Vec<String> = (1..=ids.len()).map(|i| format!("?{}", i)).collect();
         let query = format!(
@@ -929,6 +931,22 @@ impl UnifiedMessageRepository {
             |row| row.get::<_, bool>(0),
         )?;
         Ok(found)
+    }
+
+    /// Whether this account deleted its copy of the server DM `sender` sent
+    /// at `sent_at` in `conversation` (`tombstone_dm_receipt`). Receive
+    /// checks it so another copy of that message stays deleted.
+    pub fn is_dm_receipt_tombstoned(
+        &self,
+        conversation: &ChannelId,
+        sender: &UserId,
+        sent_at: u64,
+    ) -> Result<bool, StorageError> {
+        Ok(self.db.read_connection()?.query_row(
+            "SELECT EXISTS(SELECT 1 FROM dm_receive_tombstones WHERE owner_id = (SELECT json_extract(value, '$') FROM settings WHERE key = ?1) AND conversation_id = ?2 AND sender_id = ?3 AND sent_at = ?4)",
+            params![CURRENT_USER_KEY, conversation.to_string(), sender.to_string(), sent_at as i64],
+            |r| r.get(0),
+        )?)
     }
 
     /// Soft-delete multiple messages by ID.
@@ -2924,6 +2942,34 @@ fn resolve_timestamp_quote(
 }
 
 /// SELECT column list for unified messages — must match `row_to_message` column indices.
+/// How long a server DM receive tombstone is kept after the deletion. A
+/// second copy of one message comes from the sender's DecryptionError resend
+/// (`dm_resend::RESEND_MAX_AGE_NS`, 14 days after sending), its sealed outbox
+/// replay (hours) or a retry; past this, an old message could come back.
+const DM_RECEIVE_TOMBSTONE_SECONDS: i64 = 30 * 24 * 60 * 60;
+const CURRENT_USER_KEY: &str = crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID;
+
+/// Before `id` is hard-deleted: if it is a server DM, remember its
+/// (conversation, sender, sent_at) for the signed-in account, which is what a
+/// later copy of it shares (its row id is random per receipt). Every local
+/// deletion goes through here: delete-for-me and its sync, expiry, deleting
+/// the chat, and a delete-for-everyone. Prunes past the retention bound.
+fn tombstone_dm_receipt(conn: &rusqlite::Connection, id: &MessageId) -> Result<(), StorageError> {
+    let now = Utc::now().timestamp();
+    conn.execute(
+        "INSERT OR IGNORE INTO dm_receive_tombstones (owner_id, conversation_id, sender_id, sent_at, deleted_at)
+         SELECT o.owner, m.conversation_id, m.sender_id, m.sent_at, ?3
+         FROM messages m, (SELECT json_extract(value, '$') AS owner FROM settings WHERE key = ?2) o
+         WHERE m.id = ?1 AND m.conversation_type = 'server_dm' AND m.sender_id IS NOT NULL AND o.owner IS NOT NULL",
+        params![id.to_string(), CURRENT_USER_KEY, now],
+    )?;
+    conn.execute(
+        "DELETE FROM dm_receive_tombstones WHERE deleted_at < ?1",
+        params![now - DM_RECEIVE_TOMBSTONE_SECONDS],
+    )?;
+    Ok(())
+}
+
 const MSG_COLS: &str = "id, conversation_id, conversation_type, sender_id, device_id, \
      content_json, encrypted_content, \
      thread_id, reply_to, attachments_blob, \
@@ -3270,6 +3316,51 @@ mod tests {
             message_type: EncryptedMessageType::Signal,
         });
         assert_eq!(content_type_discriminant(&encrypted), 1);
+    }
+
+    /// Deleting a server DM (singly or batched) remembers its
+    /// (conversation, sender, sent_at) for the signed-in account only; other
+    /// conversation types, senders and times, and other accounts, are not held.
+    #[test]
+    fn deleted_server_dm_is_tombstoned_by_sender_and_time_for_its_account() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(Database::open(&dir.path().join("dm-tomb.db"), "testpass").unwrap());
+        db.run_migrations().unwrap();
+        let repo = UnifiedMessageRepository::new(db.clone());
+        let set_owner = |owner: UserId| {
+            db.connection()
+                .unwrap()
+                .execute(
+                    "INSERT OR REPLACE INTO settings(key,value,updated_at) VALUES(?1,?2,'now')",
+                    params![CURRENT_USER_KEY, serde_json::to_string(&owner.to_string()).unwrap()],
+                )
+                .unwrap();
+        };
+        let (me, other_account, peer) = (UserId::new(), UserId::new(), UserId::new());
+        set_owner(me);
+        let conversation = ChannelId::new();
+        let dm = |sent_at| {
+            Message::new_text(conversation, ConversationType::ServerDm, Some(peer), "x".into(), sent_at)
+        };
+        let (one, two) = (dm(100), dm(200));
+        let channel_post =
+            Message::new_text(conversation, ConversationType::Channel, Some(peer), "x".into(), 300);
+        for m in [&one, &two, &channel_post] {
+            repo.insert(m).unwrap();
+        }
+        repo.delete(&one.id).unwrap();
+        repo.delete_batch(&[two.id, channel_post.id]).unwrap();
+        let held = |sender: &UserId, sent_at| {
+            repo.is_dm_receipt_tombstoned(&conversation, sender, sent_at).unwrap()
+        };
+        assert!(held(&peer, 100));
+        assert!(held(&peer, 200));
+        assert!(!held(&peer, 300), "only server DMs");
+        assert!(!held(&peer, 101));
+        assert!(!held(&me, 100));
+        assert!(!repo.is_dm_receipt_tombstoned(&ChannelId::new(), &peer, 100).unwrap());
+        set_owner(other_account);
+        assert!(!held(&peer, 100), "account scoped");
     }
 
     #[test]

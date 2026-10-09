@@ -422,6 +422,16 @@ impl MessageGateway {
                     return Ok(SealedSenderResult::MessageStored);
                 }
             }
+            // Held once and deleted here since (for me, expiry, the chat, or
+            // for everyone): a second copy of it stays deleted. A storage
+            // error is not swallowed into storing it again.
+            if self.message_repo.is_dm_receipt_tombstoned(
+                &message.conversation_id,
+                &sid,
+                message.sent_at,
+            )? {
+                return Ok(SealedSenderResult::MessageStored);
+            }
         }
 
         // Store in repository. What is announced is what was stored: an edit
@@ -644,6 +654,14 @@ impl MessageGateway {
             if existing.conversation_id == message.conversation_id {
                 return Ok(SealedSenderResult::MessageStored);
             }
+        }
+        // Our own copy, deleted here since: a second sync of it stays deleted.
+        if self.message_repo.is_dm_receipt_tombstoned(
+            &message.conversation_id,
+            &current_user,
+            message.sent_at,
+        )? {
+            return Ok(SealedSenderResult::MessageStored);
         }
 
         crate::storage::repositories::message_receipt_repo::MessageReceiptRepository::new(

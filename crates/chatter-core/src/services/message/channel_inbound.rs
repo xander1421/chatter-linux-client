@@ -329,8 +329,8 @@ impl ChannelInbound {
             }
         }
 
-        // A deleted send whose canonical id never came back: held off like a
-        // tombstoned one (`channel_send::suppresses_own_post`).
+        // A deleted send whose canonical id never came back, recognised by
+        // its exact request key: tombstoned and dropped.
         match self.cancelled_own_post(proto_msg, channel_id) {
             Ok(false) => {}
             Ok(true) => return Err(Ingested::Dropped),
@@ -631,33 +631,25 @@ impl ChannelInbound {
         Ok((message, authenticated_identity))
     }
 
-    /// This account's post from this device (or an unknown device, as
-    /// `prepare` treats it), not held here, that a user-deleted, uncertain
-    /// send may have made. A post already held is ours to keep updating.
+    /// The deposit of a send this account deleted before its canonical id
+    /// came back, recognised exactly by its request key and tombstoned
+    /// (`channel_send::settle_cancelled_deposit`).
     fn cancelled_own_post(
         &self,
         proto_msg: &chat_v1::Message,
         channel_id: ChannelId,
     ) -> Result<bool, crate::error::StorageError> {
+        if proto_msg.send_request_key.is_empty() {
+            return Ok(false);
+        }
         let Ok(owner) = self.messages.settings_repo.current_user_id() else {
             return Ok(false);
         };
-        let device = proto_msg.author_device_id;
-        if proto_msg.author_id.parse::<UserId>().ok() != Some(owner)
-            || (device != 0 && Some(device) != self.current_device_id())
-        {
-            return Ok(false);
-        }
-        if let Ok(id) = proto_msg.id.parse::<crate::domain::ids::MessageId>() {
-            if self.messages.message_repo.get(&id)?.is_some() {
-                return Ok(false);
-            }
-        }
-        super::channel_send::suppresses_own_post(
+        super::channel_send::settle_cancelled_deposit(
             &self.messages.database,
             owner,
             channel_id,
-            proto_msg.timestamp,
+            proto_msg,
         )
     }
 

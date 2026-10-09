@@ -12,7 +12,7 @@ impl Migration for V098DmOutboxSealedAt {
     }
     fn up(&self) -> &'static str {
         // Unix seconds the first stored `request` was sealed. NULL with
-        // `request`; a replay past the certificate window re-seals instead.
+        // `request`; past the certificate window the entry fails closed.
         "ALTER TABLE dm_outbox ADD COLUMN sealed_at INTEGER;"
     }
 }

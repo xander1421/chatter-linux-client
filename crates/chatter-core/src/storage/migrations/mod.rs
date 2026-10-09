@@ -95,6 +95,7 @@ mod v095_saved_delete_tombstones;
 mod v096_saved_delete_outbox;
 mod v097_dm_outbox;
 mod v098_dm_outbox_sealed_at;
+mod v099_dm_receive_tombstones;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -418,4 +419,5 @@ pub fn default_migrations() -> MigrationRunner {
         .register(v096_saved_delete_outbox::V096SavedDeleteOutbox)
         .register(v097_dm_outbox::V097DmOutbox)
         .register(v098_dm_outbox_sealed_at::V098DmOutboxSealedAt)
+        .register(v099_dm_receive_tombstones::V099DmReceiveTombstones)
 }

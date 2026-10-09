@@ -25,16 +25,15 @@ const MAX_PENDING: i64 = 64;
 const LIVE: &str = "('queued','preparing','submitted','accepted','deleting')";
 /// The retained (`unresolved`) shape of a journal whose bubble the user
 /// deleted: the plaintext entry and lease fields go, while the exact request,
-/// token, response, canonical id and intent stay. `?2` is now.
-const RETAIN: &str = "json_set(json_remove(value,'$.entry','$.generation','$.attempts','$.next_at'),'$.phase','unresolved','$.row_id',COALESCE(json_extract(value,'$.row_id'),json_extract(value,'$.entry.row.id')),'$.channel_id',COALESCE(json_extract(value,'$.channel_id'),json_extract(value,'$.entry.row.conversation_id')),'$.retained_at',COALESCE(json_extract(value,'$.retained_at'),?2))";
+/// token, response, canonical id, intent and sending device stay (the device
+/// is part of the request key, `settle_cancelled_deposit`). `?2` is now.
+const RETAIN: &str = "json_set(json_remove(value,'$.entry','$.generation','$.attempts','$.next_at'),'$.phase','unresolved','$.row_id',COALESCE(json_extract(value,'$.row_id'),json_extract(value,'$.entry.row.id')),'$.channel_id',COALESCE(json_extract(value,'$.channel_id'),json_extract(value,'$.entry.row.conversation_id')),'$.device',COALESCE(json_extract(value,'$.device'),json_extract(value,'$.entry.device')),'$.retained_at',COALESCE(json_extract(value,'$.retained_at'),?2))";
 /// After the server forgets a client_request_id (`SendRequestRetention`, 7d,
 /// server `types.go:21`; one day of clock margin here) retained request bytes
 /// can resolve nothing. Only they are dropped; token and identities stay.
 const REQUEST_WINDOW: i64 = 8 * 24 * 60 * 60;
 /// Longest replay of a prepared (unsealed) request after `prepared.at`.
 const REPLAY_HORIZON: i64 = 23 * 60 * 60;
-/// This device's clock against the server's, which stamps a plaintext post.
-const CLOCK_SKEW: i64 = 2 * 60 * 60;
 /// A prepared request may be replayed only below sealed-sender freshness.
 /// A sealed (deletion-token) request embeds our sender certificate, which
 /// has only 12 h left when used: it gets the sealed DM outbox's window.
@@ -49,21 +48,65 @@ fn replayable(prepared: &Prepared) -> bool {
     (-300..horizon).contains(&age)
 }
 
-/// Whether a server post by `owner` from this device in `channel`, stamped
-/// `server_nanos`, may be the uncertain deposit of a send the user deleted.
-/// Its canonical id was never learned, so a tombstone cannot hold it, and
-/// nothing is posted to find out: ingest drops any such own post from the
-/// retained journal's first hand-off (`prepared.at`) to its last possible
-/// replay, with clock margin. The account is the journal key's owner. Rows
-/// with a known id are already tombstoned and are not consulted.
-pub(crate) fn suppresses_own_post(
+/// The server's SendMessage idempotency key for this account, device,
+/// channel and client_request_id (server `send.go`
+/// `setSendRequestIdempotency`), which it returns as
+/// `Message.send_request_key`.
+fn send_request_key(owner: UserId, device: u32, channel: ChannelId, request: &str) -> [u8; 32] {
+    use sha2::{Digest, Sha256};
+    let mut key = Sha256::new();
+    key.update(b"chatter.send-message-request.v1\0");
+    for part in [owner.to_string(), device.to_string(), channel.to_string(), request.to_lowercase()] {
+        key.update((part.len() as u32).to_be_bytes());
+        key.update(part.as_bytes());
+    }
+    key.finalize().into()
+}
+
+/// Whether `post` is the deposit of a send the user deleted before its
+/// canonical id came back: its `send_request_key` is exactly the one a
+/// retained (`unresolved`) journal of `owner` in `channel` sent under, the
+/// journal UUID being the request's client_request_id. A match learns the
+/// id: it is recorded on the journal and tombstoned, and any local copy is
+/// removed, so every later fetch drops it as an ordinary tombstone. Nothing
+/// else is held off, and nothing is sent: delete-for-me stays local.
+pub(crate) fn settle_cancelled_deposit(
     db: &Database,
     owner: UserId,
     channel: ChannelId,
-    server_nanos: u64,
+    post: &crate::proto::chat_v1::Message,
 ) -> Result<bool, StorageError> {
-    let at = (server_nanos / 1_000_000_000) as i64;
-    db.read_connection()?.query_row("SELECT EXISTS(SELECT 1 FROM settings WHERE key LIKE ?1 AND json_extract(value,'$.phase')='unresolved' AND json_extract(value,'$.server_id') IS NULL AND json_extract(value,'$.channel_id')=?2 AND ?3 BETWEEN json_extract(value,'$.prepared.at')-?4 AND json_extract(value,'$.prepared.at')+?5)",params![format!("{PREFIX}{owner}:%"),channel.to_string(),at,CLOCK_SKEW,REPLAY_HORIZON+CLOCK_SKEW],|r|r.get(0)).map_err(Into::into)
+    if post.send_request_key.len() != 32
+        || !(post.author_id.is_empty() || post.author_id.parse::<UserId>().ok() == Some(owner))
+    {
+        return Ok(false);
+    }
+    let Ok(id) = post.id.parse::<MessageId>() else {
+        return Ok(false);
+    };
+    let prefix = format!("{PREFIX}{owner}:");
+    let journals: Vec<(String, u32)> = {
+        let conn = db.read_connection()?;
+        let mut stmt = conn.prepare("SELECT key,json_extract(value,'$.device') FROM settings WHERE key LIKE ?1 AND json_extract(value,'$.phase')='unresolved' AND json_extract(value,'$.server_id') IS NULL AND json_extract(value,'$.channel_id')=?2 AND json_extract(value,'$.device') IS NOT NULL")?;
+        let rows = stmt.query_map(params![format!("{prefix}%"), channel.to_string()], |r| Ok((r.get(0)?, r.get(1)?)))?;
+        rows.collect::<Result<_, _>>()?
+    };
+    let Some((key, _)) = journals.into_iter().find(|(key, device)| {
+        (post.author_device_id == 0 || post.author_device_id == *device)
+            && key.strip_prefix(&prefix).is_some_and(|request| {
+                send_request_key(owner, *device, channel, request)[..] == post.send_request_key[..]
+            })
+    }) else {
+        return Ok(false);
+    };
+    let mut conn = db.connection()?;
+    let tx = conn.transaction()?;
+    tx.execute("UPDATE settings SET value=json_set(value,'$.server_id',?2) WHERE key=?1 AND json_extract(value,'$.server_id') IS NULL",params![key,id.to_string()])?;
+    tx.execute("INSERT OR IGNORE INTO deleted_messages(id) VALUES(?1)", params![id.to_string()])?;
+    tx.execute("DELETE FROM messages WHERE id=?1", params![id.to_string()])?;
+    tx.commit()?;
+    tracing::info!(message_id = %id, "Deleted send's deposit recognised by its request key; tombstoned");
+    Ok(true)
 }
 #[derive(Serialize, Deserialize)]
 struct Quote {
@@ -1010,44 +1053,71 @@ pub(crate) fn spawn_channel_send_recovery(
 mod tests {
     use super::*;
 
-    /// An uncertain, user-deleted send holds off this account's own posts in
-    /// its channel over its hand-off window only; a known id, another
-    /// channel, another account or a time outside the window are not held.
+    /// Same key as the server's (`send_idempotency_test.go` known answer);
+    /// the request id's case does not matter.
     #[test]
-    fn deleted_uncertain_send_suppresses_only_its_window() {
+    fn send_request_key_matches_server() {
+        let owner: UserId = "33333333-3333-4333-8333-333333333333".parse().unwrap();
+        let channel: ChannelId = "11111111-1111-4111-8111-111111111111".parse().unwrap();
+        let rid = "0b6c1a52-8d0e-4f43-9a51-2f6f2f0e9a10";
+        let key = send_request_key(owner, 2, channel, rid);
+        assert_eq!(
+            hex::encode(key),
+            "6f6e867173e113e37dd0dad9ad82717d0c3ec2dc0310893ed30d4aec8ed03da8"
+        );
+        assert_eq!(key, send_request_key(owner, 2, channel, &rid.to_uppercase()));
+    }
+
+    /// Only a post carrying exactly the request key of this account's
+    /// retained, deleted send is recognised (and then tombstoned); its
+    /// other posts in the channel, whatever their time, are untouched.
+    #[test]
+    fn deleted_uncertain_send_settles_only_its_exact_post() {
         let dir = tempfile::tempdir().unwrap();
         let db = Database::open(&dir.path().join("journal.db"), "test-only").unwrap();
         db.run_migrations().unwrap();
         let (me, other, channel) = (UserId::new(), UserId::new(), ChannelId::new());
-        let at = 2_000_000_000_i64;
-        let put = |owner: UserId, value: serde_json::Value| {
-            db.connection()
-                .unwrap()
-                .execute(
-                    "INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,'now')",
-                    params![key(owner, MessageId::new()), value.to_string()],
-                )
-                .unwrap();
+        let request = MessageId::new();
+        db.connection()
+            .unwrap()
+            .execute(
+                "INSERT INTO settings(key,value,updated_at) VALUES(?1,?2,'now')",
+                params![
+                    key(me, request),
+                    serde_json::json!({"phase":"unresolved","channel_id":channel,"device":3,"prepared":{"at":now()}}).to_string()
+                ],
+            )
+            .unwrap();
+        let post = |author: &str, device: u32, key: [u8; 32]| crate::proto::chat_v1::Message {
+            id: MessageId::new().to_string(),
+            channel_id: channel.to_string(),
+            author_id: author.into(),
+            author_device_id: device,
+            send_request_key: key.to_vec(),
+            ..Default::default()
         };
-        put(
-            me,
-            serde_json::json!({"phase":"unresolved","channel_id":channel,"prepared":{"at":at}}),
-        );
-        let nanos = |secs: i64| (secs as u64) * 1_000_000_000;
-        let held = |owner, ch, secs| suppresses_own_post(&db, owner, ch, nanos(secs)).unwrap();
-        assert!(held(me, channel, at));
-        assert!(held(me, channel, at - CLOCK_SKEW));
-        assert!(held(me, channel, at + REPLAY_HORIZON + CLOCK_SKEW));
-        assert!(!held(me, channel, at - CLOCK_SKEW - 1));
-        assert!(!held(me, channel, at + REPLAY_HORIZON + CLOCK_SKEW + 1));
-        assert!(!held(me, ChannelId::new(), at));
-        assert!(!held(other, channel, at));
-        // A known canonical id is tombstoned instead, never windowed.
-        let known = ChannelId::new();
-        put(
-            me,
-            serde_json::json!({"phase":"unresolved","channel_id":known,"server_id":"x","prepared":{"at":at}}),
-        );
-        assert!(!held(me, known, at));
+        let settles = |p: &crate::proto::chat_v1::Message| settle_cancelled_deposit(&db, me, channel, p).unwrap();
+        let exact = send_request_key(me, 3, channel, &request.to_string());
+        // Another send of ours in the same channel, at the same moment.
+        assert!(!settles(&post(&me.to_string(), 3, send_request_key(me, 3, channel, &MessageId::new().to_string()))));
+        // The same request id under another device, account or channel.
+        assert!(!settles(&post(&me.to_string(), 3, send_request_key(me, 4, channel, &request.to_string()))));
+        assert!(!settles(&post(&me.to_string(), 3, send_request_key(other, 3, channel, &request.to_string()))));
+        assert!(!settles(&post(&me.to_string(), 3, send_request_key(me, 3, ChannelId::new(), &request.to_string()))));
+        assert!(!settle_cancelled_deposit(&db, other, channel, &post("", 3, exact)).unwrap());
+        // The exact key, but claimed by someone else's post.
+        assert!(!settles(&post(&other.to_string(), 3, exact)));
+        assert!(!settles(&post(&me.to_string(), 4, exact)));
+        // The deposit itself, sealed (no author) or not: learned and tombstoned.
+        let sealed = post("", 3, exact);
+        assert!(settles(&sealed));
+        let tombstoned: bool = db
+            .read_connection()
+            .unwrap()
+            .query_row("SELECT EXISTS(SELECT 1 FROM deleted_messages WHERE id=?1)", params![sealed.id], |r| r.get(0))
+            .unwrap();
+        assert!(tombstoned);
+        // Settled once: the journal now knows its id and matches nothing more.
+        assert!(!settles(&post(&me.to_string(), 3, exact)));
     }
 }
