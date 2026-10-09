@@ -163,8 +163,13 @@ pub fn save_attachment(
 
 /// Only explicit PDF export can create a file in the provider's PDF directory.
 pub fn prepare_pdf(name: &str, data: &[u8]) -> Result<ExportSession, String> {
+    prepare_document(name, data, "application/pdf")
+}
+
+/// Prepare an explicit read-only external document in the session-scoped cache.
+pub fn prepare_document(name: &str, data: &[u8], mime: &str) -> Result<ExportSession, String> {
     use std::io::Write;
-    let mut session = ExportSession::begin_kind(name, "application/pdf", false, true)?;
+    let mut session = ExportSession::begin_kind(name, mime, false, true)?;
     let file = session.file.as_mut().ok_or("PDF descriptor unavailable")?;
     for chunk in data.chunks(64 * 1024) {
         file.write_all(chunk).map_err(|_| "PDF write failed")?;

@@ -17,6 +17,7 @@ use crate::bin_ui::preview_state;
 pub fn wire_code_preview_callbacks(window: &MainWindow) {
     // Close code preview
     window.on_close_code_preview(|| {
+        super::media_viewer::invalidate();
         preview_state::clear_code_preview();
         tracing::debug!("Code preview closed");
     });
@@ -57,7 +58,39 @@ pub fn wire_code_preview_callbacks(window: &MainWindow) {
     });
 
     // Open code in external editor - uses Save As for secure export
-    window.on_open_code_external(|| {
+    let weak = window.as_weak();
+    window.on_open_code_external(move || {
+        #[cfg(target_os = "android")]
+        if let Some(mut content) = preview_state::get_code_preview_content() {
+            let weak = weak.clone();
+            let request = super::media_viewer::current_request();
+            std::thread::spawn(move || {
+                let result = crate::platform::android::media_export::prepare_document(
+                    &content.filename,
+                    &content.data,
+                    "text/plain",
+                );
+                zeroize::Zeroize::zeroize(&mut content.data);
+                let _ = weak.upgrade_in_event_loop(move |w| {
+                    if !super::media_viewer::is_current(request) || !w.get_code_preview_visible() {
+                        return;
+                    }
+                    if result.and_then(|session| session.finish()).is_err() {
+                        w.set_toast_message(
+                            "Unable to open this file. Install a text viewer and try again.".into(),
+                        );
+                        w.set_toast_variant("error".into());
+                        w.set_toast_visible(true);
+                    }
+                });
+            });
+        } else if let Some(w) = weak.upgrade() {
+            w.set_toast_message("Reopen the attachment to view it externally.".into());
+            w.set_toast_variant("error".into());
+            w.set_toast_visible(true);
+        }
+        #[cfg(not(target_os = "android"))]
+        let _ = &weak;
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         if let Some(content) = preview_state::get_code_preview_content() {
             let filename = super::media_viewer::export_basename(&content.filename);
@@ -87,7 +120,7 @@ pub fn wire_code_preview_callbacks(window: &MainWindow) {
         } else {
             tracing::warn!("No code content available for external open");
         }
-        #[cfg(any(target_os = "android", target_os = "ios"))]
+        #[cfg(target_os = "ios")]
         tracing::warn!("Open external not supported on mobile");
     });
 }

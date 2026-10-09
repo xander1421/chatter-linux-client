@@ -44,7 +44,7 @@ internal object ViewerMediaExport {
             }
             .takeIf { it.isNotBlank() && it != "." && it != ".." } ?: "media"
         if (copy && !mime.startsWith("image/")) return null
-        if (pdf && (copy || mime != "application/pdf")) return null
+        if (pdf && (copy || mime !in setOf("application/pdf", "text/plain"))) return null
         val token = next.getAndIncrement()
         if (token <= 0) return null
         var uri: Uri? = null
@@ -80,7 +80,7 @@ internal object ViewerMediaExport {
                         it.delete()
                     } catch (_: Exception) {}
                 }
-                val candidate = File(folder, "${UUID.randomUUID()}-$safeName$clipboardExtension${if (pdf) ".pdf" else ""}")
+                val candidate = File(folder, "${UUID.randomUUID()}-$safeName$clipboardExtension${if (pdf && mime == "application/pdf") ".pdf" else ""}")
                 check(candidate.createNewFile()) // claim ownership before cleanup/truncation
                 file = candidate
                 descriptor = ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_WRITE_ONLY or ParcelFileDescriptor.MODE_CREATE or ParcelFileDescriptor.MODE_TRUNCATE)
@@ -105,8 +105,8 @@ internal object ViewerMediaExport {
         return try {
             if (item.pdf) {
                 val uri = FileProvider.getUriForFile(context, "${context.packageName}.viewer-media", item.file ?: error("File unavailable"))
-                context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, "application/pdf").apply {
-                    clipData = ClipData.newUri(context.contentResolver, "Chatter PDF", uri)
+                context.startActivity(Intent(Intent.ACTION_VIEW).setDataAndType(uri, item.mime).apply {
+                    clipData = ClipData.newUri(context.contentResolver, "Chatter document", uri)
                     addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
                 })
             } else if (item.copy) {
