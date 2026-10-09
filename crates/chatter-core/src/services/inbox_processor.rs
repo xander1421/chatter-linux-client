@@ -857,10 +857,10 @@ impl InboxEventProcessor {
                         return;
                     };
                     if !worker
-                        .authenticate_dm_hangup(call_id, *peer_id, own_elsewhere)
+                        .authenticate_signal_hangup(call_id, *peer_id, own_elsewhere)
                         .await
                     {
-                        tracing::warn!(%call_id, %peer_id, "Ignoring hangup from a sender unrelated to this DM call");
+                        tracing::warn!(%call_id, %peer_id, "Ignoring hangup without a matching peer or pending group caller");
                         return;
                     }
                 }

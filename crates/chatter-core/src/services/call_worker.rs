@@ -1578,8 +1578,9 @@ impl CallWorkerHandle {
         }
     }
 
-    /// Reject a Signal hangup unless its sender owns this known DM call.
-    pub(crate) async fn authenticate_dm_hangup(
+    /// Bind DM hangups to their peer; a group caller may only cancel its
+    /// pending invitation, never end another participant's accepted media.
+    pub(crate) async fn authenticate_signal_hangup(
         &self,
         call: &str,
         peer: UserId,
@@ -2401,6 +2402,7 @@ fn run_call_worker(
                         active.is_some_and(|a| a.kind == OrchestratedCallKind::DmStandard && a.peer_id == Some(peer))
                             || incoming.is_some_and(|p| p.kind == OrchestratedCallKind::DmStandard && p.peer_id == peer)
                             || outgoing.is_some_and(|p| p.kind == OrchestratedCallKind::DmStandard && p.peer_id == peer)
+                            || (active.is_none() && incoming.is_some_and(|p| p.kind == OrchestratedCallKind::GroupChannel && p.peer_id == peer))
                     };
                     let _ = response.send(valid);
                 }
