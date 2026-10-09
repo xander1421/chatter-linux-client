@@ -69,6 +69,15 @@ impl SavedSyncRepository {
                 "Saved mutation owner changed".into(),
             ));
         }
+        let deleted: bool = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM saved_delete_tombstones WHERE owner_id = ?1 AND message_id = ?2)",
+            params![owner.to_string(), id.to_string()], |r| r.get(0),
+        )?;
+        if deleted {
+            return Err(StorageError::InvalidData(
+                "Saved message is pending deletion".into(),
+            ));
+        }
         conn.execute(
             "INSERT INTO saved_sync_outbox (owner_id, message_id) VALUES (?1, ?2)
              ON CONFLICT(owner_id, message_id) DO UPDATE SET generation = generation + 1,
@@ -159,6 +168,131 @@ impl SavedSyncRepository {
             }
         }
         Ok(due)
+    }
+
+    /// Includes completed local deletions, making a UI retry after recovery a no-op.
+    pub(crate) fn deleted_identity(
+        &self,
+        owner: &UserId,
+        sent_at: u64,
+    ) -> Result<Option<MessageId>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let mut stmt = conn.prepare("SELECT message_id FROM saved_delete_tombstones WHERE owner_id = ?1 AND sent_at = ?2 ORDER BY message_id LIMIT 2")?;
+        let ids = stmt
+            .query_map(params![owner.to_string(), sent_at as i64], |r| {
+                r.get::<_, String>(0)
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        if ids.len() > 1 {
+            return Err(StorageError::InvalidData(
+                "Ambiguous Saved deletion timestamp".into(),
+            ));
+        }
+        ids.into_iter()
+            .next()
+            .map(|id| {
+                id.parse().map_err(|_| {
+                    StorageError::InvalidData("Invalid Saved deletion identity".into())
+                })
+            })
+            .transpose()
+    }
+
+    pub(crate) fn pending_delete(
+        &self,
+        owner: &UserId,
+        id: &MessageId,
+    ) -> Result<Option<(i64, u64)>, StorageError> {
+        Ok(self.db.read_connection()?.query_row(
+            "SELECT generation, sent_at FROM saved_delete_outbox WHERE owner_id = ?1 AND message_id = ?2",
+            params![owner.to_string(), id.to_string()], |r| Ok((r.get(0)?, r.get::<_, i64>(1)? as u64)),
+        ).optional()?)
+    }
+
+    /// ACK, local exact deletion and journal removal commit together.
+    pub(crate) fn finish_delete(
+        &self,
+        owner: &UserId,
+        id: &MessageId,
+        generation: i64,
+        sent_at: u64,
+        acknowledged: bool,
+    ) -> Result<bool, StorageError> {
+        crate::services::gateway::submission::check_send_session()?;
+        let conn = self.db.connection()?;
+        let tx = conn.unchecked_transaction()?;
+        let current: Option<String> = tx
+            .query_row(
+                "SELECT value FROM settings WHERE key = 'auth.current_user_id'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if current
+            .and_then(|value| serde_json::from_str::<String>(&value).ok())
+            .as_deref()
+            != Some(owner.to_string().as_str())
+        {
+            return Err(StorageError::InvalidData(
+                "Saved deletion owner changed".into(),
+            ));
+        }
+        let pending: bool = tx.query_row(
+            "SELECT EXISTS(SELECT 1 FROM saved_delete_outbox WHERE owner_id = ?1 AND message_id = ?2 AND generation = ?3 AND sent_at = ?4)",
+            params![owner.to_string(), id.to_string(), generation, sent_at as i64], |r| r.get(0),
+        )?;
+        if !pending {
+            return Ok(false);
+        }
+        if acknowledged {
+            tx.execute("DELETE FROM messages WHERE id = ?1 AND conversation_type = 'saved_messages' AND conversation_id = ?2 AND sender_id = ?2 AND sent_at = ?3",
+                params![id.to_string(), owner.to_string(), sent_at as i64])?;
+            tx.execute("DELETE FROM saved_delete_outbox WHERE owner_id = ?1 AND message_id = ?2 AND generation = ?3",
+                params![owner.to_string(), id.to_string(), generation])?;
+        } else {
+            tx.execute(
+                "UPDATE saved_delete_outbox SET attempts = MIN(attempts + 1, 10),
+                next_attempt_at = ?4 + MIN(5 * (1 << MIN(attempts, 6)), 300)
+                WHERE owner_id = ?1 AND message_id = ?2 AND generation = ?3",
+                params![
+                    owner.to_string(),
+                    id.to_string(),
+                    generation,
+                    chrono::Utc::now().timestamp()
+                ],
+            )?;
+        }
+        crate::services::gateway::submission::check_send_session()?;
+        tx.commit()?;
+        Ok(acknowledged)
+    }
+
+    pub(crate) fn due_deletes(
+        &self,
+        owner: &UserId,
+        reconnect: bool,
+    ) -> Result<Vec<MessageId>, StorageError> {
+        let conn = self.db.connection()?;
+        if reconnect {
+            conn.execute(
+                "UPDATE saved_delete_outbox SET next_attempt_at = 0 WHERE owner_id = ?1",
+                params![owner.to_string()],
+            )?;
+        }
+        let mut stmt = conn.prepare("SELECT message_id FROM saved_delete_outbox WHERE owner_id = ?1 AND next_attempt_at <= ?2 ORDER BY next_attempt_at, message_id LIMIT 4")?;
+        let ids = stmt
+            .query_map(
+                params![owner.to_string(), chrono::Utc::now().timestamp()],
+                |r| r.get::<_, String>(0),
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        ids.into_iter()
+            .map(|id| {
+                id.parse().map_err(|_| {
+                    StorageError::InvalidData("Invalid Saved deletion outbox identity".into())
+                })
+            })
+            .collect()
     }
 
     /// Clock of the last pin change applied to this record; 0 when none.

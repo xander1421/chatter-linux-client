@@ -410,6 +410,58 @@ impl MessageService {
         synced
     }
 
+    /// Serialize with snapshot fanout; deletion intent wins before network submission.
+    /// `prepare` is false for recovery and already-recorded user retries.
+    pub(crate) async fn submit_saved_delete(
+        &self,
+        owner: UserId,
+        id: MessageId,
+        sent_at: u64,
+        prepare: bool,
+    ) -> Result<bool, MessageError> {
+        let _gate = self.saved_sync_gate.lock().await;
+        crate::services::gateway::submission::check_send_session()?;
+        if self.current_user_id()? != owner {
+            return Err(MessageError::NotLoggedIn);
+        }
+        if prepare {
+            self.message_repo
+                .prepare_own_saved_delete(&owner, &id, sent_at)?;
+        }
+        let journal = SavedSyncRepository::new(self.database.clone());
+        let Some((generation, clock)) = journal.pending_delete(&owner, &id)? else {
+            return Ok(true);
+        };
+        if clock != sent_at {
+            return Err(MessageError::InvalidContent(
+                "Saved deletion clock changed".into(),
+            ));
+        }
+        let mut content = crate::services::build_delete_for_me_content(
+            &owner.to_string(),
+            &owner.to_string(),
+            sent_at,
+        );
+        if let Some(crate::proto::content_v1::content::Content::DeleteForMeSync(sync)) =
+            content.content.as_mut()
+        {
+            sync.saved_message_id = id.to_string();
+            sync.saved_messages_scope = true;
+        }
+        let acknowledged = tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            self.sync_to_own_devices_acknowledged(&mut self.auth_client(), content),
+        )
+        .await
+        .is_ok_and(|(_, acknowledged)| acknowledged);
+        if crate::services::gateway::submission::check_send_session().is_err()
+            || self.current_user_id().ok() != Some(owner)
+        {
+            return Ok(false);
+        }
+        Ok(journal.finish_delete(&owner, &id, generation, sent_at, acknowledged)?)
+    }
+
     /// Apply a snapshot through the shared storage-only receive path.
     pub fn apply_saved_message_sync(
         &self,
@@ -1144,6 +1196,8 @@ pub(crate) fn spawn_saved_sync_recovery(
                     Err(_) => break,
                 }
             }
+            use crate::services::gateway::submission::{SEND_SESSION, SendSession};
+            let send_session = SendSession::capture(client.auth_state());
             let state = client.auth_state().get();
             let Some(owner) = state
                 .current_user_id
@@ -1162,9 +1216,47 @@ pub(crate) fn spawn_saved_sync_recovery(
                     continue;
                 }
             };
+            let deletes =
+                match journal.due_deletes(&owner, reconnected || previous != Some(session)) {
+                    Ok(due) => due,
+                    Err(error) => {
+                        tracing::warn!(%error, "Saved deletion journal unavailable");
+                        Vec::new()
+                    }
+                };
             previous = Some(session);
-            use crate::services::gateway::submission::{SEND_SESSION, SendSession};
-            let send_session = SendSession::capture(client.auth_state());
+            for id in deletes {
+                let now = client.auth_state().get();
+                if now.current_user_id != Some(owner)
+                    || now.session_revision != session.1
+                    || !client.offline_state().connection_state().is_connected()
+                {
+                    break;
+                }
+                if let Ok(Some((_, sent_at))) = journal.pending_delete(&owner, &id) {
+                    match SEND_SESSION
+                        .scope(
+                            send_session.clone(),
+                            messages.submit_saved_delete(owner, id, sent_at, false),
+                        )
+                        .await
+                    {
+                        Ok(true) => {
+                            client.event_bus().emit_domain(
+                                crate::events::DomainEvent::DeleteForMeSync {
+                                    conversation_id: ChannelId::from(owner),
+                                    target_author_id: owner,
+                                    target_message_id: id,
+                                    timestamp: TimestampNanos::now().as_u64(),
+                                    saved_deletion_persisted: true,
+                                },
+                            );
+                        }
+                        Ok(false) => {}
+                        Err(error) => tracing::warn!(%error, %id, "Saved deletion remains pending"),
+                    }
+                }
+            }
             for id in due {
                 let now = client.auth_state().get();
                 if now.current_user_id != Some(owner)

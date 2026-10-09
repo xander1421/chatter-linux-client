@@ -1414,6 +1414,52 @@ impl ConversationHandle {
         target_author: &UserId,
         target_sent_timestamp: u64,
     ) -> ConversationResult {
+        if matches!(self.conversation, ActiveConversation::Channel(_))
+            && self.storage_scope()?.kind == ConversationType::SavedMessages
+        {
+            let session = crate::services::gateway::submission::SendSession::capture(
+                self.client.auth_state(),
+            );
+            let auth = self.client.auth_state().get();
+            let owner = auth
+                .current_user_id
+                .ok_or(crate::services::MessageError::NotLoggedIn)?;
+            if *target_author != owner {
+                return Err(crate::services::MessageError::NotAuthor.into());
+            }
+            if target_sent_timestamp == 0 || target_sent_timestamp > i64::MAX as u64 {
+                return Err(ConversationError::Other(
+                    "Invalid Saved deletion timestamp".into(),
+                ));
+            }
+            let messages = self.client.messages();
+            let journal =
+                crate::storage::repositories::SavedSyncRepository::new(messages.database.clone());
+            let (id, prepare) = match journal.deleted_identity(&owner, target_sent_timestamp)? {
+                Some(id) => (id, false),
+                None => (
+                    self.lookup_message(target_author, target_sent_timestamp)?
+                        .id,
+                    true,
+                ),
+            };
+            let acknowledged = crate::services::gateway::submission::SEND_SESSION
+                .scope(
+                    session,
+                    messages.submit_saved_delete(owner, id, target_sent_timestamp, prepare),
+                )
+                .await?;
+            let now = self.client.auth_state().get();
+            if acknowledged
+                && now.current_user_id == Some(owner)
+                && now.session_revision == auth.session_revision
+            {
+                return Ok(());
+            }
+            return Err(ConversationError::Other(
+                "Saved deletion was not confirmed on linked devices; retry when connected".into(),
+            ));
+        }
         match &self.conversation {
             ActiveConversation::AnonDm(id) => self
                 .client
@@ -1431,61 +1477,17 @@ impl ConversationHandle {
             _ => {
                 let msg = self.lookup_message(target_author, target_sent_timestamp)?;
                 let author_aci = msg.sender_id.map(|id| id.to_string()).unwrap_or_default();
-                let mut content = crate::services::build_delete_for_me_content(
+                let content = crate::services::build_delete_for_me_content(
                     &self.dm_or_channel_id(),
                     &author_aci,
                     target_sent_timestamp,
                 );
-                if msg.conversation_type == ConversationType::SavedMessages {
-                    if let Some(crate::proto::content_v1::content::Content::DeleteForMeSync(sync)) =
-                        content.content.as_mut()
-                    {
-                        sync.saved_message_id = msg.id.to_string();
-                        sync.saved_messages_scope = true;
-                    }
-                }
                 // Our own other devices only: a peer's (or channel member's)
                 // device would apply it and delete its own copy.
                 let messages = self.client.messages();
-                if msg.conversation_type == ConversationType::SavedMessages {
-                    // Saved has no remote history to repair a missed delete.
-                    // Keep the local row available for retry until the whole
-                    // own-device set has accepted the control.
-                    let auth = self.client.auth_state().get();
-                    if auth.current_user_id != msg.sender_id || auth.current_user_id.is_none() {
-                        return Err(crate::services::MessageError::NotLoggedIn.into());
-                    }
-                    let session = crate::services::gateway::submission::SendSession::capture(
-                        self.client.auth_state(),
-                    );
-                    let acknowledged = crate::services::gateway::submission::SEND_SESSION
-                        .scope(session, async {
-                            tokio::time::timeout(
-                                std::time::Duration::from_secs(30),
-                                messages.sync_to_own_devices_acknowledged(
-                                    &mut messages.auth_client(),
-                                    content,
-                                ),
-                            )
-                            .await
-                            .is_ok_and(|(_, acknowledged)| acknowledged)
-                        })
-                        .await;
-                    let current = self.client.auth_state().get();
-                    if !acknowledged
-                        || current.current_user_id != auth.current_user_id
-                        || current.session_revision != auth.session_revision
-                    {
-                        return Err(ConversationError::Other(
-                            "Saved deletion was not confirmed on linked devices; retry when connected"
-                                .into(),
-                        ));
-                    }
-                } else {
-                    messages
-                        .sync_to_own_devices(&mut messages.auth_client(), content)
-                        .await;
-                }
+                messages
+                    .sync_to_own_devices(&mut messages.auth_client(), content)
+                    .await;
                 messages
                     .delete_message_local(&msg.id)
                     .map_err(ConversationError::Message)

@@ -125,7 +125,7 @@ impl UnifiedMessageRepository {
         let conn = self.db.read_connection()?;
         let tx = conn.unchecked_transaction()?;
         let row = tx.query_row(
-            &format!("SELECT {} FROM messages WHERE id = ?1 AND sender_id = ?2 AND conversation_id = ?2 AND conversation_type = 'saved_messages' AND is_deleted = 0 AND NOT EXISTS (SELECT 1 FROM deleted_messages WHERE id = ?1)", message_columns("messages")),
+            &format!("SELECT {} FROM messages WHERE id = ?1 AND sender_id = ?2 AND conversation_id = ?2 AND conversation_type = 'saved_messages' AND is_deleted = 0 AND NOT EXISTS (SELECT 1 FROM deleted_messages WHERE id = ?1) AND NOT EXISTS (SELECT 1 FROM saved_delete_tombstones WHERE owner_id = ?2 AND message_id = ?1)", message_columns("messages")),
             params![id.to_string(), owner.to_string()], row_to_message,
         ).optional()?.transpose()?;
         let clock: Option<i64> = tx
@@ -749,8 +749,32 @@ impl UnifiedMessageRepository {
         id: &MessageId,
         sent_at: u64,
     ) -> Result<(), StorageError> {
+        self.write_own_saved_delete(owner, id, sent_at, false)
+    }
+
+    /// Persist intent and suppression atomically, retaining the row until ACK.
+    pub(crate) fn prepare_own_saved_delete(
+        &self,
+        owner: &UserId,
+        id: &MessageId,
+        sent_at: u64,
+    ) -> Result<(), StorageError> {
+        crate::services::gateway::submission::check_send_session()?;
+        self.write_own_saved_delete(owner, id, sent_at, true)
+    }
+
+    fn write_own_saved_delete(
+        &self,
+        owner: &UserId,
+        id: &MessageId,
+        sent_at: u64,
+        enqueue: bool,
+    ) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
         let tx = conn.unchecked_transaction()?;
+        if enqueue {
+            crate::services::gateway::submission::check_send_session()?;
+        }
         let invalid = || StorageError::InvalidData("Saved deletion identity mismatch".into());
         let current: Option<String> = tx
             .query_row(
@@ -785,15 +809,50 @@ impl UnifiedMessageRepository {
             "INSERT OR IGNORE INTO saved_delete_tombstones (owner_id, message_id) VALUES (?1, ?2)",
             params![owner.to_string(), id.to_string()],
         )?;
-        tx.execute(
-            "DELETE FROM messages WHERE id = ?1 AND conversation_type = 'saved_messages'
-             AND conversation_id = ?2 AND sender_id = ?2 AND sent_at = ?3",
-            params![id.to_string(), owner.to_string(), sent_at as i64],
-        )?;
+        if enqueue {
+            let pending_clock: Option<i64> = tx.query_row(
+                "SELECT sent_at FROM saved_delete_outbox WHERE owner_id = ?1 AND message_id = ?2",
+                params![owner.to_string(), id.to_string()], |r| r.get(0),
+            ).optional()?;
+            if pending_clock.is_some_and(|clock| clock != sent_at as i64) {
+                return Err(invalid());
+            }
+            tx.execute("UPDATE saved_delete_tombstones SET sent_at = ?3 WHERE owner_id = ?1 AND message_id = ?2",
+                params![owner.to_string(), id.to_string(), sent_at as i64])?;
+            let count: i64 = tx.query_row(
+                "SELECT COUNT(*) FROM saved_delete_outbox WHERE owner_id = ?1",
+                params![owner.to_string()],
+                |r| r.get(0),
+            )?;
+            let pending: bool = tx.query_row(
+                "SELECT EXISTS(SELECT 1 FROM saved_delete_outbox WHERE owner_id = ?1 AND message_id = ?2)",
+                params![owner.to_string(), id.to_string()], |r| r.get(0),
+            )?;
+            if count >= 4096 && !pending {
+                return Err(StorageError::InvalidData(
+                    "Saved deletion outbox is full; retry after linked devices reconnect".into(),
+                ));
+            }
+            tx.execute(
+                "INSERT INTO saved_delete_outbox(owner_id, message_id, sent_at) VALUES (?1, ?2, ?3)
+                 ON CONFLICT(owner_id, message_id) DO UPDATE SET generation = generation + 1,
+                   attempts = 0, next_attempt_at = 0 WHERE sent_at = excluded.sent_at",
+                params![owner.to_string(), id.to_string(), sent_at as i64],
+            )?;
+        } else {
+            tx.execute(
+                "DELETE FROM messages WHERE id = ?1 AND conversation_type = 'saved_messages'
+                 AND conversation_id = ?2 AND sender_id = ?2 AND sent_at = ?3",
+                params![id.to_string(), owner.to_string(), sent_at as i64],
+            )?;
+        }
         tx.execute(
             "DELETE FROM saved_sync_outbox WHERE owner_id = ?1 AND message_id = ?2",
             params![owner.to_string(), id.to_string()],
         )?;
+        if enqueue {
+            crate::services::gateway::submission::check_send_session()?;
+        }
         tx.commit()?;
         Ok(())
     }

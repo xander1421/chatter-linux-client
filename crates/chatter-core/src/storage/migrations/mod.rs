@@ -92,6 +92,7 @@ mod v092_saved_pin_watermark;
 mod v093_saved_sync_outbox;
 mod v094_anon_membership_order;
 mod v095_saved_delete_tombstones;
+mod v096_saved_delete_outbox;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -412,4 +413,5 @@ pub fn default_migrations() -> MigrationRunner {
         .register(V093SavedSyncOutbox)
         .register(V094AnonMembershipOrder)
         .register(v095_saved_delete_tombstones::V095SavedDeleteTombstones)
+        .register(v096_saved_delete_outbox::V096SavedDeleteOutbox)
 }
