@@ -109,6 +109,10 @@ pub enum RoomEvent {
         reason: String,
         retryable: bool,
     },
+    /// Reconsider canonical membership for this connection after departure/recovery.
+    MembershipChanged { generation: u64 },
+    /// Recovery notice scoped to a connection; never emitted for initial connect.
+    RecoveryPhase { generation: u64, recovered: bool },
     /// Participant joined.
     ParticipantJoined {
         identity: String,
@@ -1175,6 +1179,10 @@ impl RoomManager {
             tracing::info!("Room event handler started");
             let mut cryptor_evidence = ReceiverCryptorEvidence::default();
             while let Some(event) = events.recv().await {
+                // All effects, including track/playback and membership, belong to this connection.
+                if generation_slot.load(std::sync::atomic::Ordering::SeqCst) != generation {
+                    break;
+                }
                 // Avoid dumping arbitrary SDK event payloads and identities.
                 if let livekit::RoomEvent::E2eeStateChanged { participant, state } = &event {
                     if cryptor_evidence.observe(
@@ -1194,13 +1202,15 @@ impl RoomManager {
                 Self::handle_room_event(
                     event,
                     (generation, live),
+                    &generation_slot,
                     &event_tx,
                     &state,
                     &room_arc,
                     &audio_playback,
                     &video_playback,
                     &timing,
-                );
+                )
+                .await;
                 // Yield to allow other tasks (like forwarder) to run
                 tokio::task::yield_now().await;
             }
@@ -1208,6 +1218,9 @@ impl RoomManager {
             // Retire only this handler's observer: a detached old handler must
             // never retire a newer connection's timing.
             timing.retire();
+            if generation_slot.load(std::sync::atomic::Ordering::SeqCst) != generation {
+                return;
+            }
             // Room disconnected - stop audio/video playback
             tracing::info!("Room event stream ended - marking disconnected");
             if let Some(playback) = audio_playback.read().as_ref() {
@@ -1237,6 +1250,9 @@ impl RoomManager {
     /// signaled to stop (non-blocking) and will clean themselves up.
     /// Thread joins happen in Drop to ensure proper cleanup.
     pub async fn disconnect(&self) {
+        // Retire handler ownership before any await or reuse of shared playback.
+        self.connection_generation
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
         self.retire_timing(None);
         // Update state immediately so UI can respond
         self.set_state(RoomState::Disconnected);
@@ -1513,9 +1529,35 @@ impl RoomManager {
         let _ = self.event_tx.try_send(RoomEvent::StateChanged(state));
     }
 
-    fn handle_room_event(
+    // Reserve capacity asynchronously: terminal control must survive a full data queue.
+    // Recheck ownership after waiting, before placing the event in the queue.
+    async fn send_control(
+        tx: &mpsc::Sender<RoomEvent>,
+        owner: &std::sync::atomic::AtomicU64,
+        generation: u64,
+        event: RoomEvent,
+    ) {
+        if let Ok(permit) = tx.reserve().await {
+            if owner.load(std::sync::atomic::Ordering::SeqCst) == generation {
+                permit.send(event);
+            }
+        }
+    }
+
+    /// Canonical transport and membership are usable for peer-left policy.
+    pub fn membership_is_current(&self) -> bool {
+        matches!(self.state(), RoomState::Connected { .. })
+            && self
+                .room
+                .read()
+                .as_ref()
+                .is_some_and(|r| r.connection_state() == livekit::ConnectionState::Connected)
+    }
+
+    async fn handle_room_event(
         event: livekit::RoomEvent,
         (generation, live): (u64, bool),
+        generation_slot: &std::sync::atomic::AtomicU64,
         event_tx: &mpsc::Sender<RoomEvent>,
         state: &Arc<RwLock<RoomState>>,
         room: &Arc<RwLock<Option<Room>>>,
@@ -1523,6 +1565,9 @@ impl RoomManager {
         video_playback: &Arc<RwLock<VideoPlayback>>,
         timing: &CallTiming,
     ) {
+        if !live {
+            return;
+        }
         match event {
             livekit::RoomEvent::ParticipantConnected(participant) => {
                 timing.mark("remote_participant_present");
@@ -1594,9 +1639,24 @@ impl RoomManager {
                     vp.remove_track(&participant_id, true);
                 }
 
-                let _ = event_tx.try_send(RoomEvent::ParticipantLeft {
-                    identity: participant_id,
-                });
+                // Full restart evicts participants before delivering Reconnecting.
+                // Consult the SDK state as well as our mirrored phase.
+                let membership_current = matches!(*state.read(), RoomState::Connected { .. })
+                    && room.read().as_ref().is_some_and(|r| {
+                        r.connection_state() == livekit::ConnectionState::Connected
+                    });
+                if membership_current {
+                    let _ = event_tx.try_send(RoomEvent::ParticipantLeft {
+                        identity: participant_id,
+                    });
+                    Self::send_control(
+                        event_tx,
+                        generation_slot,
+                        generation,
+                        RoomEvent::MembershipChanged { generation },
+                    )
+                    .await;
+                }
             }
             livekit::RoomEvent::TrackSubscribed {
                 track, participant, ..
@@ -1757,6 +1817,16 @@ impl RoomManager {
                     tracing::warn!("Room connection interrupted; SDK reconnecting");
                     *state.write() = next.clone();
                     let _ = event_tx.try_send(RoomEvent::StateChanged(next));
+                    Self::send_control(
+                        event_tx,
+                        generation_slot,
+                        generation,
+                        RoomEvent::RecoveryPhase {
+                            generation,
+                            recovered: false,
+                        },
+                    )
+                    .await;
                 }
             }
             livekit::RoomEvent::Reconnected => {
@@ -1778,7 +1848,30 @@ impl RoomManager {
                 if let Some(next) = next {
                     tracing::info!("Room connection recovered by SDK");
                     *state.write() = next.clone();
-                    let _ = event_tx.try_send(RoomEvent::StateChanged(next));
+                    Self::send_control(
+                        event_tx,
+                        generation_slot,
+                        generation,
+                        RoomEvent::RecoveryPhase {
+                            generation,
+                            recovered: true,
+                        },
+                    )
+                    .await;
+                    Self::send_control(
+                        event_tx,
+                        generation_slot,
+                        generation,
+                        RoomEvent::StateChanged(next),
+                    )
+                    .await;
+                    Self::send_control(
+                        event_tx,
+                        generation_slot,
+                        generation,
+                        RoomEvent::MembershipChanged { generation },
+                    )
+                    .await;
                 }
             }
             // Terminal for this connection: the SDK closes the room next and
@@ -1801,12 +1894,24 @@ impl RoomManager {
                     reason: reason_text.clone(),
                 };
                 *state.write() = failed.clone();
-                let _ = event_tx.try_send(RoomEvent::StateChanged(failed));
-                let _ = event_tx.try_send(RoomEvent::ConnectionLost {
+                Self::send_control(
+                    event_tx,
+                    generation_slot,
                     generation,
-                    reason: reason_text,
-                    retryable: loss_is_retryable(reason),
-                });
+                    RoomEvent::StateChanged(failed),
+                )
+                .await;
+                Self::send_control(
+                    event_tx,
+                    generation_slot,
+                    generation,
+                    RoomEvent::ConnectionLost {
+                        generation,
+                        reason: reason_text,
+                        retryable: loss_is_retryable(reason),
+                    },
+                )
+                .await;
             }
             // Redundant with Reconnecting/Reconnected/Disconnected above.
             livekit::RoomEvent::ConnectionStateChanged(_) => {}

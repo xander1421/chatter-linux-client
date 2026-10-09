@@ -576,12 +576,22 @@ enum CallCommand {
         reason: CallEndReason,
         response: oneshot::Sender<()>,
     },
+    BeginPeerLeftCheck {
+        generation: u64,
+    },
+    FinishPeerLeftCheck {
+        call: CallHandle,
+        generation: u64,
+        session_revision: Option<u64>,
+    },
     /// Swap the worker's gRPC call client (anon-mode transport switch).
     ///
     /// The command loop is strictly sequential and fully awaits each call
     /// operation before dequeuing the next, so this is only ever processed
     /// BETWEEN complete operations — never mid-RPC — making the swap safe.
-    SwapCallClient { client: CallClient },
+    SwapCallClient {
+        client: CallClient,
+    },
     /// Get active call info.
     GetActiveCall {
         response: oneshot::Sender<Option<Call>>,
@@ -594,7 +604,12 @@ enum CallCommand {
         response: oneshot::Sender<Option<String>>,
     },
     /// Check if in a call.
-    IsInCall { response: oneshot::Sender<bool> },
+    IsInCall {
+        response: oneshot::Sender<bool>,
+    },
+    GetRoomConnection {
+        response: oneshot::Sender<(u64, RoomState)>,
+    },
     /// Get room state.
     GetRoomState {
         response: oneshot::Sender<RoomState>,
@@ -1631,6 +1646,16 @@ impl CallWorkerHandle {
         rx.await.ok().flatten()
     }
 
+    /// Read connection identity and phase in one actor turn.
+    pub async fn room_connection(&self) -> Option<(u64, RoomState)> {
+        let (tx, rx) = oneshot::channel();
+        self.cmd_tx
+            .send(CallCommand::GetRoomConnection { response: tx })
+            .await
+            .ok()?;
+        rx.await.ok()
+    }
+
     /// Get room connection state.
     pub async fn room_state(&self) -> RoomState {
         let (tx, rx) = oneshot::channel();
@@ -1971,10 +1996,16 @@ fn run_call_worker(
         let events_tx_clone = events_tx.clone();
         let room_bus = room_events_broadcast.clone();
         let lost_call = active_call.clone();
+        let command_sender = internal_tx.clone();
         tokio::task::spawn_local(async move {
             tracing::info!("Room events forwarder started");
             while let Some(event) = room_events_rx.recv().await {
                 tracing::info!("Forwarding room event: {:?}", event);
+                if let LiveKitRoomEvent::MembershipChanged { generation } = event {
+                    // Policy control bypasses the lossy broadcast/UI queues.
+                    let _ = internal_tx.send(CallCommand::BeginPeerLeftCheck { generation }).await;
+                    continue;
+                }
                 if let LiveKitRoomEvent::ConnectionLost { generation, ref reason, retryable } = event {
                     // Queue behind whatever the user already asked for: a
                     // hangup ahead of this clears the call and the handler
@@ -2029,9 +2060,48 @@ fn run_call_worker(
                 }
             };
 
+            // Membership decisions and owner checks happen together on the actor.
+            // Recovery may defer these commands; generation prevents a stale timer
+            // from ending a replacement room or call.
+            let cmd = match cmd {
+                CallCommand::BeginPeerLeftCheck { generation } => {
+                    if orchestrator.active.as_ref().is_some_and(|a| incoming_presentation.accepts_session(a.session_revision))
+                        && room_manager.connection_generation() == generation
+                        && room_manager.membership_is_current()
+                        && peer_left_ends_call(orchestrator.active.as_ref().map(|a| a.kind),
+                            &room_manager.remote_participant_identities(), "")
+                    {
+                        if let Some(call) = active_call.borrow().as_ref().map(derive_call_handle) {
+                            let generation = room_manager.connection_generation();
+                            let session_revision = incoming_presentation.session_revision();
+                            let tx = command_sender.clone();
+                            tokio::task::spawn_local(async move {
+                                tokio::time::sleep(PEER_LEFT_GRACE).await;
+                                let _ = tx.send(CallCommand::FinishPeerLeftCheck { call, generation, session_revision }).await;
+                            });
+                        }
+                    }
+                    continue;
+                }
+                CallCommand::FinishPeerLeftCheck { call, generation, session_revision } => {
+                    if active_call.borrow().as_ref().map(derive_call_handle).as_ref() != Some(&call)
+                        || incoming_presentation.session_revision() != session_revision
+                        || !orchestrator.active.as_ref().is_some_and(|a| incoming_presentation.accepts_session(a.session_revision))
+                        || room_manager.connection_generation() != generation
+                        || !room_manager.membership_is_current()
+                        || !peer_left_ends_call(orchestrator.active.as_ref().map(|a| a.kind),
+                            &room_manager.remote_participant_identities(), "")
+                    { continue; }
+                    let (response, _) = oneshot::channel();
+                    CallCommand::DisconnectLocal { notify_server: false, session_revision,
+                        call: Some(call), reason: CallEndReason::RemoteHangup, response }
+                }
+                cmd => cmd,
+            };
             orchestrator.generation = orchestrator.generation.checked_add(1)
                 .expect("call generation exhausted");
             match cmd {
+                CallCommand::BeginPeerLeftCheck { .. } | CallCommand::FinishPeerLeftCheck { .. } => unreachable!("normalized above"),
                 CallCommand::InitiateCall {
                     attempt,
                     channel_id,
@@ -2300,6 +2370,10 @@ fn run_call_worker(
                     let _ = response.send(active_call.borrow().is_some());
                 }
 
+                CallCommand::GetRoomConnection { response } => {
+                    let _ = response.send((room_manager.connection_generation(), room_manager.state()));
+                }
+
                 CallCommand::GetRoomState { response } => {
                     let _ = response.send(room_manager.state());
                 }
@@ -2505,12 +2579,16 @@ fn run_call_worker(
                         let _ = response.send(Err(CallError::NotInCall));
                         continue;
                     };
+                    let _ = events_tx.try_send(LiveKitRoomEvent::RecoveryPhase { generation: room_manager.connection_generation(), recovered: false });
                     let result = recover_session(
                         &call_client, &room_manager, &active_call, &ratchet_cancel,
                         &mut cmd_rx, &mut deferred_commands, &incoming_presentation, &call,
                         orchestrator.active.as_ref().filter(|active| active.call == call)
                             .map(|active| active.session_revision),
                     ).await;
+                    if result.is_ok() {
+                        let _ = events_tx.try_send(LiveKitRoomEvent::RecoveryPhase { generation: room_manager.connection_generation(), recovered: true });
+                    }
                     if matches!(&result, Err(RecoveryFailure::Failed(_))) {
                         finish_failed_recovery(
                             &call_client, &room_manager, &active_call, &ratchet_cancel,
@@ -2543,6 +2621,9 @@ fn run_call_worker(
                         .filter(|a| a.call == call)
                         .is_none_or(|a| incoming_presentation.accepts_session(a.session_revision));
                     tracing::warn!(call = %call.as_str(), %reason, retryable, "Room session lost");
+                    if retryable && session_ok {
+                        let _ = events_tx.try_send(LiveKitRoomEvent::RecoveryPhase { generation, recovered: false });
+                    }
                     let recovery = if retryable && session_ok {
                         recover_session(
                             &call_client, &room_manager, &active_call, &ratchet_cancel,
@@ -2554,7 +2635,10 @@ fn run_call_worker(
                         Err(RecoveryFailure::Failed(CallError::CallEnded))
                     };
                     match recovery {
-                        Ok(()) => tracing::info!(call = %call.as_str(), "Room session recovered"),
+                        Ok(()) => {
+                            tracing::info!(call = %call.as_str(), "Room session recovered");
+                            let _ = events_tx.try_send(LiveKitRoomEvent::RecoveryPhase { generation: room_manager.connection_generation(), recovered: true });
+                        },
                         // The admitted hangup is next, preserving its reason, server
                         // notification policy and reply through the existing arm.
                         Err(RecoveryFailure::Cancelled) => {},
@@ -4295,9 +4379,6 @@ pub fn spawn_call_orchestrator_bridge(
                     }
                 },
                 event = room_rx.recv() => match event {
-                    Ok(LiveKitRoomEvent::ParticipantLeft { identity }) => {
-                        spawn_end_if_left_alone(worker.clone(), identity);
-                    }
                     Ok(_) | Err(RecvError::Lagged(_)) => {}
                     Err(RecvError::Closed) => {
                         tracing::info!("Call orchestrator bridge stopping — room bus closed");
@@ -4331,43 +4412,6 @@ fn peer_left_ends_call(
                 | OrchestratedCallKind::AnonGroup
         )
     ) && remaining.iter().all(|id| id == departed)
-}
-
-/// A 1:1 call (DM or anon DM) is over when the other person leaves the room,
-/// and an anon group call when the last other member does.
-///
-/// The peer's hangup signal normally ends a 1:1 call, but that signal is a
-/// message and can be late or lost — the room saying the peer is gone is the
-/// ground truth. Without this the caller sat alone in the room, timer
-/// running, until they hung up themselves. An anon group member's hangup only
-/// leaves (`handle_anon_hangup`), so this is what ends the group call once we
-/// are alone. Channel calls are untouched: the initiator rekeys instead.
-fn spawn_end_if_left_alone(worker: CallWorkerHandle, departed: String) {
-    tokio::spawn(async move {
-        let Some(call) = worker.active_call().await.map(|c| c.id) else {
-            return;
-        };
-        let still_ends = || async {
-            peer_left_ends_call(
-                worker.orch_active_kind().await,
-                &worker.remote_participant_identities().await,
-                &departed,
-            )
-        };
-        if !still_ends().await {
-            return;
-        }
-        tokio::time::sleep(PEER_LEFT_GRACE).await;
-        // Still the same call, still alone? Otherwise the hangup signal already
-        // ended it, or the peer came back.
-        if worker.active_call().await.map(|c| c.id) != Some(call) || !still_ends().await {
-            return;
-        }
-        tracing::info!(call = %call, "Last other participant left the room — ending the call");
-        // The resulting `ActiveEnded` files the DM's Call bubble
-        // (`call_history_recorder`), as for any other end of the call.
-        worker.disconnect_local(CallEndReason::RemoteHangup).await;
-    });
 }
 
 /// How long an incoming offer may ring. Signal's ring timeout: an offer older

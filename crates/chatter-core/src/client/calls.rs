@@ -1024,6 +1024,24 @@ impl ChatterClient {
         })
     }
 
+    /// Recovery UI needs connection identity as well as call identity. Bracket
+    /// the existing call/roster snapshot so queued notices cannot acquire a
+    /// replacement connection's owner.
+    #[cfg(feature = "media")]
+    pub async fn call_room_recovery_snapshot(
+        &self,
+    ) -> Option<(CallRoomSnapshot, u64, crate::calls::RoomState, String)> {
+        let worker = self.call_service().get()?.clone();
+        let (generation, state) = worker.room_connection().await?;
+        let snapshot = self.call_room_snapshot().await?;
+        let room_name = worker.get_room_name().await?;
+        let (latest_generation, latest_state) = worker.room_connection().await?;
+        if generation != latest_generation || state != latest_state {
+            return None;
+        }
+        Some((snapshot, generation, state, room_name))
+    }
+
     /// Locally mute/unmute a remote participant's audio. The LiveKit
     /// stream stays subscribed; muted frames are dropped before mixing.
     #[cfg(feature = "media")]
