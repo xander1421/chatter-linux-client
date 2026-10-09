@@ -1067,6 +1067,7 @@ impl KeyStore {
         use rusqlite::OptionalExtension;
         let key_column = match (table, column) {
             ("sessions", "record") | ("remote_identities", "identity_key") => "address",
+            ("settings", "CAST(value AS BLOB)") if key == "auth.current_user_id" => "key",
             ("prekeys" | "signed_prekeys" | "kyber_prekeys", "record")
             | ("local_identity", "identity_key_pair" | "CAST(registration_id AS BLOB)") => "id",
             _ => {

@@ -51,9 +51,28 @@ impl SignalStore {
         Self { key_store }
     }
 
+    fn is_local_account(&self, account: &str) -> Result<bool> {
+        let owner = self
+            .key_store
+            .receive_read("settings", "auth.current_user_id", "CAST(value AS BLOB)")
+            .map_err(storage_to_signal_error)?;
+        local_account_matches(owner.as_deref(), account)
+    }
+
     /// Get the underlying KeyStore.
     pub fn key_store(&self) -> Arc<KeyStore> {
         self.key_store.clone()
+    }
+}
+
+// The persisted owner is the same account fence used at receive commit. A
+// malformed owner must not silently downgrade self identity to peer TOFU.
+fn local_account_matches(owner: Option<&[u8]>, account: &str) -> Result<bool> {
+    match owner {
+        None => Ok(false), // unregistered stores have no account identity yet
+        Some(bytes) => serde_json::from_slice::<String>(bytes)
+            .map(|owner| owner == account)
+            .map_err(|_| SignalProtocolError::InvalidProtobufEncoding),
     }
 }
 
@@ -117,6 +136,11 @@ impl IdentityKeyStore for SignalStore {
         // server-injected "ghost" device — fails is_trusted_identity and is
         // never encrypted to. (Sessions/prekeys/sender-keys remain per-device.)
         let account = address.name();
+        if self.is_local_account(account)?
+            && self.get_identity_key_pair().await?.identity_key() != identity
+        {
+            return Err(SignalProtocolError::UntrustedIdentity(address.clone()));
+        }
         let key_changed = self
             .key_store
             .save_identity(account, &identity.serialize())
@@ -168,6 +192,12 @@ impl IdentityKeyStore for SignalStore {
         // server-injected device TOFU-trust and receive fan-out. Compiles
         // either way; guarded only by
         // `tests/round3_security_e2e.rs::ghost_device_with_divergent_identity_is_untrusted`.
+        // Provisioning and SVR restore share the account identity key. Use
+        // that local anchor even before the first self sync and even if a
+        // legacy remote self row was poisoned. Never trust a device's TOFU key.
+        if self.is_local_account(address.name())? {
+            return Ok(self.get_identity_key_pair().await?.identity_key() == identity);
+        }
         let stored_key = self
             .key_store
             .get_identity(address.name())
@@ -184,6 +214,9 @@ impl IdentityKeyStore for SignalStore {
     }
 
     async fn get_identity(&self, address: &ProtocolAddress) -> Result<Option<IdentityKey>> {
+        if self.is_local_account(address.name())? {
+            return Ok(Some(*self.get_identity_key_pair().await?.identity_key()));
+        }
         let stored_key = self
             .key_store
             .get_identity(address.name())
@@ -508,6 +541,11 @@ impl IdentityKeyStore for StagedSignalStore {
         address: &ProtocolAddress,
         identity: &IdentityKey,
     ) -> Result<IdentityChange> {
+        if self.base.is_local_account(address.name())?
+            && self.base.get_identity_key_pair().await?.identity_key() != identity
+        {
+            return Err(SignalProtocolError::UntrustedIdentity(address.clone()));
+        }
         let changed = self
             .get_identity(address)
             .await?
@@ -527,3 +565,77 @@ impl IdentityKeyStore for StagedSignalStore {
 
 #[path = "receive_store.rs"]
 pub(crate) mod receive;
+
+#[cfg(test)]
+mod own_identity_regressions {
+    use super::*;
+
+    #[tokio::test]
+    async fn own_devices_use_local_anchor_even_with_absent_or_poisoned_self_pin() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let db = Arc::new(crate::storage::Database::open(file.path(), "fixture").unwrap());
+        db.run_migrations().unwrap();
+        let own = crate::domain::ids::UserId::new().to_string();
+        crate::storage::SettingsRepository::new(db.clone())
+            .set_string("auth.current_user_id", &own)
+            .unwrap();
+        let keys = Arc::new(KeyStore::new(db));
+        let mut rng = rand::rng();
+        let local = IdentityKeyPair::generate(&mut rng);
+        let ghost = IdentityKeyPair::generate(&mut rng);
+        keys.set_local_identity(1, &local.serialize()).unwrap();
+        let mut store = SignalStore::new(keys.clone());
+        let linked =
+            ProtocolAddress::new(own.clone(), libsignal_protocol::DeviceId::new(2).unwrap());
+        assert!(
+            store
+                .is_trusted_identity(&linked, local.identity_key(), Direction::Receiving)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !store
+                .is_trusted_identity(&linked, ghost.identity_key(), Direction::Receiving)
+                .await
+                .unwrap()
+        );
+        keys.save_identity(&own, &ghost.identity_key().serialize())
+            .unwrap();
+        assert_eq!(
+            store.get_identity(&linked).await.unwrap(),
+            Some(*local.identity_key())
+        );
+        assert!(
+            store
+                .save_identity(&linked, ghost.identity_key())
+                .await
+                .is_err()
+        );
+        // The CAS receive overlay must have exactly the same anchor.
+        let mut receive = super::receive::ReceiveStore::new(store);
+        assert!(
+            receive
+                .is_trusted_identity(&linked, local.identity_key(), Direction::Receiving)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !receive
+                .is_trusted_identity(&linked, ghost.identity_key(), Direction::Receiving)
+                .await
+                .unwrap()
+        );
+        assert!(
+            receive
+                .save_identity(&linked, ghost.identity_key())
+                .await
+                .is_err()
+        );
+        assert!(
+            receive
+                .save_identity(&linked, local.identity_key())
+                .await
+                .is_ok()
+        );
+    }
+}

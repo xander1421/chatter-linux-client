@@ -111,6 +111,10 @@ impl IdentityKeyStore for ReceiveStore {
             .ok_or(SignalProtocolError::InvalidProtobufEncoding)
     }
     async fn get_identity(&self, a: &ProtocolAddress) -> Result<Option<IdentityKey>> {
+        let owner = self.observe("settings", "auth.current_user_id", "CAST(value AS BLOB)")?;
+        if super::local_account_matches(owner.as_deref(), a.name())? {
+            return Ok(Some(*self.get_identity_key_pair().await?.identity_key()));
+        }
         self.read("remote_identities", a.name(), "identity_key")?
             .map(|v| IdentityKey::try_from(v.as_slice()))
             .transpose()
