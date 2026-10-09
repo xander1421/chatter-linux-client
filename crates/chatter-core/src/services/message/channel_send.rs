@@ -73,17 +73,10 @@ fn send_request_key(owner: UserId, device: u32, channel: ChannelId, request: &st
 /// explicit delete-for-everyone intent (`remote_delete`) goes on to
 /// `deleting`, where the recovery worker removes the server copy with the
 /// retained token.
-///
-/// A journal retained before `RETAIN` kept `$.device` has no recorded
-/// sending device. The key commits to it, so the candidates (the post's own
-/// `author_device_id`, this install's `current_device`) are only tried, never
-/// trusted: a wrong one cannot produce the key. The matching device is then
-/// recorded on the journal.
 pub(crate) fn settle_cancelled_deposit(
     db: &Database,
     owner: UserId,
     channel: ChannelId,
-    current_device: Option<u32>,
     post: &crate::proto::chat_v1::Message,
 ) -> Result<bool, StorageError> {
     if post.send_request_key.len() != 32
@@ -95,30 +88,23 @@ pub(crate) fn settle_cancelled_deposit(
         return Ok(false);
     };
     let prefix = format!("{PREFIX}{owner}:");
-    let journals: Vec<(String, Option<u32>)> = {
+    let journals: Vec<(String, u32)> = {
         let conn = db.read_connection()?;
-        let mut stmt = conn.prepare("SELECT key,COALESCE(json_extract(value,'$.device'),json_extract(value,'$.entry.device')) FROM settings WHERE key LIKE ?1 AND json_extract(value,'$.phase')='unresolved' AND json_extract(value,'$.server_id') IS NULL AND json_extract(value,'$.channel_id')=?2")?;
+        let mut stmt = conn.prepare("SELECT key,json_extract(value,'$.device') FROM settings WHERE key LIKE ?1 AND json_extract(value,'$.phase')='unresolved' AND json_extract(value,'$.server_id') IS NULL AND json_extract(value,'$.channel_id')=?2 AND json_extract(value,'$.device') IS NOT NULL")?;
         let rows = stmt.query_map(params![format!("{prefix}%"), channel.to_string()], |r| Ok((r.get(0)?, r.get(1)?)))?;
         rows.collect::<Result<_, _>>()?
     };
-    let Some((key, device)) = journals.into_iter().find_map(|(key, device)| {
-        let request = key.strip_prefix(&prefix)?.to_owned();
-        let candidates = match device {
-            Some(device) => vec![device],
-            None => vec![post.author_device_id, current_device.unwrap_or(0)],
-        };
-        let device = candidates.into_iter().find(|device| {
-            *device != 0
-                && (post.author_device_id == 0 || post.author_device_id == *device)
-                && send_request_key(owner, *device, channel, &request)[..] == post.send_request_key[..]
-        })?;
-        Some((key, device))
+    let Some((key, _)) = journals.into_iter().find(|(key, device)| {
+        (post.author_device_id == 0 || post.author_device_id == *device)
+            && key.strip_prefix(&prefix).is_some_and(|request| {
+                send_request_key(owner, *device, channel, request)[..] == post.send_request_key[..]
+            })
     }) else {
         return Ok(false);
     };
     let mut conn = db.connection()?;
     let tx = conn.transaction()?;
-    let learned = tx.execute("UPDATE settings SET value=json_set(value,'$.server_id',?2,'$.device',?3) WHERE key=?1 AND json_extract(value,'$.phase')='unresolved' AND json_extract(value,'$.server_id') IS NULL",params![key,id.to_string(),device])? == 1;
+    let learned = tx.execute("UPDATE settings SET value=json_set(value,'$.server_id',?2) WHERE key=?1 AND json_extract(value,'$.phase')='unresolved' AND json_extract(value,'$.server_id') IS NULL",params![key,id.to_string()])? == 1;
     // An explicit delete-for-everyone was waiting for exactly this id.
     let remote = learned && tx.execute("UPDATE settings SET value=json_set(value,'$.phase','deleting','$.attempts',0,'$.next_at',0) WHERE key=?1 AND json_extract(value,'$.remote_delete')",params![key])? == 1;
     tx.execute("INSERT OR IGNORE INTO deleted_messages(id) VALUES(?1)", params![id.to_string()])?;
@@ -1169,7 +1155,7 @@ mod tests {
             send_request_key: key.to_vec(),
             ..Default::default()
         };
-        let settles = |p: &crate::proto::chat_v1::Message| settle_cancelled_deposit(&db, me, channel, Some(3), p).unwrap();
+        let settles = |p: &crate::proto::chat_v1::Message| settle_cancelled_deposit(&db, me, channel, p).unwrap();
         let exact = send_request_key(me, 3, channel, &request.to_string());
         // Another send of ours in the same channel, at the same moment.
         assert!(!settles(&post(&me.to_string(), 3, send_request_key(me, 3, channel, &MessageId::new().to_string()))));
@@ -1177,7 +1163,7 @@ mod tests {
         assert!(!settles(&post(&me.to_string(), 3, send_request_key(me, 4, channel, &request.to_string()))));
         assert!(!settles(&post(&me.to_string(), 3, send_request_key(other, 3, channel, &request.to_string()))));
         assert!(!settles(&post(&me.to_string(), 3, send_request_key(me, 3, ChannelId::new(), &request.to_string()))));
-        assert!(!settle_cancelled_deposit(&db, other, channel, Some(3), &post("", 3, exact)).unwrap());
+        assert!(!settle_cancelled_deposit(&db, other, channel, &post("", 3, exact)).unwrap());
         // The exact key, but claimed by someone else's post.
         assert!(!settles(&post(&other.to_string(), 3, exact)));
         assert!(!settles(&post(&me.to_string(), 4, exact)));
@@ -1194,19 +1180,17 @@ mod tests {
         assert!(!settles(&post(&me.to_string(), 3, exact)));
     }
 
-    /// A journal retained before `$.device` was kept still settles, by trying
-    /// the post's device and this install's device against the key (and
-    /// records the one that matched). Only one carrying the explicit
-    /// delete-for-everyone intent goes on to remote deletion.
+    /// A learned id leads to remote deletion only for a journal carrying the
+    /// explicit delete-for-everyone intent; a delete-for-me stays local.
     #[test]
-    fn legacy_journal_settles_and_only_explicit_intent_deletes_remotely() {
+    fn only_explicit_intent_deletes_remotely_once_id_is_learned() {
         let dir = tempfile::tempdir().unwrap();
         let db = Database::open(&dir.path().join("journal.db"), "test-only").unwrap();
         db.run_migrations().unwrap();
         let (me, channel) = (UserId::new(), ChannelId::new());
         let (local, remote) = (MessageId::new(), MessageId::new());
         for (request, intent) in [(local, false), (remote, true)] {
-            let mut value = serde_json::json!({"phase":"unresolved","channel_id":channel,"prepared":{"at":now(),"deletion_token":[7u8;32]}});
+            let mut value = serde_json::json!({"phase":"unresolved","channel_id":channel,"device":5,"prepared":{"at":now(),"deletion_token":[7u8;32]}});
             if intent {
                 value["remote_delete"] = serde_json::json!(true);
             }
@@ -1218,30 +1202,25 @@ mod tests {
                 )
                 .unwrap();
         }
-        let post = |request: MessageId, device: u32| crate::proto::chat_v1::Message {
+        let post = |request: MessageId| crate::proto::chat_v1::Message {
             id: MessageId::new().to_string(),
             channel_id: channel.to_string(),
-            author_device_id: device,
             send_request_key: send_request_key(me, 5, channel, &request.to_string()).to_vec(),
             ..Default::default()
         };
-        // Neither candidate is the sending device: no match.
-        assert!(!settle_cancelled_deposit(&db, me, channel, Some(6), &post(local, 0)).unwrap());
-        // Sealed post, device learned from this install; delete-for-me stays local.
-        assert!(settle_cancelled_deposit(&db, me, channel, Some(5), &post(local, 0)).unwrap());
-        // Post's own device, this install re-registered since.
-        assert!(settle_cancelled_deposit(&db, me, channel, Some(6), &post(remote, 5)).unwrap());
-        let journal = |request: MessageId| -> (String, u32) {
+        assert!(settle_cancelled_deposit(&db, me, channel, &post(local)).unwrap());
+        assert!(settle_cancelled_deposit(&db, me, channel, &post(remote)).unwrap());
+        let phase = |request: MessageId| -> String {
             db.read_connection()
                 .unwrap()
                 .query_row(
-                    "SELECT json_extract(value,'$.phase'),json_extract(value,'$.device') FROM settings WHERE key=?1",
+                    "SELECT json_extract(value,'$.phase') FROM settings WHERE key=?1",
                     params![key(me, request)],
-                    |r| Ok((r.get(0)?, r.get(1)?)),
+                    |r| r.get(0),
                 )
                 .unwrap()
         };
-        assert_eq!(journal(local), ("unresolved".into(), 5));
-        assert_eq!(journal(remote), ("deleting".into(), 5));
+        assert_eq!(phase(local), "unresolved");
+        assert_eq!(phase(remote), "deleting");
     }
 }

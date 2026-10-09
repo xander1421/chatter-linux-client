@@ -649,7 +649,6 @@ impl ChannelInbound {
             &self.messages.database,
             owner,
             channel_id,
-            self.current_device_id(),
             proto_msg,
         )
     }
