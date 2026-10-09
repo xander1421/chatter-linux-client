@@ -434,7 +434,7 @@ impl InboxEventProcessor {
                 peer_id,
                 group_id,
                 joiner_mailbox_pk,
-                timestamp: _,
+                timestamp,
                 profile_key,
                 encrypted_display_name,
                 encrypted_avatar,
@@ -446,6 +446,7 @@ impl InboxEventProcessor {
                     profile_key,
                     encrypted_display_name,
                     encrypted_avatar,
+                    *timestamp,
                 );
             }
 
@@ -475,9 +476,10 @@ impl InboxEventProcessor {
                 let anon_service = self.anon_group_service.clone();
                 let members_clone = members.clone();
                 let sender_id = *peer_id;
+                let timestamp = *timestamp;
                 let _ = tokio::task::spawn_blocking(move || {
                     if let Err(e) =
-                        anon_service.handle_member_list(anon_group_id, sender_id, members_clone)
+                        anon_service.handle_member_list_ordered(anon_group_id, sender_id, members_clone, timestamp)
                     {
                         tracing::error!(
                             group_id = ?anon_group_id,
@@ -511,8 +513,9 @@ impl InboxEventProcessor {
 
                 let anon_service = self.anon_group_service.clone();
                 let peer_id_clone = *peer_id;
+                let timestamp = *timestamp;
                 let _ = tokio::task::spawn_blocking(move || {
-                    if let Err(e) = anon_service.handle_leave(anon_group_id, peer_id_clone) {
+                    if let Err(e) = anon_service.handle_leave_ordered(anon_group_id, peer_id_clone, timestamp) {
                         tracing::error!(
                             group_id = ?anon_group_id,
                             peer_id = %peer_id_clone,
@@ -1641,6 +1644,7 @@ impl InboxEventProcessor {
         profile_key: &Option<Vec<u8>>,
         encrypted_display_name: &Option<Vec<u8>>,
         encrypted_avatar: &Option<Vec<u8>>,
+        timestamp: u64,
     ) {
         tracing::info!(
             peer_id = %peer_id,
@@ -1706,13 +1710,14 @@ impl InboxEventProcessor {
 
         tokio::spawn(async move {
             match anon_service
-                .handle_join_ack(
+                .handle_join_ack_ordered(
                     anon_group_id,
                     peer_id_clone,
                     mailbox_pk,
                     profile_key_arr,
                     display_name,
                     avatar,
+                    timestamp,
                 )
                 .await
             {

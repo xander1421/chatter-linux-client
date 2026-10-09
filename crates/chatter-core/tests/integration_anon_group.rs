@@ -507,6 +507,7 @@ async fn test_anon_group_member_list_content() {
                 profile_key: None,
                 encrypted_display_name: None,
                 encrypted_avatar: None,
+                admission_timestamp: 0,
             }
         })
         .collect();
