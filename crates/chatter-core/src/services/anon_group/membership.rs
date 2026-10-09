@@ -268,6 +268,26 @@ impl AnonGroupService {
             .map_err(|e| AnonGroupError::CryptoError(e.to_string()))
     }
 
+    /// V1 invitations bind the authenticated sender as the invitee's owner.
+    /// Admin delegation needs an owner-authorized protocol before it is safe.
+    fn require_invitation_owner(&self, group_id: &AnonGroupId) -> Result<(), AnonGroupError> {
+        let current_user = self.current_user_id()?;
+        let group = self
+            .anon_group_repo
+            .get_group(group_id)?
+            .ok_or(AnonGroupError::GroupNotFound(*group_id))?;
+        let member = self.anon_group_repo.get_member(group_id, &current_user)?;
+        if group.owner_id != current_user
+            || group.my_role != AnonGroupRole::Owner
+            || !member.is_some_and(|m| m.role == AnonGroupRole::Owner)
+        {
+            return Err(AnonGroupError::InsufficientPermissions(
+                "Only the group owner can send invitations; admin invitations require owner authorization".to_string(),
+            ));
+        }
+        Ok(())
+    }
+
     /// Send an invite message to a user via their existing DM session.
     ///
     /// Invites use DM infrastructure since the recipient doesn't have a
@@ -279,6 +299,7 @@ impl AnonGroupService {
         group_name: &str,
         inviter_mailbox_pk: &[u8; 32],
     ) -> Result<(), AnonGroupError> {
+        self.require_invitation_owner(&group_id)?;
         let profile_key = self.get_my_profile_key();
         let mut encrypted_display_name = None;
         let mut encrypted_avatar = None;
@@ -334,6 +355,7 @@ impl AnonGroupService {
         group_name: &str,
         inviter_mailbox_pk: &[u8; 32],
     ) -> Result<(), AnonGroupError> {
+        self.require_invitation_owner(&group_id)?;
         let peer_mailbox_pk = anon_dm.peer_mailbox_pk.ok_or_else(|| {
             AnonGroupError::InvalidData("Anon DM conversation not ready".to_string())
         })?;
@@ -908,7 +930,8 @@ impl AnonGroupService {
 
     /// Invite additional members to an existing group with specified roles.
     ///
-    /// Only admins/owners can invite new members. Invites are sent via the same
+    /// Only the real owner can invite: v1 has no owner-authorized admin delegation.
+    /// Invites are sent via the same
     /// mechanism as during group creation (DM or anon DM tunnel).
     pub async fn invite_members(
         &self,
@@ -923,11 +946,7 @@ impl AnonGroupService {
             .get_group(group_id)?
             .ok_or(AnonGroupError::GroupNotFound(*group_id))?;
 
-        if !group.my_role.can_invite() {
-            return Err(AnonGroupError::InsufficientPermissions(
-                "Only admins can invite members".to_string(),
-            ));
-        }
+        self.require_invitation_owner(group_id)?;
 
         // Get our mailbox for this group
         let mailbox = self
@@ -943,6 +962,7 @@ impl AnonGroupService {
             .collect();
 
         let mut invited_count = 0;
+        let mut first_send_error = None;
         for (invitee, role) in invitees {
             // Skip if already a member
             if existing_members.contains(&invitee) {
@@ -957,7 +977,17 @@ impl AnonGroupService {
                 &current_user,
                 TimestampNanos::now().as_u64(),
             )? {
-                continue;
+                self.require_invitation_owner(group_id)?;
+                if self
+                    .anon_group_repo
+                    .get_member(group_id, &invitee)?
+                    .is_some()
+                {
+                    continue;
+                }
+                return Err(AnonGroupError::InvalidData(
+                    "Invitation admission was refused".to_string(),
+                ));
             }
 
             // Send invite with small random delay to reduce traffic correlation
@@ -989,12 +1019,20 @@ impl AnonGroupService {
 
             match send_result {
                 Ok(_) => invited_count += 1,
-                Err(e) => tracing::error!("Failed to send invite to {}: {}", invitee, e),
+                Err(e) => {
+                    tracing::error!("Failed to send invite to {}: {}", invitee, e);
+                    if first_send_error.is_none() {
+                        first_send_error = Some(e);
+                    }
+                }
             }
         }
 
         tracing::info!("Invited {} members to group {}", invited_count, group_id);
 
+        if let Some(error) = first_send_error {
+            return Err(error);
+        }
         Ok(())
     }
 

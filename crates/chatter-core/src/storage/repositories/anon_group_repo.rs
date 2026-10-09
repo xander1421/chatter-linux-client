@@ -502,7 +502,19 @@ impl AnonGroupRepository {
                 |r| r.get(0),
             )
             .optional()?;
-        if !role.is_some_and(|r| AnonGroupRole::from_i32(r).can_invite()) {
+        // Invitations bootstrap the sender as owner on v1 peers. Check the
+        // persisted owner and role inside the admission transaction; an admin
+        // cannot create an authoritative admission on the owner's behalf.
+        let owner: Option<String> = tx
+            .query_row(
+                "SELECT owner_id FROM anon_groups WHERE id = ?1",
+                [member.group_id.to_string()],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if owner.as_deref() != Some(actor.to_string().as_str())
+            || role != Some(AnonGroupRole::Owner.to_i32())
+        {
             return Ok(false);
         }
         let exists: bool = tx.query_row(
