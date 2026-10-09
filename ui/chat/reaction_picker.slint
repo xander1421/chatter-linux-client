@@ -13,6 +13,8 @@ import { QuickReactions } from "types.slint";
 export component ReactionPicker inherits Rectangle {
     // Visibility
     in property <bool> show: false;
+    // Touch platform: 48px picker cells (see EmojiPicker.touch).
+    in property <bool> touch: false;
 
     // Message being reacted to (Signal-style identification)
     in property <string> message-id: "";
@@ -131,6 +133,7 @@ export component ReactionPicker inherits Rectangle {
             EmojiPicker {
                 // The outer reaction panel already supplies the material.
                 material-enabled: false;
+                touch: root.touch;
                 max-picker-width: picker-shell.width;
                 max-picker-height: max(0px, picker-shell.height - Spacing.touch-target-min - Spacing.stroke);
                 show: true;

@@ -7,6 +7,8 @@
 // two. Not configurable by design.
 export global QuickReactions {
     out property <[string]> emojis: ["\u{1F44D}", "\u{2764}\u{FE0F}", "\u{1F602}", "\u{1F62E}", "\u{1F622}", "\u{1F64F}"];
+    // Spoken names, index-aligned with `emojis` (CLDR short names).
+    out property <[string]> names: ["thumbs up", "red heart", "face with tears of joy", "face with open mouth", "crying face", "folded hands"];
 }
 
 // Data struct for individual reaction entries (emoji + count pill)

@@ -53,7 +53,7 @@ fn pending_message_id(send: &ComposerSend) -> String {
 /// Thumbnails: `to_slint` loads an image by its local path through Slint's
 /// image cache, which the attachment tray filled when the file was staged,
 /// so the common case decodes nothing here.
-fn show_pending_bubble(
+pub(crate) fn show_pending_bubble(
     weak: &slint::Weak<MainWindow>,
     ui_ctx: &Arc<ChatterClient>,
     send: &ComposerSend,
@@ -171,7 +171,7 @@ fn upsert_message_in_ui(w: &MainWindow, pending_id: &str, item: crate::MessageIt
 }
 
 /// Take the pending row for `send` out of the open list: the send did not go.
-fn remove_pending_bubble(w: &MainWindow, send: &ComposerSend) {
+pub(crate) fn remove_pending_bubble(w: &MainWindow, send: &ComposerSend) {
     let pending_id = pending_message_id(send);
     super::helpers::remove_messages_where(w, |m| m.message_id.as_str() == pending_id);
 }

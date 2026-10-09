@@ -4,6 +4,7 @@ import { GlassSurface } from "glass_surface.slint";
 // composer drawer the drawer owns search, material and the Emoji/GIF tabs.
 
 import { Colors } from "../theme/colors.slint";
+import { Appearance } from "../theme/appearance.slint";
 import { Materials } from "../theme/materials.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
@@ -27,6 +28,11 @@ export component EmojiPicker inherits GlassSurface {
     material-enabled: !root.embedded;
     // Picker visibility
     in property <bool> show: false;
+    // Touch platform: category tabs, tone swatches and emoji cells take the
+    // 48px Android minimum; desktop keeps the 44px control slot. Both grow
+    // with the text size, as the glyphs in them do.
+    in property <bool> touch: false;
+    property <length> cell: (root.touch ? Spacing.touch-target-min : Spacing.button-height) * Appearance.text-grow;
 
     // Emoji list from Rust (filtered by category or search)
     in property <[EmojiData]> emoji-list: [];
@@ -76,7 +82,7 @@ export component EmojiPicker inherits GlassSurface {
 
     // Dynamic grid columns based on available width
     property <length> grid-content-width: root.width - 2 * Spacing.sm;
-    property <int> emoji-columns: max(4, Math.floor(grid-content-width / 46px));
+    property <int> emoji-columns: max(4, Math.floor(grid-content-width / (root.cell + 2px)));
     property <length> emoji-cell-stride: grid-content-width / emoji-columns;
 
     // Block clicks from passing through
@@ -175,7 +181,7 @@ export component EmojiPicker inherits GlassSurface {
 
         // Category tabs (only show when not searching)
         if root.search-query == "": Rectangle {
-            height: Spacing.button-height + Spacing.xs * 2;
+            height: root.cell + Spacing.xs * 2;
             background: transparent;
             border-radius: Spacing.radius-md;
 
@@ -189,8 +195,8 @@ export component EmojiPicker inherits GlassSurface {
                     for icon[index] in root.category-icons: Rectangle {
                         property <int> cat: root.icon-index-to-category(index);
                         property <bool> current: cat == root.selected-category;
-                        width: Spacing.button-height;
-                        height: Spacing.button-height;
+                        width: root.cell;
+                        height: root.cell;
                         border-radius: Spacing.radius-sm;
                         background: current ? Colors.tint-strong
                             : tab-area.pressed ? Materials.pressed
@@ -233,7 +239,7 @@ export component EmojiPicker inherits GlassSurface {
 
         // Skin tone selector (shown for People & Body category)
         if root.search-query == "" && root.selected-category == 1: Rectangle {
-            height: Spacing.button-height;
+            height: root.cell;
             background: transparent;
             border-radius: Spacing.radius-sm;
 
@@ -243,8 +249,8 @@ export component EmojiPicker inherits GlassSurface {
 
                 for swatch[tone-idx] in ["\u{1F44B}", "\u{1F44B}\u{1F3FB}", "\u{1F44B}\u{1F3FC}", "\u{1F44B}\u{1F3FD}", "\u{1F44B}\u{1F3FE}", "\u{1F44B}\u{1F3FF}"]: Rectangle {
                     property <bool> current: tone-idx == root.selected-skin-tone;
-                    width: Spacing.button-height;
-                    height: Spacing.button-height;
+                    width: root.cell;
+                    height: root.cell;
                     border-radius: Spacing.radius-sm;
                     background: current ? Colors.tint-strong
                         : tone-area.pressed ? Materials.pressed
@@ -293,7 +299,7 @@ export component EmojiPicker inherits GlassSurface {
             emoji-grid := Flickable {
                 width: 100%;
                 height: 100%;
-                viewport-height: Math.ceil(root.emoji-list.length / root.emoji-columns) * 44px;
+                viewport-height: Math.ceil(root.emoji-list.length / root.emoji-columns) * root.cell;
 
                 // Grid container
                 Rectangle {
@@ -304,10 +310,10 @@ export component EmojiPicker inherits GlassSurface {
                         property <int> grid-row: Math.floor(index / root.emoji-columns);
                         property <int> grid-col: mod(index, root.emoji-columns);
 
-                        x: grid-col * root.emoji-cell-stride + (root.emoji-cell-stride - 44px) / 2;
-                        y: grid-row * 44px;
-                        width: 44px;
-                        height: 44px;
+                        x: grid-col * root.emoji-cell-stride + (root.emoji-cell-stride - root.cell) / 2;
+                        y: grid-row * root.cell;
+                        width: root.cell;
+                        height: root.cell;
                         border-radius: Spacing.radius-sm;
                         background: emoji-area.pressed ? Materials.pressed
                             : emoji-area.has-hover ? Materials.hover : transparent;

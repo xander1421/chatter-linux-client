@@ -79,6 +79,7 @@ export component ChatLayout inherits Rectangle {
     // Two-way: the open path resets it so a conversation left scrolled up
     // does not decide where the NEXT conversation opens.
     in-out property <bool> is-at-bottom <=> message-list.is-at-bottom;
+    in-out property <bool> history-load-failed <=> message-list.load-failed;
     // Unread boundary from core — see MessageList.
     in-out property <int> unread-index: -1;
     in-out property <int> unread-count: 0;
@@ -726,6 +727,7 @@ export component ChatLayout inherits Rectangle {
                 clip: true;
                 if root.emoji-picker-visible: EmojiPicker {
                     embedded: true; show: true;
+                    touch: root.mobile;
                     max-picker-width: parent.width;
                     max-picker-height: parent.height;
 

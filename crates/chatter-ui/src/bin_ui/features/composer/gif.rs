@@ -12,6 +12,7 @@ use std::sync::Arc;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use chatter_core::client::{ChatterClient, ComposerSend};
+use chatter_core::domain::ids::AttachmentId;
 use chatter_core::state::PendingAttachment;
 use chatter_core::ui::picker_history::RecentGif;
 
@@ -143,6 +144,11 @@ pub(crate) fn wire_gif_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
                 },
             );
         }
+        // The pending row goes in now, not when `deliver` starts: the first
+        // and slowest part of a GIF send (fetch, encrypt, upload) left the
+        // composer empty and the drawer closed with nothing on screen saying
+        // a send was under way.
+        show_gif_pending(&w, &ui_ctx, &send);
         let (weak, ctx) = (w.as_weak(), ui_ctx.clone());
         tokio::spawn(async move {
             let upload = upload_gif(ctx.clone(), url, id);
@@ -169,6 +175,37 @@ pub fn begin_gif_send(w: &MainWindow, ui_ctx: &ChatterClient) -> Option<Composer
             None
         }
     }
+}
+
+/// Show `send` as a "sending" row in its conversation, with a placeholder
+/// GIF attachment (a box labelled "GIF" and the indeterminate sending line)
+/// until the upload returns the real one. The row id is `deliver`'s, so the
+/// upload's end replaces it in place with the GIF, the stored message
+/// replaces that, and [`recover_gif_send`] removes it on failure. Shown only
+/// while this is the open conversation of the session it was picked in
+/// (`show_pending_bubble` checks both).
+fn show_gif_pending(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, send: &ComposerSend) {
+    let auth = ui_ctx.auth_state().get();
+    let user_id = auth
+        .current_user_id
+        .map(|id| id.to_string())
+        .unwrap_or_default();
+    let user_name = auth.display_name.unwrap_or_else(|| "Me".to_string());
+    let mut shown = send.clone();
+    shown.attachments.push(PendingAttachment::new(
+        AttachmentId::new(),
+        "GIF".to_string(),
+        std::path::PathBuf::new(),
+        0,
+        "image/gif".to_string(),
+    ));
+    crate::bin_ui::features::chat::send_message::show_pending_bubble(
+        &w.as_weak(),
+        ui_ctx,
+        &shown,
+        &user_id,
+        &user_name,
+    );
 }
 
 /// Download the GIF, encrypt it and upload it to our CDN, as an attachment
@@ -227,6 +264,11 @@ pub async fn finish_gif_send(
 /// A GIF send that did not go: back into its own composer if that is open
 /// and empty, otherwise kept by core until it is (never over newer input).
 pub fn recover_gif_send(w: &MainWindow, ui_ctx: &ChatterClient, send: ComposerSend) {
+    // The row `show_gif_pending` put up. A failure past the upload has had it
+    // removed by `deliver` already; before the upload it is still there. The
+    // id is this attempt's alone, so a list that has since been reloaded for
+    // another conversation or account matches nothing.
+    crate::bin_ui::features::chat::send_message::remove_pending_bubble(w, &send);
     if !ui_ctx.composer_session_is_current(send.session_revision) {
         return;
     }

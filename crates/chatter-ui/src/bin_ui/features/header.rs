@@ -635,6 +635,8 @@ fn load_older(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, until: Option<Message
         }
         return;
     };
+    // A fresh page is on its way: the previous failure's Retry chip goes.
+    w.set_history_load_failed(false);
     let weak = w.as_weak();
     let ui_ctx = ui_ctx.clone();
 
@@ -669,6 +671,17 @@ fn load_older(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, until: Option<Message
                 tracing::error!("Failed to load more messages: {}", e);
                 if until.is_some() {
                     report_jump_unavailable_later(weak, owner);
+                } else {
+                    // Ordinary paging: the list keeps its rows and anchor and
+                    // shows a Retry chip (message_list.slint `load-failed`).
+                    // Only for the conversation that asked.
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            if owner.is_current() {
+                                w.set_history_load_failed(true);
+                            }
+                        }
+                    });
                 }
                 return;
             }

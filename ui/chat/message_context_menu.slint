@@ -36,14 +36,35 @@ export global MessageMenuActions {
 }
 
 // One tap-to-react emoji in the quick row. 48px so it is a real touch target.
+// A button to a screen reader and to the keyboard too, like IconAction: the
+// pointer path alone left every quick reaction invisible to TalkBack.
 component QuickReaction inherits Rectangle {
     in property <string> emoji;
+    // The emoji's spoken name; the glyph alone is not a name.
+    in property <string> name;
     callback clicked();
 
     width: Spacing.touch-target-min;
     height: Spacing.touch-target-min;
     border-radius: Spacing.touch-target-min / 2;
     background: touch.has-hover ? Colors.surface-hover : transparent;
+    border-width: keys.has-focus ? Spacing.stroke : 0px;
+    border-color: Colors.primary;
+    accessible-role: button;
+    accessible-label: "React with " + root.name;
+    accessible-action-default => { root.clicked(); }
+
+    keys := FocusScope {
+        width: 0px;
+        height: 0px;
+        key-pressed(event) => {
+            if event.text == Key.Space || event.text == Key.Return {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
 
     Text {
         text: root.emoji;
@@ -74,6 +95,23 @@ component MenuItem inherits Rectangle {
     height: Spacing.touch-target-min;
     background: touch.has-hover ? Colors.surface-hover : transparent;
     border-radius: Spacing.radius-sm;
+    border-width: keys.has-focus ? Spacing.stroke : 0px;
+    border-color: Colors.primary;
+    accessible-role: button;
+    accessible-label: root.label;
+    accessible-action-default => { root.clicked(); }
+
+    keys := FocusScope {
+        width: 0px;
+        height: 0px;
+        key-pressed(event) => {
+            if event.text == Key.Space || event.text == Key.Return {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
 
     HorizontalLayout {
         padding-left: Spacing.lg;
@@ -207,7 +245,11 @@ export component MessageContextMenu inherits Rectangle {
         // Block backdrop clicks on menu
         TouchArea { }
 
+        // Rows vanish the moment the menu is logically closed, as in
+        // chat_header_menu.slint: the card only fades, and no pointer, key,
+        // Tab focus or accessible default action may reach a fading row.
         menu-scroll := Flickable {
+            visible: root.show;
             width: 100%;
             height: 100%;
             viewport-height: menu-container.menu-h;
@@ -236,8 +278,9 @@ export component MessageContextMenu inherits Rectangle {
                     alignment: space-between;
                     padding-bottom: Spacing.xs;
 
-                    for emoji in QuickReactions.emojis: QuickReaction {
+                    for emoji[index] in QuickReactions.emojis: QuickReaction {
                         emoji: emoji;
+                        name: QuickReactions.names[index];
                         clicked => {
                             root.quick-react(root.sender-id, root.timestamp-ns, emoji);
                             root.close();

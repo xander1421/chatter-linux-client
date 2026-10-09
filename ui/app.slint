@@ -396,6 +396,9 @@ export component MainWindow inherits Window {
     property <bool> chat-menu-video: false;
     property <bool> chat-menu-settings: false;
     in-out property <bool> is-at-bottom: true;  // True when message list is scrolled to bottom
+    // The last older-history page failed to read (header.rs `load_older`);
+    // the list shows a Retry chip until a page loads or the conversation changes.
+    in-out property <bool> history-load-failed: false;
     // Unread boundary from core — see MessageList.
     in-out property <int> unread-index: -1;
     in-out property <int> unread-count: 0;
@@ -2104,6 +2107,7 @@ export component MainWindow inherits Window {
                         changed composer-composed-text => { root.composer-composed-text = self.composer-composed-text; }
                         changed list-scrolling => { root.chat-list-scrolling = self.list-scrolling; }
                         is-at-bottom <=> root.is-at-bottom;
+                        history-load-failed <=> root.history-load-failed;
                         unread-index <=> root.unread-index;
                         unread-count <=> root.unread-count;
                         should-auto-scroll: root.should-auto-scroll;
@@ -3446,6 +3450,7 @@ export component MainWindow inherits Window {
         // Image viewer overlay (rendered above modals)
         if root.image-viewer-visible: ImageViewer {
             show: true;
+            touch: root.is-mobile-platform;
             source: root.image-viewer-source;
             filename: root.image-viewer-filename;
             size-display: root.image-viewer-size;
@@ -3606,6 +3611,7 @@ export component MainWindow inherits Window {
         // Reaction picker overlay
         ReactionPicker {
             show: root.reaction-picker-visible;
+            touch: root.is-mobile-platform;
             message-id: root.reaction-picker-message-id;
             sender-id: root.reaction-picker-sender-id;
             timestamp-ns: root.reaction-picker-timestamp-ns;

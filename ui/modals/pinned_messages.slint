@@ -34,10 +34,27 @@ export component PinnedMessagesModal inherits Rectangle {
                     for item in root.items: Rectangle {
                         accessible-role: button;
                         accessible-label: item.preview;
+                        // The same guard as the pointer path: the modal only
+                        // fades after close, and a fading row is not a target.
+                        accessible-action-default => { if root.show-modal { root.selected(item.message-id); } }
                         // The content layout already includes its padding.
                         height: max(56px, content.preferred-height);
                         background: touch.has-hover ? Colors.surface-hover : Colors.surface;
                         border-radius: Spacing.radius-md;
+                        border-width: keys.has-focus ? Spacing.stroke : 0px;
+                        border-color: Colors.primary;
+                        keys := FocusScope {
+                            width: 0px;
+                            height: 0px;
+                            enabled: root.show-modal;
+                            key-pressed(event) => {
+                                if event.text == Key.Space || event.text == Key.Return {
+                                    if root.show-modal { root.selected(item.message-id); }
+                                    return accept;
+                                }
+                                return reject;
+                            }
+                        }
                         content := HorizontalLayout {
                             padding: Spacing.md;
                             spacing: Spacing.sm;
@@ -61,7 +78,7 @@ export component PinnedMessagesModal inherits Rectangle {
                                 horizontal-stretch: 1;
                             }
                         }
-                        touch := TouchArea { clicked => { root.selected(item.message-id); } }
+                        touch := TouchArea { clicked => { if root.show-modal { root.selected(item.message-id); } } }
                     }
                 }
             }

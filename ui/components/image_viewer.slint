@@ -14,6 +14,9 @@ import { Typography } from "../theme/typography.slint";
 
 export component ImageViewer inherits Rectangle {
     private property <bool> compact-layout: root.width < 600px;
+    // Touch platform: the media actions take the 48px Android minimum.
+    in property <bool> touch: false;
+    property <length> action-size: (root.touch ? Spacing.touch-target-min : Spacing.button-height) * Appearance.text-grow;
     // Properties
     in property <bool> show: false;
     in property <image> source;
@@ -105,15 +108,15 @@ export component ImageViewer inherits Rectangle {
         }
 
         HorizontalLayout {
-            height: Spacing.button-height;
+            height: root.action-size;
             alignment: center;
             spacing: Spacing.xxs;
-            IconAction { icon: Icons.download; label: "Download"; clicked => { root.download(); } }
-            IconAction { icon: Icons.copy; label: "Copy image"; clicked => { root.copy-image(); } }
-            IconAction { icon: Icons.folder; label: "Open downloads"; clicked => { root.open-downloads(); } }
-            IconAction { icon: Icons.chevron-left; label: "Previous media"; enabled: root.has-previous; clicked => { root.previous(); } }
+            IconAction { size: root.action-size; icon: Icons.download; label: "Download"; clicked => { root.download(); } }
+            IconAction { size: root.action-size; icon: Icons.copy; label: "Copy image"; clicked => { root.copy-image(); } }
+            IconAction { size: root.action-size; icon: Icons.folder; label: "Open downloads"; clicked => { root.open-downloads(); } }
+            IconAction { size: root.action-size; icon: Icons.chevron-left; label: "Previous media"; enabled: root.has-previous; clicked => { root.previous(); } }
             Text { text: root.position-label; color: Colors.on-media-muted; vertical-alignment: center; horizontal-stretch: 0; }
-            IconAction { icon: Icons.chevron-right; label: "Next media"; enabled: root.has-next; clicked => { root.next(); } }
+            IconAction { size: root.action-size; icon: Icons.chevron-right; label: "Next media"; enabled: root.has-next; clicked => { root.next(); } }
         }
     }
 }

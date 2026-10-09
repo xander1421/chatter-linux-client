@@ -106,6 +106,7 @@ export component MessageList inherits Rectangle {
             root.at-end = false;
             root.scrolling = false;
             root.load-more-armed = true;
+            root.load-failed = false;
             root.seen-rows = 0;
             root.first-visible-row = 0;
             root.last-visible-row = -1;
@@ -136,6 +137,17 @@ export component MessageList inherits Rectangle {
     }
     // Older history is requested once per approach to the top.
     private property <bool> load-more-armed: true;
+    // The last older page did not load (a storage read failed, header.rs
+    // `load_older`). The rows and the scroll anchor are untouched; the banner
+    // below says so and offers Retry, because the top is already reached and
+    // asks for nothing more until the user scrolls away and back. Written by
+    // Rust, cleared here on retry and on a conversation open.
+    in-out property <bool> load-failed: false;
+    function retry-load-more() {
+        root.load-failed = false;
+        root.load-more-armed = false;
+        root.load-more();
+    }
     // The user is scrolling: a finger, the wheel, or the fling either leaves
     // behind (Flickable `flicked`, until the viewport has been still a moment).
     // Out so the chrome floating over the list can stop sampling its backdrop
@@ -926,6 +938,52 @@ export component MessageList inherits Rectangle {
                     material-tint: Colors.action-hover.with-alpha(0.97);
                 }
             ]
+        }
+    }
+
+    // Older history failed to load: a nonfatal notice over the top of the
+    // list, with the retry. Same chip as the unread divider's.
+    if root.load-failed && !root.loading && root.messages.length > 0: Rectangle {
+        x: (parent.width - self.width) / 2;
+        y: root.top-inset + Spacing.sm;
+        width: min(root.width - 2 * Spacing.md, history-error.preferred-width);
+        height: max(Spacing.touch-target-min, history-error.preferred-height);
+        border-radius: self.height / 2;
+        background: Materials.regular;
+        // Taps on the chip's own padding must not reach the rows under it.
+        TouchArea { }
+        history-error := HorizontalLayout {
+            padding-left: Spacing.lg;
+            padding-right: Spacing.xs;
+            spacing: Spacing.sm;
+            Text {
+                text: "Older messages didn't load";
+                color: Colors.text-primary;
+                font-size: Typography.xs;
+                vertical-alignment: center;
+                overflow: elide;
+            }
+            Rectangle {
+                width: max(Spacing.touch-target-min, retry-label.preferred-width + 2 * Spacing.md);
+                border-radius: self.height / 2;
+                background: retry-touch.pressed ? Materials.pressed
+                    : retry-touch.has-hover ? Materials.hover : transparent;
+                accessible-role: button;
+                accessible-label: "Retry loading older messages";
+                accessible-action-default => { root.retry-load-more(); }
+                retry-label := Text {
+                    text: "Retry";
+                    color: Colors.primary;
+                    font-size: Typography.xs;
+                    font-weight: Typography.semibold;
+                    horizontal-alignment: center;
+                    vertical-alignment: center;
+                }
+                retry-touch := TouchArea {
+                    mouse-cursor: pointer;
+                    clicked => { root.retry-load-more(); }
+                }
+            }
         }
     }
 }
