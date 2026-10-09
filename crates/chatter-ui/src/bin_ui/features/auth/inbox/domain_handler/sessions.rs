@@ -24,28 +24,21 @@ pub(super) fn handle_device_linked(
         tracing::info!(device = %label, "New device linked to account");
     }
 
-    // Always refresh on DeviceLinked — cheap (one ListDevices RPC) and
-    // means the sessions/devices modal shows the new entry without the
-    // user having to close + reopen it.
+    // Reuse the modal's owner/request-fenced loader rather than publishing
+    // asynchronous rows through a second, unfenced path.
     let weak = window.clone();
-    let ui_ctx = ui_ctx.clone();
-    crate::rt_handle().spawn(async move {
-        match ui_ctx.list_sessions().await {
-            Ok(sessions) => {
-                let slint_sessions: Vec<crate::SessionInfo> = sessions
-                    .into_iter()
-                    .map(crate::bin_ui::features::modals::session_to_slint)
-                    .collect();
-                let count = slint_sessions.len() as i32;
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(w) = weak.upgrade() {
-                        w.set_sessions(slint::ModelRc::new(slint::VecModel::from(slint_sessions)));
-                        w.set_settings_session_count(count);
-                    }
-                });
-            }
-            Err(e) => {
-                tracing::warn!(error = %e, "Failed to refresh sessions on DeviceLinked");
+    let client = ui_ctx.clone();
+    let owner = client.session_current_user_id();
+    let revision = client.auth_state().get().session_revision;
+    let _ = slint::invoke_from_event_loop(move || {
+        if client.session_current_user_id() != owner
+            || client.auth_state().get().session_revision != revision
+        {
+            return;
+        }
+        if let Some(w) = weak.upgrade() {
+            if w.get_active_modal() == "sessions" && !w.get_sessions_revoking() {
+                w.invoke_settings_view_sessions();
             }
         }
     });
