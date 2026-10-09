@@ -200,6 +200,14 @@ impl From<CurrentUserError> for MessageError {
     }
 }
 
+/// Lets the durable send journals (`channel_send`, `dm_outbox`) use `?` on
+/// raw SQLite calls; the error is the same `Storage` variant as a repository's.
+impl From<rusqlite::Error> for MessageError {
+    fn from(err: rusqlite::Error) -> Self {
+        MessageError::Storage(err.into())
+    }
+}
+
 /// Parameters for sending DM content.
 pub struct SendDmContentParams<'a> {
     /// Auth client for key fetching.

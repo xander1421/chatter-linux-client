@@ -18,6 +18,17 @@ use std::sync::Arc;
 
 const PREFIX: &str = "send.channel.predeposit.v1:";
 const LEASE_SECONDS: i64 = 60;
+/// Live journals per account (queued through deleting). A full queue refuses
+/// a new compose before it is bound, so the composer keeps the draft.
+const MAX_PENDING: i64 = 64;
+/// Phases that still hold delivery or deletion work.
+const LIVE: &str = "('queued','preparing','submitted','accepted','deleting')";
+/// A prepared request may be replayed only below sealed-sender freshness.
+fn replayable(prepared: &Prepared) -> bool {
+    // Tolerate a small backward clock step instead of expiring at once.
+    let age = now() - prepared.at;
+    (-300..23 * 60 * 60).contains(&age)
+}
 #[derive(Serialize, Deserialize)]
 struct Quote {
     author: UserId,
@@ -58,14 +69,21 @@ pub(crate) fn owns(db: &Database, owner: &str, id: &str) -> Result<bool, Storage
     db.read_connection()?.query_row("SELECT EXISTS(SELECT 1 FROM settings WHERE key=?1 AND json_extract(value,'$.phase') IN ('queued','preparing','submitted','accepted'))",params![format!("{PREFIX}{owner}:{id}")],|r|r.get(0)).map_err(Into::into)
 }
 
+/// Release only the claims bound to this send's own row identities: the
+/// parked UUID (`bind_original_row`, a manual retry) or the server id the
+/// deposit rebound it to. Both are unique to this message, so a claim for any
+/// other compose in the conversation is neither released nor rewritten. Each
+/// released attempt is remembered as confirmed, so it cannot be replayed.
 fn settle_admission(
     conn: &rusqlite::Connection,
     owner: UserId,
-    id: MessageId,
+    ids: &[MessageId],
 ) -> Result<(), StorageError> {
     let pattern = format!("send.unresolved.v1:{owner}:%");
-    conn.execute("INSERT OR IGNORE INTO settings(key,value,updated_at) SELECT key || ':confirmed:' || json_extract(value,'$.attempt_id'),json_object('attempt_id',json_extract(value,'$.attempt_id'),'message_id',json_extract(value,'$.message_id')),updated_at FROM settings WHERE key LIKE ?1 AND key NOT LIKE '%:confirmed:%' AND json_extract(value,'$.message_id')=?2 AND json_extract(value,'$.attempt_id') IS NOT NULL",params![pattern,id.to_string()])?;
-    conn.execute("DELETE FROM settings WHERE key LIKE ?1 AND key NOT LIKE '%:confirmed:%' AND json_extract(value,'$.message_id')=?2 AND json_extract(value,'$.attempt_id') IS NOT NULL",params![pattern,id.to_string()])?;
+    for id in ids {
+        conn.execute("INSERT OR IGNORE INTO settings(key,value,updated_at) SELECT key || ':confirmed:' || json_extract(value,'$.attempt_id'),json_object('attempt_id',json_extract(value,'$.attempt_id'),'message_id',json_extract(value,'$.message_id')),updated_at FROM settings WHERE key LIKE ?1 AND key NOT LIKE '%:confirmed:%' AND json_extract(value,'$.message_id')=?2 AND json_extract(value,'$.attempt_id') IS NOT NULL",params![pattern,id.to_string()])?;
+        conn.execute("DELETE FROM settings WHERE key LIKE ?1 AND key NOT LIKE '%:confirmed:%' AND json_extract(value,'$.message_id')=?2 AND json_extract(value,'$.attempt_id') IS NOT NULL",params![pattern,id.to_string()])?;
+    }
     Ok(())
 }
 
@@ -148,10 +166,15 @@ impl MessageService {
         let raw = serde_json::json!({"entry":entry,"phase":"preparing","generation":generation,"attempts":0,"next_at":now()+LEASE_SECONDS}).to_string();
         // The intent is durable before the first await, including before local
         // row creation. Recovery can materialize it via tombstone-aware insert.
-        self.database.connection()?.execute(
-            "INSERT INTO settings(key,value,updated_at) VALUES (?1,?2,?3)",
-            params![journal_key, raw, chrono::Utc::now().to_rfc3339()],
+        let inserted = self.database.connection()?.execute(
+            &format!("INSERT INTO settings(key,value,updated_at) SELECT ?1,?2,?3 WHERE (SELECT COUNT(*) FROM settings WHERE key LIKE ?4 AND json_extract(value,'$.phase') IN {LIVE})<?5"),
+            params![journal_key, raw, chrono::Utc::now().to_rfc3339(), format!("{PREFIX}{owner}:%"), MAX_PENDING],
         )?;
+        if inserted != 1 {
+            return Err(MessageError::InvalidContent(
+                "Too many channel messages are waiting to send".into(),
+            ));
+        }
         crate::services::gateway::submission::bind_original_row(entry.row.id.to_string())?;
         // A durable enqueue is itself a submission boundary: generic admission
         // must retain this composer attempt while the queue owns its delivery.
@@ -183,65 +206,83 @@ impl MessageService {
             )?;
             mapped.collect::<Result<_, _>>()?
         };
-        let Some(device) = self.settings_repo.get::<u32>(keys::CURRENT_DEVICE_ID)? else {
-            return Ok(());
-        };
         for id in ids {
             let id = id
                 .parse()
                 .map_err(|_| invalid("Invalid legacy channel row identity"))?;
-            let Some(mut row) = self.message_repo.get(&id)? else {
-                continue;
-            };
-            if !row.attachments.is_empty() || row.as_text().is_none() {
-                continue;
-            }
-            if !self
-                .channel_repo
-                .get(&row.conversation_id)?
-                .is_some_and(|channel| {
-                    matches!(
-                        channel.channel_type,
-                        crate::domain::channel::ChannelType::Public
-                            | crate::domain::channel::ChannelType::Private
-                    )
-                })
-            {
-                continue;
-            }
-            let quote = if let Some(author) = row.reply_to_author_id {
-                let Some(parent) = row
-                    .reply_to
-                    .as_ref()
-                    .map(|id| self.message_repo.get(id))
-                    .transpose()?
-                    .flatten()
-                else {
-                    continue;
-                };
-                Some(Quote {
-                    author,
-                    timestamp: parent.sent_at,
-                    preview: row.reply_to_text.clone(),
-                })
-            } else {
-                None
-            };
-            row.delivery_status = "sending".into();
-            row.failure_reason = Some("Waiting for connection".into());
-            let entry = Entry { device, row, quote };
-            let raw = serde_json::json!({"entry":entry,"phase":"queued","generation":uuid::Uuid::new_v4().to_string(),"attempts":0,"next_at":0}).to_string();
-            self.database.connection()?.execute(
-                "INSERT OR IGNORE INTO settings(key,value,updated_at) VALUES (?1,?2,?3)",
-                params![
-                    key(owner, entry.row.id),
-                    raw,
-                    chrono::Utc::now().to_rfc3339()
-                ],
-            )?;
-            self.finish_retry_row(&entry.row.id, "sending", Some("Waiting for connection"))?;
+            self.adopt_unsent_channel(owner, &id)?;
         }
         Ok(())
+    }
+
+    /// Queue one proven-unsent legacy text row under its own UUID. The journal
+    /// insert re-checks the marker in the same statement, and manual retry
+    /// clears the marker only while no journal exists, so exactly one of the
+    /// two owns the row: the queue (stable request id) or a manual send.
+    fn adopt_unsent_channel(&self, owner: UserId, id: &MessageId) -> Result<bool, MessageError> {
+        let Some(device) = self.settings_repo.get::<u32>(keys::CURRENT_DEVICE_ID)? else {
+            return Ok(false);
+        };
+        let Some(mut row) = self.message_repo.get(id)? else {
+            return Ok(false);
+        };
+        if row.sender_id != Some(owner)
+            || row.conversation_type != ConversationType::Channel
+            || !row.attachments.is_empty()
+            || row.as_text().is_none()
+        {
+            return Ok(false);
+        }
+        if !self
+            .channel_repo
+            .get(&row.conversation_id)?
+            .is_some_and(|channel| {
+                matches!(
+                    channel.channel_type,
+                    crate::domain::channel::ChannelType::Public
+                        | crate::domain::channel::ChannelType::Private
+                )
+            })
+        {
+            return Ok(false);
+        }
+        let quote = if let Some(author) = row.reply_to_author_id {
+            let Some(parent) = row
+                .reply_to
+                .as_ref()
+                .map(|id| self.message_repo.get(id))
+                .transpose()?
+                .flatten()
+            else {
+                return Ok(false);
+            };
+            Some(Quote {
+                author,
+                timestamp: parent.sent_at,
+                preview: row.reply_to_text.clone(),
+            })
+        } else {
+            None
+        };
+        row.delivery_status = "sending".into();
+        row.failure_reason = Some("Waiting for connection".into());
+        let entry = Entry { device, row, quote };
+        let raw = serde_json::json!({"entry":entry,"phase":"queued","generation":uuid::Uuid::new_v4().to_string(),"attempts":0,"next_at":0}).to_string();
+        let adopted = self.database.connection()?.execute(
+            &format!("INSERT OR IGNORE INTO settings(key,value,updated_at) SELECT ?1,?2,?3 WHERE EXISTS(SELECT 1 FROM messages WHERE id=?4 AND delivery_status='failed' AND failure_reason='Message not submitted' AND is_deleted=0) AND NOT EXISTS(SELECT 1 FROM deleted_messages WHERE id=?4) AND (SELECT COUNT(*) FROM settings WHERE key LIKE ?5 AND json_extract(value,'$.phase') IN {LIVE})<?6"),
+            params![
+                key(owner, entry.row.id),
+                raw,
+                chrono::Utc::now().to_rfc3339(),
+                entry.row.id.to_string(),
+                format!("{PREFIX}{owner}:%"),
+                MAX_PENDING
+            ],
+        )? == 1;
+        if adopted {
+            self.finish_retry_row(&entry.row.id, "sending", Some("Waiting for connection"))?;
+        }
+        Ok(adopted)
     }
 
     /// Manual retry of a queued/ambiguous identity never creates a fresh post.
@@ -252,26 +293,50 @@ impl MessageService {
     ) -> Result<Option<Message>, MessageError> {
         let owner = self.current_user_id()?;
         let journal_key = key(owner, row.id);
-        let conn = self.database.connection()?;
-        let phase: Option<String> = conn
-            .query_row(
+        let phase = |conn: &rusqlite::Connection| -> Result<Option<String>, StorageError> {
+            conn.query_row(
                 "SELECT json_extract(value,'$.phase') FROM settings WHERE key=?1",
                 params![journal_key],
                 |r| r.get(0),
             )
-            .optional()?;
-        match phase.as_deref() {
-            Some("queued" | "preparing") => {
-                conn.execute("UPDATE settings SET value=json_set(value,'$.next_at',0) WHERE key=?1 AND json_extract(value,'$.phase')='queued'",params![journal_key])?;
-                Ok(Some(row.clone()))
+            .optional()
+            .map_err(Into::into)
+        };
+        let mut current = phase(&*self.database.read_connection()?)?;
+        if current.is_none() {
+            // A proven-unsent legacy row is replayed by the queue under its own
+            // UUID. Anything else falls through to the manual send, which
+            // first fences adoption by dropping the marker while no journal
+            // exists; a racing adoption that won is then read back here.
+            if !self.adopt_unsent_channel(owner, &row.id)? {
+                self.database.connection()?.execute("UPDATE messages SET failure_reason=NULL WHERE id=?1 AND failure_reason='Message not submitted' AND NOT EXISTS(SELECT 1 FROM settings WHERE key=?2)",params![row.id.to_string(),journal_key])?;
             }
-            Some("submitted") => Err(MessageError::InvalidContent(
+            current = phase(&*self.database.read_connection()?)?;
+        }
+        match current.as_deref() {
+            Some("queued" | "preparing") => {
+                // The queue owns this row's exact request, so the manual
+                // retry's own claim (bound to this row id) is settled here
+                // rather than holding the conversation until delivery.
+                let conn = self.database.connection()?;
+                conn.execute("UPDATE settings SET value=json_set(value,'$.next_at',0) WHERE key=?1 AND json_extract(value,'$.phase')='queued'",params![journal_key])?;
+                settle_admission(&conn, owner, &[row.id])?;
+                drop(conn);
+                Ok(self
+                    .message_repo
+                    .get(&row.id)?
+                    .or_else(|| Some(row.clone())))
+            }
+            Some("submitted" | "accepted") => Err(MessageError::InvalidContent(
                 "Channel delivery remains unconfirmed; refusing a duplicate post".into(),
             )),
             Some("terminal") => Err(MessageError::InvalidContent(
                 "Channel send was refused; automatic recovery stopped".into(),
             )),
-            _ => Ok(None),
+            None => Ok(None),
+            Some(_) => Err(MessageError::InvalidContent(
+                "message cannot be retried".into(),
+            )),
         }
     }
 
@@ -284,7 +349,7 @@ impl MessageService {
     ) -> Result<Message, MessageError> {
         // Stop comfortably before sealed envelope freshness (24h) and server
         // dedupe retention (7d). Never manufacture a fresh request after expiry.
-        if now().saturating_sub(prepared.at) >= 23 * 60 * 60 || now() < prepared.at {
+        if !replayable(prepared) {
             return Err(MessageError::InvalidContent(
                 "Queued channel request expired".into(),
             ));
@@ -452,16 +517,30 @@ impl MessageService {
                     let tx = conn.transaction()?;
                     let deleted: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM deleted_messages WHERE id IN (?1,?2)) OR EXISTS(SELECT 1 FROM messages WHERE id IN (?1,?2) AND is_deleted=1)",params![row.id.to_string(),sent.id.to_string()],|r|r.get(0))?;
                     if deleted {
-                        settle_admission(
-                            &tx,
-                            row.sender_id.ok_or(MessageError::NotLoggedIn)?,
-                            row.id,
-                        )?;
-                        tx.execute("UPDATE settings SET value=json_object('phase','cancelled') WHERE key=?1",params![journal_key])?;
-                        tx.execute(
-                            "DELETE FROM messages WHERE id=?1",
-                            params![row.id.to_string()],
-                        )?;
+                        // Deleted while the post was accepted. Keep the request,
+                        // token and response for `finish_channel_deletion`, and
+                        // suppress the canonical id so catch-up cannot restore
+                        // it. Only this generation may do so: a stale future
+                        // finishing after the confirm (journal gone, parked id
+                        // tombstoned by it) must not touch the server copy.
+                        let fenced = tx.execute("UPDATE settings SET value=json_set(value,'$.phase','deleting','$.next_at',0) WHERE key=?1 AND json_extract(value,'$.generation')=?2",params![journal_key,generation])?;
+                        if fenced == 1 {
+                            settle_admission(
+                                &tx,
+                                row.sender_id.ok_or(MessageError::NotLoggedIn)?,
+                                &[row.id, sent.id],
+                            )?;
+                            for id in [row.id, sent.id] {
+                                tx.execute(
+                                    "INSERT OR IGNORE INTO deleted_messages(id) VALUES (?1)",
+                                    params![id.to_string()],
+                                )?;
+                                tx.execute(
+                                    "DELETE FROM messages WHERE id=?1",
+                                    params![id.to_string()],
+                                )?;
+                            }
+                        }
                         tx.commit()?;
                         return Err(MessageError::MessageNotFound(row.id));
                     }
@@ -514,23 +593,28 @@ impl MessageService {
                         let _ = self.ephemeral_service.track_armed(sent.id, ttl);
                     }
                 }
-                if let Some(stored) = self.message_repo.get(&sent.id)? {
-                    sent.delivery_status = stored.delivery_status;
-                }
                 if let Some(quote) = quote.as_ref() {
                     sent = self
                         .persist_outgoing_reply_context(sent, quote)
                         .map_err(|(_, e)| e)?;
                 }
-                // Confirm the exact row, update shared admission and remove
-                // the parked bubble atomically. A crash cannot strand admission
-                // on a removed local identity after recovery succeeded.
+                // Confirm the exact generation, settle this send's own admission
+                // claims, mark the canonical row sent and remove the parked
+                // bubble atomically. The journal (ciphertext, token, response)
+                // is dropped: the token now lives on the canonical row. A
+                // crash cannot strand admission after recovery succeeded, and
+                // a lost generation leaves everything to its new owner.
                 {
                     let mut conn = self.database.connection()?;
                     let tx = conn.transaction()?;
-                    let changed = tx.execute("UPDATE settings SET value=json_object('phase','confirmed','message_id',?3) WHERE key=?1 AND json_extract(value,'$.generation')=?2",params![journal_key,generation,sent.id.to_string()])?;
+                    let changed = tx.execute("DELETE FROM settings WHERE key=?1 AND json_extract(value,'$.generation')=?2",params![journal_key,generation])?;
                     if changed != 0 {
-                        tx.execute("UPDATE settings SET value=json_set(value,'$.message_id',?3) WHERE key LIKE ?1 AND key NOT LIKE '%:confirmed:%' AND json_extract(value,'$.message_id')=?2",params![format!("send.unresolved.v1:{}:%",row.sender_id.ok_or(MessageError::NotLoggedIn)?),row.id.to_string(),sent.id.to_string()])?;
+                        settle_admission(
+                            &tx,
+                            row.sender_id.ok_or(MessageError::NotLoggedIn)?,
+                            &[row.id, sent.id],
+                        )?;
+                        tx.execute("UPDATE messages SET delivery_status='sent',failure_reason=NULL WHERE id=?1 AND delivery_status NOT IN ('delivered','read')",params![sent.id.to_string()])?;
                         if sent.id != row.id {
                             tx.execute(
                                 "INSERT OR IGNORE INTO deleted_messages(id) VALUES (?1)",
@@ -543,6 +627,9 @@ impl MessageService {
                         }
                     }
                     tx.commit()?;
+                }
+                if let Some(stored) = self.message_repo.get(&sent.id)? {
+                    sent.delivery_status = stored.delivery_status;
                 }
                 Ok(sent)
             }
@@ -574,11 +661,156 @@ impl MessageService {
                 if phase == "terminal" {
                     let mut conn = self.database.connection()?;
                     let tx = conn.transaction()?;
-                    settle_admission(&tx, row.sender_id.ok_or(MessageError::NotLoggedIn)?, row.id)?;
+                    settle_admission(
+                        &tx,
+                        row.sender_id.ok_or(MessageError::NotLoggedIn)?,
+                        &[row.id],
+                    )?;
+                    // Nothing ever reached the server: keep only the marker
+                    // that refuses a fresh post on manual retry. A terminal
+                    // journal holding a request or response may have been
+                    // deposited, so its token stays for a later deletion.
+                    tx.execute("UPDATE settings SET value=json_object('phase','terminal','row_id',json_extract(value,'$.entry.row.id')) WHERE key=?1 AND json_extract(value,'$.phase')='terminal' AND json_extract(value,'$.prepared') IS NULL AND json_extract(value,'$.response') IS NULL",params![journal_key])?;
                     tx.commit()?;
                 }
                 tracing::warn!(%error, message_id=%row.id, %phase, "Channel send retained");
                 self.finish_retry_row(&row.id, status, reason)
+            }
+        }
+    }
+}
+
+impl MessageService {
+    /// The parked row was deleted after its request may have reached the
+    /// server (a retained request or response). Fail closed: learn the
+    /// canonical id from the stored response or an exact replay (the server
+    /// returns the original for the same bytes), suppress it locally and
+    /// remove the server copy with the retained token. The journal, and with
+    /// it the only deletion authority for a sealed post, is dropped only
+    /// after the server confirms the copy is gone or was never kept.
+    async fn finish_channel_deletion(
+        &self,
+        journal_key: &str,
+        generation: &str,
+        entry: &Entry,
+    ) -> Result<(), MessageError> {
+        let row = &entry.row;
+        let held: Option<(Option<String>, Option<String>)> = self.database.read_connection()?.query_row(
+            "SELECT json_extract(value,'$.response'),json_extract(value,'$.prepared') FROM settings WHERE key=?1 AND json_extract(value,'$.generation')=?2 AND json_extract(value,'$.phase')='deleting'",
+            params![journal_key, generation], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
+        let Some((response, prepared)) = held else {
+            return Ok(());
+        };
+        let finish = |phase: Option<&str>| -> Result<(), MessageError> {
+            let conn = self.database.connection()?;
+            match phase {
+                // Unresolvable here: keep request and token, stop retrying.
+                Some(phase) => conn.execute("UPDATE settings SET value=json_set(value,'$.phase',?3) WHERE key=?1 AND json_extract(value,'$.generation')=?2",params![journal_key,generation,phase])?,
+                None => conn.execute("DELETE FROM settings WHERE key=?1 AND json_extract(value,'$.generation')=?2",params![journal_key,generation])?,
+            };
+            Ok(())
+        };
+        let prepared: Option<Prepared> = prepared
+            .map(|raw| serde_json::from_str(&raw))
+            .transpose()
+            .map_err(|_| invalid("Invalid prepared channel request"))?;
+        let proto = match response {
+            Some(raw) => {
+                let bytes: Vec<u8> =
+                    serde_json::from_str(&raw).map_err(|_| invalid("Invalid accepted response"))?;
+                crate::proto::chat_v1::Message::decode(bytes.as_slice())
+                    .map_err(|_| invalid("Invalid accepted response protobuf"))?
+            }
+            None => {
+                let Some(prepared) = prepared.as_ref() else {
+                    return finish(None); // never deposited
+                };
+                let request = SendMessageRequest::decode(prepared.request.as_slice())
+                    .map_err(|_| invalid("Invalid retained channel request protobuf"))?;
+                crate::services::gateway::submission::check_send_session()?;
+                if !replayable(prepared)
+                    || request.client_request_id != row.id.to_string()
+                    || row.sender_id != Some(self.current_user_id()?)
+                    || self.settings_repo.get::<u32>(keys::CURRENT_DEVICE_ID)? != Some(entry.device)
+                {
+                    tracing::warn!(message_id=%row.id, "Deleted channel send may hold an undeletable server copy; token retained");
+                    return finish(Some("unresolved"));
+                }
+                match tokio::time::timeout(
+                    std::time::Duration::from_secs(30),
+                    self.message_client().send_prepared_message(request),
+                )
+                .await
+                .unwrap_or(Err(NetworkError::Timeout))
+                {
+                    Ok(proto) => {
+                        let raw = serde_json::to_string(&proto.encode_to_vec())
+                            .map_err(|_| invalid("Cannot retain channel response"))?;
+                        self.database.connection()?.execute("UPDATE settings SET value=json_set(value,'$.response',json(?3)) WHERE key=?1 AND json_extract(value,'$.generation')=?2",params![journal_key,generation,raw])?;
+                        proto
+                    }
+                    // AlreadyExists / FailedPrecondition: the server keeps no
+                    // live copy under these exact bytes (`network_error.rs`).
+                    Err(NetworkError::InvalidRequest(_)) => return finish(None),
+                    Err(e) if e.is_retryable() || e.is_transport_error() => return Err(e.into()),
+                    // PermissionDenied and the like: the server re-authorizes
+                    // before answering a duplicate, so a copy may still exist.
+                    Err(e) => {
+                        tracing::warn!(error=%e, message_id=%row.id, "Deleted channel send unresolved; token retained");
+                        return finish(Some("unresolved"));
+                    }
+                }
+            }
+        };
+        let server_id: MessageId = proto
+            .id
+            .parse()
+            .map_err(|_| invalid("Invalid accepted message id"))?;
+        {
+            let mut conn = self.database.connection()?;
+            let tx = conn.transaction()?;
+            tx.execute(
+                "INSERT OR IGNORE INTO deleted_messages(id) VALUES (?1)",
+                params![server_id.to_string()],
+            )?;
+            tx.execute(
+                "DELETE FROM messages WHERE id=?1",
+                params![server_id.to_string()],
+            )?;
+            tx.commit()?;
+        }
+        let token = prepared
+            .and_then(|p| p.deletion_token)
+            .map(|t| t.to_vec())
+            .unwrap_or_default();
+        match tokio::time::timeout(
+            std::time::Duration::from_secs(30),
+            self.message_client().delete_message(
+                &proto.id,
+                &row.conversation_id.to_string(),
+                token,
+            ),
+        )
+        .await
+        .unwrap_or(Err(NetworkError::Timeout))
+        {
+            Ok(()) | Err(NetworkError::NotFound(_)) => finish(None),
+            Err(e) if e.is_retryable() || e.is_transport_error() => Err(e.into()),
+            Err(e) => {
+                tracing::warn!(error=%e, message_id=%server_id, "Server refused deleting a cancelled channel post; token retained");
+                finish(Some("unresolved"))
+            }
+        }
+    }
+
+    async fn delete_channel_entry(&self, journal_key: &str, generation: &str, entry: &Entry) {
+        if let Err(error) = self
+            .finish_channel_deletion(journal_key, generation, entry)
+            .await
+        {
+            tracing::warn!(%error, message_id=%entry.row.id, "Channel deletion retained");
+            if let Ok(conn) = self.database.connection() {
+                let _ = conn.execute("UPDATE settings SET value=json_set(value,'$.attempts',MIN(json_extract(value,'$.attempts')+1,6),'$.next_at',?3+MIN(300,5*(1 << MIN(json_extract(value,'$.attempts'),6)))) WHERE key=?1 AND json_extract(value,'$.generation')=?2",params![journal_key,generation,now()]);
             }
         }
     }
@@ -625,22 +857,27 @@ pub(crate) fn spawn_channel_send_recovery(
             if let Err(error) = messages.adopt_proven_unsent_channels(owner) {
                 tracing::warn!(%error,"Legacy predeposit channel recovery awaits storage");
             }
-            let due = (|| -> Result<Vec<(String, String, Entry)>, StorageError> {
+            let due = (|| -> Result<Vec<(String, String, Entry, bool)>, StorageError> {
                 let mut conn = messages.database.connection()?;
                 let tx = conn.transaction()?;
                 let pattern = format!("{PREFIX}{owner}:%");
-                tx.execute("DELETE FROM settings WHERE key LIKE ?1 AND json_extract(value,'$.phase')='terminal' AND EXISTS(SELECT 1 FROM deleted_messages WHERE id=json_extract(settings.value,'$.entry.row.id'))",params![pattern])?;
+                // A deleted refusal that never reached the server is forgotten;
+                // one holding a request or response may be live, so it moves
+                // to deletion with its token.
+                tx.execute("DELETE FROM settings WHERE key LIKE ?1 AND json_extract(value,'$.phase')='terminal' AND json_extract(value,'$.prepared') IS NULL AND json_extract(value,'$.response') IS NULL AND (EXISTS(SELECT 1 FROM deleted_messages WHERE id=COALESCE(json_extract(settings.value,'$.row_id'),json_extract(settings.value,'$.entry.row.id'))) OR EXISTS(SELECT 1 FROM messages WHERE id=COALESCE(json_extract(settings.value,'$.row_id'),json_extract(settings.value,'$.entry.row.id')) AND is_deleted=1))",params![pattern])?;
+                tx.execute("UPDATE settings SET value=json_set(value,'$.phase','deleting','$.next_at',0) WHERE key LIKE ?1 AND json_extract(value,'$.phase')='terminal' AND (json_extract(value,'$.prepared') IS NOT NULL OR json_extract(value,'$.response') IS NOT NULL) AND (EXISTS(SELECT 1 FROM deleted_messages WHERE id=json_extract(settings.value,'$.entry.row.id')) OR EXISTS(SELECT 1 FROM messages WHERE id=json_extract(settings.value,'$.entry.row.id') AND is_deleted=1))",params![pattern])?;
                 if reconnected {
                     tx.execute("UPDATE settings SET value=json_set(value,'$.next_at',0) WHERE key LIKE ?1 AND json_extract(value,'$.phase')='queued'",params![pattern])?;
                 }
-                let rows: Vec<(String, String)> = {
-                    let mut stmt = tx.prepare("SELECT key,json_extract(value,'$.entry') FROM settings WHERE key LIKE ?1 AND json_extract(value,'$.phase') IN ('queued','preparing','submitted','accepted') AND json_extract(value,'$.next_at')<=?2 ORDER BY json_extract(value,'$.next_at'),key LIMIT 4")?;
-                    let mapped =
-                        stmt.query_map(params![pattern, now()], |r| Ok((r.get(0)?, r.get(1)?)))?;
+                let rows: Vec<(String, String, String)> = {
+                    let mut stmt = tx.prepare(&format!("SELECT key,json_extract(value,'$.entry'),json_extract(value,'$.phase') FROM settings WHERE key LIKE ?1 AND json_extract(value,'$.phase') IN {LIVE} AND json_extract(value,'$.next_at')<=?2 ORDER BY json_extract(value,'$.next_at'),key LIMIT 4"))?;
+                    let mapped = stmt.query_map(params![pattern, now()], |r| {
+                        Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+                    })?;
                     mapped.collect::<Result<_, _>>()?
                 };
                 let mut due = Vec::new();
-                for (key, raw) in rows {
+                for (key, raw, phase) in rows {
                     let entry: Entry = match serde_json::from_str(&raw) {
                         Ok(entry) => entry,
                         Err(_) => {
@@ -655,15 +892,21 @@ pub(crate) fn spawn_channel_send_recovery(
                         tx.execute("UPDATE settings SET value=json_set(value,'$.phase','terminal') WHERE key=?1",params![key])?;
                         continue;
                     }
+                    let mut deleting = phase == "deleting";
                     let deleted: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM deleted_messages WHERE id=?1) OR EXISTS(SELECT 1 FROM messages WHERE id=?1 AND is_deleted=1)",params![entry.row.id.to_string()],|r|r.get(0))?;
-                    if deleted {
-                        settle_admission(&tx, owner, entry.row.id)?;
-                        tx.execute("DELETE FROM settings WHERE key=?1", params![key])?;
-                        continue;
+                    if deleted && !deleting {
+                        settle_admission(&tx, owner, &[entry.row.id])?;
+                        // A retained request or response may already be a
+                        // live server post: keep its token for deletion.
+                        deleting = tx.execute("UPDATE settings SET value=json_set(value,'$.phase','deleting') WHERE key=?1 AND (json_extract(value,'$.prepared') IS NOT NULL OR json_extract(value,'$.response') IS NOT NULL)",params![key])? == 1;
+                        if !deleting {
+                            tx.execute("DELETE FROM settings WHERE key=?1", params![key])?;
+                            continue;
+                        }
                     }
                     let generation = uuid::Uuid::new_v4().to_string();
-                    tx.execute("UPDATE settings SET value=json_set(value,'$.phase','preparing','$.generation',?2,'$.next_at',?3) WHERE key=?1",params![key,generation,now()+LEASE_SECONDS])?;
-                    due.push((key, generation, entry));
+                    tx.execute("UPDATE settings SET value=json_set(value,'$.phase',?4,'$.generation',?2,'$.next_at',?3) WHERE key=?1",params![key,generation,now()+LEASE_SECONDS,if deleting {"deleting"} else {"preparing"}])?;
+                    due.push((key, generation, entry, deleting));
                 }
                 tx.commit()?;
                 Ok(due)
@@ -675,13 +918,22 @@ pub(crate) fn spawn_channel_send_recovery(
                     continue;
                 }
             };
-            for (key, generation, entry) in due {
+            for (key, generation, entry, deleting) in due {
                 let current = client.auth_state().get();
                 if current.current_user_id != Some(owner)
                     || current.session_revision != state.session_revision
                     || !client.offline_state().connection_state().is_connected()
                 {
                     break;
+                }
+                if deleting {
+                    crate::services::gateway::submission::SEND_SESSION
+                        .scope(
+                            session.clone(),
+                            messages.delete_channel_entry(&key, &generation, &entry),
+                        )
+                        .await;
+                    continue;
                 }
                 let result = crate::services::gateway::submission::SEND_SESSION
                     .scope(session.clone(), async {
