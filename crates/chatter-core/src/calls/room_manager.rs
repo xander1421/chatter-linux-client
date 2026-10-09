@@ -272,6 +272,8 @@ pub struct RoomManager {
     /// its own value, so a detached old handler (disconnect join timed out)
     /// can neither mark a newer connection disconnected nor report its loss.
     connection_generation: Arc<std::sync::atomic::AtomicU64>,
+    /// Invalidates last-peer grace across SDK recovery without retiring the room.
+    membership_revision: Arc<std::sync::atomic::AtomicU64>,
     /// Shared frame store the UI reads. Kept here (not just inside
     /// `video_playback`) so the capture path can tee the LOCAL camera/screen
     /// feed into it for the self-preview tile.
@@ -330,6 +332,7 @@ impl RoomManager {
             })),
             event_task: Arc::new(RwLock::new(None)),
             connection_generation: Arc::new(std::sync::atomic::AtomicU64::new(0)),
+            membership_revision: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             shared_frames,
         };
         (manager, event_rx)
@@ -1175,6 +1178,7 @@ impl RoomManager {
         // 2. LiveKit Room/events are !Send and must stay on the same thread
         let event_task_slot = self.event_task.clone();
         let generation_slot = self.connection_generation.clone();
+        let membership_revision = self.membership_revision.clone();
         let handle = tokio::task::spawn_local(async move {
             tracing::info!("Room event handler started");
             let mut cryptor_evidence = ReceiverCryptorEvidence::default();
@@ -1182,6 +1186,11 @@ impl RoomManager {
                 // All effects, including track/playback and membership, belong to this connection.
                 if generation_slot.load(std::sync::atomic::Ordering::SeqCst) != generation {
                     break;
+                }
+                // Invalidate grace before any awaited control delivery at either
+                // SDK recovery boundary. Connection generation stays unchanged.
+                if matches!(&event, livekit::RoomEvent::Reconnecting | livekit::RoomEvent::Reconnected) {
+                    membership_revision.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
                 }
                 // Avoid dumping arbitrary SDK event payloads and identities.
                 if let livekit::RoomEvent::E2eeStateChanged { participant, state } = &event {
@@ -1337,6 +1346,11 @@ impl RoomManager {
     pub fn connection_generation(&self) -> u64 {
         self.connection_generation
             .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// Grace checks must belong to one uninterrupted SDK membership phase.
+    pub fn membership_revision(&self) -> u64 {
+        self.membership_revision.load(std::sync::atomic::Ordering::SeqCst)
     }
 
     /// Get current participant count.

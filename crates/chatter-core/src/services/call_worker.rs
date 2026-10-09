@@ -582,6 +582,7 @@ enum CallCommand {
     FinishPeerLeftCheck {
         call: CallHandle,
         generation: u64,
+        membership_revision: u64,
         session_revision: Option<u64>,
     },
     /// Swap the worker's gRPC call client (anon-mode transport switch).
@@ -2074,20 +2075,22 @@ fn run_call_worker(
                         if let Some(call) = active_call.borrow().as_ref().map(derive_call_handle) {
                             let generation = room_manager.connection_generation();
                             let session_revision = incoming_presentation.session_revision();
+                            let membership_revision = room_manager.membership_revision();
                             let tx = command_sender.clone();
                             tokio::task::spawn_local(async move {
                                 tokio::time::sleep(PEER_LEFT_GRACE).await;
-                                let _ = tx.send(CallCommand::FinishPeerLeftCheck { call, generation, session_revision }).await;
+                                let _ = tx.send(CallCommand::FinishPeerLeftCheck { call, generation, membership_revision, session_revision }).await;
                             });
                         }
                     }
                     continue;
                 }
-                CallCommand::FinishPeerLeftCheck { call, generation, session_revision } => {
+                CallCommand::FinishPeerLeftCheck { call, generation, membership_revision, session_revision } => {
                     if active_call.borrow().as_ref().map(derive_call_handle).as_ref() != Some(&call)
                         || incoming_presentation.session_revision() != session_revision
                         || !orchestrator.active.as_ref().is_some_and(|a| incoming_presentation.accepts_session(a.session_revision))
                         || room_manager.connection_generation() != generation
+                        || room_manager.membership_revision() != membership_revision
                         || !room_manager.membership_is_current()
                         || !peer_left_ends_call(orchestrator.active.as_ref().map(|a| a.kind),
                             &room_manager.remote_participant_identities(), "")
@@ -2587,6 +2590,11 @@ fn run_call_worker(
                             .map(|active| active.session_revision),
                     ).await;
                     if result.is_ok() {
+                        // Fresh connect emits no departure for an already-empty
+                        // roster. Reconcile on the actor using its normal scoped grace.
+                        deferred_commands.push_back(CallCommand::BeginPeerLeftCheck {
+                            generation: room_manager.connection_generation(),
+                        });
                         let _ = events_tx.try_send(LiveKitRoomEvent::RecoveryPhase { generation: room_manager.connection_generation(), recovered: true });
                     }
                     if matches!(&result, Err(RecoveryFailure::Failed(_))) {
@@ -2637,6 +2645,9 @@ fn run_call_worker(
                     match recovery {
                         Ok(()) => {
                             tracing::info!(call = %call.as_str(), "Room session recovered");
+                            deferred_commands.push_back(CallCommand::BeginPeerLeftCheck {
+                                generation: room_manager.connection_generation(),
+                            });
                             let _ = events_tx.try_send(LiveKitRoomEvent::RecoveryPhase { generation: room_manager.connection_generation(), recovered: true });
                         },
                         // The admitted hangup is next, preserving its reason, server
