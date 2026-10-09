@@ -354,6 +354,7 @@ pub fn build_delete_for_me_content(
             target_author_aci: target_author_aci.to_string(),
             target_sent_timestamp,
             timestamp: now,
+            ..Default::default()
         })),
         ..Default::default()
     }
