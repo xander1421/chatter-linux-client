@@ -361,9 +361,9 @@ fn handle_local_attachment(
     // Preview allocation is bounded by the authenticated reader's actual
     // plaintext length, not the peer-supplied display metadata.
     let preview_limit = if FileMetadata::is_code_file(&filename, &mime_type) {
-        Some(4 * 1024 * 1024u64)
+        Some(4 * 1024 * 1024usize)
     } else if mime_type == "application/pdf" || filename.to_lowercase().ends_with(".pdf") {
-        Some(32 * 1024 * 1024u64)
+        Some(32 * 1024 * 1024usize)
     } else {
         None
     };
@@ -404,7 +404,7 @@ fn handle_local_attachment(
         }
         let buffer =
             chatter_core::prelude::SecureBuffer::new(reader.read_range(0, reader.plaintext_size()));
-        if buffer.as_slice().len() as u64 != reader.plaintext_size()
+        if buffer.as_slice().len() != reader.plaintext_size()
             || ui_ctx.auth_state().get().session_revision != revision
             || !super::media_viewer::is_current(request)
         {
