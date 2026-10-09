@@ -500,6 +500,8 @@ export component MainWindow inherits Window {
     in-out property <int> composer-emoji-skin-tone: 0;  // 0=default, 1-5=Fitzpatrick
     // The composer's text or reply target changed: the app autosaves the draft.
     callback composer-draft-changed();
+    // The thread panel's text changed: autosaved under its thread the same way.
+    callback thread-draft-changed();
     callback composer-emoji-selected(string);      // emoji to insert
     callback composer-emoji-category-changed(int); // category index
     callback composer-emoji-search-changed(string); // search query
@@ -1380,6 +1382,7 @@ export component MainWindow inherits Window {
     changed selection-mode => { if root.selection-mode { VoiceRecording.cancel(); } }
     changed composer-is-editing => { if root.composer-is-editing { VoiceRecording.cancel(); } }
     changed composer-text => { root.composer-draft-changed(); }
+    changed thread-composer-text => { root.thread-draft-changed(); }
     changed thread-panel-visible => { VoiceRecording.cancel(); }
     changed active-tab => { root.calls-more-menu-visible = false; root.call-history-selecting = false; root.cancel-composer-keyboard-handover(); VoiceRecording.cancel(); }
     changed current-view => { root.calls-more-menu-visible = false; root.call-history-selecting = false; root.cancel-composer-keyboard-handover(); VoiceRecording.cancel(); }

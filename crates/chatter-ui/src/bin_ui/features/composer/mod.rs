@@ -21,7 +21,7 @@ use crate::MainWindow;
 /// Wire composer callbacks.
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     attachments::wire_attachment_clicked(window, ui_ctx.chat_state().clone(), ui_ctx);
-    attachments::wire_remove_attachment(window, ui_ctx.chat_state().clone());
+    attachments::wire_remove_attachment(window, ui_ctx);
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     attachments::wire_paste_image(window, ui_ctx.chat_state().clone());
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
@@ -36,6 +36,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     wire_text_format(window);
     wire_per_conversation_drafts(window, ui_ctx);
     wire_draft_autosave(window, ui_ctx);
+    wire_thread_draft_autosave(window, ui_ctx);
 }
 
 /// Store what the composer shows right now under the conversation it belongs
@@ -49,6 +50,49 @@ pub fn autosave_composer_draft(w: &MainWindow, ctx: &ChatterClient) {
     ctx.autosave_composer_draft(chatter_core::client::ComposerDraft {
         text: w.get_composer_text().to_string(),
         reply: crate::bin_ui::features::chat::send_message::composer_reply(w),
+    });
+}
+
+/// Store the thread panel's text under the thread it is for. Nothing is
+/// stored while no thread is loaded (the root id is cleared when the panel
+/// closes), so a late tick cannot wipe the draft the close just parked.
+pub fn autosave_thread_draft(w: &MainWindow, ctx: &ChatterClient) {
+    let Ok(root) = w
+        .get_thread_root_message_id()
+        .parse::<chatter_core::domain::ids::MessageId>()
+    else {
+        return;
+    };
+    ctx.set_thread_draft(&root, &w.get_thread_composer_text());
+}
+
+/// The thread panel's text, debounced like the composer's. The thread shown
+/// when the change happened is captured with the session: a tick after the
+/// panel moved to another thread, or closed, is dropped.
+fn wire_thread_draft_autosave(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let weak = slint::ComponentHandle::as_weak(window);
+    let ctx = ui_ctx.clone();
+    let timer = slint::Timer::default();
+    window.on_thread_draft_changed(move || {
+        let Some(w) = weak.upgrade() else { return };
+        let root = w.get_thread_root_message_id();
+        if root.is_empty() {
+            return;
+        }
+        let weak = weak.clone();
+        let ctx = ctx.clone();
+        let session = crate::bin_ui::features::history_owner::SessionOwner::capture(&ctx);
+        timer.start(
+            slint::TimerMode::SingleShot,
+            std::time::Duration::from_millis(400),
+            move || {
+                let Some(w) = weak.upgrade() else { return };
+                if !session.is_current() || w.get_thread_root_message_id() != root {
+                    return;
+                }
+                autosave_thread_draft(&w, &ctx);
+            },
+        );
     });
 }
 
@@ -107,6 +151,9 @@ pub fn reset_session(window: &MainWindow, ui_ctx: &ChatterClient) {
     window.set_composer_text("".into());
     crate::bin_ui::features::chat::send_message::clear_reply(window);
     render_attachments(window, &[]);
+    // Root first, so the text change's autosave finds no thread to write to.
+    window.set_thread_root_message_id("".into());
+    window.set_thread_composer_text("".into());
 }
 
 /// Wire the pure text operations independently of network/client callbacks.
@@ -125,10 +172,25 @@ fn wire_per_conversation_drafts(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
             .map(|id| id.to_string())
             .unwrap_or_default()
     };
+    // Which files are staged where. A change rewrites the account's recovery
+    // row (rare: a file added, removed, sent or restored — never a keystroke).
+    let trays = |d: &chatter_core::state::ChatStateData| {
+        let mut ids: Vec<String> = d
+            .pending_attachments
+            .iter()
+            .map(|a| format!("{:?}:{}", d.active_channel_id, a.id))
+            .collect();
+        for (tray, staged) in &d.attachment_trays {
+            ids.extend(staged.iter().map(|a| format!("{tray:?}:{}", a.id)));
+        }
+        ids.sort();
+        ids
+    };
     let mut rx = ui_ctx.chat_state().subscribe();
     let initial = ui_ctx.chat_state().get();
     let mut current = key(&initial);
     let mut current_revision = initial.attachment_revision;
+    let mut current_trays = trays(&initial);
     // The composer starts out holding `current`'s draft.
     let draft = ui_ctx.swap_composer_draft("", Default::default(), &current);
     if !draft.text.is_empty() {
@@ -148,6 +210,11 @@ fn wire_per_conversation_drafts(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             };
+            let staged = trays(&snapshot);
+            if staged != current_trays {
+                current_trays = staged;
+                ctx.persist_composer_recovery();
+            }
             let entering = key(&snapshot);
             if entering == current && snapshot.attachment_revision == current_revision {
                 continue;

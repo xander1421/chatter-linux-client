@@ -736,6 +736,9 @@ async fn deliver_inner(
         None => return false,
         Some(Ok(r)) => {
             tracing::info!(msg_id = %r.message_id_effective, sent_at = r.sent_at, "[UI_SEND] send_message_ui returned Ok");
+            // Core stored the message with its uploads: the sheltered copies
+            // behind the attachments are done. A user's original is untouched.
+            ui_ctx.release_staged_files(&pending_attachments);
             r
         }
         Some(Err(e)) => {
@@ -771,8 +774,11 @@ async fn deliver_inner(
             ) {
                 // Taken by core, outcome unresolved: the pending row stays
                 // "sending", which is the truth. In particular GIF/voice
-                // wrappers must not restore it as a new composer send.
+                // wrappers must not restore it as a new composer send. The
+                // retained attempt never re-reads the files, so the sheltered
+                // copies are done here too.
                 notice(&weak, &ui_ctx, session_revision, &e.to_string());
+                ui_ctx.release_staged_files(&pending_attachments);
                 return true;
             }
 

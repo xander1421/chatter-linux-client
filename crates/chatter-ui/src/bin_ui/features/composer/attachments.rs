@@ -105,17 +105,11 @@ pub(crate) fn wire_attachment_clicked(
     ui_ctx: &std::sync::Arc<chatter_core::client::ChatterClient>,
 ) {
     let weak_window = window.as_weak();
-    // Only the mesh interception below consumes this; without the feature the
-    // whole path is the ordinary staging one.
-    #[cfg(feature = "mesh")]
     let ui_ctx_attach = ui_ctx.clone();
-    #[cfg(not(feature = "mesh"))]
-    let _ = ui_ctx;
 
     window.on_attachment_clicked(move || {
         let weak = weak_window.clone();
         let chat_state = chat_state.clone();
-        #[cfg(feature = "mesh")]
         let ui_ctx_attach = ui_ctx_attach.clone();
         tracing::debug!("Attachment clicked");
         let Some(w) = weak.upgrade() else { return };
@@ -159,6 +153,8 @@ pub(crate) fn wire_attachment_clicked(
 
         #[cfg(not(any(target_os = "android", target_os = "ios")))]
         {
+            // Desktop picks the user's own files by path; nothing to shelter.
+            let _ = &ui_ctx_attach;
             tokio::spawn(async move {
                 use chatter_core::media::file_picker::{FileFilter, FilePicker, FilePickerConfig};
 
@@ -210,6 +206,9 @@ pub(crate) fn wire_attachment_clicked(
                 tracing::info!("Selected {} file(s) for attachment", selected_files.len());
 
                 for file_path in selected_files {
+                    // The SAF copy sits in the purgeable cache dir and is ours:
+                    // move it where a restart finds it (core owns the dir).
+                    let file_path = ui_ctx_attach.stage_owned_file(file_path);
                     if let Err(e) =
                         process_and_add_file(file_path, &chat_state, conversation, revision, &weak)
                             .await
@@ -224,7 +223,7 @@ pub(crate) fn wire_attachment_clicked(
         // rather than no-op silently.
         #[cfg(target_os = "ios")]
         {
-            let _ = (&chat_state, &weak);
+            let _ = (&chat_state, &weak, &ui_ctx_attach);
             tracing::warn!("File picker not yet implemented on iOS");
             w.invoke_finish_attachment_picker(true);
         }
@@ -315,10 +314,15 @@ fn read_clipboard_image() -> Result<PathBuf, String> {
 }
 
 /// Wire up the remove-attachment callback.
-pub(crate) fn wire_remove_attachment(window: &MainWindow, chat_state: ChatState) {
+pub(crate) fn wire_remove_attachment(
+    window: &MainWindow,
+    ui_ctx: &std::sync::Arc<chatter_core::client::ChatterClient>,
+) {
     let weak_window = window.as_weak();
+    let ui_ctx = ui_ctx.clone();
 
     window.on_remove_attachment(move |attachment_id: SharedString| {
+        let chat_state = ui_ctx.chat_state();
         let id_str = attachment_id.to_string();
         tracing::debug!("Remove attachment clicked: {}", id_str);
 
@@ -326,11 +330,19 @@ pub(crate) fn wire_remove_attachment(window: &MainWindow, chat_state: ChatState)
         let parsed_id: Result<AttachmentId, _> = id_str.parse();
         match parsed_id {
             Ok(id) => {
+                let removed: Vec<PendingAttachment> = chat_state
+                    .get_pending_attachments()
+                    .into_iter()
+                    .filter(|a| a.id == id)
+                    .collect();
                 chat_state.remove_pending_attachment(id);
+                // A sheltered copy leaves with its tray entry; a user's
+                // original is only a reference and stays.
+                ui_ctx.release_staged_files(&removed);
                 tracing::info!("Removed pending attachment: {}", id_str);
 
                 // Refresh the UI
-                update_attachments_ui(&chat_state, &weak_window);
+                update_attachments_ui(chat_state, &weak_window);
             }
             Err(e) => {
                 tracing::error!("Failed to parse attachment ID '{}': {}", id_str, e);

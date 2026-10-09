@@ -27,6 +27,13 @@ fn wire_close_thread(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let owner = HistoryOwner::capture(&client, chat_state.active_conversation());
         let chat = chat_state.clone();
         let weak = weak_window.clone();
+        if let Some(w) = weak_window.upgrade() {
+            // The text stays with its thread; root first, so the text
+            // change's autosave has no thread to overwrite it under.
+            crate::bin_ui::features::composer::autosave_thread_draft(&w, &client);
+            w.set_thread_root_message_id(SharedString::default());
+            w.set_thread_composer_text(SharedString::default());
+        }
         if let Some(thread) = chat_state.active_thread() {
             chat_state.close_thread(thread.root_message_id);
         }
@@ -57,6 +64,9 @@ fn wire_send_thread_reply(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let Some(thread) = chat_state.active_thread() else {
             return;
         };
+        // The panel cleared its composer on tap: the persisted draft goes
+        // now, not after the autosave delay, so a restart cannot resend it.
+        ui_ctx.set_thread_draft(&thread.root_message_id, "");
         let owner = HistoryOwner::thread(&ui_ctx, thread.root_message_id, false);
         tokio::spawn(async move {
             if !owner.is_current() {
@@ -374,13 +384,24 @@ pub fn load_thread_data(
                 .session_current_user_id()
                 .map(|id| id.to_string())
                 .unwrap_or_default();
+            let draft = ui_ctx.thread_draft(&root_message_id);
+            let ctx = ui_ctx.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 if !owner.is_current() {
                     return;
                 }
                 if let Some(w) = window.upgrade() {
+                    // Switching threads: what was typed for the one shown
+                    // until now stays its draft; this thread's comes back.
+                    // Reloading the same thread keeps what is being typed.
+                    let root_id = root_message_id.to_string();
+                    let switching = w.get_thread_root_message_id().as_str() != root_id;
+                    crate::bin_ui::features::composer::autosave_thread_draft(&w, &ctx);
                     w.set_thread_panel_visible(true);
-                    w.set_thread_root_message_id(root_message_id.to_string().into());
+                    w.set_thread_root_message_id(root_id.into());
+                    if switching {
+                        w.set_thread_composer_text(draft.into());
+                    }
                     w.set_thread_root_sender_name(sender_name.into());
                     w.set_thread_root_content_preview(content_preview.into());
                     w.set_thread_reply_count(total_replies as i32);

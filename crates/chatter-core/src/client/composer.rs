@@ -6,7 +6,13 @@
 //! whatever the composer and the active conversation hold when the upload
 //! finishes.
 
+use std::collections::{HashMap, HashSet};
+use std::path::{Path, PathBuf};
+
 use super::ChatterClient;
+use crate::domain::anon_dm::AnonDmId;
+use crate::domain::anon_group::AnonGroupId;
+use crate::domain::ids::{AttachmentId, ChannelId, MessageId, UserId};
 use crate::state::{ActiveConversation, PendingAttachment};
 
 /// The message being replied to, as the composer's reply bar holds it.
@@ -54,6 +60,167 @@ pub struct ComposerSend {
     pub text: String,
     pub reply: Option<ComposerReply>,
     pub attachments: Vec<PendingAttachment>,
+}
+
+// ── Recovery row ────────────────────────────────────────────────────
+//
+// What a restart would otherwise lose, per account, in one encrypted
+// settings row (`ui.composer_recovery.<owner>`): the staged attachment trays
+// of every conversation and the failed sends parked for later. Rewritten
+// whenever a tray or the parked list changes — rare events, unlike
+// keystrokes — and on Android's pause edge through the draft autosave.
+//
+// Files the app itself produced (an Android SAF copy, a pasted image) live
+// under `data_dir/composer-staging/<owner>/<uuid>/<name>`, which no cache
+// purge reaches, until their send is accepted, they are removed from the
+// tray, or the account signs out. A file the user owns (a desktop original
+// picked by path) is only ever referenced, never moved or deleted.
+
+/// A staged attachment as the recovery row stores it: `PendingAttachment`
+/// with the pre-uploaded pointer (GIF, voice note) as its prost bytes.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct StagedAttachment {
+    id: AttachmentId,
+    filename: String,
+    path: PathBuf,
+    size: u64,
+    mime_type: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pointer: Option<Vec<u8>>,
+}
+
+impl From<&PendingAttachment> for StagedAttachment {
+    fn from(a: &PendingAttachment) -> Self {
+        Self {
+            id: a.id,
+            filename: a.filename.clone(),
+            path: a.path.clone(),
+            size: a.size,
+            mime_type: a.mime_type.clone(),
+            pointer: a.pointer.as_ref().map(|pointer| {
+                <crate::proto::content_v1::AttachmentPointer as prost::Message>::encode_to_vec(
+                    pointer,
+                )
+            }),
+        }
+    }
+}
+
+impl StagedAttachment {
+    /// Back into a tray entry, if it can still be sent: a pointer-backed
+    /// attachment needs no file; a file-backed one needs its file.
+    fn into_pending(self) -> Option<PendingAttachment> {
+        let pointer = match self.pointer {
+            Some(bytes) => Some(
+                <crate::proto::content_v1::AttachmentPointer as prost::Message>::decode(
+                    bytes.as_slice(),
+                )
+                .ok()?,
+            ),
+            None => None,
+        };
+        if pointer.is_none() && !self.path.is_file() {
+            return None;
+        }
+        Some(PendingAttachment {
+            id: self.id,
+            filename: self.filename,
+            path: self.path,
+            size: self.size,
+            mime_type: self.mime_type,
+            pointer,
+        })
+    }
+}
+
+/// `ActiveConversation` minus `None`, as stored. Kept apart from the state
+/// enum so the row format does not follow every navigation refactor.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+enum ConversationKey {
+    Channel(ChannelId),
+    ServerDm(UserId),
+    AnonDm(AnonDmId),
+    AnonGroup(AnonGroupId),
+}
+
+impl ConversationKey {
+    fn of(conversation: ActiveConversation) -> Option<Self> {
+        Some(match conversation {
+            ActiveConversation::None => return None,
+            ActiveConversation::Channel(id) => Self::Channel(id),
+            ActiveConversation::ServerDm { peer_id } => Self::ServerDm(peer_id),
+            ActiveConversation::AnonDm(id) => Self::AnonDm(id),
+            ActiveConversation::AnonGroup(id) => Self::AnonGroup(id),
+        })
+    }
+
+    fn into_active(self) -> ActiveConversation {
+        match self {
+            Self::Channel(id) => ActiveConversation::Channel(id),
+            Self::ServerDm(peer_id) => ActiveConversation::ServerDm { peer_id },
+            Self::AnonDm(id) => ActiveConversation::AnonDm(id),
+            Self::AnonGroup(id) => ActiveConversation::AnonGroup(id),
+        }
+    }
+}
+
+/// A failed send kept for its conversation, as stored. The attempt id and
+/// session are not: a restored send is a new attempt in the new session.
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct ParkedSend {
+    conversation: ConversationKey,
+    text: String,
+    reply: Option<ComposerReply>,
+    attachments: Vec<StagedAttachment>,
+}
+
+impl ParkedSend {
+    fn of(send: &ComposerSend) -> Option<Self> {
+        Some(Self {
+            conversation: ConversationKey::of(send.conversation)?,
+            text: send.text.clone(),
+            reply: send.reply.clone(),
+            attachments: send.attachments.iter().map(StagedAttachment::from).collect(),
+        })
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+struct ComposerRecovery {
+    /// Staged attachments per conversation id (the tray key), the active
+    /// conversation's tray included.
+    trays: HashMap<String, Vec<StagedAttachment>>,
+    parked: Vec<ParkedSend>,
+}
+
+impl ComposerRecovery {
+    fn is_empty(&self) -> bool {
+        self.trays.is_empty() && self.parked.is_empty()
+    }
+}
+
+/// Delete every staged file under `dir` that `keep` does not name, and the
+/// per-file directories left empty. Files staged and never persisted (the
+/// process died in between) and files of sends that went out go this way.
+fn sweep_staging(dir: &Path, keep: &HashSet<PathBuf>) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let sub = entry.path();
+        if !sub.is_dir() {
+            let _ = std::fs::remove_file(&sub);
+            continue;
+        }
+        if let Ok(files) = std::fs::read_dir(&sub) {
+            for file in files.flatten() {
+                if !keep.contains(&file.path()) {
+                    let _ = std::fs::remove_file(file.path());
+                }
+            }
+        }
+        let _ = std::fs::remove_dir(&sub);
+    }
 }
 
 impl ChatterClient {
@@ -163,13 +330,14 @@ impl ChatterClient {
         drafts.clear();
         let loaded = self.composer_draft_owner.lock().take();
         if let Some(owner) = signed_in.or(loaded) {
-            if self
-                .settings_repo()
-                .delete(&Self::composer_drafts_key(owner))
-                .is_err()
+            let repo = self.settings_repo();
+            if repo.delete(&Self::composer_drafts_key(owner)).is_err()
+                || repo.delete(&Self::composer_recovery_key(owner)).is_err()
             {
                 tracing::warn!("persisted composer drafts not deleted at sign-out");
             }
+            // The account's staged copies go with its row.
+            let _ = std::fs::remove_dir_all(self.staging_dir(owner));
         }
         drop(drafts);
         self.composer_owner.lock().clear();
@@ -193,7 +361,14 @@ impl ChatterClient {
         if self.composer_has_room(send.conversation, composer_empty) {
             return Some(send);
         }
-        self.parked_sends.lock().push(send);
+        // Owner before the parked lock: the session loader holds the drafts
+        // lock while it fills the parked list, and asks for nothing else.
+        let owner = self.recovery_owner();
+        let mut parked = self.parked_sends.lock();
+        parked.push(send);
+        if let Some(owner) = owner {
+            self.persist_recovery_with(owner, &parked);
+        }
         None
     }
 
@@ -204,11 +379,16 @@ impl ChatterClient {
         if !self.composer_has_room(active, composer_empty) {
             return None;
         }
+        let owner = self.recovery_owner();
         let mut parked = self.parked_sends.lock();
         let revision = self.auth_state().get().session_revision;
         parked.retain(|send| send.session_revision == revision);
         let at = parked.iter().position(|s| s.conversation == active)?;
-        Some(parked.remove(at))
+        let send = parked.remove(at);
+        if let Some(owner) = owner {
+            self.persist_recovery_with(owner, &parked);
+        }
+        Some(send)
     }
 
     /// Mid-switch the active conversation is already the new one while the
@@ -269,6 +449,16 @@ impl ChatterClient {
                         .flatten()
                 })
                 .unwrap_or_default();
+            // Nothing staged or parked crosses a session: the previous
+            // account's trays would otherwise be shown to, and from here on
+            // persisted under, the new one. Its parked sends can never be
+            // restored anyway (`take_parked_send` checks the revision). The
+            // new account's persisted ones take their place.
+            self.chat_state().clear_attachment_trays();
+            self.parked_sends.lock().clear();
+            if let Some(owner) = auth.current_user_id {
+                self.restore_composer_recovery(owner, auth.session_revision);
+            }
         }
         (drafts, changed_session)
     }
@@ -318,6 +508,230 @@ impl ChatterClient {
             drafts.insert(owner, draft);
         }
         self.persist_composer_drafts(&drafts);
+    }
+
+    // ── Thread drafts ───────────────────────────────────────────────
+
+    fn thread_draft_key(root: &MessageId) -> String {
+        format!("thread:{root}")
+    }
+
+    /// The unsent text of the thread panel for `root`, kept in the drafts map
+    /// under its own key so it survives a restart like the composer's.
+    pub fn thread_draft(&self, root: &MessageId) -> String {
+        let (drafts, _) = self.composer_drafts_for_session();
+        drafts
+            .get(&Self::thread_draft_key(root))
+            .map(|draft| draft.text.clone())
+            .unwrap_or_default()
+    }
+
+    /// Store the thread panel's text for `root`; empty text clears it. A
+    /// save after the session moved on is dropped, like an autosave.
+    pub fn set_thread_draft(&self, root: &MessageId, text: &str) {
+        let (mut drafts, changed_session) = self.composer_drafts_for_session();
+        if changed_session {
+            return;
+        }
+        let key = Self::thread_draft_key(root);
+        let same = drafts
+            .get(&key)
+            .map_or(text.is_empty(), |held| held.text == text && held.reply.is_none());
+        if same {
+            return;
+        }
+        if text.is_empty() {
+            drafts.remove(&key);
+        } else {
+            drafts.insert(
+                key,
+                ComposerDraft {
+                    text: text.to_owned(),
+                    reply: None,
+                },
+            );
+        }
+        self.persist_composer_drafts(&drafts);
+    }
+
+    // ── Recovery: staged files and parked sends ─────────────────────
+
+    fn composer_recovery_key(owner: UserId) -> String {
+        format!("ui.composer_recovery.{}", owner.0)
+    }
+
+    fn staging_root(&self) -> PathBuf {
+        self.directories().data_dir().join("composer-staging")
+    }
+
+    fn staging_dir(&self, owner: UserId) -> PathBuf {
+        self.staging_root().join(owner.0.to_string())
+    }
+
+    /// The account whose recovery row may be written: the drafts' owner,
+    /// only while the session that loaded it is the current one. `None`
+    /// between a sign-out and the next composer use, so nothing of the old
+    /// account lands under the new one.
+    fn recovery_owner(&self) -> Option<UserId> {
+        let auth = self.auth_state().get();
+        if *self.composer_draft_revision.lock() != auth.session_revision {
+            return None;
+        }
+        let owner = *self.composer_draft_owner.lock();
+        owner.filter(|owner| Some(*owner) == auth.current_user_id)
+    }
+
+    /// Shelter a file the app itself produced — an Android SAF copy in the
+    /// purgeable cache dir, a pasted image in `/tmp` — under the signed-in
+    /// account's staging directory, where a restart or a cache purge does
+    /// not reach it. Returns the path to stage: the original when no account
+    /// can own it or the move fails, in which case the file still sends, it
+    /// is only not sheltered. Never call this with a file the user owns.
+    pub fn stage_owned_file(&self, path: PathBuf) -> PathBuf {
+        let Some(owner) = self.recovery_owner() else {
+            return path;
+        };
+        let Some(name) = path.file_name() else {
+            return path;
+        };
+        let dir = self.staging_dir(owner).join(uuid::Uuid::new_v4().to_string());
+        if std::fs::create_dir_all(&dir).is_err() {
+            return path;
+        }
+        let dest = dir.join(name);
+        if std::fs::rename(&path, &dest).is_err() {
+            // Another filesystem: copy, then let go of the original.
+            if std::fs::copy(&path, &dest).is_err() {
+                let _ = std::fs::remove_dir(&dir);
+                return path;
+            }
+            let _ = std::fs::remove_file(&path);
+        }
+        // The Android picker copies each selection into a directory of its
+        // own (`MainActivity.copyToCache`); it is empty now.
+        if let Some(parent) = path.parent() {
+            if parent
+                .file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.starts_with("selection_"))
+            {
+                let _ = std::fs::remove_dir(parent);
+            }
+        }
+        dest
+    }
+
+    /// Delete the staged copies behind `attachments`, once their send was
+    /// taken by core or they left the tray. Only files under the staging
+    /// root go; a user's original referenced by path is never touched.
+    pub fn release_staged_files(&self, attachments: &[PendingAttachment]) {
+        let root = self.staging_root();
+        for attachment in attachments {
+            let path = &attachment.path;
+            if path.as_os_str().is_empty() || !path.starts_with(&root) {
+                continue;
+            }
+            let _ = std::fs::remove_file(path);
+            if let Some(dir) = path.parent() {
+                let _ = std::fs::remove_dir(dir);
+            }
+        }
+    }
+
+    /// Write the trays and the parked sends under the signed-in account.
+    /// The UI's chat-state watcher calls this on every tray change; the
+    /// parked-send paths call it themselves.
+    pub fn persist_composer_recovery(&self) {
+        let Some(owner) = self.recovery_owner() else {
+            return;
+        };
+        let parked = self.parked_sends.lock();
+        self.persist_recovery_with(owner, &parked);
+    }
+
+    fn persist_recovery_with(&self, owner: UserId, parked: &[ComposerSend]) {
+        let chat = self.chat_state().get();
+        let mut recovery = ComposerRecovery::default();
+        let mut trays: Vec<(Option<ChannelId>, &[PendingAttachment])> =
+            vec![(chat.active_channel_id, chat.pending_attachments.as_slice())];
+        trays.extend(chat.attachment_trays.iter().map(|(k, v)| (*k, v.as_slice())));
+        for (key, attachments) in trays {
+            // A mesh scope keys its tray as `None`; it is no conversation
+            // core can restore.
+            let Some(id) = key else {
+                continue;
+            };
+            if attachments.is_empty() {
+                continue;
+            }
+            recovery.trays.insert(
+                id.to_string(),
+                attachments.iter().map(StagedAttachment::from).collect(),
+            );
+        }
+        recovery.parked = parked.iter().filter_map(ParkedSend::of).collect();
+        let repo = self.settings_repo();
+        let key = Self::composer_recovery_key(owner);
+        let written = if recovery.is_empty() {
+            repo.delete(&key).map(|_| ())
+        } else {
+            repo.set(&key, &recovery)
+        };
+        if written.is_err() {
+            tracing::warn!("composer recovery state not saved");
+        }
+    }
+
+    /// Load `owner`'s row into the trays and the parked list, dropping what
+    /// can no longer be sent, then sweep the staging directory of files the
+    /// row does not name. Runs once per session, under the drafts lock.
+    fn restore_composer_recovery(&self, owner: UserId, session_revision: u64) {
+        let recovery: ComposerRecovery = self
+            .settings_repo()
+            .get(&Self::composer_recovery_key(owner))
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        let mut keep = HashSet::new();
+        let chat = self.chat_state();
+        let revision = chat.get().attachment_revision;
+        for (id, attachments) in recovery.trays {
+            let Ok(channel) = id.parse::<ChannelId>() else {
+                continue;
+            };
+            for attachment in attachments.into_iter().filter_map(StagedAttachment::into_pending) {
+                keep.insert(attachment.path.clone());
+                // Trays are keyed by channel id alone, so the variant does
+                // not matter here: a DM's tray has the DM's derived id.
+                chat.add_pending_attachment_for(
+                    ActiveConversation::Channel(channel),
+                    revision,
+                    attachment,
+                );
+            }
+        }
+        let mut parked = self.parked_sends.lock();
+        for send in recovery.parked {
+            let attachments: Vec<PendingAttachment> = send
+                .attachments
+                .into_iter()
+                .filter_map(StagedAttachment::into_pending)
+                .collect();
+            if send.text.is_empty() && send.reply.is_none() && attachments.is_empty() {
+                continue;
+            }
+            keep.extend(attachments.iter().map(|a| a.path.clone()));
+            parked.push(ComposerSend {
+                attempt_id: uuid::Uuid::new_v4(),
+                session_revision,
+                conversation: send.conversation.into_active(),
+                text: send.text,
+                reply: send.reply,
+                attachments,
+            });
+        }
+        drop(parked);
+        sweep_staging(&self.staging_dir(owner), &keep);
     }
 }
 
@@ -788,5 +1202,226 @@ mod tests {
             "a's thought",
             "another account's sign-out deleted A's drafts"
         );
+    }
+
+    /// A file the app produced, as the Android picker leaves it: in a
+    /// one-selection directory under the cache dir.
+    fn picked(dir: &tempfile::TempDir, name: &str) -> std::path::PathBuf {
+        let selection = dir.path().join("cache").join("picked").join("selection_1");
+        std::fs::create_dir_all(&selection).unwrap();
+        let path = selection.join(name);
+        std::fs::write(&path, b"bytes").unwrap();
+        path
+    }
+
+    fn stage(client: &ChatterClient, path: std::path::PathBuf) -> PendingAttachment {
+        let path = client.stage_owned_file(path);
+        let chat = client.chat_state().get();
+        let pending = PendingAttachment::new(
+            AttachmentId::new(),
+            path.file_name().unwrap().to_str().unwrap().into(),
+            path,
+            5,
+            "image/png".into(),
+        );
+        client.chat_state().add_pending_attachment_for(
+            chat.active_conversation,
+            chat.attachment_revision,
+            pending.clone(),
+        );
+        // The UI's state watcher does this on every tray change.
+        client.persist_composer_recovery();
+        pending
+    }
+
+    #[tokio::test]
+    async fn an_owned_file_is_sheltered_under_the_account_and_a_users_file_is_not() {
+        let (client, dir) = client();
+        let a = ChannelId::new();
+        open(&client, a);
+        let cache_copy = picked(&dir, "cat.png");
+        let staged = client.stage_owned_file(cache_copy.clone());
+        assert_ne!(staged, cache_copy);
+        assert!(staged.starts_with(client.staging_root()));
+        assert!(staged.is_file() && !cache_copy.exists());
+        assert!(
+            !cache_copy.parent().unwrap().exists(),
+            "the picker's selection directory was left behind"
+        );
+
+        // Release touches only what lives under the staging root.
+        let original = dir.path().join("my-photo.png");
+        std::fs::write(&original, b"mine").unwrap();
+        let mine = PendingAttachment::new(
+            AttachmentId::new(),
+            "my-photo.png".into(),
+            original.clone(),
+            4,
+            "image/png".into(),
+        );
+        let ours = PendingAttachment::new(
+            AttachmentId::new(),
+            "cat.png".into(),
+            staged.clone(),
+            5,
+            "image/png".into(),
+        );
+        client.release_staged_files(&[mine, ours]);
+        assert!(original.is_file(), "the user's original was deleted");
+        assert!(!staged.exists() && !staged.parent().unwrap().exists());
+    }
+
+    #[tokio::test]
+    async fn staged_files_survive_a_restart_in_their_own_conversation_only() {
+        let (client, dir) = client();
+        let user = crate::domain::ids::UserId::new();
+        client.auth_state().set_logged_in(user, 1, "A".into());
+        let (a, b) = (ChannelId::new(), ChannelId::new());
+        open(&client, a);
+        let kept = stage(&client, picked(&dir, "for-a.png"));
+        open(&client, b);
+        // A GIF: pre-uploaded, no file behind it.
+        client.chat_state().add_pending_attachment(PendingAttachment::with_pointer(
+            AttachmentId::new(),
+            Default::default(),
+            "fun.gif".into(),
+            9,
+            "image/gif".into(),
+            crate::proto::content_v1::AttachmentPointer {
+                cdn_key: "k".into(),
+                ..Default::default()
+            },
+        ));
+        client.persist_composer_recovery();
+        drop(client);
+
+        let client = client_in(&dir);
+        client.auth_state().set_logged_in(user, 1, "A".into());
+        open(&client, b);
+        let tray = client.chat_state().get_pending_attachments();
+        assert_eq!(tray.len(), 1, "B's GIF lost over restart");
+        assert_eq!(tray[0].pointer.as_ref().unwrap().cdn_key, "k");
+        open(&client, a);
+        let tray = client.chat_state().get_pending_attachments();
+        assert_eq!(tray.len(), 1, "A's file lost over restart");
+        assert_eq!(tray[0].path, kept.path);
+        assert!(kept.path.is_file());
+
+        // Another account sees none of it, and its sign-out leaves A's files.
+        client.auth_state().set_logged_out();
+        client
+            .auth_state()
+            .set_logged_in(crate::domain::ids::UserId::new(), 1, "B".into());
+        open(&client, a);
+        assert!(client.chat_state().get_pending_attachments().is_empty());
+        client.clear_composer_session();
+        assert!(kept.path.is_file(), "B's sign-out deleted A's staged file");
+    }
+
+    #[tokio::test]
+    async fn a_file_deleted_from_disk_is_not_restored_and_orphans_are_swept() {
+        let (client, dir) = client();
+        let user = crate::domain::ids::UserId::new();
+        client.auth_state().set_logged_in(user, 1, "A".into());
+        let a = ChannelId::new();
+        open(&client, a);
+        let gone = stage(&client, picked(&dir, "gone.png"));
+        std::fs::remove_file(&gone.path).unwrap();
+        // Staged, then killed before the tray was written.
+        let orphan = client.stage_owned_file(picked(&dir, "orphan.png"));
+        drop(client);
+
+        let client = client_in(&dir);
+        client.auth_state().set_logged_in(user, 1, "A".into());
+        open(&client, a);
+        assert!(client.chat_state().get_pending_attachments().is_empty());
+        assert!(!orphan.exists(), "orphaned staged file survived the sweep");
+    }
+
+    #[tokio::test]
+    async fn a_parked_failed_send_survives_a_restart_for_its_conversation() {
+        let (client, dir) = client();
+        let user = crate::domain::ids::UserId::new();
+        client.auth_state().set_logged_in(user, 1, "A".into());
+        let (a, b) = (ChannelId::new(), ChannelId::new());
+        open(&client, a);
+        let file = stage(&client, picked(&dir, "late.png"));
+        let send = client
+            .begin_composer_send(
+                "caption".into(),
+                Some(ComposerReply {
+                    sender_id: "peer".into(),
+                    timestamp: "1".into(),
+                    sender_name: "Peer".into(),
+                    preview: "quoted".into(),
+                    thumbnail: None,
+                }),
+            )
+            .unwrap();
+        // Failed while B is open: parked, and the parked copy is persisted.
+        open(&client, b);
+        assert!(client.recover_composer_send(send, true).is_none());
+        drop(client);
+
+        let client = client_in(&dir);
+        client.auth_state().set_logged_in(user, 1, "A".into());
+        open(&client, b);
+        assert!(client.take_parked_send(true).is_none(), "A's send restored into B");
+        open(&client, a);
+        let back = client.take_parked_send(true).expect("parked send lost over restart");
+        assert_eq!(back.text, "caption");
+        assert_eq!(back.reply.unwrap().preview, "quoted");
+        assert_eq!(back.attachments.len(), 1);
+        assert_eq!(back.attachments[0].path, file.path);
+        assert!(file.path.is_file(), "the parked send's file was swept");
+        assert!(client.take_parked_send(true).is_none(), "restored twice");
+
+        // Taken: the row no longer holds it.
+        drop(client);
+        let client = client_in(&dir);
+        client.auth_state().set_logged_in(user, 1, "A".into());
+        open(&client, a);
+        assert!(client.take_parked_send(true).is_none(), "taken send came back");
+    }
+
+    #[tokio::test]
+    async fn sign_out_removes_the_recovery_row_and_the_staged_files() {
+        let (client, dir) = client();
+        let user = crate::domain::ids::UserId::new();
+        client.auth_state().set_logged_in(user, 1, "A".into());
+        let a = ChannelId::new();
+        open(&client, a);
+        let file = stage(&client, picked(&dir, "private.png"));
+        client.clear_composer_session();
+        assert!(!file.path.exists(), "staged file survived sign-out");
+        drop(client);
+
+        let client = client_in(&dir);
+        client.auth_state().set_logged_in(user, 1, "A".into());
+        open(&client, a);
+        assert!(client.chat_state().get_pending_attachments().is_empty());
+    }
+
+    #[tokio::test]
+    async fn a_thread_draft_survives_a_restart_and_clears_when_sent() {
+        let (client, dir) = client();
+        let user = crate::domain::ids::UserId::new();
+        client.auth_state().set_logged_in(user, 1, "A".into());
+        let a = ChannelId::new();
+        open(&client, a);
+        let root = crate::domain::ids::MessageId::new();
+        client.set_thread_draft(&root, "half a reply");
+        drop(client);
+
+        let client = client_in(&dir);
+        client.auth_state().set_logged_in(user, 1, "A".into());
+        assert_eq!(client.thread_draft(&root), "half a reply");
+        assert!(client.thread_draft(&crate::domain::ids::MessageId::new()).is_empty());
+        client.set_thread_draft(&root, "");
+        drop(client);
+
+        let client = client_in(&dir);
+        client.auth_state().set_logged_in(user, 1, "A".into());
+        assert!(client.thread_draft(&root).is_empty(), "sent reply came back");
     }
 }

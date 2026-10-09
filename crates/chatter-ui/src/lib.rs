@@ -109,6 +109,7 @@ fn android_main(app: i_slint_backend_android_activity::AndroidApp) {
                         // draft now rather than after the autosave delay.
                         if let Some(client) = listener_client.get() {
                             crate::bin_ui::features::composer::autosave_composer_draft(&window, client);
+                            crate::bin_ui::features::composer::autosave_thread_draft(&window, client);
                         }
                     }
                 }
@@ -745,6 +746,7 @@ fn app_run(state: AppState) {
     tracing::info!("Window closed, signaling shutdown...");
     // Whatever the composer still holds outlives this exit.
     bin_ui::features::composer::autosave_composer_draft(&state.window, &state.ui_ctx);
+    bin_ui::features::composer::autosave_thread_draft(&state.window, &state.ui_ctx);
     state.shutdown_token.cancel();
     tracing::info!("Shutting down services...");
 
