@@ -359,7 +359,10 @@ async fn decrypt_durable_inner(
     use crate::storage::receive_artifact::{self, MAX_RECEIVE_CONTENT, ReceiveArtifact};
     use prost::Message;
     key.validate()?;
-    if ciphertext.is_empty() || ciphertext.len() > 128 * 1024 {
+    // Matches internal/services/mailbox/handlers/handlers.go: MaxMailboxEnvelopeSize.
+    // The reaction journal has a smaller retention bound, not a transport bound.
+    const MAX_MAILBOX_ENVELOPE: usize = 1024 * 1024;
+    if ciphertext.is_empty() || ciphertext.len() > MAX_MAILBOX_ENVELOPE {
         return Err(ServiceError::Validation(
             "receive envelope exceeds bound".into(),
         ));
@@ -395,7 +398,7 @@ async fn decrypt_durable_inner(
     if msg_type == CiphertextMessageType::Plaintext {
         return Ok(None);
     }
-    if result.message.len() > MAX_RECEIVE_CONTENT {
+    if result.message.len() > MAX_MAILBOX_ENVELOPE {
         return Err(ServiceError::Validation(
             "decrypted receive content exceeds bound".into(),
         ));
@@ -406,6 +409,13 @@ async fn decrypt_durable_inner(
         None => false,
     };
     let artifact = if is_reaction {
+        // Refuse oversized reaction evidence before committing any ratchet writes.
+        // Bootstrap/profile content is routed normally and is never journaled.
+        if result.message.len() > MAX_RECEIVE_CONTENT {
+            return Err(ServiceError::Validation(
+                "decrypted reaction content exceeds journal bound".into(),
+            ));
+        }
         capacity?;
         let message_type = match msg_type {
             CiphertextMessageType::PreKey => 2,
@@ -927,6 +937,72 @@ mod tests {
             100
         );
     }
+    #[tokio::test]
+    async fn group_join_ack_above_reaction_and_old_envelope_limits_routes_without_journaling() {
+        let mut f = fixture().await;
+        f.key.transport = "anon_group".into();
+        f.body = crate::proto::content_v1::Content {
+            content: Some(
+                crate::proto::content_v1::content::Content::AnonGroupJoinAck(
+                    crate::proto::content_v1::AnonGroupJoinAck {
+                        group_id: uuid::Uuid::new_v4().as_bytes().to_vec(),
+                        joiner_mailbox_pk: vec![7; 32],
+                        timestamp: f.key.server_timestamp_ns,
+                        profile_key: Some(vec![9; 32]),
+                        encrypted_avatar: Some(
+                            crate::crypto::profile_crypto::encrypt_avatar(
+                                &[9; 32],
+                                &vec![8; 160 * 1024],
+                            )
+                            .unwrap(),
+                        ),
+                        ..Default::default()
+                    },
+                ),
+            ),
+            ..Default::default()
+        }
+        .encode_to_vec();
+        let cipher = encrypt(&mut f).await;
+        assert!(cipher.len() > 128 * 1024);
+        assert!(cipher.len() < 1024 * 1024);
+        let received = decrypt_durable(f.store.clone(), &cipher, &f.root, f.key.clone())
+            .await
+            .unwrap();
+        assert_eq!(received.content, f.body);
+        assert!(received.artifact.is_none());
+        assert!(
+            f.store
+                .key_store
+                .pending_receive_artifacts(&f.key.local_account, 1, 100)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
+    async fn oversized_reaction_and_mailbox_envelope_leave_receive_state_unchanged() {
+        let mut f = fixture().await;
+        let mut content = crate::proto::content_v1::Content::decode(f.body.as_slice()).unwrap();
+        content.padding = vec![0; crate::storage::receive_artifact::MAX_RECEIVE_CONTENT];
+        f.body = content.encode_to_vec();
+        let cipher = encrypt(&mut f).await;
+        let before = snapshot(&f.db);
+        assert!(
+            decrypt_durable(f.store.clone(), &cipher, &f.root, f.key.clone())
+                .await
+                .is_err()
+        );
+        assert_eq!(snapshot(&f.db), before);
+        let oversized = vec![0; 1024 * 1024 + 1];
+        assert!(
+            decrypt_durable(f.store.clone(), &oversized, &f.root, f.key.clone())
+                .await
+                .is_err()
+        );
+        assert_eq!(snapshot(&f.db), before);
+    }
+
     #[tokio::test]
     async fn unratcheted_plaintext_and_changed_account_never_commit_receive_state() {
         let mut f = fixture().await;
