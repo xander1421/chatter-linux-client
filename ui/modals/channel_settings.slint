@@ -1019,8 +1019,8 @@ export component ChannelSettingsModal inherits Rectangle {
                                     vertical-alignment: center;
                                 }
 
-                                // Invite button for private groups (admins/owners only)
-                                if root.is-private-group && root.can-manage-members: Rectangle {
+                                // V1 private-group invitations require the real owner.
+                                if root.is-private-group && root.is-owner: Rectangle {
                                     width: max(invite-btn-text.width + Spacing.md * 2, Spacing.touch-target-min);
                                     height: Spacing.touch-target-min;
                                     accessible-role: button;

@@ -1478,44 +1478,62 @@ fn wire_invite_members(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             .map(|w| w.get_channel_settings_id().to_string())
             .unwrap_or_default();
 
-        tokio::spawn(async move {
-            if group_id_str.is_empty() {
-                return;
-            }
+        let Ok(group_id) = group_id_str.parse() else {
+            return;
+        };
+        open_private_group_invite_modal(weak, ui_ctx, group_id);
+    });
+}
 
-            let group_id: AnonGroupId = match group_id_str.parse() {
-                Ok(id) => id,
-                Err(e) => {
-                    tracing::error!("Invalid private group ID: {}", e);
-                    return;
-                }
-            };
-
-            let candidates: Vec<_> = ui_ctx
+/// Shared header/settings entry: validate ownership and populate the picker.
+pub fn open_private_group_invite_modal(
+    weak: slint::Weak<MainWindow>,
+    ui_ctx: Arc<ChatterClient>,
+    group_id: AnonGroupId,
+) {
+    let Some(fence) = weak
+        .upgrade()
+        .and_then(|w| super::create_channel::RequestFence::capture(&w, &ui_ctx))
+    else {
+        return;
+    };
+    tokio::spawn(async move {
+        let allowed = ui_ctx.session_current_user_id().is_some_and(|uid| {
+            ui_ctx
+                .get_anon_group(&group_id)
+                .is_some_and(|g| g.is_current_user_owner(&uid) && g.my_role.can_invite())
+        });
+        let candidates = if allowed {
+            ui_ctx
                 .list_anon_group_invite_candidates(Some(&group_id))
                 .into_iter()
                 .map(|c| {
                     let avatar = crate::bin_ui::converters::invite_candidate_avatar(&ui_ctx, &c);
                     (c, avatar)
                 })
+                .collect::<Vec<_>>()
+        } else {
+            Vec::new()
+        };
+        let _ = slint::invoke_from_event_loop(move || {
+            let Some(w) = weak.upgrade() else { return };
+            if !fence.owns_ui(&w, &ui_ctx) {
+                return;
+            }
+            if !allowed {
+                w.set_toast_message("Only the group owner can invite members".into());
+                w.set_toast_variant("error".into());
+                w.set_toast_visible(true);
+                return;
+            }
+            let rows: Vec<PrivateGroupFriend> = candidates
+                .into_iter()
+                .map(|(c, avatar)| crate::bin_ui::converters::invite_candidate_to_slint(c, avatar))
                 .collect();
-
-            // Update UI - close settings modal and open invite modal
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak.upgrade() {
-                    let friend_data: Vec<PrivateGroupFriend> = candidates
-                        .into_iter()
-                        .map(|(c, avatar)| {
-                            crate::bin_ui::converters::invite_candidate_to_slint(c, avatar)
-                        })
-                        .collect();
-                    // Store the group ID for the invite
-                    w.set_invite_private_group_id(group_id_str.into());
-                    w.set_invite_private_group_friends(ModelRc::new(VecModel::from(friend_data)));
-                    w.set_invite_private_group_selected_count(0);
-                    crate::bin_ui::features::back::push(&w, "invite-private-group");
-                }
-            });
+            w.set_invite_private_group_id(group_id.to_string().into());
+            w.set_invite_private_group_friends(ModelRc::new(VecModel::from(rows)));
+            w.set_invite_private_group_selected_count(0);
+            crate::bin_ui::features::back::push(&w, "invite-private-group");
         });
     });
 }
@@ -1722,8 +1740,7 @@ fn wire_invite_channel_members(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
             let attempted = selected_user_ids.len();
             let _ = slint::invoke_from_event_loop(move || {
                 let Some(w) = weak.upgrade() else { return };
-                w.set_invite_member_loading(false);
-
+    
                 if success_count == 0 {
                     // Stay open: the selection is still there and retrying is
                     // one tap, which is the right thing to offer here.
@@ -2094,7 +2111,10 @@ mod deletion_tests {
         assert_eq!(w.get_topic().as_str(), "Saved description");
         assert!(w.get_channel_has_avatar());
         assert_eq!(
-            (w.get_channel_avatar_source().size().width, w.get_channel_avatar_source().size().height),
+            (
+                w.get_channel_avatar_source().size().width,
+                w.get_channel_avatar_source().size().height
+            ),
             (3, 2)
         );
         let row = w
@@ -2104,7 +2124,13 @@ mod deletion_tests {
             .unwrap();
         assert_eq!(row.display_name.as_str(), "Saved name");
         assert!(row.has_avatar);
-        assert_eq!((row.avatar_source.size().width, row.avatar_source.size().height), (3, 2));
+        assert_eq!(
+            (
+                row.avatar_source.size().width,
+                row.avatar_source.size().height
+            ),
+            (3, 2)
+        );
         assert_ne!(w.get_active_modal().as_str(), "channel-settings");
 
         show_channel_settings_shell(&w, &id.to_string(), "private");

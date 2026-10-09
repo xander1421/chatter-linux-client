@@ -127,9 +127,9 @@ impl AnonGroupRole {
         matches!(self, Self::Admin | Self::Owner)
     }
 
-    /// Check if this role can invite new members.
+    /// V1 invitations require the owner; admin delegation is not supported.
     pub fn can_invite(&self) -> bool {
-        matches!(self, Self::Admin | Self::Owner)
+        matches!(self, Self::Owner)
     }
 
     /// Check if this role can pin or unpin messages.
@@ -608,9 +608,9 @@ mod tests {
         assert!(!AnonGroupRole::Member.can_kick());
         assert!(AnonGroupRole::Admin.can_kick());
         assert!(AnonGroupRole::Owner.can_kick());
-        // Only admins and owners can invite
+        // Only the owner can invite with the v1 protocol
         assert!(!AnonGroupRole::Member.can_invite());
-        assert!(AnonGroupRole::Admin.can_invite());
+        assert!(!AnonGroupRole::Admin.can_invite());
         assert!(AnonGroupRole::Owner.can_invite());
     }
 

@@ -10,8 +10,8 @@ use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::MessageId;
 use chatter_core::state::ActiveConversation;
 
-use crate::bin_ui::converters::messages_to_display_batch;
 use crate::MainWindow;
+use crate::bin_ui::converters::messages_to_display_batch;
 
 thread_local! {
     static PENDING_JUMP: std::cell::RefCell<Option<(ActiveConversation, String)>> = const { std::cell::RefCell::new(None) };
@@ -515,12 +515,9 @@ fn wire_invite_member(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
         match conversation {
             ActiveConversation::AnonGroup(group_id) => {
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(w) = weak.upgrade() {
-                        w.set_invite_private_group_id(group_id.to_string().into());
-                        crate::bin_ui::features::back::push(&w, "invite-private-group");
-                    }
-                });
+                crate::bin_ui::features::modals::open_private_group_invite_modal(
+                    weak, ui_ctx, group_id,
+                );
             }
             ActiveConversation::Channel(channel_id) => {
                 crate::bin_ui::features::modals::open_invite_member_modal(weak, ui_ctx, channel_id);
