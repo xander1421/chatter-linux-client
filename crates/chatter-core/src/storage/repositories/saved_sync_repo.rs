@@ -28,6 +28,16 @@ pub enum PinWrite {
     NoRow,
 }
 
+/// The reply context a snapshot gives a Saved row (`set_reply_once`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SavedReply {
+    /// The quoted record's real id, held here or not.
+    pub parent: MessageId,
+    pub text: Option<String>,
+    pub thumbnail: Option<Vec<u8>>,
+    pub thumbnail_mime: Option<String>,
+}
+
 pub struct SavedSyncRepository {
     db: Arc<Database>,
 }
@@ -56,8 +66,12 @@ impl SavedSyncRepository {
 
     /// Apply a pin change made on a sibling device: `pinned` as of
     /// `changed_at`, to the undeleted own Saved row `id` at the scope's
-    /// Signal-style key. Stale (clock not newer than the watermark) writes
-    /// nothing. Row columns and watermark move in one transaction.
+    /// Signal-style key. A clock older than the watermark writes nothing.
+    /// An equal clock writes only when the stored pin state differs: that
+    /// is the row a crash left behind — watermark recorded, row inserted
+    /// later from an older snapshot — converging on the replayed newer
+    /// state instead of refusing it forever. Row columns and watermark move
+    /// in one transaction.
     pub fn apply_synced_pin(
         &self,
         scope: &ReactionScope,
@@ -67,8 +81,9 @@ impl SavedSyncRepository {
         pinned: bool,
         changed_at: u64,
     ) -> Result<PinWrite, StorageError> {
-        self.write_pin(scope, author, sent_at, id, pinned, |watermark| {
-            (changed_at > watermark).then_some(changed_at)
+        self.write_pin(scope, author, sent_at, id, pinned, |watermark, stored| {
+            (changed_at > watermark || (changed_at == watermark && stored != pinned))
+                .then_some(changed_at)
         })
     }
 
@@ -84,15 +99,56 @@ impl SavedSyncRepository {
         pinned: bool,
         now_ns: u64,
     ) -> Result<PinWrite, StorageError> {
-        self.write_pin(scope, author, sent_at, id, pinned, |watermark| {
+        self.write_pin(scope, author, sent_at, id, pinned, |watermark, _| {
             Some(now_ns.max(watermark.saturating_add(1)))
         })
     }
 
+    /// Give the own Saved row `id` at this key its reply context, once: the
+    /// parent's id (held here or not — a reply keeps naming its parent, as
+    /// an ordinary message does), our account, the preview and thumbnail
+    /// the snapshot carried. A row that already has a parent is left alone.
+    /// `Ok(false)`: no such undeleted row without a parent.
+    pub fn set_reply_once(
+        &self,
+        scope: &ReactionScope,
+        author: &UserId,
+        sent_at: u64,
+        id: &MessageId,
+        reply: &SavedReply,
+    ) -> Result<bool, StorageError> {
+        let conn = self.db.connection()?;
+        let rows = conn.execute(
+            "UPDATE messages SET reply_to = ?1, reply_to_author_id = ?2, reply_to_text = ?3,
+                    reply_to_thumbnail = ?4, reply_to_thumbnail_mime = ?5, updated_at = ?6
+             WHERE id = ?7 AND conversation_id = ?8 AND conversation_type = ?9 AND sender_id = ?10
+               AND sent_at = ?11 AND is_deleted = 0 AND reply_to IS NULL",
+            params![
+                reply.parent.to_string(),
+                author.to_string(),
+                reply.text.as_deref(),
+                reply.thumbnail.as_deref(),
+                reply.thumbnail_mime.as_deref(),
+                chrono::Utc::now().to_rfc3339(),
+                id.to_string(),
+                scope.id.to_string(),
+                scope.kind.as_str(),
+                author.to_string(),
+                sent_at as i64,
+            ],
+        )?;
+        Ok(rows > 0)
+    }
+
     /// Record the clock of a pin state stored with a freshly created row
-    /// (a snapshot that arrived pinned). Written before the row insert: an
-    /// orphan watermark only keeps an older pin from applying later, which
-    /// is the right answer anyway; a row without its watermark is not.
+    /// (a snapshot that arrived pinned). The row insert is a separate
+    /// write (`UnifiedMessageRepository::insert`, its own connection), so
+    /// this goes first: a crash between the two leaves a watermark without
+    /// its row, and the row an older snapshot then inserts carries that
+    /// older pin state — which the newer snapshot's replay repairs, since
+    /// `apply_synced_pin` accepts an equal clock when the stored state
+    /// differs. The other order would leave a pinned row an older unpin
+    /// could flip.
     pub fn record_pin_watermark(
         &self,
         id: &MessageId,
@@ -100,6 +156,11 @@ impl SavedSyncRepository {
     ) -> Result<(), StorageError> {
         if changed_at == 0 {
             return Ok(());
+        }
+        if changed_at > i64::MAX as u64 {
+            return Err(StorageError::InvalidData(
+                "pin clock does not fit the column".into(),
+            ));
         }
         let conn = self.db.connection()?;
         conn.execute(
@@ -110,6 +171,8 @@ impl SavedSyncRepository {
         Ok(())
     }
 
+    /// `clock` sees the watermark and the row's stored pin state and names
+    /// the clock to record, or `None` to write nothing.
     fn write_pin(
         &self,
         scope: &ReactionScope,
@@ -117,30 +180,53 @@ impl SavedSyncRepository {
         sent_at: u64,
         id: &MessageId,
         pinned: bool,
-        clock: impl FnOnce(u64) -> Option<u64>,
+        clock: impl FnOnce(u64, bool) -> Option<u64>,
     ) -> Result<PinWrite, StorageError> {
         let conn = self.db.connection()?;
         let tx = conn.unchecked_transaction()?;
         let watermark = Self::watermark_with(&tx, id)?;
-        let Some(changed_at) = clock(watermark) else {
+        let stored: Option<bool> = tx
+            .query_row(
+                "SELECT is_pinned FROM messages
+                 WHERE id = ?1 AND conversation_id = ?2 AND conversation_type = ?3
+                   AND sender_id = ?4 AND sent_at = ?5 AND is_deleted = 0",
+                params![
+                    id.to_string(),
+                    scope.id.to_string(),
+                    scope.kind.as_str(),
+                    author.to_string(),
+                    sent_at as i64,
+                ],
+                |row| row.get(0),
+            )
+            .optional()?;
+        let Some(stored) = stored else {
+            return Ok(PinWrite::NoRow);
+        };
+        let Some(changed_at) = clock(watermark, stored) else {
             return Ok(PinWrite::Stale);
         };
+        if changed_at > i64::MAX as u64 {
+            return Err(StorageError::InvalidData(
+                "pin clock does not fit the column".into(),
+            ));
+        }
         // The pin columns of `UnifiedMessageRepository::set_pinned_scoped`,
-        // narrowed to this row id: `pinned_at` orders the pinned list, set on
-        // the transition to pinned and cleared on unpin.
-        let now = chrono::Utc::now();
+        // narrowed to this row id. `pinned_at` orders the pinned list: on the
+        // transition to pinned it is the pin's own clock, the same on every
+        // device that applies this change, and unpin clears it.
         let rows = tx.execute(
             "UPDATE messages SET pinned_at = CASE WHEN ?1 = 0 THEN NULL WHEN is_pinned = 0 THEN ?8 ELSE pinned_at END, is_pinned = ?1, updated_at = ?2
              WHERE id = ?7 AND conversation_id = ?3 AND conversation_type = ?4 AND sender_id = ?5 AND sent_at = ?6 AND is_deleted = 0",
             params![
                 pinned as i32,
-                now.to_rfc3339(),
+                chrono::Utc::now().to_rfc3339(),
                 scope.id.to_string(),
                 scope.kind.as_str(),
                 author.to_string(),
                 sent_at as i64,
                 id.to_string(),
-                now.timestamp_nanos_opt().unwrap_or_default(),
+                changed_at as i64,
             ],
         )?;
         if rows == 0 {

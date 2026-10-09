@@ -64,7 +64,7 @@ pub use jarvis_memory_repo::JarvisMemoryRepository;
 pub use mesh_conversation_repo::{MeshConversationRepository, StoredMeshConversation};
 pub use mesh_delivery_repo::MeshDeliveryRepository;
 pub use pending_dm_repo::{PendingDm, PendingDmRepository};
-pub use saved_sync_repo::{PinWrite, SavedSyncRepository};
+pub use saved_sync_repo::{PinWrite, SavedReply, SavedSyncRepository};
 pub use search_index::{SearchIndex, SearchResult};
 pub use section_repo::SectionRepository;
 pub use settings_repo::{SettingsRepository, keys as settings_keys};

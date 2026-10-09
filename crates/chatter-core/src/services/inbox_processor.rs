@@ -1172,10 +1172,13 @@ impl InboxEventProcessor {
                         self.event_bus
                             .emit_domain(DomainEvent::SavedMessageSynced { message });
                     }
+                    // A hydrated quote alone has no event: the row reads
+                    // right on the next load of the conversation.
                     Ok(SavedSyncOutcome::Updated {
                         message,
                         body_changed,
                         pin_changed,
+                        quote_hydrated: _,
                     }) => {
                         if body_changed {
                             self.event_bus.emit_domain(DomainEvent::MessageEdited {

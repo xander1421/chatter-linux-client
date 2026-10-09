@@ -18,11 +18,13 @@ use crate::domain::ids::{AttachmentId, ChannelId, MessageId, UserId};
 use crate::domain::message::{ConversationType, Message, MessageContent, MixedContent};
 use crate::domain::reaction::ReactionScope;
 use crate::network::grpc::message_client::MessageClient;
-use crate::proto::content_v1::{AttachmentPointer, Quote, SavedMessageSync, quote};
+use crate::proto::content_v1::{
+    AttachmentPointer, Quote, QuotedAttachment, SavedMessageSync, quote,
+};
 use crate::services::attachment::AttachmentService;
 use crate::services::current_user::CurrentUserProvider;
 use crate::services::gateway::{QuoteIntent, build_saved_message_sync_content};
-use crate::storage::repositories::{PinWrite, SavedSyncRepository};
+use crate::storage::repositories::{PinWrite, SavedReply, SavedSyncRepository};
 use crate::util::time::TimestampNanos;
 
 use super::core::proto_to_domain_message_with_sender;
@@ -40,6 +42,9 @@ pub enum SavedSyncOutcome {
         body_changed: bool,
         /// The pin state changed, to this value.
         pin_changed: Option<bool>,
+        /// A row stored without its quote (its parent's snapshot had not
+        /// arrived) got its reply context from this one.
+        quote_hydrated: bool,
     },
     /// Nothing to do: every part was already applied, or the record was
     /// deleted here (a tombstone or a deleted row is never resurrected).
@@ -108,6 +113,15 @@ pub(crate) fn validate_snapshot(sync: &SavedMessageSync) -> Result<MessageId, Me
     let id: MessageId = sync.message_id.parse().map_err(|_| {
         MessageError::InvalidContent(format!("invalid message ID: {}", sync.message_id))
     })?;
+    // Every clock is stored in a signed column.
+    let clocks = [sync.sent_at, sync.edited_at, sync.pin_changed_at];
+    if clocks.iter().any(|c| *c > i64::MAX as u64)
+        || sync.quote.as_ref().is_some_and(|q| q.id > i64::MAX as u64)
+    {
+        return Err(MessageError::InvalidContent(
+            "SavedMessageSync clock out of range".into(),
+        ));
+    }
     if sync.sent_at == 0 {
         return Err(MessageError::InvalidContent(
             "SavedMessageSync without sent_at".into(),
@@ -134,14 +148,25 @@ pub(crate) fn validate_snapshot(sync: &SavedMessageSync) -> Result<MessageId, Me
             "SavedMessageSync must have text or attachments".into(),
         ));
     }
-    if let Some(q) = &sync.quote {
-        if q.id == 0 {
+    if sync.quote.is_some() {
+        let parent = quoted_parent(sync)?;
+        if parent == id {
             return Err(MessageError::InvalidContent(
-                "SavedMessageSync quote without a target clock".into(),
+                "SavedMessageSync quotes itself".into(),
             ));
         }
     }
     Ok(id)
+}
+
+/// The quoted record's real id, required of every snapshot with a quote.
+pub(crate) fn quoted_parent(sync: &SavedMessageSync) -> Result<MessageId, MessageError> {
+    sync.quoted_message_id.parse().map_err(|_| {
+        MessageError::InvalidContent(format!(
+            "SavedMessageSync quote without a valid quoted_message_id: {:?}",
+            sync.quoted_message_id
+        ))
+    })
 }
 
 impl MessageService {
@@ -212,8 +237,12 @@ impl MessageService {
         self.message_repo.insert_outgoing(&message)?;
 
         // Sync to other devices. Failures are logged there and non-fatal:
-        // the message is stored locally.
-        self.sync_saved_record(&message).await;
+        // the message is stored locally. The row as stored is the snapshot.
+        let stored = self
+            .message_repo
+            .get(&message.id)?
+            .unwrap_or_else(|| message.clone());
+        self.sync_saved_record(&stored).await;
 
         Ok(message)
     }
@@ -221,70 +250,81 @@ impl MessageService {
     /// The snapshot of one stored Saved record as [`SavedMessageSync`]:
     /// its body, real id and clock, attachments as fetchable pointers (and
     /// their CDN keys, for a receiver that only knows those), its quote as
-    /// the parent's clock plus the stored preview, and the edit and pin
-    /// clocks a receiver orders by. `pin_changed_at` is this device's
-    /// watermark for the record (`SavedSyncRepository`): 0 until its pin
-    /// state ever changed.
-    fn saved_snapshot(&self, message: &Message) -> SavedMessageSync {
+    /// the parent's real id plus the stored preview and thumbnail, and the
+    /// edit and pin clocks a receiver orders by. `pin_changed_at` is this
+    /// device's watermark for the record (`SavedSyncRepository`): 0 until
+    /// its pin state ever changed.
+    ///
+    /// Whole or not at all: an attachment the row names that cannot be
+    /// read, has no record, or has no CDN key and key material is an error,
+    /// never a snapshot quietly missing media.
+    fn saved_snapshot(&self, message: &Message) -> Result<SavedMessageSync, MessageError> {
         let mut attachments = Vec::with_capacity(message.attachments.len());
         let mut attachment_ids = Vec::with_capacity(message.attachments.len());
         for id in &message.attachments {
-            match self.attachment_repo.get(id) {
-                Ok(Some(att)) => match attachment_pointer_from_record(&att) {
-                    Some(pointer) => {
-                        attachment_ids.push(pointer.cdn_key.clone());
-                        attachments.push(pointer);
-                    }
-                    None => tracing::warn!(
-                        message_id = %message.id,
-                        attachment_id = %id,
-                        "SavedMessages sync: attachment has no CDN key, left out of the snapshot"
-                    ),
-                },
-                Ok(None) => tracing::warn!(
-                    message_id = %message.id,
-                    attachment_id = %id,
-                    "SavedMessages sync: attachment record missing, left out of the snapshot"
-                ),
-                Err(error) => tracing::warn!(
-                    message_id = %message.id,
-                    attachment_id = %id,
-                    %error,
-                    "SavedMessages sync: attachment read failed, left out of the snapshot"
-                ),
-            }
+            let att = self.attachment_repo.get(id)?.ok_or_else(|| {
+                MessageError::InvalidContent(format!(
+                    "Saved record {} names attachment {id} that has no record",
+                    message.id
+                ))
+            })?;
+            let pointer = attachment_pointer_from_record(&att).ok_or_else(|| {
+                MessageError::InvalidContent(format!(
+                    "Saved record {} attachment {id} was never uploaded (no CDN key)",
+                    message.id
+                ))
+            })?;
+            attachment_ids.push(pointer.cdn_key.clone());
+            attachments.push(pointer);
         }
-        // The quoted parent is named by its clock, as every Quote is. A
-        // parent deleted here since has no clock to send: the snapshot then
-        // carries no quote rather than a preview pointing nowhere.
-        let quote = message
-            .reply_to
-            .and_then(|parent| self.message_repo.get(&parent).ok().flatten())
-            .map(|parent| Quote {
-                id: parent.sent_at,
-                text: message.reply_to_text.clone().unwrap_or_default(),
-                attachments: vec![],
-                author_aci: message
-                    .reply_to_author_id
-                    .or(parent.sender_id)
-                    .map(|a| a.to_string())
-                    .unwrap_or_default(),
-                r#type: quote::Type::Normal as i32,
-                author_aci_binary: vec![],
-            });
-        let pin_changed_at = SavedSyncRepository::new(self.message_repo.db())
-            .pin_watermark(&message.id)
-            .unwrap_or_else(|error| {
-                tracing::warn!(message_id = %message.id, %error, "SavedMessages sync: pin watermark read failed; sending 0");
-                0
-            });
-        SavedMessageSync {
+        // The quote is the row's own reply context, as an ordinary message
+        // keeps it after its parent is gone: the parent's real id, the stored
+        // preview and thumbnail. The parent's clock is added when we still
+        // hold it; a receiver needs none of it to store the reply.
+        let (quote, quoted_message_id) = match message.reply_to {
+            Some(parent_id) => {
+                let parent_sent_at = self
+                    .message_repo
+                    .get(&parent_id)?
+                    .map(|p| p.sent_at)
+                    .unwrap_or_default();
+                let attachments = match (
+                    &message.reply_to_thumbnail,
+                    &message.reply_to_thumbnail_mime,
+                ) {
+                    (Some(thumb), mime) if !thumb.is_empty() => vec![QuotedAttachment {
+                        content_type: mime.clone().unwrap_or_default(),
+                        file_name: String::new(),
+                        thumbnail: thumb.clone(),
+                    }],
+                    _ => vec![],
+                };
+                let quote = Quote {
+                    id: parent_sent_at,
+                    text: message.reply_to_text.clone().unwrap_or_default(),
+                    attachments,
+                    author_aci: message
+                        .reply_to_author_id
+                        .or(message.sender_id)
+                        .map(|a| a.to_string())
+                        .unwrap_or_default(),
+                    r#type: quote::Type::Normal as i32,
+                    author_aci_binary: vec![],
+                };
+                (Some(quote), parent_id.to_string())
+            }
+            None => (None, String::new()),
+        };
+        let pin_changed_at =
+            SavedSyncRepository::new(self.message_repo.db()).pin_watermark(&message.id)?;
+        Ok(SavedMessageSync {
             text: message.as_text().unwrap_or_default().to_string(),
             message_id: message.id.to_string(),
             sent_at: message.sent_at,
             attachment_ids,
             attachments,
             quote,
+            quoted_message_id,
             edited_at: if message.is_edited {
                 nanos(message.edited_at)
             } else {
@@ -295,7 +335,7 @@ impl MessageService {
             // until its pin state changes here again.
             pinned: message.is_pinned && pin_changed_at != 0,
             pin_changed_at,
-        }
+        })
     }
 
     /// Sync one of our stored Saved records to the user's other linked
@@ -305,17 +345,107 @@ impl MessageService {
     /// it changed, and in Shield only devices we already hold a session
     /// with. Best effort, once: a device that was unreachable gets no
     /// retry from here, and a Shield device without a session is skipped;
-    /// returns how many devices it reached. `message` is the row as stored
-    /// — the caller re-reads it after its write, so the snapshot is what
-    /// this device holds, not what it meant to write.
+    /// returns how many devices it reached. A record whose snapshot cannot
+    /// be built whole ([`Self::saved_snapshot`]) is not sent at all, and
+    /// that is logged as an error. `message` is the row as stored — the
+    /// caller re-reads it after its write, so the snapshot is what this
+    /// device holds, not what it meant to write.
     pub(crate) async fn sync_saved_record(&self, message: &Message) -> usize {
-        let snapshot = self.saved_snapshot(message);
+        let snapshot = match self.saved_snapshot(message) {
+            Ok(snapshot) => snapshot,
+            Err(error) => {
+                tracing::error!(
+                    message_id = %message.id,
+                    %error,
+                    "SavedMessages: snapshot not built; nothing sent to linked devices"
+                );
+                return 0;
+            }
+        };
         let content = build_saved_message_sync_content(snapshot);
         let synced = self
             .sync_to_own_devices(&mut self.auth_client(), content)
             .await;
         tracing::debug!(message_id = %message.id, synced, "SavedMessages: own-device sync done");
         synced
+    }
+
+    /// The reply context a snapshot's quote gives a Saved row here. The
+    /// parent is named by its real id: held here, the preview and thumbnail
+    /// come from it, as a local reply's do (`fill_reply_context`); not held
+    /// (its own snapshot not here yet, or deleted here), the snapshot's
+    /// preview and thumbnail are kept with the dangling id, as an ordinary
+    /// message keeps its quote after the parent is gone — so a reply never
+    /// loses its quote to ordering, and reload shows the parent once it is
+    /// here. A row under the parent's id that is not our Saved record is
+    /// refused: `reply_to` must never point into another conversation.
+    fn reply_for_quote(
+        &self,
+        own: UserId,
+        scope: &ReactionScope,
+        sync: &SavedMessageSync,
+    ) -> Result<Option<SavedReply>, MessageError> {
+        let Some(q) = &sync.quote else {
+            return Ok(None);
+        };
+        let parent = quoted_parent(sync)?;
+        let held = match self.message_repo.get(&parent)? {
+            Some(p)
+                if p.conversation_id == scope.id
+                    && p.conversation_type == scope.kind
+                    && p.sender_id == Some(own) =>
+            {
+                Some(p)
+            }
+            Some(_) => {
+                return Err(MessageError::InvalidContent(format!(
+                    "SavedMessageSync quotes a row outside our Saved conversation: {parent}"
+                )));
+            }
+            None => None,
+        };
+        let reply = match held {
+            Some(p) if !p.is_deleted => {
+                let atts: Vec<_> = p
+                    .attachments
+                    .iter()
+                    .filter_map(|id| self.attachment_repo.get(id).ok().flatten())
+                    .collect();
+                let preview = crate::services::gateway::shared::message_reply_preview(&p, &atts);
+                let quoted = crate::services::gateway::shared::build_quoted_attachments(&atts);
+                let (thumbnail, thumbnail_mime) = quoted
+                    .first()
+                    .map(|qa| {
+                        (
+                            (!qa.thumbnail.is_empty()).then(|| qa.thumbnail.clone()),
+                            (!qa.content_type.is_empty()).then(|| qa.content_type.clone()),
+                        )
+                    })
+                    .unwrap_or((None, None));
+                SavedReply {
+                    parent,
+                    text: Some(preview)
+                        .filter(|t| !t.is_empty())
+                        .or_else(|| Some(q.text.clone()).filter(|t| !t.is_empty())),
+                    thumbnail,
+                    thumbnail_mime,
+                }
+            }
+            _ => {
+                let first = q.attachments.first();
+                SavedReply {
+                    parent,
+                    text: Some(q.text.clone()).filter(|t| !t.is_empty()),
+                    thumbnail: first
+                        .map(|qa| qa.thumbnail.clone())
+                        .filter(|t| !t.is_empty()),
+                    thumbnail_mime: first
+                        .map(|qa| qa.content_type.clone())
+                        .filter(|t| !t.is_empty()),
+                }
+            }
+        };
+        Ok(Some(reply))
     }
 
     /// The stored Saved record `id` if it is ours: in our Saved conversation,
@@ -380,6 +510,16 @@ impl MessageService {
             return Ok(SavedSyncOutcome::Unchanged);
         }
 
+        // A row stored before its parent's snapshot arrived, or by a sender
+        // that sent no quote, takes this snapshot's quote once; a row that
+        // has its parent keeps it.
+        let mut quote_hydrated = false;
+        if stored.reply_to.is_none() {
+            if let Some(reply) = self.reply_for_quote(own, &scope, sync)? {
+                quote_hydrated = pins.set_reply_once(&scope, &own, stored.sent_at, &id, &reply)?;
+            }
+        }
+
         let mut body_changed = false;
         if body_supersedes(nanos(stored.edited_at), sync) {
             let content = edited_body(&stored.content, sync.text.trim());
@@ -408,7 +548,7 @@ impl MessageService {
             }
         }
 
-        if !body_changed && pin_changed.is_none() {
+        if !body_changed && pin_changed.is_none() && !quote_hydrated {
             return Ok(SavedSyncOutcome::Unchanged);
         }
         let message = self
@@ -419,12 +559,14 @@ impl MessageService {
             message_id = %id,
             body_changed,
             ?pin_changed,
+            quote_hydrated,
             "SavedMessages: applied snapshot from another device"
         );
         Ok(SavedSyncOutcome::Updated {
             message,
             body_changed,
             pin_changed,
+            quote_hydrated,
         })
     }
 
@@ -466,31 +608,17 @@ impl MessageService {
         }
         message.is_pinned = sync.pinned;
 
-        // The quote resolves in our Saved scope only, like a local reply
-        // (`save_message`). A parent we do not hold (its own snapshot not
-        // here yet, or deleted) leaves the row without reply context rather
-        // than with a clock-derived id another conversation's row may carry.
-        if let Some(q) = &sync.quote {
-            match self.message_repo.get_by_reaction_scope(scope, &own, q.id)? {
-                Some(original) => {
-                    let intent = QuoteIntent {
-                        target_author_id: own,
-                        target_timestamp: q.id,
-                        target_preview: None,
-                    };
-                    self.fill_reply_context(&mut message, &intent, Some(original));
-                }
-                None => tracing::warn!(
-                    message_id = %id,
-                    quoted_sent_at = q.id,
-                    "SavedMessages sync: quoted record not held here, stored without reply context"
-                ),
-            }
+        if let Some(reply) = self.reply_for_quote(own, scope, sync)? {
+            message.reply_to = Some(reply.parent);
+            message.reply_to_author_id = Some(own);
+            message.reply_to_text = reply.text;
+            message.reply_to_thumbnail = reply.thumbnail;
+            message.reply_to_thumbnail_mime = reply.thumbnail_mime;
         }
 
-        // Watermark first, then the row: an orphan watermark only keeps an
-        // older pin from applying later; a pinned row without its watermark
-        // could be unpinned by one.
+        // Watermark first, then the row (two writes, two connections; see
+        // `SavedSyncRepository::record_pin_watermark` for why this order
+        // and how an equal-clock replay repairs a crash between them).
         pins.record_pin_watermark(&id, sync.pin_changed_at)?;
         self.message_repo.insert(&message)?;
         let stored = self
@@ -606,7 +734,30 @@ mod tests {
         assert!(validate_snapshot(&bad).is_ok(), "attachment-only record");
         let mut bad = snapshot();
         bad.quote = Some(Quote::default());
-        assert!(validate_snapshot(&bad).is_err(), "quote without a clock");
+        assert!(
+            validate_snapshot(&bad).is_err(),
+            "quote without its parent id"
+        );
+        bad.quoted_message_id = bad.message_id.clone();
+        assert!(validate_snapshot(&bad).is_err(), "quotes itself");
+        bad.quoted_message_id = MessageId::new().to_string();
+        assert!(
+            validate_snapshot(&bad).is_ok(),
+            "parent id is all a quote needs"
+        );
+        let mut bad = snapshot();
+        bad.pin_changed_at = u64::MAX;
+        bad.pinned = true;
+        assert!(
+            validate_snapshot(&bad).is_err(),
+            "clock past the signed column"
+        );
+        let mut bad = snapshot();
+        bad.sent_at = i64::MAX as u64 + 1;
+        assert!(
+            validate_snapshot(&bad).is_err(),
+            "sent_at past the signed column"
+        );
     }
 
     #[test]
@@ -687,7 +838,7 @@ mod tests {
             )
             .unwrap();
         let repo = MessageRepository::new(db.clone());
-        let pins = SavedSyncRepository::new(db);
+        let pins = SavedSyncRepository::new(db.clone());
         let own = UserId::new();
         let scope = ReactionScope::new(ChannelId::from(own), ConversationType::SavedMessages);
         let sent_at = 5_000;
@@ -742,12 +893,50 @@ mod tests {
                 .unwrap(),
             PinWrite::Stale
         );
+        // `pinned_at` is the pin's own clock, not the receipt time, so the
+        // pinned list orders the same on every device.
+        let pinned_at = |id: &MessageId| -> Option<i64> {
+            db.read_connection()
+                .unwrap()
+                .query_row(
+                    "SELECT pinned_at FROM messages WHERE id = ?1",
+                    rusqlite::params![id.to_string()],
+                    |row| row.get(0),
+                )
+                .unwrap()
+        };
+        assert_eq!(pinned_at(&saved.id), None, "unpin clears it");
+        assert_eq!(
+            pins.apply_synced_pin(&scope, &own, sent_at, &saved.id, true, 12_000)
+                .unwrap(),
+            PinWrite::Applied { changed_at: 12_000 }
+        );
+        assert_eq!(pinned_at(&saved.id), Some(12_000));
+        // Crash recovery: the watermark was recorded for a newer unpin (13_000)
+        // but the row was then inserted from an older snapshot, pinned. The
+        // replayed unpin has an equal clock and a different state: applied.
+        pins.record_pin_watermark(&saved.id, 13_000).unwrap();
+        assert!(repo.get(&saved.id).unwrap().unwrap().is_pinned);
+        assert_eq!(
+            pins.apply_synced_pin(&scope, &own, sent_at, &saved.id, true, 13_000)
+                .unwrap(),
+            PinWrite::Stale,
+            "equal clock, same state: nothing to repair"
+        );
+        assert_eq!(
+            pins.apply_synced_pin(&scope, &own, sent_at, &saved.id, false, 13_000)
+                .unwrap(),
+            PinWrite::Applied { changed_at: 13_000 }
+        );
+        assert!(!repo.get(&saved.id).unwrap().unwrap().is_pinned);
+        // Back to the unpinned state for the local-clock check below.
+        assert_eq!(pins.pin_watermark(&saved.id).unwrap(), 13_000);
 
         // A local pin whose clock reads before the watermark still orders after it.
         let skewed = pins
             .apply_local_pin(&scope, &own, sent_at, &saved.id, true, 7_000)
             .unwrap();
-        assert_eq!(skewed, PinWrite::Applied { changed_at: 10_001 });
+        assert_eq!(skewed, PinWrite::Applied { changed_at: 13_001 });
 
         // No row at that key: nothing written, watermark untouched.
         let ghost = MessageId::new();
@@ -761,5 +950,31 @@ mod tests {
         pins.record_pin_watermark(&ghost, 20_000).unwrap();
         pins.record_pin_watermark(&ghost, 15_000).unwrap();
         assert_eq!(pins.pin_watermark(&ghost).unwrap(), 20_000);
+        assert!(pins.record_pin_watermark(&ghost, u64::MAX).is_err());
+
+        // A reply stored before its parent takes its quote once, dangling
+        // parent id included; a row that has a parent is left alone.
+        let reply = SavedReply {
+            parent: ghost,
+            text: Some("quoted".into()),
+            thumbnail: Some(vec![9, 9]),
+            thumbnail_mime: Some("image/jpeg".into()),
+        };
+        assert!(
+            pins.set_reply_once(&scope, &own, sent_at, &saved.id, &reply)
+                .unwrap()
+        );
+        let row = repo.get(&saved.id).unwrap().unwrap();
+        assert_eq!(row.reply_to, Some(ghost));
+        assert_eq!(row.reply_to_author_id, Some(own));
+        assert_eq!(row.reply_to_text.as_deref(), Some("quoted"));
+        assert_eq!(row.reply_to_thumbnail, Some(vec![9, 9]));
+        assert_eq!(row.reply_to_thumbnail_mime.as_deref(), Some("image/jpeg"));
+        assert!(
+            !pins
+                .set_reply_once(&scope, &own, sent_at, &saved.id, &reply)
+                .unwrap()
+        );
+        assert!(repo.get(&twin.id).unwrap().unwrap().reply_to.is_none());
     }
 }
