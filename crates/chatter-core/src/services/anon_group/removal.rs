@@ -27,18 +27,34 @@ impl AnonGroupService {
         // Get confirmed members before we remove ourselves
         let members = self.anon_group_repo.get_members_with_mailbox(group_id)?;
 
+        let timestamp = self
+            .anon_group_repo
+            .next_membership_timestamp(group_id, TimestampNanos::now().as_u64())?;
         // Build leave message
         let leave = AnonGroupLeave {
             group_id: group_id.to_vec(),
-            timestamp: TimestampNanos::now().as_u64(),
+            timestamp,
         };
 
         let content = Content {
             content: Some(content_v1::content::Content::AnonGroupLeave(leave)),
             ephemeral_reply_to: None,
-            timestamp: TimestampNanos::now().as_u64(),
+            timestamp,
             padding: Self::generate_padding(160),
         };
+
+        if !self.anon_group_repo.remove_ordered_member(
+            group_id,
+            &current_user,
+            timestamp,
+            None,
+            true,
+        )? {
+            return Err(AnonGroupError::InvalidData(
+                "Leave superseded by membership change".into(),
+            ));
+        }
+        self.held_posts.forget(group_id);
 
         // Notify other members via their anonymous mailboxes
         for member in members {
@@ -59,9 +75,7 @@ impl AnonGroupService {
             }
         }
 
-        // Delete local group data
-        self.anon_group_repo.delete_group(group_id)?;
-        self.held_posts.forget(group_id);
+        // Local group data and removals were committed before network fanout.
 
         tracing::info!("Left group {}", group_id);
         Ok(())
@@ -119,7 +133,9 @@ impl AnonGroupService {
             return Err(AnonGroupError::MemberNotFound(*new_owner));
         }
 
-        let timestamp = TimestampNanos::now().as_u64();
+        let timestamp = self
+            .anon_group_repo
+            .next_membership_timestamp(group_id, TimestampNanos::now().as_u64())?;
         let content = Content {
             content: Some(content_v1::content::Content::AnonGroupUpdate(
                 AnonGroupUpdate {
@@ -136,7 +152,16 @@ impl AnonGroupService {
             timestamp,
             padding: Self::generate_padding(160),
         };
-        for member in self.anon_group_repo.get_members_with_mailbox(group_id)? {
+        let recipients = self.anon_group_repo.get_members_with_mailbox(group_id)?;
+        let Some(content_v1::content::Content::AnonGroupUpdate(update)) = &content.content else {
+            unreachable!()
+        };
+        if !self.handle_update(*group_id, current_user, update)? {
+            return Err(AnonGroupError::InvalidData(
+                "Ownership transfer superseded".into(),
+            ));
+        }
+        for member in recipients {
             if member.user_id == current_user {
                 continue;
             }
@@ -155,7 +180,6 @@ impl AnonGroupService {
             }
         }
 
-        self.apply_ownership_transfer(group_id, &current_user, new_owner, &current_user)?;
         tracing::info!("Transferred group {} to {}", group_id, new_owner);
         Ok(())
     }
@@ -168,23 +192,25 @@ impl AnonGroupService {
         to: &UserId,
         me: &UserId,
     ) -> Result<(), AnonGroupError> {
-        let group = self
+        let timestamp = self
             .anon_group_repo
-            .get_group(group_id)?
-            .ok_or(AnonGroupError::GroupNotFound(*group_id))?;
-        let my_role = if to == me {
-            AnonGroupRole::Owner
-        } else if from == me {
-            AnonGroupRole::Admin
-        } else {
-            group.my_role
+            .next_membership_timestamp(group_id, TimestampNanos::now().as_u64())?;
+        let update = AnonGroupUpdate {
+            group_id: group_id.to_vec(),
+            timestamp,
+            update: Some(anon_group_update::Update::RoleChange(AnonGroupRoleChange {
+                user_id: to.as_bytes().to_vec(),
+                new_role: AnonGroupRole::Owner.to_i32(),
+                timestamp,
+            })),
         };
-        self.anon_group_repo.set_owner(group_id, to, my_role)?;
-        self.anon_group_repo
-            .update_member_role(group_id, to, AnonGroupRole::Owner)?;
-        if self.anon_group_repo.is_member(group_id, from)? {
-            self.anon_group_repo
-                .update_member_role(group_id, from, AnonGroupRole::Admin)?;
+        if !self
+            .anon_group_repo
+            .apply_ordered_update(group_id, from, me, &update)?
+        {
+            return Err(AnonGroupError::InvalidData(
+                "Ownership transfer superseded".into(),
+            ));
         }
         Ok(())
     }
@@ -222,9 +248,12 @@ impl AnonGroupService {
         let members = self.anon_group_repo.get_members_with_mailbox(group_id)?;
 
         // Build kick message with signature
-        let timestamp = TimestampNanos::now().as_u64();
+        let timestamp = self
+            .anon_group_repo
+            .next_membership_timestamp(group_id, TimestampNanos::now().as_u64())?;
         let admin_signature = self.sign_kick(group_id, target_user_id, timestamp)?;
 
+        let admin_signature_for_local = admin_signature.clone();
         let kick = AnonGroupKick {
             group_id: group_id.to_vec(),
             kicked_user_id: target_user_id.as_bytes().to_vec(),
@@ -238,6 +267,18 @@ impl AnonGroupService {
             timestamp,
             padding: Self::generate_padding(160),
         };
+
+        if !self.handle_kick(
+            *group_id,
+            *target_user_id,
+            current_user,
+            &admin_signature_for_local,
+            timestamp,
+        )? {
+            return Err(AnonGroupError::InvalidData(
+                "Kick superseded by membership change".into(),
+            ));
+        }
 
         // Notify every other member, the kicked one included: their client
         // verifies the same signature and drops the group (`handle_kick`),
@@ -260,9 +301,7 @@ impl AnonGroupService {
             }
         }
 
-        // Remove from local member list
-        self.anon_group_repo
-            .remove_member(group_id, target_user_id)?;
+        // Removal and its tombstone were committed before network fanout.
 
         tracing::info!("Kicked {} from group {}", target_user_id, group_id);
         Ok(())
@@ -314,21 +353,27 @@ impl AnonGroupService {
         sender_id: &UserId,
         signature: &[u8],
     ) -> Result<bool, AnonGroupError> {
-        use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+        let key = self
+            .anon_group_repo
+            .get_member(group_id, sender_id)?
+            .and_then(|m| m.mailbox_pk)
+            .ok_or(AnonGroupError::MemberNotFound(*sender_id))?;
+        self.verify_kick_signature_with_key(group_id, kicked_user_id, timestamp, &key, signature)
+    }
 
-        // Build message that was signed
-        let mut message = Vec::with_capacity(16 + 16 + 8);
+    pub(crate) fn verify_kick_signature_with_key(
+        &self,
+        group_id: &AnonGroupId,
+        kicked_user_id: &UserId,
+        timestamp: u64,
+        sender_mailbox_pk: &[u8; 32],
+        signature: &[u8],
+    ) -> Result<bool, AnonGroupError> {
+        use ed25519_dalek::{Signature, Verifier, VerifyingKey};
+        let mut message = Vec::with_capacity(40);
         message.extend_from_slice(group_id.as_bytes());
         message.extend_from_slice(kicked_user_id.as_bytes());
         message.extend_from_slice(&timestamp.to_le_bytes());
-
-        // Get sender's mailbox public key
-        let members = self.anon_group_repo.get_members(group_id)?;
-        let sender_mailbox_pk = members
-            .iter()
-            .find(|m| m.user_id == *sender_id)
-            .and_then(|m| m.mailbox_pk)
-            .ok_or_else(|| AnonGroupError::MemberNotFound(*sender_id))?;
 
         // Parse the signature
         if signature.len() != 64 {
@@ -340,7 +385,7 @@ impl AnonGroupService {
         let sig = Signature::from_bytes(&sig_bytes);
 
         // Parse the verifying key
-        let verifying_key = VerifyingKey::from_bytes(&sender_mailbox_pk)
+        let verifying_key = VerifyingKey::from_bytes(sender_mailbox_pk)
             .map_err(|e| AnonGroupError::CryptoError(format!("Invalid public key: {}", e)))?;
 
         // Verify

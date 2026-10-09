@@ -8,7 +8,7 @@ use tokio::time::sleep;
 
 use crate::domain::UserId;
 use crate::domain::anon_group::{
-    AnonGroup, AnonGroupId, AnonGroupMember, AnonGroupPending, AnonGroupRole, PendingActionType,
+    AnonGroup, AnonGroupId, AnonGroupMember, AnonGroupRole, PendingActionType,
 };
 use crate::proto::content_v1::{
     self, AnonDmMessage as AnonDmMessageProto, AnonGroupInvite, AnonGroupJoinAck,
@@ -71,6 +71,7 @@ impl AnonGroupService {
         mailbox_pk: &[u8; 32],
         content: Content,
     ) -> Result<(), AnonGroupError> {
+        self.check_group_recipient(&content, peer_id, mailbox_pk)?;
         // 1. Serialize content
         let plaintext = content.encode_to_vec();
         let retained = if crate::services::gateway::submission::user_post(&content) {
@@ -127,6 +128,7 @@ impl AnonGroupService {
         }
         self.check_recipient_session(retained.as_deref())?;
         let ciphertext = if has_session {
+            self.check_group_recipient(&content, peer_id, mailbox_pk)?;
             self.admit_recipient_encryption(retained.as_deref())?;
             self.pairwise_service
                 .encrypt(peer_id, &plaintext)
@@ -160,6 +162,7 @@ impl AnonGroupService {
                 }
                 e
             })?;
+            self.check_group_recipient(&content, peer_id, mailbox_pk)?;
             self.admit_recipient_encryption(retained.as_deref())?;
             self.pairwise_service
                 .encrypt_anonymous(peer_id, &plaintext, &token)
@@ -167,6 +170,7 @@ impl AnonGroupService {
                 .map_err(|e| AnonGroupError::CryptoError(e.to_string()))?
         };
 
+        self.check_group_recipient(&content, peer_id, mailbox_pk)?;
         // 3. Send directly to anonymous mailbox
         if let Some(key) = retained.as_ref() {
             crate::services::gateway::submission::ciphertext(
@@ -191,6 +195,36 @@ impl AnonGroupService {
                 .map_err(|_| AnonGroupError::DeliveryUnconfirmed)?;
         }
 
+        Ok(())
+    }
+
+    /// Revalidate snapshots at encryption and delivery boundaries, including
+    /// queue drains. Removal controls deliberately still reach the removed peer.
+    fn check_group_recipient(
+        &self,
+        content: &Content,
+        peer: &UserId,
+        key: &[u8; 32],
+    ) -> Result<(), AnonGroupError> {
+        use content_v1::content::Content as Kind;
+        let scope = match content.content.as_ref() {
+            Some(Kind::AnonGroupMessage(message)) => Some((&message.group_id, content.timestamp)),
+            Some(Kind::AnonGroupMemberList(list)) => Some((&list.group_id, list.timestamp)),
+            Some(Kind::AnonGroupProfileShare(profile)) => {
+                Some((&profile.group_id, profile.timestamp))
+            }
+            _ => None,
+        };
+        if let Some((id, timestamp)) = scope {
+            let group = AnonGroupId::try_from_slice(id)
+                .ok_or_else(|| AnonGroupError::InvalidData("Invalid recipient group".into()))?;
+            if !self
+                .anon_group_repo
+                .current_recipient(&group, peer, key, timestamp)?
+            {
+                return Err(AnonGroupError::MemberNotFound(*peer));
+            }
+        }
         Ok(())
     }
 
@@ -527,6 +561,28 @@ impl AnonGroupService {
         display_name: Option<String>,
         avatar: Option<Vec<u8>>,
     ) -> Result<(), AnonGroupError> {
+        self.handle_join_ack_ordered(
+            group_id,
+            joiner_id,
+            joiner_mailbox_pk,
+            profile_key,
+            display_name,
+            avatar,
+            0,
+        )
+        .await
+    }
+
+    pub async fn handle_join_ack_ordered(
+        &self,
+        group_id: AnonGroupId,
+        joiner_id: UserId,
+        joiner_mailbox_pk: [u8; 32],
+        profile_key: Option<[u8; 32]>,
+        display_name: Option<String>,
+        avatar: Option<Vec<u8>>,
+        timestamp: u64,
+    ) -> Result<(), AnonGroupError> {
         // 1. Verify the group exists and we're the owner/admin
         let group = self
             .anon_group_repo
@@ -544,26 +600,19 @@ impl AnonGroupService {
             return Ok(());
         }
 
-        // 2. Update member's mailbox key and profile
-        self.anon_group_repo.update_member_mailbox_and_profile(
-            &group_id,
-            &joiner_id,
-            &joiner_mailbox_pk,
-            profile_key,
-            display_name.clone(),
-            avatar,
-        )?;
-
-        tracing::debug!(
-            "Updated member {} in group {} with profile: {:?}",
-            joiner_id,
+        let member = AnonGroupMember::with_mailbox(
             group_id,
-            display_name
-        );
-
-        // 3. Remove pending invite
-        self.anon_group_repo
-            .delete_pending(&group_id, &joiner_id, PendingActionType::Invite)?;
+            joiner_id,
+            AnonGroupRole::Member,
+            joiner_mailbox_pk,
+        )
+        .with_profile(profile_key, display_name, avatar);
+        if !self
+            .anon_group_repo
+            .apply_ordered_join_ack(&member, timestamp)?
+        {
+            return Ok(());
+        }
 
         // 4. Drain any messages queued for this member while mailbox_pk was
         //    unknown. Failures are logged and left for retry (rows persist).
@@ -597,8 +646,20 @@ impl AnonGroupService {
         &self,
         group_id: &AnonGroupId,
     ) -> Result<(), AnonGroupError> {
-        let members = self.anon_group_repo.get_members(group_id)?;
-        let confirmed_members = self.anon_group_repo.get_members_with_mailbox(group_id)?;
+        let current_user = self.current_user_id()?;
+        let (snapshot, roster_timestamp) = self.anon_group_repo.ordered_roster_snapshot(
+            group_id,
+            &current_user,
+            TimestampNanos::now().as_u64(),
+        )?;
+        let admissions: std::collections::HashMap<UserId, u64> =
+            snapshot.iter().map(|(m, ts)| (m.user_id, *ts)).collect();
+        let members: Vec<_> = snapshot.into_iter().map(|(m, _)| m).collect();
+        let confirmed_members: Vec<_> = members
+            .iter()
+            .filter(|m| m.mailbox_pk.is_some())
+            .cloned()
+            .collect();
 
         // Build member info list
         let member_infos: Vec<AnonGroupMemberInfo> = members
@@ -636,6 +697,7 @@ impl AnonGroupService {
                     profile_key,
                     encrypted_display_name,
                     encrypted_avatar,
+                    admission_timestamp: admissions[&m.user_id],
                 }
             })
             .collect();
@@ -643,7 +705,7 @@ impl AnonGroupService {
         let member_list = AnonGroupMemberList {
             group_id: group_id.to_vec(),
             members: member_infos,
-            timestamp: TimestampNanos::now().as_u64(),
+            timestamp: roster_timestamp,
         };
 
         let content = Content {
@@ -695,6 +757,18 @@ impl AnonGroupService {
         sender_id: UserId,
         members: Vec<AnonGroupMemberInfo>,
     ) -> Result<(), AnonGroupError> {
+        self.handle_member_list_ordered(group_id, sender_id, members, 0)
+            .map(|_| ())
+    }
+
+    /// All transports must pass the timestamp inside the authenticated payload.
+    pub fn handle_member_list_ordered(
+        &self,
+        group_id: AnonGroupId,
+        sender_id: UserId,
+        members: Vec<AnonGroupMemberInfo>,
+        timestamp: u64,
+    ) -> Result<bool, AnonGroupError> {
         let current_user = self.current_user_id()?;
 
         // Verify group exists
@@ -723,16 +797,36 @@ impl AnonGroupService {
             ));
         }
 
-        // Update local member state
+        let mut parsed = Vec::with_capacity(members.len());
+        let mut seen = std::collections::HashSet::new();
+        // Parse the complete snapshot before any writes.
         for member_info in members {
             let user_id = UserId::try_from_slice(&member_info.user_id)
                 .ok_or_else(|| AnonGroupError::InvalidData("Invalid user ID".to_string()))?;
 
-            // Skip ourselves
+            if !seen.insert(user_id) {
+                return Err(AnonGroupError::InvalidData(
+                    "Duplicate roster member".into(),
+                ));
+            }
+
+            // Preserve our locally owned mailbox/profile, but persist our
+            // owner-authenticated admission too. Otherwise a delayed old kick
+            // could evict us again after we explicitly accepted a reinvitation.
             if user_id == current_user {
+                if let Some(local) = self.anon_group_repo.get_member(&group_id, &user_id)? {
+                    parsed.push((local, member_info.admission_timestamp));
+                }
                 continue;
             }
 
+            if !(0..=2).contains(&member_info.role)
+                || (!member_info.mailbox_pk.is_empty() && member_info.mailbox_pk.len() != 32)
+            {
+                return Err(AnonGroupError::InvalidData(
+                    "Invalid roster role or mailbox key".into(),
+                ));
+            }
             let role = AnonGroupRole::from_i32(member_info.role);
             let mailbox_pk = if member_info.mailbox_pk.len() == 32 {
                 let mut pk = [0u8; 32];
@@ -756,36 +850,34 @@ impl AnonGroupService {
 
             use crate::crypto::profile_crypto::{decrypt_avatar, decrypt_display_name};
 
-            let display_name: Option<String> =
-                match (&profile_key, &member_info.encrypted_display_name) {
-                    (Some(pk), Some(encrypted)) if !encrypted.is_empty() => {
-                        match decrypt_display_name(pk, encrypted) {
-                            Ok(name) if !name.is_empty() => {
-                                tracing::debug!("Decrypted display name for {}: {}", user_id, name);
-                                Some(name)
-                            }
-                            Ok(_) => {
-                                tracing::debug!("Decrypted empty display name for {}", user_id);
-                                None
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    "Failed to decrypt display name for {}: {}",
-                                    user_id,
-                                    e
-                                );
-                                None
-                            }
+            let display_name: Option<String> = match (
+                &profile_key,
+                &member_info.encrypted_display_name,
+            ) {
+                (Some(pk), Some(encrypted)) if !encrypted.is_empty() => {
+                    match decrypt_display_name(pk, encrypted) {
+                        Ok(name) if !name.is_empty() => {
+                            tracing::debug!(user_id = %user_id, "Decrypted member display name");
+                            Some(name)
+                        }
+                        Ok(_) => {
+                            tracing::debug!("Decrypted empty display name for {}", user_id);
+                            None
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to decrypt display name for {}: {}", user_id, e);
+                            None
                         }
                     }
-                    _ => {
-                        tracing::trace!(
-                            "No profile key or encrypted name for member {} in list",
-                            user_id
-                        );
-                        None
-                    }
-                };
+                }
+                _ => {
+                    tracing::trace!(
+                        "No profile key or encrypted name for member {} in list",
+                        user_id
+                    );
+                    None
+                }
+            };
 
             let avatar: Option<Vec<u8>> = match (&profile_key, &member_info.encrypted_avatar) {
                 (Some(pk), Some(encrypted)) if !encrypted.is_empty() => {
@@ -800,44 +892,18 @@ impl AnonGroupService {
                 _ => None,
             };
 
-            // Check if member already exists
-            let is_member = self.anon_group_repo.is_member(&group_id, &user_id)?;
-
-            if is_member {
-                // Update existing member
-                self.anon_group_repo
-                    .update_member_role(&group_id, &user_id, role)?;
-                if let Some(pk) = mailbox_pk {
-                    self.anon_group_repo.update_member_mailbox_and_profile(
-                        &group_id,
-                        &user_id,
-                        &pk,
-                        profile_key,
-                        display_name,
-                        avatar,
-                    )?;
-                }
+            let member = if let Some(pk) = mailbox_pk {
+                AnonGroupMember::with_mailbox(group_id, user_id, role, pk)
             } else {
-                // Add new member
-                let member = if let Some(pk) = mailbox_pk {
-                    AnonGroupMember::with_mailbox(group_id, user_id, role, pk).with_profile(
-                        profile_key,
-                        display_name,
-                        avatar,
-                    )
-                } else {
-                    AnonGroupMember::new(group_id, user_id, role).with_profile(
-                        profile_key,
-                        display_name,
-                        avatar,
-                    )
-                };
-                self.anon_group_repo.add_member(&member)?;
+                AnonGroupMember::new(group_id, user_id, role)
             }
+            .with_profile(profile_key, display_name, avatar);
+            parsed.push((member, member_info.admission_timestamp));
         }
 
-        tracing::debug!("Updated member list for group {}", group_id);
-        Ok(())
+        Ok(self
+            .anon_group_repo
+            .apply_ordered_roster(&group_id, &sender_id, timestamp, &parsed)?)
     }
 
     /// Invite additional members to an existing group with specified roles.
@@ -849,7 +915,7 @@ impl AnonGroupService {
         group_id: &AnonGroupId,
         invitees: Vec<(UserId, AnonGroupRole)>,
     ) -> Result<(), AnonGroupError> {
-        let _current_user = self.current_user_id()?;
+        let current_user = self.current_user_id()?;
 
         // Verify group exists and we have permission to invite
         let group = self
@@ -886,11 +952,13 @@ impl AnonGroupService {
 
             // Add as pending member with specified role
             let member = AnonGroupMember::new(*group_id, invitee, role);
-            self.anon_group_repo.add_member(&member)?;
-
-            // Track pending invite
-            let pending = AnonGroupPending::new_invite(*group_id, invitee);
-            self.anon_group_repo.insert_pending(&pending)?;
+            if !self.anon_group_repo.invite_ordered_member(
+                &member,
+                &current_user,
+                TimestampNanos::now().as_u64(),
+            )? {
+                continue;
+            }
 
             // Send invite with small random delay to reduce traffic correlation
             let delay_ms = 100 + (rand::rng().next_u32() % 400);
@@ -1209,6 +1277,7 @@ mod tests {
             profile_key: None,
             encrypted_display_name: None,
             encrypted_avatar: None,
+            admission_timestamp: 0,
         }
     }
 

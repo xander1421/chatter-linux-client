@@ -267,7 +267,21 @@ impl AnonGroupService {
                 // Sender authorization (owner only) lives in handle_member_list,
                 // the one function every transport routes through.
                 let members = list.members.clone();
-                if let Err(e) = self.handle_member_list(*group_id, *peer_id, members.clone()) {
+                if let Err(e) = self
+                    .handle_member_list_ordered(
+                        *group_id,
+                        *peer_id,
+                        members.clone(),
+                        list.timestamp,
+                    )
+                    .and_then(|applied| {
+                        if applied {
+                            Ok(())
+                        } else {
+                            Err(AnonGroupError::InvalidData("Stale roster".into()))
+                        }
+                    })
+                {
                     tracing::warn!(group_id = %group_id, error = %e, "Failed to handle member list");
                     return Ok(events);
                 }
@@ -281,17 +295,19 @@ impl AnonGroupService {
 
                 tracing::info!(group_id = %group_id, sender_id = %peer_id, "Processed group member list");
             }
-            Some(ContentType::AnonGroupLeave(_)) => match self.handle_leave(*group_id, *peer_id) {
-                Ok(true) => {
-                    events.push(DomainEvent::AnonGroupMemberLeft {
-                        group_id: *group_id,
-                        user_id: *peer_id,
-                    });
-                    tracing::info!(group_id = %group_id, sender_id = %peer_id, "Member left group");
+            Some(ContentType::AnonGroupLeave(leave)) => {
+                match self.handle_leave_ordered(*group_id, *peer_id, leave.timestamp) {
+                    Ok(true) => {
+                        events.push(DomainEvent::AnonGroupMemberLeft {
+                            group_id: *group_id,
+                            user_id: *peer_id,
+                        });
+                        tracing::info!(group_id = %group_id, sender_id = %peer_id, "Member left group");
+                    }
+                    Ok(false) => {}
+                    Err(e) => tracing::warn!(error = %e, "Failed to handle group leave"),
                 }
-                Ok(false) => {}
-                Err(e) => tracing::warn!(error = %e, "Failed to handle group leave"),
-            },
+            }
             Some(ContentType::AnonGroupKick(kick)) => {
                 let kicked_user_id = match UserId::try_from_slice(&kick.kicked_user_id) {
                     Some(id) => id,

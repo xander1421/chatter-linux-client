@@ -9,10 +9,11 @@ use uuid::Uuid;
 
 use crate::domain::UserId;
 use crate::domain::anon_group::{
-    AnonGroup, AnonGroupId, AnonGroupMailbox, AnonGroupMember, AnonGroupPending, AnonGroupRole,
+    AnonGroup, AnonGroupId, AnonGroupMailbox, AnonGroupMember, AnonGroupRole,
 };
 use crate::services::current_user::CurrentUserProvider;
 use crate::storage::repositories::settings_keys;
+use crate::util::time::TimestampNanos;
 
 use super::{AnonGroupError, AnonGroupService};
 
@@ -97,11 +98,13 @@ impl AnonGroupService {
         for invitee in invitees {
             // Add as pending member
             let member = AnonGroupMember::new(group.id, invitee, AnonGroupRole::Member);
-            self.anon_group_repo.add_member(&member)?;
-
-            // Track pending invite
-            let pending = AnonGroupPending::new_invite(group.id, invitee);
-            self.anon_group_repo.insert_pending(&pending)?;
+            if !self.anon_group_repo.invite_ordered_member(
+                &member,
+                &current_user,
+                TimestampNanos::now().as_u64(),
+            )? {
+                continue;
+            }
 
             // Send invite with small random delay to reduce traffic correlation
             // Keep it short (100-500ms) to maintain good UX
@@ -183,11 +186,13 @@ impl AnonGroupService {
         for (invitee, role) in invitees {
             // Add as pending member with specified role
             let member = AnonGroupMember::new(group.id, invitee, role);
-            self.anon_group_repo.add_member(&member)?;
-
-            // Track pending invite
-            let pending = AnonGroupPending::new_invite(group.id, invitee);
-            self.anon_group_repo.insert_pending(&pending)?;
+            if !self.anon_group_repo.invite_ordered_member(
+                &member,
+                &current_user,
+                TimestampNanos::now().as_u64(),
+            )? {
+                continue;
+            }
 
             // Send invite with small random delay to reduce traffic correlation
             let delay_ms = 100 + (rand::rng().next_u32() % 400);
@@ -349,7 +354,8 @@ impl AnonGroupService {
             mailbox.public_key,
         )
         .with_profile(profile_key, my_display_name, my_avatar);
-        self.anon_group_repo.add_member(&my_member)?;
+        self.anon_group_repo
+            .accept_ordered_self(&my_member, TimestampNanos::now().as_u64())?;
 
         // 4. Add inviter with their mailbox key and profile.
         //

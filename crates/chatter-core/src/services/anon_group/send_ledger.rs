@@ -167,13 +167,30 @@ mod tests {
         let group = AnonGroupId::new();
         let first = UserId::new();
         let queued = UserId::new();
+        repo.insert_group(&crate::domain::anon_group::AnonGroup::from_invite(
+            group,
+            "fixture".into(),
+            first,
+        ))
+        .unwrap();
+        repo.add_member(&crate::domain::anon_group::AnonGroupMember::new(
+            group,
+            queued,
+            crate::domain::anon_group::AnonGroupRole::Member,
+        ))
+        .unwrap();
+        let original_content = crate::proto::content_v1::Content {
+            timestamp: 7,
+            ..Default::default()
+        }
+        .encode_to_vec();
         let id = MessageId::new();
         let key = "send.group.completion.v1:queue-failure";
         register(&db, key, &id.to_string()).unwrap();
         initialize(&db, key, &[first.to_string(), queued.to_string()]).unwrap();
         record(&db, key, &first.to_string(), "confirmed").unwrap();
         db.connection().unwrap().execute_batch("CREATE TRIGGER reject_pending BEFORE INSERT ON pending_anon_group_messages BEGIN SELECT RAISE(FAIL,'injected queue write failure'); END;").unwrap();
-        assert!(enqueue(&db, &repo, key, &group, &queued, b"exact original content").is_err());
+        assert!(enqueue(&db, &repo, key, &group, &queued, &original_content).is_err());
         assert_eq!(row_complete(&db, &id.to_string()).unwrap(), Some(false));
         assert!(
             repo.get_pending_messages_for_member(&group, &queued)
@@ -184,13 +201,13 @@ mod tests {
             .unwrap()
             .execute_batch("DROP TRIGGER reject_pending;")
             .unwrap();
-        enqueue(&db, &repo, key, &group, &queued, b"exact original content").unwrap();
+        enqueue(&db, &repo, key, &group, &queued, &original_content).unwrap();
         assert_eq!(row_complete(&db, &id.to_string()).unwrap(), Some(false));
         let rows = repo
             .get_pending_messages_for_member(&group, &queued)
             .unwrap();
         assert_eq!(rows.len(), 1);
-        assert_eq!(rows[0].1.as_slice(), b"exact original content");
+        assert_eq!(rows[0].1.as_slice(), original_content.as_slice());
         assert_eq!(
             record(&db, key, &queued.to_string(), "confirmed").unwrap(),
             Some(id)
