@@ -1,5 +1,5 @@
 //! Anonymous deposits cannot be retried by re-encrypting a parked plaintext.
-//! Retain the first plaintext/ciphertext in SQLCipher before attempting deposit.
+//! Retain the first ciphertext in SQLCipher before attempting deposit.
 use crate::{error::StorageError, storage::database::Database};
 use rusqlite::params;
 use sha2::{Digest, Sha256};
@@ -23,30 +23,12 @@ pub(crate) fn user_post(content: &crate::proto::content_v1::Content) -> bool {
     )
 }
 
-fn scrub_legacy_content(db: &Database) -> Result<(), StorageError> {
-    let mut conn = db.connection()?;
-    let done: bool = conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM settings WHERE key='send.anonymous.content-scrub.v1')",
-        [],
-        |row| row.get(0),
-    )?;
-    if done {
-        return Ok(());
-    }
-    let tx = conn.transaction()?;
-    tx.execute("UPDATE settings SET value=CASE WHEN json_extract(value,'$.confirmed')=1 THEN json_object('confirmed',json('true')) ELSE json_remove(value,'$.plaintext') END WHERE key LIKE 'send.anonymous.v1:%'", [])?;
-    tx.execute("INSERT OR IGNORE INTO settings(key,value,updated_at) VALUES ('send.anonymous.content-scrub.v1','done',?1)", params![chrono::Utc::now().to_rfc3339()])?;
-    tx.commit()?;
-    Ok(())
-}
-
 pub(crate) fn prepare(
     db: &Database,
     owner: &str,
     peer: &str,
     plaintext: &[u8],
 ) -> Result<Admission, StorageError> {
-    scrub_legacy_content(db)?;
     let mut hash = Sha256::new();
     hash.update(owner.as_bytes());
     hash.update([0]);
@@ -68,26 +50,18 @@ pub(crate) fn prepare(
         params![key],
         |row| row.get(0),
     )?;
-    if confirmed {
-        // Also scrub a legacy confirmed record when its identity is reopened.
-        conn.execute(
-            "UPDATE settings SET value=json_object('confirmed',json('true')) WHERE key=?1",
-            params![key],
-        )?;
-        return Ok(Admission::Confirmed);
-    }
-    conn.execute(
-        "UPDATE settings SET value=json_remove(value,'$.plaintext') WHERE key=?1",
-        params![key],
-    )?;
-    Ok(Admission::Unconfirmed)
+    Ok(if confirmed {
+        Admission::Confirmed
+    } else {
+        Admission::Unconfirmed
+    })
 }
 pub(crate) fn ciphertext(db: &Database, key: &str, ciphertext: &[u8]) -> Result<(), StorageError> {
     let conn = db.connection()?;
     let value = serde_json::to_string(ciphertext)
         .map_err(|_| StorageError::InvalidData("Cannot retain anonymous ciphertext".into()))?;
     conn.execute(
-        "UPDATE settings SET value=json_set(json_remove(value,'$.plaintext'),'$.ciphertext',json(?2)) WHERE key=?1 AND json_extract(value,'$.confirmed')=0",
+        "UPDATE settings SET value=json_set(value,'$.ciphertext',json(?2)) WHERE key=?1 AND json_extract(value,'$.confirmed')=0",
         params![key, value],
     )?;
     Ok(())
@@ -104,62 +78,6 @@ pub(crate) fn confirm(db: &Database, key: &str) -> Result<(), StorageError> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    #[test]
-    fn legacy_cleanup_keeps_unknown_ciphertext_and_redacts_all_confirmed_content() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = Database::open(&dir.path().join("legacy.db"), "test-only").unwrap();
-        db.run_migrations()
-            .expect("migrate throwaway test database");
-        db.connection()
-            .unwrap()
-            .execute(
-                "INSERT INTO settings(key,value,updated_at) VALUES (?1,?2,'now')",
-                params![
-                    "send.anonymous.v1:confirmed",
-                    serde_json::json!({"plaintext":[1,2],"ciphertext":[3,4],"confirmed":true})
-                        .to_string()
-                ],
-            )
-            .unwrap();
-        db.connection()
-            .unwrap()
-            .execute(
-                "INSERT INTO settings(key,value,updated_at) VALUES (?1,?2,'now')",
-                params![
-                    "send.anonymous.v1:unknown",
-                    serde_json::json!({"plaintext":[5,6],"ciphertext":[7,8],"confirmed":false})
-                        .to_string()
-                ],
-            )
-            .unwrap();
-        scrub_legacy_content(&db).unwrap();
-        for (key, expected) in [
-            (
-                "send.anonymous.v1:confirmed",
-                serde_json::json!({"confirmed":true}),
-            ),
-            (
-                "send.anonymous.v1:unknown",
-                serde_json::json!({"ciphertext":[7,8],"confirmed":false}),
-            ),
-        ] {
-            let raw: String = db
-                .read_connection()
-                .unwrap()
-                .query_row(
-                    "SELECT value FROM settings WHERE key=?1",
-                    params![key],
-                    |row| row.get(0),
-                )
-                .unwrap();
-            assert_eq!(
-                serde_json::from_str::<serde_json::Value>(&raw).unwrap(),
-                expected
-            );
-        }
-        scrub_legacy_content(&db).unwrap(); // durable idempotent cleanup
-    }
-
     #[test]
     fn accepted_deposit_with_lost_receipt_never_reencrypts_plaintext() {
         let dir = tempfile::tempdir().unwrap();
