@@ -9,14 +9,6 @@ use super::{AnonGroupError, AnonGroupService};
 impl AnonGroupService {
     /// Handle an incoming leave message. `Ok(true)` only when a member was
     /// actually removed, so the caller announces nothing it did not apply.
-    pub fn handle_leave(
-        &self,
-        group_id: AnonGroupId,
-        sender_id: UserId,
-    ) -> Result<bool, AnonGroupError> {
-        self.handle_leave_ordered(group_id, sender_id, 0)
-    }
-
     pub fn handle_leave_ordered(
         &self,
         group_id: AnonGroupId,

@@ -323,23 +323,11 @@ impl AnonGroupRepository {
             )
             .optional()?
             .unwrap_or(0);
-        let legacy_locked: bool = tx
-            .query_row(
-                "SELECT legacy_locked FROM anon_group_order WHERE group_id = ?1",
-                [group.to_string()],
-                |r| r.get(0),
-            )
-            .optional()?
-            .unwrap_or(false);
-        // Zero is legacy: permitted only until authenticated ordering is known.
-        if (timestamp == 0 && roster_at > 0) || (timestamp > 0 && timestamp <= roster_at) {
+        if timestamp == 0 || timestamp <= roster_at {
             return Ok(false);
         }
         for (member, admission) in members {
             let admission = membership_timestamp(*admission)?;
-            if legacy_locked && admission == 0 {
-                continue;
-            }
             if admission > timestamp {
                 return Ok(false);
             }
@@ -421,9 +409,7 @@ impl AnonGroupRepository {
             "SELECT admitted_at,removed_at FROM anon_group_member_order WHERE group_id = ?1 AND user_id = ?2",
             params![group.to_string(), target.to_string()], |r| Ok((r.get(0)?,r.get(1)?))).optional()?.unwrap_or((0,0));
         // Old removals cannot evict a later explicitly invited incarnation.
-        // Unknown legacy ordering fails closed by retaining a permanent barrier.
-        let timestamp = if timestamp == 0 { i64::MAX } else { timestamp };
-        if timestamp < admitted || timestamp <= removed {
+        if timestamp == 0 || timestamp < admitted || timestamp <= removed {
             return Ok(false);
         }
         tx.execute("INSERT INTO anon_group_member_order(group_id,user_id,removed_at,changed_at)
