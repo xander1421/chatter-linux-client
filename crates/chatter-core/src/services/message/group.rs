@@ -349,6 +349,12 @@ impl MessageService {
                 registration_id.map(|r| (device, r))
             })
             .collect();
+        {
+            let mut unreached = self.unreached_peer_devices.lock();
+            for &(device, _) in &devices {
+                unreached.remove(&(member_id.to_string(), device));
+            }
+        }
         if let Err(e) = self
             .signal_service
             .mark_sender_key_held(channel_id, member_id, &devices)
@@ -378,7 +384,7 @@ impl MessageService {
         } else {
             None
         };
-        let devices = match own {
+        let mut devices: Vec<u32> = match own {
             Some(ids) => ids.into_iter().collect(),
             None => self
                 .signal_service
@@ -386,6 +392,12 @@ impl MessageService {
                 .await
                 .unwrap_or_default(),
         };
+        // A peer's added device we could not open a session with yet.
+        for (user, device) in self.unreached_peer_devices.lock().iter() {
+            if user == member && !devices.contains(device) {
+                devices.push(*device);
+            }
+        }
         devices
             .into_iter()
             .filter(|&d| member != our_user_id || d != our_device_id)
@@ -1104,11 +1116,29 @@ impl MessageService {
                 match result {
                     Ok(()) => tracing::info!(peer = %peer_str, device_id,
                         "Opened a session with a peer's new device; next group send hands it our sender key"),
-                    Err(e) => tracing::warn!(peer = %peer_str, device_id, error = %e,
-                        "Could not open a session with a peer's new device; it heals via its SenderKeyRequest"),
+                    // A changed identity waits for the user's decision;
+                    // retrying would only spend the peer's one-time prekeys.
+                    Err(
+                        ref e @ crate::error::ServiceError::Crypto(
+                            crate::error::CryptoError::UntrustedIdentity { .. },
+                        ),
+                    ) => {
+                        tracing::warn!(peer = %peer_str, device_id, error = %e,
+                            "A peer's new device has a changed identity; it heals via its SenderKeyRequest")
+                    }
+                    Err(e) => {
+                        tracing::warn!(peer = %peer_str, device_id, error = %e,
+                            "Could not open a session with a peer's new device; the next group send retries");
+                        self.unreached_peer_devices
+                            .lock()
+                            .insert((peer_str, device_id));
+                    }
                 }
             }
             "revoked" => {
+                self.unreached_peer_devices
+                    .lock()
+                    .remove(&(peer_str.clone(), device_id));
                 if let Err(e) = self
                     .signal_service
                     .actor
@@ -3827,6 +3857,15 @@ mod tests {
             lacking().await.is_empty(),
             "every device of Bob's holds it: no SKDM"
         );
+
+        // §125: an added device of Bob's whose session could not be opened
+        // is retried on the next send, and reaching it clears it.
+        alice.unreached_peer_devices.lock().insert((bob.clone(), 4));
+        assert_eq!(lacking().await, vec![t.bob_id]);
+        store_session(&t.alice, t.bob_id, 4, 404).await;
+        alice.record_sender_key_holders(&channel, &bob, &reached(&[(4, 404)]));
+        assert!(alice.unreached_peer_devices.lock().is_empty());
+        assert!(lacking().await.is_empty());
 
         // Our own newly linked device 3 (no session yet), then reached.
         set_own_devices(&t.alice, &[1, 3]).await;

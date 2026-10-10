@@ -369,6 +369,14 @@ pub struct MessageService {
     /// Our own device list as the server last gave it: (fetched at, epoch
     /// nanos; device ids). See [`MessageService::is_retired_device`].
     pub(crate) own_devices: Arc<tokio::sync::Mutex<Option<(u64, std::collections::HashSet<u32>)>>>,
+    /// Peer devices announced as added whose session could not be opened then
+    /// (a transient failure): `(user, device)`. They count as lacking our
+    /// sender key, so the next group send tries again instead of waiting for
+    /// the device's own SenderKeyRequest (§125). Cleared when an SKDM reaches
+    /// the device or it is revoked. In memory: a restart falls back to that
+    /// request.
+    pub(crate) unreached_peer_devices:
+        Arc<parking_lot::Mutex<std::collections::HashSet<(String, u32)>>>,
     /// Peer devices the server refused a send to as "unknown destination
     /// device", and when. Timed, because the server reuses a removed device's
     /// id (`MAX(device_id) + 1`).
@@ -521,6 +529,9 @@ impl MessageService {
             solicited_resends,
             saved_sync_gate: Arc::new(tokio::sync::Mutex::new(())),
             own_devices: Arc::new(tokio::sync::Mutex::new(None)),
+            unreached_peer_devices: Arc::new(parking_lot::Mutex::new(
+                std::collections::HashSet::new(),
+            )),
             retired_peer_devices: Arc::new(parking_lot::Mutex::new(
                 std::collections::HashMap::new(),
             )),
