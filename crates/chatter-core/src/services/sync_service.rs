@@ -34,6 +34,7 @@ impl SyncService {
         event_bus: EventBus,
         inbound: Arc<ChannelInbound>,
         channel_events: Arc<crate::services::channel_event_service::ChannelEventService>,
+        messages: Arc<crate::services::message::MessageService>,
     ) -> Self {
         let (shutdown_tx, _shutdown_rx) = watch::channel(false);
 
@@ -45,6 +46,7 @@ impl SyncService {
             event_bus,
             inbound,
             channel_events,
+            messages,
         ));
 
         Self {

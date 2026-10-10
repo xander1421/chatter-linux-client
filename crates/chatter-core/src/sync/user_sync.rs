@@ -39,9 +39,76 @@ pub struct UserSyncResult {
     /// One of these is enough for the contacts list: the UI reloads every
     /// friend from storage when it hears `FriendAccepted`.
     pub new_friend_ids: Vec<UserId>,
+    /// Of those, the requests WE sent that the peer accepted while we were
+    /// not listening (pending → accepted). The live `FriendAccepted` path
+    /// sends them our profile key; learned here, nothing did, so the peer
+    /// kept showing "User <id>" for us (OPEN-ITEMS §119). An inserted row is
+    /// not one: the device that accepted already sent the key.
+    pub accepted_requests: Vec<UserId>,
     /// A row failed. The pass returned what it could, but `last_synced_at`
     /// was not advanced and the engine must run this step again.
     pub incomplete: bool,
+}
+
+/// Persist the friendship edge (current_user → friend) the server listed, so
+/// local-only friend queries (get_friends_local, etc.) return the same list.
+/// `false` when a write or read failed and the pass must run again.
+fn record_friend_edge(
+    user_repo: &UserRepository,
+    current_user: &UserId,
+    user_id: UserId,
+    result: &mut UserSyncResult,
+) -> bool {
+    let mut ok = true;
+    // `ListFriends` only returns accepted friendships.
+    match user_repo.get_friendship(current_user, &user_id) {
+        // A Blocked row stays blocked: the server lists blocked
+        // friends too, and the block is `sync_blocked_users`'s.
+        Ok(Some(existing)) if existing.status == FriendshipStatus::Pending => {
+            let mut updated = existing;
+            updated.status = FriendshipStatus::Accepted;
+            if let Err(e) = user_repo.update_friendship(&updated) {
+                ok = false;
+                tracing::debug!(
+                    user_id = %user_id,
+                    error = %e,
+                    "Failed to update friendship during sync"
+                );
+            } else {
+                result.new_friend_ids.push(user_id);
+                result.accepted_requests.push(user_id);
+            }
+        }
+        Ok(Some(_)) => {} // accepted or blocked, nothing to do
+        Ok(None) => {
+            let mut friendship = Friendship::new_request(*current_user, user_id);
+            friendship.status = FriendshipStatus::Accepted;
+            match user_repo.insert_friendship(&friendship) {
+                Ok(()) => {
+                    result.friendships_inserted += 1;
+                    result.new_friend_ids.push(user_id);
+                }
+                Err(e) => {
+                    ok = false;
+                    tracing::debug!(
+                        user_id = %user_id,
+                        error = %e,
+                        "Failed to insert friendship during sync"
+                    );
+                }
+            }
+        }
+        Err(e) => {
+            ok = false;
+            tracing::debug!(
+                user_id = %user_id,
+                error = %e,
+                "Failed to read existing friendship during sync"
+            );
+        }
+    }
+
+    ok
 }
 
 impl UserSync {
@@ -185,55 +252,8 @@ impl UserSync {
                     }
                 }
 
-                // Persist the friendship edge (current_user → friend) so
-                // local-only friend queries (get_friends_local, etc.) return
-                // the same list the server just handed us. `ListFriends` only
-                // returns accepted friendships.
-                match self.user_repo.get_friendship(&current_user, &user_id) {
-                    // A Blocked row stays blocked: the server lists blocked
-                    // friends too, and the block is `sync_blocked_users`'s.
-                    Ok(Some(existing)) if existing.status == FriendshipStatus::Pending => {
-                        let mut updated = existing;
-                        updated.status = FriendshipStatus::Accepted;
-                        if let Err(e) = self.user_repo.update_friendship(&updated) {
-                            had_failure = true;
-                            tracing::debug!(
-                                user_id = %user_id,
-                                error = %e,
-                                "Failed to update friendship during sync"
-                            );
-                        } else {
-                            result.new_friend_ids.push(user_id);
-                        }
-                    }
-                    Ok(Some(_)) => {} // accepted or blocked, nothing to do
-                    Ok(None) => {
-                        let mut friendship = Friendship::new_request(current_user, user_id);
-                        friendship.status = FriendshipStatus::Accepted;
-                        match self.user_repo.insert_friendship(&friendship) {
-                            Ok(()) => {
-                                result.friendships_inserted += 1;
-                                result.new_friend_ids.push(user_id);
-                            }
-                            Err(e) => {
-                                had_failure = true;
-                                tracing::debug!(
-                                    user_id = %user_id,
-                                    error = %e,
-                                    "Failed to insert friendship during sync"
-                                );
-                            }
-                        }
-                    }
-                    Err(e) => {
-                        had_failure = true;
-                        tracing::debug!(
-                            user_id = %user_id,
-                            error = %e,
-                            "Failed to read existing friendship during sync"
-                        );
-                    }
-                }
+                had_failure |=
+                    !record_friend_edge(&self.user_repo, &current_user, user_id, &mut result);
 
                 result.friends_synced += 1;
             }
@@ -403,5 +423,45 @@ impl UserSync {
     /// Get the last sync timestamp.
     pub fn last_synced_at(&self) -> Option<i64> {
         self.settings_repo.get::<i64>(SYNC_KEY).ok().flatten()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::storage::Database;
+
+    /// §119: only a request we sent that the peer accepted is reported as
+    /// owed our profile key; a row sync inserts (accepted on another of our
+    /// devices, or a newly linked device) is a new friend but not owed one.
+    #[test]
+    fn only_our_accepted_requests_are_owed_a_profile_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(Database::open(&dir.path().join("t.db"), "test_passphrase").unwrap());
+        db.run_migrations().unwrap();
+        let users = UserRepository::new(db);
+        let (me, requested, linked) = (UserId::new(), UserId::new(), UserId::new());
+        for user in [me, requested, linked] {
+            users.ensure_user_exists(&user).unwrap();
+        }
+        users
+            .insert_friendship(&Friendship::new_request(me, requested))
+            .unwrap();
+
+        let mut result = UserSyncResult::default();
+        assert!(record_friend_edge(&users, &me, requested, &mut result));
+        assert!(record_friend_edge(&users, &me, linked, &mut result));
+        assert!(record_friend_edge(&users, &me, requested, &mut result));
+
+        assert_eq!(result.new_friend_ids, vec![requested, linked]);
+        assert_eq!(result.accepted_requests, vec![requested]);
+        assert_eq!(
+            users
+                .get_friendship(&me, &requested)
+                .unwrap()
+                .unwrap()
+                .status,
+            FriendshipStatus::Accepted
+        );
     }
 }

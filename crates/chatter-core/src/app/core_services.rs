@@ -174,6 +174,7 @@ impl CoreServices {
             infra.event_bus.clone(),
             channel_inbound.clone(),
             services.channel_event_service.clone(),
+            services.message_service.clone(),
         ));
 
         Self {

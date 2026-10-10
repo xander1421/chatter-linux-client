@@ -103,6 +103,7 @@ pub struct SyncEngine {
     channel_sync: ChannelSync,
     message_sync: MessageSync,
     user_sync: UserSync,
+    messages: Arc<crate::services::message::MessageService>,
     event_bus: EventBus,
     coalescer: Coalescer,
     /// Set at the end of every cycle, including one this engine did not start
@@ -145,6 +146,7 @@ impl SyncEngine {
         event_bus: EventBus,
         inbound: Arc<ChannelInbound>,
         channel_events: Arc<crate::services::channel_event_service::ChannelEventService>,
+        messages: Arc<crate::services::message::MessageService>,
     ) -> Self {
         Self {
             channel_sync: ChannelSync::new(
@@ -155,6 +157,7 @@ impl SyncEngine {
             ),
             message_sync: MessageSync::new(grpc_pool.clone(), settings_repo.clone(), inbound),
             user_sync: UserSync::new(grpc_pool, user_repo, settings_repo.clone()),
+            messages,
             event_bus,
             coalescer: Coalescer::new(),
             needs_retry: AtomicBool::new(false),
@@ -247,6 +250,20 @@ impl SyncEngine {
                 .event_bus
                 .domain_sender()
                 .send(DomainEvent::FriendAccepted { friend_id });
+        }
+        // Our half of the profile-key handshake, as the live FriendAccepted
+        // path sends it (inbox_processor), for acceptances only sync saw.
+        for friend_id in result.users.accepted_requests.iter().copied() {
+            let messages = Arc::clone(&self.messages);
+            tokio::spawn(async move {
+                if let Err(e) = messages.send_profile_key_handshake(&friend_id).await {
+                    tracing::warn!(
+                        peer_id = %friend_id,
+                        error = %e,
+                        "Sync-learned acceptance: profile-key handshake not delivered"
+                    );
+                }
+            });
         }
 
         tracing::info!(
