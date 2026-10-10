@@ -19,6 +19,7 @@
 //! | send_to_ephemeral_mailbox | AnonymousMailboxClient | None (fire and forget) |
 //! | poll_ephemeral_mailbox | AnonymousMailboxClient | Challenge-response |
 //! | acknowledge_messages | AnonymousMailboxClient | Challenge-response |
+//! | delete_ephemeral_mailbox | AnonymousMailboxClient | Challenge-response |
 //! | get_mailbox_challenge | AnonymousMailboxClient | None |
 //! | get_blind_signature_public_key | Either | None |
 
@@ -27,7 +28,7 @@ use crate::network::grpc::transport::GrpcTransport;
 use crate::error::NetworkError;
 use crate::proto::mailbox_v1::{
     AcknowledgeMessagesRequest, AcknowledgeMessagesResponse, CreateEphemeralMailboxRequest,
-    CreateEphemeralMailboxResponse, GetBlindSignaturePublicKeyRequest,
+    CreateEphemeralMailboxResponse, DeleteEphemeralMailboxRequest, GetBlindSignaturePublicKeyRequest,
     GetBlindSignaturePublicKeyResponse, GetMailboxChallengeRequest, GetMailboxChallengeResponse,
     PollEphemeralMailboxRequest,
     PollEphemeralMailboxResponse, SendToEphemeralMailboxRequest, SendToEphemeralMailboxResponse,
@@ -210,6 +211,27 @@ impl AnonymousMailboxClient {
             .acknowledge_messages(request)
             .await
             .map(|r| r.into_inner())
+            .map_err(|s| NetworkError::from_status(&s))
+    }
+
+    /// Delete a mailbox and everything queued in it (challenge-response).
+    /// Success also when it was already gone.
+    pub async fn delete_ephemeral_mailbox(
+        &mut self,
+        public_key: Vec<u8>,
+        challenge_signature: Vec<u8>,
+        challenge: Vec<u8>,
+    ) -> Result<(), NetworkError> {
+        let request = DeleteEphemeralMailboxRequest {
+            public_key,
+            challenge_signature,
+            challenge,
+        };
+
+        self.inner
+            .delete_ephemeral_mailbox(request)
+            .await
+            .map(|_| ())
             .map_err(|s| NetworkError::from_status(&s))
     }
 }

@@ -266,6 +266,35 @@ pub mod ephemeral_mailbox_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        pub async fn delete_ephemeral_mailbox(
+            &mut self,
+            request: impl tonic::IntoRequest<super::DeleteEphemeralMailboxRequest>,
+        ) -> std::result::Result<
+            tonic::Response<super::DeleteEphemeralMailboxResponse>,
+            tonic::Status,
+        > {
+            self.inner
+                .ready()
+                .await
+                .map_err(|e| {
+                    tonic::Status::unknown(
+                        format!("Service was not ready: {}", e.into()),
+                    )
+                })?;
+            let codec = tonic_prost::ProstCodec::default();
+            let path = http::uri::PathAndQuery::from_static(
+                "/chat.v1.mailbox.EphemeralMailboxService/DeleteEphemeralMailbox",
+            );
+            let mut req = request.into_request();
+            req.extensions_mut()
+                .insert(
+                    GrpcMethod::new(
+                        "chat.v1.mailbox.EphemeralMailboxService",
+                        "DeleteEphemeralMailbox",
+                    ),
+                );
+            self.inner.unary(req, path, codec).await
+        }
         pub async fn get_blind_signature_public_key(
             &mut self,
             request: impl tonic::IntoRequest<super::GetBlindSignaturePublicKeyRequest>,

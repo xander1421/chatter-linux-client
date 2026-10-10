@@ -40,6 +40,34 @@ impl AnonDmService {
         Ok(())
     }
 
+    /// Delete one of our mailboxes on the server, proving we hold its key
+    /// (challenge-response over the secret route, like a poll).
+    pub(crate) async fn delete_server_mailbox(
+        &self,
+        mailbox: &crate::domain::anon_dm::AnonDmMailbox,
+    ) -> Result<(), AnonDmError> {
+        use ed25519_dalek::{Signer, SigningKey};
+
+        let net = |e: crate::error::NetworkError| AnonDmError::MessageError(e.to_string());
+        let mut client = self.grpc_pool.secret_mailbox_client().map_err(net)?;
+        let challenge = client
+            .get_mailbox_challenge(mailbox.public_key.to_vec())
+            .await
+            .map_err(net)?
+            .challenge;
+        let signature = SigningKey::from_keypair_bytes(&mailbox.private_key)
+            .map_err(|e| AnonDmError::CryptoError(e.to_string()))?
+            .sign(&challenge);
+        client
+            .delete_ephemeral_mailbox(
+                mailbox.public_key.to_vec(),
+                signature.to_bytes().to_vec(),
+                challenge,
+            )
+            .await
+            .map_err(net)
+    }
+
     /// Claim a token from the pre-fetched batch (`claim_prefetched_token`).
     ///
     /// Never requests tokens: an empty batch fails the send rather than

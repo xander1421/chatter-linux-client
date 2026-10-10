@@ -69,7 +69,7 @@ impl AnonDmService {
         }
         .await;
         if let Err(e) = sent {
-            self.discard_if_unsent(&dm.id);
+            self.discard_if_unsent(&dm.id).await;
             return Err(e);
         }
 
@@ -82,18 +82,28 @@ impl AnonDmService {
 
     /// After a failed start: drop the conversation if its request provably
     /// never left this device (failed before the send RPC), so nothing
-    /// half-made is left behind. A request that may have left stays, with its
-    /// uncertain delivery, exactly as it is.
-    fn discard_if_unsent(&self, id: &AnonDmId) {
+    /// half-made is left behind, its server mailbox included: no peer ever
+    /// learned that mailbox's key, so nothing will arrive there. A request
+    /// that may have left stays, with its uncertain delivery and the mailbox
+    /// a reply would land in, exactly as it is.
+    async fn discard_if_unsent(&self, id: &AnonDmId) {
         let unsent = matches!(
             self.anon_dm_repo.get_conversation(id),
             Ok(Some(dm)) if dm.is_unsent_request()
         );
-        if unsent {
-            let _ = self.anon_dm_repo.delete_mailbox(id);
-            if let Err(e) = self.anon_dm_repo.delete_conversation(id) {
-                tracing::warn!(error = %e, "could not discard an unsent secret-chat request");
-            }
+        if !unsent {
+            return;
+        }
+        let mailbox = self.anon_dm_repo.get_mailbox(id).ok().flatten();
+        let _ = self.anon_dm_repo.delete_mailbox(id);
+        if let Err(e) = self.anon_dm_repo.delete_conversation(id) {
+            tracing::warn!(error = %e, "could not discard an unsent secret-chat request");
+        }
+        if let Some(mailbox) = mailbox
+            && let Err(e) = self.delete_server_mailbox(&mailbox).await
+        {
+            // Best effort: the server's TTL removes it anyway.
+            tracing::warn!(error = %e, "could not delete an unused secret-chat mailbox");
         }
     }
 
@@ -175,7 +185,7 @@ impl AnonDmService {
         }
         .await;
         if let Err(e) = sent {
-            self.discard_if_unsent(&dm.id);
+            self.discard_if_unsent(&dm.id).await;
             return Err(e);
         }
 
@@ -409,7 +419,7 @@ mod tests {
                 .is_unsent_request()
         );
         svc.anon_dm_repo.mark_request_submitted(&dm.id).unwrap();
-        svc.discard_if_unsent(&dm.id);
+        svc.discard_if_unsent(&dm.id).await;
         let kept = svc.anon_dm_repo.get_conversation(&dm.id).unwrap().unwrap();
         assert!(kept.request_submitted && !kept.is_unsent_request());
     }
