@@ -12,8 +12,10 @@
 //! | `name_only`        | "Alice"             | "New message"       | Sender identity |
 //! | `name_and_message` | "Alice"             | "hey are you free?" | Sender + content|
 //!
-//! For sealed sender / anonymous messages, sender is NEVER shown regardless of
-//! detail level — that would defeat the protocol's privacy guarantees.
+//! For sealed sender messages and anything in a secret chat (anonymous DM or
+//! group) — messages and reactions alike — the notification is always the
+//! generic one: no sender, no text, no emoji, whatever the detail level. See
+//! [`is_private_notification`].
 
 use std::sync::Arc;
 
@@ -98,19 +100,20 @@ impl NotificationService {
     /// Show `conversation_id`'s notification for an incoming message,
     /// replacing the conversation's earlier one.
     ///
-    /// Respects privacy settings and sealed sender status.
+    /// Respects privacy settings; `private` (see [`is_private_notification`])
+    /// forces the generic notification at every level.
     pub fn show_message_notification(
         &self,
         conversation_id: &crate::domain::ids::ChannelId,
         sender_name: Option<&str>,
         message_preview: Option<&str>,
-        is_sealed_sender: bool,
+        private: bool,
         priority: NotificationPriority,
     ) -> Result<(), SystemError> {
         let level = self.detail_level();
 
-        let (title, body) = match (level, is_sealed_sender) {
-            // Sealed sender: NEVER show sender, regardless of setting
+        let (title, body) = match (level, private) {
+            // Sealed sender / secret chat: nothing but "New message", ever
             (_, true) => ("Chatter".to_string(), "New message".to_string()),
             // None: maximum privacy
             (NotificationDetailLevel::None, false) => {
@@ -317,7 +320,7 @@ pub fn spawn_notification_listener(
                         &message.conversation_id,
                         sender_name.as_deref(),
                         preview,
-                        message.is_sealed_sender(),
+                        is_private_notification(message),
                         NotificationPriority::Normal,
                     );
                 }
@@ -355,7 +358,8 @@ pub fn spawn_notification_listener(
                         &target.conversation_id,
                         None,
                         Some(&format!("Reacted {}", emoji)),
-                        false,
+                        // The reaction lives in the target's conversation.
+                        is_private_notification(&target),
                         NotificationPriority::Low,
                     );
                 }
@@ -458,6 +462,14 @@ fn should_notify_message(
             message.content,
             crate::domain::message::MessageContent::Call(_)
         )
+}
+
+/// Whether a notification about `message` (or a reaction to it) must be the
+/// generic one at every detail level. A secret chat stores decoded Text/Mixed
+/// with a sender, so sealed content alone would miss it: the conversation
+/// type decides.
+fn is_private_notification(message: &crate::domain::message::Message) -> bool {
+    message.is_sealed_sender() || message.conversation_type.is_secret_chat()
 }
 
 /// `(on_screen, muted)` for the conversation `message` belongs to. On screen
@@ -614,10 +626,34 @@ mod tests {
             shown(NotificationDetailLevel::None, false),
             pair("Chatter", "New message")
         );
-        assert_eq!(
-            shown(NotificationDetailLevel::NameAndMessage, true),
-            pair("Chatter", "New message")
-        );
+        // Private (sealed / secret chat): generic at every level.
+        for level in [
+            NotificationDetailLevel::None,
+            NotificationDetailLevel::NameOnly,
+            NotificationDetailLevel::NameAndMessage,
+        ] {
+            assert_eq!(shown(level, true), pair("Chatter", "New message"));
+        }
+    }
+
+    /// Secret chats store decoded Text/Mixed with a sender, so the
+    /// conversation type — not sealed content — must mark them private.
+    /// The reaction path classifies its target message the same way.
+    #[test]
+    fn secret_chat_messages_and_reaction_targets_are_private() {
+        use crate::domain::ids::{ChannelId, UserId};
+        use crate::domain::message::{ConversationType, Message, MessageContent, MixedContent};
+
+        let msg = |ct| Message::new_text(ChannelId::new(), ct, Some(UserId::new()), "hi".into(), 1);
+        for ct in [ConversationType::AnonDm, ConversationType::AnonGroup] {
+            let text = msg(ct.clone());
+            assert!(is_private_notification(&text), "{ct:?} text");
+            let mut mixed = msg(ct.clone());
+            mixed.content = MessageContent::Mixed(MixedContent::text_only("hi".into()));
+            assert!(is_private_notification(&mixed), "{ct:?} mixed");
+        }
+        assert!(!is_private_notification(&msg(ConversationType::ServerDm)));
+        assert!(!is_private_notification(&msg(ConversationType::Channel)));
     }
 
     /// A panicking sink is one failed notification, not a dead caller loop.
