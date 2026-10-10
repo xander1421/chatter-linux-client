@@ -318,5 +318,6 @@ fn selection_scope_requires_eligibility_and_confirmation_in_both_themes() {
         w.get_selection_mode(),
         "rejected deletion keeps the selection"
     );
-    assert!(w.get_toast_message().contains("can no longer"));
+    // A vanished row is reported as such (650b5754), before any scope check.
+    assert!(w.get_toast_message().contains("no longer available"));
 }

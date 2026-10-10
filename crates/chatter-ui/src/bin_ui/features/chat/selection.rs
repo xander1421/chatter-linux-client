@@ -112,6 +112,8 @@ fn delete_selection(
         return;
     }
     let Some(targets) = selected_targets(w, &selected_ids.borrow()) else {
+        // A row is gone: the scope offered for it is stale too.
+        refresh_delete_everyone(w, ui_ctx, &selected_ids.borrow());
         w.set_toast_message("The selected messages are no longer available.".into());
         w.set_toast_visible(true);
         return;
