@@ -222,8 +222,10 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
         composer_src
             .matches("border-radius: Spacing.radius-chrome-inner;")
             .count(),
-        4,
-        "field, emoji, attach and send are concentric with the shell"
+        7,
+        "field, emoji, attach and send are concentric with the shell, and so \
+         are the reply chip's cancel (649b152a) and the attachment tray's remove \
+         and add-more boxes (ae492dbb)"
     );
     w.set_modal_stack(slint::ModelRc::new(slint::VecModel::from(Vec::<
         slint::SharedString,
