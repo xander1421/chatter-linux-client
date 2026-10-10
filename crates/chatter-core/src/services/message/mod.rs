@@ -1188,45 +1188,6 @@ impl MessageService {
         Ok(target)
     }
 
-    /// Add or remove a reaction on a message and persist to DB.
-    pub fn update_reaction(
-        &self,
-        message_id: &crate::domain::ids::MessageId,
-        emoji: &str,
-        add: bool,
-    ) -> Result<(), MessageError> {
-        if let Some(mut message) = self.message_repo.get(message_id)? {
-            if add {
-                if let Some(rc) = message
-                    .reaction_counts
-                    .iter_mut()
-                    .find(|r| r.emoji == emoji)
-                {
-                    rc.count += 1;
-                } else {
-                    message
-                        .reaction_counts
-                        .push(crate::domain::message::ReactionCount {
-                            emoji: emoji.to_string(),
-                            count: 1,
-                        });
-                }
-            } else {
-                if let Some(rc) = message
-                    .reaction_counts
-                    .iter_mut()
-                    .find(|r| r.emoji == emoji)
-                {
-                    rc.count = rc.count.saturating_sub(1);
-                }
-                message.reaction_counts.retain(|r| r.count > 0);
-            }
-            message.updated_at = chrono::Utc::now();
-            self.message_repo.update(&message)?;
-        }
-        Ok(())
-    }
-
     /// Update delivery status for a message by sent_at timestamp.
     ///
     /// Used when receipts (delivered/read) are received.

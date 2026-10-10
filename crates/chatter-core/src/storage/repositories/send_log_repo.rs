@@ -1,6 +1,7 @@
 //! Message send log: the exact plaintext `Content` bytes of every resendable
-//! 1:1 deposit, so a device that could not decrypt one can have those bytes
-//! again (migration v078).
+//! pairwise deposit — a 1:1 DM, or a channel's reaction/edit/delete/pin
+//! fanned out per device — so a device that could not decrypt one can have
+//! those bytes again (migration v078).
 //!
 //! Signal-Desktop's MSL (`ts/sql/Server.node.ts` `sendLogPayloads` /
 //! `sendLogRecipients`, read by `ts/util/handleRetry.preload.ts`
@@ -40,20 +41,20 @@ impl SendLogRepository {
         Self { db }
     }
 
-    /// Log `content` as deposited for `peer` on each of `deposits`
-    /// (`(device, server timestamp in epoch nanos)`), resendable until
-    /// `expires_at` (epoch nanos). Drops what has expired and what is over
-    /// [`MAX_PAYLOADS`] in the same transaction.
+    /// Log `content` as deposited on each of `recipients`
+    /// (`(peer, device, server timestamp in epoch nanos)`): one payload, one
+    /// recipient row per device, as Signal's MSL keeps a fan-out. Resendable
+    /// until `expires_at` (epoch nanos). Drops what has expired and what is
+    /// over [`MAX_PAYLOADS`] in the same transaction.
     pub fn record(
         &self,
-        peer: &UserId,
         content: &[u8],
         message_ts: Option<u64>,
         now: u64,
         expires_at: u64,
-        deposits: &[(u32, u64)],
+        recipients: &[(UserId, u32, u64)],
     ) -> Result<(), StorageError> {
-        if deposits.is_empty() {
+        if recipients.is_empty() {
             return Ok(());
         }
         let conn = self.db.connection()?;
@@ -63,11 +64,11 @@ impl SendLogRepository {
             params![content, message_ts.map(|t| t as i64), expires_at as i64],
         )?;
         let payload_id = tx.last_insert_rowid();
-        for &(device, server_ts_ns) in deposits {
+        for (peer, device, server_ts_ns) in recipients {
             tx.execute(
                 "INSERT OR REPLACE INTO send_log_recipients (payload_id, peer_id, device_id, server_ts_ms)
                  VALUES (?1, ?2, ?3, ?4)",
-                params![payload_id, peer.to_string(), device as i64, (server_ts_ns / 1_000_000) as i64],
+                params![payload_id, peer.to_string(), *device as i64, (server_ts_ns / 1_000_000) as i64],
             )?;
         }
         Self::prune(&tx, now)?;
@@ -161,12 +162,11 @@ mod tests {
         let (peer, other) = (UserId::new(), UserId::new());
         let now = 1_000_000_000_000;
         log.record(
-            &peer,
             b"bytes",
             Some(7),
             now,
             now + 10,
-            &[(1, 5_000_000), (2, 6_000_000)],
+            &[(peer, 1, 5_000_000), (peer, 2, 6_000_000)],
         )
         .unwrap();
 
@@ -207,7 +207,7 @@ mod tests {
         let (_dir, log) = repo();
         let peer = UserId::new();
         let now = 1_000_000_000_000;
-        log.record(&peer, b"old", None, now, now + 5, &[(1, 1_000_000)])
+        log.record(b"old", None, now, now + 5, &[(peer, 1, 1_000_000)])
             .unwrap();
         assert_eq!(
             log.take(&peer, 1, 1, now + 5).unwrap(),
@@ -217,12 +217,11 @@ mod tests {
 
         for i in 0..=MAX_PAYLOADS as u64 {
             log.record(
-                &peer,
                 b"m",
                 None,
                 now,
                 now + 100,
-                &[(1, (i + 10) * 1_000_000)],
+                &[(peer, 1, (i + 10) * 1_000_000)],
             )
             .unwrap();
         }

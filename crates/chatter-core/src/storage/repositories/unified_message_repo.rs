@@ -590,33 +590,37 @@ impl UnifiedMessageRepository {
     /// upserts (channel backfill, thread/pin/saved fetches) rebuild the
     /// message without it, and replacing it here wiped the quote from a
     /// stored reply after restart (OPEN-ITEMS §112l).
+    ///
+    /// The reaction projections (`reaction_counts_blob`,
+    /// `current_user_reactions_blob`) are not written here either: they are a
+    /// cache of `unified_reactions`, rebuilt only by the reaction writers
+    /// (`rebuild_reaction_blobs_with_conn`). Writing them from `message` put
+    /// back whatever the caller held — a row read before a reaction landed,
+    /// or a server proto with no reactions at all — and that drift then
+    /// survived every reload (OPEN-ITEMS §112w).
     pub fn update(&self, message: &Message) -> Result<(), StorageError> {
         let is_read = self.stored_is_read(message);
         let conn = self.db.connection()?;
         let content_json = serde_json::to_string(&message.content)
             .map_err(|e| StorageError::InvalidData(format!("serialize content: {}", e)))?;
         let attachments_blob = db_serialize(&message.attachments)?;
-        let reaction_counts_blob = db_serialize(&message.reaction_counts)?;
-        let current_user_reactions_blob = db_serialize(&message.current_user_reactions)?;
         let mentioned_integrations_blob = db_serialize(&message.mentioned_integrations)?;
 
         let rows = conn.execute(
             "UPDATE messages SET
                 content_type = ?1, content_json = ?2, encrypted_content = ?3,
                 thread_id = ?4, reply_to = COALESCE(?5, reply_to), attachments_blob = ?6,
-                pinned_at = CASE WHEN ?7 = 0 THEN NULL WHEN is_pinned = 0 THEN ?24 ELSE pinned_at END,
+                pinned_at = CASE WHEN ?7 = 0 THEN NULL WHEN is_pinned = 0 THEN ?22 ELSE pinned_at END,
                 is_pinned = ?7, is_edited = ?8, is_deleted = ?9, is_read = ?10,
                 updated_at = ?11, edited_at = ?12,
-                reaction_counts_blob = ?13,
-                current_user_reactions_blob = ?14,
-                mentioned_integrations_blob = ?15, targets_ai_bot = ?16,
-                delivery_status = ?17,
-                reply_to_author_id = COALESCE(?18, reply_to_author_id),
-                reply_to_text = COALESCE(?19, reply_to_text),
-                reply_to_thumbnail = COALESCE(?20, reply_to_thumbnail),
-                reply_to_thumbnail_mime = COALESCE(?21, reply_to_thumbnail_mime),
-                failure_reason = ?22
-             WHERE id = ?23",
+                mentioned_integrations_blob = ?13, targets_ai_bot = ?14,
+                delivery_status = ?15,
+                reply_to_author_id = COALESCE(?16, reply_to_author_id),
+                reply_to_text = COALESCE(?17, reply_to_text),
+                reply_to_thumbnail = COALESCE(?18, reply_to_thumbnail),
+                reply_to_thumbnail_mime = COALESCE(?19, reply_to_thumbnail_mime),
+                failure_reason = ?20
+             WHERE id = ?21",
             params![
                 content_type_discriminant(&message.content),
                 content_json,
@@ -630,8 +634,6 @@ impl UnifiedMessageRepository {
                 is_read as i32,
                 message.updated_at.to_rfc3339(),
                 message.edited_at.map(|dt| dt.to_rfc3339()),
-                reaction_counts_blob,
-                current_user_reactions_blob,
                 mentioned_integrations_blob,
                 message.targets_ai_bot as i32,
                 &message.delivery_status,
@@ -3274,6 +3276,59 @@ mod tests {
                 2
             );
         }
+    }
+
+    /// §112w: a row read before a reaction landed (or rebuilt from a server
+    /// proto with no reactions) and written back with `update` must not put
+    /// its stale counts over the vote table; what a reload reads stays the
+    /// authoritative count.
+    #[test]
+    fn update_with_a_stale_row_keeps_the_reaction_projection() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(Database::open(&dir.path().join("stale.db"), "testpass").unwrap());
+        db.run_migrations().unwrap();
+        let repo = UnifiedMessageRepository::new(db);
+        let (me, peer, author) = (UserId::new(), UserId::new(), UserId::new());
+        let msg = Message::new_text(
+            ChannelId::new(),
+            ConversationType::Channel,
+            Some(author),
+            "hi".into(),
+            100,
+        );
+        repo.insert(&msg).unwrap();
+        let scope = ReactionScope::of(&msg);
+        let mut stale = repo.get(&msg.id).unwrap().unwrap();
+        repo.add_reaction_at(&scope, &author, 100, &me, &me, "👍", 10)
+            .unwrap();
+        repo.add_reaction_at(&scope, &author, 100, &peer, &me, "👍", 11)
+            .unwrap();
+
+        // Drifted the other way too: a caller holding inflated counts.
+        stale.reaction_counts = vec![ReactionCount::new("👍".into(), 7)];
+        stale.is_pinned = true;
+        repo.update(&stale).unwrap();
+        let stored = repo.get(&msg.id).unwrap().unwrap();
+        assert!(stored.is_pinned, "the update itself applied");
+        assert_eq!(
+            stored.reaction_counts,
+            vec![ReactionCount::new("👍".into(), 2)]
+        );
+        assert_eq!(stored.current_user_reactions, vec!["👍"]);
+
+        // An emptied row (server proto) does not wipe them either.
+        let mut emptied = stored.clone();
+        emptied.reaction_counts.clear();
+        emptied.current_user_reactions.clear();
+        repo.update(&emptied).unwrap();
+        repo.remove_reaction_at(&scope, &author, 100, &me, &me, "👍", 20)
+            .unwrap();
+        let stored = repo.get(&msg.id).unwrap().unwrap();
+        assert_eq!(
+            stored.reaction_counts,
+            vec![ReactionCount::new("👍".into(), 1)]
+        );
+        assert!(stored.current_user_reactions.is_empty());
     }
 
     #[test]

@@ -91,22 +91,40 @@ impl MessageService {
     /// nanos)` per device reached. The bytes logged are the ones every one of
     /// those devices was sent (`encode_to_vec` of this same `content`).
     pub(crate) fn record_dm_send(&self, peer: UserId, content: &Content, deposits: &[(u32, u64)]) {
+        let recipients: Vec<_> = deposits
+            .iter()
+            .map(|&(device, server_ts)| (peer, device, server_ts))
+            .collect();
+        self.record_pairwise_send(content, &recipients);
+    }
+
+    /// Log `content` as deposited on every `(peer, device, server timestamp
+    /// in epoch nanos)` of `recipients`, as one payload: a channel's control
+    /// content (reaction, edit, delete, pin) is fanned out pairwise to each
+    /// member device (`fanout_control_to_device_inboxes`), so a member device
+    /// that cannot decrypt it reports it the same way a DM recipient does and
+    /// is answered from here (OPEN-ITEMS §5).
+    pub(crate) fn record_pairwise_send(
+        &self,
+        content: &Content,
+        recipients: &[(UserId, u32, u64)],
+    ) {
         let Some(message_ts) = loggable(content) else {
             return;
         };
-        if deposits.is_empty() {
+        if recipients.is_empty() {
             return;
         }
         let now = TimestampNanos::now().as_u64();
         if let Err(e) = self.send_log().record(
-            &peer,
             &content.encode_to_vec(),
             message_ts,
             now,
             expires_at(content, now),
-            deposits,
+            recipients,
         ) {
-            tracing::warn!(%peer, error = %e, "Could not log a DM send; a retry request for it gets a NullMessage");
+            tracing::warn!(error = %e, recipients = recipients.len(),
+                "Could not log a pairwise send; a retry request for it gets a NullMessage");
         }
     }
 
@@ -351,6 +369,73 @@ mod tests {
         assert!(is_null_message(
             &m.dm_resend_plaintext(&bob, 1, 10).unwrap()
         ));
+    }
+
+    /// §5: a channel's control content goes to every member device pairwise
+    /// and is logged as one payload; each member device's report gets the
+    /// exact bytes back, once — a delete even after its target is gone, an
+    /// edit only while its target is still ours.
+    #[tokio::test]
+    async fn channel_control_fanout_is_resent_to_each_member_device() {
+        let (_dir, alice, alice_id) = client();
+        let m = alice.messages();
+        let (bob, carol) = (UserId::new(), UserId::new());
+        let channel = crate::domain::ids::ChannelId::new();
+        let sent_at = TimestampNanos::now().as_u64();
+        let message = Message::new_text(
+            channel,
+            ConversationType::Channel,
+            Some(alice_id),
+            "ours".into(),
+            sent_at,
+        );
+        m.message_repo.insert_outgoing(&message).unwrap();
+
+        let cid = channel.to_string();
+        let alice_aci = alice_id.to_string();
+        let delete = crate::services::gateway::builders::build_targeted_delete_content(
+            sent_at,
+            Some(&alice_aci),
+            Some(&cid),
+        );
+        let edit = crate::services::gateway::builders::build_edit_content_with_channel(
+            sent_at,
+            "ours, edited",
+            Some(&cid),
+        );
+        m.record_pairwise_send(&edit, &[(bob, 1, 20_000_000), (carol, 3, 21_000_000)]);
+        m.record_pairwise_send(
+            &delete,
+            &[
+                (bob, 1, 30_000_000),
+                (carol, 3, 31_000_000),
+                (alice_id, 2, 32_000_000),
+            ],
+        );
+
+        assert_eq!(
+            m.dm_resend_plaintext(&bob, 1, 20).unwrap(),
+            Resend::Original(edit.encode_to_vec())
+        );
+        assert!(
+            is_null_message(&m.dm_resend_plaintext(&carol, 1, 21).unwrap()),
+            "carol's deposit went to her device 3"
+        );
+
+        m.message_repo.delete(&message.id).unwrap();
+        assert!(
+            is_null_message(&m.dm_resend_plaintext(&carol, 3, 21).unwrap()),
+            "an edit of a message deleted since is not repeated"
+        );
+        for (who, device, ms) in [(bob, 1, 30), (carol, 3, 31), (alice_id, 2, 32)] {
+            assert_eq!(
+                m.dm_resend_plaintext(&who, device, ms).unwrap(),
+                Resend::Original(delete.encode_to_vec())
+            );
+            assert!(is_null_message(
+                &m.dm_resend_plaintext(&who, device, ms).unwrap()
+            ));
+        }
     }
 
     #[tokio::test]

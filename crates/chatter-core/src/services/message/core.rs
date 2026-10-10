@@ -724,12 +724,9 @@ impl MessageService {
         content: crate::proto::content_v1::Content,
         _group_fanout: Option<&GroupFanout>,
     ) -> Result<(), MessageError> {
-        use prost::Message as ProstMessage;
-
         let _ = self.settings_repo.current_user_id()?;
 
-        let plaintext = content.encode_to_vec();
-        self.fanout_control_to_device_inboxes(auth_client, channel_id, &plaintext)
+        self.fanout_control_to_device_inboxes(auth_client, channel_id, &content)
             .await
     }
 
@@ -762,13 +759,18 @@ impl MessageService {
     ///
     /// Skips our own current device (we already applied the change locally)
     /// but fans to our own linked devices for Signal-style multi-device sync.
+    ///
+    /// Every deposit is logged in the send log, so a member device that
+    /// cannot decrypt its copy gets these exact bytes again on its
+    /// `DecryptionErrorMessage` (`dm_resend.rs`, OPEN-ITEMS §5).
     async fn fanout_control_to_device_inboxes(
         &self,
         auth_client: &mut AuthClient,
         channel_id: &ChannelId,
-        plaintext: &[u8],
+        content: &crate::proto::content_v1::Content,
     ) -> Result<(), MessageError> {
         use crate::storage::repositories::settings_repo::keys;
+        use prost::Message as _;
 
         let our_user_id = self
             .settings_repo
@@ -796,9 +798,11 @@ impl MessageService {
             return Ok(());
         }
 
+        let plaintext = content.encode_to_vec();
         let mut message_client = self.message_client();
         let mut success = 0usize;
         let mut errors = 0u32;
+        let mut deposits = Vec::new();
 
         for member_uid in &members {
             let member_id = member_uid.to_string();
@@ -809,14 +813,22 @@ impl MessageService {
                     auth_client,
                     &mut message_client,
                     &member_id,
-                    plaintext,
+                    &plaintext,
                 )
                 .await;
+            deposits.extend(
+                outcome
+                    .deposits
+                    .iter()
+                    .map(|&(device, server_ts)| (*member_uid, device, server_ts)),
+            );
             success += outcome.delivered;
             if outcome.delivered == 0 && !is_self {
                 errors += 1;
             }
         }
+
+        self.record_pairwise_send(content, &deposits);
 
         tracing::debug!(
             channel_id = %channel_id,

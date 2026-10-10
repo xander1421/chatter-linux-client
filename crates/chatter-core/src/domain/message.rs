@@ -572,27 +572,6 @@ impl ReactionCount {
         Self { emoji, count }
     }
 
-    /// Apply an add/remove to an aggregate reaction-counts vec in place.
-    ///
-    /// - `remove=false`: increment (or insert at count=1).
-    /// - `remove=true`: decrement; drop the entry when the count reaches 0.
-    ///
-    /// Used by the UI to keep a message's `reaction_counts` in sync with
-    /// inbound reaction events without round-tripping through a presentation
-    /// string.
-    pub fn apply(counts: &mut Vec<ReactionCount>, emoji: &str, remove: bool) {
-        if let Some(existing) = counts.iter_mut().find(|r| r.emoji == emoji) {
-            if remove {
-                existing.count = existing.count.saturating_sub(1);
-            } else {
-                existing.count = existing.count.saturating_add(1);
-            }
-        } else if !remove {
-            counts.push(ReactionCount::new(emoji.to_string(), 1));
-        }
-        counts.retain(|r| r.count > 0);
-    }
-
     /// Format an aggregate reaction-counts vec as a compact summary string
     /// (e.g. "👍 3  ❤️ 2"). Used for accessibility labels only — never for
     /// round-tripping state.
