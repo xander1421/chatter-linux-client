@@ -124,10 +124,8 @@ pub enum DmContent {
         /// `gateway/mod.rs`, which already carries this through.
         thread_id: Option<String>,
         /// The ttl this message was sent under (`DataMessage
-        /// .ephemeral_ttl_seconds`, `0` = off). `None` when the payload could
-        /// not carry one (the legacy fallbacks), which must not be read as
-        /// "off".
-        expire_timer: Option<u32>,
+        /// .ephemeral_ttl_seconds`, `0` = off).
+        expire_timer: u32,
         /// Conversation configuration, including its version and absolute
         /// activation window. Independent of this message's actual TTL.
         stated_timer: Option<crate::services::disappearing::DmTimer>,

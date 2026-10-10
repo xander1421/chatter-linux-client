@@ -4,6 +4,18 @@ pub(super) fn tag(call_id: &str) -> String {
     format!("chatter.call:{call_id}")
 }
 
+/// A stable request code. Full call/action categories also participate in
+/// PendingIntent identity, so a hash collision cannot retarget another call.
+pub(super) fn request_code(call_id: &str) -> i32 {
+    // FNV-1a → positive i32. Stable across show/cancel for the same call_id.
+    let mut h: u32 = 2166136261;
+    for b in call_id.as_bytes() {
+        h ^= *b as u32;
+        h = h.wrapping_mul(16777619);
+    }
+    (h & 0x7fff_ffff) as i32
+}
+
 pub(super) fn category(call_id: &str, action: &str) -> String {
     // Call ids are authenticated UUIDs; delimiters cannot occur in them.
     format!("com.chatter.client.call.{call_id}:{action}")
@@ -14,26 +26,18 @@ mod tests {
     use super::*;
     use std::collections::HashMap;
 
-    fn legacy_hash(call_id: &str) -> i32 {
-        let mut h = 2166136261u32;
-        for b in call_id.bytes() {
-            h = (h ^ u32::from(b)).wrapping_mul(16777619);
-        }
-        (h & 0x7fff_ffff) as i32
-    }
-
     #[test]
     fn colliding_request_codes_cannot_replace_or_cancel_other_call() {
         let a = "2165ee0a-3f69-8e4c-8d5d-80b00d8a46f5";
         let b = "345cffa2-e803-f012-23c8-54256d598597";
-        assert_eq!(legacy_hash(a), legacy_hash(b));
+        assert_eq!(request_code(a), request_code(b));
 
         // Android NotificationManager keys by (tag, id), including cancel.
         let mut notifications = HashMap::new();
-        notifications.insert((tag(a), legacy_hash(a)), a);
-        notifications.insert((tag(b), legacy_hash(b)), b);
+        notifications.insert((tag(a), request_code(a)), a);
+        notifications.insert((tag(b), request_code(b)), b);
         assert_eq!(notifications.len(), 2);
-        notifications.remove(&(tag(a), legacy_hash(a)));
+        notifications.remove(&(tag(a), request_code(a)));
         assert_eq!(notifications.values().copied().collect::<Vec<_>>(), [b]);
 
         // Intent extras are ignored by PendingIntent identity. Even with

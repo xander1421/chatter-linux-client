@@ -317,7 +317,7 @@ pub async fn poll_dm_mailboxes(
                                 let disappearing = match &dm_content {
                                     DmContent::Text {
                                         stated_timer,
-                                        expire_timer: Some(ttl),
+                                        expire_timer: ttl,
                                         timer_update,
                                         body,
                                         attachments,
@@ -1446,7 +1446,7 @@ mod tests {
             profile_key: None,
             quote: None,
             thread_id: None,
-            expire_timer: None,
+            expire_timer: 0,
             stated_timer: None,
             timer_update: false,
         };

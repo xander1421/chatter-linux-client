@@ -920,7 +920,7 @@ impl MessageGateway {
                     });
                 }
 
-                let expire_timer = Some(crate::services::disappearing::message_ttl(&msg));
+                let expire_timer = crate::services::disappearing::message_ttl(&msg);
                 let stated_timer = crate::services::disappearing::stated_timer(&msg);
                 let timer_update = crate::services::disappearing::is_timer_update(&msg);
                 // Extract profile key if present (32 bytes for display_name decryption)

@@ -73,18 +73,6 @@ const FLAG_IMMUTABLE: i32 = 0x0400_0000; // 67108864
 const IC_CALL: i32 = 17301507; // ic_menu_call
 const IC_CLOSE: i32 = 17301560; // ic_menu_close_clear_cancel
 
-/// A stable request code. Full call/action categories also participate in
-/// PendingIntent identity, so a hash collision cannot retarget another call.
-fn call_notification_id(call_id: &str) -> i32 {
-    // FNV-1a → positive i32. Stable across show/cancel for the same call_id.
-    let mut h: u32 = 2166136261;
-    for b in call_id.as_bytes() {
-        h ^= *b as u32;
-        h = h.wrapping_mul(16777619);
-    }
-    (h & 0x7fff_ffff) as i32
-}
-
 pub struct AndroidNotifications {
     channel_initialized: AtomicBool,
     calls_channel_initialized: AtomicBool,
@@ -259,7 +247,7 @@ impl AndroidNotifications {
             chatter_core::services::call_worker::RING_TIMEOUT,
         );
 
-        let id = call_notification_id(call_id);
+        let id = call_identity::request_code(call_id);
         let mut env = get_jni_env()?;
         let context = get_app_context(&mut env)?;
 
@@ -451,7 +439,7 @@ impl AndroidNotifications {
     }
 
     fn cancel_call_platform(&self, call_id: &str) -> Result<(), SystemError> {
-        let id = call_notification_id(call_id);
+        let id = call_identity::request_code(call_id);
         let mut env = get_jni_env()?;
         let context = get_app_context(&mut env)?;
         let manager = get_notification_manager(&mut env, &context)?;

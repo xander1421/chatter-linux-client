@@ -1486,14 +1486,6 @@ impl UserService {
         Ok(format!("chatter://connect/{}", current_user))
     }
 
-    /// Generate a friend code as plain text (for copying).
-    ///
-    /// Format: `{user_id}` (just the UUID, no URL scheme)
-    pub fn generate_friend_code_plain(&self) -> Result<String, UserError> {
-        let current_user = self.settings_repo.current_user_id()?;
-        Ok(current_user.to_string())
-    }
-
     /// Generate a QR code image (PNG) containing the friend code URL.
     ///
     /// Returns PNG image bytes that can be displayed in the UI.

@@ -81,42 +81,6 @@ impl SearchIndex {
 
         Ok(results)
     }
-
-    /// Reindex all existing messages (for migration or repair).
-    ///
-    /// Clears the FTS table and reinserts from the messages table.
-    /// Returns the number of messages indexed.
-    pub fn reindex_all(&self) -> Result<u64, StorageError> {
-        let conn = self.db.connection()?;
-
-        // Clear existing FTS data
-        conn.execute("DELETE FROM messages_fts", [])?;
-
-        // Reindex all searchable messages (content_type 0, 5, 6)
-        let count = conn.execute(
-            "INSERT INTO messages_fts(message_id, conversation_id, content)
-             SELECT
-                 id,
-                 conversation_id,
-                 CASE content_type
-                     WHEN 0 THEN json_extract(content_json, '$.Text')
-                     WHEN 5 THEN json_extract(content_json, '$.AI.text')
-                     WHEN 6 THEN json_extract(content_json, '$.Mixed.text')
-                 END
-             FROM messages
-             WHERE content_type IN (0, 5, 6)
-               AND COALESCE(
-                   CASE content_type
-                       WHEN 0 THEN json_extract(content_json, '$.Text')
-                       WHEN 5 THEN json_extract(content_json, '$.AI.text')
-                       WHEN 6 THEN json_extract(content_json, '$.Mixed.text')
-                   END, ''
-               ) != ''",
-            [],
-        )?;
-
-        Ok(count as u64)
-    }
 }
 
 /// Escape special FTS5 query characters.
@@ -224,9 +188,6 @@ mod tests {
         );
         repo.insert(&msg2).unwrap();
 
-        // Reindex just in case triggers didn't fire (though they should)
-        index.reindex_all().unwrap();
-
         // Search for "hello"
         let results = index.search("hello", None, 10).unwrap();
         assert_eq!(results.len(), 1);
@@ -264,8 +225,6 @@ mod tests {
             0,
         ))
         .unwrap();
-
-        index.reindex_all().unwrap();
 
         // Search for "quick brown"
         let results = index.search("quick brown", None, 10).unwrap();
