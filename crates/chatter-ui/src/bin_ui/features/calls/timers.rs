@@ -83,7 +83,6 @@ where
     let presentation = window.get_active_call_data();
     let expected_call_id = presentation.call_id;
     let expected_channel_id = presentation.channel_id;
-    let anonymous = presentation.is_anonymous_call;
     let stop = Arc::new(AtomicBool::new(false));
     CALL_TIMER_STOP.with(|cell| *cell.borrow_mut() = Some(stop.clone()));
     crate::rt_handle().spawn(async move {
@@ -101,10 +100,8 @@ where
             }
             let Some(snapshot) = call else { continue };
             let call = snapshot.call;
-            // Standard presentation IDs are domain call IDs. Anonymous IDs
-            // are room names; their setup supplies the synthetic channel ID.
-            if (!anonymous && call.id.to_string() != expected_call_id.as_str())
-                || (anonymous && call.channel_id.to_string() != expected_channel_id.as_str())
+            // Presentation IDs are domain call IDs.
+            if call.id.to_string() != expected_call_id.as_str()
                 || snapshot_call_id.is_some_and(|id| id != call.id)
             {
                 continue;
@@ -129,7 +126,7 @@ where
                 use chatter_core::services::call_worker::CallEncryptionVerification;
                 match snapshot.verification {
                     CallEncryptionVerification::ExistingHandshake => {
-                        // DM/anonymous SAS belongs to the existing handshake.
+                        // DM SAS belongs to the existing handshake.
                         data.verification_key_version = "".into();
                     }
                     CallEncryptionVerification::WaitingForKey => {
@@ -554,48 +551,6 @@ pub(super) mod tests {
             "a"
         );
         stop_call_timer();
-        // Anonymous pre-rendered names/avatars remain conversation-owned even
-        // when the live identity adopts the empty remote slot.
-        let mut anonymous = window.get_active_call_data();
-        anonymous.is_anonymous_call = true;
-        anonymous.participants = ModelRc::new(VecModel::from(vec![
-            crate::CallParticipantData {
-                display_name: "Private peer".into(),
-                ..Default::default()
-            },
-            crate::CallParticipantData {
-                user_id: "real-local-id\u{1}screen".into(),
-                display_name: chatter_core::calls::tiles::LOCAL_SCREEN_TILE_NAME.into(),
-                is_screen_sharing: true,
-                is_video_enabled: true,
-                ..Default::default()
-            },
-            crate::CallParticipantData {
-                user_id: "You".into(),
-                ..Default::default()
-            },
-        ]));
-        super::super::room_events::reconcile_roster(&mut anonymous, roster(&["ephemeral"]));
-        assert_eq!(
-            anonymous.participants.row_data(0).unwrap().display_name,
-            "Private peer"
-        );
-        assert_eq!(
-            anonymous.participants.row_data(0).unwrap().user_id,
-            "ephemeral"
-        );
-        assert_eq!(anonymous.participant_count, 2);
-        assert_eq!(anonymous.participants.row_count(), 3);
-        assert_eq!(
-            anonymous.participants.row_data(1).unwrap().user_id,
-            "real-local-id\u{1}screen"
-        );
-        assert_eq!(anonymous.participants.row_data(2).unwrap().user_id, "You");
-        super::super::room_events::reconcile_roster(&mut anonymous, roster(&["ephemeral"]));
-        assert_eq!(
-            anonymous.participants.row_data(0).unwrap().display_name,
-            "Private peer"
-        );
     }
 
     fn verification_tracks_snapshot_with_identity_fences() {
@@ -650,20 +605,15 @@ pub(super) mod tests {
         source.lock().unwrap().as_mut().unwrap().verification = code(9);
         pump(&window, 1100);
         assert_code("9", ["🐱", "🌳", "🚀", "🍋"]);
-        // Handshake snapshots preserve both standard and anonymous SAS.
-        for anonymous in [false, true] {
-            let mut data = window.get_active_call_data();
-            data.is_anonymous_call = anonymous;
-            window.set_active_call_data(data);
-            source.lock().unwrap().as_mut().unwrap().verification = Verification::ExistingHandshake;
-            let read = source.clone();
-            start_call_presentation_with(&window, move || {
-                let snapshot = read.lock().unwrap().clone();
-                async move { snapshot }
-            });
-            pump(&window, 100);
-            assert_code("", ["🐱", "🌳", "🚀", "🍋"]);
-        }
+        // Handshake snapshots preserve the existing SAS.
+        source.lock().unwrap().as_mut().unwrap().verification = Verification::ExistingHandshake;
+        let read = source.clone();
+        start_call_presentation_with(&window, move || {
+            let snapshot = read.lock().unwrap().clone();
+            async move { snapshot }
+        });
+        pump(&window, 100);
+        assert_code("", ["🐱", "🌳", "🚀", "🍋"]);
         // A pending result from another core call cannot erase this code.
         source.lock().unwrap().as_mut().unwrap().call.id = chatter_core::domain::ids::CallId::new();
         source.lock().unwrap().as_mut().unwrap().verification = Verification::WaitingForKey;
@@ -671,9 +621,6 @@ pub(super) mod tests {
         assert_code("", ["🐱", "🌳", "🚀", "🍋"]);
         stop_call_timer();
         // Hold a real production snapshot in flight, replace UI, then release it.
-        let mut original = window.get_active_call_data();
-        original.is_anonymous_call = false;
-        window.set_active_call_data(original);
         let (send, receive) = tokio::sync::oneshot::channel();
         let receive = Arc::new(Mutex::new(Some(receive)));
         start_call_presentation_with(&window, move || {
@@ -761,12 +708,11 @@ pub(super) mod tests {
         assert!(!window.get_active_call_data().is_connected);
         stop_call_timer();
 
-        // Anonymous UI IDs are room names, not the core's random domain IDs.
-        let mut anonymous = window.get_active_call_data();
-        anonymous.call_id = "anon-room".into();
-        anonymous.channel_id = call.channel_id.to_string().into();
-        anonymous.is_anonymous_call = true;
-        window.set_active_call_data(anonymous);
+        // The UI back on this call adopts its snapshot.
+        let mut restored = window.get_active_call_data();
+        restored.call_id = call.id.to_string().into();
+        restored.channel_id = call.channel_id.to_string().into();
+        window.set_active_call_data(restored);
         let source = snapshot.clone();
         start_call_timer_with(&window, move || {
             let call = source.lock().unwrap().clone();

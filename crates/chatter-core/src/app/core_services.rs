@@ -315,8 +315,7 @@ impl CoreServices {
         }
     }
 
-    /// Pre-fetch anonymous tokens for sealed sender messaging, and the
-    /// call-room pool.
+    /// Pre-fetch anonymous tokens for sealed sender messaging.
     ///
     /// Ensures tokens are available before the first SKDM distribution.
     /// Returns the number of mailbox tokens fetched, or 0 if already sufficient.
@@ -324,20 +323,6 @@ impl CoreServices {
         &self,
         target_count: u32,
     ) -> Result<u32, crate::error::MailboxError> {
-        // A call claims only from the call-room pool, so fill it at login too
-        // or the first anonymous call waits for the refill loop.
-        let calls = TokenPool::CallRoom;
-        let have = calls.count(&self.token_manager)?;
-        calls
-            .top_up(
-                &self.token_manager,
-                &mut self.grpc_pool.mailbox_client(),
-                &mut self.grpc_pool.anonymous_kt_client(),
-                have,
-                crate::mailbox::DEFAULT_CALL_ROOM_TOKEN_REQUEST_COUNT,
-            )
-            .await;
-
         let current = self.token_manager.available_token_count()?;
         if current >= target_count {
             tracing::debug!(
@@ -368,10 +353,9 @@ impl CoreServices {
 
     /// Spawn the token refill loop and the parked-send retry loop.
     ///
-    /// Sends and calls spend only from the pre-fetched pools
-    /// (`TokenManager::claim_prefetched_token`,
-    /// `claim_prefetched_call_room_token`) and never request tokens
-    /// themselves; this loop is the only thing that tops the pools up, at a
+    /// Sends spend only from the pre-fetched pool
+    /// (`TokenManager::claim_prefetched_token`) and never request tokens
+    /// themselves; this loop is the only thing that tops the pool up, at a
     /// random interval, so the authenticated token request is not tied in
     /// time to the anonymous send that spends it (NDSS'21 §VI-F).
     ///
@@ -380,10 +364,6 @@ impl CoreServices {
     /// retry right after a refill would spend the fresh tokens next to the
     /// request that fetched them. Aborting the returned handle stops both.
     pub fn spawn_token_refill(&self) -> tokio::task::JoinHandle<()> {
-        use crate::mailbox::{
-            DEFAULT_CALL_ROOM_TOKEN_REQUEST_COUNT, MIN_CALL_ROOM_TOKEN_THRESHOLD,
-        };
-
         /// Refill to this many claimable tokens…
         ///
         /// Sized for the largest burst a send makes: an anon-group post
@@ -403,31 +383,13 @@ impl CoreServices {
                 jittered_sleep().await;
                 let mut client = grpc_pool.mailbox_client();
                 let mut kt = grpc_pool.anonymous_kt_client();
-                for pool in [TokenPool::Mailbox, TokenPool::CallRoom] {
-                    let (target, low_water) = match pool {
-                        TokenPool::Mailbox => (BATCH, LOW_WATER),
-                        TokenPool::CallRoom => (
-                            DEFAULT_CALL_ROOM_TOKEN_REQUEST_COUNT,
-                            MIN_CALL_ROOM_TOKEN_THRESHOLD,
-                        ),
-                    };
-                    match pool.count(&token_manager) {
-                        Ok(current) if current < low_water => {
-                            let now = pool
-                                .top_up(&token_manager, &mut client, &mut kt, current, target)
-                                .await;
-                            tracing::info!(
-                                ?pool,
-                                had = current,
-                                now,
-                                "Token refill: pool topped up"
-                            );
-                        }
-                        Ok(_) => {}
-                        Err(e) => {
-                            tracing::warn!(?pool, "Token refill: could not count tokens: {}", e)
-                        }
+                match token_manager.available_token_count() {
+                    Ok(current) if current < LOW_WATER => {
+                        let now = top_up(&token_manager, &mut client, &mut kt, current, BATCH).await;
+                        tracing::info!(had = current, now, "Token refill: pool topped up");
                     }
+                    Ok(_) => {}
+                    Err(e) => tracing::warn!("Token refill: could not count tokens: {}", e),
                 }
             }
         };
@@ -953,45 +915,24 @@ async fn jittered_sleep() {
     tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
 }
 
-/// The two blind-signed token pools, one server budget.
-#[derive(Clone, Copy, Debug)]
-enum TokenPool {
-    Mailbox,
-    CallRoom,
-}
-
-impl TokenPool {
-    fn count(self, tm: &TokenManager) -> Result<u32, crate::error::MailboxError> {
-        match self {
-            Self::Mailbox => tm.available_token_count(),
-            Self::CallRoom => tm.available_call_room_token_count(),
-        }
-    }
-
-    /// Top the pool up from `have` to `target` in rounds (the server grants
-    /// at most 10 per request). Returns the claimable count reached.
-    async fn top_up(
-        self,
-        tm: &TokenManager,
-        client: &mut crate::network::grpc::MailboxClient,
-        kt: &mut crate::network::grpc::AnonymousKtClient,
-        mut have: u32,
-        target: u32,
-    ) -> u32 {
-        while have < target {
-            let got = match self {
-                Self::Mailbox => tm.request_tokens(client, kt, target - have).await,
-                Self::CallRoom => tm.request_call_room_tokens(client, kt, target - have).await,
-            };
-            match got {
-                Ok(0) => break,
-                Ok(n) => have += n,
-                Err(e) => {
-                    tracing::warn!(pool = ?self, "Token refill failed: {}", e);
-                    break;
-                }
+/// Top the mailbox token pool up from `have` to `target` in rounds (the
+/// server grants at most 10 per request). Returns the claimable count reached.
+async fn top_up(
+    tm: &TokenManager,
+    client: &mut crate::network::grpc::MailboxClient,
+    kt: &mut crate::network::grpc::AnonymousKtClient,
+    mut have: u32,
+    target: u32,
+) -> u32 {
+    while have < target {
+        match tm.request_tokens(client, kt, target - have).await {
+            Ok(0) => break,
+            Ok(n) => have += n,
+            Err(e) => {
+                tracing::warn!("Token refill failed: {}", e);
+                break;
             }
         }
-        have
     }
+    have
 }

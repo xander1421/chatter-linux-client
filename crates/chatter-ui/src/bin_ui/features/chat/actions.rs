@@ -142,12 +142,13 @@ pub(super) fn open_forward_modal(
     preview: String,
 ) {
     // The destination list is core's — which conversations exist, which the
-    // current mode may show, and Saved Messages. The UI renders it.
-    let targets = forward_targets(ui_ctx, "");
+    // current mode may show, Saved Messages, and the secret-chat rules for
+    // these sources. The UI renders it.
     let sources: Vec<SharedString> = sources.into_iter().map(Into::into).collect();
     w.set_forward_message_preview(preview.into());
     w.set_forward_sources(ModelRc::from(std::rc::Rc::new(VecModel::from(sources))));
     w.set_forward_search_text("".into());
+    let targets = forward_targets(w, ui_ctx, "");
     w.set_forward_targets(ModelRc::from(std::rc::Rc::new(VecModel::from(targets))));
     crate::bin_ui::features::back::push(&w, "forward-message");
 }
@@ -163,16 +164,35 @@ pub fn wire_forward_search(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         // conversation list. A local read per keystroke over the sidebar's
         // conversations, not a network call.
         if let Some(w) = weak_window.upgrade() {
-            let targets = forward_targets(&ui_ctx, query.as_str());
+            let targets = forward_targets(&w, &ui_ctx, query.as_str());
             w.set_forward_targets(ModelRc::from(std::rc::Rc::new(VecModel::from(targets))));
         }
     });
 }
 
-/// Core's forward destinations in the row shape the picker renders.
-fn forward_targets(ui_ctx: &Arc<ChatterClient>, query: &str) -> Vec<ForwardTarget> {
+/// The stashed forward sources ("sender_id:timestamp_ns" keys), parsed.
+/// `None` when any key is unparsable. rsplit: the timestamp is the part that
+/// is certainly colon-free.
+pub(crate) fn forward_sources(w: &MainWindow) -> Option<Vec<(UserId, u64)>> {
+    w.get_forward_sources()
+        .iter()
+        .map(|key| {
+            let (sender, ts) = key.rsplit_once(':')?;
+            Some((sender.parse::<UserId>().ok()?, ts.parse::<u64>().ok()?))
+        })
+        .collect()
+}
+
+/// Core's forward destinations for the stashed sources, in the row shape the
+/// picker renders. The modal blocks conversation switches, so the active
+/// conversation is the sources' conversation.
+fn forward_targets(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, query: &str) -> Vec<ForwardTarget> {
+    let Some(sources) = forward_sources(w) else {
+        return Vec::new();
+    };
     ui_ctx
-        .forward_destinations(query)
+        .conversation(ui_ctx.chat_state().active_conversation())
+        .forward_destinations(&sources, query)
         .into_iter()
         .map(|d| ForwardTarget {
             avatar_source: crate::bin_ui::features::modals::target_avatar(ui_ctx, &d.kind, &d.id),

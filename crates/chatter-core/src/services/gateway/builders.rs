@@ -412,11 +412,9 @@ pub fn build_targeted_delete_content(
     }
 }
 
-/// Build a scoped DM delete from a stored record. Anonymous Call authors are
-/// nil storage placeholders; the authenticated local participant is field 101.
+/// Build a scoped DM delete from a stored record.
 pub(crate) fn build_stored_dm_delete_content(
     target: &crate::domain::message::Message,
-    me: &crate::domain::ids::UserId,
 ) -> Result<Content, crate::error::StorageError> {
     use crate::storage::repositories::message_modifier_repo::canonical_call_record_id;
     let call_id = canonical_call_record_id(target);
@@ -429,15 +427,9 @@ pub(crate) fn build_stored_dm_delete_content(
             "Noncanonical DM call record".into(),
         ));
     }
-    let author = if call_id.is_some()
-        && target.conversation_type == crate::domain::message::ConversationType::AnonDm
-    {
-        *me
-    } else {
-        target.sender_id.ok_or_else(|| {
-            crate::error::StorageError::InvalidData("Delete target has no author".into())
-        })?
-    };
+    let author = target.sender_id.ok_or_else(|| {
+        crate::error::StorageError::InvalidData("Delete target has no author".into())
+    })?;
     let mut content =
         build_targeted_delete_content(target.sent_at, Some(&author.to_string()), None);
     if let Some(content::Content::DataMessage(data)) = &mut content.content {
@@ -605,127 +597,6 @@ pub fn build_call_self_sync(content: &Content, our_device_id: u32) -> Option<Con
         })),
         ..Default::default()
     })
-}
-
-// =============================================================================
-// Anonymous Call Signaling (Anon DM + Anon Group)
-// =============================================================================
-
-/// Generate a new anonymous call room ID and name.
-///
-/// Returns `(room_id_bytes, room_name, encryption_key)`.
-/// The room name has format `"anon-{uuid}"`.
-pub fn generate_anon_call_room() -> ([u8; 16], String, Vec<u8>) {
-    let call_room_id = uuid::Uuid::new_v4();
-    let room_id_bytes: [u8; 16] = *call_room_id.as_bytes();
-    let room_name = format!("anon-{}", call_room_id);
-
-    // Generate random 32-byte E2EE key
-    let mut encryption_key = vec![0u8; 32];
-    // SECURITY: call E2EE key must draw from the OS entropy pool, not a
-    // once-seeded userspace PRG (ThreadRng). Matches call_key_provider.
-    {
-        use rand::TryRngCore;
-        rand::RngCore::fill_bytes(&mut rand::rngs::OsRng.unwrap_err(), &mut encryption_key);
-    }
-
-    (room_id_bytes, room_name, encryption_key)
-}
-
-/// Build an `AnonCallToken` proto from a `CallRoomToken`.
-pub fn build_anon_call_token(
-    token: &crate::mailbox::CallRoomToken,
-) -> crate::proto::content_v1::AnonCallToken {
-    crate::proto::content_v1::AnonCallToken {
-        public_key: token.public_key.clone(),
-        signature: token.signature.clone(),
-        message_randomizer: token.randomizer.clone().unwrap_or_default(),
-    }
-}
-
-/// Create a Content proto for an anonymous call offer.
-///
-/// Used by both anon DM and anon group call initiation.
-pub fn build_anon_call_offer_content(
-    call_room_id: &[u8; 16],
-    room_name: &str,
-    token: &crate::mailbox::CallRoomToken,
-    video: bool,
-    display_name: &str,
-    encryption_key: &[u8],
-) -> Content {
-    use crate::proto::content_v1::{AnonCallOffer, anon_call_offer::CallType};
-
-    let now = TimestampNanos::now().as_u64();
-    Content {
-        timestamp: now,
-        padding: generate_padding(PADDING_LARGE),
-        content: Some(content::Content::AnonCallOffer(AnonCallOffer {
-            call_room_id: call_room_id.to_vec(),
-            room_name: room_name.to_string(),
-            caller_token: Some(build_anon_call_token(token)),
-            call_type: if video {
-                CallType::Video.into()
-            } else {
-                CallType::Voice.into()
-            },
-            timestamp: now,
-            caller_display_name: display_name.to_string(),
-            call_encryption_key: encryption_key.to_vec(),
-        })),
-        ..Default::default()
-    }
-}
-
-/// Create a Content proto for an anonymous call answer.
-///
-/// Used by both anon DM and anon group call acceptance/decline.
-pub fn build_anon_call_answer_content(
-    call_room_id: &[u8; 16],
-    accept: bool,
-    token: Option<&crate::mailbox::CallRoomToken>,
-    decline_reason: i32,
-    display_name: &str,
-) -> Content {
-    use crate::proto::content_v1::AnonCallAnswer;
-
-    let now = TimestampNanos::now().as_u64();
-    Content {
-        timestamp: now,
-        padding: generate_padding(PADDING_LARGE),
-        content: Some(content::Content::AnonCallAnswer(AnonCallAnswer {
-            call_room_id: call_room_id.to_vec(),
-            accepted: accept,
-            callee_token: if accept {
-                token.map(build_anon_call_token)
-            } else {
-                None
-            },
-            timestamp: now,
-            callee_display_name: display_name.to_string(),
-            decline_reason,
-        })),
-        ..Default::default()
-    }
-}
-
-/// Create a Content proto for an anonymous call hangup.
-///
-/// Used by both anon DM and anon group call termination.
-pub fn build_anon_call_hangup_content(call_room_id: &[u8; 16], reason: i32) -> Content {
-    use crate::proto::content_v1::AnonCallHangup;
-
-    let now = TimestampNanos::now().as_u64();
-    Content {
-        timestamp: now,
-        padding: generate_padding(PADDING_MESSAGE),
-        content: Some(content::Content::AnonCallHangup(AnonCallHangup {
-            call_room_id: call_room_id.to_vec(),
-            reason,
-            timestamp: now,
-        })),
-        ..Default::default()
-    }
 }
 
 #[cfg(test)]

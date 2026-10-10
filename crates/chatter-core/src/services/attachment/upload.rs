@@ -324,6 +324,7 @@ impl AttachmentService {
             encryption_key: Some(encrypt_result.key.to_vec()),
             encryption_iv: Some(encrypt_result.digest.to_vec()),
             created_at: chrono::Utc::now(),
+            secret_chat: Some(self.secret_chat),
         };
 
         // Save to repository with file path
@@ -699,6 +700,7 @@ impl AttachmentService {
             encryption_key: Some(encrypted.key.to_vec()),
             encryption_iv: Some(encrypted.digest.to_vec()),
             created_at: chrono::Utc::now(),
+            secret_chat: Some(self.secret_chat),
         };
 
         // Save to repository with file path
@@ -754,6 +756,13 @@ impl AttachmentService {
         url: &str,
         gif_id: &str,
     ) -> Result<CdnUploadResult, AttachmentError> {
+        // The media proxy takes account auth only; a secret chat sends no GIFs
+        // (`ConversationType::gif_picker_available`).
+        if self.secret_chat {
+            return Err(AttachmentError::InvalidAttachment(
+                "GIFs are not available in a secret chat".into(),
+            ));
+        }
         let bytes = self.fetch_gif_media(url).await?;
 
         let filename = format!(

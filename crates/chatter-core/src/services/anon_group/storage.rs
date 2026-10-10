@@ -192,15 +192,17 @@ impl AnonGroupService {
             .get_by_conversation_timestamp(&channel_id, sent_timestamp)?)
     }
 
-    /// Create attachment records from pointers.
+    /// Create attachment records from pointers, marked as a secret chat's so
+    /// their downloads go over Tor only.
     ///
     /// Returns the list of created attachment IDs for storing in the message.
     pub fn create_attachments_from_pointers(
         &self,
         pointers: &[crate::proto::content_v1::AttachmentPointer],
     ) -> Vec<AttachmentId> {
-        let attachment_service = AttachmentService::new_local(self.attachment_repo.clone());
-        attachment_service.create_from_pointers(pointers)
+        AttachmentService::new_local(self.attachment_repo.clone())
+            .for_secret_chat()
+            .create_from_pointers(pointers)
     }
 
     /// Get a message by sender ID and timestamp (Signal-style lookup).

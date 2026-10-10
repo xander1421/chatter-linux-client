@@ -19,7 +19,6 @@ export struct ActiveCallData {
     channel-id: string,
     title: string,
     is-video-call: bool,
-    is-anonymous-call: bool,
     is-encrypted: bool,
     is-identity-verified: bool,
     identity-warning: string,
@@ -45,7 +44,6 @@ export struct IncomingCallData {
     caller-avatar-source: image,
     channel-name: string,
     is-video-call: bool,
-    is-anonymous-call: bool,
     is-identity-verified: bool,
     identity-warning: string,
     // Encryption key from caller (base64 encoded for UI transport)

@@ -104,6 +104,9 @@ export component ChatLayout inherits Rectangle {
     in property <[GifData]> gif-recent;
     in property <bool> gif-loading;
     in property <bool> gif-failed;
+    // Core's answer for the open conversation (false in a secret chat): when
+    // false the drawer is Emoji only.
+    in property <bool> gifs-available: true;
     callback emoji-selected(string);
     callback emoji-category-changed(int);
     callback emoji-search-changed(string);
@@ -642,6 +645,7 @@ export component ChatLayout inherits Rectangle {
         }
         function select-mode(gifs: bool) {
             if gifs == root.gif-picker-visible { return; }
+            if gifs && !root.gifs-available { return; }
             // Open the destination first: switching tabs keeps the
             // unified drawer alive and its search focused. Each mode keeps
             // its own query and tab; only the GIF side re-requests, since
@@ -761,8 +765,9 @@ export component ChatLayout inherits Rectangle {
                 height: picker-drawer.control-height;
                 for tab[index] in ["Emoji", "GIFs"]: Rectangle {
                     property <bool> current: index == 0 ? root.emoji-picker-visible : root.gif-picker-visible;
+                    visible: index == 0 || root.gifs-available;
                     x: index * (parent.width + Spacing.xs) / 2;
-                    width: (parent.width - Spacing.xs) / 2;
+                    width: root.gifs-available ? (parent.width - Spacing.xs) / 2 : parent.width;
                     height: parent.height;
                     background: current ? Colors.tint-strong
                         : tab-touch.pressed ? Materials.pressed

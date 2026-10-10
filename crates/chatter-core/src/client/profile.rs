@@ -1161,6 +1161,11 @@ impl ChatterClient {
         &self,
         url: &str,
     ) -> Result<Vec<u8>, crate::services::attachment::AttachmentError> {
+        if !self.gif_picker_available() {
+            return Err(crate::services::attachment::AttachmentError::InvalidAttachment(
+                "GIFs are not available in a secret chat".into(),
+            ));
+        }
         self.attachments().fetch_gif_media(url).await
     }
 

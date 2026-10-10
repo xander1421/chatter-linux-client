@@ -1,13 +1,11 @@
-//! No send or call path may request mailbox or call-room tokens (NDSS'21 §VI-F).
+//! No send path may request mailbox tokens (NDSS'21 §VI-F).
 //!
 //! An authenticated `GetMailboxTokens` followed a moment later by the
 //! anonymous operation that spends its output links the two in time. Sends
-//! spend only via `TokenManager::claim_prefetched_token` and calls only via
-//! `claim_prefetched_call_room_token`; the pools are
+//! spend only via `TokenManager::claim_prefetched_token`; the pool is
 //! refilled by `CoreServices::spawn_token_refill` (and the login prefetch),
 //! which live in `app/core_services.rs`. Any other caller of
-//! `request_tokens` or `request_call_room_tokens` reintroduces
-//! request-then-spend.
+//! `request_tokens` reintroduces request-then-spend.
 
 use std::path::Path;
 
@@ -37,7 +35,7 @@ fn request_tokens_is_only_called_by_the_refill() {
         .filter(|f| !allowed.contains(f))
         .filter(|f| {
             let src = std::fs::read_to_string(f).unwrap();
-            src.contains(".request_tokens(") || src.contains(".request_call_room_tokens(")
+            src.contains(".request_tokens(")
         })
         .collect();
 

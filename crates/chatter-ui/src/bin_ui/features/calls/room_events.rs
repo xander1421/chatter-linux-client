@@ -19,7 +19,7 @@ fn order_participants(
     tiles::order_tiles(remotes, local, |p| p.user_id.as_str())
 }
 
-/// Render core membership, preserving media flags and anonymous peer presentation.
+/// Render core membership, preserving media flags.
 pub(super) fn reconcile_roster(
     data: &mut crate::ActiveCallData,
     roster: Vec<(String, chatter_core::ui::chat_data::CallParticipantInfo)>,
@@ -31,26 +31,19 @@ pub(super) fn reconcile_roster(
     let mut remotes = Vec::new();
     let count = roster.len() + usize::from(local.is_some());
     for (identity, info) in &roster {
-        let existing = previous.iter().position(|p| p.user_id.as_str() == identity);
-        let anonymous_slot = if data.is_anonymous_call && existing.is_none() {
-            previous.iter().position(|p| p.user_id.is_empty())
-        } else {
-            None
-        };
-        let mut tile = existing
-            .or(anonymous_slot)
+        let mut tile = previous
+            .iter()
+            .position(|p| p.user_id.as_str() == identity)
             .map(|i| previous.remove(i))
             .unwrap_or_default();
         tile.user_id = identity.clone().into();
-        if !data.is_anonymous_call || tile.display_name.is_empty() {
-            tile.display_name = info.display_name.clone().into();
-            tile.initials = info.initials.clone().into();
-            tile.avatar_source = info
-                .avatar_bytes
-                .as_deref()
-                .and_then(crate::bin_ui::converters::avatar_bytes_to_image)
-                .unwrap_or_default();
-        }
+        tile.display_name = info.display_name.clone().into();
+        tile.initials = info.initials.clone().into();
+        tile.avatar_source = info
+            .avatar_bytes
+            .as_deref()
+            .and_then(crate::bin_ui::converters::avatar_bytes_to_image)
+            .unwrap_or_default();
         remotes.push(tile);
     }
     for tile in previous {
@@ -110,7 +103,7 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 | LiveKitRoomEvent::ParticipantLeft { .. } => {
                     // Events are wakeups, not membership decisions: mount may
                     // have overwritten earlier joins, and departures may lag.
-                    let Some((snapshot, connection_generation, room_state, room_name)) =
+                    let Some((snapshot, connection_generation, room_state)) =
                         ui_ctx.call_room_recovery_snapshot().await
                     else {
                         continue;
@@ -130,13 +123,8 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     let _ = slint::invoke_from_event_loop(move || {
                         let Some(w) = weak.upgrade() else { return };
                         let mut data = w.get_active_call_data();
-                        let matches = if data.is_anonymous_call {
-                            data.call_id.as_str() == room_name
-                                && data.channel_id.as_str() == snapshot.call.channel_id.to_string()
-                        } else {
-                            data.call_id.as_str() == snapshot.call.id.to_string()
-                                && data.channel_id.as_str() == snapshot.call.channel_id.to_string()
-                        };
+                        let matches = data.call_id.as_str() == snapshot.call.id.to_string()
+                            && data.channel_id.as_str() == snapshot.call.channel_id.to_string();
                         if !matches || !w.get_active_call_visible() {
                             return;
                         }

@@ -424,6 +424,7 @@ mod video_thumbnail_tests {
             encryption_key: Some(encrypted.key.to_vec()),
             encryption_iv: Some(encrypted.digest.to_vec()),
             created_at: chrono::Utc::now(),
+            secret_chat: Some(false),
         };
         repo.insert(&source).unwrap();
         super::super::ensure_attachments_dir().unwrap();
@@ -483,6 +484,7 @@ mod video_thumbnail_tests {
             encryption_key: Some(vec![1; 64]),
             encryption_iv: Some(vec![2; 32]),
             created_at: chrono::Utc::now(),
+            secret_chat: Some(false),
         };
         repo.insert(&source).unwrap();
         let mut concurrent = source.clone();

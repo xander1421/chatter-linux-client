@@ -383,6 +383,7 @@ mod tests {
             encryption_key: None,
             encryption_iv: None,
             created_at: chrono::Utc::now(),
+            secret_chat: Some(false),
         }
     }
 

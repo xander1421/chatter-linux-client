@@ -23,9 +23,8 @@ use crate::domain::anon_group::AnonGroupId;
 use crate::domain::attachment::Attachment;
 use crate::domain::ids::{AttachmentId, ChannelId, IntegrationId, MessageId, UserId};
 use crate::domain::message::Message;
-use crate::mailbox::CallRoomToken;
 use crate::mailbox::group::GroupFanout;
-use crate::proto::content_v1::{AttachmentPointer, anon_call_answer, anon_call_hangup};
+use crate::proto::content_v1::AttachmentPointer;
 use crate::services::anon_dm::{AnonDmError, AnonDmService};
 use crate::services::anon_group::{AnonGroupError, AnonGroupService};
 use crate::services::attachment::{AttachmentError, AttachmentService};
@@ -93,31 +92,6 @@ pub enum OutgoingIntent {
         quote: Option<QuoteIntent>,
     },
 
-    /// Initiate a call.
-    CallOffer {
-        channel_id: CallChannelId,
-        video: bool,
-        display_name: String,
-        token: Option<CallRoomToken>, // Required for Anon
-    },
-
-    /// Answer a call.
-    CallAnswer {
-        channel_id: CallChannelId,
-        call_room_id: Vec<u8>,
-        accept: bool,
-        token: Option<CallRoomToken>, // Required for Anon
-        decline_reason: Option<i32>,
-        display_name: String,
-    },
-
-    /// Hang up a call.
-    CallHangup {
-        channel_id: CallChannelId,
-        call_room_id: Vec<u8>,
-        reason: i32,
-    },
-
     /// Connect with a user (Friend Request or Anon DM Request).
     Connect {
         peer_id: UserId,
@@ -125,12 +99,6 @@ pub enum OutgoingIntent {
         use_anonymous_dm: bool, // If true, starts an Anon DM instead of Friend Request
         private_friend_code: Option<String>, // NDSS'21 compliant code
     },
-}
-
-/// Channel ID variant for call signaling.
-pub enum CallChannelId {
-    Standard(ChannelId),
-    AnonDm(AnonDmId),
 }
 
 /// Quote/reply context for outgoing messages (all conversation types).
@@ -159,20 +127,12 @@ pub struct SendResult {
     pub gif_attachment_ids: Vec<AttachmentId>,
     pub bootstrap_initiated: bool,
     pub anon_message_id: Option<String>,
-    pub call_result: Option<CallOfferResult>,
     /// The message was stored but not delivered (status `"failed"`, retryable)
     /// — friend DMs only. A refused or failed channel send is also `Ok`, but
     /// carries no error here: `message` comes back stored with
     /// `delivery_status == "failed"` (`MessageService::send`, core.rs). Other
     /// paths report a failure as `Err`.
     pub send_error: Option<MessageError>,
-}
-
-/// Result of initiating a call.
-pub struct CallOfferResult {
-    pub call_room_id: [u8; 16],
-    pub room_name: String,
-    pub call_encryption_key: Vec<u8>,
 }
 
 // =============================================================================
@@ -356,85 +316,8 @@ pub async fn route_outgoing(
                 gif_attachment_ids: vec![],
                 bootstrap_initiated: false,
                 anon_message_id: None,
-                call_result: None,
                 send_error: None,
             })
-        }
-
-        OutgoingIntent::CallOffer {
-            channel_id,
-            video,
-            display_name,
-            token,
-        } => {
-            match channel_id {
-                CallChannelId::AnonDm(cid) => {
-                    let anon_dm_service = services.anon_dm_service.ok_or(SendError::NotLoggedIn)?;
-                    let t = token.ok_or(SendError::UnsupportedAction)?;
-                    let res = anon_dm_service
-                        .send_call_offer(&cid, &t, video, Some(&display_name))
-                        .await?;
-                    Ok(SendResult::from_call(res))
-                }
-                CallChannelId::Standard(_cid) => {
-                    // Standard Signal call signaling to be integrated here
-                    Err(SendError::UnsupportedAction)
-                }
-            }
-        }
-
-        OutgoingIntent::CallAnswer {
-            channel_id,
-            call_room_id,
-            accept,
-            token,
-            decline_reason,
-            display_name,
-        } => {
-            let room_id_arr: [u8; 16] = call_room_id
-                .try_into()
-                .map_err(|_| SendError::UnsupportedAction)?;
-            match channel_id {
-                CallChannelId::AnonDm(cid) => {
-                    let anon_dm_service = services.anon_dm_service.ok_or(SendError::NotLoggedIn)?;
-                    let reason = decline_reason
-                        .and_then(|r| anon_call_answer::DeclineReason::try_from(r).ok());
-                    anon_dm_service
-                        .send_call_answer(
-                            &cid,
-                            &room_id_arr,
-                            accept,
-                            token.as_ref(),
-                            reason,
-                            Some(&display_name),
-                        )
-                        .await?;
-                    Ok(SendResult::empty())
-                }
-                CallChannelId::Standard(_cid) => Err(SendError::UnsupportedAction),
-            }
-        }
-
-        OutgoingIntent::CallHangup {
-            channel_id,
-            call_room_id,
-            reason,
-        } => {
-            let room_id_arr: [u8; 16] = call_room_id
-                .try_into()
-                .map_err(|_| SendError::UnsupportedAction)?;
-            match channel_id {
-                CallChannelId::AnonDm(cid) => {
-                    let anon_dm_service = services.anon_dm_service.ok_or(SendError::NotLoggedIn)?;
-                    let r = anon_call_hangup::Reason::try_from(reason)
-                        .unwrap_or(anon_call_hangup::Reason::Normal);
-                    anon_dm_service
-                        .send_call_hangup(&cid, &room_id_arr, r)
-                        .await?;
-                    Ok(SendResult::empty())
-                }
-                CallChannelId::Standard(_cid) => Err(SendError::UnsupportedAction),
-            }
         }
 
         OutgoingIntent::Connect {
@@ -562,24 +445,6 @@ impl SendResult {
             gif_attachment_ids: vec![],
             bootstrap_initiated: false,
             anon_message_id: None,
-            call_result: None,
-            send_error: None,
-        }
-    }
-
-    fn from_call(res: crate::services::anon_dm::AnonCallOfferResult) -> Self {
-        Self {
-            sent_at: res.timestamp,
-            message: None,
-            attachment_ids: vec![],
-            gif_attachment_ids: vec![],
-            bootstrap_initiated: false,
-            anon_message_id: None,
-            call_result: Some(CallOfferResult {
-                call_room_id: res.call_room_id,
-                room_name: res.room_name,
-                call_encryption_key: res.call_encryption_key,
-            }),
             send_error: None,
         }
     }
@@ -611,7 +476,6 @@ async fn route_server_dm(
         gif_attachment_ids: dm_result.gif_attachment_ids,
         bootstrap_initiated: dm_result.bootstrap_initiated,
         anon_message_id: None,
-        call_result: None,
         send_error: dm_result.send_error,
     })
 }
@@ -694,7 +558,6 @@ async fn route_channel(
         gif_attachment_ids: vec![],
         bootstrap_initiated: false,
         anon_message_id: None,
-        call_result: None,
         send_error: None,
     })
 }
@@ -740,7 +603,6 @@ async fn route_anon_dm(
         gif_attachment_ids: vec![],
         bootstrap_initiated: false,
         anon_message_id: Some(message_id.to_string()),
-        call_result: None,
         send_error: None,
     })
 }
@@ -804,7 +666,6 @@ async fn route_anon_group(
         gif_attachment_ids: vec![],
         bootstrap_initiated: complete != Some(true),
         anon_message_id: Some(message_id.as_str().to_string()),
-        call_result: None,
         send_error: None,
     })
 }

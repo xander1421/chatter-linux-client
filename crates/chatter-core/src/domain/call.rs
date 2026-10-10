@@ -220,7 +220,6 @@ impl VerificationBadge {}
 // ============================================================================
 
 use crate::crypto::call_key_provider::EphemeralCallKey;
-use zeroize::Zeroizing;
 
 /// One channel group-call signal (`GroupCallSignal` on the wire). A ring
 /// carries no key: as in Signal, media keys go only to participants in the
@@ -262,63 +261,6 @@ pub struct CallSetupResult {
     /// Local offer/answer completion time (Unix nanos).
     /// Live duration uses the active Call's connected_at instead.
     pub started_at_ns: u64,
-}
-
-/// Result of completing an anonymous call setup (either side).
-///
-/// Contains everything the UI needs to display the active anonymous call.
-/// `encryption_key` is wrapped in `Zeroizing` so the E2EE key is wiped
-/// from memory when this struct is dropped.
-pub struct AnonCallSetupResult {
-    /// The room name (used as call_id for anonymous calls).
-    pub room_name: String,
-    /// The channel ID (synthetic for anon calls).
-    pub channel_id: ChannelId,
-    /// E2EE encryption key for LiveKit (32 bytes). Zeroized on drop.
-    pub encryption_key: Zeroizing<Vec<u8>>,
-    /// Verification emojis for secure call verification (4 emojis).
-    pub verification_emojis: [String; 4],
-    /// Whether this is a video call.
-    pub is_video: bool,
-    /// Display name of the remote peer.
-    pub peer_display_name: String,
-    /// Callee's answer envelope timestamp (Unix nanos).
-    /// Live duration uses the active Call's local connected_at, avoiding
-    /// remote wall-clock skew and signaling-to-connection latency.
-    pub started_at_ns: u64,
-    /// Cached avatar bytes for the remote peer, sourced from the local
-    /// `AnonDm.peer_avatar` row. Threaded so the active-call tile shows the
-    /// peer's picture immediately on connect without an HTTP round-trip.
-    pub peer_avatar: Option<Vec<u8>>,
-}
-
-/// Outcome of `handle_anon_call_answer`.
-///
-/// Group anon calls fan out answers to every participant, so the caller (and
-/// any already-joined callee) receives *N* answer events per call. These
-/// must be distinguished from an actual decline.
-#[derive(Debug)]
-pub enum AnonCallAnswerOutcome {
-    /// The call was accepted and this participant just connected to LiveKit.
-    Connected(AnonCallSetupResult),
-    /// Peer declined the call (`accepted=false`).
-    Declined,
-    /// We are already in this call (own echo or another participant's answer
-    /// to the same room). UI should ignore — the call is already active.
-    AlreadyInCall,
-}
-
-impl std::fmt::Debug for AnonCallSetupResult {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("AnonCallSetupResult")
-            .field("room_name", &self.room_name)
-            .field("channel_id", &self.channel_id)
-            .field("encryption_key", &"<redacted 32 bytes>")
-            .field("verification_emojis", &self.verification_emojis)
-            .field("is_video", &self.is_video)
-            .field("peer_display_name", &self.peer_display_name)
-            .finish()
-    }
 }
 
 // ============================================================================

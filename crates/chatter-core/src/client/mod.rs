@@ -6,7 +6,7 @@
 //! add a focused set of methods to `ChatterClient` via `impl` blocks:
 //!
 //! * `auth` — login / register / recovery / PIN flows
-//! * `calls` — DM / group / anonymous call orchestration (desktop + mobile)
+//! * `calls` — DM / group call orchestration (desktop + mobile)
 //! * `channels` — channel CRUD + membership
 //! * `messaging` — message list / get / mark-read thin façades
 //! * `profile` — user display name + friend code + QR façades
@@ -39,7 +39,7 @@ mod send_attempt;
 pub use send_attempt::await_send_with_notice;
 mod receipts;
 pub use anon_group::AnonGroupInviteCandidate;
-pub use messaging::{InviteCandidate, ReplyParentMedia};
+pub use messaging::{ForwardDestination, InviteCandidate, ReplyParentMedia};
 pub use secret_chat::SecretChatError;
 
 /// A user-search hit surfaced to the UI (friends modal search).
@@ -950,8 +950,6 @@ impl ChatterClient {
             crate::services::call_signaling::CallSignalingService::new(
                 self.messages().clone(),
                 self.channels().clone(),
-                self.anon_dms().clone(),
-                self.anon_groups().clone(),
             )
         })
     }
@@ -2328,20 +2326,36 @@ impl ChatterClient {
         self.services.decline_call(call_id).await
     }
 
-    /// Search GIFs.
+    /// Whether the GIF picker may be used in the open conversation: not in a
+    /// secret chat, where GifService's account auth would tie the activity to
+    /// the account ([`crate::domain::message::ConversationType::gif_picker_available`]).
+    pub fn gif_picker_available(&self) -> bool {
+        self.chat_state()
+            .active_conversation()
+            .routing_key()
+            .is_none_or(|(kind, _)| kind.gif_picker_available())
+    }
+
+    /// Search GIFs. Refused in a secret chat ([`Self::gif_picker_available`]).
     pub async fn search_gifs(
         &self,
         query: &str,
         limit: u32,
     ) -> Result<Vec<crate::proto::chat_v1::GifResult>, NetworkError> {
+        if !self.gif_picker_available() {
+            return Err(NetworkError::PermissionDenied);
+        }
         self.services.search_gifs(query, limit).await
     }
 
-    /// Fetch trending GIFs.
+    /// Fetch trending GIFs. Refused in a secret chat ([`Self::gif_picker_available`]).
     pub async fn trending_gifs(
         &self,
         limit: u32,
     ) -> Result<Vec<crate::proto::chat_v1::GifResult>, NetworkError> {
+        if !self.gif_picker_available() {
+            return Err(NetworkError::PermissionDenied);
+        }
         self.services.trending_gifs(limit).await
     }
 
@@ -4424,10 +4438,10 @@ impl ChatterClient {
                 .session_revision()
                 .unwrap_or(retired);
             match worker.reset_presentation_session(actor_revision).await {
-                Ok(incoming) => {
+                Ok(_) => {
                     if self.auth_state().get().session_revision == revision {
                         if let Some(signaling) = self.call_signaling.get() {
-                            signaling.clear_call_session(&incoming);
+                            signaling.clear_call_session();
                         }
                     }
                 }

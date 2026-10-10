@@ -22,19 +22,15 @@ use zeroize::Zeroizing;
 
 #[cfg(feature = "media")]
 use crate::crypto::call_key_provider::EphemeralCallKey;
-use crate::domain::anon_dm::AnonDmId;
-use crate::domain::anon_group::AnonGroupId;
 #[cfg(feature = "media")]
 use crate::domain::call::CallType;
 use crate::domain::call::PendingDmCall;
 #[cfg(feature = "media")]
-use crate::domain::call::{AnonCallAnswerOutcome, AnonCallSetupResult, CallSetupResult};
+use crate::domain::call::CallSetupResult;
 
 #[cfg(feature = "media")]
 use crate::domain::ids::CallId;
 use crate::domain::ids::{ChannelId, UserId};
-use crate::services::anon_dm::AnonDmService;
-use crate::services::anon_group::AnonGroupService;
 #[cfg(feature = "media")]
 use crate::services::call_verification::CallVerification;
 #[cfg(feature = "media")]
@@ -69,10 +65,6 @@ pub enum CallSignalingError {
     KeyDerivationFailed(String),
     #[error("call worker error: {0}")]
     CallWorker(String),
-    #[error("anonymous call error: {0}")]
-    AnonCall(String),
-    #[error("no call room tokens available")]
-    NoTokens,
     /// Mobile-path orchestration error (LiveKit setup, gRPC create/end call,
     /// JSON decode of server responses). Kept as a free-form string because
     /// the mobile methods bridge multiple subsystems and their error surfaces
@@ -220,8 +212,6 @@ impl GroupCallInvites {
 pub struct CallSignalingService {
     message_service: Arc<MessageService>,
     channel_service: Arc<ChannelService>,
-    anon_dm_service: Arc<AnonDmService>,
-    anon_group_service: Arc<AnonGroupService>,
     /// Pending outgoing DM call state (waiting for answer with peer's ephemeral key).
     pending_dm_call: Arc<Mutex<Option<PendingDmCall>>>,
     pub(crate) start_gate: Arc<tokio::sync::Mutex<()>>,
@@ -232,7 +222,6 @@ pub struct CallSignalingService {
     group_key_wait: Arc<Mutex<Option<String>>>,
     /// The last rotated key we sent: call, when, and to whom.
     last_key_sent: Arc<Mutex<Option<KeySent>>>,
-    owned_anon_rooms: Arc<Mutex<std::collections::HashSet<String>>>,
     #[cfg(feature = "media")]
     start_groups: Arc<Mutex<std::collections::HashSet<String>>>,
     #[cfg(feature = "media")]
@@ -294,19 +283,14 @@ impl CallSignalingService {
     pub fn new(
         message_service: Arc<MessageService>,
         channel_service: Arc<ChannelService>,
-        anon_dm_service: Arc<AnonDmService>,
-        anon_group_service: Arc<AnonGroupService>,
     ) -> Self {
         Self {
             message_service,
             channel_service,
-            anon_dm_service,
-            anon_group_service,
             pending_dm_call: Arc::new(Mutex::new(None)),
             group_call_invites: Arc::new(GroupCallInvites::default()),
             group_key_wait: Arc::new(Mutex::new(None)),
             last_key_sent: Arc::new(Mutex::new(None)),
-            owned_anon_rooms: Arc::new(Mutex::new(Default::default())),
             start_gate: Arc::new(tokio::sync::Mutex::new(())),
             #[cfg(feature = "media")]
             start_groups: Arc::new(Mutex::new(Default::default())),
@@ -341,7 +325,6 @@ impl CallSignalingService {
         for id in ids {
             self.rollback_start(
                 &crate::client::calls::OutgoingCallStart {
-                    is_anonymous: id.starts_with("anon-"),
                     call_id: id,
                     channel_id: String::new(),
                     is_video: false,
@@ -406,69 +389,36 @@ impl CallSignalingService {
         worker: &CallWorkerHandle,
     ) {
         let id = &start.call_id;
-        if start.is_anonymous {
-            if let Some(pending) = self.anon_dm_service.take_pending_anon_call(id) {
-                let reason = crate::proto::content_v1::anon_call_hangup::Reason::Normal;
-                let send = async {
-                    if self
-                        .anon_dm_service
-                        .get_conversation(&pending.conversation_id)
-                        .ok()
-                        .flatten()
-                        .is_some()
-                    {
-                        let _ = self
-                            .anon_dm_service
-                            .send_call_hangup(
-                                &pending.conversation_id,
-                                &pending.call_room_id,
-                                reason,
-                            )
-                            .await;
-                    } else if let Some(group) =
-                        AnonGroupId::try_from_slice(pending.conversation_id.as_bytes())
-                    {
-                        let _ = self
-                            .anon_group_service
-                            .send_call_hangup(&group, &pending.call_room_id, reason)
-                            .await;
-                    }
-                };
-                let _ = tokio::time::timeout(std::time::Duration::from_secs(3), send).await;
+        let pending = {
+            let mut slot = self.pending_dm_call.lock();
+            if slot.as_ref().is_some_and(|p| p.call_id.to_string() == *id) {
+                slot.take()
+            } else {
+                None
             }
-            self.owned_anon_rooms.lock().remove(id);
-        } else {
-            let pending = {
-                let mut slot = self.pending_dm_call.lock();
-                if slot.as_ref().is_some_and(|p| p.call_id.to_string() == *id) {
-                    slot.take()
-                } else {
-                    None
-                }
-            };
-            if let Some(pending) = pending {
+        };
+        if let Some(pending) = pending {
+            let _ = tokio::time::timeout(
+                std::time::Duration::from_secs(3),
+                self.send_call_hangup_to(&pending.peer_id, id, CallHangupReason::Normal),
+            )
+            .await;
+        } else if !self.start_groups.lock().contains(id) {
+            if let Some(call) = worker
+                .active_call()
+                .await
+                .filter(|c| c.id.to_string() == *id)
+            {
                 let _ = tokio::time::timeout(
                     std::time::Duration::from_secs(3),
-                    self.send_call_hangup_to(&pending.peer_id, id, CallHangupReason::Normal),
+                    self.send_call_hangup(&call.channel_id, id, CallHangupReason::Normal),
                 )
                 .await;
-            } else if !self.start_groups.lock().contains(id) {
-                if let Some(call) = worker
-                    .active_call()
-                    .await
-                    .filter(|c| c.id.to_string() == *id)
-                {
-                    let _ = tokio::time::timeout(
-                        std::time::Duration::from_secs(3),
-                        self.send_call_hangup(&call.channel_id, id, CallHangupReason::Normal),
-                    )
-                    .await;
-                }
             }
         }
         // A channel host may already have sent some rings before cancellation.
         // Cancel those named rings without advertising any later STARTED event.
-        if !start.is_anonymous && self.start_groups.lock().contains(id) {
+        if self.start_groups.lock().contains(id) {
             if let Some(call) = worker
                 .active_call()
                 .await
@@ -550,7 +500,7 @@ impl CallSignalingService {
     /// Store a pending outgoing DM call.
     /// Called only after the client has serialized credential teardown and
     /// stopped old producers. Dropping invite buffers zeroizes retained keys.
-    pub(crate) fn clear_call_session(&self, incoming: &[String]) {
+    pub(crate) fn clear_call_session(&self) {
         self.pending_dm_call.lock().take();
         #[cfg(feature = "media")]
         {
@@ -568,10 +518,6 @@ impl CallSignalingService {
         self.group_call_invites.lock().clear();
         self.group_key_wait.lock().take();
         self.last_key_sent.lock().take();
-        let rooms = std::mem::take(&mut *self.owned_anon_rooms.lock());
-        for room in rooms.iter().chain(incoming.iter()) {
-            self.anon_dm_service.clear_pending_anon_call(room);
-        }
     }
 
     pub fn set_pending_dm_call(&self, pending: PendingDmCall) {
@@ -1294,570 +1240,12 @@ impl CallSignalingService {
         })
     }
 
-    // =========================================================================
-    // Anonymous Call Orchestration
-    // =========================================================================
-
-    /// Claim a call-room token from the pre-fetched pool (already marked used).
-    ///
-    /// Never requests tokens: an authenticated request right before the
-    /// anonymous room create/join that spends it links the two in time
-    /// (NDSS'21 §VI-F). An empty pool fails the call with `NoTokens`; the
-    /// refill loop tops it up on its own schedule.
-    #[cfg(feature = "media")]
-    fn acquire_call_room_token(&self) -> Result<crate::mailbox::CallRoomToken, CallSignalingError> {
-        self.anon_dm_service
-            .token_manager
-            .claim_prefetched_call_room_token()
-            .map_err(|e| match e {
-                crate::error::MailboxError::NoTokensAvailable => CallSignalingError::NoTokens,
-                e => CallSignalingError::AnonCall(e.to_string()),
-            })
-    }
-
-    /// Derive verification emojis from an anonymous call's encryption key and room name.
-    #[cfg(feature = "media")]
-    fn anon_verification_emojis(encryption_key: &[u8], room_name: &str) -> [String; 4] {
-        let mut key_arr = [0u8; 32];
-        if encryption_key.len() >= 32 {
-            key_arr.copy_from_slice(&encryption_key[..32]);
-        }
-        let verification = CallVerification::derive_verification_emojis(&key_arr, room_name);
-        let (e1, e2, e3, e4) = CallVerification::to_slint_tuple(&verification);
-        [e1, e2, e3, e4]
-    }
-
     /// Whether `user_id` is the logged-in user — i.e. a message from one of our
     /// own devices.
     pub fn is_current_user(&self, user_id: &UserId) -> bool {
         self.channel_service
             .current_user_id()
             .is_ok_and(|me| me == *user_id)
-    }
-
-    /// Drop the pending state of the anon call `sender` is ringing us with in
-    /// `room_name`, returning whether there was one — i.e. whether their
-    /// hangup calls off a ring of ours.
-    pub fn take_incoming_anon_call(&self, room_name: &str, sender: UserId) -> bool {
-        self.anon_dm_service
-            .take_incoming_anon_call(room_name, sender)
-            .is_some()
-    }
-
-    /// Resolve the display name *we* locally know for an anon-DM peer, from the
-    /// conversation's profile exchange. Preferred over the caller-supplied
-    /// `caller_display_name` in an incoming offer: it's reliable (synced via the
-    /// anon-DM handshake) and spoof-resistant — a caller can't pick the name
-    /// shown on the callee's incoming-call screen. Returns `None` if unknown.
-    pub fn anon_dm_peer_name(&self, conversation_id: &AnonDmId) -> Option<String> {
-        self.anon_dm_service
-            .get_conversation(conversation_id)
-            .ok()
-            .flatten()
-            .and_then(|c| c.peer_display_name)
-            .filter(|n| !n.is_empty())
-    }
-
-    /// Start an anonymous DM call: acquire token, send offer, store pending state.
-    ///
-    /// Returns an `AnonCallSetupResult` with the room name for UI display.
-    /// The call is not yet connected -- that happens when the peer accepts
-    /// via `handle_anon_call_answer()`.
-    #[cfg(feature = "media")]
-    pub async fn start_anon_dm_call(
-        &self,
-        anon_dm_id: &AnonDmId,
-        is_video: bool,
-        display_name: &str,
-        call_worker: &CallWorkerHandle,
-    ) -> Result<crate::services::anon_dm::AnonCallOfferResult, CallSignalingError> {
-        let token = self.acquire_call_room_token()?;
-
-        // Send call offer via anon DM channel
-        let offer_result = self
-            .anon_dm_service
-            .send_call_offer(anon_dm_id, &token, is_video, Some(display_name))
-            .await
-            .map_err(|e| CallSignalingError::AnonCall(format!("Failed to send offer: {}", e)))?;
-
-        tracing::info!(
-            room_name = %offer_result.room_name,
-            "Sent anonymous DM call offer"
-        );
-
-        self.register_start_attempt(&offer_result.room_name);
-        // Store pending call state
-        self.owned_anon_rooms
-            .lock()
-            .insert(offer_result.room_name.clone());
-        self.anon_dm_service.store_pending_anon_call(
-            offer_result.room_name.clone(),
-            crate::services::anon_dm::PendingAnonCall {
-                call_room_id: offer_result.call_room_id,
-                room_name: offer_result.room_name.clone(),
-                conversation_id: *anon_dm_id,
-                token,
-                is_video_call: is_video,
-                is_outgoing: true,
-                display_name: display_name.to_string(),
-                encryption_key: offer_result.call_encryption_key.clone(),
-                sender_id: None,
-                started_at: None,
-            },
-        );
-        self.ring_anon_call(
-            call_worker,
-            &offer_result.room_name,
-            OrchestratedCallKind::AnonDm,
-            is_video,
-        );
-
-        Ok(offer_result)
-    }
-
-    /// Start an anonymous group call: acquire token, send offer to all members, store pending state.
-    #[cfg(feature = "media")]
-    pub async fn start_anon_group_call(
-        &self,
-        group_id: &AnonGroupId,
-        is_video: bool,
-        display_name: &str,
-        call_worker: &CallWorkerHandle,
-    ) -> Result<crate::services::anon_dm::AnonCallOfferResult, CallSignalingError> {
-        let token = self.acquire_call_room_token()?;
-
-        // Send call offer to all group members
-        let offer_result = self
-            .anon_group_service
-            .send_call_offer(group_id, &token, is_video, Some(display_name))
-            .await
-            .map_err(|e| {
-                CallSignalingError::AnonCall(format!("Failed to send group offer: {}", e))
-            })?;
-
-        tracing::info!(
-            room_name = %offer_result.room_name,
-            "Sent anonymous group call offer"
-        );
-
-        self.register_start_attempt(&offer_result.room_name);
-        // Store pending call state (reuse anon DM pending call infrastructure)
-        let conversation_id = crate::domain::anon_dm::AnonDmId::try_from_slice(group_id.as_bytes())
-            .expect("AnonGroupId is 16 bytes like AnonDmId");
-
-        self.owned_anon_rooms
-            .lock()
-            .insert(offer_result.room_name.clone());
-        self.anon_dm_service.store_pending_anon_call(
-            offer_result.room_name.clone(),
-            crate::services::anon_dm::PendingAnonCall {
-                call_room_id: offer_result.call_room_id,
-                room_name: offer_result.room_name.clone(),
-                conversation_id,
-                token,
-                is_video_call: is_video,
-                is_outgoing: true,
-                display_name: display_name.to_string(),
-                encryption_key: offer_result.call_encryption_key.clone(),
-                sender_id: None,
-                started_at: None,
-            },
-        );
-        self.ring_anon_call(
-            call_worker,
-            &offer_result.room_name,
-            OrchestratedCallKind::AnonGroup,
-            is_video,
-        );
-
-        Ok(offer_result)
-    }
-
-    /// Our anon call is ringing: register it, so `end_active_call` can cancel
-    /// it before anyone answers, and ring it out after [`RING_TIMEOUT`] —
-    /// both through `end_anon_call`, so the callee stops ringing too.
-    ///
-    /// The peer is nil: anon peers have no `UserId` (as on connect, see
-    /// `spawn_anon_call_answer_task`). The pending call is the ringing
-    /// state — an answer re-stores it as started, and any end takes it — so
-    /// the timeout ends the call only if it is still dialed and unanswered.
-    #[cfg(feature = "media")]
-    fn ring_anon_call(
-        &self,
-        call_worker: &CallWorkerHandle,
-        room_name: &str,
-        kind: OrchestratedCallKind,
-        is_video: bool,
-    ) {
-        call_worker.orch_register_outgoing(
-            CallHandle::from(room_name),
-            kind,
-            UserId(uuid::Uuid::nil()),
-            String::new(),
-            is_video,
-        );
-        let signaling = self.clone();
-        let worker = call_worker.clone();
-        let room_name = room_name.to_string();
-        tokio::spawn(async move {
-            tokio::time::sleep(RING_TIMEOUT).await;
-            if signaling.start_was_cancelled(&room_name) {
-                return;
-            }
-            let Some(pending) = signaling
-                .anon_dm_service
-                .take_ringing_anon_call(Some(&room_name))
-            else {
-                return;
-            };
-            tracing::info!(room_name = %room_name, "Outgoing anon call unanswered — ending it");
-            signaling
-                .finish_anon_call(
-                    &worker,
-                    Some(pending),
-                    room_name,
-                    0,
-                    CallEndReason::NoAnswer,
-                )
-                .await;
-        });
-    }
-
-    /// Accept an incoming anonymous call: acquire token, send accept, join room, connect LiveKit.
-    ///
-    /// Returns an `AnonCallSetupResult` with everything the UI needs.
-    #[cfg(feature = "media")]
-    pub async fn accept_anon_call(
-        &self,
-        room_name: &str,
-        call_worker: &CallWorkerHandle,
-    ) -> Result<AnonCallSetupResult, CallSignalingError> {
-        // Take pending call state
-        let pending = self
-            .anon_dm_service
-            .take_pending_anon_call(room_name)
-            .ok_or(CallSignalingError::NoPendingCall)?;
-
-        // Acquire a fresh token for joining
-        let token = self.acquire_call_room_token().map_err(|e| {
-            // Put pending call back so user can retry
-            call_worker.with_current_presentation_session(|| {
-                self.anon_dm_service
-                    .store_pending_anon_call(room_name.to_string(), pending.clone())
-            });
-            e
-        })?;
-
-        // Use our own display name
-        let my_display_name = self
-            .anon_dm_service
-            .get_my_display_name()
-            .unwrap_or_else(|| "Anonymous".to_string());
-
-        // Determine if this is a group call (no anon DM conversation for this ID)
-        let is_group_call = self
-            .anon_dm_service
-            .get_conversation(&pending.conversation_id)
-            .ok()
-            .flatten()
-            .is_none();
-
-        // Send accept answer. The returned ns timestamp is wired into the
-        // peer's `AnonCallAnswer` envelope and becomes the shared call-start
-        // anchor for the duration timer on both sides.
-        let answer_timestamp_ns = if is_group_call {
-            let group_id = AnonGroupId::try_from_slice(pending.conversation_id.as_bytes())
-                .ok_or_else(|| CallSignalingError::AnonCall("Invalid group ID".into()))?;
-
-            self.anon_group_service
-                .send_call_answer(
-                    &group_id,
-                    &pending.call_room_id,
-                    true,
-                    Some(&token),
-                    Some(&my_display_name),
-                )
-                .await
-                .map_err(|e| {
-                    CallSignalingError::AnonCall(format!("Failed to send group accept: {}", e))
-                })?
-        } else {
-            self.anon_dm_service
-                .send_call_answer(
-                    &pending.conversation_id,
-                    &pending.call_room_id,
-                    true,
-                    Some(&token),
-                    None,
-                    Some(&my_display_name),
-                )
-                .await
-                .map_err(|e| {
-                    CallSignalingError::AnonCall(format!("Failed to send accept: {}", e))
-                })?
-        };
-
-        tracing::info!(room_name = %room_name, "Anonymous call accept sent, joining LiveKit room");
-
-        // Join the anonymous call room to get LiveKit credentials
-        let room_info = self
-            .anon_dm_service
-            .join_anon_call_room(room_name, &token, &my_display_name, pending.is_video_call)
-            .await
-            .map_err(|e| CallSignalingError::AnonCall(format!("Failed to join room: {}", e)))?;
-
-        // Connect to LiveKit
-        let call_id = CallId::new();
-        let channel_id = ChannelId::new();
-
-        call_worker
-            .connect_with_token(
-                &room_info.livekit_token,
-                &room_info.livekit_url,
-                pending.encryption_key.clone(),
-                room_name,
-                call_id,
-                channel_id,
-                pending.is_video_call,
-            )
-            .await
-            .map_err(|e| CallSignalingError::CallWorker(e.to_string()))?;
-
-        tracing::info!(room_name = %room_name, "Connected to LiveKit for anonymous call");
-
-        let verification_emojis =
-            Self::anon_verification_emojis(&pending.encryption_key, room_name);
-
-        let peer_avatar = self
-            .anon_dm_service
-            .get_conversation(&pending.conversation_id)
-            .ok()
-            .flatten()
-            .and_then(|c| c.peer_avatar);
-
-        let result = AnonCallSetupResult {
-            room_name: room_name.to_string(),
-            channel_id,
-            encryption_key: zeroize::Zeroizing::new(pending.encryption_key.clone()),
-            verification_emojis,
-            is_video: pending.is_video_call,
-            peer_display_name: pending.display_name.clone(),
-            started_at_ns: answer_timestamp_ns,
-            peer_avatar,
-        };
-
-        // Re-store pending call so end_anon_call can find it for hangup/history
-        let restored = call_worker.with_current_presentation_session(|| {
-            self.owned_anon_rooms.lock().insert(room_name.to_string());
-            let mut active_pending = pending;
-            active_pending.started_at = Some(chrono::Utc::now());
-            self.anon_dm_service
-                .store_pending_anon_call(room_name.to_string(), active_pending);
-        });
-        if restored.is_none() {
-            return Err(CallSignalingError::NoPendingCall);
-        }
-
-        Ok(result)
-    }
-
-    /// Handle an anonymous call answer (caller side): acquire token, join room, connect LiveKit.
-    ///
-    /// Group anon calls fan out answers to every participant, so this may be
-    /// invoked repeatedly for the same room. Returns `AlreadyInCall` for those
-    /// echoes so the UI can distinguish them from a real `Declined`.
-    #[cfg(feature = "media")]
-    pub async fn handle_anon_call_answer(
-        &self,
-        call_room_id: &[u8],
-        accepted: bool,
-        callee_display_name: &str,
-        answer_timestamp_ns: u64,
-        call_worker: &CallWorkerHandle,
-    ) -> Result<AnonCallAnswerOutcome, CallSignalingError> {
-        let _ownership = self.start_gate.lock().await;
-        // Skip if already in a call — this handles the callee's own echo coming
-        // back from the group mailbox, or another participant's answer in a
-        // multi-party group call. Distinct from `Declined` so the UI can ignore
-        // these silently instead of tearing down the active call.
-        if call_worker.is_in_call().await {
-            tracing::debug!("Already in a call, ignoring duplicate answer event");
-            return Ok(AnonCallAnswerOutcome::AlreadyInCall);
-        }
-
-        // Reconstruct room name from call_room_id. A wrong-length id can't map
-        // to any pending call — surface it instead of silently degrading to a
-        // nil-UUID room name that always misses (misleading NoPendingCall).
-        let id_bytes: [u8; 16] = call_room_id.try_into().map_err(|_| {
-            CallSignalingError::AnonCall(format!(
-                "invalid call_room_id length: {} (expected 16)",
-                call_room_id.len()
-            ))
-        })?;
-        let room_name = format!("anon-{}", uuid::Uuid::from_bytes(id_bytes));
-
-        let attempt = self.start_attempts.lock().get(&room_name).cloned();
-        if attempt.as_ref().is_some_and(|a| a.is_cancelled()) {
-            return Err(CallSignalingError::NoPendingCall);
-        }
-
-        let pending = self
-            .anon_dm_service
-            .take_pending_anon_call(&room_name)
-            .ok_or(CallSignalingError::NoPendingCall)?;
-
-        if !accepted {
-            tracing::info!(room_name = %room_name, "Anonymous call declined by peer");
-            return Ok(AnonCallAnswerOutcome::Declined);
-        }
-
-        tracing::info!(room_name = %room_name, "Anonymous call accepted, connecting to LiveKit");
-
-        // Mark call as started for duration tracking
-        self.anon_dm_service
-            .mark_anon_call_started(&pending.room_name);
-
-        // Acquire a fresh token for joining the call room
-        let join_token = self.acquire_call_room_token()?;
-
-        // Join the anonymous call room to get LiveKit credentials
-        let room_info = self
-            .anon_dm_service
-            .join_anon_call_room(
-                &pending.room_name,
-                &join_token,
-                &pending.display_name,
-                pending.is_video_call,
-            )
-            .await
-            .map_err(|e| CallSignalingError::AnonCall(format!("Failed to join room: {}", e)))?;
-
-        if attempt.as_ref().is_some_and(|a| a.is_cancelled()) {
-            call_worker.with_current_presentation_session(|| {
-                self.anon_dm_service
-                    .store_pending_anon_call(room_name.clone(), pending)
-            });
-            return Err(CallSignalingError::NoPendingCall);
-        }
-
-        // Connect to LiveKit
-        let call_id = CallId::new();
-        let channel_id = ChannelId::new();
-
-        call_worker
-            .connect_with_token(
-                &room_info.livekit_token,
-                &room_info.livekit_url,
-                pending.encryption_key.clone(),
-                &pending.room_name,
-                call_id,
-                channel_id,
-                pending.is_video_call,
-            )
-            .await
-            .map_err(|e| CallSignalingError::CallWorker(e.to_string()))?;
-
-        if attempt.as_ref().is_some_and(|a| a.is_cancelled()) {
-            call_worker
-                .rollback_setup(CallHandle::from(room_name.as_str()))
-                .await;
-            call_worker.with_current_presentation_session(|| {
-                self.anon_dm_service
-                    .store_pending_anon_call(room_name.clone(), pending)
-            });
-            return Err(CallSignalingError::NoPendingCall);
-        }
-
-        tracing::info!(room_name = %room_name, "Connected to LiveKit for anonymous call (caller side)");
-
-        let verification_emojis =
-            Self::anon_verification_emojis(&pending.encryption_key, &pending.room_name);
-
-        let peer_avatar = self
-            .anon_dm_service
-            .get_conversation(&pending.conversation_id)
-            .ok()
-            .flatten()
-            .and_then(|c| c.peer_avatar);
-
-        let result = AnonCallSetupResult {
-            room_name: pending.room_name.clone(),
-            channel_id,
-            encryption_key: zeroize::Zeroizing::new(pending.encryption_key.clone()),
-            verification_emojis,
-            is_video: pending.is_video_call,
-            peer_display_name: callee_display_name.to_string(),
-            started_at_ns: answer_timestamp_ns,
-            peer_avatar,
-        };
-
-        // Re-store pending call so end_anon_call can find it for hangup/history
-        let restored = call_worker.with_current_presentation_session(|| {
-            self.owned_anon_rooms.lock().insert(room_name.to_string());
-            let mut active_pending = pending;
-            active_pending.started_at = Some(chrono::Utc::now());
-            self.anon_dm_service
-                .store_pending_anon_call(room_name.clone(), active_pending);
-        });
-        if restored.is_none() {
-            return Err(CallSignalingError::NoPendingCall);
-        }
-
-        Ok(AnonCallAnswerOutcome::Connected(result))
-    }
-
-    /// Decline an incoming anonymous call: send the decline answer. The history
-    /// row and bubble follow the orchestrator's `IncomingWithdrawn { Declined }`
-    /// (`call_history_recorder`).
-    pub async fn decline_anon_call(&self, room_name: &str) -> Result<(), CallSignalingError> {
-        let pending = self
-            .anon_dm_service
-            .take_pending_anon_call(room_name)
-            .ok_or(CallSignalingError::NoPendingCall)?;
-
-        // Determine if this is a group call
-        let is_group_call = self
-            .anon_dm_service
-            .get_conversation(&pending.conversation_id)
-            .ok()
-            .flatten()
-            .is_none();
-
-        if is_group_call {
-            let group_id = AnonGroupId::try_from_slice(pending.conversation_id.as_bytes())
-                .ok_or_else(|| CallSignalingError::AnonCall("Invalid group ID".into()))?;
-
-            self.anon_group_service
-                .send_call_answer(
-                    &group_id,
-                    &pending.call_room_id,
-                    false,
-                    None,
-                    Some(&pending.display_name),
-                )
-                .await
-                .map_err(|e| {
-                    CallSignalingError::AnonCall(format!("Failed to send group decline: {}", e))
-                })?;
-        } else {
-            self.anon_dm_service
-                .send_call_answer(
-                    &pending.conversation_id,
-                    &pending.call_room_id,
-                    false,
-                    None,
-                    None,
-                    Some(&pending.display_name),
-                )
-                .await
-                .map_err(|e| {
-                    CallSignalingError::AnonCall(format!("Failed to send decline: {}", e))
-                })?;
-        }
-
-        tracing::info!(room_name = %room_name, "Anonymous call declined");
-
-        Ok(())
     }
 
     // ================================================================
@@ -1971,213 +1359,6 @@ impl CallSignalingService {
         }
 
         Ok(())
-    }
-
-    /// End an active anonymous call: send hangup, store history, leave.
-    ///
-    /// Handles both anonymous DM and anonymous group calls.
-    /// Always disconnects from the LiveKit room, even if hangup signaling fails.
-    #[cfg(feature = "media")]
-    pub async fn end_anon_call(
-        &self,
-        call_worker: &CallWorkerHandle,
-        duration_secs: i64,
-    ) -> Result<Option<crate::domain::anon_dm::AnonDmId>, CallSignalingError> {
-        // Get room name from active call state (not from Call.id which is a random UUID)
-        if let Some(room_name) = call_worker.get_room_name().await {
-            // Take the pending call info (re-stored by accept/answer flow)
-            let pending = self.anon_dm_service.take_pending_anon_call(&room_name);
-            return Ok(self
-                .finish_anon_call(
-                    call_worker,
-                    pending,
-                    room_name,
-                    duration_secs,
-                    CallEndReason::LocalHangup,
-                )
-                .await);
-        }
-        // No room: our call is still ringing — the caller joins the room
-        // only once it is answered. Cancel it.
-        if let Some(pending) = self.anon_dm_service.take_ringing_anon_call(None) {
-            let room_name = pending.room_name.clone();
-            return Ok(self
-                .finish_anon_call(
-                    call_worker,
-                    Some(pending),
-                    room_name,
-                    0,
-                    CallEndReason::LocalHangup,
-                )
-                .await);
-        }
-        tracing::warn!("end_anon_call: no active or ringing anon call, forcing disconnect");
-        call_worker
-            .disconnect_local(CallEndReason::LocalHangup)
-            .await;
-        Ok(None)
-    }
-
-    /// Send the anon hangup and end `room_name`'s call with `reason`: leave
-    /// the room if we are in it, else withdraw our ringing call from the
-    /// orchestrator. Either way one `ActiveEnded` closes the history row,
-    /// files a 1:1 call's bubble, and closes the UI's call view.
-    #[cfg(feature = "media")]
-    async fn finish_anon_call(
-        &self,
-        call_worker: &CallWorkerHandle,
-        pending: Option<crate::services::anon_dm::PendingAnonCall>,
-        room_name: String,
-        duration_secs: i64,
-        reason: CallEndReason,
-    ) -> Option<crate::domain::anon_dm::AnonDmId> {
-        use crate::proto::content_v1::anon_call_hangup::Reason as HangupReason;
-        let hangup_reason = if reason == CallEndReason::NoAnswer {
-            HangupReason::Timeout
-        } else {
-            HangupReason::Normal
-        };
-
-        // Send hangup and store history if we have the call context
-        let conversation_id = if let Some(ref pending) = pending {
-            let conversation_id = pending.conversation_id;
-
-            // Determine if this is a group call
-            let is_group_call = self
-                .anon_dm_service
-                .get_conversation(&conversation_id)
-                .ok()
-                .flatten()
-                .is_none();
-
-            // Send hangup to the correct channel (DM or group)
-            if is_group_call {
-                if let Some(group_id) = AnonGroupId::try_from_slice(conversation_id.as_bytes()) {
-                    if let Err(e) = self
-                        .anon_group_service
-                        .send_call_hangup(&group_id, &pending.call_room_id, hangup_reason)
-                        .await
-                    {
-                        tracing::error!(error = %e, "Failed to send group call hangup");
-                    }
-                }
-            } else {
-                if let Err(e) = self
-                    .anon_dm_service
-                    .send_call_hangup(&conversation_id, &pending.call_room_id, hangup_reason)
-                    .await
-                {
-                    tracing::error!(error = %e, "Failed to send anonymous call hangup");
-                }
-            }
-
-            // A 1:1 anon call's Call bubble is filed by `call_history_recorder`
-            // on the `ActiveEnded` below, as for a friend DM; only a group call
-            // still files its text record here.
-            if is_group_call {
-                // Store call history as plain text (store_text_message wraps in
-                // MessageContent::Text without a JSON envelope, so the bubble renders
-                // correctly after reload via Message::as_text()).
-                let duration_str = if duration_secs > 0 {
-                    format!("{}:{:02}", duration_secs / 60, duration_secs % 60)
-                } else {
-                    "0:00".to_string()
-                };
-                let label = if pending.is_outgoing {
-                    "Outgoing call"
-                } else {
-                    "Incoming call"
-                };
-                let text = format!("\u{1F4DE} {} \u{00B7} {}", label, duration_str);
-                let sent_at = crate::util::time::TimestampNanos::now().as_u64();
-                let user_id = self
-                    .channel_service
-                    .current_user_id()
-                    .unwrap_or_else(|_| UserId::from_uuid(uuid::Uuid::nil()));
-
-                match self.anon_dm_service.store_text_message(
-                    &conversation_id,
-                    &user_id,
-                    &text,
-                    sent_at,
-                ) {
-                    Ok(msg_id) => {
-                        // Tell the UI in real time so the call-history bubble
-                        // shows without waiting for the user to re-enter the
-                        // conversation. The send path optimistically inserts
-                        // via `send_message.rs` and skips this emit; here the
-                        // message originates inside the signaling actor with
-                        // no UI optimism, so we have to drive the model
-                        // update ourselves.
-                        use crate::domain::ids::{ChannelId, MessageId};
-                        use crate::domain::message::{ConversationType, Message, MessageContent};
-                        use crate::inbox::handlers::DomainEvent;
-                        let channel_id: ChannelId = conversation_id.into();
-                        let msg_uuid = msg_id
-                            .as_str()
-                            .parse::<uuid::Uuid>()
-                            .map(MessageId::from_uuid)
-                            .unwrap_or_else(|_| MessageId::new());
-                        let now = chrono::Utc::now();
-                        let domain_msg = Message {
-                            id: msg_uuid,
-                            conversation_id: channel_id,
-                            conversation_type: ConversationType::AnonDm,
-                            sender_id: Some(user_id),
-                            device_id: None,
-                            content: MessageContent::Text(text),
-                            encrypted_content: None,
-                            thread_id: None,
-                            reply_to: None,
-                            reply_to_author_id: None,
-                            reply_to_text: None,
-                            reply_to_thumbnail: None,
-                            reply_to_thumbnail_mime: None,
-                            attachments: vec![],
-                            is_pinned: false,
-                            is_edited: false,
-                            is_deleted: false,
-                            is_read: true,
-                            sent_at,
-                            created_at: now,
-                            updated_at: now,
-                            edited_at: None,
-                            reaction_counts: vec![],
-                            current_user_reactions: vec![],
-                            mentioned_integrations: vec![],
-                            targets_ai_bot: false,
-                            delivery_status: String::new(),
-                            failure_reason: None,
-                        };
-                        self.message_service
-                            .event_bus
-                            .emit_domain(DomainEvent::MessageReceived {
-                                message: domain_msg,
-                            });
-                    }
-                    Err(e) => {
-                        tracing::error!(error = %e, "Failed to store anon call history on hangup");
-                    }
-                }
-            }
-
-            Some(conversation_id)
-        } else {
-            tracing::warn!(room_name = %room_name, "No pending call context for end — hangup signal skipped");
-            None
-        };
-
-        // Leave the call (orchestrator cleanup is now atomic inside the
-        // worker); a call that never got a room is only the orchestrator's.
-        if call_worker.get_room_name().await.as_deref() == Some(room_name.as_str()) {
-            if let Err(e) = call_worker.leave_call(reason).await {
-                tracing::debug!(error = %e, "leave_call after anon hangup");
-            }
-        } else {
-            call_worker.orch_mark_ended(CallHandle::from(room_name), reason);
-        }
-
-        conversation_id
     }
 
     /// Handle remote hangup: disconnect locally. The Call bubble is filed by
@@ -2558,7 +1739,7 @@ mod named_dm_completion_tests {
         });
         entered_rx.await.unwrap();
         client.auth_state().invalidate_session();
-        service.clear_call_session(&[]);
+        service.clear_call_session();
         worker.reset_presentation_session(revision).await.unwrap();
         assert!(service.start_attempts.lock().is_empty());
         assert!(attempt.is_cancelled());

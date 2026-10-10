@@ -82,6 +82,35 @@ impl ConversationType {
         matches!(self, Self::AnonDm | Self::AnonGroup)
     }
 
+    /// A Telegram-style secret chat: the anonymous DMs and groups, bound to
+    /// this device and carried over Tor only (owner decision 2026-10-10).
+    pub fn is_secret_chat(&self) -> bool {
+        self.is_anon()
+    }
+
+    /// Whether a message in this conversation may be forwarded anywhere.
+    /// Nothing leaves a secret chat: a forward would carry its content (and
+    /// its attachments' CDN objects) into a conversation tied to the account.
+    pub fn can_forward_from(&self) -> bool {
+        !self.is_secret_chat()
+    }
+
+    /// Whether a forward may land here. A secret chat takes forwarded text
+    /// only: a forwarded attachment reuses the original's CDN pointer, an
+    /// object uploaded (and minted) outside the secret chat, which would tie
+    /// the two conversations together on the server.
+    pub fn accepts_forward(&self, has_attachments: bool) -> bool {
+        !(self.is_secret_chat() && has_attachments)
+    }
+
+    /// Whether the GIF picker is offered here. GIF search and media go through
+    /// the server's GifService, which takes only account (Basic) auth, so
+    /// using it from a secret chat would tie that activity to the account even
+    /// over Tor.
+    pub fn gif_picker_available(&self) -> bool {
+        !self.is_secret_chat()
+    }
+
     /// Parse from database string representation.
     ///
     /// Returns an error for unknown conversation types instead of silently
@@ -1090,6 +1119,31 @@ pub fn ordered_insert_position(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Secret chats: nothing is forwarded out; forwards in are text only; no
+    /// GIF picker. Every other conversation is unaffected.
+    #[test]
+    fn secret_chat_forward_and_gif_rules() {
+        for ct in [ConversationType::AnonDm, ConversationType::AnonGroup] {
+            assert!(ct.is_secret_chat());
+            assert!(!ct.can_forward_from());
+            assert!(ct.accepts_forward(false));
+            assert!(!ct.accepts_forward(true));
+            assert!(!ct.gif_picker_available());
+        }
+        for ct in [
+            ConversationType::Channel,
+            ConversationType::ServerDm,
+            ConversationType::SavedMessages,
+            ConversationType::Mesh,
+            ConversationType::MeshDm,
+        ] {
+            assert!(!ct.is_secret_chat());
+            assert!(ct.can_forward_from());
+            assert!(ct.accepts_forward(true) && ct.accepts_forward(false));
+            assert!(ct.gif_picker_available());
+        }
+    }
 
     #[test]
     fn ordered_insert_position_dedup_and_ordering() {

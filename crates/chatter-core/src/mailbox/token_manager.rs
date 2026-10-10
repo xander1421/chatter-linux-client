@@ -1,4 +1,4 @@
-//! Token manager for blind-signed mailbox and call room tokens.
+//! Token manager for blind-signed mailbox tokens.
 //!
 //! Manages the full lifecycle of Chaum blind signature tokens:
 //! - Fetching server's RSA public key
@@ -7,10 +7,9 @@
 //! - Unblinding signatures to create usable tokens
 //! - Storing tokens securely in SQLCipher
 //!
-//! Supports two token types, both drawn from ONE server-owned daily budget
-//! (the server is the only quota authority; see `grant_error`):
-//! - **Mailbox tokens**: For creating ephemeral mailboxes / anonymous sends
-//! - **Call room tokens**: For joining anonymous call rooms
+//! Tokens create ephemeral mailboxes and pay for anonymous sends, drawn from a
+//! server-owned daily budget (the server is the only quota authority; see
+//! `grant_error`).
 
 use std::sync::Arc;
 use std::time::Duration;
@@ -36,13 +35,6 @@ pub const DEFAULT_TOKEN_REQUEST_COUNT: u32 = 5;
 /// Request more mailbox tokens when below this threshold.
 pub const MIN_TOKEN_THRESHOLD: u32 = 2;
 
-/// Call-room tokens the refill loop keeps claimable. An outgoing anonymous
-/// call spends two (the offer's room and the join); accepting spends one.
-pub const DEFAULT_CALL_ROOM_TOKEN_REQUEST_COUNT: u32 = 4;
-
-/// The refill loop tops call-room tokens up once fewer than this remain.
-pub const MIN_CALL_ROOM_TOKEN_THRESHOLD: u32 = 2;
-
 /// A ready-to-use mailbox token.
 ///
 /// Contains the ephemeral Ed25519 keypair and its blind signature.
@@ -60,28 +52,9 @@ pub struct MailboxToken {
     pub randomizer: Option<Vec<u8>>,
 }
 
-/// A ready-to-use call room token.
-///
-/// Contains the ephemeral Ed25519 keypair and its blind signature.
-/// The signature proves the right to join/create an anonymous call room.
-#[derive(Clone)]
-pub struct CallRoomToken {
-    /// Unique token identifier.
-    pub id: String,
-    /// Ed25519 public key (32 bytes).
-    pub public_key: Vec<u8>,
-    /// Ed25519 private key (64 bytes) for signing challenges.
-    pub private_key: Vec<u8>,
-    /// Unblinded RSA signature over the public key.
-    pub signature: Vec<u8>,
-    /// Message randomizer for signature verification.
-    pub randomizer: Option<Vec<u8>>,
-}
-
 /// Map a GetMailboxTokens failure. The server is the only authority on the
-/// daily token budget (mailbox and call-room tokens draw from the same one);
-/// it answers ResourceExhausted once that budget is spent. The client used to
-/// keep its own counter with a hard-coded ceiling of 10 (5 for call rooms)
+/// daily token budget; it answers ResourceExhausted once that budget is
+/// spent. The client used to keep its own counter with a hard-coded ceiling
 /// against a server budget of 48 + 2/conversation, so the two disagreed
 /// (OPEN-ITEMS §120).
 fn grant_error(e: crate::error::NetworkError) -> MailboxError {
@@ -638,315 +611,6 @@ impl TokenManager {
 
         Ok(count as u32)
     }
-
-    // ========================================================================
-    // Call Room Token Methods
-    // ========================================================================
-
-    /// Request new call room tokens from the server.
-    ///
-    /// Uses the same blind signature infrastructure and server budget as
-    /// mailbox tokens, with separate storage tables.
-    ///
-    /// # Arguments
-    ///
-    /// * `client` - MailboxClient for server communication
-    /// * `kt` - anonymous KT client (see [`Self::refresh_server_key`])
-    /// * `count` - Number of tokens to request
-    ///
-    /// # Returns
-    ///
-    /// The number of tokens successfully acquired.
-    pub async fn request_call_room_tokens(
-        &self,
-        client: &mut MailboxClient,
-        kt: &mut AnonymousKtClient,
-        count: u32,
-    ) -> Result<u32, MailboxError> {
-        tracing::info!(
-            "TokenManager: request_call_room_tokens called, count={}",
-            count
-        );
-
-        // Same server-owned budget as mailbox tokens; no local gate.
-        let request_count = count;
-        tracing::info!(
-            "TokenManager: will request {} call room tokens",
-            request_count
-        );
-
-        // Get/refresh server key (shared with mailbox tokens)
-        let server_key = self.refresh_server_key(client, kt).await?;
-
-        // Generate ephemeral keypairs and blind them
-        let mut blinded_keys = Vec::with_capacity(request_count as usize);
-        let mut pending_ops = Vec::with_capacity(request_count as usize);
-
-        for _ in 0..request_count {
-            let mut secret_bytes = [0u8; 32];
-            {
-                use rand::TryRngCore;
-                rand::rngs::OsRng
-                    .try_fill_bytes(&mut secret_bytes)
-                    .expect("OS CSPRNG must not fail");
-            }
-            let signing_key = SigningKey::from_bytes(&secret_bytes);
-            let verifying_key = VerifyingKey::from(&signing_key);
-
-            let public_key_bytes = verifying_key.to_bytes().to_vec();
-            let private_key_bytes = signing_key.to_keypair_bytes().to_vec();
-
-            let blinding_op = blind_key(&server_key, &public_key_bytes)?;
-
-            blinded_keys.push(blinding_op.blinded_message.clone());
-            pending_ops.push((
-                Uuid::new_v4().to_string(),
-                public_key_bytes,
-                private_key_bytes,
-                blinding_op,
-            ));
-        }
-
-        // Store pending blinds in call_room_pending_blinds table
-        for (id, pub_key, priv_key, op) in &pending_ops {
-            self.store_call_room_pending_blind(
-                id,
-                pub_key,
-                priv_key,
-                &op.blinded_message,
-                &op.secret,
-                &op.randomizer,
-                &server_key.key_id,
-            )?;
-        }
-
-        // Request signatures from server
-        let response = client
-            .get_mailbox_tokens(
-                request_count as i32,
-                blinded_keys,
-                server_key.key_id.clone(),
-            )
-            .await
-            .map_err(grant_error)?;
-        tracing::info!(
-            "TokenManager: got {} call room signatures, server quota remaining={}",
-            response.blinded_signatures.len(),
-            response.remaining_quota
-        );
-
-        // Process each signature
-        let mut success_count = 0;
-        for (i, blinded_sig) in response.blinded_signatures.iter().enumerate() {
-            if let Some((id, pub_key, priv_key, op)) = pending_ops.get(i) {
-                match unblind(
-                    &server_key,
-                    blinded_sig,
-                    &op.secret,
-                    &op.randomizer,
-                    pub_key,
-                ) {
-                    Ok(signature) => {
-                        if self
-                            .store_call_room_ready_token(
-                                id,
-                                pub_key,
-                                priv_key,
-                                &signature,
-                                &op.randomizer,
-                                &server_key.key_id,
-                            )
-                            .is_ok()
-                        {
-                            let _ = self.delete_call_room_pending_blind(id);
-                            success_count += 1;
-                        }
-                    }
-                    Err(e) => {
-                        tracing::warn!("Failed to unblind call room signature: {}", e);
-                    }
-                }
-            }
-        }
-
-        for (id, ..) in pending_ops.iter().skip(response.blinded_signatures.len()) {
-            let _ = self.delete_call_room_pending_blind(id);
-        }
-
-        tracing::info!(
-            "TokenManager: request_call_room_tokens complete, got {} tokens",
-            success_count
-        );
-        Ok(success_count)
-    }
-
-    /// Store a pending call room blinding operation.
-    #[allow(clippy::too_many_arguments)]
-    fn store_call_room_pending_blind(
-        &self,
-        id: &str,
-        ephemeral_pk: &[u8],
-        ephemeral_sk: &[u8],
-        blinded_message: &[u8],
-        secret: &BlindingSecret,
-        randomizer: &MessageRandomizer,
-        server_key_id: &str,
-    ) -> Result<(), MailboxError> {
-        let conn = self
-            .db
-            .connection()
-            .map_err(|e| MailboxError::Storage(e.to_string()))?;
-        let now = Utc::now().to_rfc3339();
-        let randomizer_bytes = randomizer.as_bytes().map(|b| b.to_vec());
-
-        conn.execute(
-            "INSERT INTO call_room_pending_blinds
-             (id, ephemeral_public_key, ephemeral_private_key, blinded_message, blinding_secret, message_randomizer, server_key_id, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-            rusqlite::params![
-                id,
-                ephemeral_pk,
-                ephemeral_sk,
-                blinded_message,
-                secret.as_bytes(),
-                randomizer_bytes,
-                server_key_id,
-                now
-            ],
-        )
-        .map_err(|e| MailboxError::Storage(e.to_string()))?;
-
-        Ok(())
-    }
-
-    /// Delete a pending call room blinding operation.
-    fn delete_call_room_pending_blind(&self, id: &str) -> Result<(), MailboxError> {
-        let conn = self
-            .db
-            .connection()
-            .map_err(|e| MailboxError::Storage(e.to_string()))?;
-
-        conn.execute("DELETE FROM call_room_pending_blinds WHERE id = ?1", [id])
-            .map_err(|e| MailboxError::Storage(e.to_string()))?;
-
-        Ok(())
-    }
-
-    /// Store a ready-to-use call room token.
-    fn store_call_room_ready_token(
-        &self,
-        id: &str,
-        ephemeral_pk: &[u8],
-        ephemeral_sk: &[u8],
-        signature: &[u8],
-        randomizer: &MessageRandomizer,
-        server_key_id: &str,
-    ) -> Result<(), MailboxError> {
-        let conn = self
-            .db
-            .connection()
-            .map_err(|e| MailboxError::Storage(e.to_string()))?;
-        let now = Utc::now().to_rfc3339();
-        let randomizer_bytes = randomizer.as_bytes().map(|b| b.to_vec());
-
-        conn.execute(
-            "INSERT INTO call_room_tokens
-             (id, ephemeral_public_key, ephemeral_private_key, signature, message_randomizer, server_key_id, created_at, used_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL)",
-            rusqlite::params![
-                id,
-                ephemeral_pk,
-                ephemeral_sk,
-                signature,
-                randomizer_bytes,
-                server_key_id,
-                now
-            ],
-        )
-        .map_err(|e| MailboxError::Storage(e.to_string()))?;
-
-        Ok(())
-    }
-
-    /// Claim a call-room token from the pre-fetched pool, and ONLY from it.
-    ///
-    /// The call-room twin of `claim_prefetched_token`: the one way a call
-    /// spends a call-room token. Marked used in the same statement, so two
-    /// concurrent calls never get the same key. Never asks the server for
-    /// more (NDSS'21 §VI-F); the pool is refilled by
-    /// `CoreServices::spawn_token_refill`, and an empty pool fails the call
-    /// with `NoTokensAvailable`. Tokens under an expired signing key are
-    /// skipped, as the server would reject them.
-    pub fn claim_prefetched_call_room_token(&self) -> Result<CallRoomToken, MailboxError> {
-        let conn = self
-            .db
-            .connection()
-            .map_err(|e| MailboxError::Storage(e.to_string()))?;
-        let now = Utc::now().to_rfc3339();
-        let now_nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos() as i64)
-            .unwrap_or(0);
-
-        let result = conn.query_row(
-            "UPDATE call_room_tokens \
-             SET used_at = ?1 \
-             WHERE id = ( \
-                 SELECT t.id FROM call_room_tokens t \
-                 JOIN mailbox_server_keys k ON k.key_id = t.server_key_id \
-                 WHERE t.used_at IS NULL AND k.valid_until > ?2 \
-                 ORDER BY t.created_at ASC \
-                 LIMIT 1 \
-             ) \
-             RETURNING id, ephemeral_public_key, ephemeral_private_key, signature, message_randomizer",
-            rusqlite::params![now, now_nanos],
-            |row| {
-                Ok(CallRoomToken {
-                    id: row.get(0)?,
-                    public_key: row.get(1)?,
-                    private_key: row.get(2)?,
-                    signature: row.get(3)?,
-                    randomizer: row.get(4)?,
-                })
-            },
-        );
-
-        match result {
-            Ok(token) => Ok(token),
-            Err(rusqlite::Error::QueryReturnedNoRows) => {
-                tracing::warn!(
-                    "TokenManager: pre-fetched call-room pool is empty; refusing to request-then-spend"
-                );
-                Err(MailboxError::NoTokensAvailable)
-            }
-            Err(e) => Err(MailboxError::Storage(e.to_string())),
-        }
-    }
-
-    /// Count claimable call-room tokens (same filter as
-    /// `claim_prefetched_call_room_token`).
-    pub fn available_call_room_token_count(&self) -> Result<u32, MailboxError> {
-        let conn = self
-            .db
-            .connection()
-            .map_err(|e| MailboxError::Storage(e.to_string()))?;
-        let now_nanos = std::time::SystemTime::now()
-            .duration_since(std::time::UNIX_EPOCH)
-            .map(|d| d.as_nanos() as i64)
-            .unwrap_or(0);
-
-        let count: i64 = conn
-            .query_row(
-                "SELECT COUNT(*) FROM call_room_tokens t \
-                 JOIN mailbox_server_keys k ON k.key_id = t.server_key_id \
-                 WHERE t.used_at IS NULL AND k.valid_until > ?1",
-                [now_nanos],
-                |row| row.get(0),
-            )
-            .map_err(|e| MailboxError::Storage(e.to_string()))?;
-
-        Ok(count as u32)
-    }
 }
 
 #[cfg(test)]
@@ -1023,35 +687,6 @@ mod tests {
         stripped.kt_proof = None;
         cache(&stripped);
         assert!(tm.get_cached_server_key().unwrap().is_none());
-    }
-
-    #[test]
-    fn call_room_claim_spends_only_the_prefetched_pool() {
-        let tm = TokenManager::new(test_db());
-        let far = i64::MAX / 2;
-        tm.store_server_key("live", b"der", far as u64).unwrap();
-        tm.store_server_key("dead", b"der", 1).unwrap();
-        let conn = tm.db.connection().unwrap();
-        for (id, key) in [("t-live", "live"), ("t-dead", "dead")] {
-            conn.execute(
-                "INSERT INTO call_room_tokens
-                 (id, ephemeral_public_key, ephemeral_private_key, signature, message_randomizer, server_key_id, created_at, used_at)
-                 VALUES (?1, CAST(?1 AS BLOB), x'00', x'00', NULL, ?2, ?3, NULL)",
-                rusqlite::params![id, key, Utc::now().to_rfc3339()],
-            )
-            .unwrap();
-        }
-        drop(conn);
-
-        // A token under an expired signing key is neither counted nor claimed.
-        assert_eq!(tm.available_call_room_token_count().unwrap(), 1);
-        assert_eq!(tm.claim_prefetched_call_room_token().unwrap().id, "t-live");
-        // Claimed means spent: the pool is now empty and says so.
-        assert_eq!(tm.available_call_room_token_count().unwrap(), 0);
-        assert!(matches!(
-            tm.claim_prefetched_call_room_token(),
-            Err(MailboxError::NoTokensAvailable)
-        ));
     }
 
     #[test]

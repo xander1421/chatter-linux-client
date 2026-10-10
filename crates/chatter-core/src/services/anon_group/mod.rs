@@ -13,7 +13,6 @@
 //!
 //! The anonymous mailbox per group ensures the server cannot correlate group membership.
 
-pub mod calls;
 mod control;
 mod ephemeral;
 mod error;

@@ -53,10 +53,7 @@ fn loggable(content: &Content) -> Option<Option<u64>> {
         | content::Content::NullMessage(_)
         | content::Content::CallKey(_)
         | content::Content::CallHangup(_)
-        | content::Content::GroupCallSignal(_)
-        | content::Content::AnonCallOffer(_)
-        | content::Content::AnonCallAnswer(_)
-        | content::Content::AnonCallHangup(_) => None,
+        | content::Content::GroupCallSignal(_) => None,
         content::Content::DataMessage(dm) => Some(has_payload(dm).then_some(dm.timestamp)),
         content::Content::SyncSent(sync) => Some(
             sync.message

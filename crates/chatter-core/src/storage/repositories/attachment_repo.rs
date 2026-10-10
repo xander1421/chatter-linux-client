@@ -66,8 +66,9 @@ impl AttachmentRepository {
         conn.execute(
             "INSERT INTO attachments (
                 id, metadata_blob, status, local_path, remote_url,
-                encryption_key, encryption_iv, thumbnail_bytes, content_location, created_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                encryption_key, encryption_iv, thumbnail_bytes, content_location, created_at,
+                secret_chat
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 attachment.id.to_string(),
                 metadata_blob,
@@ -79,6 +80,7 @@ impl AttachmentRepository {
                 thumbnail_bytes,
                 content_location_to_int(attachment.content_location),
                 attachment.created_at.to_rfc3339(),
+                attachment.secret_chat,
             ],
         )?;
         resolve_shared_content(&conn, attachment);
@@ -105,8 +107,8 @@ impl AttachmentRepository {
             "INSERT INTO attachments (
                 id, metadata_blob, status, local_path, remote_url,
                 encryption_key, encryption_iv, thumbnail_bytes,
-                encrypted_content, content_location, created_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                encrypted_content, content_location, created_at, secret_chat
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 attachment.id.to_string(),
                 metadata_blob,
@@ -119,6 +121,7 @@ impl AttachmentRepository {
                 encrypted_content,
                 content_location_to_int(ContentLocation::InDatabase),
                 attachment.created_at.to_rfc3339(),
+                attachment.secret_chat,
             ],
         )?;
         resolve_shared_content(&conn, attachment);
@@ -131,7 +134,8 @@ impl AttachmentRepository {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
             "SELECT id, metadata_blob, status, local_path, remote_url,
-                    encryption_key, encryption_iv, thumbnail_bytes, content_location, created_at
+                    encryption_key, encryption_iv, thumbnail_bytes, content_location, created_at,
+                    secret_chat
              FROM attachments WHERE id = ?1",
         )?;
 
@@ -191,8 +195,8 @@ impl AttachmentRepository {
             "INSERT INTO attachments (
                 id, metadata_blob, status, local_path, remote_url,
                 encryption_key, encryption_iv, thumbnail_bytes,
-                file_path, content_location, created_at
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+                file_path, content_location, created_at, secret_chat
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 attachment.id.to_string(),
                 metadata_blob,
@@ -205,6 +209,7 @@ impl AttachmentRepository {
                 file_path.to_string_lossy().to_string(),
                 content_location_to_int(ContentLocation::OnFilesystem),
                 attachment.created_at.to_rfc3339(),
+                attachment.secret_chat,
             ],
         )?;
         resolve_shared_content(&conn, attachment);
@@ -283,23 +288,17 @@ impl AttachmentRepository {
         Ok(found)
     }
 
-    /// Whether a secret-chat (anonymous DM / group) message carries this
-    /// attachment, so its transfers must go over Tor. Answered from
-    /// `shared_content`, like [`Self::is_referenced_by_message`].
-    pub fn is_in_secret_chat(&self, id: &AttachmentId) -> Result<bool, StorageError> {
-        use crate::domain::message::ConversationType;
-        let conn = self.db.read_connection()?;
-        let found = conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM shared_content
-             WHERE attachment_id = ?1 AND conversation_type IN (?2, ?3))",
-            params![
-                id.to_string(),
-                ConversationType::AnonDm.as_str(),
-                ConversationType::AnonGroup.as_str()
-            ],
-            |row| row.get::<_, bool>(0),
+    /// Mark an existing row as carried by a secret chat. One-way: a row
+    /// first stored for an ordinary conversation and then received in a
+    /// secret chat (the same CDN key) goes over Tor from then on; nothing
+    /// clears the mark. Returns whether the row exists.
+    pub fn mark_secret_chat(&self, id: &AttachmentId) -> Result<bool, StorageError> {
+        let conn = self.db.connection()?;
+        let rows = conn.execute(
+            "UPDATE attachments SET secret_chat = 1 WHERE id = ?1",
+            params![id.to_string()],
         )?;
-        Ok(found)
+        Ok(rows > 0)
     }
 
     /// Update an existing attachment.
@@ -516,6 +515,7 @@ fn row_to_attachment(
     let thumbnail_bytes: Option<Vec<u8>> = row.get(7)?;
     let content_location_int: i32 = row.get(8).unwrap_or(0); // Default to NotDownloaded for old rows
     let created_at_str: String = row.get(9)?;
+    let secret_chat: Option<bool> = row.get(10)?;
 
     let id: AttachmentId = match id_str.parse() {
         Ok(id) => id,
@@ -546,6 +546,7 @@ fn row_to_attachment(
         encryption_key,
         encryption_iv,
         created_at: parse_datetime(&created_at_str),
+        secret_chat,
     }))
 }
 

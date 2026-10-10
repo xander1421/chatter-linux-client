@@ -310,7 +310,7 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     }
                     return;
                 }
-                // Core resolves call kind (anon/DM/group) from orchestrator state.
+                // Core resolves call kind (DM/group) from orchestrator state.
                 let ctx = ui_ctx.clone();
                 tokio::spawn(async move {
                     if let Err(e) = ctx.end_active_call().await {

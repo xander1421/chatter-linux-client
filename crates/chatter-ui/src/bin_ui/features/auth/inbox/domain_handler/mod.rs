@@ -10,7 +10,6 @@
 
 mod anon;
 #[cfg(feature = "call-ui")]
-mod anon_calls;
 #[cfg(feature = "call-ui")]
 mod calls;
 mod helpers;
@@ -491,86 +490,6 @@ pub async fn handle_domain_event(
 
         DomainEvent::AnonDmInitReceived { .. } => {
             anon::handle_dm_init_received(window, ui_ctx);
-        }
-
-        // =========================================================================
-        // Anonymous Call Events
-        // =========================================================================
-        #[cfg(feature = "call-ui")]
-        DomainEvent::AnonCallOfferReceived {
-            conversation_id,
-            sender_id,
-            call_room_id,
-            room_name,
-            call_type,
-            caller_display_name,
-            call_encryption_key,
-            ..
-        } => {
-            anon_calls::handle_anon_call_offer(
-                window,
-                ui_ctx,
-                conversation_id,
-                sender_id,
-                call_room_id,
-                room_name,
-                call_type,
-                caller_display_name,
-                call_encryption_key,
-            );
-        }
-        #[cfg(not(feature = "call-ui"))]
-        DomainEvent::AnonCallOfferReceived { .. } => {
-            tracing::debug!("Ignoring AnonCallOfferReceived (desktop-media disabled)");
-        }
-
-        DomainEvent::AnonCallAnswerReceived { .. } => {
-            // Handled entirely by the call orchestrator bridge — it calls
-            // CallSignalingService::handle_anon_call_answer and emits
-            // AnonCallConnected / ActiveEnded orchestrator events.
-        }
-
-        DomainEvent::AnonCallHangupReceived { .. }
-        | DomainEvent::AnonGroupCallHangupReceived { .. } => {
-            // Handled by the call orchestrator bridge: it withdraws the ring
-            // or ends the call (1:1 only), and the UI follows its
-            // `IncomingWithdrawn` / `ActiveEnded` for that call.
-        }
-
-        // =========================================================================
-        // Anonymous Group Call Events
-        // =========================================================================
-        #[cfg(feature = "call-ui")]
-        DomainEvent::AnonGroupCallOfferReceived {
-            group_id,
-            sender_id,
-            call_room_id,
-            room_name,
-            call_type,
-            caller_display_name,
-            call_encryption_key,
-            ..
-        } => {
-            anon_calls::handle_anon_group_call_offer(
-                window,
-                ui_ctx,
-                group_id,
-                sender_id,
-                call_room_id,
-                room_name,
-                call_type,
-                caller_display_name,
-                call_encryption_key,
-            );
-        }
-        #[cfg(not(feature = "call-ui"))]
-        DomainEvent::AnonGroupCallOfferReceived { .. } => {
-            tracing::debug!("Ignoring AnonGroupCallOfferReceived (desktop-media disabled)");
-        }
-
-        DomainEvent::AnonGroupCallAnswerReceived { .. } => {
-            // Handled entirely by the call orchestrator bridge (same path as
-            // AnonCallAnswerReceived).
         }
 
         // =========================================================================

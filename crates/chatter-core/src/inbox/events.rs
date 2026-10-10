@@ -643,27 +643,6 @@ pub enum InboxEvent {
     },
 }
 
-impl InboxEvent {
-    /// An anonymous call offer ages by the server's receive stamp (ns), not
-    /// the caller's clock, as a 1:1 offer does: a caller whose clock runs
-    /// fast or slow must neither ring forever nor never ring. `0` (no stamp)
-    /// keeps the caller's. Every other event passes through unchanged.
-    pub(crate) fn server_stamp_call_offer(mut self, server_timestamp_ns: u64) -> Self {
-        use crate::proto::content_v1::content::Content;
-        if let (
-            InboxEvent::AnonDmMessage { inner_content, .. }
-            | InboxEvent::AnonGroupMessage { inner_content, .. },
-            true,
-        ) = (&mut self, server_timestamp_ns > 0)
-        {
-            if let Some(Content::AnonCallOffer(offer)) = &mut inner_content.content {
-                offer.timestamp = server_timestamp_ns;
-            }
-        }
-        self
-    }
-}
-
 /// Friend request information for events.
 #[derive(Debug, Clone)]
 pub struct FriendRequestInfo {
@@ -712,31 +691,5 @@ mod tests {
         ];
 
         assert_eq!(events.len(), 6);
-    }
-
-    #[test]
-    fn anon_call_offer_ages_by_the_server_stamp() {
-        use crate::proto::content_v1::{AnonCallOffer, Content, content::Content as C};
-        let offer = |ts| InboxEvent::AnonGroupMessage {
-            peer_id: UserId::new(),
-            group_id: vec![],
-            inner_content: Box::new(Content {
-                content: Some(C::AnonCallOffer(AnonCallOffer {
-                    timestamp: ts,
-                    ..Default::default()
-                })),
-                ..Default::default()
-            }),
-        };
-        let stamp = |event: InboxEvent| match event {
-            InboxEvent::AnonGroupMessage { inner_content, .. } => match inner_content.content {
-                Some(C::AnonCallOffer(o)) => o.timestamp,
-                _ => unreachable!(),
-            },
-            _ => unreachable!(),
-        };
-        assert_eq!(stamp(offer(5).server_stamp_call_offer(9)), 9);
-        // No server stamp: the caller's clock is all there is.
-        assert_eq!(stamp(offer(5).server_stamp_call_offer(0)), 5);
     }
 }

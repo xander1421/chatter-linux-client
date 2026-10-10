@@ -5,7 +5,6 @@ use std::sync::Arc;
 use slint::{ComponentHandle, Model, SharedString};
 
 use chatter_core::client::ChatterClient;
-use chatter_core::domain::ids::UserId;
 
 use crate::MainWindow;
 
@@ -41,16 +40,8 @@ pub fn wire_forward_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 .find(|t| t.id.as_str() == target_id_str)
                 .map(|t| t.target_type.to_string())
         };
-        // "sender_id:timestamp_ns" keys, in the order they are to arrive.
-        // rsplit: the timestamp is the part that is certainly colon-free.
-        let sources: Option<Vec<(UserId, u64)>> = w
-            .get_forward_sources()
-            .iter()
-            .map(|key| {
-                let (sender, ts) = key.rsplit_once(':')?;
-                Some((sender.parse::<UserId>().ok()?, ts.parse::<u64>().ok()?))
-            })
-            .collect();
+        // In the order they are to arrive.
+        let sources = crate::bin_ui::features::chat::forward_sources(&w);
 
         // The row's type tag is core's conversation vocabulary, so the target
         // resolves through core's own inverse — no second mapping to drift.

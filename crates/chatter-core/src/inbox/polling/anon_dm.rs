@@ -499,10 +499,7 @@ pub async fn process_anon_dm_results(
             let decision = match route_anon_dm_content(content, sender_id, conversation_id) {
                 AnonDmRoute::Deliver(events) => {
                     for event in events {
-                        if event_tx
-                            .send(event.server_stamp_call_offer(msg.server_timestamp))
-                            .await
-                            .is_err()
+                        if event_tx.send(event).await.is_err()
                         {
                             return processed;
                         }

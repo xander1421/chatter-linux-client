@@ -19,7 +19,7 @@ use crate::calls::{
     LiveKitRoomEvent, RoomManager, RoomState, SharedVideoFrames, VideoCaptureConfig,
 };
 use crate::crypto::call_key_provider::CallKeyState;
-use crate::domain::call::{Call, CallState, CallType, Participant};
+use crate::domain::call::{Call, CallType, Participant};
 use crate::domain::ids::{CallId, ChannelId, UserId};
 use crate::error::CallError;
 use crate::events::EventBus;
@@ -40,8 +40,7 @@ use crate::proto::chat_v1::CallType as ProtoCallType;
 // Phase 2 (follow-up): EventBus bridge + UI migration.
 
 /// Stable identifier used to match presented-incoming / pending-outgoing
-/// calls across handler boundaries. For Signal-style DM calls this is the
-/// server-assigned call id; for anonymous calls it is the LiveKit room name.
+/// calls across handler boundaries: the call id.
 #[derive(Debug, Clone, Eq, PartialEq, Hash)]
 pub struct CallHandle(String);
 
@@ -72,10 +71,6 @@ impl From<&str> for CallHandle {
 pub enum OrchestratedCallKind {
     /// Signal-style DM call with ephemeral key exchange.
     DmStandard,
-    /// Anonymous DM call (blind-signature token auth).
-    AnonDm,
-    /// Anonymous group call (blind-signature token auth).
-    AnonGroup,
     /// Regular group channel call (sender-key distributed key).
     GroupChannel,
 }
@@ -95,8 +90,6 @@ impl OrchestratedCallKind {
         use crate::domain::message::ConversationType as CT;
         match self {
             Self::DmStandard => CT::ServerDm,
-            Self::AnonDm => CT::AnonDm,
-            Self::AnonGroup => CT::AnonGroup,
             Self::GroupChannel => CT::Channel,
         }
     }
@@ -142,15 +135,15 @@ pub enum CallOrchestratorEvent {
         identity_warning: String,
         /// For DM-standard calls: caller's ephemeral X25519 pk (32 bytes) to
         /// be passed back on accept. `None` for transports that derive the
-        /// key server-side (anonymous calls).
+        /// key elsewhere (group channel calls).
         ephemeral_public_key: Option<[u8; 32]>,
-        /// Caller-reported channel/room context (DM channel id, anon room
-        /// name, group id) — opaque to the orchestrator, used by the UI and
+        /// Caller-reported channel context (DM channel id, group id) —
+        /// opaque to the orchestrator, used by the UI and
         /// the signalling services for accept/decline.
         channel_context: Option<String>,
         /// The conversation this call arrived in, as `ConversationType`
-        /// dictates for `kind` (peer `UserId` for a DM, `AnonDmId` /
-        /// `AnonGroupId` for the anonymous flavours). Call history needs it
+        /// dictates for `kind` (peer `UserId` for a DM, `ChannelId` for a
+        /// group channel). Call history needs it
         /// to offer "call back" — `call` alone is a signaling id.
         conversation_id: String,
         replaces_active: bool,
@@ -189,15 +182,6 @@ pub enum CallOrchestratorEvent {
         kind: OrchestratedCallKind,
         peer_id: UserId,
         is_video: bool,
-    },
-
-    /// An anonymous call (DM or group) fully connected to LiveKit. Carries
-    /// everything the UI needs to mount the active-call surface without
-    /// having to round-trip through additional service calls.
-    AnonCallConnected {
-        call: CallHandle,
-        kind: OrchestratedCallKind,
-        info: AnonCallConnectedInfo,
     },
 
     /// The active call has ended.
@@ -249,30 +233,10 @@ impl CallEventsTx {
     }
 }
 
-/// UI-facing snapshot emitted with [`CallOrchestratorEvent::AnonCallConnected`].
-///
-/// The E2EE key is intentionally absent — it was consumed by the worker when
-/// it connected to LiveKit and should not be broadcast to subscribers.
-#[derive(Debug, Clone, PartialEq)]
-pub struct AnonCallConnectedInfo {
-    pub room_name: String,
-    pub channel_id: ChannelId,
-    pub verification_emojis: [String; 4],
-    pub is_video: bool,
-    pub peer_display_name: String,
-    /// Callee's answer envelope timestamp (Unix nanos), retained as metadata.
-    /// Presentation duration uses the active Call's local connected_at.
-    pub started_at_ns: u64,
-    /// Cached peer avatar bytes (from the local AnonDm row) for the active
-    /// call tile. None when the peer never sent a profile avatar.
-    pub peer_avatar: Option<Vec<u8>>,
-}
-
 /// Bookkeeping for a presented incoming call waiting for the user to decide.
 #[derive(Debug, Clone)]
 struct PendingIncoming {
     deadline: tokio::time::Instant,
-    anon_lease: Option<Arc<crate::services::anon_dm::IncomingAnonOfferLease>>,
     session_revision: Option<u64>,
     call: CallHandle,
     kind: OrchestratedCallKind,
@@ -284,15 +248,6 @@ struct PendingIncoming {
     ephemeral_public_key: Option<[u8; 32]>,
     channel_context: Option<String>,
     conversation_id: String,
-}
-
-impl PendingIncoming {
-    fn retire_anon(&self) {
-        if let Some(lease) = &self.anon_lease { lease.retire(self.call.as_str(), self.peer_id); }
-    }
-    fn seal_anon(&self) -> bool {
-        self.anon_lease.as_ref().is_none_or(|lease| lease.seal(self.call.as_str()))
-    }
 }
 
 /// Bookkeeping for an outgoing call dialed but not yet connected.
@@ -331,7 +286,6 @@ struct OrchestratorState {
 impl OrchestratorState {
     fn withdraw_expired(&mut self, now: tokio::time::Instant, presentation: &IncomingCallPresentationState, events: &CallEventsTx) {
         for pending in self.expire_incoming(now) {
-            pending.retire_anon();
             if presentation.accepts_session(pending.session_revision) {
                 let _ = events.send(CallOrchestratorEvent::IncomingWithdrawn {
                     call: pending.call, reason: CallEndReason::NoAnswer,
@@ -654,10 +608,6 @@ enum CallCommand {
     GetVerificationSnapshot {
         response: oneshot::Sender<Option<CallVerificationSnapshot>>,
     },
-    /// Get the room name of the active call.
-    GetRoomName {
-        response: oneshot::Sender<Option<String>>,
-    },
     /// Check if in a call.
     IsInCall {
         response: oneshot::Sender<bool>,
@@ -773,20 +723,6 @@ enum CallCommand {
         key: [u8; 32],
         epoch: u32,
         response: oneshot::Sender<Result<bool, CallError>>,
-    },
-    /// Connect directly to LiveKit with a pre-made access token (for anonymous calls).
-    ConnectWithToken {
-        session_revision: Option<u64>,
-        access_token: String,
-        livekit_url: String,
-        encryption_key: Vec<u8>,
-        room_name: String,
-        call_id: CallId,
-        channel_id: ChannelId,
-        /// Whether this is a video call — drives auto-publish of the camera
-        /// track after the connect handshake succeeds.
-        is_video: bool,
-        response: oneshot::Sender<Result<(), CallError>>,
     },
 
     // ========================================================================
@@ -1197,7 +1133,7 @@ impl CallWorkerHandle {
     ) {
         self.orch_present_incoming_offer(call, kind, peer_id, peer_name, is_video,
             is_identity_verified, identity_warning, ephemeral_public_key, channel_context,
-            conversation_id, 0, None);
+            conversation_id, 0);
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -1206,11 +1142,9 @@ impl CallWorkerHandle {
         peer_name: String, is_video: bool, is_identity_verified: bool,
         identity_warning: String, ephemeral_public_key: Option<[u8; 32]>,
         channel_context: Option<String>, conversation_id: String, timestamp: u64,
-        anon_lease: Option<Arc<crate::services::anon_dm::IncomingAnonOfferLease>>,
     ) {
         let incoming = PendingIncoming {
             deadline: tokio::time::Instant::now() + incoming_ring_budget(timestamp, crate::util::time::TimestampNanos::now().as_u64()),
-            anon_lease,
             session_revision: self.presentation_session,
             call,
             kind,
@@ -1223,9 +1157,7 @@ impl CallWorkerHandle {
             channel_context,
             conversation_id,
         };
-        if let Err(error) = self.cmd_tx.try_send(CallCommand::OrchPresentIncoming { incoming }) {
-            if let CallCommand::OrchPresentIncoming { incoming } = error.into_inner() { incoming.retire_anon(); }
-        }
+        let _ = self.cmd_tx.try_send(CallCommand::OrchPresentIncoming { incoming });
     }
 
     /// Record an incoming call whose offer is too old to ring. Touches no
@@ -1519,40 +1451,6 @@ impl CallWorkerHandle {
         rx.await.map_err(|_| CallError::WorkerShutdown)?
     }
 
-    /// Connect directly to LiveKit with a pre-made access token (for anonymous calls).
-    ///
-    /// This bypasses the server call creation and directly connects to LiveKit.
-    /// Used for anonymous calls where we get the token from the anonymous call service.
-    pub async fn connect_with_token(
-        &self,
-        access_token: &str,
-        livekit_url: &str,
-        encryption_key: Vec<u8>,
-        room_name: &str,
-        call_id: CallId,
-        channel_id: ChannelId,
-        is_video: bool,
-    ) -> Result<(), CallError> {
-        if self.presentation_session.is_some() && !self.presentation_session_is_current() {
-            return Err(CallError::WorkerShutdown);
-        }
-        let (tx, rx) = oneshot::channel();
-        self.cmd_tx
-            .try_send(CallCommand::ConnectWithToken {
-                session_revision: self.presentation_session,
-                access_token: access_token.to_string(),
-                livekit_url: livekit_url.to_string(),
-                encryption_key,
-                room_name: room_name.to_string(),
-                call_id,
-                channel_id,
-                is_video,
-                response: tx,
-            })
-            .map_err(|_| CallError::WorkerShutdown)?;
-        rx.await.map_err(|_| CallError::WorkerShutdown)?
-    }
-
     /// Leave the current call. `reason` is what the emitted `ActiveEnded`
     /// reports.
     pub async fn leave_call(&self, reason: CallEndReason) -> Result<(), CallError> {
@@ -1674,15 +1572,6 @@ impl CallWorkerHandle {
         let (tx, rx) = oneshot::channel();
         self.cmd_tx
             .try_send(CallCommand::GetVerificationSnapshot { response: tx })
-            .ok()?;
-        rx.await.ok().flatten()
-    }
-
-    /// Get the room name of the active call (for anonymous call management).
-    pub async fn get_room_name(&self) -> Option<String> {
-        let (tx, rx) = oneshot::channel();
-        self.cmd_tx
-            .try_send(CallCommand::GetRoomName { response: tx })
             .ok()?;
         rx.await.ok().flatten()
     }
@@ -2023,13 +1912,8 @@ impl CallWorkerHandle {
 }
 
 /// Derive the orchestrator `CallHandle` from the active call state.
-/// Anonymous calls key by room_name; standard calls by call_id.
 fn derive_call_handle(state: &ActiveCallState) -> CallHandle {
-    if state.room_name.starts_with("anon-") {
-        CallHandle::from(state.room_name.clone())
-    } else {
-        CallHandle::from(state.call.id.to_string())
-    }
+    CallHandle::from(state.call.id.to_string())
 }
 
 /// Run the call worker on the current thread.
@@ -2295,47 +2179,6 @@ fn run_call_worker(
                     let _ = response.send(result);
                 }
 
-                CallCommand::ConnectWithToken {
-                    session_revision,
-                    access_token,
-                    livekit_url,
-                    encryption_key,
-                    room_name,
-                    call_id,
-                    channel_id,
-                    is_video,
-                    response,
-                } => {
-                    if session_revision.is_some() && !incoming_presentation.accepts_session(session_revision) {
-                        let _ = response.send(Err(CallError::WorkerShutdown));
-                        continue;
-                    }
-                    let result = connect_with_token_impl(
-                        &room_manager,
-                        &active_call,
-                        access_token,
-                        livekit_url,
-                        encryption_key,
-                        room_name,
-                        call_id,
-                        channel_id,
-                    )
-                    .await;
-
-                    if session_revision.is_some() && !incoming_presentation.accepts_session(session_revision) {
-                        room_manager.disconnect().await;
-                        *active_call.borrow_mut() = None;
-                        let _ = response.send(Err(CallError::WorkerShutdown));
-                        continue;
-                    }
-                    if result.is_ok() {
-                        start_key_ratchet_timer(&room_manager, &ratchet_cancel, &active_call);
-                        auto_publish_media(&room_manager, is_video).await;
-                    }
-
-                    let _ = response.send(result);
-                }
-
                 CallCommand::LeaveCall { reason, response } => {
                     // Cancel key ratchet timer
                     stop_key_ratchet_timer(&ratchet_cancel);
@@ -2400,7 +2243,7 @@ fn run_call_worker(
                     }
 
                     if notify_server {
-                        let id = active_call.borrow().as_ref().filter(|s| !s.room_name.starts_with("anon-")).map(|s| s.call.id.to_string());
+                        let id = active_call.borrow().as_ref().map(|s| s.call.id.to_string());
                         if let Some(id) = id {
                             let mut client = call_client.lock().await;
                             let _ = tokio::time::timeout(std::time::Duration::from_secs(3), client.leave_call(&id)).await;
@@ -2456,8 +2299,7 @@ fn run_call_worker(
                         // Consume the pending ring on this actor turn. Emitting a
                         // generic hangup later could race acceptance and disconnect
                         // media for an already accepted group call.
-                        if let Some(pending) = orchestrator.incoming.remove(&call) {
-                            pending.retire_anon();
+                        if orchestrator.incoming.remove(&call).is_some() {
                             let _ = call_events_tx.send(CallOrchestratorEvent::IncomingWithdrawn {
                                 call, reason: CallEndReason::RemoteHangup,
                             });
@@ -2492,11 +2334,6 @@ fn run_call_worker(
                         room_manager.key_epoch(),
                     );
                     let _ = response.send(snapshot);
-                }
-
-                CallCommand::GetRoomName { response } => {
-                    let name = active_call.borrow().as_ref().map(|a| a.room_name.clone());
-                    let _ = response.send(name);
                 }
 
                 CallCommand::IsInCall { response } => {
@@ -2812,7 +2649,6 @@ fn run_call_worker(
                 }
                 CallCommand::OrchPresentIncoming { incoming } => {
                     if !incoming_presentation.accepts_session(incoming.session_revision) {
-                        incoming.retire_anon();
                         continue;
                     }
                     // A group ring whose lookup raced our own join of that
@@ -2824,23 +2660,10 @@ fn run_call_worker(
                         continue;
                     }
                     if orchestrator.incoming.get(&incoming.call).is_some_and(|old| old.session_revision != incoming.session_revision) {
-                        if let Some(old) = orchestrator.incoming.remove(&incoming.call) { old.retire_anon(); }
+                        orchestrator.incoming.remove(&incoming.call);
                     }
-                    if let Some(original) = orchestrator.incoming.get(&incoming.call) {
-                        if let Some(duplicate) = &incoming.anon_lease {
-                            if let Some(first) = &original.anon_lease {
-                                if original.peer_id != incoming.peer_id || original.kind != incoming.kind {
-                                    incoming.retire_anon();
-                                    continue;
-                                }
-                                if !Arc::ptr_eq(first, duplicate) { first.absorb(duplicate, incoming.call.as_str()); }
-                            } else { incoming.retire_anon(); }
-                        }
+                    if orchestrator.incoming.contains_key(&incoming.call) {
                         continue; // never renew or re-announce an existing ring
-                    }
-                    if incoming.anon_lease.as_ref().is_some_and(|lease| !lease.admit(incoming.call.as_str(), incoming.peer_id)) {
-                        incoming.retire_anon();
-                        continue; // never expose a visible offer without its matching keys
                     }
                     let replaces_active = orchestrator.active.is_some();
                     let snapshot = incoming.clone();
@@ -2878,8 +2701,7 @@ fn run_call_worker(
                         }
                         continue;
                     }
-                    if let Some(pending) = orchestrator.incoming.remove(&call) {
-                        pending.retire_anon();
+                    if orchestrator.incoming.remove(&call).is_some() {
                         let _ = call_events_tx.send(CallOrchestratorEvent::IncomingWithdrawn {
                             call,
                             reason,
@@ -2931,7 +2753,7 @@ fn run_call_worker(
                     // Clear from pending maps regardless of whether it was
                     // incoming or outgoing — either way it's now connected.
                     orchestrator.outgoing.remove(&call);
-                    if let Some(pending) = orchestrator.incoming.remove(&call) { pending.seal_anon(); }
+                    orchestrator.incoming.remove(&call);
                     orchestrator.active = Some(OrchestratedActive {
                         peer_id: Some(peer_id),
                         session_revision: session_revision.or(session_lease.session_revision),
@@ -2968,8 +2790,7 @@ fn run_call_worker(
                             call,
                             reason,
                         });
-                    } else if let Some(pending) = orchestrator.incoming.remove(&call) {
-                        pending.retire_anon();
+                    } else if orchestrator.incoming.remove(&call).is_some() {
                         let _ = call_events_tx.send(CallOrchestratorEvent::IncomingWithdrawn {
                             call,
                             reason,
@@ -3007,7 +2828,7 @@ fn run_call_worker(
                         reconnect_media: None,
                         fresh_rejoin_used: false,
                         call, key_state,
-                        room_name: handle.as_str().to_string(), livekit_url: String::new(),
+                        livekit_url: String::new(),
                         publish_gate: PublishGate::default(),
                     });
                     orchestrator.active = Some(OrchestratedActive {
@@ -3029,8 +2850,6 @@ fn run_call_worker(
                         Err(CallError::NotInCall)
                     } else if !replaces_active && orchestrator.active.is_some() {
                         Err(CallError::AlreadyInCall)
-                    } else if orchestrator.incoming.get(&call).is_some_and(|p| !p.seal_anon()) {
-                        Err(CallError::AwaitingKey)
                     } else if let Some(p) = orchestrator.incoming.remove(&call) {
                         // No await or reply can expose worker success before key ownership.
                         if is_group {
@@ -3057,8 +2876,6 @@ fn run_call_worker(
                     // chosen to end their current call.
                     let result = if orchestrator.active.is_some() {
                         Err(CallError::AlreadyInCall)
-                    } else if orchestrator.incoming.get(&call).is_some_and(|p| !p.seal_anon()) {
-                        Err(CallError::AwaitingKey)
                     } else if let Some(p) = orchestrator.incoming.remove(&call) {
                         Ok(p)
                     } else {
@@ -3069,9 +2886,7 @@ fn run_call_worker(
                 }
 
                 CallCommand::OrchAcceptIncomingReplacingActive { call, response } => {
-                    let result = if orchestrator.incoming.get(&call).is_some_and(|p| !p.seal_anon()) {
-                        Err(CallError::AwaitingKey)
-                    } else { match orchestrator.incoming.remove(&call) {
+                    let result = match orchestrator.incoming.remove(&call) {
                         Some(p) => {
                             if let Some(prev) = orchestrator.active.take() {
                                 let _ = call_events_tx.send(
@@ -3084,17 +2899,14 @@ fn run_call_worker(
                             Ok(p)
                         }
                         None => Err(CallError::NotInCall),
-                    } };
+                    };
                     incoming_presentation.publish(&orchestrator);
                     let _ = response.send(result);
                 }
 
                 CallCommand::OrchDeclineIncoming { call, response } => {
-                    let result = if orchestrator.incoming.get(&call).is_some_and(|p| !p.seal_anon()) {
-                        Err(CallError::AwaitingKey)
-                    } else { match orchestrator.incoming.remove(&call) {
+                    let result = match orchestrator.incoming.remove(&call) {
                         Some(p) => {
-                            // The decline sender still needs the pending room/caller record.
                             let _ = call_events_tx.send(
                                 CallOrchestratorEvent::IncomingWithdrawn {
                                     call: p.call.clone(),
@@ -3104,7 +2916,7 @@ fn run_call_worker(
                             Ok(p)
                         }
                         None => Err(CallError::NotInCall),
-                    } };
+                    };
                     incoming_presentation.publish(&orchestrator);
                     let _ = response.send(result);
                 }
@@ -3120,7 +2932,7 @@ fn run_call_worker(
                         .map(|(id, _)| id.clone()).collect();
                     let retired_ids = retired.iter().map(|call| call.as_str().to_owned()).collect();
                     for call in retired {
-                        if let Some(pending) = orchestrator.incoming.remove(&call) { pending.retire_anon(); }
+                        orchestrator.incoming.remove(&call);
                         let _ = call_events_tx.send(CallOrchestratorEvent::IncomingWithdrawn {
                             call, reason: CallEndReason::LocalHangup,
                         });
@@ -3137,7 +2949,6 @@ fn run_call_worker(
                 }
 
                 CallCommand::Shutdown => {
-                    for pending in orchestrator.incoming.values() { pending.retire_anon(); }
                     tracing::info!("Call worker shutting down");
                     break;
                 }
@@ -3164,8 +2975,6 @@ struct ActiveCallState {
     call: Call,
     /// Key state for Signal-based key derivation and ratcheting.
     key_state: CallKeyState,
-    /// Room name for potential future UI display during reconnection.
-    room_name: String,
     /// LiveKit server URL for reconnection.
     livekit_url: String,
     /// Closed while we hold none of the call's keys (a group joiner).
@@ -3192,11 +3001,7 @@ fn call_verification_snapshot(
         .map(|a| a.kind)
         .or_else(|| orchestrator.outgoing.get(&handle).map(|a| a.kind));
     let verification = match kind {
-        Some(
-            OrchestratedCallKind::DmStandard
-            | OrchestratedCallKind::AnonDm
-            | OrchestratedCallKind::AnonGroup,
-        ) => CallEncryptionVerification::ExistingHandshake,
+        Some(OrchestratedCallKind::DmStandard) => CallEncryptionVerification::ExistingHandshake,
         Some(OrchestratedCallKind::GroupChannel)
             if connected
                 && !state.publish_gate.is_closed()
@@ -3626,7 +3431,6 @@ async fn initiate_call_impl(
         fresh_rejoin_used: false,
         call: call.clone(),
         key_state,
-        room_name: response.room_name,
         livekit_url: response.livekit_url,
         publish_gate: if joined_existing {
             PublishGate::awaiting_key(matches!(call_type, CallType::Video))
@@ -3739,7 +3543,6 @@ async fn join_call_impl(
         fresh_rejoin_used: false,
         call: call.clone(),
         key_state,
-        room_name: call_info.room_name,
         livekit_url: response.livekit_url,
         publish_gate,
     });
@@ -3766,89 +3569,18 @@ fn joined_channel_id(
     }
 }
 
-/// Connect directly to LiveKit with a pre-made access token (for anonymous calls).
-///
-/// This bypasses the server call creation and directly connects to LiveKit.
-/// Used for anonymous calls where we get the token from the anonymous call service.
-async fn connect_with_token_impl(
-    room_manager: &Arc<RoomManager>,
-    active_call: &Rc<RefCell<Option<ActiveCallState>>>,
-    access_token: String,
-    livekit_url: String,
-    encryption_key: Vec<u8>,
-    room_name: String,
-    call_id: CallId,
-    channel_id: ChannelId,
-) -> Result<(), CallError> {
-    // Check if already in a call
-    if active_call.borrow().is_some() {
-        return Err(CallError::AlreadyInCall);
-    }
-
-    // Connect to LiveKit room with E2EE key
-    room_manager
-        .connect(&livekit_url, &access_token, encryption_key.clone())
-        .await?;
-
-    // Create a minimal Call object for UI purposes
-    let call = Call {
-        id: call_id,
-        channel_id,
-        initiator_id: UserId::new(), // Anonymous
-        call_type: CallType::Voice,  // Default to voice for anonymous calls
-        state: CallState::Connected,
-        participants: vec![],
-        started_at: Some(chrono::Utc::now()),
-        connected_at: Some(chrono::Utc::now()),
-        ended_at: None,
-        is_encrypted: true, // Anonymous calls are always encrypted (oblivious)
-    };
-
-    // Create key state from real encryption key
-    let mut key_arr = [0u8; 32];
-    if encryption_key.len() >= 32 {
-        key_arr.copy_from_slice(&encryption_key[..32]);
-    }
-    // Use room_name as call_id for CallKeyState — both sides know it, ensuring
-    // coordinated ratcheting produces identical keys on both sides
-    let key_state = CallKeyState::new(&key_arr, &room_name)
-        .map_err(|e| CallError::CryptoError(e.to_string()))?;
-
-    // Store active call info
-    *active_call.borrow_mut() = Some(ActiveCallState {
-        reconnect_media: None,
-        fresh_rejoin_used: false,
-        call: call.clone(),
-        key_state,
-        room_name: room_name.clone(),
-        livekit_url: livekit_url.to_string(),
-        publish_gate: PublishGate::default(),
-    });
-
-    tracing::info!(
-        call_id = %call_id,
-        "Connected to LiveKit for anonymous call"
-    );
-
-    Ok(())
-}
-
 async fn leave_call_impl(
     call_client: &Arc<TokioMutex<CallClient>>,
     room_manager: &Arc<RoomManager>,
     active_call: &Rc<RefCell<Option<ActiveCallState>>>,
 ) -> Result<(), CallError> {
-    let (call_id, is_anonymous) = {
+    let call_id = {
         let active = active_call.borrow();
         let state = active.as_ref().ok_or(CallError::NotInCall)?;
-        (
-            state.call.id.to_string(),
-            state.room_name.starts_with("anon-"),
-        )
+        state.call.id.to_string()
     };
 
-    // Skip server leave_call for anonymous calls (no server-side call state)
-    if !is_anonymous {
+    {
         let mut client = call_client.lock().await;
         match tokio::time::timeout(
             tokio::time::Duration::from_secs(3),
@@ -4438,7 +4170,7 @@ fn start_key_ratchet_scheduler(
 ///   - guarantees all media publication runs on the worker thread (LiveKit
 ///     tracks are `!Send`), and
 ///   - ensures we publish exactly once per connect regardless of who
-///     initiated (caller, callee, DM, anon).
+///     initiated (caller, callee, DM, group).
 ///
 /// Failures are logged but do not fail the connect — the call stays up
 /// even if mic/camera permissions are denied.
@@ -4468,17 +4200,13 @@ fn stop_key_ratchet_timer(ratchet_cancel: &Rc<RefCell<Option<tokio::sync::onesho
 // Subscribes to DomainEvents on the main tokio runtime and forwards call
 // offers / answers / hangups into the worker's orchestrator state. Replaces
 // the per-event UI-side dispatch that used to live in
-// `domain_handler/{calls,anon_calls}.rs` and which scattered modal-policy
+// `domain_handler/calls.rs` and which scattered modal-policy
 // decisions across the UI layer.
 
 /// Spawn the EventBus → CallWorker orchestrator bridge. Safe to call once at
 /// app startup, after both the EventBus and the call worker exist.
 ///
-/// `signaling` is required so the bridge can own answer-handling end-to-end:
-/// token fetch, LiveKit connect and call-history side effects now live inside
-/// the actor instead of being split across UI glue. UI subscribers only need
-/// to listen for [`CallOrchestratorEvent::AnonCallConnected`] /
-/// [`CallOrchestratorEvent::ActiveEnded`].
+/// `signaling` lets the bridge tell our own devices' hangups from a peer's.
 pub fn spawn_call_orchestrator_bridge(
     bus: &EventBus,
     worker: CallWorkerHandle,
@@ -4538,20 +4266,13 @@ const PEER_LEFT_GRACE: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// Whether `departed` leaving ends the call: nobody else is left in the room
 /// (`remaining` may still list `departed` — the SDK's eviction order is not
-/// something to depend on), and it is a 1:1 or anon group call.
+/// something to depend on), and it is a 1:1 call.
 fn peer_left_ends_call(
     kind: Option<OrchestratedCallKind>,
     remaining: &[String],
     departed: &str,
 ) -> bool {
-    matches!(
-        kind,
-        Some(
-            OrchestratedCallKind::DmStandard
-                | OrchestratedCallKind::AnonDm
-                | OrchestratedCallKind::AnonGroup
-        )
-    ) && remaining.iter().all(|id| id == departed)
+    kind == Some(OrchestratedCallKind::DmStandard) && remaining.iter().all(|id| id == departed)
 }
 
 /// How long an incoming offer may ring. Signal's ring timeout: an offer older
@@ -4586,23 +4307,6 @@ fn elsewhere_reason(reason: crate::services::gateway::CallHangupReason) -> Optio
         R::DeclinedElsewhere => Some(CallEndReason::Declined),
         _ => None,
     }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn stage_incoming_anon_offer(
-    lease: &Arc<crate::services::anon_dm::IncomingAnonOfferLease>, room: &str,
-    sender: UserId, conversation: crate::domain::anon_dm::AnonDmId, room_id: &[u8],
-    key: Vec<u8>, display_name: String, video: bool,
-) {
-    let mut id = [0; 16];
-    let len = room_id.len().min(id.len());
-    id[..len].copy_from_slice(&room_id[..len]);
-    lease.stage(crate::services::anon_dm::PendingAnonCall {
-        call_room_id: id, room_name: room.to_owned(), conversation_id: conversation,
-        token: crate::mailbox::CallRoomToken { id: String::new(), public_key: vec![], private_key: vec![], signature: vec![], randomizer: None },
-        is_video_call: video, is_outgoing: false, display_name, encryption_key: key,
-        sender_id: Some(sender), started_at: None,
-    });
 }
 
 async fn handle_domain_event(
@@ -4647,7 +4351,7 @@ async fn handle_domain_event(
                 None,
                 // DMs are channel-free: the conversation key IS the peer.
                 peer_id.to_string(),
-                timestamp, None,
+                timestamp,
             );
         }
 
@@ -4677,168 +4381,6 @@ async fn handle_domain_event(
             // this call was never presented or was already accepted.
             let call = CallHandle::from(call_id);
             withdraw_domain_call(worker, call, end, true).await;
-        }
-
-        DomainEvent::AnonCallOfferReceived {
-            sender_id,
-            room_name,
-            call_type,
-            caller_display_name,
-            conversation_id,
-            timestamp,
-            incoming_lease,
-            call_room_id,
-            call_encryption_key,
-            ..
-        } => {
-            let is_video = call_type == 2;
-            // Prefer the name WE locally know for this peer (synced via the
-            // anon-DM profile exchange) over the caller's self-reported name in
-            // the offer — reliable and spoof-resistant. Fall back to the offer's
-            // name, then "Anonymous".
-            let peer_name = signaling
-                .anon_dm_peer_name(&conversation_id)
-                .or_else(|| (!caller_display_name.is_empty()).then_some(caller_display_name))
-                .unwrap_or_else(|| "Anonymous".to_string());
-            if offer_is_stale_now(timestamp) {
-                incoming_lease.retire(&room_name, sender_id);
-                worker.orch_missed_incoming(
-                    CallHandle::from(room_name),
-                    OrchestratedCallKind::AnonDm,
-                    peer_name,
-                    is_video,
-                    conversation_id.to_string(),
-                );
-                return;
-            }
-            stage_incoming_anon_offer(&incoming_lease, &room_name, sender_id, conversation_id,
-                &call_room_id, call_encryption_key, peer_name.clone(), is_video);
-            worker.orch_present_incoming_offer(
-                CallHandle::from(room_name),
-                OrchestratedCallKind::AnonDm,
-                sender_id,
-                peer_name,
-                is_video,
-                true, // anon-auth is treated as verified
-                String::new(),
-                None,
-                // 1:1 anon DM — no channel name.
-                None,
-                conversation_id.to_string(),
-                timestamp, Some(incoming_lease),
-            );
-        }
-
-        DomainEvent::AnonCallAnswerReceived {
-            accepted,
-            call_room_id,
-            callee_display_name,
-            timestamp,
-            ..
-        } => {
-            spawn_anon_call_answer_task(
-                worker.clone(),
-                signaling.clone(),
-                OrchestratedCallKind::AnonDm,
-                call_room_id,
-                accepted,
-                callee_display_name,
-                timestamp,
-            );
-        }
-
-        DomainEvent::AnonCallHangupReceived {
-            call_room_id,
-            sender_id,
-            ..
-        } => {
-            handle_anon_hangup(
-                worker,
-                signaling,
-                OrchestratedCallKind::AnonDm,
-                &call_room_id,
-                sender_id,
-            ).await;
-        }
-        DomainEvent::AnonGroupCallHangupReceived {
-            call_room_id,
-            sender_id,
-            ..
-        } => {
-            handle_anon_hangup(
-                worker,
-                signaling,
-                OrchestratedCallKind::AnonGroup,
-                &call_room_id,
-                sender_id,
-            ).await;
-        }
-
-        DomainEvent::AnonGroupCallOfferReceived {
-            sender_id,
-            room_name,
-            call_type,
-            caller_display_name,
-            group_id,
-            timestamp,
-            incoming_lease,
-            call_room_id,
-            call_encryption_key,
-            ..
-        } => {
-            let is_video = call_type == 2;
-            let peer_name = if caller_display_name.is_empty() {
-                "Anonymous".to_string()
-            } else {
-                caller_display_name
-            };
-            if offer_is_stale_now(timestamp) {
-                incoming_lease.retire(&room_name, sender_id);
-                worker.orch_missed_incoming(
-                    CallHandle::from(room_name),
-                    OrchestratedCallKind::AnonGroup,
-                    peer_name,
-                    is_video,
-                    group_id.to_string(),
-                );
-                return;
-            }
-            stage_incoming_anon_offer(&incoming_lease, &room_name, sender_id, crate::domain::anon_dm::AnonDmId::try_from_slice(group_id.as_bytes()).expect("AnonGroupId is 16 bytes"),
-                &call_room_id, call_encryption_key, peer_name.clone(), is_video);
-            worker.orch_present_incoming_offer(
-                CallHandle::from(room_name),
-                OrchestratedCallKind::AnonGroup,
-                sender_id,
-                peer_name,
-                is_video,
-                true,
-                String::new(),
-                None,
-                // group name would read "X is calling in <group>", but no
-                // resolver wired yet — None beats leaking the raw group UUID. Pass a
-                // resolved name here when a group-name lookup exists.
-                None,
-                group_id.to_string(),
-                timestamp, Some(incoming_lease),
-            );
-        }
-
-        DomainEvent::AnonGroupCallAnswerReceived {
-            accepted,
-            call_room_id,
-            callee_display_name,
-            timestamp,
-            ..
-        } => {
-            spawn_anon_call_answer_task(
-                worker.clone(),
-                signaling.clone(),
-                OrchestratedCallKind::AnonGroup,
-                call_room_id,
-                accepted,
-                callee_display_name,
-                timestamp,
-            );
         }
 
         // Key answers are completed by the UI/glue layer against the
@@ -4886,158 +4428,6 @@ async fn withdraw_domain_call(
             tracing::debug!("Domain call disconnect worker unavailable");
         }
     }
-}
-
-/// `sender`'s hangup of the anon call `kind` in room `call_room_id`.
-///
-/// It calls off the ring `sender` started: the callee stops ringing and the
-/// pending call is dropped. Beyond that, only a 1:1 call ends on the peer's
-/// hangup ([`anon_hangup_ends_call`]). In a group the member only leaves — the
-/// room drops them from the roster, and ends the call for us only once nobody
-/// else is left in it ([`peer_left_ends_call`]).
-async fn handle_anon_hangup(
-    worker: &CallWorkerHandle,
-    signaling: &crate::services::call_signaling::CallSignalingService,
-    kind: OrchestratedCallKind,
-    call_room_id: &[u8],
-    sender: UserId,
-) {
-    let Some(call) = anon_room_handle(call_room_id) else {
-        tracing::debug!(
-            len = call_room_id.len(),
-            "Anon hangup with a malformed call_room_id; ignored"
-        );
-        return;
-    };
-    let rang_us = signaling.take_incoming_anon_call(call.as_str(), sender);
-    if !anon_hangup_ends_call(kind) {
-        // Only the member who rang us can call our ring off; another's hangup
-        // (or our own, echoed back by the group mailbox) leaves it ringing.
-        if rang_us {
-            withdraw_domain_call(worker, call, CallEndReason::RemoteHangup, false).await;
-        }
-        return;
-    }
-    // Still ringing? The caller gave up or it rang out — stop ringing.
-    // A no-op when this call was never presented or already accepted.
-    withdraw_domain_call(worker, call, CallEndReason::RemoteHangup, true).await;
-}
-
-/// Whether a participant's hangup ends anon call `kind` for us: a 1:1 call
-/// ends on the peer's hangup, a group call outlives any one member (Signal).
-fn anon_hangup_ends_call(kind: OrchestratedCallKind) -> bool {
-    kind == OrchestratedCallKind::AnonDm
-}
-
-/// The orchestrator handle of an anon call: its room name, `anon-<uuid>` of
-/// the 16-byte `call_room_id` every anon offer, answer and hangup carries.
-fn anon_room_handle(call_room_id: &[u8]) -> Option<CallHandle> {
-    let id: [u8; 16] = call_room_id.try_into().ok()?;
-    Some(CallHandle::from(format!(
-        "anon-{}",
-        uuid::Uuid::from_bytes(id)
-    )))
-}
-
-/// Handle an anonymous call answer (DM or group) inside the orchestrator.
-///
-/// Calls `CallSignalingService::handle_anon_call_answer` on a background task
-/// so the bridge's dispatch loop stays responsive, then translates the
-/// outcome into orchestrator events:
-///
-/// - `Connected`   → emit `AnonCallConnected`; UI mounts the active-call surface.
-/// - `Declined`    → emit `ActiveEnded(Declined)`.
-/// - `AlreadyInCall` → no-op (another participant's fan-out answer in a group
-///   call, or our own echo — the call is already active).
-fn spawn_anon_call_answer_task(
-    worker: CallWorkerHandle,
-    signaling: crate::services::call_signaling::CallSignalingService,
-    kind: OrchestratedCallKind,
-    call_room_id: Vec<u8>,
-    accepted: bool,
-    callee_display_name: String,
-    answer_timestamp_ns: u64,
-) {
-    tokio::spawn(async move {
-        let room_handle = anon_room_handle(&call_room_id)
-            .unwrap_or_else(|| CallHandle::from(format!("anon-{}", uuid::Uuid::nil())));
-
-        match signaling
-            .handle_anon_call_answer(
-                &call_room_id,
-                accepted,
-                &callee_display_name,
-                answer_timestamp_ns,
-                &worker,
-            )
-            .await
-        {
-            Ok(crate::domain::call::AnonCallAnswerOutcome::Connected(setup)) => {
-                let _ownership = signaling.start_gate.lock().await;
-                if signaling.start_was_cancelled(&setup.room_name)
-                    || worker.get_room_name().await.as_deref() != Some(setup.room_name.as_str())
-                {
-                    return;
-                }
-                let info = AnonCallConnectedInfo {
-                    room_name: setup.room_name.clone(),
-                    channel_id: setup.channel_id,
-                    verification_emojis: setup.verification_emojis.clone(),
-                    is_video: setup.is_video,
-                    peer_display_name: setup.peer_display_name.clone(),
-                    started_at_ns: setup.started_at_ns,
-                    peer_avatar: setup.peer_avatar.clone(),
-                };
-                let handle = CallHandle::from(setup.room_name.clone());
-                // Register as the active call so subsequent hangup / new-call
-                // offers find the slot. Anon peers have no stable UserId, so
-                // we use nil — the orchestrator only uses peer_id for
-                // replace-active policy, which anon calls don't participate in.
-                if worker
-                    .orch_mark_connected_reliably(
-                        handle.clone(),
-                        kind,
-                        UserId(uuid::Uuid::nil()),
-                        setup.is_video,
-                    )
-                    .await
-                    .is_err()
-                {
-                    return;
-                }
-                let _ = worker.orch_active_kind().await; // actor barrier: connected publication precedes UI event
-                if !worker.presentation_session_is_current() {
-                    return;
-                }
-                let _ = worker
-                    .call_events_tx
-                    .send(CallOrchestratorEvent::AnonCallConnected {
-                        call: handle,
-                        kind,
-                        info,
-                    });
-            }
-            Ok(crate::domain::call::AnonCallAnswerOutcome::Declined) => {
-                worker.orch_mark_ended(room_handle, CallEndReason::Declined);
-            }
-            Ok(crate::domain::call::AnonCallAnswerOutcome::AlreadyInCall) => {
-                tracing::debug!(
-                    call = %room_handle.as_str(),
-                    "Ignoring duplicate anon call answer (already in call)"
-                );
-            }
-            // Not a call of ours that is ringing: cancelled or rung out
-            // before this answer landed (that end already closed it), or
-            // another member's call in a group.
-            Err(crate::services::call_signaling::CallSignalingError::NoPendingCall) => {
-                tracing::debug!(call = %room_handle.as_str(), "Anon call answer for no pending call; ignored");
-            }
-            Err(e) => {
-                tracing::error!(error = %e, "Anon call answer handling failed");
-                worker.orch_mark_ended(room_handle, CallEndReason::Error(e.to_string()));
-            }
-        }
-    });
 }
 
 #[cfg(test)]
@@ -5171,7 +4561,7 @@ mod peer_left_tests {
     fn one_to_one_ends_only_when_the_room_is_empty() {
         let gone = vec!["peer".to_string()];
         assert!(peer_left_ends_call(Some(K::DmStandard), &[], "peer"));
-        assert!(peer_left_ends_call(Some(K::AnonDm), &gone, "peer"));
+        assert!(peer_left_ends_call(Some(K::DmStandard), &gone, "peer"));
         assert!(!peer_left_ends_call(
             Some(K::DmStandard),
             &["other".into()],
@@ -5180,28 +4570,6 @@ mod peer_left_tests {
         // Channel calls and no-call are never ended by a departure.
         assert!(!peer_left_ends_call(Some(K::GroupChannel), &[], "peer"));
         assert!(!peer_left_ends_call(None, &[], "peer"));
-    }
-
-    #[test]
-    fn anon_group_ends_only_when_we_are_left_alone() {
-        assert!(!peer_left_ends_call(
-            Some(K::AnonGroup),
-            &["other".into()],
-            "peer"
-        ));
-        assert!(peer_left_ends_call(
-            Some(K::AnonGroup),
-            &["peer".into()],
-            "peer"
-        ));
-        assert!(peer_left_ends_call(Some(K::AnonGroup), &[], "peer"));
-    }
-
-    #[test]
-    fn group_hangup_does_not_end_the_call() {
-        use super::anon_hangup_ends_call;
-        assert!(!anon_hangup_ends_call(K::AnonGroup));
-        assert!(anon_hangup_ends_call(K::AnonDm));
     }
 }
 
@@ -5307,51 +4675,6 @@ mod failed_accept_tests {
 }
 
 #[cfg(test)]
-mod anon_cancel_tests {
-    use super::*;
-
-    /// §124 1f: cancelling our anon call while it still rings reaches the
-    /// cancel branch. `end_active_call` routes on `orch_active_kind` — the
-    /// ringing outgoing call must resolve to its anon kind — and
-    /// `end_anon_call` takes the ringing branch (which sends the anon hangup,
-    /// `call_signaling.rs` `finish_anon_call`) only when we are in no room.
-    /// The hangup's delivery to the callee is not covered here.
-    #[tokio::test]
-    async fn a_ringing_anon_call_cancels_through_the_hangup_path() {
-        for kind in [
-            OrchestratedCallKind::AnonDm,
-            OrchestratedCallKind::AnonGroup,
-        ] {
-            let channel =
-                tonic::transport::Endpoint::from_static("http://127.0.0.1:9").connect_lazy();
-            let worker = CallWorkerHandle::spawn(crate::network::grpc::CallClient::new(
-                channel.into(),
-                crate::network::grpc::interceptors::AuthInterceptor::new(),
-            ));
-            let room = format!("anon-{}", uuid::Uuid::new_v4());
-            worker.orch_register_outgoing(
-                CallHandle::from(room.as_str()),
-                kind,
-                UserId(uuid::Uuid::nil()),
-                String::new(),
-                false,
-            );
-            assert_eq!(
-                worker.orch_active_kind().await,
-                Some(kind),
-                "a ringing {kind:?} call is not what End ends"
-            );
-            assert_eq!(
-                worker.get_room_name().await,
-                None,
-                "ringing, yet in a room: the cancel would skip the hangup"
-            );
-            worker.shutdown();
-        }
-    }
-}
-
-#[cfg(test)]
 mod publish_gate_tests {
     use super::{DeferredMedia, PublishGate};
 
@@ -5420,7 +4743,6 @@ mod group_key_install_tests {
             fresh_rejoin_used: false,
             call,
             key_state: CallKeyState::new(&root, CALL).unwrap(),
-            room_name: String::new(),
             livekit_url: String::new(),
             publish_gate: PublishGate::default(),
         }
@@ -5633,7 +4955,6 @@ mod media_key_install_failure_tests {
             fresh_rejoin_used: false,
             call,
             key_state,
-            room_name: String::new(),
             livekit_url: String::new(),
             publish_gate: PublishGate::awaiting_key(false),
         })))
@@ -5737,7 +5058,6 @@ mod reconnect_timer_boundary_tests {
         Rc::new(RefCell::new(Some(ActiveCallState {
             call,
             key_state: chain,
-            room_name: String::new(),
             livekit_url: String::new(),
             publish_gate: PublishGate::awaiting_key(false),
             reconnect_media: None,
@@ -6034,7 +5354,6 @@ mod verification_snapshot_tests {
         ActiveCallState {
             key_state: CallKeyState::new(&root, &call.id.to_string()).unwrap(),
             call,
-            room_name: String::new(),
             livekit_url: String::new(),
             publish_gate: PublishGate::default(),
             reconnect_media: None,
@@ -6178,18 +5497,17 @@ mod verification_snapshot_tests {
                 .verification,
             CallEncryptionVerification::WaitingForKey
         );
-        for kind in [
-            OrchestratedCallKind::DmStandard,
-            OrchestratedCallKind::AnonDm,
-            OrchestratedCallKind::AnonGroup,
-        ] {
-            assert_eq!(
-                call_verification_snapshot(Some(&state), &orchestrator(&state, kind), false, 0)
-                    .unwrap()
-                    .verification,
-                CallEncryptionVerification::ExistingHandshake
-            );
-        }
+        assert_eq!(
+            call_verification_snapshot(
+                Some(&state),
+                &orchestrator(&state, OrchestratedCallKind::DmStandard),
+                false,
+                0
+            )
+            .unwrap()
+            .verification,
+            CallEncryptionVerification::ExistingHandshake
+        );
     }
 }
 
@@ -6272,7 +5590,7 @@ mod group_ring_cancel_tests {
         present(&current, &CallHandle::from("new-ring")).await;
         current.orch_mark_connected(
             CallHandle::from("new-active"),
-            OrchestratedCallKind::AnonDm,
+            OrchestratedCallKind::DmStandard,
             bob,
             false,
         );
@@ -6281,7 +5599,7 @@ mod group_ring_cancel_tests {
         // regardless of what an earlier detached future checked before await.
         old.orch_mark_connected(
             CallHandle::from("old-active"),
-            OrchestratedCallKind::AnonDm,
+            OrchestratedCallKind::DmStandard,
             alice,
             false,
         );
@@ -6290,7 +5608,7 @@ mod group_ring_cancel_tests {
         assert!(matches!(
             old.orch_mark_connected_reliably(
                 CallHandle::from("late-ack"),
-                OrchestratedCallKind::AnonDm,
+                OrchestratedCallKind::DmStandard,
                 alice,
                 false
             )
@@ -6713,7 +6031,7 @@ mod setup_cancellation_actor_tests {
             worker
                 .orch_mark_connected_reliably(
                     old,
-                    OrchestratedCallKind::AnonDm,
+                    OrchestratedCallKind::DmStandard,
                     UserId::new(),
                     false
                 )
@@ -6746,97 +6064,9 @@ mod incoming_expiry_tests {
 
     async fn present(worker: &CallWorkerHandle, call: &str, kind: OrchestratedCallKind, timestamp: u64) {
         worker.orch_present_incoming_offer(CallHandle::from(call), kind, UserId::new(), "Caller".into(), false,
-            true, String::new(), None, None, "conversation".into(), timestamp, None);
+            true, String::new(), None, None, "conversation".into(), timestamp);
         // FIFO snapshot is an actor barrier, not a wall-clock sleep.
         worker.incoming_presentation_snapshot().await.unwrap();
-    }
-
-    async fn present_ready_anon(worker: &CallWorkerHandle, room: &str, kind: OrchestratedCallKind)
-        -> (Arc<crate::services::anon_dm::IncomingAnonOfferLease>, crate::services::anon_dm::PendingAnonCall) {
-        let lease = crate::services::anon_dm::IncomingAnonOfferLease::new();
-        let caller = UserId::new();
-        let pending = crate::services::anon_dm::PendingAnonCall {
-            call_room_id: [7; 16], room_name: room.into(), conversation_id: crate::domain::anon_dm::AnonDmId::new(),
-            token: crate::mailbox::CallRoomToken { id: String::new(), public_key: vec![], private_key: vec![], signature: vec![], randomizer: None },
-            is_video_call: false, is_outgoing: false, display_name: "Caller".into(), encryption_key: vec![37; 32],
-            sender_id: Some(caller), started_at: None,
-        };
-        // The real offer consumer stages the same complete key record before
-        // queuing admission; the independent general store consumer is delayed.
-        stage_incoming_anon_offer(&lease, room, caller, pending.conversation_id, &pending.call_room_id,
-            pending.encryption_key.clone(), pending.display_name.clone(), false);
-        worker.orch_present_incoming_offer(CallHandle::from(room), kind, caller, "Caller".into(), false,
-            true, String::new(), None, None, pending.conversation_id.to_string(), 0, Some(lease.clone()));
-        assert_eq!(worker.incoming_presentation_snapshot().await.unwrap().presentations.len(), 1);
-        (lease, pending)
-    }
-
-    #[tokio::test]
-    async fn incoming_expiry_readiness_delayed_store_accept_replace_decline_keep_keys() {
-        for kind in [OrchestratedCallKind::AnonDm, OrchestratedCallKind::AnonGroup] {
-            for action in ["accept", "replace", "decline", "legacy-accept", "legacy-replace"] {
-                let worker = worker();
-                let room = format!("ready-{}", uuid::Uuid::new_v4());
-                let mut events = worker.subscribe_call_events();
-                if action.contains("replace") {
-                    worker.orch_mark_connected(CallHandle::from("original-active"), OrchestratedCallKind::DmStandard, UserId::new(), false);
-                }
-                let (lease, delayed) = present_ready_anon(&worker, &room, kind).await;
-                let handle = CallHandle::from(room.as_str());
-                match action {
-                    "accept" | "replace" => { worker.orch_accept_presented(handle.clone(), action == "replace",
-                        Arc::new(Default::default())).await.unwrap(); }
-                    "legacy-accept" => { worker.orch_accept_incoming(handle.clone()).await.unwrap(); }
-                    "legacy-replace" => { worker.orch_accept_incoming_replacing_active(handle.clone()).await.unwrap(); }
-                    _ => { worker.orch_decline_incoming(handle.clone()).await.unwrap(); }
-                }
-                // Same production map consumption used by accept_anon_call and
-                // decline_anon_call: visible admission must have made it ready.
-                assert!(crate::services::anon_dm::take_incoming_anon_call_state(&room, delayed.sender_id.unwrap()).is_none(), "remote ring cleanup stole claimed keys");
-                let owned = crate::services::anon_dm::take_pending_anon_call_state(&room).expect("claimed signaling keys");
-                assert_eq!(owned.encryption_key, vec![37; 32]);
-                assert_eq!(owned.call_room_id, [7; 16]);
-                assert_eq!(owned.sender_id, delayed.sender_id);
-                crate::services::anon_dm::store_incoming_anon_offer_state(room.clone(), delayed, lease);
-                assert!(crate::services::anon_dm::take_pending_anon_call_state(&room).is_none(), "delayed handler resurrected claimed state");
-                expire(&worker, Duration::from_secs(120)).await;
-                assert!(worker.incoming_presentation_snapshot().await.unwrap().presentations.is_empty());
-                let events: Vec<_> = std::iter::from_fn(|| events.try_recv().ok()).collect();
-                assert!(!events.iter().any(|e| matches!(e, CallOrchestratorEvent::IncomingWithdrawn { reason: CallEndReason::NoAnswer, .. })));
-                assert_eq!(events.iter().filter(|e| matches!(e, CallOrchestratorEvent::IncomingWithdrawn { reason: CallEndReason::Declined, .. })).count(), usize::from(action == "decline"));
-                assert_eq!(events.iter().filter(|e| matches!(e, CallOrchestratorEvent::ActiveEnded { reason: CallEndReason::ReplacedByIncoming, .. })).count(), usize::from(action.contains("replace")));
-                worker.shutdown();
-            }
-        }
-    }
-
-    #[tokio::test]
-    async fn incoming_expiry_readiness_failed_claim_retains_offer_active_and_can_retry() {
-        for action in ["accept", "replace", "decline"] {
-            let worker = worker();
-            let room = format!("recover-{}", uuid::Uuid::new_v4());
-            if action == "replace" {
-                worker.orch_mark_connected(CallHandle::from("original-active"), OrchestratedCallKind::DmStandard, UserId::new(), false);
-            }
-            let (lease, delayed) = present_ready_anon(&worker, &room, OrchestratedCallKind::AnonDm).await;
-            // Simulate the map disappearing after admission, before the claim.
-            crate::services::anon_dm::take_pending_anon_call_state(&room).unwrap();
-            let mut events = worker.subscribe_call_events();
-            let handle = CallHandle::from(room.as_str());
-            let claim = if action == "decline" { worker.orch_decline_incoming(handle.clone()).await }
-                else { worker.orch_accept_presented(handle.clone(), action == "replace", Arc::new(Default::default())).await };
-            assert!(matches!(claim, Err(CallError::AwaitingKey)));
-            assert_eq!(worker.incoming_presentation_snapshot().await.unwrap().presentations.len(), 1);
-            if action == "replace" { assert_eq!(worker.orch_active_kind().await, Some(OrchestratedCallKind::DmStandard)); }
-            assert!(events.try_recv().is_err(), "failed readiness mutated presentation or active call");
-            // A failed claim must not retire the delivery lease. The original
-            // storage consumer can still complete and the user can retry.
-            crate::services::anon_dm::store_incoming_anon_offer_state(room.clone(), delayed, lease);
-            if action == "decline" { worker.orch_decline_incoming(handle.clone()).await.unwrap(); }
-            else { worker.orch_accept_presented(handle, action == "replace", Arc::new(Default::default())).await.unwrap(); }
-            assert_eq!(crate::services::anon_dm::take_pending_anon_call_state(&room).unwrap().encryption_key, vec![37; 32]);
-            worker.shutdown();
-        }
     }
 
     struct NotificationProbe(tokio::sync::mpsc::UnboundedSender<String>);
@@ -6878,7 +6108,7 @@ mod incoming_expiry_tests {
 
     #[tokio::test]
     async fn incoming_expiry_real_actor_all_transports_missing_cancel_exactly_once() {
-        for kind in [OrchestratedCallKind::DmStandard, OrchestratedCallKind::AnonDm, OrchestratedCallKind::AnonGroup] {
+        for kind in [OrchestratedCallKind::DmStandard, OrchestratedCallKind::GroupChannel] {
             let worker = worker();
             let mut events = worker.subscribe_call_events();
             present(&worker, "missing-cancel", kind, 0).await;
@@ -6906,7 +6136,7 @@ mod incoming_expiry_tests {
         worker.orch_mark_connected(active.clone(), OrchestratedCallKind::DmStandard, UserId::new(), false);
         let now = crate::util::time::TimestampNanos::now().as_u64();
         present(&worker, "old", OrchestratedCallKind::DmStandard, now - 59_000_000_000).await;
-        present(&worker, "fresh", OrchestratedCallKind::AnonDm, 0).await;
+        present(&worker, "fresh", OrchestratedCallKind::DmStandard, 0).await;
         // Re-delivery with an unstamped/future clock cannot renew the old slot.
         present(&worker, "old", OrchestratedCallKind::DmStandard, u64::MAX).await;
         expire(&worker, Duration::from_secs(2)).await;
@@ -6930,7 +6160,7 @@ mod incoming_expiry_tests {
     async fn incoming_expiry_accept_decline_hangup_and_session_reset_fence_old_slots() {
         let worker = worker();
         let mut events = worker.subscribe_call_events();
-        for call in ["accepted", "declined", "hung-up"] { present(&worker, call, OrchestratedCallKind::AnonGroup, 0).await; }
+        for call in ["accepted", "declined", "hung-up"] { present(&worker, call, OrchestratedCallKind::DmStandard, 0).await; }
         worker.orch_accept_incoming(CallHandle::from("accepted")).await.unwrap();
         worker.orch_decline_incoming(CallHandle::from("declined")).await.unwrap();
         worker.orch_withdraw_incoming_reliably(CallHandle::from("hung-up"), CallEndReason::RemoteHangup).await.unwrap();

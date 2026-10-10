@@ -117,7 +117,6 @@ fn requires_device_auth(path: &str) -> bool {
             | "/chat.v1.mailbox.EphemeralMailboxService/SendToEphemeralMailbox"
             | "/chat.v1.mailbox.EphemeralMailboxService/AcknowledgeMessages"
             | "/chat.v1.mailbox.EphemeralMailboxService/GetBlindSignaturePublicKey"
-            | "/chat.v1.mailbox.EphemeralMailboxService/JoinAnonCallRoom"
             | "/chat.v1.FileService/GetAttachmentUploadUrl"
             | "/chat.v1.FileService/ConfirmAttachmentUpload"
             | "/chat.v1.FileService/GetAttachmentDownloadUrl"

@@ -295,34 +295,5 @@ pub mod ephemeral_mailbox_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
-        pub async fn join_anon_call_room(
-            &mut self,
-            request: impl tonic::IntoRequest<super::JoinAnonCallRoomRequest>,
-        ) -> std::result::Result<
-            tonic::Response<super::JoinAnonCallRoomResponse>,
-            tonic::Status,
-        > {
-            self.inner
-                .ready()
-                .await
-                .map_err(|e| {
-                    tonic::Status::unknown(
-                        format!("Service was not ready: {}", e.into()),
-                    )
-                })?;
-            let codec = tonic_prost::ProstCodec::default();
-            let path = http::uri::PathAndQuery::from_static(
-                "/chat.v1.mailbox.EphemeralMailboxService/JoinAnonCallRoom",
-            );
-            let mut req = request.into_request();
-            req.extensions_mut()
-                .insert(
-                    GrpcMethod::new(
-                        "chat.v1.mailbox.EphemeralMailboxService",
-                        "JoinAnonCallRoom",
-                    ),
-                );
-            self.inner.unary(req, path, codec).await
-        }
     }
 }

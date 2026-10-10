@@ -117,7 +117,6 @@ fn show_dialling(weak: &slint::Weak<MainWindow>, call_type: CallType, ui_ctx: &A
         // it is the only fact about the call we actually know yet.
         title: w.get_channel_name(),
         is_video_call: is_video,
-        is_anonymous_call: false,
         is_encrypted: true,
         // Nothing has been verified yet and nothing may claim otherwise. No
         // emoji until keyed: the view shows its plain lock in their place.
@@ -252,7 +251,6 @@ async fn start_call_impl(
 
     // Delegate all orchestration to core — it resolves peer / kind / transport.
     let ctx = ui_ctx.clone();
-    let dn = display_name.clone();
     // The `JoinError` is handled rather than unwrapped: this runs inside
     // `slint::spawn_local`, i.e. on the UI thread, so unwrapping it turned any
     // panic in the LiveKit/gRPC start path into a panic on the event loop and
@@ -261,7 +259,7 @@ async fn start_call_impl(
     let revision = ui_ctx.auth_state().get().session_revision;
     let task_attempt = attempt.clone();
     let mut task = tokio::spawn(async move {
-        ctx.start_call_attempt(conversation, call_type, &dn, task_attempt)
+        ctx.start_call_attempt(conversation, call_type, task_attempt)
             .await
     });
     let joined = tokio::select! {
@@ -333,8 +331,7 @@ fn render_calling_placeholder(
 
     // A 1:1 call pre-renders the callee's tile, so ringing shows who is being
     // called rather than the caller. It is a remote placed before the local
-    // tile (local is pinned last), which the join handler matches by user_id —
-    // or, for an anon DM's empty id, fills in (see room_events.rs).
+    // tile (local is pinned last), which the join handler matches by user_id.
     let mut participants = Vec::with_capacity(2);
     if let Some(peer) = &setup.peer {
         participants.push(CallParticipantData {
@@ -368,9 +365,8 @@ fn render_calling_placeholder(
         channel_id: setup.channel_id.clone().into(),
         title: title.into(),
         is_video_call: setup.is_video,
-        is_anonymous_call: setup.is_anonymous,
         is_encrypted: true,
-        // Nothing is verified when the call starts; an anon peer never is.
+        // Nothing is verified when the call starts.
         is_identity_verified: false,
         identity_warning: "".into(),
         // Only we are in the room until the callee joins; the pre-rendered
@@ -393,7 +389,7 @@ fn render_calling_placeholder(
 
     // SAS emojis are absent for channel group calls too. Start presentation
     // polling for every call; fresh core snapshots decide when it is connected.
-    // Pending DM/anon calls stay at zero until their answer is processed.
+    // Pending DM calls stay at zero until their answer is processed.
     start_call_timer(&w, ui_ctx.clone());
     if let Some(frames) = ui_ctx.call_video_frames() {
         start_video_frame_timer(&w, frames);
@@ -434,7 +430,6 @@ mod tests {
             call_id: uuid::Uuid::new_v4().to_string(),
             channel_id: uuid::Uuid::new_v4().to_string(),
             is_video: false,
-            is_anonymous: false,
             verification_emojis: None,
             title: String::new(),
             peer: None,

@@ -30,8 +30,10 @@ impl AnonInboxBackend for AnonDmService {
     }
 
     fn create_attachment_records(&self, pointers: &[AttachmentPointer]) -> Vec<AttachmentId> {
-        let svc = AttachmentService::new_local(self.attachment_repo.clone());
-        svc.create_from_pointers(pointers)
+        // Marked as a secret chat's: its downloads go over Tor only.
+        AttachmentService::new_local(self.attachment_repo.clone())
+            .for_secret_chat()
+            .create_from_pointers(pointers)
     }
 
     fn store_data_message(
@@ -190,24 +192,19 @@ impl AnonDmService {
         // intentionally remains author-only. Emit the stored target's identity.
         if let Some(ContentType::DataMessage(data)) = &inner_content.content {
             if let Some(delete) = &data.delete {
-                if !data.channel_id.is_empty() || delete.destination_user_id.is_some() {
+                // A secret chat has no calls, so no Call record to delete.
+                if !data.channel_id.is_empty()
+                    || delete.destination_user_id.is_some()
+                    || delete.target_call_id.is_some()
+                {
                     return Ok(vec![]);
                 }
-                let deleted = if let Some(claim) = delete.target_call_id.as_deref() {
-                    self.apply_received_call_delete(
-                        conversation_id,
-                        sender_id,
-                        delete.target_author_aci.as_deref(),
-                        claim,
-                    )?
-                } else {
-                    self.apply_targeted_received_delete(
-                        conversation_id,
-                        sender_id,
-                        delete.target_author_aci.as_deref(),
-                        delete.target_sent_timestamp,
-                    )?
-                };
+                let deleted = self.apply_targeted_received_delete(
+                    conversation_id,
+                    sender_id,
+                    delete.target_author_aci.as_deref(),
+                    delete.target_sent_timestamp,
+                )?;
                 return Ok(deleted
                     .into_iter()
                     .map(|message| DomainEvent::MessageDeleted {
@@ -439,63 +436,6 @@ impl AnonDmService {
                 events.push(DomainEvent::AnonGroupMemberListReceived {
                     group_id,
                     members: list.members.clone(),
-                });
-            }
-            Some(ContentType::AnonCallOffer(offer)) => {
-                tracing::info!(
-                    conversation_id = %conversation_id,
-                    sender_id = %sender_id,
-                    room_name = %offer.room_name,
-                    call_type = ?offer.call_type,
-                    "[ANON_DM_CALL] Received call offer"
-                );
-
-                // Emit event for UI to show incoming call
-                events.push(DomainEvent::AnonCallOfferReceived {
-                    conversation_id: *conversation_id,
-                    sender_id: *sender_id,
-                    call_room_id: offer.call_room_id.clone(),
-                    room_name: offer.room_name.clone(),
-                    call_type: offer.call_type,
-                    caller_display_name: offer.caller_display_name.clone(),
-                    call_encryption_key: offer.call_encryption_key.clone(),
-                    timestamp: offer.timestamp,
-                    incoming_lease: crate::services::anon_dm::IncomingAnonOfferLease::new(),
-                });
-            }
-            Some(ContentType::AnonCallAnswer(answer)) => {
-                tracing::info!(
-                    conversation_id = %conversation_id,
-                    sender_id = %sender_id,
-                    accepted = answer.accepted,
-                    "[ANON_DM_CALL] Received call answer"
-                );
-
-                // Emit event for UI to handle call acceptance/rejection
-                events.push(DomainEvent::AnonCallAnswerReceived {
-                    conversation_id: *conversation_id,
-                    sender_id: *sender_id,
-                    call_room_id: answer.call_room_id.clone(),
-                    accepted: answer.accepted,
-                    callee_display_name: answer.callee_display_name.clone(),
-                    timestamp: inner_content.timestamp,
-                });
-            }
-            Some(ContentType::AnonCallHangup(hangup)) => {
-                tracing::info!(
-                    conversation_id = %conversation_id,
-                    sender_id = %sender_id,
-                    reason = ?hangup.reason,
-                    "[ANON_DM_CALL] Received call hangup"
-                );
-
-                // Emit event for UI to end call
-                events.push(DomainEvent::AnonCallHangupReceived {
-                    conversation_id: *conversation_id,
-                    sender_id: *sender_id,
-                    call_room_id: hangup.call_room_id.clone(),
-                    reason: hangup.reason,
-                    timestamp: inner_content.timestamp,
                 });
             }
             _ => {

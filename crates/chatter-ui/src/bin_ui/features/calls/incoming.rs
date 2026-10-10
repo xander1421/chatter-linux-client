@@ -277,7 +277,6 @@ fn render_accepted_call(
                         // Who the call is with — what the return-to-call bar shows.
                         title: peer_name.clone().into(),
                         is_video_call: is_video,
-                        is_anonymous_call: false,
                         is_encrypted: true,
                         is_identity_verified: false,
                         identity_warning: "".into(),
@@ -348,7 +347,6 @@ fn render_accepted_call(
                         channel_id: setup.channel_id.to_string().into(),
                         title: title.into(),
                         is_video_call: setup.is_video,
-                        is_anonymous_call: false,
                         is_encrypted: true,
                         is_identity_verified: false,
                         identity_warning: "".into(),
@@ -373,35 +371,6 @@ fn render_accepted_call(
                 });
             });
         }
-
-        AcceptedIncomingCall::Anon { setup, peer_id: _ } => {
-            render_active_anon_call(
-                weak,
-                ui_ctx,
-                shared_frames,
-                setup.room_name.clone(),
-                setup.channel_id.to_string(),
-                setup.peer_display_name,
-                setup.is_video,
-                setup.verification_emojis,
-                setup.peer_avatar,
-                revision,
-            );
-            let accepted_identity = setup.room_name.clone();
-            // Queued after the render above (the event loop runs them in order).
-            let weak = weak.clone();
-            let ui_ctx = ui_ctx.clone();
-            let _ = slint::invoke_from_event_loop(move || {
-                if !ui_ctx.call_session_is_current(revision) {
-                    return;
-                }
-                if let (Some(w), Some(worker)) = (weak.upgrade(), ui_ctx.call_service().get()) {
-                    worker.with_current_active_presentation(revision, &accepted_identity, || {
-                        open_call_screen(&w)
-                    });
-                }
-            });
-        }
     }
 }
 
@@ -409,8 +378,8 @@ fn render_accepted_call(
 /// data. Answering waits on the mic prompt, the answer send and the LiveKit
 /// join — seconds on a good network, the 10 s connect timeout on a bad one —
 /// and until now all of it rendered as the chat list, which read as the call
-/// having been dropped. `render_accepted_call` / `render_active_anon_call`
-/// overwrite this with the real call; a failure takes it down (`fail_call`).
+/// having been dropped. `render_accepted_call` overwrites this with the real
+/// call; a failure takes it down (`fail_call`).
 fn show_answering(w: &MainWindow) {
     let incoming = w.get_incoming_call_data();
     let is_video = incoming.is_video_call;
@@ -430,15 +399,8 @@ fn show_answering(w: &MainWindow) {
         is_audio_muted_locally: false,
         is_video_paused_locally: false,
     };
-    // An anon peer's room identity is unknown until it joins; an empty id is
-    // the slot `ParticipantJoined` adopts (see `render_active_anon_call`).
-    let remote_id = if incoming.is_anonymous_call {
-        "".into()
-    } else {
-        incoming.caller_id.clone()
-    };
     let remote = participant(
-        remote_id,
+        incoming.caller_id.clone(),
         incoming.caller_name.clone(),
         incoming.caller_initials.clone(),
         incoming.caller_avatar_source.clone(),
@@ -454,7 +416,6 @@ fn show_answering(w: &MainWindow) {
         channel_id: "".into(),
         title: incoming.caller_name.clone(),
         is_video_call: is_video,
-        is_anonymous_call: incoming.is_anonymous_call,
         is_encrypted: true,
         is_identity_verified: false,
         identity_warning: "".into(),
@@ -494,135 +455,6 @@ fn open_call_screen(w: &MainWindow) {
         w.set_mobile_show_chat(true);
         w.set_active_call_fullscreen(true);
     }
-}
-
-/// Mount the active anonymous call UI.
-///
-/// Shared between the "accept incoming" path (`AcceptedIncomingCall::Anon`)
-/// and the orchestrator's `AnonCallConnected` event (caller-side answer
-/// received). Both paths need the same UI state, so keep them in one helper.
-/// Media publication is handled inside the call worker — this is pure view.
-#[allow(clippy::too_many_arguments)]
-fn render_active_anon_call(
-    weak: &slint::Weak<MainWindow>,
-    ui_ctx: &Arc<ChatterClient>,
-    shared_frames: chatter_core::calls::SharedVideoFrames,
-    room_name: String,
-    channel_id: String,
-    peer_display_name: String,
-    is_video: bool,
-    verification_emojis: [String; 4],
-    peer_avatar: Option<Vec<u8>>,
-    revision: u64,
-) {
-    let weak = weak.clone();
-    let frames = shared_frames.clone();
-    let ui_ctx = ui_ctx.clone();
-    let _ = slint::invoke_from_event_loop(move || {
-        let Some(w) = weak.upgrade() else { return };
-        if !ui_ctx.call_session_is_current(revision) {
-            return;
-        }
-        let Some(worker) = ui_ctx.call_service().get() else {
-            return;
-        };
-        let identity = room_name.clone();
-        if ui_ctx.call_start_was_cancelled(&identity) { return; }
-        worker.with_current_active_presentation(revision, &identity, || {
-            // If `LiveKitRoomEvent::ParticipantJoined` already landed on the UI
-            // thread (it races AnonCallConnected via two independent
-            // `invoke_from_event_loop` dispatches), the remote slot already
-            // carries the server-assigned identity (e.g. "anon-c1954f…").
-            // Re-stamping a placeholder here clobbers it, and subsequent
-            // `TrackSubscribed` events can't match the identity back to a
-            // participant — the screen-share tile then stays in
-            // is_video_enabled=false until the user does pause+unpause.
-            //
-            // Otherwise the remote tile starts with an EMPTY user_id: the peer's
-            // LiveKit identity is derived by the server from the ephemeral key it
-            // joins with ("anon-" + sha256(pk)[..8], mailbox handlers.go), so
-            // nobody knows it before the join. `ParticipantJoined` adopts the
-            // empty-id tile (room_events.rs); the old literal "Anonymous" matched
-            // no identity, so a join after this render added a second remote
-            // tile and the peer's frames never reached this one.
-            let existing = w.get_active_call_data().participants;
-            let preserved_remote_user_id: Option<slint::SharedString> = existing
-                .iter()
-                .find(|p| {
-                    let uid = p.user_id.as_str();
-                    !uid.is_empty() && uid != "You"
-                })
-                .map(|p| p.user_id);
-
-            let local_participant = CallParticipantData {
-                user_id: "You".into(),
-                display_name: "You".into(),
-                initials: "Y".into(),
-                avatar_source: w.get_user_avatar_source(),
-                is_muted: false,
-                is_video_enabled: is_video,
-                is_screen_sharing: false,
-                is_speaking: false,
-                is_audio_muted_locally: false,
-                is_video_paused_locally: false,
-            };
-            let remote_initials = initials_from_name(&peer_display_name);
-            let remote_avatar_source = peer_avatar
-                .as_deref()
-                .and_then(avatar_bytes_to_image)
-                .unwrap_or_default();
-            let remote_participant = CallParticipantData {
-                user_id: preserved_remote_user_id.unwrap_or_default(),
-                display_name: peer_display_name.into(),
-                initials: remote_initials.into(),
-                avatar_source: remote_avatar_source,
-                is_muted: false,
-                is_video_enabled: is_video,
-                is_screen_sharing: false,
-                is_speaking: false,
-                is_audio_muted_locally: false,
-                is_video_paused_locally: false,
-            };
-            let accepted_identity = room_name.clone();
-            let call_data = ActiveCallData {
-                call_id: room_name.into(),
-                channel_id: channel_id.into(),
-                title: "Anonymous Call".into(),
-                is_video_call: is_video,
-                is_anonymous_call: true,
-                is_encrypted: true,
-                // An anonymous peer has no identity to have verified; `true` here
-                // would be a false "verified" badge the moment one is drawn.
-                is_identity_verified: false,
-                identity_warning: "".into(),
-                participant_count: 2,
-                duration_seconds: 0,
-                is_connected: true,
-                participants: ModelRc::new(VecModel::from(vec![
-                    remote_participant,
-                    local_participant,
-                ])),
-                verification_key_version: "".into(),
-                verification_emoji_1: verification_emojis[0].clone().into(),
-                verification_emoji_2: verification_emojis[1].clone().into(),
-                verification_emoji_3: verification_emojis[2].clone().into(),
-                verification_emoji_4: verification_emojis[3].clone().into(),
-            };
-            w.set_active_call_data(call_data);
-            w.set_call_is_muted(false);
-            w.set_call_is_video_enabled(is_video);
-            w.set_call_is_screen_sharing(false);
-            w.set_active_call_visible(true);
-            if w.get_incoming_call_data().call_id.as_str() == accepted_identity {
-                super::super::auth::initial_data::hide_incoming_call(&w);
-                w.set_incoming_call_replaces_active(false);
-            }
-            start_call_timer(&w, ui_ctx.clone());
-            start_video_frame_timer(&w, frames);
-        });
-    });
-    // Media is auto-published by the call worker after connect — no UI-side
-    // publish needed.
 }
 
 /// Subscribe to CallOrchestrator broadcast events and translate them into
@@ -743,10 +575,6 @@ fn reconcile_incoming_modal(
             }
             let peer_id_str = peer_id.to_string();
             let avatar_bytes = ui_ctx.resolve_call_participant(&peer_id_str).avatar_bytes;
-            let is_anonymous = matches!(
-                kind,
-                OrchestratedCallKind::AnonDm | OrchestratedCallKind::AnonGroup
-            );
             super::super::auth::initial_data::show_incoming_call(
                 &w,
                 call.as_str(),
@@ -755,7 +583,6 @@ fn reconcile_incoming_modal(
                 if *is_video { "video" } else { "voice" },
                 *is_identity_verified,
                 identity_warning,
-                is_anonymous,
                 avatar_bytes.as_deref(),
             );
             if *kind == OrchestratedCallKind::GroupChannel {
@@ -850,29 +677,6 @@ fn handle_orchestrator_event(
                 });
             });
         }
-
-        CallOrchestratorEvent::AnonCallConnected { call, info, .. } => {
-            tracing::info!(
-                call = %call.as_str(),
-                "Anon call connected — mounting active-call UI"
-            );
-            let Some(frames) = ui_ctx.call_video_frames() else {
-                tracing::error!("CallService not initialized — cannot render anon call");
-                return;
-            };
-            render_active_anon_call(
-                weak,
-                ui_ctx,
-                frames,
-                info.room_name,
-                info.channel_id.to_string(),
-                info.peer_display_name,
-                info.is_video,
-                info.verification_emojis,
-                info.peer_avatar,
-                revision,
-            );
-        }
     }
 }
 
@@ -893,7 +697,7 @@ mod session_tests {
         // Slint's integration backend may only be initialized once per process.
         // Re-run this exact test alone, preserving the inherited no-keyring env.
         let test_name = format!(
-            "{}::queued_projection_and_anonymous_completion_obey_session_and_active_identity",
+            "{}::queued_projection_and_accept_completion_obey_session_and_active_identity",
             module_path!().split_once("::").unwrap().1
         );
         // Files avoid pipe-buffer deadlocks even if the fixture logs heavily.
@@ -948,9 +752,9 @@ mod session_tests {
     }
 
     #[test]
-    fn queued_projection_and_anonymous_completion_obey_session_and_active_identity() {
+    fn queued_projection_and_accept_completion_obey_session_and_active_identity() {
         let test_name = format!(
-            "{}::queued_projection_and_anonymous_completion_obey_session_and_active_identity",
+            "{}::queued_projection_and_accept_completion_obey_session_and_active_identity",
             module_path!().split_once("::").unwrap().1
         );
         if std::env::var(CHILD_MARKER).ok().as_deref() != Some(test_name.as_str()) {
@@ -1022,53 +826,7 @@ mod session_tests {
         pump(&window);
         assert!(window.get_incoming_call_visible());
         assert_eq!(window.get_incoming_call_data().call_id.as_str(), "B");
-        // Accepted A mounts while B rings, and cannot dismiss B by accident.
-        current.orch_mark_connected(
-            CallHandle::from("A"),
-            OrchestratedCallKind::AnonDm,
-            alice,
-            false,
-        );
-        runtime.block_on(current.orch_active_kind());
-        render_active_anon_call(
-            &window.as_weak(),
-            &client,
-            worker.video_frames().clone(),
-            "A".into(),
-            String::new(),
-            "Peer".into(),
-            false,
-            Default::default(),
-            None,
-            revision,
-        );
-        pump(&window);
-        assert_eq!(window.get_active_call_data().call_id.as_str(), "A");
-        assert!(window.get_incoming_call_visible());
-        assert_eq!(window.get_incoming_call_data().call_id.as_str(), "B");
-        // A completion queued before its terminal actor transition cannot resurrect A.
-        render_active_anon_call(
-            &window.as_weak(),
-            &client,
-            worker.video_frames().clone(),
-            "A".into(),
-            String::new(),
-            "Late peer".into(),
-            false,
-            Default::default(),
-            None,
-            revision,
-        );
-        current.orch_mark_ended(
-            CallHandle::from("A"),
-            chatter_core::services::call_worker::CallEndReason::RemoteHangup,
-        );
-        runtime.block_on(current.orch_active_kind());
-        window.set_active_call_visible(false);
-        pump(&window);
-        assert!(!window.get_active_call_visible());
-        assert!(window.get_incoming_call_visible());
-        // Both non-anonymous accept branches must consult actor lifecycle,
+        // Both accept branches must consult actor lifecycle,
         // even when the hidden UI retains the accepted call's exact identity.
         for group in [false, true] {
             let id = chatter_core::domain::ids::CallId::new();
@@ -1185,7 +943,7 @@ mod session_tests {
                 if replaced {
                     current.orch_mark_connected(
                         CallHandle::from("replacement-active"),
-                        OrchestratedCallKind::AnonDm,
+                        OrchestratedCallKind::DmStandard,
                         alice,
                         false,
                     );

@@ -962,18 +962,14 @@ impl ChatterClient {
                 .incoming_presentation_state()
                 .session_revision()
                 .unwrap_or(expected);
-            let incoming = match worker.reset_presentation_session(actor_revision).await {
-                Ok(incoming) => incoming,
-                Err(error) => {
-                    tracing::error!(%error, "call session reset failed during logout");
-                    Vec::new()
-                }
-            };
+            if let Err(error) = worker.reset_presentation_session(actor_revision).await {
+                tracing::error!(%error, "call session reset failed during logout");
+            }
             if self.auth_state().get().session_revision != teardown_revision {
                 return Ok(());
             }
             if let Some(signaling) = self.call_signaling.get() {
-                signaling.clear_call_session(&incoming);
+                signaling.clear_call_session();
             }
         }
         if self.auth_state().get().session_revision != teardown_revision {

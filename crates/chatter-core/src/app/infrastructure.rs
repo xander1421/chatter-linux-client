@@ -103,7 +103,7 @@ pub struct InfrastructureContainer {
     pub group_coordinator: Arc<GroupCoordinator>,
 
     // Mailbox infrastructure
-    /// Token manager for blind-signed anonymous mailbox and call room tokens.
+    /// Token manager for blind-signed anonymous mailbox tokens.
     pub(crate) token_manager: Arc<TokenManager>,
 
     // Event infrastructure

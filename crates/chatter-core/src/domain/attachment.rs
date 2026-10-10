@@ -259,6 +259,12 @@ pub struct Attachment {
     /// Encryption IV/digest for verification (32 bytes SHA-256).
     pub encryption_iv: Option<Vec<u8>>,
     pub created_at: DateTime<Utc>,
+    /// Created for a secret chat (anonymous DM / group): every transfer goes
+    /// over Tor. Set where the row is made — the secret-chat receive path or
+    /// an upload routed for a secret chat — and never cleared. `None` only for
+    /// a row stored before the marker existed (migration v101).
+    #[serde(default)]
+    pub secret_chat: Option<bool>,
 }
 
 impl Attachment {
@@ -283,6 +289,7 @@ impl Attachment {
             encryption_key: None,
             encryption_iv: None,
             created_at: Utc::now(),
+            secret_chat: Some(false),
         }
     }
 
@@ -442,8 +449,8 @@ impl FileMetadata {
     }
 
     /// One-line type label for a conversation preview — "🎤 Voice message",
-    /// "🖼️ Photo", "📄 report.pdf". Media gets a kind word rather than a
-    /// filename because "IMG_4821.HEIC" tells the reader nothing a 🖼️ hasn't;
+    /// "📷 Photo", "📄 report.pdf". Media gets a kind word rather than a
+    /// filename because "IMG_4821.HEIC" tells the reader nothing a 📷 hasn't;
     /// a document keeps its name because that is what identifies it.
     #[must_use]
     pub fn preview_label(&self) -> String {
@@ -606,10 +613,9 @@ mod preview_label_tests {
             "\u{1F3A4} Voice message"
         );
         assert_eq!(label("song.mp3", "audio/mpeg", None), "\u{1F3B5} Audio");
-        assert_eq!(
-            label("IMG_1.HEIC", "image/heic", None),
-            "\u{1F5BC}\u{FE0F} Photo"
-        );
+        // Camera, not 🖼️: the framed picture rendered as tofu on Android 10
+        // (`ui::file_data::category_icon`, ae492dbb).
+        assert_eq!(label("IMG_1.HEIC", "image/heic", None), "\u{1F4F7} Photo");
         assert_eq!(label("a.gif", "image/gif", None), "\u{1F39E}\u{FE0F} GIF");
         assert_eq!(label("clip.mp4", "video/mp4", None), "\u{1F3AC} Video");
         let mut recorded = FileMetadata::new(

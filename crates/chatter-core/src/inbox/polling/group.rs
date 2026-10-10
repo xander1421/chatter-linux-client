@@ -508,7 +508,7 @@ async fn process_sealed_sender_group_message(
                 group_id: anon_group_id,
                 inner_content,
             };
-            let _ = event_tx.send(event.server_stamp_call_offer(envelope_ts_ns));
+            let _ = event_tx.send(event);
         }
         SealedSenderResult::AnonGroupJoinAckReceived {
             sender_id,

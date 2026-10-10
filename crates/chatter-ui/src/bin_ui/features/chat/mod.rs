@@ -41,6 +41,7 @@ pub use helpers::{refresh_reaction_in_ui, refresh_scoped_reaction_in_ui};
 // against a real offline ChatterClient, without the full `wire` (which needs a
 // live event loop). Registration-only; no behavioural change to the app.
 pub use actions::wire_forward_search;
+pub(crate) use actions::forward_sources;
 pub use send_message::{refresh_send_notice, show_send_notice};
 
 /// Wire chat callbacks.

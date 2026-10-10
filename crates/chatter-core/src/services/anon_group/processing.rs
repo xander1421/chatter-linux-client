@@ -176,17 +176,12 @@ impl AnonGroupService {
 
         // Roster gate, fail closed (a store error reads as "not a member").
         // Structural messages authorize themselves (owner signature, sender
-        // == leaver). Call signalling from outside the roster is dropped: a
-        // ring replayed minutes later would be for a call long gone. Anything
-        // else waits in `held_posts` for a member list that adds the sender.
+        // == leaver). Content this build does not recognise is dropped: there
+        // is nothing to deliver later. Anything else waits in `held_posts` for
+        // a member list that adds the sender.
         if !structural && !self.sender_in_roster(group_id, peer_id) {
-            let is_call = matches!(
-                inner_content.content,
-                Some(ContentType::AnonCallOffer(_))
-                    | Some(ContentType::AnonCallAnswer(_))
-                    | Some(ContentType::AnonCallHangup(_))
-            );
-            if !is_call {
+            let held = inner_content.content.is_some();
+            if held {
                 let now = std::time::Instant::now();
                 self.held_posts.hold(
                     *group_id,
@@ -198,7 +193,7 @@ impl AnonGroupService {
                     now,
                 );
             }
-            tracing::debug!(group_id = %group_id, sender_id = %peer_id, held = !is_call,
+            tracing::debug!(group_id = %group_id, sender_id = %peer_id, held,
                 "Content from a sender outside the roster not delivered");
             return Ok(vec![]);
         }
@@ -214,55 +209,6 @@ impl AnonGroupService {
         // Group-specific content types.
         let mut events = Vec::new();
         match &inner_content.content {
-            Some(ContentType::AnonCallOffer(offer)) => {
-                tracing::info!(
-                    group_id = %group_id,
-                    sender_id = %peer_id,
-                    room_name = %offer.room_name,
-                    "Received anonymous group call offer"
-                );
-                events.push(DomainEvent::AnonGroupCallOfferReceived {
-                    group_id: *group_id,
-                    sender_id: *peer_id,
-                    call_room_id: offer.call_room_id.clone(),
-                    room_name: offer.room_name.clone(),
-                    call_type: offer.call_type,
-                    caller_display_name: offer.caller_display_name.clone(),
-                    call_encryption_key: offer.call_encryption_key.clone(),
-                    timestamp: offer.timestamp,
-                    incoming_lease: crate::services::anon_dm::IncomingAnonOfferLease::new(),
-                });
-            }
-            Some(ContentType::AnonCallAnswer(answer)) => {
-                tracing::info!(
-                    group_id = %group_id,
-                    sender_id = %peer_id,
-                    accepted = answer.accepted,
-                    "Received anonymous group call answer"
-                );
-                events.push(DomainEvent::AnonGroupCallAnswerReceived {
-                    group_id: *group_id,
-                    sender_id: *peer_id,
-                    call_room_id: answer.call_room_id.clone(),
-                    accepted: answer.accepted,
-                    callee_display_name: answer.callee_display_name.clone(),
-                    timestamp: answer.timestamp,
-                });
-            }
-            Some(ContentType::AnonCallHangup(hangup)) => {
-                tracing::info!(
-                    group_id = %group_id,
-                    sender_id = %peer_id,
-                    "Received anonymous group call hangup"
-                );
-                events.push(DomainEvent::AnonGroupCallHangupReceived {
-                    group_id: *group_id,
-                    sender_id: *peer_id,
-                    call_room_id: hangup.call_room_id.clone(),
-                    reason: hangup.reason,
-                    timestamp: hangup.timestamp,
-                });
-            }
             Some(ContentType::AnonGroupMemberList(list)) => {
                 // Sender authorization (owner only) lives in handle_member_list,
                 // the one function every transport routes through.

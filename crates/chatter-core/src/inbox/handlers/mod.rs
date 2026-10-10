@@ -411,66 +411,6 @@ pub enum DomainEvent {
         server_timestamp: u64,
     },
 
-    AnonCallOfferReceived {
-        conversation_id: AnonDmId,
-        sender_id: UserId,
-        call_room_id: Vec<u8>,
-        room_name: String,
-        /// Call type (voice = 1, video = 2).
-        call_type: i32,
-        caller_display_name: String,
-        /// E2EE encryption key (32 bytes).
-        call_encryption_key: Vec<u8>,
-        timestamp: u64,
-        incoming_lease: std::sync::Arc<crate::services::anon_dm::IncomingAnonOfferLease>,
-    },
-
-    AnonCallAnswerReceived {
-        conversation_id: AnonDmId,
-        sender_id: UserId,
-        call_room_id: Vec<u8>,
-        accepted: bool,
-        callee_display_name: String,
-        timestamp: u64,
-    },
-
-    AnonCallHangupReceived {
-        conversation_id: AnonDmId,
-        sender_id: UserId,
-        call_room_id: Vec<u8>,
-        reason: i32,
-        timestamp: u64,
-    },
-
-    AnonGroupCallOfferReceived {
-        group_id: AnonGroupId,
-        sender_id: UserId,
-        call_room_id: Vec<u8>,
-        room_name: String,
-        call_type: i32,
-        caller_display_name: String,
-        call_encryption_key: Vec<u8>,
-        timestamp: u64,
-        incoming_lease: std::sync::Arc<crate::services::anon_dm::IncomingAnonOfferLease>,
-    },
-
-    AnonGroupCallAnswerReceived {
-        group_id: AnonGroupId,
-        sender_id: UserId,
-        call_room_id: Vec<u8>,
-        accepted: bool,
-        callee_display_name: String,
-        timestamp: u64,
-    },
-
-    AnonGroupCallHangupReceived {
-        group_id: AnonGroupId,
-        sender_id: UserId,
-        call_room_id: Vec<u8>,
-        reason: i32,
-        timestamp: u64,
-    },
-
     // ========================================================================
     // UI-Specific Events
     // ========================================================================
@@ -729,12 +669,6 @@ impl DomainEvent {
             DomainEvent::AnonDmRequestReceived { .. } => None,
             DomainEvent::AnonDmRequestAccepted { .. } => None,
             DomainEvent::AnonDmInitReceived { .. } => None,
-            DomainEvent::AnonCallOfferReceived { .. } => None,
-            DomainEvent::AnonCallAnswerReceived { .. } => None,
-            DomainEvent::AnonCallHangupReceived { .. } => None,
-            DomainEvent::AnonGroupCallOfferReceived { .. } => None,
-            DomainEvent::AnonGroupCallAnswerReceived { .. } => None,
-            DomainEvent::AnonGroupCallHangupReceived { .. } => None,
             DomainEvent::CallKeyOfferReceived { .. } => None,
             DomainEvent::DmBootstrapCompleted { .. } => None,
             DomainEvent::FriendRequestsUpdated { .. } => None,

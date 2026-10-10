@@ -990,7 +990,11 @@ impl ChatterClient {
     /// receive a forward), PLUS Saved Messages once its channel is known
     /// locally. Rows that cannot be resolved back to a conversation to send to
     /// (mesh, mailbox DMs, a stale id) are not destinations and are dropped.
-    pub fn forward_destinations(&self, query: &str) -> Vec<ForwardDestination> {
+    ///
+    /// Not the picker's list on its own: the secret-chat rules depend on the
+    /// messages being forwarded, so the picker asks
+    /// [`crate::services::conversation::ConversationHandle::forward_destinations`].
+    pub(crate) fn forward_destinations(&self, query: &str) -> Vec<ForwardDestination> {
         use crate::domain::message::ConversationType as CT;
 
         let mut out: Vec<ForwardDestination> = Vec::new();

@@ -6,7 +6,6 @@ mod framework;
 
 mod anon_dm_file_display_tests;
 mod anon_group_join_ack_test;
-mod anonymous_call_integration;
 mod bootstrap_lock_test;
 mod concurrent_bootstrap_race_test;
 mod conversation_open_bench;

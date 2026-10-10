@@ -29,7 +29,7 @@ use crate::proto::mailbox_v1::{
     AcknowledgeMessagesRequest, AcknowledgeMessagesResponse, CreateEphemeralMailboxRequest,
     CreateEphemeralMailboxResponse, GetBlindSignaturePublicKeyRequest,
     GetBlindSignaturePublicKeyResponse, GetMailboxChallengeRequest, GetMailboxChallengeResponse,
-    JoinAnonCallRoomRequest, JoinAnonCallRoomResponse, PollEphemeralMailboxRequest,
+    PollEphemeralMailboxRequest,
     PollEphemeralMailboxResponse, SendToEphemeralMailboxRequest, SendToEphemeralMailboxResponse,
     ephemeral_mailbox_service_client::EphemeralMailboxServiceClient,
 };
@@ -211,44 +211,6 @@ impl AnonymousMailboxClient {
 
         self.inner
             .acknowledge_messages(request)
-            .await
-            .map(|r| r.into_inner())
-            .map_err(|s| NetworkError::from_status(&s))
-    }
-
-    /// Join an anonymous call room using a blind signature token.
-    ///
-    /// Proves authorization via blind signature without revealing identity.
-    /// Returns LiveKit credentials for joining the call.
-    ///
-    /// # Arguments
-    ///
-    /// * `room_name` - The room name (must start with "anon-")
-    /// * `public_key` - The ephemeral public key (Ed25519)
-    /// * `signature` - The unblinded blind signature
-    /// * `message_randomizer` - Randomizer used during blinding
-    /// * `display_name` - Display name for this participant
-    /// * `call_type` - Call type (1 = voice, 2 = video)
-    pub async fn join_anon_call_room(
-        &mut self,
-        room_name: String,
-        public_key: Vec<u8>,
-        signature: Vec<u8>,
-        message_randomizer: Vec<u8>,
-        display_name: String,
-        call_type: i32,
-    ) -> Result<JoinAnonCallRoomResponse, NetworkError> {
-        let request = JoinAnonCallRoomRequest {
-            room_name,
-            public_key,
-            signature,
-            message_randomizer,
-            display_name,
-            call_type,
-        };
-
-        self.inner
-            .join_anon_call_room(request)
             .await
             .map(|r| r.into_inner())
             .map_err(|s| NetworkError::from_status(&s))

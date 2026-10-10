@@ -274,17 +274,33 @@ impl AttachmentService {
     }
 
     /// The service to download `attachment_id` with: routed for a secret chat
-    /// when any secret-chat message carries it.
+    /// when the row's [`Attachment::secret_chat`] marker says it was created
+    /// for one.
+    ///
+    /// The marker is written wherever a row is created, so it is unknown only
+    /// on a row stored before it existed (migration v101). Such a row goes
+    /// over Tor: an unknown origin never risks a secret-chat download on the
+    /// clearnet.
+    ///
+    /// [`Attachment::secret_chat`]: crate::domain::attachment::Attachment::secret_chat
     fn for_download(&self, attachment_id: &AttachmentId) -> Result<Self, AttachmentError> {
-        if !self.secret_chat
-            && self
-                .attachment_repo
-                .is_in_secret_chat(attachment_id)
-                .map_err(|e| AttachmentError::StorageError(e.to_string()))?
-        {
-            return Ok(self.for_secret_chat());
+        if self.secret_chat {
+            return Ok(self.clone());
         }
-        Ok(self.clone())
+        let storage = |e: crate::error::StorageError| AttachmentError::StorageError(e.to_string());
+        let secret = match self.attachment_repo.get(attachment_id).map_err(storage)? {
+            Some(attachment) => match attachment.secret_chat {
+                Some(secret) => secret,
+                None => true,
+            },
+            // No row: the transfer fails on its own lookup before any request.
+            None => false,
+        };
+        Ok(if secret {
+            self.for_secret_chat()
+        } else {
+            self.clone()
+        })
     }
 
     /// File client for URL mints: the secret-chat client (no auth header,
@@ -517,8 +533,16 @@ impl AttachmentService {
             let att_id = AttachmentId::from_cdn_key(&pointer.cdn_key);
             ids.push(att_id);
 
-            // Check if already exists (idempotent)
-            if let Ok(Some(_)) = self.attachment_repo.get(&att_id) {
+            // Check if already exists (idempotent). A secret chat receiving a
+            // CDN key this device already holds still marks it: its transfers
+            // go over Tor from now on.
+            if let Ok(Some(existing)) = self.attachment_repo.get(&att_id) {
+                if self.secret_chat
+                    && existing.secret_chat != Some(true)
+                    && let Err(e) = self.attachment_repo.mark_secret_chat(&att_id)
+                {
+                    tracing::warn!(attachment_id = %att_id, error = %e, "secret-chat mark failed");
+                }
                 tracing::debug!(
                     attachment_id = %att_id,
                     cdn_key = %pointer.cdn_key,
@@ -597,6 +621,7 @@ impl AttachmentService {
                 encryption_key: Some(pointer.encryption_key.clone()),
                 encryption_iv: Some(pointer.digest.clone()),
                 created_at: chrono::Utc::now(),
+                secret_chat: Some(self.secret_chat),
             };
 
             // Insert (ignore errors - may be race condition)
@@ -813,6 +838,81 @@ mod waveform_tests {
         let pointer = att.to_pointer().unwrap();
         assert_eq!(pointer.waveform, vec![13, 128, 255]);
         assert!(pointer.voice_note);
+    }
+}
+
+#[cfg(test)]
+mod secret_chat_origin_tests {
+    use super::*;
+
+    fn service() -> (AttachmentService, Arc<crate::storage::Database>, tempfile::TempDir) {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(
+            crate::storage::database::Database::open(&dir.path().join("origin.db"), "testpass")
+                .unwrap(),
+        );
+        db.run_migrations().unwrap();
+        let service = AttachmentService::new_local(Arc::new(AttachmentRepository::new(db.clone())));
+        (service, db, dir)
+    }
+
+    fn pointer(cdn_key: &str) -> AttachmentPointer {
+        AttachmentPointer {
+            cdn_key: cdn_key.into(),
+            content_type: "image/jpeg".into(),
+            file_name: "photo.jpg".into(),
+            ..Default::default()
+        }
+    }
+
+    fn routed_secret(service: &AttachmentService, id: &AttachmentId) -> bool {
+        service.for_download(id).unwrap().secret_chat
+    }
+
+    /// The receive path marks the row for the conversation it was created
+    /// in, and downloads route by that marker — not by whether the
+    /// shared-content index happened to record the message.
+    #[test]
+    fn received_rows_carry_their_origin_and_route_by_it() {
+        let (service, _db, _dir) = service();
+        let secret = service
+            .for_secret_chat()
+            .create_from_pointers(&[pointer("secret-key")])[0];
+        let plain = service.create_from_pointers(&[pointer("plain-key")])[0];
+
+        assert_eq!(service.get(&secret).unwrap().unwrap().secret_chat, Some(true));
+        assert_eq!(service.get(&plain).unwrap().unwrap().secret_chat, Some(false));
+        assert!(routed_secret(&service, &secret), "secret-chat row left Tor");
+        assert!(!routed_secret(&service, &plain));
+    }
+
+    /// A CDN key already stored for an ordinary conversation and then received
+    /// in a secret chat goes over Tor from then on; an ordinary receive of a
+    /// secret row never clears the mark.
+    #[test]
+    fn the_secret_mark_is_one_way() {
+        let (service, _db, _dir) = service();
+        let id = service.create_from_pointers(&[pointer("shared-key")])[0];
+        service
+            .for_secret_chat()
+            .create_from_pointers(&[pointer("shared-key")]);
+        assert_eq!(service.get(&id).unwrap().unwrap().secret_chat, Some(true));
+        service.create_from_pointers(&[pointer("shared-key")]);
+        assert_eq!(service.get(&id).unwrap().unwrap().secret_chat, Some(true));
+        assert!(routed_secret(&service, &id));
+    }
+
+    /// A row from before the marker existed (NULL) goes over Tor.
+    #[test]
+    fn unknown_origin_goes_over_tor() {
+        let (service, db, _dir) = service();
+        let id = service.create_from_pointers(&[pointer("legacy-key")])[0];
+        db.connection()
+            .unwrap()
+            .execute("UPDATE attachments SET secret_chat = NULL", [])
+            .unwrap();
+        assert_eq!(service.get(&id).unwrap().unwrap().secret_chat, None);
+        assert!(routed_secret(&service, &id));
     }
 }
 

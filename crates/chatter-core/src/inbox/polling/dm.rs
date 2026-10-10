@@ -1125,8 +1125,7 @@ pub(crate) fn dispatch_dm_content(
                     peer_id,
                     group_id,
                     inner_content,
-                }
-                .server_stamp_call_offer(server_timestamp),
+                },
             );
         }
         // =====================================================================
@@ -1201,8 +1200,7 @@ pub(crate) fn dispatch_dm_content(
                     peer_id,
                     conversation_id,
                     inner_content,
-                }
-                .server_stamp_call_offer(server_timestamp),
+                },
             );
         }
         // Unreachable in practice — the poll loop routes this to

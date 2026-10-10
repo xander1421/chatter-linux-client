@@ -70,8 +70,9 @@ fn refresh_delete_everyone(
                 };
                 handle.can_delete_for_everyone(&author, ts).unwrap_or(false)
             });
-    w.global::<crate::SelectionChrome>()
-        .set_can_delete_everyone(all_ok);
+    let chrome = w.global::<crate::SelectionChrome>();
+    chrome.set_can_delete_everyone(all_ok);
+    chrome.set_can_forward(handle.can_forward_from());
 }
 
 /// Leave selection mode and drop the marks.

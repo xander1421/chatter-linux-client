@@ -749,7 +749,8 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let Some(w) = weak_window.upgrade() else {
             return;
         };
-        if w.get_profile_scoped_member() {
+        // No calls from a secret chat (the tiles are hidden there too).
+        if w.get_profile_scoped_member() || w.get_profile_is_anonymous() {
             return;
         }
         let peer_id = w.get_profile_user_id().to_string();

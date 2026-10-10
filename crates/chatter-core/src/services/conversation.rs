@@ -105,6 +105,9 @@ fn scoped_stored_message(
 
 fn stored_message_menu(message: &crate::domain::Message, is_own: bool, now_ns: u64) -> MessageMenu {
     let mut actions = message.actions(is_own, now_ns);
+    if !message.conversation_type.can_forward_from() {
+        actions.forward = false;
+    }
     if !matches!(
         message.conversation_type,
         ConversationType::ServerDm | ConversationType::Channel
@@ -1016,10 +1019,7 @@ impl ConversationHandle {
             target.conversation_type,
             ConversationType::ServerDm | ConversationType::AnonDm
         ) {
-            crate::services::gateway::builders::build_stored_dm_delete_content(
-                &target,
-                &self.client.messages().current_user_id()?,
-            )?
+            crate::services::gateway::builders::build_stored_dm_delete_content(&target)?
         } else {
             crate::services::gateway::builders::build_targeted_delete_content(
                 target_sent_timestamp,
@@ -1514,17 +1514,32 @@ impl ConversationHandle {
     ///
     /// The quoted parent of a reply is deliberately not carried: the target
     /// conversation has no such message, and Signal drops it too.
+    ///
+    /// Secret chats are refused both ways a forward could leak them: nothing
+    /// is forwarded out of one, and only text is forwarded into one
+    /// ([`ConversationType::can_forward_from`] / [`ConversationType::accepts_forward`]).
     pub async fn forward_to(
         &self,
         target_author: &UserId,
         target_sent_timestamp: u64,
         target: ActiveConversation,
     ) -> ConversationResult {
+        if !self.can_forward_from() {
+            return Err(ConversationError::Other(
+                "messages in a secret chat cannot be forwarded".into(),
+            ));
+        }
         let text = self
             .get_message_text(target_author, target_sent_timestamp)?
             .unwrap_or_default();
         let attachment_ids =
             self.get_message_attachment_ids(target_author, target_sent_timestamp)?;
+        let (target_kind, _) = target.routing_key().ok_or(ConversationError::NoConversation)?;
+        if !target_kind.accepts_forward(!attachment_ids.is_empty()) {
+            return Err(ConversationError::Other(
+                "attachments cannot be forwarded into a secret chat".into(),
+            ));
+        }
         let attachments: Vec<crate::domain::attachment::Attachment> = attachment_ids
             .iter()
             .filter_map(|id| self.client.attachments().get(id).ok().flatten())
@@ -1542,6 +1557,38 @@ impl ConversationHandle {
             .await
             .map_err(|e| ConversationError::Other(e.to_string()))?;
         Ok(())
+    }
+
+    /// Whether messages in this conversation may be forwarded at all — false
+    /// in a secret chat. The selection bar asks this; the message menu's own
+    /// `forward` flag follows the same rule.
+    pub fn can_forward_from(&self) -> bool {
+        self.conversation
+            .routing_key()
+            .is_some_and(|(kind, _)| kind.can_forward_from())
+    }
+
+    /// The forward picker's destinations for `sources` (messages in this
+    /// conversation, by author and sent time), narrowed by `query`.
+    ///
+    /// Empty from a secret chat. Secret chats are offered only when no source
+    /// carries an attachment; a source that cannot be read counts as carrying
+    /// one, so an unreadable row never opens the text-only path.
+    pub fn forward_destinations(
+        &self,
+        sources: &[(UserId, u64)],
+        query: &str,
+    ) -> Vec<crate::client::ForwardDestination> {
+        if !self.can_forward_from() {
+            return Vec::new();
+        }
+        let has_attachments = sources.iter().any(|(author, sent_at)| {
+            self.get_message_attachment_ids(author, *sent_at)
+                .map_or(true, |ids| !ids.is_empty())
+        });
+        let mut out = self.client.forward_destinations(query);
+        out.retain(|d| d.kind.accepts_forward(has_attachments));
+        out
     }
 
     /// Get attachment IDs for a message by sender + timestamp across any conversation type.
@@ -2467,6 +2514,86 @@ mod tests {
         let mut att = received_photo();
         att.encryption_iv = None;
         assert!(forwardable_attachments(&[att]).is_empty());
+    }
+
+    // ========================================================================
+    // Secret-chat forwarding
+    // ========================================================================
+
+    /// The message menu offers no Forward in a secret chat, and still does in
+    /// an ordinary DM.
+    #[test]
+    fn secret_chat_messages_offer_no_forward() {
+        let peer = UserId::new();
+        for (ct, forward) in [
+            (ConversationType::AnonDm, false),
+            (ConversationType::AnonGroup, false),
+            (ConversationType::ServerDm, true),
+        ] {
+            let mut message = crate::domain::message::Message::new_text(
+                ChannelId::new(),
+                ct,
+                Some(peer),
+                "hello".into(),
+                1,
+            );
+            message.delivery_status = "delivered".into();
+            let menu = stored_message_menu(&message, false, 2);
+            assert_eq!(menu.actions.forward, forward, "{:?}", message.conversation_type);
+        }
+    }
+
+    /// Nothing is forwarded out of a secret chat, and its picker is empty —
+    /// refused before any lookup or send.
+    #[tokio::test]
+    async fn nothing_forwards_out_of_a_secret_chat() {
+        let (client, _dir) = test_client();
+        let source = client.conversation(ActiveConversation::AnonDm(
+            crate::domain::anon_dm::AnonDmId::new(),
+        ));
+        assert!(!source.can_forward_from());
+        assert!(source.forward_destinations(&[(UserId::new(), 1)], "").is_empty());
+        let err = source
+            .forward_to(
+                &UserId::new(),
+                1,
+                ActiveConversation::ServerDm {
+                    peer_id: UserId::new(),
+                },
+            )
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("secret chat"), "{err}");
+    }
+
+    /// An attachment is never forwarded into a secret chat: its pointer names
+    /// a CDN object minted outside it. Refused before anything is sent.
+    #[tokio::test]
+    async fn attachments_do_not_forward_into_a_secret_chat() {
+        let (client, _dir) = test_client();
+        let peer = UserId::new();
+        let attachment = AttachmentId::from_cdn_key("forward-into-secret");
+        let mut message = crate::domain::message::Message::new_text(
+            ChannelId::from(peer),
+            ConversationType::ServerDm,
+            Some(peer),
+            "look".into(),
+            7,
+        );
+        message.attachments = vec![attachment];
+        client.messages().message_repo.insert(&message).unwrap();
+
+        let source = client.conversation(ActiveConversation::ServerDm { peer_id: peer });
+        assert!(source.can_forward_from());
+        let err = source
+            .forward_to(
+                &peer,
+                7,
+                ActiveConversation::AnonDm(crate::domain::anon_dm::AnonDmId::new()),
+            )
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("attachments"), "{err}");
     }
 
     // ========================================================================

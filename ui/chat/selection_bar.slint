@@ -25,6 +25,9 @@ import { HeaderButton } from "../components/header_button.slint";
 
 export global SelectionChrome {
     in-out property <bool> can-delete-everyone: false;
+    // Core's answer for the open conversation: false in a secret chat,
+    // where nothing may be forwarded.
+    in-out property <bool> can-forward: false;
     callback select-all();
     callback delete-everyone();
     // UI-owned selection reconciles only rows actually removed from the view.
@@ -95,7 +98,7 @@ export component SelectionBar inherits GlassSurface {
             clicked => { root.copy-clicked(); }
         }
 
-        HeaderButton {
+        if SelectionChrome.can-forward: HeaderButton {
             backdrop-paused: root.backdrop-paused;
             touch: root.touch;
             icon: Icons.send;

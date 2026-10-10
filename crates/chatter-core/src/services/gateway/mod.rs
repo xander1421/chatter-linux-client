@@ -34,10 +34,6 @@ pub use builders::{
     PADDING_GROUP_CONTROL,
     PADDING_LARGE,
     PADDING_MESSAGE,
-    build_anon_call_answer_content,
-    build_anon_call_hangup_content,
-    build_anon_call_offer_content,
-    build_anon_call_token,
     // Call hangup
     build_call_hangup_content,
     build_call_key_answer,
@@ -68,8 +64,6 @@ pub use builders::{
     // Control message builders
     build_typing_content,
     build_typing_content_with_channel,
-    // Anonymous call signaling (anon DM + anon group)
-    generate_anon_call_room,
     // Padding
     generate_padding,
 };

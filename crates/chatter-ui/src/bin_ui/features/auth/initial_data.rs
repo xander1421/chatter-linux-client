@@ -378,7 +378,6 @@ pub fn show_incoming_call(
     call_type: &str,
     is_identity_verified: bool,
     identity_warning: &str,
-    is_anonymous: bool,
     caller_avatar: Option<&[u8]>,
 ) {
     use crate::IncomingCallData;
@@ -399,7 +398,6 @@ pub fn show_incoming_call(
         caller_avatar_source,
         channel_name: String::new().into(),
         is_video_call: call_type == "video",
-        is_anonymous_call: is_anonymous,
         is_identity_verified,
         identity_warning: identity_warning.into(),
         encryption_key: String::new().into(),

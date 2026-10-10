@@ -1,4 +1,7 @@
-//! Call orchestration (DM / group / anonymous) plus call history and lifecycle.
+//! Call orchestration (DM / group) plus call history and lifecycle.
+//!
+//! Secret chats (anonymous DMs and groups) have no calls: LiveKit media would
+//! leave Tor and expose the user's IP.
 
 use super::{ChatterClient, ClientError};
 #[cfg(feature = "media")]
@@ -23,8 +26,7 @@ pub struct CallHistoryPage {
 /// Opaque to the UI: it hands the cursor back unchanged to page further.
 pub type CallHistoryCursor = (chrono::DateTime<chrono::Utc>, String);
 
-/// orchestrator internals. `Clone` is intentionally omitted — the anonymous
-/// setup's encryption key is `Zeroize`-only.
+/// An accepted incoming call, as the UI renders it — no orchestrator internals.
 #[cfg(feature = "media")]
 #[derive(Debug)]
 pub enum AcceptedIncomingCall {
@@ -34,11 +36,6 @@ pub enum AcceptedIncomingCall {
         peer_id: crate::domain::ids::UserId,
         peer_name: String,
         is_video: bool,
-    },
-    /// Anonymous DM / anonymous group call.
-    Anon {
-        setup: crate::domain::call::AnonCallSetupResult,
-        peer_id: crate::domain::ids::UserId,
     },
     /// Channel group call joined from its ring.
     Group {
@@ -161,14 +158,14 @@ impl ChatterClient {
 
     /// Start an outgoing call for an arbitrary conversation.
     ///
-    /// Resolves the conversation kind (channel / server-DM / mailbox-DM /
-    /// anon-DM / anon-group) internally, looks up the peer when required,
+    /// Resolves the conversation kind (channel / server-DM) internally, looks
+    /// up the peer when required,
     /// and dispatches to the correct signalling path. Returns an
     /// [`OutgoingCallStart`] with everything the UI needs to render the
     /// "Calling…" state.
     ///
-    /// Also opens the call-history row for the outgoing side. Only DM and
-    /// anon calls are registered with the orchestrator while they ring
+    /// Also opens the call-history row for the outgoing side. Only DM calls
+    /// are registered with the orchestrator while they ring
     /// (`orch_register_outgoing`), and that registration names no
     /// conversation, so this is the only place that sees an outgoing call of
     /// *every* conversation type at the moment it is placed;
@@ -178,14 +175,8 @@ impl ChatterClient {
         &self,
         conversation: crate::state::ActiveConversation,
         call_type: crate::domain::call::CallType,
-        display_name: &str,
     ) -> Result<OutgoingCallStart, ClientError> {
-        self.start_call_attempt(
-            conversation,
-            call_type,
-            display_name,
-            CallStartAttempt::default(),
-        )
+        self.start_call_attempt(conversation, call_type, CallStartAttempt::default())
         .await
     }
 
@@ -196,7 +187,6 @@ impl ChatterClient {
         &self,
         conversation: crate::state::ActiveConversation,
         call_type: crate::domain::call::CallType,
-        display_name: &str,
         attempt: CallStartAttempt,
     ) -> Result<OutgoingCallStart, ClientError> {
         let revision = self.auth_state().get().session_revision;
@@ -214,7 +204,7 @@ impl ChatterClient {
                     return Err(ClientError::Validation("call session changed".into()));
                 }
                 let start = match self
-                    .dispatch_start_call(conversation, call_type, display_name)
+                    .dispatch_start_call(conversation, call_type)
                     .await
                 {
                     Ok(start) => start,
@@ -255,7 +245,6 @@ impl ChatterClient {
     #[cfg(feature = "media")]
     pub async fn end_cancelled_call(&self, call_id: String, channel_id: String, is_video: bool) {
         let start = OutgoingCallStart {
-            is_anonymous: call_id.starts_with("anon-"),
             call_id,
             channel_id,
             is_video,
@@ -340,7 +329,6 @@ impl ChatterClient {
         &self,
         conversation: crate::state::ActiveConversation,
         call_type: crate::domain::call::CallType,
-        display_name: &str,
     ) -> Result<OutgoingCallStart, ClientError> {
         use crate::domain::call::CallType as CT;
         use crate::state::ActiveConversation as AC;
@@ -355,52 +343,10 @@ impl ChatterClient {
                 "no conversation selected for call".into(),
             )),
 
-            AC::AnonDm(anon_dm_id) => {
-                let offer = self
-                    .start_anon_dm_call(&anon_dm_id, is_video, display_name)
-                    .await?;
-                let title = self.conversation_display_name(
-                    &crate::domain::ids::ChannelId::from_uuid(*anon_dm_id.as_uuid()),
-                    &crate::domain::message::ConversationType::AnonDm,
-                );
-                // The anon peer's call identity is an ephemeral key, learned
-                // only when they join — so the tile carries no id yet.
-                let peer = RingingPeer {
-                    user_id: String::new(),
-                    info: crate::ui::chat_data::CallParticipantInfo {
-                        initials: crate::ui::chat_data::initials_from_name(&title),
-                        display_name: title.clone(),
-                        avatar_bytes: None,
-                    },
-                };
-                Ok(OutgoingCallStart {
-                    call_id: offer.room_name.clone(),
-                    channel_id: anon_dm_id.to_string(),
-                    is_video,
-                    is_anonymous: true,
-                    verification_emojis: None,
-                    title,
-                    peer: Some(peer),
-                })
-            }
-
-            AC::AnonGroup(group_id) => {
-                let offer = self
-                    .start_anon_group_call(&group_id, is_video, display_name)
-                    .await?;
-                Ok(OutgoingCallStart {
-                    call_id: offer.room_name.clone(),
-                    channel_id: group_id.to_string(),
-                    is_video,
-                    is_anonymous: true,
-                    verification_emojis: None,
-                    title: self.conversation_display_name(
-                        &crate::domain::ids::ChannelId::from_uuid(*group_id.as_uuid()),
-                        &crate::domain::message::ConversationType::AnonGroup,
-                    ),
-                    peer: None,
-                })
-            }
+            // Secret chats have no calls: LiveKit media would leave Tor.
+            AC::AnonDm(_) | AC::AnonGroup(_) => Err(ClientError::Validation(
+                "calls are not available in secret chats".into(),
+            )),
 
             AC::ServerDm { peer_id } => {
                 // Channel-free DM: the call's local scoping id is derived
@@ -417,7 +363,6 @@ impl ChatterClient {
                     call_id: call_id.to_string(),
                     channel_id: channel_id.to_string(),
                     is_video,
-                    is_anonymous: false,
                     verification_emojis: None,
                     title: peer.info.display_name.clone(),
                     peer: Some(peer),
@@ -432,7 +377,6 @@ impl ChatterClient {
                     call_id: setup.call_id.to_string(),
                     channel_id: channel_id.to_string(),
                     is_video,
-                    is_anonymous: false,
                     // A group call has no SAS (as in Signal): no key is
                     // shared by everyone who could compare one.
                     verification_emojis: None,
@@ -715,7 +659,7 @@ impl ChatterClient {
     /// Accept a presented incoming call (the one the orchestrator fired
     /// `IncomingPresented` for). Routes the orchestrator transition, fires
     /// the wire-level hangup on the old active call when `replaces_active`,
-    /// runs the appropriate accept flow (DM / anon / anon group), and
+    /// runs the appropriate accept flow (DM / group channel), and
     /// promotes the orchestrator's active slot on success.
     #[cfg(feature = "media")]
     pub async fn accept_presented_incoming_call(
@@ -809,19 +753,6 @@ impl ChatterClient {
                         peer_name: snapshot.peer_name,
                         is_video,
                     }
-                }
-                OrchestratedCallKind::AnonDm | OrchestratedCallKind::AnonGroup => {
-                    let setup = self.accept_anon_call(call_id).await?;
-                    worker
-                        .orch_mark_connected_reliably(
-                            CallHandle::from(setup.room_name.clone()),
-                            kind,
-                            peer_id,
-                            setup.is_video,
-                        )
-                        .await
-                        .map_err(|e| ClientError::Inbox(e.to_string()))?;
-                    AcceptedIncomingCall::Anon { setup, peer_id }
                 }
                 OrchestratedCallKind::GroupChannel => {
                     let setup = self.join_group_call(&worker, call_id).await?;
@@ -1019,16 +950,15 @@ impl ChatterClient {
     #[cfg(feature = "media")]
     pub async fn call_room_recovery_snapshot(
         &self,
-    ) -> Option<(CallRoomSnapshot, u64, crate::calls::RoomState, String)> {
+    ) -> Option<(CallRoomSnapshot, u64, crate::calls::RoomState)> {
         let worker = self.call_service().get()?.clone();
         let (generation, state) = worker.room_connection().await?;
         let snapshot = self.call_room_snapshot().await?;
-        let room_name = worker.get_room_name().await?;
         let (latest_generation, latest_state) = worker.room_connection().await?;
         if generation != latest_generation || state != latest_state {
             return None;
         }
-        Some((snapshot, generation, state, room_name))
+        Some((snapshot, generation, state))
     }
 
     /// Locally mute/unmute a remote participant's audio. The LiveKit
@@ -1123,7 +1053,7 @@ impl ChatterClient {
 
     /// Leave the currently-joined LiveKit room without clearing the
     /// orchestrator's active-call record. Bridge pairs this with
-    /// `end_dm_call` / `end_anon_call` for the full hang-up flow.
+    /// `end_dm_call` for the full hang-up flow.
     #[cfg(feature = "media")]
     pub async fn call_leave_room(&self) -> Result<(), crate::error::CallError> {
         if let Some(worker) = self.call_service().get().cloned() {
@@ -1200,11 +1130,6 @@ impl ChatterClient {
             // a server-side leave would take us out of.
             OrchestratedCallKind::GroupChannel => {
                 self.call_signaling().take_group_call_invite(call_id);
-            }
-            OrchestratedCallKind::AnonDm | OrchestratedCallKind::AnonGroup => {
-                self.decline_anon_call(call_id)
-                    .await
-                    .map_err(|e| ClientError::Inbox(format!("decline_anon_call: {e}")))?;
             }
         }
         Ok(())
@@ -1370,7 +1295,7 @@ impl ChatterClient {
         let inbox = self.device_inbox_provider().get().cloned();
         tokio::spawn(async move {
             use crate::services::call_worker::OrchestratedCallKind;
-            // Channel group calls only: a 1:1 or anonymous call has no key
+            // Channel group calls only: a 1:1 call has no key
             // authority to ask.
             if worker.orch_active_kind().await != Some(OrchestratedCallKind::GroupChannel) {
                 return;
@@ -1563,7 +1488,7 @@ impl ChatterClient {
             None,
             channel_name,
             channel_id.to_string(),
-            info.created_at, None,
+            info.created_at,
         );
 
         // Watch the authoritative call, not the initiator's departure: other
@@ -1701,73 +1626,6 @@ impl ChatterClient {
         })
     }
 
-    // ── Anonymous Call Orchestration ─────────────────────────────────
-
-    /// Start an anonymous DM call: acquire token, send offer, store pending state.
-    #[cfg(feature = "media")]
-    pub async fn start_anon_dm_call(
-        &self,
-        anon_dm_id: &crate::domain::anon_dm::AnonDmId,
-        is_video: bool,
-        display_name: &str,
-    ) -> Result<crate::services::anon_dm::AnonCallOfferResult, ClientError> {
-        let call_worker = self
-            .call_service()
-            .get()
-            .ok_or_else(|| ClientError::Inbox("Call service not initialized".into()))?;
-        self.call_signaling()
-            .start_anon_dm_call(anon_dm_id, is_video, display_name, call_worker)
-            .await
-            .map_err(|e| ClientError::Inbox(e.to_string()))
-    }
-
-    /// Start an anonymous group call: acquire token, send offer to all members, store pending state.
-    #[cfg(feature = "media")]
-    pub async fn start_anon_group_call(
-        &self,
-        group_id: &crate::domain::anon_group::AnonGroupId,
-        is_video: bool,
-        display_name: &str,
-    ) -> Result<crate::services::anon_dm::AnonCallOfferResult, ClientError> {
-        let call_worker = self
-            .call_service()
-            .get()
-            .ok_or_else(|| ClientError::Inbox("Call service not initialized".into()))?;
-        self.call_signaling()
-            .start_anon_group_call(group_id, is_video, display_name, call_worker)
-            .await
-            .map_err(|e| ClientError::Inbox(e.to_string()))
-    }
-
-    /// Accept an incoming anonymous call: acquire token, send accept, join room, connect LiveKit.
-    #[cfg(feature = "media")]
-    pub async fn accept_anon_call(
-        &self,
-        room_name: &str,
-    ) -> Result<crate::domain::call::AnonCallSetupResult, ClientError> {
-        let call_worker = self
-            .call_service()
-            .get()
-            .ok_or_else(|| ClientError::Inbox("Call service not initialized".into()))?
-            .for_presentation_session(self.auth_state().get().session_revision);
-        self.call_signaling()
-            .accept_anon_call(room_name, &call_worker)
-            .await
-            .map_err(|e| ClientError::Inbox(e.to_string()))
-    }
-
-    // handle_anon_call_answer is now owned by the call orchestrator bridge
-    // (chatter_core::services::call_worker::spawn_anon_call_answer_task).
-    // No client facade — UI reacts to orchestrator events instead.
-
-    /// Decline an incoming anonymous call: send decline answer, store missed call history.
-    pub async fn decline_anon_call(&self, room_name: &str) -> Result<(), ClientError> {
-        self.call_signaling()
-            .decline_anon_call(room_name)
-            .await
-            .map_err(|e| ClientError::Inbox(e.to_string()))
-    }
-
     // ── Call history ──────────────────────────────────────────────────
 
     // ── Local call history (v053) ──────────────────────────────────
@@ -1876,28 +1734,17 @@ impl ChatterClient {
         use crate::domain::message::ConversationType as CT;
         match CT::from_str_value(conversation_type).ok()? {
             CT::ServerDm => Some(self.display_name(&conversation_id.parse().ok()?)),
-            CT::AnonDm => {
-                let dm = self.get_anon_dm_conversation(&conversation_id.parse().ok()?)?;
-                Some(
-                    dm.peer_display_name
-                        .unwrap_or_else(|| self.fallback_display_name(&dm.peer_id)),
-                )
-            }
             _ => None,
         }
     }
 
     /// Avatar for a call-history row's peer, from the stores the chat list
-    /// reads: the peer's profile for a server DM, the anon DM row for an
-    /// anonymous one. Group and channel calls have no single peer → `None`.
+    /// reads: the peer's profile for a server DM. Group and channel calls have
+    /// no single peer → `None`.
     fn call_peer_avatar(&self, conversation_type: &str, conversation_id: &str) -> Option<Vec<u8>> {
         use crate::domain::message::ConversationType as CT;
         match CT::from_str_value(conversation_type).ok()? {
             CT::ServerDm => self.user_avatar(&conversation_id.parse().ok()?),
-            CT::AnonDm => {
-                self.get_anon_dm_conversation(&conversation_id.parse().ok()?)?
-                    .peer_avatar
-            }
             _ => None,
         }
     }
@@ -2013,31 +1860,13 @@ impl ChatterClient {
             .map_err(|e| ClientError::Inbox(e.to_string()))
     }
 
-    /// End an active anonymous call: send hangup, store history, leave.
-    ///
-    /// Returns the conversation_id for UI bubble insertion.
-    #[cfg(feature = "media")]
-    pub async fn end_anon_call(
-        &self,
-        duration_secs: i64,
-    ) -> Result<Option<crate::domain::anon_dm::AnonDmId>, ClientError> {
-        let call_worker = self
-            .call_service()
-            .get()
-            .ok_or_else(|| ClientError::Inbox("call service not initialized".into()))?;
-        self.call_signaling()
-            .end_anon_call(call_worker, duration_secs)
-            .await
-            .map_err(|e| ClientError::Inbox(e.to_string()))
-    }
-
     /// End the active call regardless of kind.
     ///
     /// Resolves the call kind from the orchestrator — the connected call, or
-    /// our DM or anon call still ringing, so cancelling it sends the hangup — and
+    /// our DM call still ringing, so cancelling it sends the hangup — and
     /// dispatches to the correct wire-level tear-down. UI code should call
     /// this from its "End call" button instead of branching between
-    /// `end_dm_call` / `end_anon_call` based on view state.
+    /// `end_dm_call` / `end_group_call` based on view state.
     #[cfg(feature = "media")]
     pub async fn end_active_call(&self) -> Result<(), ClientError> {
         use crate::services::call_worker::OrchestratedCallKind;
@@ -2061,9 +1890,6 @@ impl ChatterClient {
             .map(|call| call.duration_seconds())
             .unwrap_or(0);
         match kind {
-            OrchestratedCallKind::AnonDm | OrchestratedCallKind::AnonGroup => {
-                self.end_anon_call(duration_secs).await.map(|_| ())
-            }
             OrchestratedCallKind::DmStandard => self.end_dm_call().await,
             OrchestratedCallKind::GroupChannel => self.end_group_call(duration_secs).await,
         }
@@ -2114,8 +1940,7 @@ impl ChatterClient {
             None => return Ok(()), // No active call
         };
 
-        // Only rotate for channel-based group calls (not anon, not Saved Messages).
-        // Anonymous calls have a random channel_id that won't resolve.
+        // Only rotate for channel-based group calls (not Saved Messages).
         let channel = match self.channels().get_channel_local(&call.channel_id) {
             Ok(Some(c)) => c,
             _ => return Ok(()),
@@ -2208,23 +2033,19 @@ impl ChatterClient {
 /// render, not as orchestration state.
 #[derive(Debug, Clone)]
 pub struct OutgoingCallStart {
-    /// Stable identifier for the outgoing call. For DM/group calls this is
-    /// the server-assigned `CallId` stringified; for anon calls it is the
-    /// LiveKit room name.
+    /// Stable identifier for the outgoing call: the server-assigned `CallId`
+    /// stringified.
     pub call_id: String,
     /// Conversation / channel id to display in the call metadata. Stringified
     /// to avoid leaking domain ID types into the UI crate.
     pub channel_id: String,
     pub is_video: bool,
-    /// True if this is an anonymous call (DM or group). Drives the "shield"
-    /// branding and skips identity verification surfaces.
-    pub is_anonymous: bool,
     /// Verification emojis, if already known at dial time (channel group
-    /// calls). `None` for DM + anon calls — those populate after the peer's
+    /// calls). `None` for DM calls — those populate after the peer's
     /// answer arrives.
     pub verification_emojis: Option<[String; 4]>,
-    /// Who is being called: the peer's display name for a DM, the
-    /// conversation name for an anon group. Empty for a channel group call,
+    /// Who is being called: the peer's display name for a DM. Empty for a
+    /// channel group call,
     /// where the UI uses the channel name it already shows.
     pub title: String,
     /// The person being rung in a 1:1 call, so the ringing screen shows them
@@ -2235,8 +2056,7 @@ pub struct OutgoingCallStart {
 /// The callee of a 1:1 outgoing call, resolved for display at dial time.
 #[derive(Debug, Clone)]
 pub struct RingingPeer {
-    /// The peer's call identity; empty for an anon DM, whose identity is an
-    /// ephemeral key only learned when they join.
+    /// The peer's call identity.
     pub user_id: String,
     pub info: crate::ui::chat_data::CallParticipantInfo,
 }

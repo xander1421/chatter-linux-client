@@ -14,22 +14,12 @@
 
 mod acceptance;
 mod blocking;
-mod calls;
 mod helpers;
 mod infrastructure;
 mod initiation;
 mod messaging;
 mod processing;
 mod queries;
-
-#[cfg(test)]
-pub(crate) use calls::{store_incoming_anon_offer_state, take_pending_anon_call_state, take_incoming_anon_call_state};
-
-// Re-export call types for external use
-pub use calls::{
-    IncomingAnonOfferLease, AnonCallOfferResult, AnonCallRoomCredentials, PendingAnonCall, ReceivedCallAnswer,
-    ReceivedCallOffer,
-};
 
 use std::sync::Arc;
 

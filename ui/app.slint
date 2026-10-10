@@ -514,6 +514,11 @@ export component MainWindow inherits Window {
 
     // ========== Composer GIF picker state ==========
     in-out property <bool> composer-gif-picker-visible: false;
+    // Set with the conversation kind from core (`gif_picker_available`).
+    in property <bool> composer-gifs-available: true;
+    changed composer-gifs-available => {
+        if !root.composer-gifs-available { root.composer-gif-picker-visible = false; }
+    }
     in property <bool> composer-gif-picker-loading: false;
     in property <bool> composer-gif-picker-failed: false;
     in property <[GifData]> composer-gif-picker-results: [];
@@ -2170,6 +2175,7 @@ export component MainWindow inherits Window {
                         gif-search-changed(query) => { root.composer-gif-search-changed(query); }
                         emoji-picker-visible <=> root.composer-emoji-picker-visible;
                         gif-picker-visible <=> root.composer-gif-picker-visible;
+                        gifs-available: root.composer-gifs-available;
 
                         settings-clicked => { root.chat-settings-clicked(); }
                         voice-call-clicked => { root.start-voice-call(); }

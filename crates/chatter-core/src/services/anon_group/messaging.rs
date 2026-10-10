@@ -790,15 +790,6 @@ mod tests {
             undelivered_post(&wrap(attachment_only)),
             Some(SystemMessage::Undelivered { preview, .. }) if preview == "📎 Attachment"
         ));
-
-        // Call signaling is never parked: a late ring is worse than none.
-        let hangup = Content {
-            content: Some(content_v1::content::Content::AnonCallHangup(
-                Default::default(),
-            )),
-            ..Default::default()
-        };
-        assert!(undelivered_post(&wrap(hangup)).is_none());
     }
 }
 

@@ -198,8 +198,6 @@ impl AppContext {
                 let signaling = crate::services::call_signaling::CallSignalingService::new(
                     self.core_services.message_service.clone(),
                     self.core_services.channel_service.clone(),
-                    self.core_services.anon_dm_service.clone(),
-                    self.core_services.anon_group_service.clone(),
                 );
                 crate::services::call_history_recorder::spawn_call_history_recorder(
                     &handle,

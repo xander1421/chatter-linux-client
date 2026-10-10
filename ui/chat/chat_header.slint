@@ -137,8 +137,9 @@ export component ChatHeader inherits GlassSurface {
     // Show invite button for channels and private groups only (not DMs, anon DMs, or saved)
     property <bool> show-invite: has-channel && !tight && !is-dm && !is-anon-dm && !is-saved && !is-mesh;
 
-    // Show call buttons for everything except saved messages
-    property <bool> show-calls: has-channel && !is-saved && !is-mesh && !read-only;
+    // No calls in saved messages, the mesh, or secret chats: LiveKit media
+    // would leave Tor and expose the user's IP.
+    property <bool> show-calls: has-channel && !is-saved && !is-mesh && !read-only && !is-anon-dm && !is-private-group;
     // ⋯ holds Video call (owner, 2026-10-05: out of the header row, into the
     // menu) and Conversation settings, so it is there when either is.
     // Saved always has its pinned list (the only row its menu has), so the

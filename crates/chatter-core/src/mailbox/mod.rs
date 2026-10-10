@@ -38,11 +38,7 @@ pub use blind_signature::{
     blind_key, unblind, verify,
 };
 pub use token_manager::{
-    // Call room tokens (integrated into TokenManager)
-    CallRoomToken,
-    DEFAULT_CALL_ROOM_TOKEN_REQUEST_COUNT,
     DEFAULT_TOKEN_REQUEST_COUNT,
-    MIN_CALL_ROOM_TOKEN_THRESHOLD,
     MIN_TOKEN_THRESHOLD,
     // Mailbox tokens
     MailboxToken,

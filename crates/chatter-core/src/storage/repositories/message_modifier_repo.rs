@@ -387,7 +387,6 @@ pub(crate) fn canonical_call_record_id(message: &Message) -> Option<uuid::Uuid> 
     };
     let raw = match message.conversation_type {
         ConversationType::ServerDm => call.call_id.as_str(),
-        ConversationType::AnonDm => call.call_id.strip_prefix("anon-").unwrap_or(&call.call_id),
         _ => return None,
     };
     let id = canonical_call_claim(raw)?;
@@ -404,10 +403,7 @@ pub(crate) fn apply_call_delete(
     let Some(id) = canonical_call_claim(claim) else {
         return Ok(None);
     };
-    if !matches!(
-        scope.kind,
-        ConversationType::ServerDm | ConversationType::AnonDm
-    ) {
+    if scope.kind != ConversationType::ServerDm {
         return Ok(None);
     }
     let conn = db.connection()?;
@@ -550,7 +546,7 @@ pub(crate) fn take_on_arrival<'a>(
     message: &'a Message,
 ) -> Result<Arrival<'a>, StorageError> {
     // Call identity is shared across replicas; authors and timestamps are local.
-    // Check before the author fallback, including anonymous nil-authored calls.
+    // Check before the author fallback.
     if let Some(call_id) = canonical_call_record_id(message) {
         let deleted: bool = conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM pending_message_modifiers WHERE kind='delete' AND author_id=?1 AND target_sent_at=0 AND conversation_id=?2 AND body=?3 AND emoji=?4)",
