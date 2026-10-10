@@ -2223,12 +2223,17 @@ mod deletion_tests {
                 .collect::<Vec<_>>(),
         )));
         assert_eq!(w.get_chat_rows().row_count(), 2);
+        // Each round runs every UI closure queued so far and stops at its own
+        // sentinel, queued behind them. Not `w.run()` with a quit timer: run's
+        // hide queues a Quit (last window closed), and a timer firing after
+        // its loop already exited leaves another, so stale Quits piled up at
+        // the head of the queue and a later pump returned before the work it
+        // waited for had run (flaky under load).
+        w.show().unwrap();
         let pump = || {
             for _ in 0..4 {
-                slint::Timer::single_shot(std::time::Duration::from_millis(25), || {
-                    slint::quit_event_loop().unwrap();
-                });
-                w.run().unwrap();
+                slint::invoke_from_event_loop(|| slint::quit_event_loop().unwrap()).unwrap();
+                slint::run_event_loop().unwrap();
             }
         };
         finish_channel_delete(
