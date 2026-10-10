@@ -1551,7 +1551,6 @@ impl MessageService {
     }
 
     /// Authenticate a DM destination claim against the actual envelope sender.
-    /// Self-device envelopes without a destination are rejected.
     pub fn dm_reaction_admission(
         &self,
         transport_peer: Option<UserId>,
@@ -1561,12 +1560,9 @@ impl MessageService {
         let own = self.current_user_id()?;
         let (claimed, author) = crate::domain::reaction::decode_dm_reaction_target(target)?;
         let conversation_peer = if reactor == own {
-            claimed.or(transport_peer).ok_or_else(|| {
-                MessageError::InvalidContent("Self-device reaction lacks destination scope".into())
-            })?
+            claimed
         } else {
-            if claimed.is_some_and(|destination| destination != own)
-                || transport_peer.is_some_and(|peer| peer != reactor)
+            if claimed != own || transport_peer.is_some_and(|peer| peer != reactor)
             {
                 return Err(MessageError::InvalidContent(
                     "Reaction destination differs from authenticated transport".into(),
@@ -3302,6 +3298,11 @@ mod inbound_target_tests {
             svc.dm_reaction_admission(None, f.me, &f.carol.to_string())
                 .is_err(),
             "own-device ambiguity is never guessed"
+        );
+        assert!(
+            svc.dm_reaction_admission(Some(f.carol), f.carol, &f.carol.to_string())
+                .is_err(),
+            "a peer reaction must name its destination"
         );
         assert!(
             svc.dm_reaction_admission(Some(f.bob), f.bob, &encoded)

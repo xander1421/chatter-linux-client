@@ -245,20 +245,20 @@ pub fn encode_dm_reaction_target(destination: &UserId, author: &UserId) -> Strin
     format!("dm:{destination}:{author}")
 }
 
+/// Every DM reaction names its destination; a bare author UUID is refused.
 pub fn decode_dm_reaction_target(
     target: &str,
-) -> Result<(Option<UserId>, UserId), crate::error::StorageError> {
+) -> Result<(UserId, UserId), crate::error::StorageError> {
     let invalid =
         || crate::error::StorageError::InvalidData("Invalid scoped DM reaction target".into());
-    if let Some(scoped) = target.strip_prefix("dm:") {
-        let (destination, author) = scoped.split_once(':').ok_or_else(invalid)?;
-        Ok((
-            Some(destination.parse().map_err(|_| invalid())?),
-            author.parse().map_err(|_| invalid())?,
-        ))
-    } else {
-        Ok((None, target.parse().map_err(|_| invalid())?))
-    }
+    let (destination, author) = target
+        .strip_prefix("dm:")
+        .and_then(|scoped| scoped.split_once(':'))
+        .ok_or_else(invalid)?;
+    Ok((
+        destination.parse().map_err(|_| invalid())?,
+        author.parse().map_err(|_| invalid())?,
+    ))
 }
 
 /// Presentation is derived from persisted counts and this account's own votes.
