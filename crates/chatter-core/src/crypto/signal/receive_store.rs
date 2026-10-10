@@ -357,7 +357,6 @@ async fn decrypt_durable_inner(
 > {
     use crate::error::{CryptoError, ServiceError};
     use crate::storage::receive_artifact::{self, MAX_RECEIVE_CONTENT, ReceiveArtifact};
-    use prost::Message;
     key.validate()?;
     // Matches internal/services/mailbox/handlers/handlers.go: MaxMailboxEnvelopeSize.
     // The reaction journal has a smaller retention bound, not a transport bound.
@@ -403,7 +402,13 @@ async fn decrypt_durable_inner(
             "decrypted receive content exceeds bound".into(),
         ));
     }
-    let decoded = crate::proto::content_v1::Content::decode(result.message.as_slice()).ok();
+    // Validated decode (content.proto rules, nested wrappers too): an invalid
+    // reaction is never journaled; it routes like any other content and is
+    // refused there by the same validation.
+    let decoded = crate::network::validation::protovalidate::decode_validated::<
+        crate::proto::content_v1::Content,
+    >(result.message.as_slice())
+    .ok();
     let is_reaction = match decoded.as_ref() {
         Some(c) => reaction_content(c, 0)?,
         None => false,
@@ -830,8 +835,12 @@ mod tests {
         f.body = crate::proto::content_v1::Content {
             content: Some(crate::proto::content_v1::content::Content::AnonDmMessage(
                 Box::new(crate::proto::content_v1::AnonDmMessage {
+                    // A valid wrapper names a 16-byte conversation.
+                    conversation_id: uuid::Uuid::parse_str(&f.key.scope)
+                        .unwrap()
+                        .as_bytes()
+                        .to_vec(),
                     inner_content: Some(Box::new(inner)),
-                    ..Default::default()
                 }),
             )),
             ..Default::default()
@@ -981,19 +990,57 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn invalid_reaction_is_never_journaled() {
+        let mut f = fixture().await;
+        // Empty emoji breaks Reaction.emoji min_len: 1.
+        f.body = crate::proto::content_v1::Content {
+            content: Some(crate::proto::content_v1::content::Content::Reaction(
+                crate::proto::content_v1::Reaction {
+                    emoji: String::new(),
+                    target_author_aci: uuid::Uuid::new_v4().to_string(),
+                    target_sent_timestamp: 1,
+                    ..Default::default()
+                },
+            )),
+            ..Default::default()
+        }
+        .encode_to_vec();
+        let cipher = encrypt(&mut f).await;
+        let received = decrypt_durable(f.store.clone(), &cipher, &f.root, f.key.clone())
+            .await
+            .unwrap();
+        assert!(received.artifact.is_none(), "invalid reaction journaled");
+        assert!(
+            f.store
+                .key_store
+                .pending_receive_artifacts(&f.key.local_account, 1, 100)
+                .unwrap()
+                .is_empty()
+        );
+    }
+
+    #[tokio::test]
     async fn oversized_reaction_and_mailbox_envelope_leave_receive_state_unchanged() {
         let mut f = fixture().await;
         let mut content = crate::proto::content_v1::Content::decode(f.body.as_slice()).unwrap();
+        // Padding past Content.padding's 4096-byte rule makes this an invalid
+        // reaction: it routes like other content (refused there) and is never
+        // journaled, however large.
         content.padding = vec![0; crate::storage::receive_artifact::MAX_RECEIVE_CONTENT];
         f.body = content.encode_to_vec();
         let cipher = encrypt(&mut f).await;
-        let before = snapshot(&f.db);
+        let received = decrypt_durable(f.store.clone(), &cipher, &f.root, f.key.clone())
+            .await
+            .unwrap();
+        assert!(received.artifact.is_none());
         assert!(
-            decrypt_durable(f.store.clone(), &cipher, &f.root, f.key.clone())
-                .await
-                .is_err()
+            f.store
+                .key_store
+                .pending_receive_artifacts(&f.key.local_account, 1, 100)
+                .unwrap()
+                .is_empty()
         );
-        assert_eq!(snapshot(&f.db), before);
+        let before = snapshot(&f.db);
         let oversized = vec![0; 1024 * 1024 + 1];
         assert!(
             decrypt_durable(f.store.clone(), &oversized, &f.root, f.key.clone())
