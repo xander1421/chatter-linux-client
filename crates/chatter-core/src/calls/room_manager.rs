@@ -918,24 +918,6 @@ impl RoomManager {
         })
     }
 
-    pub(crate) async fn connect_reusing_keys(
-        &self,
-        url: &str,
-        token: &str,
-        snapshot: ReconnectKeys,
-    ) -> Result<(), CallError> {
-        self.connect_with_provider(
-            url,
-            token,
-            snapshot.provider.clone(),
-            snapshot.epoch,
-            CallTiming::new("room_reconnect_requested"),
-            Some(snapshot),
-            None,
-        )
-        .await
-    }
-
     /// Catch up on the provisional room, before its handle or Connected event
     /// can permit publication. The caller commits this staged chain on success.
     pub(crate) async fn connect_reusing_keys_aligned(
@@ -2236,9 +2218,10 @@ mod reconnect_initialization_tests {
             manager.disconnect().await;
             // Exercise the production fresh-room initialization path without
             // a server. A malformed URL fails before any network connection.
+            let mut candidate = chain.clone();
             assert!(
                 manager
-                    .connect_reusing_keys("invalid://", "", snapshot)
+                    .connect_reusing_keys_aligned("invalid://", "", snapshot, &mut candidate, None)
                     .await
                     .is_err()
             );

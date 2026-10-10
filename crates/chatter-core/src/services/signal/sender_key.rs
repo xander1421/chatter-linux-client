@@ -84,9 +84,10 @@ impl SignalService {
         sender_device_id: u32,
         skdm: &SenderKeyDistribution,
     ) -> Result<(), ServiceError> {
-        let channel_id = skdm
-            .channel_id
-            .parse()
+        // The actor needs no channel (libsignal keys the state by the
+        // distribution id inside the message); a malformed id is still refused.
+        skdm.channel_id
+            .parse::<ChannelId>()
             .map_err(|_| ServiceError::Validation("Invalid channel ID".into()))?;
         let sender_address = ProtocolAddress::new(
             sender_id.to_string(),
@@ -95,11 +96,7 @@ impl SignalService {
         );
 
         self.actor
-            .process_sender_key(
-                channel_id,
-                sender_address,
-                skdm.distribution_message.clone(),
-            )
+            .process_sender_key(sender_address, skdm.distribution_message.clone())
             .await
     }
 
@@ -190,9 +187,10 @@ impl SignalService {
         sender_device_id: u32,
         encrypted: &GroupEncrypted,
     ) -> Result<Vec<u8>, ServiceError> {
-        let channel_id = encrypted
+        // A malformed channel id is refused, as for distributions above.
+        encrypted
             .channel_id
-            .parse()
+            .parse::<ChannelId>()
             .map_err(|_| ServiceError::Validation("Invalid channel ID".into()))?;
         let sender_address = ProtocolAddress::new(
             sender_id.to_string(),
@@ -201,7 +199,7 @@ impl SignalService {
         );
 
         self.actor
-            .decrypt_from_group(channel_id, sender_address, encrypted.ciphertext.clone())
+            .decrypt_from_group(sender_address, encrypted.ciphertext.clone())
             .await
     }
 

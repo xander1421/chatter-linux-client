@@ -168,7 +168,6 @@ pub(crate) enum SignalCommand {
         response: oneshot::Sender<Result<Vec<u8>, ServiceError>>,
     },
     ProcessSenderKey {
-        channel_id: ChannelId,
         sender_address: ProtocolAddress,
         skdm_bytes: Vec<u8>,
         response: oneshot::Sender<Result<(), ServiceError>>,
@@ -180,7 +179,6 @@ pub(crate) enum SignalCommand {
         response: oneshot::Sender<Result<Vec<u8>, ServiceError>>,
     },
     DecryptFromGroup {
-        channel_id: ChannelId,
         sender_address: ProtocolAddress,
         ciphertext: Vec<u8>,
         response: oneshot::Sender<Result<Vec<u8>, ServiceError>>,
@@ -550,7 +548,7 @@ impl SignalActorHandle {
                             let _ = response.send(res);
                         }
 
-                        SignalCommand::ProcessSenderKey { channel_id: _, sender_address, skdm_bytes, response } => {
+                        SignalCommand::ProcessSenderKey { sender_address, skdm_bytes, response } => {
                             let res = match libsignal_protocol::SenderKeyDistributionMessage::try_from(skdm_bytes.as_slice()) {
                                 Ok(skdm) => {
                                     SenderKeyManager::process_distribution_message(&sender_address, &skdm, &mut store).await
@@ -569,7 +567,7 @@ impl SignalActorHandle {
                             let _ = response.send(res);
                         }
 
-                        SignalCommand::DecryptFromGroup { channel_id: _, sender_address, ciphertext, response } => {
+                        SignalCommand::DecryptFromGroup { sender_address, ciphertext, response } => {
                             let res = SenderKeyManager::decrypt(&ciphertext, &sender_address, &mut store).await
                                 .map_err(ServiceError::Crypto);
                             let _ = response.send(res);
@@ -1088,12 +1086,10 @@ impl SignalActorHandle {
 
     pub async fn process_sender_key(
         &self,
-        channel_id: ChannelId,
         sender_address: ProtocolAddress,
         skdm_bytes: Vec<u8>,
     ) -> Result<(), ServiceError> {
         self.send(|tx| SignalCommand::ProcessSenderKey {
-            channel_id,
             sender_address,
             skdm_bytes,
             response: tx,
@@ -1118,12 +1114,10 @@ impl SignalActorHandle {
 
     pub async fn decrypt_from_group(
         &self,
-        channel_id: ChannelId,
         sender_address: ProtocolAddress,
         ciphertext: Vec<u8>,
     ) -> Result<Vec<u8>, ServiceError> {
         self.send(|tx| SignalCommand::DecryptFromGroup {
-            channel_id,
             sender_address,
             ciphertext,
             response: tx,

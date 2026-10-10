@@ -184,37 +184,6 @@ impl AnonGroupService {
         Ok(())
     }
 
-    /// Record that `from` handed `group_id` to `to`, as seen by `me`.
-    pub(crate) fn apply_ownership_transfer(
-        &self,
-        group_id: &AnonGroupId,
-        from: &UserId,
-        to: &UserId,
-        me: &UserId,
-    ) -> Result<(), AnonGroupError> {
-        let timestamp = self
-            .anon_group_repo
-            .next_membership_timestamp(group_id, TimestampNanos::now().as_u64())?;
-        let update = AnonGroupUpdate {
-            group_id: group_id.to_vec(),
-            timestamp,
-            update: Some(anon_group_update::Update::RoleChange(AnonGroupRoleChange {
-                user_id: to.as_bytes().to_vec(),
-                new_role: AnonGroupRole::Owner.to_i32(),
-                timestamp,
-            })),
-        };
-        if !self
-            .anon_group_repo
-            .apply_ordered_update(group_id, from, me, &update)?
-        {
-            return Err(AnonGroupError::InvalidData(
-                "Ownership transfer superseded".into(),
-            ));
-        }
-        Ok(())
-    }
-
     /// Kick a member from the group (admin/owner only).
     pub async fn kick_member(
         &self,
@@ -344,23 +313,7 @@ impl AnonGroupService {
         Ok(signature.to_bytes().to_vec())
     }
 
-    /// Verify a kick signature using the sender's mailbox public key.
-    pub(crate) fn verify_kick_signature(
-        &self,
-        group_id: &AnonGroupId,
-        kicked_user_id: &UserId,
-        timestamp: u64,
-        sender_id: &UserId,
-        signature: &[u8],
-    ) -> Result<bool, AnonGroupError> {
-        let key = self
-            .anon_group_repo
-            .get_member(group_id, sender_id)?
-            .and_then(|m| m.mailbox_pk)
-            .ok_or(AnonGroupError::MemberNotFound(*sender_id))?;
-        self.verify_kick_signature_with_key(group_id, kicked_user_id, timestamp, &key, signature)
-    }
-
+    /// Verify a kick signature against the sender's mailbox public key.
     pub(crate) fn verify_kick_signature_with_key(
         &self,
         group_id: &AnonGroupId,
@@ -640,8 +593,8 @@ mod tests {
         let f = fixture(AnonGroupRole::Member);
         let svc = f.client.anon_groups();
         let me = svc.current_user_id().unwrap();
-        // Make us the owner of the fixture's group.
-        svc.apply_ownership_transfer(&f.group_id, &f.owner, &me, &me)
+        // Make us the owner of the fixture's group: the owner hands it to us.
+        svc.process_incoming_content(&f.group_id, &f.owner, &transfer_to(&f, me))
             .unwrap();
         let conv = ActiveConversation::AnonGroup(f.group_id);
         assert!(!svc.can_leave(&f.group_id));

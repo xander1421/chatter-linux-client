@@ -496,16 +496,29 @@ impl MessageService {
     }
 }
 
+/// Why an expired entry (past retention, or from a previous device) failed.
+/// One holding a stored envelope may have landed, so it reads like a replay
+/// past its certificate window; one without never reached the network.
+fn expired_error(envelope_stored: bool) -> MessageError {
+    MessageError::DmError(if envelope_stored {
+        super::core::DELIVERY_UNCONFIRMED.into()
+    } else {
+        "expired".into()
+    })
+}
+
 /// Claimed entries of `owner` that are due: leased to a fresh generation in
 /// one transaction. Entries whose row the user deleted are dropped (never
-/// sent); expired ones and ones from a previous device are settled failed.
+/// sent); expired ones and ones from a previous device are settled failed,
+/// each with whether it holds a stored envelope.
+#[allow(clippy::type_complexity)]
 fn claim_due(
     service: &MessageService,
     owner: &UserId,
 ) -> Result<
     (
         Vec<(MessageId, String, ChannelId, u64)>,
-        Vec<(MessageId, String, ChannelId, u64)>,
+        Vec<(MessageId, String, ChannelId, u64, bool)>,
     ),
     StorageError,
 > {
@@ -516,18 +529,19 @@ fn claim_due(
     }
     let mut conn = service.database.connection()?;
     let tx = conn.transaction()?;
-    let rows: Vec<(String, i64, u32)> = {
+    let rows: Vec<(String, i64, u32, bool)> = {
         let mut stmt = tx.prepare(
-            "SELECT message_id,created_at,device_id FROM dm_outbox WHERE owner_id=?1 AND next_attempt_at<=?2
+            "SELECT message_id,created_at,device_id,request IS NOT NULL FROM dm_outbox
+             WHERE owner_id=?1 AND next_attempt_at<=?2
              ORDER BY created_at,message_id LIMIT ?3",
         )?;
         let mapped = stmt.query_map(params![owner_s, now(), BATCH], |r| {
-            Ok((r.get(0)?, r.get(1)?, r.get(2)?))
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?))
         })?;
         mapped.collect::<Result<_, _>>()?
     };
     let (mut due, mut expired) = (Vec::new(), Vec::new());
-    for (id, created, entry_device) in rows {
+    for (id, created, entry_device, envelope_stored) in rows {
         // Only the account's own live friend-DM row is ever sent.
         let stored: Option<(String, i64)> = tx
             .query_row(
@@ -556,7 +570,13 @@ fn claim_due(
             params![owner_s, id, generation, now() + LEASE_SECONDS],
         )?;
         if created < now() - RETENTION_SECONDS || entry_device != device {
-            expired.push((message_id, generation, conversation, sent_at as u64));
+            expired.push((
+                message_id,
+                generation,
+                conversation,
+                sent_at as u64,
+                envelope_stored,
+            ));
             continue;
         }
         due.push((message_id, generation, conversation, sent_at as u64));
@@ -626,14 +646,14 @@ pub(crate) fn spawn_dm_send_recovery(
                     Err(error) => tracing::warn!(%error, "Sealed DM failure not recorded"),
                 }
             };
-            for (id, generation, conversation, sent_at) in expired {
-                tracing::warn!(message_id = %id, "Sealed DM unconfirmed past retention or from a previous device; marked failed");
+            for (id, generation, conversation, sent_at, envelope_stored) in expired {
+                tracing::warn!(message_id = %id, envelope_stored, "Sealed DM unconfirmed past retention or from a previous device; marked failed");
                 fail(
                     &id,
                     &generation,
                     conversation,
                     sent_at,
-                    MessageError::DmError("expired".into()),
+                    expired_error(envelope_stored),
                 );
             }
             for (id, generation, conversation, sent_at) in due {
@@ -712,6 +732,26 @@ mod tests {
         assert!(!replayable(None, sealed));
         // Inside the 12 h a used certificate has left, with margin.
         assert!(REPLAY_WINDOW_SECONDS < 12 * 3600);
+    }
+
+    /// An expired entry that holds a stored envelope may have been delivered,
+    /// so it reads "Delivery unconfirmed" (retryable, never auto-resealed);
+    /// one that never stored an envelope never left and stays a plain failure.
+    /// Either way the verdict is final, so the worker settles it.
+    #[test]
+    fn expired_entry_with_stored_envelope_reads_delivery_unconfirmed() {
+        let stored = expired_error(true);
+        assert_eq!(
+            stored.permanent_send_failure_reason(),
+            Some(super::super::core::DELIVERY_UNCONFIRMED)
+        );
+        assert!(!transient(&stored));
+        let never_sent = expired_error(false);
+        assert_eq!(
+            never_sent.permanent_send_failure_reason(),
+            Some("Cannot send message")
+        );
+        assert!(!transient(&never_sent));
     }
 
     /// Only the generation that owns the entry may store envelopes, only for

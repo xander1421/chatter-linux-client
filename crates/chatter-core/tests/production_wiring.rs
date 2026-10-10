@@ -313,7 +313,7 @@ const TABLE: &[Entry] = &[
     },
     // ---- Anonymous groups: removal -------------------------------------
     Entry {
-        symbol: "verify_kick_signature",
+        symbol: "verify_kick_signature_with_key",
         defined_in: "chatter-core/src/services/anon_group/removal.rs",
         expect: Expect::Wired,
         why: "Receive-side kick authentication (services/anon_group/handlers.rs). Lose \
