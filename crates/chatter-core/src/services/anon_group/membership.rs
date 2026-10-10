@@ -72,11 +72,6 @@ impl AnonGroupService {
         content: Content,
     ) -> Result<(), AnonGroupError> {
         self.check_group_recipient(&content, peer_id, mailbox_pk)?;
-        // Secret-chat traffic goes over Tor or not at all; refuse before any
-        // submission is recorded or token spent.
-        self.grpc_pool
-            .secret_channel()
-            .map_err(|e| AnonGroupError::MessageError(e.to_string()))?;
         // 1. Serialize content
         let plaintext = content.encode_to_vec();
         let retained = if crate::services::gateway::submission::user_post(&content) {
@@ -132,6 +127,19 @@ impl AnonGroupService {
             resume.notified().await;
         }
         self.check_recipient_session(retained.as_deref())?;
+        // Secret-chat traffic goes over Tor or not at all; refuse before any
+        // network contact, token spend or encryption. Placed after the
+        // submission lookup so an already-claimed post still reports its own
+        // (local) state, and a fresh claim is released here.
+        if let Err(e) = self.grpc_pool.secret_channel() {
+            if let Some(key) = retained.as_ref() {
+                crate::services::gateway::submission::discard_before_encryption(
+                    self.settings_repo.database(),
+                    key,
+                );
+            }
+            return Err(AnonGroupError::MessageError(e.to_string()));
+        }
         let ciphertext = if has_session {
             self.check_group_recipient(&content, peer_id, mailbox_pk)?;
             self.admit_recipient_encryption(retained.as_deref())?;
@@ -1534,12 +1542,24 @@ mod tests {
         let svc = f._client.anon_groups();
         let repo = &svc.anon_group_repo;
 
+        // Even the owner's list cannot crown a second Owner: refused whole.
         svc.handle_member_list(f.group_id, f.owner, forged(&f))
             .unwrap();
-
         assert_eq!(
             repo.get_member_role(&f.group_id, &f.mallory).unwrap(),
-            Some(AnonGroupRole::Owner)
+            Some(AnonGroupRole::Member)
+        );
+
+        let list = vec![
+            info(f.owner, AnonGroupRole::Owner, [1u8; 32]),
+            info(f.mallory, AnonGroupRole::Admin, [2u8; 32]),
+            info(f.victim, AnonGroupRole::Member, [9u8; 32]),
+        ];
+        svc.handle_member_list_ordered(f.group_id, f.owner, list, 1)
+            .unwrap();
+        assert_eq!(
+            repo.get_member_role(&f.group_id, &f.mallory).unwrap(),
+            Some(AnonGroupRole::Admin)
         );
         let victim = repo.get_member(&f.group_id, &f.victim).unwrap().unwrap();
         assert_eq!(victim.mailbox_pk, Some([9u8; 32]));
