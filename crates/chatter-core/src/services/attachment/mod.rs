@@ -153,6 +153,12 @@ static ATTACHMENTS_BASE: std::sync::OnceLock<PathBuf> = std::sync::OnceLock::new
 /// Set the base directory for attachment storage.
 /// Call once during app init with the writable data directory.
 pub fn set_attachments_base_dir(dir: PathBuf) {
+    // Unit tests share one process-lifetime directory (`attachments_dir`): the
+    // first test client to get here would otherwise pin the base to its own
+    // temp data dir, deleted under every later test when that one ends.
+    if cfg!(test) {
+        return;
+    }
     let _ = ATTACHMENTS_BASE.set(dir);
 }
 
@@ -161,6 +167,14 @@ pub fn set_attachments_base_dir(dir: PathBuf) {
 /// Uses the override set by `set_attachments_base_dir()` if available,
 /// otherwise falls back to `~/.local/share/chatter/attachments/` on desktop.
 pub fn attachments_dir() -> PathBuf {
+    // Never the user's own ~/.local/share/chatter from a unit test.
+    #[cfg(test)]
+    ATTACHMENTS_BASE.get_or_init(|| {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().to_path_buf();
+        std::mem::forget(dir);
+        path
+    });
     if let Some(base) = ATTACHMENTS_BASE.get() {
         base.join("attachments")
     } else {

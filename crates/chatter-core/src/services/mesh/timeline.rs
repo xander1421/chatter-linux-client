@@ -880,33 +880,10 @@ pub(crate) fn temp_identity_store() -> Arc<crate::storage::mesh_identity_store::
     ))
 }
 
-/// Point attachment storage at a throwaway directory, once per test process.
-///
-/// [`store_file`](MeshTimeline::store_file) writes real bytes to
-/// [`attachments_dir`], which without this is the user's own
-/// `~/.local/share/chatter/attachments`. The base is a `OnceLock`, so the first
-/// caller wins and every test in the process shares one leaked directory —
-/// which is what we want: they are only ever writing files nobody reads back
-/// across tests.
-#[cfg(test)]
-fn redirect_attachments_to_temp() {
-    use std::sync::Once;
-
-    static ONCE: Once = Once::new();
-    ONCE.call_once(|| {
-        let dir = tempfile::tempdir().expect("temp dir");
-        crate::services::attachment::set_attachments_base_dir(dir.path().to_path_buf());
-        // Process-wide on purpose (see above): one directory per test binary,
-        // shared by every test, so it cannot be tied to one test's lifetime.
-        Box::leak(Box::new(dir));
-    });
-}
-
 #[cfg(test)]
 pub(crate) fn temp_timeline() -> Arc<MeshTimeline> {
     use crate::storage::Database;
 
-    redirect_attachments_to_temp();
     let dir = tempfile::tempdir().expect("temp dir");
     let db = Arc::new(
         Database::open(&dir.path().join("mesh_timeline.db"), "testpass").expect("open database"),
