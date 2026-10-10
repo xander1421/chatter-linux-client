@@ -3608,6 +3608,7 @@ impl ChatterClient {
         // co-member's from their SKDM: those are the profiles this device can
         // decrypt. Throttled per user; a no-op in Shield mode.
         let users = &self.messages().user_repo;
+        let here = crate::state::ActiveConversation::Channel(*channel_id);
         futures::future::join_all(
             members
                 .iter()
@@ -3617,7 +3618,7 @@ impl ChatterClient {
                             && matches!(users.get_friend_profile_key(me, &m.user_id), Ok(Some(_)))
                     })
                 })
-                .map(|m| self.refresh_profile_if_stale(&m.user_id)),
+                .map(|m| self.refresh_profile_if_stale(&m.user_id, &here)),
         )
         .await;
         // Our own role, for what we may do to each row. Saved Messages has
@@ -4065,10 +4066,14 @@ impl ChatterClient {
     /// peer's profile edit does not rotate their profile key, so nothing else
     /// tells us about it. Call on DM open and profile open (Signal-Desktop's
     /// `throttledGetProfiles`); throttled in `UserService`, so cheap to call.
-    pub async fn refresh_profile_if_stale(&self, user_id: &crate::domain::ids::UserId) {
-        // Shield: an identified fetch naming the friend the moment their DM
-        // opens is the link the mailbox hides. The cached profile stands.
-        if self.anon_mode_enabled() {
+    /// `conversation` is where the peer is being looked at: see
+    /// [`may_refresh_global_profile`].
+    pub async fn refresh_profile_if_stale(
+        &self,
+        user_id: &crate::domain::ids::UserId,
+        conversation: &crate::state::ActiveConversation,
+    ) {
+        if !may_refresh_global_profile(self.anon_mode_enabled(), conversation) {
             return;
         }
         match self.users().refresh_profile_if_stale(user_id).await {
@@ -4907,6 +4912,43 @@ fn queued_bubble_id(stored_id: String, sent_at: u64) -> String {
         format!("pending-{sent_at}")
     } else {
         stored_id
+    }
+}
+
+/// Whether looking at a peer may trigger the global authenticated profile
+/// fetch (`GetUserProfile` naming that peer). Never in Shield — an identified
+/// fetch the moment a friend's DM opens is the link the mailbox hides — and
+/// never from a secret chat, whatever the transport: even over Tor it would
+/// tie the account to the peer it is secretly talking to. A secret chat shows
+/// only the profile data carried inside it.
+fn may_refresh_global_profile(
+    shield: bool,
+    conversation: &crate::state::ActiveConversation,
+) -> bool {
+    !shield && !conversation.is_anon()
+}
+
+#[cfg(test)]
+mod global_profile_refresh_tests {
+    use crate::domain::anon_dm::AnonDmId;
+    use crate::domain::anon_group::AnonGroupId;
+    use crate::domain::ids::UserId;
+    use crate::state::ActiveConversation;
+
+    #[test]
+    fn secret_chats_and_shield_never_refresh_the_global_profile() {
+        let peer = UserId::new();
+        let secret = [
+            ActiveConversation::AnonDm(AnonDmId::new()),
+            ActiveConversation::AnonGroup(AnonGroupId::new()),
+        ];
+        for conversation in &secret {
+            assert!(!super::may_refresh_global_profile(false, conversation));
+            assert!(!super::may_refresh_global_profile(true, conversation));
+        }
+        let dm = ActiveConversation::ServerDm { peer_id: peer };
+        assert!(super::may_refresh_global_profile(false, &dm));
+        assert!(!super::may_refresh_global_profile(true, &dm));
     }
 }
 

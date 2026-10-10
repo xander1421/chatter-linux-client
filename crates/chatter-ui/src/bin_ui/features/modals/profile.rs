@@ -223,6 +223,23 @@ pub fn open_user_profile_in_conversation(
         w.set_profile_avatar_source(avatar_source);
         w.set_profile_presence(presence.into());
         w.set_profile_bio(bio.into());
+        // A secret DM shows only what the chat itself carried: the peer's
+        // in-chat name and avatar, no account-profile bio.
+        if let (chatter_core::state::ActiveConversation::AnonDm(id), Some(ctx)) =
+            (conversation, ui_ctx)
+        {
+            if let Some((name, avatar)) = ctx.anon_dm_peer_card(&id) {
+                w.set_profile_initials(initials_from_name(&name).into());
+                w.set_profile_display_name(name.into());
+                w.set_profile_avatar_source(
+                    avatar
+                        .as_deref()
+                        .and_then(crate::bin_ui::converters::avatar_bytes_to_image)
+                        .unwrap_or_default(),
+                );
+            }
+            w.set_profile_bio("".into());
+        }
         // Check verification state
         let is_verified = ui_ctx
             .and_then(|ctx| ctx.is_peer_verified(user_id).ok())
@@ -266,10 +283,14 @@ pub fn open_user_profile_in_conversation(
         if let Some(ctx) = ui_ctx {
             // A peer's name/bio/avatar edit is not pushed reliably; refetch on
             // open (throttled in core) so the modal catches up via
-            // UserProfileUpdated.
-            if !is_self && !scoped_member {
+            // UserProfileUpdated. Core refuses it from a secret chat.
+            if !is_self {
                 let (refresh_ctx, peer) = (ctx.clone(), *user_id);
-                tokio::spawn(async move { refresh_ctx.refresh_profile_if_stale(&peer).await });
+                tokio::spawn(async move {
+                    refresh_ctx
+                        .refresh_profile_if_stale(&peer, &conversation)
+                        .await
+                });
             }
             // Loading from the first frame: an empty strip is also what "no
             // tabs" looks like, and flashing "Nothing shared yet" for the

@@ -420,7 +420,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
             // Catch up on the peer's profile edits once the conversation is on
             // screen (throttled in core; skipped in Shield).
-            if owner.is_current() { refresh_ctx.refresh_profile_if_stale(&peer_id).await; }
+            if owner.is_current() { refresh_ctx.refresh_profile_if_stale(&peer_id, &chatter_core::state::ActiveConversation::ServerDm { peer_id }).await; }
         });
     });
 }

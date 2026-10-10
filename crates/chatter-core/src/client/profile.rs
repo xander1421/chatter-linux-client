@@ -636,6 +636,26 @@ impl ChatterClient {
             .map(|dm| dm.id)
     }
 
+    /// A secret DM's peer as the chat itself presents them: the name and
+    /// avatar they sent inside it (encrypted in the request/profile update,
+    /// cached on the row), never the global account profile. `None` when the
+    /// chat is unknown.
+    pub fn anon_dm_peer_card(
+        &self,
+        conversation_id: &crate::domain::anon_dm::AnonDmId,
+    ) -> Option<(String, Option<Vec<u8>>)> {
+        let dm = self
+            .anon_dms()
+            .get_conversation(conversation_id)
+            .ok()
+            .flatten()?;
+        let name = dm
+            .peer_display_name
+            .filter(|n| !n.is_empty())
+            .unwrap_or_else(|| self.fallback_display_name(&dm.peer_id));
+        Some((name, dm.peer_avatar))
+    }
+
     /// Decrypted avatar bytes for an anonymous DM peer (the user directory has
     /// no profile for anon peers — their avatar lives on the anon DM row, same
     /// source the sidebar uses).
@@ -1673,6 +1693,32 @@ mod tests {
 
         client.unblock_profile_user(&peer).await.unwrap();
         assert!(!client.is_profile_user_blocked(&peer));
+    }
+
+    /// A secret DM's profile shows what the chat carried, not the global
+    /// profile cached for the same user.
+    #[tokio::test]
+    async fn anon_dm_peer_card_uses_in_chat_profile_only() {
+        let (client, _dir) = test_client();
+        let peer = UserId::from_uuid(uuid::Uuid::from_u128(11));
+        let mut global = crate::domain::user::Profile::new(peer, "Global Name".into());
+        global.avatar_bytes = Some(vec![9]);
+        client.messages().user_repo.ensure_user_exists(&peer).unwrap();
+        client.messages().user_repo.upsert_profile(&global).unwrap();
+
+        let mut dm = AnonDm::new_initiated(peer);
+        client.anon_dms().anon_dm_repo().insert_conversation(&dm).unwrap();
+        let (name, avatar) = client.anon_dm_peer_card(&dm.id).unwrap();
+        assert_ne!(name, "Global Name");
+        assert_eq!(avatar, None);
+
+        dm.peer_display_name = Some("In-chat".into());
+        dm.peer_avatar = Some(vec![1]);
+        client.anon_dms().anon_dm_repo().update_conversation(&dm).unwrap();
+        assert_eq!(
+            client.anon_dm_peer_card(&dm.id),
+            Some(("In-chat".into(), Some(vec![1])))
+        );
     }
 
     /// An anon chat blocked without its peer row (half a block) is still
