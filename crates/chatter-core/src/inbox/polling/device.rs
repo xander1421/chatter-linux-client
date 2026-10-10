@@ -1456,7 +1456,7 @@ async fn process_sealed_sender_message(
     };
 
     match message_gateway
-        .process_incoming_message(sealed_sender_msg.clone())
+        .process_incoming_message(sealed_sender_msg)
         .await
     {
         // Blocked. This is the arm that matters most: on the sealed path the
@@ -1824,10 +1824,12 @@ async fn process_sealed_sender_message(
         // duplicate inner message, a `DecryptionErrorMessage` addressed to
         // another of our devices, a content type with no bubble). The pipeline
         // below therefore decides nothing about the message's survival — it
-        // dedups and orders a SYNTHETIC proto (`channel_id: "pending"`, body =
-        // the sealed envelope) purely to gate the UI events. So every arm of it
-        // acks, including `Buffered` and `Dropped`: the payload is on disk
-        // before we get here and there is nothing left to lose.
+        // dedups and orders a SYNTHETIC proto (`channel_id: "pending"`, no
+        // content: dedup keys on the id, ordering on channel and timestamp,
+        // and the validator skips absent content) purely to gate the UI
+        // events. So every arm of it acks, including `Buffered` and `Dropped`:
+        // the payload is on disk before we get here and there is nothing left
+        // to lose.
         //
         // Worth knowing about the orderer it feeds, though: `get_ready` and
         // `flush_stale` have no production callers, so anything it buffers is
@@ -1841,11 +1843,6 @@ async fn process_sealed_sender_message(
                 channel_id: "pending".to_string(),
                 author_id: msg.source_user_id.clone(),
                 timestamp: msg.server_timestamp,
-                content: Some(crate::proto::chat_v1::message::Content {
-                    r#type: Some(crate::proto::chat_v1::message::content::Type::SealedSender(
-                        sealed_sender_msg,
-                    )),
-                }),
                 ..Default::default()
             };
 

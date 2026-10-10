@@ -213,7 +213,6 @@ impl ContentValidator {
             }
             Some(Type::AiBot(ai)) => ai.text.len(),
             Some(Type::SignalEncrypted(sig)) => sig.body.len(),
-            Some(Type::SealedSender(sealed)) => sealed.sealed_body.len(),
             None => 0,
         }
     }

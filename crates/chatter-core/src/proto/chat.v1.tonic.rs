@@ -4778,7 +4778,6 @@ pub mod user_service_client {
                 .insert(GrpcMethod::new("chat.v1.UserService", "GetUserProfile"));
             self.inner.unary(req, path, codec).await
         }
-        ///
         pub async fn update_user_profile(
             &mut self,
             request: impl tonic::IntoRequest<super::UpdateUserProfileRequest>,
