@@ -88,47 +88,6 @@ impl AttachmentRepository {
         Ok(())
     }
 
-    /// Insert an attachment with encrypted content stored in database.
-    ///
-    /// This stores the encrypted ciphertext directly in the database for
-    /// secure in-memory-only decryption during playback.
-    pub fn insert_with_content(
-        &self,
-        attachment: &Attachment,
-        encrypted_content: &[u8],
-    ) -> Result<(), StorageError> {
-        let conn = self.db.connection()?;
-        // Use bincode for efficient BLOB storage
-        let metadata_blob = db_serialize(&attachment.metadata)?;
-
-        let thumbnail_bytes = attachment.metadata.thumbnail.as_deref();
-
-        conn.execute(
-            "INSERT INTO attachments (
-                id, metadata_blob, status, local_path, remote_url,
-                encryption_key, encryption_iv, thumbnail_bytes,
-                encrypted_content, content_location, created_at, secret_chat
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
-            params![
-                attachment.id.to_string(),
-                metadata_blob,
-                status_to_int(attachment.status),
-                attachment.local_path,
-                attachment.remote_url,
-                attachment.encryption_key,
-                attachment.encryption_iv,
-                thumbnail_bytes,
-                encrypted_content,
-                content_location_to_int(ContentLocation::InDatabase),
-                attachment.created_at.to_rfc3339(),
-                attachment.secret_chat,
-            ],
-        )?;
-        resolve_shared_content(&conn, attachment);
-
-        Ok(())
-    }
-
     /// Get an attachment by ID.
     pub fn get(&self, id: &AttachmentId) -> Result<Option<Attachment>, StorageError> {
         let conn = self.db.read_connection()?;
@@ -515,7 +474,6 @@ fn int_to_status(value: i32) -> AttachmentStatus {
 fn content_location_to_int(location: ContentLocation) -> i32 {
     match location {
         ContentLocation::NotDownloaded => 0,
-        ContentLocation::InDatabase => 1,
         ContentLocation::OnFilesystem => 2,
     }
 }
@@ -523,7 +481,6 @@ fn content_location_to_int(location: ContentLocation) -> i32 {
 /// Convert integer to ContentLocation.
 fn int_to_content_location(value: i32) -> ContentLocation {
     match value {
-        1 => ContentLocation::InDatabase,
         2 => ContentLocation::OnFilesystem,
         _ => ContentLocation::NotDownloaded,
     }

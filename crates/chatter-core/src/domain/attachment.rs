@@ -22,14 +22,12 @@ pub enum AttachmentStatus {
 /// Where the encrypted content is stored.
 ///
 /// Tracks whether encrypted attachment data needs to be fetched from CDN
-/// or is already stored locally (in database or filesystem).
+/// or is already stored locally on the filesystem.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default, Serialize, Deserialize)]
 pub enum ContentLocation {
     /// Content needs to be fetched from CDN (not downloaded yet).
     #[default]
     NotDownloaded = 0,
-    /// Content is stored encrypted in database BLOB (legacy, for migration compatibility).
-    InDatabase = 1,
     /// Content is stored encrypted on filesystem (~/.local/share/chatter/attachments/).
     /// This is the preferred storage for large files (videos, large images).
     OnFilesystem = 2,
@@ -245,7 +243,7 @@ pub struct Attachment {
     pub id: AttachmentId,
     pub metadata: FileMetadata,
     pub status: AttachmentStatus,
-    /// Where encrypted content is stored (NotDownloaded or InDatabase).
+    /// Where encrypted content is stored (NotDownloaded or OnFilesystem).
     #[serde(default)]
     pub content_location: ContentLocation,
     /// Local file path (DEPRECATED - kept for migration compatibility).

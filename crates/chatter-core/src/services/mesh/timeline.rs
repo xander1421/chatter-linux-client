@@ -298,19 +298,10 @@ impl MeshTimeline {
     /// a CDN key would join the download queue and be retried forever against a
     /// CDN that never had it.
     ///
-    /// # Why the filesystem and not `insert_with_content`
-    ///
-    /// `insert_with_content` is one call and puts the bytes straight into the
-    /// SQLCipher blob, which reads like the better fit for a payload capped at
-    /// 1 MiB. It is not: it writes `ContentLocation::InDatabase`, which V019
-    /// records as the legacy location, and every reader left in the tree checks
-    /// for `OnFilesystem` and refuses anything else
-    /// (`services::attachment::crypto`, `has_local_content`). A row written the
-    /// short way would be storage nothing in this client can open. So a mesh
-    /// file is stored exactly as a locally-composed attachment is: encrypted
-    /// under a fresh per-file key, written to [`attachment_file_path`], and
-    /// recorded with the key and digest that the existing read path decrypts
-    /// with.
+    /// A mesh file is stored exactly as a locally-composed attachment is:
+    /// encrypted under a fresh per-file key, written to [`attachment_file_path`],
+    /// and recorded with the key and digest that the existing read path decrypts
+    /// with (`services::attachment::crypto` only opens `OnFilesystem` rows).
     ///
     /// The encryption is not theatre either. The bytes land outside SQLCipher,
     /// so this is what keeps a mesh file at parity with the messages beside it
