@@ -695,6 +695,9 @@ fn every_sealed_sender_decrypt_consumer_refuses_unratcheted_plaintext() {
     const EXPECTED_CONSUMERS: &[&str] = &[
         "chatter-core/src/services/gateway/decryption.rs",
         "chatter-core/src/services/pairwise.rs",
+        // Durable receive: `decrypt_durable_inner` returns None for Plaintext
+        // before reading the bytes, surfaced as PlaintextRejected.
+        "chatter-core/src/crypto/signal/receive_store.rs",
         // Plumbing: forwards the (result, type) tuple to the consumers above and
         // never interprets the bytes itself.
         "chatter-core/src/services/signal/actor.rs",

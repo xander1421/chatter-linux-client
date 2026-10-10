@@ -30,7 +30,6 @@ fn allocate_with_conn(
     let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     // Local allocator state is deliberately retained across deletion of targets.
     // It is not a projection and must not be reset by snapshot/import operations.
-    tx.execute_batch("CREATE TABLE IF NOT EXISTS reaction_send_clocks(actor_id TEXT PRIMARY KEY, action_ts INTEGER NOT NULL CHECK(action_ts>0))")?;
     let known: i64 = tx.query_row(
         "SELECT COALESCE(MAX(action_ts),0) FROM (
             SELECT action_ts FROM reaction_send_clocks WHERE actor_id=?1
@@ -70,7 +69,8 @@ mod tests {
         conn.execute_batch(
             "CREATE TABLE reaction_action_versions(actor_id TEXT,action_ts INTEGER);
             CREATE TABLE reaction_actor_selections(actor_id TEXT,action_ts INTEGER);
-            CREATE TABLE pending_scoped_reactions(actor_id TEXT,action_ts INTEGER);",
+            CREATE TABLE pending_scoped_reactions(actor_id TEXT,action_ts INTEGER);
+            CREATE TABLE reaction_send_clocks(actor_id TEXT PRIMARY KEY, action_ts INTEGER NOT NULL CHECK(action_ts>0));",
         )
         .unwrap();
         conn
@@ -103,6 +103,7 @@ mod tests {
                 "CREATE TABLE reaction_action_versions(actor_id TEXT,action_ts INTEGER);
                 CREATE TABLE reaction_actor_selections(actor_id TEXT,action_ts INTEGER);
                 CREATE TABLE pending_scoped_reactions(actor_id TEXT,action_ts INTEGER);
+                CREATE TABLE reaction_send_clocks(actor_id TEXT PRIMARY KEY, action_ts INTEGER NOT NULL CHECK(action_ts>0));
                 INSERT INTO reaction_actor_selections VALUES('me',800);",
             )
             .unwrap();
