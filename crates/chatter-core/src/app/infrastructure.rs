@@ -523,18 +523,4 @@ mod android_passphrase_tests {
         assert!(InfrastructureContainer::android_passphrase(&dirs, &OK).is_err());
         assert!(!dirs.data_dir().join(".db_key").exists());
     }
-
-    #[test]
-    fn a_legacy_plaintext_key_keeps_the_existing_database() {
-        let (_tmp, dirs) = dirs();
-        let legacy = "ab".repeat(32);
-        std::fs::write(dirs.data_dir().join(".db_key"), &legacy).unwrap();
-        std::fs::write(dirs.database_path(), b"db").unwrap();
-        assert_eq!(
-            InfrastructureContainer::android_passphrase(&dirs, &OK).unwrap(),
-            legacy
-        );
-        let on_disk = std::fs::read_to_string(dirs.data_dir().join(".db_key")).unwrap();
-        assert!(on_disk.starts_with("ks1:") && !on_disk.contains(&legacy));
-    }
 }

@@ -746,28 +746,6 @@ mod tests {
     }
 
     #[test]
-    fn a_legacy_plaintext_android_seal_key_is_kept_and_sealed() {
-        use crate::system::sealed_secret::tests::FakeWrap;
-        let dir = tempfile::tempdir().expect("temp dir");
-        let db_path = dir.path().join("chatter.db");
-        let key = [0x33u8; KEY_SIZE];
-        let sealed = MeshSealer::from_key(&key).seal(b"pins").expect("seal");
-        std::fs::write(MeshSealer::local_key_path(&db_path), hex::encode(key))
-            .expect("legacy file");
-
-        let sealer = MeshSealer::acquire_with(&db_path, Some(&FakeWrap { fail_unseal: false }))
-            .expect("migrate");
-        assert!(
-            !sealer.key_is_new(),
-            "a migrated key is not new; mesh state must not be wiped"
-        );
-        assert_eq!(sealer.open(&sealed).expect("open"), b"pins");
-        let on_disk =
-            std::fs::read_to_string(MeshSealer::local_key_path(&db_path)).expect("key file");
-        assert!(on_disk.starts_with("ks1:") && !on_disk.contains(&hex::encode(key)));
-    }
-
-    #[test]
     fn a_keyring_that_forgets_is_refused_rather_than_sealed_under() {
         // Off a sandboxed platform there is no safe place to put the key, so the
         // sealer must say so up front instead of sealing under a key that dies

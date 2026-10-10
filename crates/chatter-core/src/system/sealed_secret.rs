@@ -12,10 +12,8 @@
 //! (`platform/android/keystore.rs`), as it does the platform camera. With none
 //! installed every read and write fails: there is no plaintext fallback.
 //!
-//! File format: `ks1:` + base64(platform blob). The one other content accepted
-//! is the pre-Keystore plaintext (64 hex chars): it is sealed and the file
-//! replaced in place on first read, as Signal migrated its own unencrypted
-//! secret (`DatabaseSecretProvider.getUnencryptedDatabaseSecret`).
+//! File format: `ks1:` + base64(platform blob). Anything else, plaintext
+//! included, is refused.
 
 use std::path::Path;
 use std::sync::OnceLock;
@@ -57,8 +55,6 @@ pub fn installed_key_wrap() -> Result<&'static dyn KeyWrap, String> {
 /// not exist. Any other failure — unreadable file, unknown format, a blob the
 /// Keystore will not open — is an error, never an absence: treating it as
 /// absent would generate a replacement over data the real key still opens.
-///
-/// A legacy plaintext file is sealed and replaced before returning.
 pub fn read(
     path: &Path,
     alias: &str,
@@ -69,41 +65,27 @@ pub fn read(
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(None),
         Err(e) => return Err(format!("{} could not be read: {e}", path.display())),
     };
-    let trimmed = contents.trim();
-
-    if let Some(encoded) = trimmed.strip_prefix(PREFIX) {
-        let blob = base64::engine::general_purpose::STANDARD
-            .decode(encoded)
-            .map_err(|e| format!("{} is not a valid sealed secret: {e}", path.display()))?;
-        let plain = Zeroizing::new(wrap.unseal(alias, &blob).map_err(|e| {
-            format!(
-                "the Android Keystore could not unseal {}: {e}",
-                path.display()
-            )
-        })?);
-        let secret = std::str::from_utf8(&plain)
-            .map_err(|_| format!("{} unsealed to non-text", path.display()))?;
-        if !is_hex_secret(secret) {
-            return Err(format!(
-                "{} unsealed to an unexpected secret shape",
-                path.display()
-            ));
-        }
-        return Ok(Some(Zeroizing::new(secret.to_string())));
+    let Some(encoded) = contents.trim().strip_prefix(PREFIX) else {
+        return Err(format!("{} is not a sealed secret", path.display()));
+    };
+    let blob = base64::engine::general_purpose::STANDARD
+        .decode(encoded)
+        .map_err(|e| format!("{} is not a valid sealed secret: {e}", path.display()))?;
+    let plain = Zeroizing::new(wrap.unseal(alias, &blob).map_err(|e| {
+        format!(
+            "the Android Keystore could not unseal {}: {e}",
+            path.display()
+        )
+    })?);
+    let secret = std::str::from_utf8(&plain)
+        .map_err(|_| format!("{} unsealed to non-text", path.display()))?;
+    if !is_hex_secret(secret) {
+        return Err(format!(
+            "{} unsealed to an unexpected secret shape",
+            path.display()
+        ));
     }
-
-    if is_hex_secret(trimmed) {
-        // Pre-Keystore plaintext. Seal it and atomically replace the file.
-        let secret = Zeroizing::new(trimmed.to_string());
-        write(path, alias, wrap, &secret)?;
-        tracing::warn!(path = %path.display(), "sealed a plaintext secret file under the Android Keystore");
-        return Ok(Some(secret));
-    }
-
-    Err(format!(
-        "{} is neither a sealed secret nor a legacy key",
-        path.display()
-    ))
+    Ok(Some(Zeroizing::new(secret.to_string())))
 }
 
 /// Seal `secret` and write it to `path` atomically (temp file 0600, fsync,
@@ -224,19 +206,14 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn legacy_plaintext_is_sealed_in_place() {
+    fn plaintext_file_is_refused_and_left_alone() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("k");
         std::fs::write(&path, format!("{SECRET}\n")).unwrap();
+        assert!(read(&path, DB_ALIAS, &OK).is_err());
         assert_eq!(
-            read(&path, DB_ALIAS, &OK).unwrap().unwrap().as_str(),
-            SECRET
-        );
-        let on_disk = std::fs::read_to_string(&path).unwrap();
-        assert!(on_disk.starts_with("ks1:") && !on_disk.contains(SECRET));
-        assert_eq!(
-            read(&path, DB_ALIAS, &OK).unwrap().unwrap().as_str(),
-            SECRET
+            std::fs::read_to_string(&path).unwrap(),
+            format!("{SECRET}\n")
         );
     }
 
