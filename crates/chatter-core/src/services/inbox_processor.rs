@@ -2162,19 +2162,39 @@ impl InboxEventProcessor {
 /// Fetch the avatars a member list points at (over Tor, skipping ones we
 /// already hold) and store the changed ones; when any changed, announce the
 /// roster again so an open view re-reads it. Runs after the roster is applied
-/// so a slow fetch never delays membership.
+/// so a slow fetch never delays membership. One attempt each first, so a
+/// failing fetch never holds up the others; the failed ones are then retried
+/// with backoff (a flaky Tor circuit, RC107).
 async fn refresh_roster_avatars(
     service: std::sync::Arc<crate::services::anon_group::AnonGroupService>,
     event_bus: EventBus,
     group_id: crate::domain::anon_group::AnonGroupId,
     members: Vec<crate::proto::content_v1::AnonGroupMemberInfo>,
 ) {
-    match service.refresh_roster_avatars(&group_id, &members).await {
-        Ok(true) => {
-            event_bus.emit_domain(DomainEvent::AnonGroupMemberListReceived { group_id, members });
+    use crate::services::secret_avatar::RETRY_DELAYS;
+    let mut pending = members.clone();
+    for delays in [&RETRY_DELAYS[..1], &RETRY_DELAYS[1..]] {
+        match service
+            .refresh_roster_avatars(&group_id, &pending, delays)
+            .await
+        {
+            Ok((changed, failed)) => {
+                if changed {
+                    event_bus.emit_domain(DomainEvent::AnonGroupMemberListReceived {
+                        group_id,
+                        members: members.clone(),
+                    });
+                }
+                if failed.is_empty() {
+                    return;
+                }
+                pending = failed;
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "Failed to store secret group avatars");
+                return;
+            }
         }
-        Ok(false) => {}
-        Err(e) => tracing::warn!(error = %e, "Failed to store secret group avatars"),
     }
 }
 

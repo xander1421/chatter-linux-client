@@ -94,6 +94,21 @@ impl AnonGroupService {
             .await
     }
 
+    /// [`Self::resolve_member_avatar`], retrying a failed fetch after each of
+    /// `delays`; `Err` when every fetch failed.
+    pub(crate) async fn fetch_member_avatar(
+        &self,
+        pointer: &crate::proto::content_v1::AttachmentPointer,
+        current: Option<Vec<u8>>,
+        delays: &[std::time::Duration],
+    ) -> Result<Option<Vec<u8>>, crate::services::attachment::AttachmentError> {
+        let attachments = self.secret_attachments();
+        crate::services::secret_avatar::retrying(delays, || {
+            crate::services::secret_avatar::resolve(&attachments, Some(pointer), current.clone())
+        })
+        .await
+    }
+
     /// Our avatar's pointer.
     pub(crate) async fn my_avatar_pointer(
         &self,

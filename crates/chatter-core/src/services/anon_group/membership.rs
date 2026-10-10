@@ -735,16 +735,19 @@ impl AnonGroupService {
         Ok(())
     }
 
-    /// Fetch the avatars a member list points at and store each that differs
-    /// from the one we hold. Our own entry is skipped. Returns whether any
-    /// member's avatar changed.
+    /// Fetch the avatars a member list points at (each fetch retried after
+    /// each of `delays`) and store each that differs from the one we hold.
+    /// Our own entry is skipped. Returns whether any member's avatar changed,
+    /// and the entries whose every fetch failed, for a later pass.
     pub async fn refresh_roster_avatars(
         &self,
         group_id: &AnonGroupId,
         members: &[AnonGroupMemberInfo],
-    ) -> Result<bool, AnonGroupError> {
+        delays: &[std::time::Duration],
+    ) -> Result<(bool, Vec<AnonGroupMemberInfo>), AnonGroupError> {
         let current_user = self.current_user_id()?;
         let mut changed = false;
+        let mut failed = Vec::new();
         for info in members {
             let (Some(pointer), Some(user_id)) =
                 (info.avatar.as_ref(), UserId::try_from_slice(&info.user_id))
@@ -758,11 +761,16 @@ impl AnonGroupService {
                 continue;
             };
             let held = member.avatar.clone();
-            let Some(avatar) = self
-                .resolve_member_avatar(Some(pointer), held.clone())
+            let avatar = match self
+                .fetch_member_avatar(pointer, held.clone(), delays)
                 .await
-            else {
-                continue;
+            {
+                Ok(Some(avatar)) => avatar,
+                Ok(None) => continue,
+                Err(_) => {
+                    failed.push(info.clone());
+                    continue;
+                }
             };
             if held.as_ref() != Some(&avatar) {
                 self.anon_group_repo.update_member_profile(
@@ -775,7 +783,7 @@ impl AnonGroupService {
                 changed = true;
             }
         }
-        Ok(changed)
+        Ok((changed, failed))
     }
 
     /// Handle an incoming member list update.
@@ -1511,5 +1519,33 @@ mod tests {
         );
         let victim = repo.get_member(&f.group_id, &f.victim).unwrap().unwrap();
         assert_eq!(victim.mailbox_pk, Some([9u8; 32]));
+    }
+
+    /// RC107: a member's avatar whose fetch fails (here: no route) is
+    /// reported back for a retry pass, not dropped; an entry with no usable
+    /// pointer is not.
+    #[tokio::test]
+    async fn failed_roster_avatar_fetch_is_kept_for_a_retry() {
+        let f = fixture();
+        let svc = f._client.anon_groups();
+        let mut fetchable = info(f.victim, AnonGroupRole::Member, [9u8; 32]);
+        fetchable.avatar = Some(crate::proto::content_v1::AttachmentPointer {
+            cdn_key: "k".into(),
+            plaintext_size: 3,
+            plaintext_hash: "00".into(),
+            ..Default::default()
+        });
+        let mut unusable = info(f.mallory, AnonGroupRole::Member, [2u8; 32]);
+        unusable.avatar = Some(Default::default());
+        let (changed, failed) = svc
+            .refresh_roster_avatars(
+                &f.group_id,
+                &[fetchable.clone(), unusable],
+                &[std::time::Duration::ZERO],
+            )
+            .await
+            .unwrap();
+        assert!(!changed);
+        assert_eq!(failed, vec![fetchable]);
     }
 }

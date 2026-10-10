@@ -85,8 +85,8 @@ impl AnonDmService {
         })
         .await;
         match avatar {
-            Some(avatar) => self.store_peer_avatar(conversation_id, peer_id, avatar),
-            None => Ok(None),
+            Ok(Some(avatar)) => self.store_peer_avatar(conversation_id, peer_id, avatar),
+            _ => Ok(None),
         }
     }
 

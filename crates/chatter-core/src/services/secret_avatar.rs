@@ -177,23 +177,25 @@ pub(crate) const RETRY_DELAYS: [std::time::Duration; 5] = [
 ];
 
 /// Run `attempt` (a [`resolve`]) after each of `delays` until it does not
-/// fail. Its answer, or `None` when every attempt's fetch failed.
+/// fail. Its answer, or the last fetch error when every attempt failed.
 pub(crate) async fn retrying<F, Fut>(
     delays: &[std::time::Duration],
     mut attempt: F,
-) -> Option<Vec<u8>>
+) -> Result<Option<Vec<u8>>, AttachmentError>
 where
     F: FnMut() -> Fut,
     Fut: std::future::Future<Output = Result<Option<Vec<u8>>, AttachmentError>>,
 {
+    let mut last = Ok(None);
     for delay in delays {
         tokio::time::sleep(*delay).await;
-        match attempt().await {
-            Ok(avatar) => return avatar,
+        last = attempt().await;
+        match &last {
+            Ok(_) => return last,
             Err(e) => tracing::warn!(error = %e, "Secret-chat avatar fetch failed; will retry"),
         }
     }
-    None
+    last
 }
 
 /// The most ciphertext a well-formed pointer can name: the padded plaintext
@@ -347,7 +349,7 @@ mod tests {
                 }
             }
         };
-        let got = retrying(&[Duration::ZERO; 5], attempt).await;
+        let got = retrying(&[Duration::ZERO; 5], attempt).await.unwrap();
         assert_eq!((got, tries.get()), (Some(vec![3]), 3));
 
         // Every attempt failing gives up after the last delay.
@@ -356,7 +358,7 @@ mod tests {
             tries.set(tries.get() + 1);
             async { Err(AttachmentError::NetworkError("down".into())) }
         };
-        assert_eq!(retrying(&[Duration::ZERO; 2], failing).await, None);
+        assert!(retrying(&[Duration::ZERO; 2], failing).await.is_err());
         assert_eq!(tries.get(), 2);
 
         // An unusable pointer is an answer, not a failure: no retry.
@@ -365,7 +367,10 @@ mod tests {
             tries.set(tries.get() + 1);
             async { Ok(None) }
         };
-        assert_eq!(retrying(&[Duration::ZERO; 5], unusable).await, None);
+        assert_eq!(
+            retrying(&[Duration::ZERO; 5], unusable).await.unwrap(),
+            None
+        );
         assert_eq!(tries.get(), 1);
     }
 
