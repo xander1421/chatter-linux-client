@@ -237,6 +237,10 @@ impl AnonGroupService {
         &self,
         group_id: &AnonGroupId,
     ) -> Result<AnonGroupMailbox, AnonGroupError> {
+        // Over Tor or not at all; refuse before the token is spent.
+        self.grpc_pool
+            .secret_channel()
+            .map_err(|e| AnonGroupError::MessageError(e.to_string()))?;
         // Atomically claim a blind-signed token (marks used in same SQL stmt)
         let token = self.claim_token()?;
 
@@ -264,7 +268,10 @@ impl AnonGroupService {
                     "Retrying create_ephemeral_mailbox for group"
                 );
             }
-            let mut mailbox_client = self.grpc_pool.anonymous_mailbox_client();
+            let mut mailbox_client = self
+                .grpc_pool
+                .secret_mailbox_client()
+                .map_err(|e| AnonGroupError::MessageError(e.to_string()))?;
             match mailbox_client
                 .create_ephemeral_mailbox(
                     token.public_key.clone(),
@@ -280,7 +287,7 @@ impl AnonGroupService {
                 }
                 Err(e) if e.is_retryable() => {
                     tracing::warn!(attempt = attempt + 1, error = %e, "create_ephemeral_mailbox transient error, disconnecting stale channel and retrying");
-                    self.grpc_pool.disconnect();
+                    self.grpc_pool.disconnect_secret();
                     last_err = Some(e);
                 }
                 Err(e) => {

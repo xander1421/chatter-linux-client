@@ -171,6 +171,7 @@ impl AppContext {
             Arc::new(GroupFanout::new(
                 self.infrastructure.group_mailbox_manager.clone(),
                 Arc::new(tokio::sync::Mutex::new(mailbox_client)),
+                self.infrastructure.grpc_pool.clone(),
             ))
         });
     }

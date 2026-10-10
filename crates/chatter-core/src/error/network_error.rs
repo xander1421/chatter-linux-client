@@ -59,6 +59,12 @@ pub enum NetworkError {
         stale: Vec<u32>,
     },
 
+    /// A secret-chat (anonymous DM / anonymous group) operation has no Tor
+    /// route: the build lacks the `onion` feature, or no server `.onion` is
+    /// pinned. Secret-chat traffic never falls back to the direct transport.
+    #[error("secret chats need Tor (onion): {0}")]
+    SecretChatNeedsTor(&'static str),
+
     /// Unknown or unclassified error.
     #[error("unknown error: {0}")]
     Unknown(String),

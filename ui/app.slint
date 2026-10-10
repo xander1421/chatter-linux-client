@@ -395,6 +395,7 @@ export component MainWindow inherits Window {
     // Which rows the chat header's ⋯ menu offers, set by the header as it opens it.
     property <bool> chat-menu-video: false;
     property <bool> chat-menu-settings: false;
+    property <bool> chat-menu-secret-chat: false;
     in-out property <bool> is-at-bottom: true;  // True when message list is scrolled to bottom
     // The last older-history page failed to read (header.rs `load_older`);
     // the list shows a Retry chip until a page loads or the conversation changes.
@@ -1148,6 +1149,14 @@ export component MainWindow inherits Window {
 
     // User profile
     callback profile-send-message();
+    // Profile › Start secret chat: core starts (or finds) the secret chat
+    // with `profile-user-id` and the chat pane opens it.
+    callback profile-start-secret-chat();
+    in property <bool> profile-can-start-secret-chat: false;
+    // Chat header ⋯ › Start secret chat, for the open regular DM's peer.
+    // Asked of core when the menu opens (`can_start_secret_chat`).
+    callback chat-menu-can-start-secret-chat() -> bool;
+    callback chat-menu-start-secret-chat();
     callback profile-add-friend();
     callback profile-remove-friend();
     callback profile-block-user();
@@ -2167,6 +2176,7 @@ export component MainWindow inherits Window {
                         header-more-clicked(video, settings) => {
                             root.chat-menu-video = video;
                             root.chat-menu-settings = settings;
+                            root.chat-menu-secret-chat = root.chat-menu-can-start-secret-chat();
                             root.nav-push("chat-menu");
                         }
                         invite-clicked => { root.invite-member(); }
@@ -2453,6 +2463,7 @@ export component MainWindow inherits Window {
             bio: root.profile-bio;
             is-friend: root.profile-is-friend;
             is-blocked: root.profile-is-blocked;
+            can-start-secret-chat: root.profile-can-start-secret-chat;
             is-self: root.profile-is-self;
             status-mode: root.user-presence-mode;
             loading: root.profile-loading;
@@ -2505,6 +2516,9 @@ export component MainWindow inherits Window {
             }
             send-message => {
                 root.profile-send-message();
+            }
+            start-secret-chat => {
+                root.profile-start-secret-chat();
             }
             add-friend => {
                 root.profile-add-friend();
@@ -3047,6 +3061,7 @@ export component MainWindow inherits Window {
             show: root.active-modal == "chat-menu";
             show-video-call: root.chat-menu-video;
             show-settings: root.chat-menu-settings;
+            show-secret-chat: root.chat-menu-secret-chat;
             show-pinned: root.pinned-total-count > 0
                 || root.conversation-kind == ConversationKind.saved-messages;
             pinned => { root.nav-close("chat-menu"); root.pinned-show-clicked(); }
@@ -3060,6 +3075,10 @@ export component MainWindow inherits Window {
             settings => {
                 root.nav-close("chat-menu");
                 root.chat-settings-clicked();
+            }
+            secret-chat => {
+                root.nav-close("chat-menu");
+                root.chat-menu-start-secret-chat();
             }
         }
 

@@ -15,6 +15,7 @@ use crate::error::MailboxError;
 use crate::mailbox::dm::ReceivedMessage;
 use crate::mailbox::group::{GroupMailboxManager, MemberMailbox};
 use crate::network::grpc::AnonymousMailboxClient;
+use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::proto::mailbox_v1::EnvelopeType;
 
 /// Maximum messages to fetch per poll.
@@ -107,8 +108,12 @@ impl GroupPollResult {
 pub struct GroupFanout {
     /// Manager for group mailbox state persistence.
     mailbox_manager: Arc<GroupMailboxManager>,
-    /// gRPC client for mailbox operations.
+    /// gRPC client for private-channel mailbox operations (follows the pool's
+    /// transport).
     mailbox_client: Arc<Mutex<AnonymousMailboxClient>>,
+    /// Pool for the secret-chat client: anonymous-group mailboxes are polled
+    /// and acknowledged over Tor only (`GrpcClientPool::secret_channel`).
+    pool: Arc<GrpcClientPool>,
 }
 
 impl GroupFanout {
@@ -117,14 +122,17 @@ impl GroupFanout {
     /// # Arguments
     ///
     /// * `mailbox_manager` - Manager for group mailbox state
-    /// * `mailbox_client` - Client for mailbox network operations
+    /// * `mailbox_client` - Client for private-channel mailbox operations
+    /// * `pool` - Source of the secret-chat (Tor) client for anonymous groups
     pub fn new(
         mailbox_manager: Arc<GroupMailboxManager>,
         mailbox_client: Arc<Mutex<AnonymousMailboxClient>>,
+        pool: Arc<GrpcClientPool>,
     ) -> Self {
         Self {
             mailbox_manager,
             mailbox_client,
+            pool,
         }
     }
 
@@ -323,13 +331,34 @@ impl GroupFanout {
             "[GROUP_FANOUT] Found group mailboxes to poll"
         );
 
+        // Anonymous-group (secret-chat) mailboxes are polled over Tor only.
+        // Without a Tor route they are skipped, never polled direct.
+        let secret_client = if group_mailboxes.iter().any(|m| m.4) {
+            match self.pool.secret_mailbox_client() {
+                Ok(client) => Some(Arc::new(Mutex::new(client))),
+                Err(e) => {
+                    tracing::warn!(
+                        error = %e,
+                        "[GROUP_FANOUT] Skipping anonymous group mailboxes: no Tor route"
+                    );
+                    None
+                }
+            }
+        } else {
+            None
+        };
+
         // Create futures for parallel polling
         let futures: Vec<_> = group_mailboxes
             .into_iter()
-            .map(|(group_id, public_key, private_key, mailbox_id)| {
-                let client = Arc::clone(&self.mailbox_client);
+            .filter_map(|(group_id, public_key, private_key, mailbox_id, secret)| {
+                let client = if secret {
+                    Arc::clone(secret_client.as_ref()?)
+                } else {
+                    Arc::clone(&self.mailbox_client)
+                };
                 let manager = Arc::clone(&self.mailbox_manager);
-                async move {
+                Some(async move {
                     let result = Self::poll_single_group_internal(
                         client,
                         manager,
@@ -340,7 +369,7 @@ impl GroupFanout {
                     )
                     .await;
                     (group_id, result)
-                }
+                })
             })
             .collect();
 
@@ -445,10 +474,24 @@ impl GroupFanout {
         }
 
         // Look up keys by mailbox_id (checks both tables)
-        let (public_key, private_key) = self.mailbox_manager.get_mailbox_keys_by_id(mailbox_id)?;
+        let (public_key, private_key, secret) =
+            self.mailbox_manager.get_mailbox_keys_by_id(mailbox_id)?;
+
+        // An anonymous-group mailbox is acknowledged over Tor or not at all.
+        let mut secret_client;
+        let mut shared_client;
+        let client: &mut AnonymousMailboxClient = if secret {
+            secret_client = self
+                .pool
+                .secret_mailbox_client()
+                .map_err(|e| MailboxError::Network(e.to_string()))?;
+            &mut secret_client
+        } else {
+            shared_client = self.mailbox_client.lock().await;
+            &mut shared_client
+        };
 
         // Get challenge from server
-        let mut client = self.mailbox_client.lock().await;
         let challenge_response = client
             .get_mailbox_challenge(public_key.to_vec())
             .await

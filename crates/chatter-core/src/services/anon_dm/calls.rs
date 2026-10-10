@@ -678,8 +678,11 @@ impl AnonDmService {
         display_name: &str,
         video: bool,
     ) -> Result<AnonCallRoomCredentials, AnonDmError> {
-        // Use anonymous mailbox client from pool (no auth headers, creates lazy channel if needed)
-        let mut client = self.grpc_pool.anonymous_mailbox_client();
+        // Secret-chat mailbox client (no auth headers, over Tor or not at all)
+        let mut client = self
+            .grpc_pool
+            .secret_mailbox_client()
+            .map_err(|e| AnonDmError::MessageError(e.to_string()))?;
 
         let call_type = if video { 2 } else { 1 }; // 1 = voice, 2 = video
 

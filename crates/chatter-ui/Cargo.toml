@@ -142,7 +142,9 @@ i-slint-backend-testing = { version = "=1.17.1", default-features = false }
 webrtc-sys-build = "0.3.16"
 
 [features]
-default = ["desktop", "jarvis"]
+# `onion` is default: secret chats (anonymous DMs/groups) ride Tor only, and a
+# build without it would have none (owner decision 2026-10-10).
+default = ["desktop", "jarvis", "onion"]
 # Emit Slint element metadata for the headless UI query suites.
 ui-test-debug = ["chatter-ui-slint/ui-test-debug"]
 # The bitchat mesh. Off by default while the radio stack is unproven against a

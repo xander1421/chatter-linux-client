@@ -283,6 +283,25 @@ impl AttachmentRepository {
         Ok(found)
     }
 
+    /// Whether a secret-chat (anonymous DM / group) message carries this
+    /// attachment, so its transfers must go over Tor. Answered from
+    /// `shared_content`, like [`Self::is_referenced_by_message`].
+    pub fn is_in_secret_chat(&self, id: &AttachmentId) -> Result<bool, StorageError> {
+        use crate::domain::message::ConversationType;
+        let conn = self.db.read_connection()?;
+        let found = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM shared_content
+             WHERE attachment_id = ?1 AND conversation_type IN (?2, ?3))",
+            params![
+                id.to_string(),
+                ConversationType::AnonDm.as_str(),
+                ConversationType::AnonGroup.as_str()
+            ],
+            |row| row.get::<_, bool>(0),
+        )?;
+        Ok(found)
+    }
+
     /// Update an existing attachment.
     pub fn update(&self, attachment: &Attachment) -> Result<(), StorageError> {
         let conn = self.db.connection()?;

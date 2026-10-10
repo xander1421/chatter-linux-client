@@ -567,11 +567,12 @@ impl GroupMailboxManager {
     /// Get mailbox keys by mailbox ID.
     ///
     /// Looks up keys from both `group_mailboxes` and `anon_group_mailboxes` tables.
-    /// Returns (public_key, private_key) if found.
+    /// Returns (public_key, private_key, secret) if found; `secret` is true for
+    /// an anonymous (secret-chat) group mailbox, whose traffic must go over Tor.
     pub fn get_mailbox_keys_by_id(
         &self,
         mailbox_id: &str,
-    ) -> Result<([u8; 32], [u8; 64]), MailboxError> {
+    ) -> Result<([u8; 32], [u8; 64], bool), MailboxError> {
         let conn = self
             .db
             .connection()
@@ -591,7 +592,7 @@ impl GroupMailboxManager {
             let private_key_arr: [u8; 64] = private_key
                 .try_into()
                 .map_err(|_| MailboxError::Storage("Invalid private key length".into()))?;
-            return Ok((public_key_arr, private_key_arr));
+            return Ok((public_key_arr, private_key_arr, false));
         }
 
         // Try anonymous group mailboxes
@@ -609,7 +610,7 @@ impl GroupMailboxManager {
                 let private_key_arr: [u8; 64] = private_key
                     .try_into()
                     .map_err(|_| MailboxError::Storage("Invalid private key length".into()))?;
-                Ok((public_key_arr, private_key_arr))
+                Ok((public_key_arr, private_key_arr, true))
             }
             Err(rusqlite::Error::QueryReturnedNoRows) => {
                 Err(MailboxError::TokenNotFound(mailbox_id.to_string()))
@@ -620,12 +621,14 @@ impl GroupMailboxManager {
 
     /// Get all group mailboxes for batch polling.
     ///
-    /// Returns (group_id, public_key, private_key, mailbox_id) for all active groups.
-    /// Queries both server-managed groups (group_mailboxes) and anonymous groups (anon_group_mailboxes).
+    /// Returns (group_id, public_key, private_key, mailbox_id, secret) for all
+    /// active groups. Queries both server-managed groups (group_mailboxes) and
+    /// anonymous groups (anon_group_mailboxes); `secret` marks the latter,
+    /// whose traffic must go over Tor.
     #[allow(clippy::type_complexity)]
     pub fn get_all_group_mailboxes(
         &self,
-    ) -> Result<Vec<(ChannelId, [u8; 32], [u8; 64], String)>, MailboxError> {
+    ) -> Result<Vec<(ChannelId, [u8; 32], [u8; 64], String, bool)>, MailboxError> {
         let conn = self
             .db
             .connection()
@@ -724,7 +727,13 @@ impl GroupMailboxManager {
                 .try_into()
                 .map_err(|_| MailboxError::Storage("Invalid private key length".into()))?;
 
-            results.push((group_id, public_key_arr, private_key_arr, mailbox_id));
+            results.push((
+                group_id,
+                public_key_arr,
+                private_key_arr,
+                mailbox_id,
+                source == "anon",
+            ));
         }
 
         if results.is_empty() {
@@ -1314,7 +1323,7 @@ mod tests {
         mgr.save_our_mailbox(&new).unwrap();
 
         let active = mgr.get_all_group_mailboxes().unwrap();
-        let ids: Vec<String> = active.iter().map(|(_, _, _, id)| id.clone()).collect();
+        let ids: Vec<String> = active.iter().map(|(_, _, _, id, _)| id.clone()).collect();
         assert_eq!(active.len(), 2, "both non-expired rows must be polled");
         assert!(ids.contains(&"a".to_string()));
         assert!(ids.contains(&"b".to_string()));
@@ -1365,7 +1374,7 @@ mod tests {
         mgr.save_our_mailbox(&live).unwrap();
 
         let active = mgr.get_all_group_mailboxes().unwrap();
-        let ids: Vec<String> = active.iter().map(|(_, _, _, id)| id.clone()).collect();
+        let ids: Vec<String> = active.iter().map(|(_, _, _, id, _)| id.clone()).collect();
         assert_eq!(active.len(), 1, "expired row must be excluded from polling");
         assert_eq!(ids, vec!["b".to_string()]);
     }

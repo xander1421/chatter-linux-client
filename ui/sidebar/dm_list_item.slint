@@ -142,6 +142,22 @@ export component DMListItem inherits Rectangle {
             HorizontalLayout {
                 spacing: Spacing.xs;
 
+                // Secret chat (anon DM): a lock before the name, Telegram's
+                // mark for a device-bound conversation that is its own row
+                // beside the regular DM with the same person.
+                if root.anonymous: VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 0;
+                    Image {
+                        source: Icons.lock;
+                        width: 12px;
+                        height: 12px;
+                        colorize: Colors.success;
+                        accessible-role: text;
+                        accessible-label: "Secret chat";
+                    }
+                }
+
                 Text {
                     text: root.display-name;
                     // The name is the anchor of the row on every density, so it

@@ -40,6 +40,7 @@ pub use send_attempt::await_send_with_notice;
 mod receipts;
 pub use anon_group::AnonGroupInviteCandidate;
 pub use messaging::{InviteCandidate, ReplyParentMedia};
+pub use secret_chat::SecretChatError;
 
 /// A user-search hit surfaced to the UI (friends modal search).
 ///
@@ -69,6 +70,7 @@ mod pin;
 mod profile;
 mod profile_visibility;
 mod push_config;
+mod secret_chat;
 mod shared_content;
 
 use std::sync::Arc;
@@ -1658,17 +1660,20 @@ impl ChatterClient {
     }
 
     /// Whether a conversation of this kind may be shown (listed, searched,
-    /// opened) in the current mode. Shield on: anon DMs, never channels;
-    /// off: never anon DMs. Friend DMs show in both — one conversation whose
-    /// transport follows the mode (`send_friend_dm_content`). Anon groups and
-    /// mesh are serverless and show in both.
+    /// opened) in the current mode. Shield on: never channels or Saved
+    /// Messages. Friend DMs show in both — one conversation whose transport
+    /// follows the mode (`send_friend_dm_content`). Anon DMs are secret chats
+    /// (Telegram-style): device-bound, carried over the onion channel in
+    /// either mode, so they show in both, as their own rows beside the friend
+    /// DM with the same person. Anon groups and mesh are serverless and show
+    /// in both.
     pub fn visible_in_mode(&self, kind: &crate::domain::message::ConversationType) -> bool {
         use crate::domain::message::ConversationType;
         let anon = self.anon_mode_enabled();
         match kind {
-            ConversationType::AnonDm => anon,
             ConversationType::Channel | ConversationType::SavedMessages => !anon,
-            ConversationType::ServerDm
+            ConversationType::AnonDm
+            | ConversationType::ServerDm
             | ConversationType::AnonGroup
             | ConversationType::Mesh
             | ConversationType::MeshDm => true,
@@ -2943,9 +2948,13 @@ impl ChatterClient {
             )
             .before_submission());
         }
-        let uploaded = upload_attachments(pending_attachments, self.attachments())
-            .await
-            .map_err(|e| SendError::from(e).before_submission())?;
+        // A secret chat's attachments go over Tor or not at all.
+        let uploaded = upload_attachments(
+            pending_attachments,
+            &self.attachments().for_conversation(&conversation),
+        )
+        .await
+        .map_err(|e| SendError::from(e).before_submission())?;
         crate::services::gateway::submission::check_send_session()
             .map_err(|_| SendError::NotLoggedIn.before_submission())?;
         // Saved Messages resolves its parent and preview itself, scoped to
@@ -3521,15 +3530,14 @@ impl ChatterClient {
         for peer in self.dm_peers() {
             rows.insert((peer.to_string(), ConversationType::ServerDm));
         }
-        if self.anon_mode_enabled() {
-            let anon = self
-                .list_anon_dm_conversations()
-                .into_iter()
-                .chain(self.list_anon_dm_message_requests())
-                .chain(self.list_anon_dm_outgoing_requests());
-            for dm in anon {
-                rows.insert((dm.id.to_string(), ConversationType::AnonDm));
-            }
+        // Secret chats (anon DMs) and their requests are rows in both modes.
+        let anon = self
+            .list_anon_dm_conversations()
+            .into_iter()
+            .chain(self.list_anon_dm_message_requests())
+            .chain(self.list_anon_dm_outgoing_requests());
+        for dm in anon {
+            rows.insert((dm.id.to_string(), ConversationType::AnonDm));
         }
         for channel in self.sidebar_channels() {
             rows.insert((channel.id.to_string(), ConversationType::Channel));
@@ -5733,11 +5741,12 @@ mod unread_badge_tests {
         receive(&client, anon.into(), ConversationType::AnonDm, 3);
 
         let dm = ActiveConversation::ServerDm { peer_id: peer };
-        // Two unread on the DM row; the anon DM is hidden, so the total is 1.
-        assert_eq!(client.unread_badges(&dm), UnreadBadges { row: 2, total: 1 });
+        // Two unread on the DM row; the anon DM is a secret chat, a row of
+        // its own in both modes, so the total is 2.
+        assert_eq!(client.unread_badges(&dm), UnreadBadges { row: 2, total: 2 });
 
-        // Shield on: the anon DM shows, and so does the friend DM (friend DMs
-        // show in both modes — `visible_in_mode`), so the total is 2.
+        // Shield on: the same two rows (friend DMs and secret chats both show
+        // in both modes — `visible_in_mode`), so the total is 2.
         client.anon_mode.store(true, Ordering::Release);
         assert_eq!(
             client.unread_badges(&ActiveConversation::AnonDm(anon)),

@@ -318,6 +318,29 @@ export component ChatHeader inherits GlassSurface {
                         min-width: 0px;
                         overflow: elide;
                     }
+                    // Secret chat (anon DM): device-bound and separate from
+                    // the regular DM with the same person — say so under the
+                    // name, with the lock the chat list draws on its row.
+                    if root.typing-indicator == "" && has-channel && is-anon-dm: HorizontalLayout {
+                        spacing: Spacing.xs;
+                        alignment: start;
+                        VerticalLayout {
+                            alignment: center;
+                            Image {
+                                source: Icons.lock;
+                                width: 11px;
+                                height: 11px;
+                                colorize: Colors.success;
+                            }
+                        }
+                        Text {
+                            text: "Secret chat";
+                            color: Colors.success;
+                            font-size: Typography.xs;
+                            overflow: elide;
+                            min-width: 0px;
+                        }
+                    }
                     // Keep member count in the title column at every width.
                     if root.typing-indicator == "" && has-channel && !root.read-only && (is-channel || is-private-group) && member-count > 0: Text {
                         // The public badge (core-worded) rides on the count

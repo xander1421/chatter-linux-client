@@ -69,6 +69,9 @@ export component UserProfileModal inherits Rectangle {
     in property <string> bio: "";
     in property <bool> is-friend: false;
     in property <bool> is-blocked: false;
+    // Core's `can_start_secret_chat`: onion channel available, not Shield,
+    // not self, not blocked.
+    in property <bool> can-start-secret-chat: false;
     // Block asks first (Signal: "Block <name>? They won't be able to call or
     // message you."); reset whenever another profile is shown.
     property <bool> confirm-block: false;
@@ -120,6 +123,7 @@ export component UserProfileModal inherits Rectangle {
     callback copy-share-link();
     callback reset-share-link();     // rotate: old URLs stop resolving
     callback send-message();  // open DM
+    callback start-secret-chat();  // open (or start) the secret chat with this user
     callback edit-profile();   // open edit profile modal
     callback add-friend();
     callback remove-friend();
@@ -832,6 +836,24 @@ export component UserProfileModal inherits Rectangle {
                                 height: Spacing.touch-target-min;
                                 clicked => { root.toggle-verified(); }
                             }
+                        }
+                    }
+
+                    // ── Secret chat ───────────────────────────────────
+                    // Telegram-style: a device-bound conversation over Tor,
+                    // its own row beside the regular DM. Hidden where core
+                    // cannot start one.
+                    if root.can-start-secret-chat && !root.scoped-member && !root.is-self && !root.is-blocked: HorizontalLayout {
+                        padding-left: Spacing.md;
+                        padding-right: Spacing.md;
+                        padding-top: Spacing.lg;
+
+                        Button {
+                            text: "Start secret chat";
+                            icon: Icons.lock;
+                            variant: "secondary";
+                            horizontal-stretch: 1;
+                            clicked => { root.start-secret-chat(); }
                         }
                     }
 

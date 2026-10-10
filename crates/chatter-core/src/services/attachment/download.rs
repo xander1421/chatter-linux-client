@@ -18,7 +18,18 @@ impl AttachmentService {
     /// ## Storage Location
     ///
     /// Files are stored at: `~/.local/share/chatter/attachments/{attachment_id}.enc`
+    ///
+    /// An attachment carried by a secret-chat message is fetched over Tor only.
     pub async fn download_to_filesystem(
+        &self,
+        attachment_id: &AttachmentId,
+    ) -> Result<(), AttachmentError> {
+        self.for_download(attachment_id)?
+            .download_to_filesystem_routed(attachment_id)
+            .await
+    }
+
+    async fn download_to_filesystem_routed(
         &self,
         attachment_id: &AttachmentId,
     ) -> Result<(), AttachmentError> {
@@ -44,7 +55,7 @@ impl AttachmentService {
         );
 
         // Get presigned download URL
-        let mut file_client = self.grpc_pool()?.file_client();
+        let mut file_client = self.file_client()?;
         let download_response = file_client
             .get_attachment_download_url(cdn_key)
             .await

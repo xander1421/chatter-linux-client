@@ -1107,16 +1107,6 @@ impl ChatterClient {
         self.attachments().ensure_thumbnail(attachment_id).await
     }
 
-    pub async fn upload_attachment_to_cdn_encrypted(
-        &self,
-        path: &std::path::Path,
-    ) -> Result<
-        crate::services::attachment::CdnUploadResult,
-        crate::services::attachment::AttachmentError,
-    > {
-        self.attachments().upload_to_cdn_encrypted(path).await
-    }
-
     /// Encrypt/upload a recorded voice note, preserving voice metadata on every
     /// platform; the caller retains the recording for retry until sent/cancelled.
     pub async fn upload_voice_note(
@@ -1127,8 +1117,11 @@ impl ChatterClient {
         if !recording_context_is_current(self.chat_state(), note.conversation) {
             return Err("Conversation changed; recording discarded".into());
         }
+        // Routed for the recording's conversation: Tor-only for a secret chat.
         let upload = self
-            .upload_attachment_to_cdn_encrypted(note.file.path())
+            .attachments()
+            .for_conversation(&note.conversation)
+            .upload_to_cdn_encrypted(note.file.path())
             .await
             .map_err(|e| e.to_string())?;
         if !recording_context_is_current(self.chat_state(), note.conversation) {
@@ -1179,7 +1172,10 @@ impl ChatterClient {
         crate::services::attachment::CdnUploadResult,
         crate::services::attachment::AttachmentError,
     > {
+        // The GIF is sent into the open conversation; a secret chat's upload
+        // goes over Tor or not at all.
         self.attachments()
+            .for_conversation(&self.chat_state().active_conversation())
             .download_and_upload_gif(url, gif_id)
             .await
     }

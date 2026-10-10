@@ -31,6 +31,15 @@ use crate::storage::repositories::AttachmentRepository;
 // Submodules add impl blocks to AttachmentService
 // No re-exports needed - methods are on the struct
 
+/// The transfer needs Tor and this build has none (`cdn_over_tor` only says
+/// so for a secret chat, which it already refuses without a Tor route).
+#[cfg(not(feature = "onion"))]
+fn no_tor() -> AttachmentError {
+    AttachmentError::NetworkError(
+        crate::error::NetworkError::SecretChatNeedsTor("this build has none").to_string(),
+    )
+}
+
 /// Use the common pinned storage policy for every direct CDN transfer.
 fn cdn_client() -> Result<reqwest::Client, AttachmentError> {
     crate::network::storage_http::storage_client().map_err(AttachmentError::NetworkError)
@@ -217,9 +226,13 @@ pub struct DecodedImagePixels {
     pub rgba: Vec<u8>,
 }
 
+#[derive(Clone)]
 pub struct AttachmentService {
     pub(crate) attachment_repo: Arc<AttachmentRepository>,
     pub(crate) grpc_pool: Option<Arc<GrpcClientPool>>,
+    /// Serving a secret chat (anonymous DM / group): every URL mint and CDN
+    /// transfer goes over Tor, whatever the pool's transport, or fails.
+    pub(crate) secret_chat: bool,
 }
 
 impl AttachmentService {
@@ -237,29 +250,95 @@ impl AttachmentService {
         })
     }
 
-    /// True when the pool is routing over Tor (anon mode). CDN HTTP must then be
-    /// tunnelled, never sent direct — a direct request would leak the real IP.
-    #[cfg(feature = "onion")]
-    pub(crate) fn transport_is_onion(&self) -> bool {
-        self.grpc_pool
-            .as_ref()
-            .map(|p| p.transport_mode() == crate::network::grpc::client_pool::TransportMode::Onion)
-            .unwrap_or(false)
+    /// This service, routed for a secret chat: URL mints over the pool's
+    /// secret channel and CDN transfers over Tor, failing closed when there is
+    /// no Tor route.
+    pub fn for_secret_chat(&self) -> Self {
+        Self {
+            secret_chat: true,
+            ..self.clone()
+        }
     }
 
-    /// GET a presigned/CDN URL, over Tor in anon mode and direct otherwise.
+    /// This service routed for `conversation`: [`Self::for_secret_chat`] for
+    /// an anonymous DM or group, unchanged otherwise.
+    pub fn for_conversation(
+        &self,
+        conversation: &crate::state::chat_state::ActiveConversation,
+    ) -> Self {
+        if conversation.is_anon() {
+            self.for_secret_chat()
+        } else {
+            self.clone()
+        }
+    }
+
+    /// The service to download `attachment_id` with: routed for a secret chat
+    /// when any secret-chat message carries it.
+    fn for_download(&self, attachment_id: &AttachmentId) -> Result<Self, AttachmentError> {
+        if !self.secret_chat
+            && self
+                .attachment_repo
+                .is_in_secret_chat(attachment_id)
+                .map_err(|e| AttachmentError::StorageError(e.to_string()))?
+        {
+            return Ok(self.for_secret_chat());
+        }
+        Ok(self.clone())
+    }
+
+    /// File client for URL mints: the secret-chat client (no auth header,
+    /// Tor) for a secret chat, else the pool's transport-following one.
+    pub(crate) fn file_client(&self) -> Result<crate::network::grpc::FileClient, AttachmentError> {
+        let pool = self.grpc_pool()?;
+        if self.secret_chat {
+            return pool
+                .secret_file_client()
+                .map_err(|e| AttachmentError::NetworkError(e.to_string()));
+        }
+        Ok(pool.file_client())
+    }
+
+    /// Whether CDN HTTP must be tunnelled over Tor, never sent direct (a direct
+    /// request would leak the real IP): always for a secret chat, else when
+    /// the pool is routing over Tor (anon mode). A secret chat with no Tor
+    /// route is an error, never a direct request.
+    pub(crate) fn cdn_over_tor(&self) -> Result<bool, AttachmentError> {
+        if self.secret_chat {
+            let pool = self.grpc_pool()?;
+            if !pool.secret_route_available() {
+                return Err(AttachmentError::NetworkError(
+                    pool.secret_channel()
+                        .err()
+                        .map(|e| e.to_string())
+                        .unwrap_or_else(|| "secret chats need Tor (onion)".into()),
+                ));
+            }
+            return Ok(true);
+        }
+        Ok(self.grpc_pool.as_ref().is_some_and(|p| {
+            p.transport_mode() == crate::network::grpc::client_pool::TransportMode::Onion
+        }))
+    }
+
+    /// GET a presigned/CDN URL, over Tor when [`Self::cdn_over_tor`] and
+    /// direct otherwise.
     ///
     /// Returns the full body on 2xx, else a `NetworkError` carrying the status —
-    /// same fail-on-non-2xx semantics the direct path had. In anon mode this
+    /// same fail-on-non-2xx semantics the direct path had. Over Tor this
     /// tunnels through the pool's Tor client (real IP hidden); it never falls
     /// back to a direct request, so the leak stays closed.
     pub(crate) async fn cdn_http_get(&self, url: &str) -> Result<Vec<u8>, AttachmentError> {
-        #[cfg(feature = "onion")]
-        if self.transport_is_onion() {
-            let tor = self.grpc_pool()?.onion_tor();
-            return crate::network::anon_http::get(&tor, url)
-                .await
-                .map_err(AttachmentError::NetworkError);
+        if self.cdn_over_tor()? {
+            #[cfg(feature = "onion")]
+            {
+                let tor = self.grpc_pool()?.onion_tor();
+                return crate::network::anon_http::get(&tor, url)
+                    .await
+                    .map_err(AttachmentError::NetworkError);
+            }
+            #[cfg(not(feature = "onion"))]
+            return Err(no_tor());
         }
 
         let mut response = cdn_client()?.get(url).send().await.map_err(|e| {
@@ -298,12 +377,16 @@ impl AttachmentService {
         file: &mut tokio::fs::File,
     ) -> Result<u64, AttachmentError> {
         let limit = crate::network::anon_http::storage_response_limit() as u64;
-        #[cfg(feature = "onion")]
-        if self.transport_is_onion() {
-            let tor = self.grpc_pool()?.onion_tor();
-            return crate::network::anon_http::get_to_file(&tor, url, file, limit)
-                .await
-                .map_err(AttachmentError::NetworkError);
+        if self.cdn_over_tor()? {
+            #[cfg(feature = "onion")]
+            {
+                let tor = self.grpc_pool()?.onion_tor();
+                return crate::network::anon_http::get_to_file(&tor, url, file, limit)
+                    .await
+                    .map_err(AttachmentError::NetworkError);
+            }
+            #[cfg(not(feature = "onion"))]
+            return Err(no_tor());
         }
 
         let mut response = cdn_client()?
@@ -335,24 +418,29 @@ impl AttachmentService {
         Ok(total)
     }
 
-    /// PUT `body` to a presigned URL, over Tor in anon mode and direct otherwise.
+    /// PUT `body` to a presigned URL, over Tor when [`Self::cdn_over_tor`] and
+    /// direct otherwise.
     ///
     /// Returns `(status, etag)`; the caller decides how to treat the status
     /// (single PUTs error on non-2xx, multipart parts retry). Never falls back to
-    /// a direct request in anon mode.
+    /// a direct request when Tor is required.
     pub(crate) async fn cdn_http_put(
         &self,
         url: &str,
         body: Vec<u8>,
         content_type: &str,
     ) -> Result<(u16, Option<String>), AttachmentError> {
-        #[cfg(feature = "onion")]
-        if self.transport_is_onion() {
-            let tor = self.grpc_pool()?.onion_tor();
-            let resp = crate::network::anon_http::put(&tor, url, body, content_type)
-                .await
-                .map_err(AttachmentError::NetworkError)?;
-            return Ok((resp.status, resp.etag));
+        if self.cdn_over_tor()? {
+            #[cfg(feature = "onion")]
+            {
+                let tor = self.grpc_pool()?.onion_tor();
+                let resp = crate::network::anon_http::put(&tor, url, body, content_type)
+                    .await
+                    .map_err(AttachmentError::NetworkError)?;
+                return Ok((resp.status, resp.etag));
+            }
+            #[cfg(not(feature = "onion"))]
+            return Err(no_tor());
         }
 
         let content_length = body.len();
@@ -381,6 +469,7 @@ impl AttachmentService {
         Self {
             attachment_repo,
             grpc_pool: Some(grpc_pool),
+            secret_chat: false,
         }
     }
 
@@ -391,6 +480,7 @@ impl AttachmentService {
         Self {
             attachment_repo,
             grpc_pool: None,
+            secret_chat: false,
         }
     }
 
@@ -588,6 +678,13 @@ impl AttachmentService {
     /// Returns the decoded thumbnail bytes (JPEG/WebP), or `None` when the
     /// attachment has no thumbnail sidecar or the fetch/decrypt fails.
     pub async fn ensure_thumbnail(&self, attachment_id: &AttachmentId) -> Option<Vec<u8>> {
+        self.for_download(attachment_id)
+            .ok()?
+            .ensure_thumbnail_routed(attachment_id)
+            .await
+    }
+
+    async fn ensure_thumbnail_routed(&self, attachment_id: &AttachmentId) -> Option<Vec<u8>> {
         let mut attachment = self.attachment_repo.get(attachment_id).ok()??;
 
         // Already have the decoded bytes locally (sender's own upload, or a
@@ -608,7 +705,7 @@ impl AttachmentService {
         }
 
         // Download the small encrypted thumbnail blob.
-        let mut file_client = self.grpc_pool().ok()?.file_client();
+        let mut file_client = self.file_client().ok()?;
         let dl = file_client
             .get_attachment_download_url(&cdn_key)
             .await

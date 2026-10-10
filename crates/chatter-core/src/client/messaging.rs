@@ -575,11 +575,6 @@ impl ChatterClient {
         row
     }
 
-    /// Build the complete DM sidebar list — regular server DMs plus anon DMs
-    /// (active conversations first, then incoming requests) — as one ordered,
-    /// fully-shaped vector the UI renders directly. Regular DMs are dropped when
-    /// anon mode is on. This is the single source of truth for the sidebar; the
-    /// UI must not merge two separate lists (that races and drops fresh DMs).
     /// Build the regular (non-anon) DM sidebar rows — one per accepted
     /// friend, keyed by the peer's `user_id` (channel-free, Signal-style).
     /// A friend with no messages yet still shows (empty preview), so a
@@ -667,11 +662,11 @@ impl ChatterClient {
         rows
     }
 
-    /// Build the complete DM sidebar list — regular DMs plus anon DMs
-    /// (active conversations first, then incoming requests) — as one ordered,
-    /// fully-shaped vector the UI renders directly. Regular DMs are dropped when
-    /// anon mode is on. This is the single source of truth for the sidebar; the
-    /// UI must not merge two separate lists (that races and drops fresh DMs).
+    /// Build the complete DM sidebar list — friend DMs plus secret chats
+    /// (anon DMs: active conversations, incoming requests, outgoing requests)
+    /// — as one ordered, fully-shaped vector the UI renders directly. This is
+    /// the single source of truth for the sidebar; the UI must not merge two
+    /// separate lists (that races and drops fresh DMs).
     pub fn list_dm_sidebar(&self) -> Vec<crate::ui::sidebar_data::ChatRowSendData> {
         use crate::domain::anon_dm::AnonDmStatus;
         use crate::domain::message::{ConversationType, truncate_preview_text};
@@ -679,129 +674,126 @@ impl ChatterClient {
         use crate::ui::sidebar_data::ChatRowSendData;
 
         // Friend DMs show in both modes — one conversation per friend, whose
-        // transport follows the mode. Anon DMs show ONLY in Shield: an anon
-        // conversation must not surface — or be operable — in the identified
-        // UI. This is the reactive filter behind the sidebar refresh on toggle.
-        if self.anon_mode_enabled() {
-            let mut out: Vec<ChatRowSendData> = self.list_regular_dm_sidebar();
+        // transport follows the mode. Secret chats (anon DMs) also show in
+        // both modes (Telegram-style), as their own `AnonDm` rows beside the
+        // friend DM with the same person: the row kind is what the UI marks
+        // as secret. Their traffic rides the onion channel in either mode.
+        let mut out: Vec<ChatRowSendData> = self.list_regular_dm_sidebar();
 
-            // Anon DMs — active conversations.
-            for dm in self.list_anon_dm_conversations() {
-                if dm.status == AnonDmStatus::Pending {
-                    continue;
+        // Anon DMs — active conversations.
+        for dm in self.list_anon_dm_conversations() {
+            if dm.status == AnonDmStatus::Pending {
+                continue;
+            }
+            let display_name = dm
+                .peer_display_name
+                .clone()
+                .unwrap_or_else(|| self.fallback_display_name(&dm.peer_id));
+            let latest = self.get_latest_anon_dm_message(&dm.id);
+            let (last_message, timestamp) = match &latest {
+                Some(msg) => {
+                    let preview = msg
+                        .as_text()
+                        .map(|t| truncate_preview_text(t, 50))
+                        .unwrap_or_else(|| "[Attachment]".to_string());
+                    (preview, self.sidebar_time(msg.created_at))
                 }
-                let display_name = dm
-                    .peer_display_name
-                    .clone()
-                    .unwrap_or_else(|| self.fallback_display_name(&dm.peer_id));
-                let latest = self.get_latest_anon_dm_message(&dm.id);
-                let (last_message, timestamp) = match &latest {
-                    Some(msg) => {
-                        let preview = msg
-                            .as_text()
-                            .map(|t| truncate_preview_text(t, 50))
-                            .unwrap_or_else(|| "[Attachment]".to_string());
-                        (preview, self.sidebar_time(msg.created_at))
-                    }
-                    None => (String::new(), String::new()),
-                };
-                out.push(ChatRowSendData {
-                    user_id: dm.peer_id.to_string(),
-                    initials: initials_from_name(&display_name),
-                    avatar_bytes: dm.peer_avatar.clone(),
-                    presence_status: if dm.status == AnonDmStatus::Active {
-                        "online".to_string()
-                    } else {
-                        "offline".to_string()
-                    },
-                    last_message,
-                    timestamp,
-                    unread_count: dm.unread_count,
-                    last_activity: latest.map(|m| m.created_at),
-                    ..ChatRowSendData::new(
-                        ConversationType::AnonDm,
-                        dm.id.to_string(),
-                        display_name,
-                    )
-                });
-            }
-
-            // Anon DMs — incoming message requests awaiting acceptance.
-            for dm in self.list_anon_dm_message_requests() {
-                let peer_name = dm
-                    .peer_display_name
-                    .clone()
-                    .unwrap_or_else(|| self.fallback_display_name(&dm.peer_id));
-                let latest = self.get_latest_anon_dm_message(&dm.id);
-                let last_message = match &latest {
-                    Some(msg) => self.message_sidebar_preview(msg),
-                    None => "Message request".to_string(),
-                };
-                out.push(ChatRowSendData {
-                    user_id: dm.peer_id.to_string(),
-                    initials: initials_from_name(&peer_name),
-                    avatar_bytes: dm.peer_avatar.clone(),
-                    presence_status: "pending".to_string(),
-                    last_message,
-                    timestamp: self.sidebar_time(dm.created_at),
-                    unread_count: 1,
-                    last_activity: Some(latest.map_or(dm.created_at, |m| m.created_at)),
-                    // Envelope marker distinguishes a pending request from an
-                    // active conversation in the sidebar.
-                    ..ChatRowSendData::new(
-                        ConversationType::AnonDm,
-                        dm.id.to_string(),
-                        format!("\u{1F4E9} {}", peer_name),
-                    )
-                });
-            }
-
-            // Anon DMs — outgoing requests we sent, awaiting acceptance.
-            for dm in self.list_anon_dm_outgoing_requests() {
-                let peer_name = dm
-                    .peer_display_name
-                    .clone()
-                    .unwrap_or_else(|| self.fallback_display_name(&dm.peer_id));
-                let latest = self.get_latest_anon_dm_message(&dm.id);
-                let (last_message, timestamp) = match &latest {
-                    Some(msg) => {
-                        let preview = msg
-                            .as_text()
-                            .filter(|t| !t.is_empty())
-                            .map(|t| format!("You: {}", truncate_preview_text(t, 50)))
-                            .unwrap_or_else(|| "Message request sent".to_string());
-                        (preview, self.sidebar_time(msg.created_at))
-                    }
-                    None => (
-                        "Waiting for response...".to_string(),
-                        self.sidebar_time(dm.created_at),
-                    ),
-                };
-                out.push(ChatRowSendData {
-                    user_id: dm.peer_id.to_string(),
-                    initials: initials_from_name(&peer_name),
-                    avatar_bytes: dm.peer_avatar.clone(),
-                    presence_status: "offline".to_string(),
-                    last_message,
-                    timestamp,
-                    last_activity: Some(latest.map_or(dm.created_at, |m| m.created_at)),
-                    // Postbox marker distinguishes an outgoing pending request.
-                    ..ChatRowSendData::new(
-                        ConversationType::AnonDm,
-                        dm.id.to_string(),
-                        format!("\u{1F4EE} {} (pending)", peer_name),
-                    )
-                });
-            }
-
-            self.finish_dm_sidebar(out)
-        } else {
-            self.list_regular_dm_sidebar()
+                None => (String::new(), String::new()),
+            };
+            out.push(ChatRowSendData {
+                user_id: dm.peer_id.to_string(),
+                initials: initials_from_name(&display_name),
+                avatar_bytes: dm.peer_avatar.clone(),
+                presence_status: if dm.status == AnonDmStatus::Active {
+                    "online".to_string()
+                } else {
+                    "offline".to_string()
+                },
+                last_message,
+                timestamp,
+                unread_count: dm.unread_count,
+                last_activity: latest.map(|m| m.created_at),
+                ..ChatRowSendData::new(
+                    ConversationType::AnonDm,
+                    dm.id.to_string(),
+                    display_name,
+                )
+            });
         }
+
+        // Anon DMs — incoming message requests awaiting acceptance.
+        for dm in self.list_anon_dm_message_requests() {
+            let peer_name = dm
+                .peer_display_name
+                .clone()
+                .unwrap_or_else(|| self.fallback_display_name(&dm.peer_id));
+            let latest = self.get_latest_anon_dm_message(&dm.id);
+            let last_message = match &latest {
+                Some(msg) => self.message_sidebar_preview(msg),
+                None => "Message request".to_string(),
+            };
+            out.push(ChatRowSendData {
+                user_id: dm.peer_id.to_string(),
+                initials: initials_from_name(&peer_name),
+                avatar_bytes: dm.peer_avatar.clone(),
+                presence_status: "pending".to_string(),
+                last_message,
+                timestamp: self.sidebar_time(dm.created_at),
+                unread_count: 1,
+                last_activity: Some(latest.map_or(dm.created_at, |m| m.created_at)),
+                // Envelope marker distinguishes a pending request from an
+                // active conversation in the sidebar.
+                ..ChatRowSendData::new(
+                    ConversationType::AnonDm,
+                    dm.id.to_string(),
+                    format!("\u{1F4E9} {}", peer_name),
+                )
+            });
+        }
+
+        // Anon DMs — outgoing requests we sent, awaiting acceptance.
+        for dm in self.list_anon_dm_outgoing_requests() {
+            let peer_name = dm
+                .peer_display_name
+                .clone()
+                .unwrap_or_else(|| self.fallback_display_name(&dm.peer_id));
+            let latest = self.get_latest_anon_dm_message(&dm.id);
+            let (last_message, timestamp) = match &latest {
+                Some(msg) => {
+                    let preview = msg
+                        .as_text()
+                        .filter(|t| !t.is_empty())
+                        .map(|t| format!("You: {}", truncate_preview_text(t, 50)))
+                        .unwrap_or_else(|| "Message request sent".to_string());
+                    (preview, self.sidebar_time(msg.created_at))
+                }
+                None => (
+                    "Waiting for response...".to_string(),
+                    self.sidebar_time(dm.created_at),
+                ),
+            };
+            out.push(ChatRowSendData {
+                user_id: dm.peer_id.to_string(),
+                initials: initials_from_name(&peer_name),
+                avatar_bytes: dm.peer_avatar.clone(),
+                presence_status: "offline".to_string(),
+                last_message,
+                timestamp,
+                last_activity: Some(latest.map_or(dm.created_at, |m| m.created_at)),
+                // Postbox marker distinguishes an outgoing pending request.
+                ..ChatRowSendData::new(
+                    ConversationType::AnonDm,
+                    dm.id.to_string(),
+                    format!("\u{1F4EE} {} (pending)", peer_name),
+                )
+            });
+        }
+
+        self.finish_dm_sidebar(out)
     }
 
     /// The chat list: every loose conversation the current mode shows — DMs
-    /// (and, in Shield, anon DMs and requests), channels (current and former),
+    /// (friend DMs and secret chats with their requests), channels (current and former),
     /// private groups — as ONE list, pinned first, then newest activity first
     /// (Signal/Telegram). It used to be a DM block above a channel block, so a
     /// channel with newer activity never rose above a DM. Folders render their
@@ -1963,7 +1955,8 @@ mod shield_mode_tests {
             client.resolve_dm_conversation(&peer.to_string()),
             Some(ActiveConversation::ServerDm { peer_id: peer })
         );
-        assert!(!client.visible_in_mode(&ConversationType::AnonDm));
+        // Secret chats (anon DMs) show outside Shield too.
+        assert!(client.visible_in_mode(&ConversationType::AnonDm));
     }
 
     /// With Shield off, a peer known only from an anon group never gets an

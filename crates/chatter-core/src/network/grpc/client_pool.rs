@@ -106,10 +106,15 @@ pub struct GrpcClientPool {
     /// direct dial still in flight when Shield was switched on would otherwise
     /// become the cached channel every later RPC rides.
     transport_gen: Arc<std::sync::atomic::AtomicU64>,
-    /// Separate channel for the anonymous mailbox/message/auth clients, so their
-    /// traffic rides its OWN connection — an isolated Tor circuit under onion — and
-    /// the server can't correlate anon ops with authenticated RPCs by connection.
-    anon_channel: Arc<RwLock<Option<GrpcTransport>>>,
+    /// Separate channel for the unidentified (no auth header) clients of the
+    /// ordinary sealed-sender DM path, so their traffic rides its OWN
+    /// connection — an isolated Tor circuit under onion — and the server can't
+    /// correlate those ops with authenticated RPCs by connection.
+    unidentified_channel: Arc<RwLock<Option<GrpcTransport>>>,
+    /// Channel for secret chats (anonymous DMs and groups). Always an isolated
+    /// Tor circuit to the pinned `.onion`, whatever `transport_mode` is; never
+    /// built over the direct transport. See [`Self::secret_channel`].
+    secret_channel: Arc<RwLock<Option<GrpcTransport>>>,
     /// Cached QUIC reachability, probed once and reused. Only ever consulted
     /// for `TransportMode::Direct` over `https://` — onion carries TCP, and
     /// QUIC needs TLS 1.3 to negotiate ALPN.
@@ -119,10 +124,15 @@ pub struct GrpcClientPool {
     /// Bootstrap is deferred to the first onion dial and cached thereafter.
     #[cfg(feature = "onion")]
     onion_tor: super::onion_transport::SharedTorClient,
-    /// Cached ISOLATED Tor client for the anon channel (separate circuit-group
-    /// from `onion_tor`). Derived from the bootstrapped client on first anon dial.
+    /// Cached ISOLATED Tor client for the unidentified channel (separate
+    /// circuit-group from `onion_tor`). Derived from the bootstrapped client on
+    /// first dial.
     #[cfg(feature = "onion")]
-    anon_onion_tor: super::onion_transport::SharedTorClient,
+    unidentified_onion_tor: super::onion_transport::SharedTorClient,
+    /// Cached ISOLATED Tor client for the secret-chat channel, its own
+    /// circuit-group apart from both the account's and the unidentified one.
+    #[cfg(feature = "onion")]
+    secret_onion_tor: super::onion_transport::SharedTorClient,
 }
 
 impl GrpcClientPool {
@@ -185,13 +195,16 @@ impl GrpcClientPool {
             onion_addr: Arc::new(RwLock::new(None)),
             transport_mode: Arc::new(RwLock::new(TransportMode::Direct)),
             transport_gen: Arc::new(std::sync::atomic::AtomicU64::new(0)),
-            anon_channel: Arc::new(RwLock::new(None)),
+            unidentified_channel: Arc::new(RwLock::new(None)),
+            secret_channel: Arc::new(RwLock::new(None)),
             #[cfg(feature = "quic")]
             quic_probe: Arc::new(RwLock::new(QuicProbeState::Untried)),
             #[cfg(feature = "onion")]
             onion_tor: Arc::new(tokio::sync::OnceCell::new()),
             #[cfg(feature = "onion")]
-            anon_onion_tor: Arc::new(tokio::sync::OnceCell::new()),
+            unidentified_onion_tor: Arc::new(tokio::sync::OnceCell::new()),
+            #[cfg(feature = "onion")]
+            secret_onion_tor: Arc::new(tokio::sync::OnceCell::new()),
         })
     }
 
@@ -304,9 +317,16 @@ impl GrpcClientPool {
     }
 
     /// Pin the server's Tor v3 onion address (e.g. "http://<hash>.onion:443").
-    /// Required before switching to `TransportMode::Onion`.
+    /// Required before switching to `TransportMode::Onion`, and for any
+    /// secret-chat traffic. A changed address drops the cached secret channel,
+    /// which was built from the old one.
     pub fn set_onion_address(&self, addr: Option<String>) {
-        *self.onion_addr.write() = addr;
+        let mut secret = self.secret_channel.write();
+        let mut current = self.onion_addr.write();
+        if *current != addr {
+            *secret = None;
+        }
+        *current = addr;
     }
 
     /// The currently active transport.
@@ -341,7 +361,7 @@ impl GrpcClientPool {
         self.transport_gen
             .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         *channel = None;
-        *self.anon_channel.write() = None;
+        *self.unidentified_channel.write() = None;
     }
 
     /// Endpoint, transport and generation read together (under the channel
@@ -362,7 +382,7 @@ impl GrpcClientPool {
     /// loop (the inbox poller) exists to do it.
     fn note_onion_dial(mode: TransportMode, ok: bool) {
         if mode == TransportMode::Onion {
-            use crate::network::connection::{set_tor_status, TorStatus};
+            use crate::network::connection::{TorStatus, set_tor_status};
             set_tor_status(if ok {
                 TorStatus::Connected
             } else {
@@ -647,7 +667,7 @@ impl GrpcClientPool {
     /// [`call_with_retry`]: Self::call_with_retry
     pub async fn probe(&self) -> Result<(), NetworkError> {
         use crate::network::connection::{
-            server_evidence_revision, set_server_status_if_current, ServerStatus,
+            ServerStatus, server_evidence_revision, set_server_status_if_current,
         };
 
         let (endpoint, mode, generation) = self.snapshot();
@@ -688,36 +708,48 @@ impl GrpcClientPool {
         super::onion_transport::OnionConnector::new(self.onion_tor.clone())
     }
 
-    /// Isolated onion connector for the anonymous channel (separate circuit).
+    /// Isolated onion connector for the unidentified channel (separate circuit).
     #[cfg(feature = "onion")]
-    fn anon_onion_connector(&self) -> super::onion_transport::OnionConnector {
+    fn unidentified_onion_connector(&self) -> super::onion_transport::OnionConnector {
         super::onion_transport::OnionConnector::new_isolated(
             self.onion_tor.clone(),
-            self.anon_onion_tor.clone(),
+            self.unidentified_onion_tor.clone(),
         )
     }
 
-    /// The channel for the anonymous mailbox/message/auth clients.
+    /// Isolated onion connector for the secret-chat channel (its own circuit).
+    #[cfg(feature = "onion")]
+    fn secret_onion_connector(&self) -> super::onion_transport::OnionConnector {
+        super::onion_transport::OnionConnector::new_isolated(
+            self.onion_tor.clone(),
+            self.secret_onion_tor.clone(),
+        )
+    }
+
+    /// The channel for the unidentified (no auth header) clients of the
+    /// ordinary sealed-sender DM path. It follows the pool's transport.
     ///
     /// Under onion transport this is a SEPARATE channel over an isolated Tor
-    /// circuit, so the server cannot correlate anonymous mailbox ops with the
+    /// circuit, so the server cannot correlate unidentified ops with the
     /// account's authenticated RPCs by connection/circuit. On the direct
     /// transport isolation is moot (both connections share the client IP), so it
     /// falls back to the shared channel.
-    pub fn anon_channel(&self) -> GrpcTransport {
+    ///
+    /// Secret chats never use this: see [`Self::secret_channel`].
+    pub fn unidentified_channel(&self) -> GrpcTransport {
         #[cfg(feature = "onion")]
         {
             if *self.transport_mode.read() == TransportMode::Onion {
-                if let Some(ch) = self.anon_channel.read().clone() {
+                if let Some(ch) = self.unidentified_channel.read().clone() {
                     return ch;
                 }
-                let mut guard = self.anon_channel.write();
+                let mut guard = self.unidentified_channel.write();
                 if let Some(ch) = guard.clone() {
                     return ch;
                 }
                 let endpoint = self.endpoint.read().clone();
                 let ch: GrpcTransport = endpoint
-                    .connect_with_connector_lazy(self.anon_onion_connector())
+                    .connect_with_connector_lazy(self.unidentified_onion_connector())
                     .into();
                 *guard = Some(ch.clone());
                 return ch;
@@ -726,12 +758,64 @@ impl GrpcClientPool {
         self.channel()
     }
 
+    /// The channel for secret chats (anonymous DMs and anonymous groups).
+    ///
+    /// Secret chats are device-bound and ALL their traffic goes over Tor, so
+    /// this is always a lazy channel over an isolated Tor circuit to the pinned
+    /// `.onion`, whatever [`Self::transport_mode`] is. It fails closed: without
+    /// the `onion` feature, or with no `.onion` pinned, it returns
+    /// [`NetworkError::SecretChatNeedsTor`] and never falls back to the direct
+    /// transport. Cached until [`Self::disconnect`] or a new onion address.
+    pub fn secret_channel(&self) -> Result<GrpcTransport, NetworkError> {
+        if let Some(ch) = self.secret_channel.read().clone() {
+            return Ok(ch);
+        }
+        let mut guard = self.secret_channel.write();
+        if let Some(ch) = guard.clone() {
+            return Ok(ch);
+        }
+        let onion = self
+            .onion_addr
+            .read()
+            .clone()
+            .ok_or(NetworkError::SecretChatNeedsTor(
+                "no server .onion address is pinned",
+            ))?;
+        #[cfg(feature = "onion")]
+        {
+            let endpoint = Self::create_endpoint(&onion, self.timeout)?;
+            let ch: GrpcTransport = endpoint
+                .connect_with_connector_lazy(self.secret_onion_connector())
+                .into();
+            *guard = Some(ch.clone());
+            Ok(ch)
+        }
+        #[cfg(not(feature = "onion"))]
+        {
+            let _ = (onion, &mut guard);
+            Err(NetworkError::SecretChatNeedsTor("this build has none"))
+        }
+    }
+
+    /// Whether secret-chat traffic has a route at all (see
+    /// [`Self::secret_channel`]). Cheap; builds nothing.
+    pub fn secret_route_available(&self) -> bool {
+        self.onion_available()
+    }
+
+    /// Drop the cached secret-chat channel so the next secret-chat RPC
+    /// re-dials (still over Tor). For retry loops after a transport error.
+    pub fn disconnect_secret(&self) {
+        *self.secret_channel.write() = None;
+    }
+
     /// Disconnect from the server.
     ///
-    /// Drops the underlying channel. Safe to call multiple times.
+    /// Drops every cached channel. Safe to call multiple times.
     pub fn disconnect(&self) {
         *self.channel.write() = None;
-        *self.anon_channel.write() = None;
+        *self.unidentified_channel.write() = None;
+        *self.secret_channel.write() = None;
     }
 
     /// Demote a cached `Working` QUIC verdict to `Failed` after a real RPC
@@ -906,7 +990,7 @@ impl GrpcClientPool {
         F: FnMut(&Self) -> Fut,
         Fut: Future<Output = Result<T, NetworkError>>,
     {
-        use crate::network::connection::{set_server_status, ServerStatus};
+        use crate::network::connection::{ServerStatus, set_server_status};
 
         let pool = self;
         let retry_config = RetryConfig::default();
@@ -985,7 +1069,7 @@ impl GrpcClientPool {
         // transport keeps the authenticated client.
         #[cfg(feature = "onion")]
         if self.transport_mode() == TransportMode::Onion {
-            return super::FileClient::new(self.anon_channel(), AuthInterceptor::new());
+            return super::FileClient::new(self.unidentified_channel(), AuthInterceptor::new());
         }
         super::FileClient::new(self.channel(), self.auth_clone())
     }
@@ -1030,19 +1114,22 @@ impl GrpcClientPool {
         super::NotificationClient::new(self.channel(), self.auth_clone())
     }
 
-    /// Create an anonymous mailbox client (no auth headers).
+    /// Create an anonymous mailbox client (no auth headers) on the
+    /// unidentified channel. Not for secret chats: [`Self::secret_mailbox_client`].
     pub fn anonymous_mailbox_client(&self) -> super::AnonymousMailboxClient {
-        super::AnonymousMailboxClient::new(self.anon_channel())
+        super::AnonymousMailboxClient::new(self.unidentified_channel())
     }
 
-    /// Create an anonymous message client (no auth headers).
+    /// Create an anonymous message client (no auth headers) on the
+    /// unidentified channel. Not for secret chats: [`Self::secret_message_client`].
     pub fn anonymous_message_client(&self) -> super::AnonymousMessageClient {
-        super::AnonymousMessageClient::new(self.anon_channel())
+        super::AnonymousMessageClient::new(self.unidentified_channel())
     }
 
-    /// Create an anonymous auth client (no auth headers).
+    /// Create an anonymous auth client (no auth headers) on the unidentified
+    /// channel.
     pub fn anonymous_auth_client(&self) -> super::AnonymousAuthClient {
-        super::AnonymousAuthClient::new(self.anon_channel())
+        super::AnonymousAuthClient::new(self.unidentified_channel())
     }
 
     /// Create an anonymous Key Transparency client (no auth headers).
@@ -1052,7 +1139,40 @@ impl GrpcClientPool {
     /// authenticated identity (Phase 3a). `GetProof` is a public method
     /// server-side; the proof is public, auditable transparency data.
     pub fn anonymous_kt_client(&self) -> super::AnonymousKtClient {
-        super::AnonymousKtClient::new(self.anon_channel())
+        super::AnonymousKtClient::new(self.unidentified_channel())
+    }
+
+    // ========================================================================
+    // Secret-chat clients — always over Tor, fail closed (see secret_channel)
+    // ========================================================================
+
+    /// Mailbox client (no auth headers) for secret-chat traffic.
+    pub fn secret_mailbox_client(&self) -> Result<super::AnonymousMailboxClient, NetworkError> {
+        Ok(super::AnonymousMailboxClient::new(self.secret_channel()?))
+    }
+
+    /// Message client (no auth headers) for secret-chat traffic.
+    pub fn secret_message_client(&self) -> Result<super::AnonymousMessageClient, NetworkError> {
+        Ok(super::AnonymousMessageClient::new(self.secret_channel()?))
+    }
+
+    /// Auth client (no auth headers) for secret-chat prekey fetches.
+    pub fn secret_auth_client(&self) -> Result<super::AnonymousAuthClient, NetworkError> {
+        Ok(super::AnonymousAuthClient::new(self.secret_channel()?))
+    }
+
+    /// Key Transparency client (no auth headers) for secret-chat sessions.
+    pub fn secret_kt_client(&self) -> Result<super::AnonymousKtClient, NetworkError> {
+        Ok(super::AnonymousKtClient::new(self.secret_channel()?))
+    }
+
+    /// File client for secret-chat attachments: no auth header (the URL-mint
+    /// methods are auth-exempt), so the cdn_key is tied to no account.
+    pub fn secret_file_client(&self) -> Result<super::FileClient, NetworkError> {
+        Ok(super::FileClient::new(
+            self.secret_channel()?,
+            AuthInterceptor::new(),
+        ))
     }
 
     /// Get auth info (user_id, device_id, token) from the auth interceptor.
@@ -1096,9 +1216,11 @@ mod tests {
             .unwrap()
             .unwrap()
             .unwrap_err();
-        assert!(error
-            .to_string()
-            .contains("transport changed while probing"));
+        assert!(
+            error
+                .to_string()
+                .contains("transport changed while probing")
+        );
     }
 
     #[test]
@@ -1200,6 +1322,43 @@ mod tests {
             // actual Tor dial is deferred to the next channel()).
             assert!(pool.set_transport_mode(TransportMode::Onion).is_ok());
             assert_eq!(pool.transport_mode(), TransportMode::Onion);
+        }
+    }
+
+    /// Secret chats never fall back to the direct transport: with no `.onion`
+    /// pinned, or without the `onion` feature, the secret channel and every
+    /// secret client refuse with `SecretChatNeedsTor`.
+    #[tokio::test]
+    async fn secret_channel_fails_closed_without_onion() {
+        let pool = GrpcClientPool::new("https://localhost:50051").unwrap();
+        assert!(!pool.secret_route_available());
+        assert!(matches!(
+            pool.secret_channel(),
+            Err(NetworkError::SecretChatNeedsTor(_))
+        ));
+        assert!(pool.secret_mailbox_client().is_err());
+        assert!(pool.secret_message_client().is_err());
+        assert!(pool.secret_auth_client().is_err());
+        assert!(pool.secret_kt_client().is_err());
+        assert!(pool.secret_file_client().is_err());
+
+        pool.set_onion_address(Some(format!("http://{}.onion:443", "a".repeat(56))));
+        #[cfg(not(feature = "onion"))]
+        {
+            assert!(!pool.secret_route_available());
+            let err = pool.secret_channel().err().expect("no Tor in this build");
+            assert!(matches!(err, NetworkError::SecretChatNeedsTor(_)));
+            assert!(err.to_string().contains("this build has none"), "{err}");
+        }
+        #[cfg(feature = "onion")]
+        {
+            // Built, and over Tor even though the pool itself stays Direct.
+            assert!(pool.secret_route_available());
+            assert!(pool.secret_channel().is_ok());
+            assert_eq!(pool.transport_mode(), TransportMode::Direct);
+            // Unpinning drops the cached channel: no stale route survives.
+            pool.set_onion_address(None);
+            assert!(pool.secret_channel().is_err());
         }
     }
 

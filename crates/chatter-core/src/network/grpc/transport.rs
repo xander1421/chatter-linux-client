@@ -469,7 +469,7 @@ pub(crate) mod outcome_tests {
     #[tokio::test]
     async fn direct_pool_factories_install_the_production_recorder_without_dialing() {
         let pool = crate::network::grpc::GrpcClientPool::new("https://127.0.0.1:9").unwrap();
-        for channel in [pool.channel(), pool.anon_channel()] {
+        for channel in [pool.channel(), pool.unidentified_channel()] {
             assert!(std::ptr::fn_addr_eq(
                 channel.record,
                 set_server_status as fn(ServerStatus)
@@ -484,7 +484,7 @@ pub(crate) mod outcome_tests {
         pool.set_onion_address(Some(format!("http://{}.onion:443", "a".repeat(56))));
         pool.set_transport_mode(crate::network::grpc::client_pool::TransportMode::Onion)
             .unwrap();
-        for channel in [pool.channel(), pool.anon_channel()] {
+        for channel in [pool.channel(), pool.unidentified_channel()] {
             assert!(std::ptr::fn_addr_eq(
                 channel.record,
                 set_server_status as fn(ServerStatus)

@@ -87,6 +87,8 @@ pub fn open_user_profile_in_conversation(
 
     w.set_profile_user_id(user_id.to_string().into());
     w.set_profile_is_anonymous(conversation.is_anon());
+    // Offered for another user only (set again on that path below).
+    w.set_profile_can_start_secret_chat(false);
     // Reset safety number state for fresh modal
     w.set_profile_safety_number("".into());
     w.set_profile_show_safety_number(false);
@@ -237,6 +239,9 @@ pub fn open_user_profile_in_conversation(
         w.set_profile_is_self(false);
         w.set_profile_is_friend(is_friend);
         w.set_profile_is_blocked(is_blocked);
+        w.set_profile_can_start_secret_chat(
+            ui_ctx.is_some_and(|ctx| ctx.can_start_secret_chat(user_id)),
+        );
         w.set_profile_is_verified(is_verified);
     }
 

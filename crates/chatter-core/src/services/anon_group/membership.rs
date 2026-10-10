@@ -72,6 +72,11 @@ impl AnonGroupService {
         content: Content,
     ) -> Result<(), AnonGroupError> {
         self.check_group_recipient(&content, peer_id, mailbox_pk)?;
+        // Secret-chat traffic goes over Tor or not at all; refuse before any
+        // submission is recorded or token spent.
+        self.grpc_pool
+            .secret_channel()
+            .map_err(|e| AnonGroupError::MessageError(e.to_string()))?;
         // 1. Serialize content
         let plaintext = content.encode_to_vec();
         let retained = if crate::services::gateway::submission::user_post(&content) {
@@ -181,7 +186,7 @@ impl AnonGroupService {
             .map_err(|_| AnonGroupError::DeliveryUnconfirmed)?;
         }
         self.mailbox_manager
-            .send_to_mailbox(mailbox_pk, ciphertext, EnvelopeType::SealedSender)
+            .send_to_secret_mailbox(mailbox_pk, ciphertext, EnvelopeType::SealedSender)
             .await
             .map_err(|e| {
                 if retained.is_some() {

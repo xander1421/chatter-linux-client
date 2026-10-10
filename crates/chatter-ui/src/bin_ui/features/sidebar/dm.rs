@@ -39,6 +39,72 @@ pub fn wire_delete_conversation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
     });
 }
 
+/// Profile › Start secret chat, and the chat header's ⋯ › Start secret chat
+/// on a regular DM. Core starts the secret chat with the peer (or finds the
+/// one that exists, `start_secret_chat`); the list rebuilds with its row and
+/// the chat pane opens it through `dm-selected`, like every other DM.
+pub fn wire_start_secret_chat(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let (weak, ctx) = (window.as_weak(), ui_ctx.clone());
+    window.on_profile_start_secret_chat(move || {
+        let Some(w) = weak.upgrade() else {
+            return;
+        };
+        let Ok(peer) = w.get_profile_user_id().parse::<UserId>() else {
+            return;
+        };
+        start_secret_chat(&weak, &ctx, peer);
+    });
+
+    let ctx = ui_ctx.clone();
+    window.on_chat_menu_can_start_secret_chat(move || {
+        open_dm_peer(&ctx).is_some_and(|peer| ctx.can_start_secret_chat(&peer))
+    });
+
+    let (weak, ctx) = (window.as_weak(), ui_ctx.clone());
+    window.on_chat_menu_start_secret_chat(move || {
+        if let Some(peer) = open_dm_peer(&ctx) {
+            start_secret_chat(&weak, &ctx, peer);
+        }
+    });
+}
+
+/// The peer of the open regular DM, if that is what is open.
+fn open_dm_peer(ui_ctx: &ChatterClient) -> Option<UserId> {
+    match ui_ctx.chat_state().active_conversation() {
+        chatter_core::state::ActiveConversation::ServerDm { peer_id } => Some(peer_id),
+        _ => None,
+    }
+}
+
+fn start_secret_chat(weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<ChatterClient>, peer: UserId) {
+    let (weak, ui_ctx) = (weak.clone(), ui_ctx.clone());
+    tokio::spawn(async move {
+        match ui_ctx.start_secret_chat(peer).await {
+            Ok(dm) => {
+                super::rebuild_chat_list(&weak, &ui_ctx);
+                let dm_id = dm.id.to_string();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak.upgrade() {
+                        crate::bin_ui::features::back::reset_to_chats(&w);
+                        w.invoke_dm_selected(dm_id.into());
+                    }
+                });
+            }
+            Err(e) => {
+                tracing::warn!(error = %e, "start secret chat failed");
+                let message = format!("Could not start secret chat: {e}");
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak.upgrade() {
+                        w.set_toast_message(message.into());
+                        w.set_toast_variant("error".into());
+                        w.set_toast_visible(true);
+                    }
+                });
+            }
+        }
+    });
+}
+
 /// Wire DM selected callback.
 pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx_clone = ui_ctx.clone();

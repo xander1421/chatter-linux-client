@@ -1792,7 +1792,7 @@ mod tests {
                 ms.database.clone(),
                 &ms.signal_service,
                 &mut auth,
-                ms.grpc_pool.anon_channel(),
+                ms.grpc_pool.unidentified_channel(),
                 ms,
             )
             .await;
@@ -1859,7 +1859,7 @@ mod tests {
             ms.database.clone(),
             &ms.signal_service,
             &mut auth,
-            ms.grpc_pool.anon_channel(),
+            ms.grpc_pool.unidentified_channel(),
             ms,
         )
         .await

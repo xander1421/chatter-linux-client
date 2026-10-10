@@ -227,13 +227,19 @@ impl AnonDmService {
         )
         .map_err(|e| AnonDmError::CryptoError(e.to_string()))?;
 
+        // Secret-chat traffic goes over Tor or not at all; refuse before the
+        // token is spent.
+        let mut anon_client = self
+            .grpc_pool
+            .secret_message_client()
+            .map_err(|e| AnonDmError::MessageError(e.to_string()))?;
+
         // Get blind signature token for anonymous delivery
         let token = self.claim_token()?;
 
         // Send to recipient's device inbox using anonymous credential
         // The ECIES ciphertext goes in the sealed_body, but we're NOT using
         // sealed sender here - we're using raw ECIES + anonymous credential
-        let mut anon_client = self.grpc_pool.anonymous_message_client();
 
         // ECIES_INIT requires server_key_id == 0 (server rejects non-zero, see sealed_sender.go:66-68)
         let sealed_message = SealedSenderMessage {

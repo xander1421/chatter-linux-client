@@ -20,6 +20,13 @@ impl AnonDmService {
         peer_id: &UserId,
         content: Content,
     ) -> Result<(), AnonDmError> {
+        // Secret-chat traffic goes over Tor or not at all; refuse before any
+        // token is spent.
+        let mut anon_client = self
+            .grpc_pool
+            .secret_message_client()
+            .map_err(|e| AnonDmError::MessageError(e.to_string()))?;
+
         // Serialize content
         let plaintext = content.encode_to_vec();
 
@@ -51,9 +58,7 @@ impl AnonDmService {
             timestamp: crate::util::time::TimestampNanos::now_anonymized().as_u64(),
         };
 
-        // Send to device inbox using ANONYMOUS client (no auth headers)
-        let mut anon_client = self.grpc_pool.anonymous_message_client();
-
+        // Send to device inbox using the secret-chat client (no auth headers, Tor)
         anon_client
             .send_with_anonymous_credential(
                 &peer_id.to_string(),
@@ -103,6 +108,11 @@ impl AnonDmService {
         mailbox_pk: &[u8; 32],
         content: Content,
     ) -> Result<(), AnonDmError> {
+        // Secret-chat traffic goes over Tor or not at all; refuse before any
+        // submission is recorded or token spent.
+        self.grpc_pool
+            .secret_channel()
+            .map_err(|e| AnonDmError::MessageError(e.to_string()))?;
         // Serialize content
         let plaintext = content.encode_to_vec();
         let retained = if crate::services::gateway::submission::user_post(&content) {
@@ -219,7 +229,7 @@ impl AnonDmService {
         }
         // Send to anonymous mailbox
         self.mailbox_manager
-            .send_to_mailbox(mailbox_pk, ciphertext, EnvelopeType::SealedSender)
+            .send_to_secret_mailbox(mailbox_pk, ciphertext, EnvelopeType::SealedSender)
             .await
             .map_err(|e| {
                 tracing::error!(
@@ -252,6 +262,10 @@ impl AnonDmService {
         &self,
         conversation_id: &AnonDmId,
     ) -> Result<AnonDmMailbox, AnonDmError> {
+        // Over Tor or not at all; refuse before the token is spent.
+        self.grpc_pool
+            .secret_channel()
+            .map_err(|e| AnonDmError::MessageError(e.to_string()))?;
         // Atomically claim a blind-signed token (marks used in same SQL stmt)
         let token = self.claim_token()?;
 
@@ -278,7 +292,10 @@ impl AnonDmService {
                     .await;
                 tracing::info!(attempt = attempt + 1, "Retrying create_ephemeral_mailbox");
             }
-            let mut mailbox_client = self.grpc_pool.anonymous_mailbox_client();
+            let mut mailbox_client = self
+                .grpc_pool
+                .secret_mailbox_client()
+                .map_err(|e| AnonDmError::MessageError(e.to_string()))?;
             match mailbox_client
                 .create_ephemeral_mailbox(
                     token.public_key.clone(),
@@ -294,7 +311,7 @@ impl AnonDmService {
                 }
                 Err(e) if e.is_retryable() => {
                     tracing::warn!(attempt = attempt + 1, error = %e, "create_ephemeral_mailbox transient error, disconnecting stale channel and retrying");
-                    self.grpc_pool.disconnect();
+                    self.grpc_pool.disconnect_secret();
                     last_err = Some(e);
                 }
                 Err(e) => {

@@ -277,8 +277,9 @@ impl PairwiseService {
         let peer_id_str = peer_id.to_string();
         let device_id = 1u32;
 
-        // Fetch prekey bundle ANONYMOUSLY using blind signature token
-        let mut anon_auth = self.grpc_pool.anonymous_auth_client();
+        // Fetch prekey bundle ANONYMOUSLY using blind signature token. Only
+        // secret chats use this path, so it rides the secret (Tor) channel.
+        let mut anon_auth = self.grpc_pool.secret_auth_client()?;
         let bundle_response = anon_auth
             .get_pre_key_bundle_anonymous(
                 &peer_id_str,
@@ -301,7 +302,7 @@ impl PairwiseService {
         // MITM hole. The proof fetch reveals only which peer is looked up (the
         // same user_id already sent in the anonymous prekey fetch above); VRF
         // query-privacy for that lookup is the remaining Phase 3b work.
-        let mut anon_kt_client = self.grpc_pool.anonymous_kt_client();
+        let mut anon_kt_client = self.grpc_pool.secret_kt_client()?;
         self.signal_service
             .ensure_session_with_bundle(
                 &mut anon_kt_client,

@@ -1,6 +1,7 @@
 import { GlassSurface } from "../components/glass_surface.slint";
 import { Materials } from "../theme/materials.slint";
-// The chat header's ⋯ menu: Video call and Conversation settings (owner,
+// The chat header's ⋯ menu: Video call, Conversation settings and, on a
+// regular DM, Start secret chat (owner,
 // 2026-10-05: video call moved out of the header row into this menu, voice
 // call stays in the row). Pushed on the modal stack as "chat-menu" (app.slint),
 // so Back and the backdrop close it like any other layer; it drops from the
@@ -16,6 +17,8 @@ export component ChatHeaderMenu inherits Rectangle {
     in property <bool> show-video-call;
     in property <bool> show-settings;
     in property <bool> show-pinned;
+    // Regular DM only, when core can start a secret chat with the peer.
+    in property <bool> show-secret-chat;
     callback pinned();
     out property <length> card-width: min(288px, root.width - 2 * Spacing.sm);
     out property <length> card-height: menu.preferred-height;
@@ -23,6 +26,7 @@ export component ChatHeaderMenu inherits Rectangle {
     callback close();
     callback video-call();
     callback settings();
+    callback secret-chat();
 
     // Logical close is immediate; the card settles back and the scrim fades
     // before the host unmounts it. Nothing is a live target meanwhile.
@@ -62,6 +66,7 @@ export component ChatHeaderMenu inherits Rectangle {
                 if root.show-pinned: MenuRow { icon: Icons.pin; label: "Pinned messages"; clicked => { if root.show { root.pinned(); } } }
                 if root.show-video-call: MenuRow { icon: Icons.video; label: "Video call"; clicked => { if root.show { root.video-call(); } } }
                 if root.show-settings: MenuRow { icon: Icons.settings; label: "Conversation settings"; clicked => { if root.show { root.settings(); } } }
+                if root.show-secret-chat: MenuRow { icon: Icons.lock; label: "Start secret chat"; clicked => { if root.show { root.secret-chat(); } } }
             }
         }
     }

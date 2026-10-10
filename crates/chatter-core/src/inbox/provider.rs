@@ -258,8 +258,6 @@ pub struct DeviceInboxProvider {
     anon_dm_poller: Option<Arc<AnonDmPoller>>,
     /// Pairwise service for anon DM decryption (optional).
     pairwise_service: Option<Arc<PairwiseService>>,
-    /// Anonymous mailbox client for anon DM polling (no JWT auth, challenge-response only).
-    anon_mailbox_client: Option<Arc<tokio::sync::Mutex<AnonymousMailboxClient>>>,
 }
 
 impl DeviceInboxProvider {
@@ -355,7 +353,6 @@ impl DeviceInboxProvider {
             decoys: Arc::new(tokio::sync::RwLock::new(Vec::new())),
             anon_dm_poller: None,
             pairwise_service: None,
-            anon_mailbox_client: None,
         }
     }
 
@@ -363,17 +360,16 @@ impl DeviceInboxProvider {
     ///
     /// Enables polling of anonymous DM mailboxes for stranger messaging.
     /// Requires both an `AnonDmPoller` for fetching messages and a
-    /// `PairwiseService` for sealed sender decryption.
+    /// `PairwiseService` for sealed sender decryption. Anonymous DMs are
+    /// secret chats: each cycle polls them over the pool's secret (Tor)
+    /// channel, and skips them when there is no Tor route.
     pub fn with_anon_dm_polling(
         mut self,
         poller: Arc<AnonDmPoller>,
         pairwise_service: Arc<PairwiseService>,
     ) -> Self {
-        // Create anonymous mailbox client (no JWT auth, challenge-response only)
-        let anon_client = self.grpc_pool.anonymous_mailbox_client();
         self.anon_dm_poller = Some(poller);
         self.pairwise_service = Some(pairwise_service);
-        self.anon_mailbox_client = Some(Arc::new(tokio::sync::Mutex::new(anon_client)));
         self
     }
 
@@ -415,7 +411,6 @@ impl DeviceInboxProvider {
         let decoys = self.decoys.clone();
         let anon_dm_poller = self.anon_dm_poller.clone();
         let pairwise_service = self.pairwise_service.clone();
-        let anon_mailbox_client = self.anon_mailbox_client.clone();
         let user_events_handle = self.user_events_handle.clone();
 
         tracing::info!("Spawning inbox provider task...");
@@ -440,7 +435,6 @@ impl DeviceInboxProvider {
                 decoys,
                 anon_dm_poller,
                 pairwise_service,
-                anon_mailbox_client,
                 user_events_handle,
             )
             .await;
@@ -464,9 +458,6 @@ impl DeviceInboxProvider {
     /// safe regardless, but rebuilding a live client mid-poll would be pointless.
     pub async fn refresh_clients(&self, pool: &GrpcClientPool) {
         *self.mailbox_client.lock().await = pool.anonymous_mailbox_client();
-        if let Some(anon) = &self.anon_mailbox_client {
-            *anon.lock().await = pool.anonymous_mailbox_client();
-        }
         self.poller.refresh_message_client(pool).await;
         tracing::info!("inbox provider: rebuilt gRPC clients for new transport");
     }
@@ -525,7 +516,6 @@ impl DeviceInboxProvider {
         decoys: Arc<tokio::sync::RwLock<Vec<SigningKey>>>,
         anon_dm_poller: Option<Arc<AnonDmPoller>>,
         pairwise_service: Option<Arc<PairwiseService>>,
-        anon_mailbox_client: Option<Arc<tokio::sync::Mutex<AnonymousMailboxClient>>>,
         user_events_handle: Arc<parking_lot::Mutex<Option<tokio::task::JoinHandle<()>>>>,
     ) {
         tracing::info!("Inbox provider run_loop started");
@@ -554,6 +544,7 @@ impl DeviceInboxProvider {
         let group_fanout = Arc::new(GroupFanout::new(
             group_mailbox_manager,
             mailbox_client.clone(),
+            grpc_pool.clone(),
         ));
 
         // Start user events stream for real-time friend request notifications
@@ -792,9 +783,7 @@ impl DeviceInboxProvider {
             .await;
 
             // 4. Poll anonymous DM mailboxes (if configured)
-            if let (Some(anon_poller), Some(pairwise), Some(anon_client)) =
-                (&anon_dm_poller, &pairwise_service, &anon_mailbox_client)
-            {
+            if let (Some(anon_poller), Some(pairwise)) = (&anon_dm_poller, &pairwise_service) {
                 // Random delay before anon DM polling
                 timing.delay_between_batch_items().await;
 
@@ -814,91 +803,109 @@ impl DeviceInboxProvider {
                     "[ANON_DM] Polling anonymous DM mailboxes"
                 );
 
-                // Poll anon DM mailboxes using anonymous client (no JWT, challenge-response only)
-                let mut client = anon_client.lock().await;
-                match anon_poller.poll_all(&mut client).await {
-                    Ok(results) => {
-                        if !results.is_empty() {
-                            // Create mpsc channel for events (process_anon_dm_results expects mpsc)
-                            let (tx, mut rx) = tokio::sync::mpsc::channel(64);
-                            // Blocking check closure — uses the DB directly to
-                            // avoid threading AnonDmService through the polling layer.
-                            let anon_repo = crate::storage::repositories::AnonDmRepository::new(
-                                database.clone(),
+                // Anonymous DMs are secret chats: poll them over Tor only
+                // (no auth headers, challenge-response). No Tor route → skip.
+                let secret_client = if mailbox_count == 0 {
+                    None
+                } else {
+                    match grpc_pool.secret_mailbox_client() {
+                        Ok(client) => Some(client),
+                        Err(e) => {
+                            tracing::warn!(
+                                error = %e,
+                                mailbox_count,
+                                "[ANON_DM] Skipping anonymous DM polling: no Tor route"
                             );
-                            let is_blocked = |sender: &crate::domain::UserId,
-                                              conv: &crate::domain::anon_dm::AnonDmId|
-                             -> bool {
-                                if anon_repo.is_user_blocked(sender).unwrap_or(false) {
-                                    return true;
-                                }
-                                anon_repo
-                                    .get_conversation(conv)
-                                    .ok()
-                                    .flatten()
-                                    .map(|dm| {
-                                        dm.status == crate::domain::anon_dm::AnonDmStatus::Blocked
-                                    })
-                                    .unwrap_or(false)
-                            };
-                            // Capture exact current-envelope binding before processing and
-                            // retain it until the actual upstream ACK result is known.
-                            let ack_bindings:std::collections::HashMap<_,_>=results.iter().flat_map(|result|result.messages.iter().filter_map(|message|{
+                            None
+                        }
+                    }
+                };
+                if let Some(mut client) = secret_client {
+                    match anon_poller.poll_all(&mut client).await {
+                        Ok(results) => {
+                            if !results.is_empty() {
+                                // Create mpsc channel for events (process_anon_dm_results expects mpsc)
+                                let (tx, mut rx) = tokio::sync::mpsc::channel(64);
+                                // Blocking check closure — uses the DB directly to
+                                // avoid threading AnonDmService through the polling layer.
+                                let anon_repo = crate::storage::repositories::AnonDmRepository::new(
+                                    database.clone(),
+                                );
+                                let is_blocked = |sender: &crate::domain::UserId,
+                                                  conv: &crate::domain::anon_dm::AnonDmId|
+                                 -> bool {
+                                    if anon_repo.is_user_blocked(sender).unwrap_or(false) {
+                                        return true;
+                                    }
+                                    anon_repo
+                                        .get_conversation(conv)
+                                        .ok()
+                                        .flatten()
+                                        .map(|dm| {
+                                            dm.status
+                                                == crate::domain::anon_dm::AnonDmStatus::Blocked
+                                        })
+                                        .unwrap_or(false)
+                                };
+                                // Capture exact current-envelope binding before processing and
+                                // retain it until the actual upstream ACK result is known.
+                                let ack_bindings:std::collections::HashMap<_,_>=results.iter().flat_map(|result|result.messages.iter().filter_map(|message|{
                                 message_repo.reaction_receive_key("anon_dm",result.conversation_id.into(),&message.message_id,message.server_timestamp).ok().map(|key|((result.conversation_id,message.message_id.clone()),(key,crate::storage::receive_artifact::envelope_digest(&message.encrypted_envelope))))
                             })).collect();
-                            // Use deduplicator to prevent re-decryption when ack fails
-                            let processed = process_anon_dm_results(
-                                results,
-                                pairwise,
-                                &tx,
-                                &dm_deduplicator,
-                                current_user_id.as_ref(),
-                                &is_blocked,
-                                &message_repo,
-                                domain_tx.as_ref(),
-                            )
-                            .await;
-                            drop(tx); // Close sender so receiver knows when done
+                                // Use deduplicator to prevent re-decryption when ack fails
+                                let processed = process_anon_dm_results(
+                                    results,
+                                    pairwise,
+                                    &tx,
+                                    &dm_deduplicator,
+                                    current_user_id.as_ref(),
+                                    &is_blocked,
+                                    &message_repo,
+                                    domain_tx.as_ref(),
+                                )
+                                .await;
+                                drop(tx); // Close sender so receiver knows when done
 
-                            // Forward events to broadcast channel
-                            while let Some(event) = rx.recv().await {
-                                let _ = event_tx.send(event);
-                            }
+                                // Forward events to broadcast channel
+                                while let Some(event) = rx.recv().await {
+                                    let _ = event_tx.send(event);
+                                }
 
-                            // Acknowledge processed messages to prevent re-delivery
-                            for (conversation_id, message_ids) in processed {
-                                if !message_ids.is_empty() {
-                                    let ack_ids = message_ids.clone();
-                                    let ack_result = anon_poller
-                                        .acknowledge_messages(
-                                            &conversation_id,
-                                            message_ids,
-                                            &mut client,
-                                        )
-                                        .await;
-                                    if let Err(e) = &ack_result {
-                                        tracing::warn!(
-                                            conversation_id = %conversation_id,
-                                            error = %e,
-                                            "Failed to acknowledge anonymous DM messages"
-                                        );
-                                    }
-                                    if ack_result.is_ok() {
-                                        for id in ack_ids {
-                                            if let Some((key, digest)) =
-                                                ack_bindings.get(&(conversation_id, id))
-                                            {
-                                                if crate::inbox::reaction_handoff::acknowledge(
-                                                    &message_repo,
-                                                    key,
-                                                    digest,
-                                                    true,
-                                                )
-                                                .is_err()
+                                // Acknowledge processed messages to prevent re-delivery
+                                for (conversation_id, message_ids) in processed {
+                                    if !message_ids.is_empty() {
+                                        let ack_ids = message_ids.clone();
+                                        let ack_result = anon_poller
+                                            .acknowledge_messages(
+                                                &conversation_id,
+                                                message_ids,
+                                                &mut client,
+                                            )
+                                            .await;
+                                        if let Err(e) = &ack_result {
+                                            tracing::warn!(
+                                                conversation_id = %conversation_id,
+                                                error = %e,
+                                                "Failed to acknowledge anonymous DM messages"
+                                            );
+                                        }
+                                        if ack_result.is_ok() {
+                                            for id in ack_ids {
+                                                if let Some((key, digest)) =
+                                                    ack_bindings.get(&(conversation_id, id))
                                                 {
-                                                    tracing::warn!(
-                                                        "Anonymous ACK receipt awaits storage recovery"
-                                                    );
+                                                    if crate::inbox::reaction_handoff::acknowledge(
+                                                        &message_repo,
+                                                        key,
+                                                        digest,
+                                                        true,
+                                                    )
+                                                    .is_err()
+                                                    {
+                                                        tracing::warn!(
+                                                            "Anonymous ACK receipt awaits storage recovery"
+                                                        );
+                                                    }
                                                 }
                                             }
                                         }
@@ -906,9 +913,9 @@ impl DeviceInboxProvider {
                                 }
                             }
                         }
-                    }
-                    Err(e) => {
-                        tracing::warn!(error = %e, "Failed to poll anonymous DM mailboxes");
+                        Err(e) => {
+                            tracing::warn!(error = %e, "Failed to poll anonymous DM mailboxes");
+                        }
                     }
                 }
             } else {
@@ -916,7 +923,6 @@ impl DeviceInboxProvider {
                 tracing::debug!(
                     has_poller = anon_dm_poller.is_some(),
                     has_pairwise = pairwise_service.is_some(),
-                    has_anon_client = anon_mailbox_client.is_some(),
                     "[ANON_DM] Skipping anonymous DM polling (not configured)"
                 );
             }

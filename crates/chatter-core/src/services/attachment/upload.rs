@@ -185,7 +185,7 @@ impl AttachmentService {
                 .await?
         } else {
             // Get presigned upload URL
-            let mut file_client = self.grpc_pool()?.file_client();
+            let mut file_client = self.file_client()?;
             let upload_response = file_client
                 .get_attachment_upload_url(encrypt_result.ciphertext_size)
                 .await
@@ -204,7 +204,7 @@ impl AttachmentService {
             // in-memory body, so read the ciphertext (bounded by the ≤100 MiB
             // single-PUT threshold) into memory rather than streaming the file.
             #[cfg(feature = "onion")]
-            let sent = if self.transport_is_onion() {
+            let sent = if self.cdn_over_tor()? {
                 let bytes = tokio::fs::read(temp_file.path()).await.map_err(|e| {
                     AttachmentError::FileError(format!("Failed to read temp file: {}", e))
                 })?;
@@ -216,7 +216,11 @@ impl AttachmentService {
                 None
             };
             #[cfg(not(feature = "onion"))]
-            let sent: Option<u16> = None;
+            let sent: Option<u16> = if self.cdn_over_tor()? {
+                return Err(super::no_tor());
+            } else {
+                None
+            };
 
             let status = if let Some(status) = sent {
                 status
@@ -387,7 +391,7 @@ impl AttachmentService {
             }
         };
         let encrypted_size = encrypted.ciphertext.len() as u64;
-        let mut file_client = self.grpc_pool().ok()?.file_client();
+        let mut file_client = self.file_client().ok()?;
         let upload_response = match file_client.get_attachment_upload_url(encrypted_size).await {
             Ok(r) => r,
             Err(e) => {
@@ -437,7 +441,7 @@ impl AttachmentService {
     ) -> Result<String, AttachmentError> {
         use futures::stream::StreamExt;
 
-        let mut file_client = self.grpc_pool()?.file_client();
+        let mut file_client = self.file_client()?;
         let create = file_client
             .create_attachment_multipart_upload(ciphertext_size)
             .await
@@ -588,7 +592,7 @@ impl AttachmentService {
         );
 
         // Get presigned upload URL
-        let mut file_client = self.grpc_pool()?.file_client();
+        let mut file_client = self.file_client()?;
         let upload_response = file_client
             .get_attachment_upload_url(encrypted_size)
             .await
