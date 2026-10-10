@@ -1262,197 +1262,207 @@ export component MessageItem inherits Rectangle {
                             }
                         }
 
-                        // Reactions share the message background as an in-bubble footer.
-                        if root.has-reactions: HorizontalLayout {
-                            alignment: start;
-                            reactions-pill := Rectangle {
-                                // Grows with the text size; on touch the row is
-                                // tall enough to tell neighbouring chips apart
-                                // under a thumb (22px was the whole hit box).
-                                height: (root.mobile ? 32px : 22px) * Appearance.text-grow;
-                                width: reactions-row.preferred-width + 8px;
-                                background: transparent;
-                                border-width: 0px;
-                                accessible-role: button;
-                                accessible-label: "Reactions: " + root.reaction-summary;
+                        // Footer: reactions start, clock and status end, on one row.
+                        HorizontalLayout {
+                            spacing: Spacing.sm;
+                            if root.has-reactions: HorizontalLayout {
+                                alignment: start;
+                                horizontal-stretch: 0;
+                                reactions-pill := Rectangle {
+                                    // Grows with the text size; on touch the row is
+                                    // tall enough to tell neighbouring chips apart
+                                    // under a thumb (22px was the whole hit box).
+                                    height: (root.mobile ? 32px : 22px) * Appearance.text-grow;
+                                    width: reactions-row.preferred-width + 8px;
+                                    background: transparent;
+                                    border-width: 0px;
+                                    accessible-role: button;
+                                    accessible-label: "Reactions: " + root.reaction-summary;
 
-                                reactions-row := HorizontalLayout {
-                                    padding-left: Spacing.none;
-                                    padding-right: Spacing.none;
-                                    spacing: Spacing.sm;
-                                    alignment: center;
+                                    reactions-row := HorizontalLayout {
+                                        padding-left: Spacing.none;
+                                        padding-right: Spacing.none;
+                                        spacing: Spacing.sm;
+                                        alignment: center;
 
-                                    for reaction in root.reactions: Rectangle {
-                                        width: max(root.mobile ? Spacing.button-height : 0px, entry.preferred-width + (root.mobile ? Spacing.sm : 4px));
-                                        border-radius: self.height / 2;
-                                        // Own reactions: a neutral 8% tint, no ring and no
-                                        // brand-colour pill around a lone emoji (owner's
-                                        // call); the accessible label carries "yours".
-                                        border-width: 0px;
-                                        background: reaction.own ? Colors.text-primary.with-alpha(0.08) : transparent;
-                                        accessible-role: button;
-                                        accessible-label: reaction.emoji + (reaction.own ? ", your reaction" : "");
-                                        accessible-action-default => { root.reaction-toggled(root.sender-id, root.timestamp-ns, reaction.emoji); }
+                                        for reaction in root.reactions: Rectangle {
+                                            width: max(root.mobile ? Spacing.button-height : 0px, entry.preferred-width + (root.mobile ? Spacing.sm : 4px));
+                                            border-radius: self.height / 2;
+                                            // Own reactions: a neutral 8% tint, no ring and no
+                                            // brand-colour pill around a lone emoji (owner's
+                                            // call); the accessible label carries "yours".
+                                            border-width: 0px;
+                                            background: reaction.own ? Colors.text-primary.with-alpha(0.08) : transparent;
+                                            accessible-role: button;
+                                            accessible-label: reaction.emoji + (reaction.own ? ", your reaction" : "");
+                                            accessible-action-default => { root.reaction-toggled(root.sender-id, root.timestamp-ns, reaction.emoji); }
 
-                                        entry := HorizontalLayout {
-                                            spacing: Spacing.xxs;
-                                            alignment: center;
+                                            entry := HorizontalLayout {
+                                                spacing: Spacing.xxs;
+                                                alignment: center;
 
-                                            Text {
-                                                text: reaction.emoji;
-                                                font-family: Typography.font-family-emoji;
-                                                font-size: root.mobile ? Typography.sm : Typography.xs;
-                                                vertical-alignment: center;
+                                                Text {
+                                                    text: reaction.emoji;
+                                                    font-family: Typography.font-family-emoji;
+                                                    font-size: root.mobile ? Typography.sm : Typography.xs;
+                                                    vertical-alignment: center;
+                                                }
+
+                                                if reaction.count > 1: Text {
+                                                    text: reaction.count;
+                                                    color: Colors.text-secondary;
+                                                    font-size: Typography.xs;
+                                                    vertical-alignment: center;
+                                                }
                                             }
 
-                                            if reaction.count > 1: Text {
-                                                text: reaction.count;
-                                                color: Colors.text-secondary;
-                                                font-size: Typography.xs;
-                                                vertical-alignment: center;
-                                            }
-                                        }
-
-                                        // Per-emoji, replacing a pill-wide TouchArea that
-                                        // only opened the picker. The picker is still on
-                                        // long-press → More reactions and on the hover
-                                        // "Add reaction" button.
-                                        TouchArea {
-                                            mouse-cursor: pointer;
-                                            clicked => {
-                                                root.reaction-toggled(root.sender-id, root.timestamp-ns,
-                                                    reaction.emoji);
+                                            // Per-emoji, replacing a pill-wide TouchArea that
+                                            // only opened the picker. The picker is still on
+                                            // long-press → More reactions and on the hover
+                                            // "Add reaction" button.
+                                            TouchArea {
+                                                mouse-cursor: pointer;
+                                                clicked => {
+                                                    root.reaction-toggled(root.sender-id, root.timestamp-ns,
+                                                        reaction.emoji);
+                                                }
                                             }
                                         }
                                     }
                                 }
                             }
-                        }
 
-                        // Timestamp row — bottom-right for all messages (messenger convention)
-                        HorizontalLayout {
-                            spacing: Spacing.xs;
-                            alignment: end;
+                            Rectangle { horizontal-stretch: 1; }
 
-                            if root.is-pinned: Image {
-                                source: Icons.pin;
-                                width: 12px;
-                                height: 12px;
-                                colorize: Colors.primary;
-                            }
+                            // Clock and status sit on the row's bottom line beside a taller reaction pill.
+                            VerticalLayout {
+                                alignment: end;
+                                horizontal-stretch: 0;
+                                HorizontalLayout {
+                                    spacing: Spacing.xs;
+                                    alignment: end;
 
-                            // "edited" before the time on both sides (Signal's order).
-                            if root.is-edited: Text {
-                                text: "edited";
-                                color: Colors.text-muted;
-                                font-size: Typography.xs;
-                                font-italic: true;
-                            }
+                                    if root.is-pinned: Image {
+                                        source: Icons.pin;
+                                        width: 12px;
+                                        height: 12px;
+                                        colorize: Colors.primary;
+                                    }
 
-                            Text {
-                                text: root.timestamp;
-                                color: Colors.text-muted;
-                                font-size: Typography.xs;
-                            }
+                                    // "edited" before the time on both sides (Signal's order).
+                                    if root.is-edited: Text {
+                                        text: "edited";
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                        font-italic: true;
+                                    }
 
-                            // Delivery status. Mesh states get a word rather
-                            // than a tick: over couriers "sent" and
-                            // "delivered" are hours apart, and two ticks
-                            // would claim an arrival nobody has confirmed.
-                            if root.is-own && root.mesh-delivery: Text {
-                                // "sent" is deliberately not reused for a
-                                // broadcast: a room or cell message has no
-                                // recipient to acknowledge it, so there is
-                                // never anything to upgrade it to.
-                                text: root.delivery-status == "carried" ? "carried"
-                                    : root.delivery-status == "waiting" ? "waiting"
-                                    : root.delivery-status == "undelivered" ? "not delivered"
-                                    : root.delivery-status == "delivered" ? "delivered"
-                                    : root.delivery-status == "read" ? "read"
-                                    : root.delivery-status == "broadcast" ? "broadcast"
-                                    : "sent";
-                                color: root.delivery-status == "undelivered" ? Colors.text-secondary : Colors.text-muted;
-                                font-size: Typography.xs;
-                                font-italic: true;
-                                accessible-role: text;
-                                accessible-label: root.delivery-status == "carried"
-                                        ? "Handed to a passing device; may arrive later"
-                                    : root.delivery-status == "waiting"
-                                        ? "Held on this device until something can carry it"
-                                    : root.delivery-status == "undelivered"
-                                        ? "Left the outbox without ever being acknowledged"
-                                    : root.delivery-status == "delivered"
-                                        ? "The peer's device acknowledged it"
-                                    : root.delivery-status == "read"
-                                        ? "Read by the peer"
-                                    : root.delivery-status == "broadcast"
-                                        ? "Went out to whoever is in range; nobody acknowledges a broadcast"
-                                    : "Handed to a live link; not yet acknowledged";
-                            }
+                                    Text {
+                                        text: root.timestamp;
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                    }
 
-                            // Delivery status checkmarks. SVG, not "✓": the
-                            // glyph has no coverage in the Android system
-                            // font and rendered as a tofu box on every
-                            // message. Fixed 12px so the row — and the
-                            // bubble — keeps the height the text tick had.
-                            // Queued behind a Shield mailbox bootstrap, or
-                            // that queue's flush failed: a word, not a tick —
-                            // neither has reached the server, and "failed"
-                            // must never read as delivered.
-                            if root.is-own && !root.mesh-delivery && root.delivery-status == "sending": Text {
-                                text: "sending";
-                                color: Colors.text-muted;
-                                font-size: Typography.xs;
-                                font-italic: true;
-                                accessible-role: text;
-                                accessible-label: "Sending";
-                            }
+                                    // Delivery status. Mesh states get a word rather
+                                    // than a tick: over couriers "sent" and
+                                    // "delivered" are hours apart, and two ticks
+                                    // would claim an arrival nobody has confirmed.
+                                    if root.is-own && root.mesh-delivery: Text {
+                                        // "sent" is deliberately not reused for a
+                                        // broadcast: a room or cell message has no
+                                        // recipient to acknowledge it, so there is
+                                        // never anything to upgrade it to.
+                                        text: root.delivery-status == "carried" ? "carried"
+                                            : root.delivery-status == "waiting" ? "waiting"
+                                            : root.delivery-status == "undelivered" ? "not delivered"
+                                            : root.delivery-status == "delivered" ? "delivered"
+                                            : root.delivery-status == "read" ? "read"
+                                            : root.delivery-status == "broadcast" ? "broadcast"
+                                            : "sent";
+                                        color: root.delivery-status == "undelivered" ? Colors.text-secondary : Colors.text-muted;
+                                        font-size: Typography.xs;
+                                        font-italic: true;
+                                        accessible-role: text;
+                                        accessible-label: root.delivery-status == "carried"
+                                                ? "Handed to a passing device; may arrive later"
+                                            : root.delivery-status == "waiting"
+                                                ? "Held on this device until something can carry it"
+                                            : root.delivery-status == "undelivered"
+                                                ? "Left the outbox without ever being acknowledged"
+                                            : root.delivery-status == "delivered"
+                                                ? "The peer's device acknowledged it"
+                                            : root.delivery-status == "read"
+                                                ? "Read by the peer"
+                                            : root.delivery-status == "broadcast"
+                                                ? "Went out to whoever is in range; nobody acknowledges a broadcast"
+                                            : "Handed to a live link; not yet acknowledged";
+                                    }
 
-                            // "not sent" is the retry control (Signal's "tap
-                            // to retry"): `message-clicked` resends it, reason or not.
-                            if root.is-own && !root.mesh-delivery && root.delivery-status == "failed": Text {
-                                text: root.failure-reason == "" ? "not sent \u{b7} retry" : "not sent \u{b7} " + root.failure-reason;
-                                color: Colors.error;
-                                font-size: Typography.xs;
-                                font-italic: true;
-                                accessible-role: button;
-                                accessible-label: "Not sent, tap to retry";
-                                accessible-action-default => { root.message-clicked(root.message-id); }
+                                    // Delivery status checkmarks. SVG, not "✓": the
+                                    // glyph has no coverage in the Android system
+                                    // font and rendered as a tofu box on every
+                                    // message. Fixed 12px so the row — and the
+                                    // bubble — keeps the height the text tick had.
+                                    // Queued behind a Shield mailbox bootstrap, or
+                                    // that queue's flush failed: a word, not a tick —
+                                    // neither has reached the server, and "failed"
+                                    // must never read as delivered.
+                                    if root.is-own && !root.mesh-delivery && root.delivery-status == "sending": Text {
+                                        text: "sending";
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                        font-italic: true;
+                                        accessible-role: text;
+                                        accessible-label: "Sending";
+                                    }
 
-                                TouchArea {
-                                    mouse-cursor: pointer;
-                                    clicked => { root.message-clicked(root.message-id); }
-                                }
-                            }
+                                    // "not sent" is the retry control (Signal's "tap
+                                    // to retry"): `message-clicked` resends it, reason or not.
+                                    if root.is-own && !root.mesh-delivery && root.delivery-status == "failed": Text {
+                                        text: root.failure-reason == "" ? "not sent \u{b7} retry" : "not sent \u{b7} " + root.failure-reason;
+                                        color: Colors.error;
+                                        font-size: Typography.xs;
+                                        font-italic: true;
+                                        accessible-role: button;
+                                        accessible-label: "Not sent, tap to retry";
+                                        accessible-action-default => { root.message-clicked(root.message-id); }
 
-                            if root.is-own && !root.mesh-delivery && root.delivery-status != "sending" && root.delivery-status != "failed": ticks := Rectangle {
-                                property <bool> double-tick: root.delivery-status != "sent";
-                                property <color> tick-color: root.delivery-status == "read" ? Colors.bubble-accent : Colors.text-muted;
-                                width: self.double-tick ? 17px : 12px;
-                                height: 12px;
-                                accessible-role: text;
-                                accessible-label: root.delivery-status == "sent" ? "Sent"
-                                    : root.delivery-status == "delivered" ? "Delivered"
-                                    : root.delivery-status == "read" ? "Read" : "";
+                                        TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => { root.message-clicked(root.message-id); }
+                                        }
+                                    }
 
-                                // Second tick behind, offset left, so the
-                                // pair reads as the usual overlapping ✓✓.
-                                if ticks.double-tick: Image {
-                                    source: Icons.check;
-                                    width: 12px;
-                                    height: 12px;
-                                    x: 0px;
-                                    y: 0px;
-                                    colorize: ticks.tick-color;
-                                }
+                                    if root.is-own && !root.mesh-delivery && root.delivery-status != "sending" && root.delivery-status != "failed": ticks := Rectangle {
+                                        property <bool> double-tick: root.delivery-status != "sent";
+                                        property <color> tick-color: root.delivery-status == "read" ? Colors.bubble-accent : Colors.text-muted;
+                                        width: self.double-tick ? 17px : 12px;
+                                        height: 12px;
+                                        accessible-role: text;
+                                        accessible-label: root.delivery-status == "sent" ? "Sent"
+                                            : root.delivery-status == "delivered" ? "Delivered"
+                                            : root.delivery-status == "read" ? "Read" : "";
 
-                                Image {
-                                    source: Icons.check;
-                                    width: 12px;
-                                    height: 12px;
-                                    x: parent.width - self.width;
-                                    y: 0px;
-                                    colorize: ticks.tick-color;
+                                        // Second tick behind, offset left, so the
+                                        // pair reads as the usual overlapping ✓✓.
+                                        if ticks.double-tick: Image {
+                                            source: Icons.check;
+                                            width: 12px;
+                                            height: 12px;
+                                            x: 0px;
+                                            y: 0px;
+                                            colorize: ticks.tick-color;
+                                        }
+
+                                        Image {
+                                            source: Icons.check;
+                                            width: 12px;
+                                            height: 12px;
+                                            x: parent.width - self.width;
+                                            y: 0px;
+                                            colorize: ticks.tick-color;
+                                        }
+                                    }
                                 }
                             }
                         }
