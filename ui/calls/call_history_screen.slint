@@ -21,6 +21,7 @@ import { Modal } from "../components/modal.slint";
 import { Button } from "../components/button.slint";
 import { Avatar } from "../components/avatar.slint";
 import { HeaderButton } from "../components/header_button.slint";
+import { DismissButton } from "../components/dismiss_button.slint";
 import { HoldArea } from "../components/hold_area.slint";
 import { CallHistoryRow } from "types.slint";
 
@@ -155,9 +156,8 @@ export component CallHistoryScreen inherits Rectangle {
                 HorizontalLayout {
                     spacing: Spacing.header-action-gap;
 
-                    HeaderButton {
+                    DismissButton {
                         touch: root.mobile-mode;
-                        icon: Icons.x;
                         label: "Exit selection";
                         clicked => { root.end-selection(); }
                     }

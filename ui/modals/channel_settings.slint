@@ -204,7 +204,7 @@ export component ChannelSettingsModal inherits Rectangle {
                 border-radius: Spacing.radius-md;
 
                 VerticalLayout {
-                    padding: root.narrow ? 0px : Spacing.sm;
+                    padding: root.narrow ? Spacing.none : Spacing.sm;
                     spacing: Spacing.xs;
                     alignment: start;
 
@@ -221,8 +221,8 @@ export component ChannelSettingsModal inherits Rectangle {
                             clicked => { root.active-section = "general"; }
 
                             HorizontalLayout {
-                                padding-left: root.narrow ? 0px : Spacing.sm;
-                                padding-right: root.narrow ? 0px : Spacing.sm;
+                                padding-left: root.narrow ? Spacing.none : Spacing.sm;
+                                padding-right: root.narrow ? Spacing.none : Spacing.sm;
                                 alignment: root.narrow ? LayoutAlignment.center : LayoutAlignment.start;
 
                                 // U+2699 and U+26A0 are tofu boxes on the
@@ -258,8 +258,8 @@ export component ChannelSettingsModal inherits Rectangle {
                             clicked => { root.active-section = "notifications"; }
 
                             HorizontalLayout {
-                                padding-left: root.narrow ? 0px : Spacing.sm;
-                                padding-right: root.narrow ? 0px : Spacing.sm;
+                                padding-left: root.narrow ? Spacing.none : Spacing.sm;
+                                padding-right: root.narrow ? Spacing.none : Spacing.sm;
                                 alignment: root.narrow ? LayoutAlignment.center : LayoutAlignment.start;
 
                                 Image {
@@ -292,8 +292,8 @@ export component ChannelSettingsModal inherits Rectangle {
                             clicked => { root.active-section = "members"; }
 
                             HorizontalLayout {
-                                padding-left: root.narrow ? 0px : Spacing.sm;
-                                padding-right: root.narrow ? 0px : Spacing.sm;
+                                padding-left: root.narrow ? Spacing.none : Spacing.sm;
+                                padding-right: root.narrow ? Spacing.none : Spacing.sm;
                                 alignment: root.narrow ? LayoutAlignment.center : LayoutAlignment.start;
 
                                 // U+1F465 is a tofu box on the Galaxy S9 (§112u).
@@ -327,8 +327,8 @@ export component ChannelSettingsModal inherits Rectangle {
                             clicked => { root.active-section = "access"; }
 
                             HorizontalLayout {
-                                padding-left: root.narrow ? 0px : Spacing.sm;
-                                padding-right: root.narrow ? 0px : Spacing.sm;
+                                padding-left: root.narrow ? Spacing.none : Spacing.sm;
+                                padding-right: root.narrow ? Spacing.none : Spacing.sm;
                                 alignment: root.narrow ? LayoutAlignment.center : LayoutAlignment.start;
 
                                 Image {
@@ -362,8 +362,8 @@ export component ChannelSettingsModal inherits Rectangle {
                             clicked => { root.active-section = "destructive"; }
 
                             HorizontalLayout {
-                                padding-left: root.narrow ? 0px : Spacing.sm;
-                                padding-right: root.narrow ? 0px : Spacing.sm;
+                                padding-left: root.narrow ? Spacing.none : Spacing.sm;
+                                padding-right: root.narrow ? Spacing.none : Spacing.sm;
                                 alignment: root.narrow ? LayoutAlignment.center : LayoutAlignment.start;
 
                                 Image {
