@@ -419,20 +419,21 @@ export component RegisterPage inherits Rectangle {
                                 horizontal-alignment: center;
                             }
 
-                            // Direct endpoint configuration; Shield uses the pinned onion service.
-                            Text {
+                            // Direct endpoint configuration. Shield registers over Tor to
+                            // the pinned onion service, so it has no URL to choose (§134).
+                            if !AnonMode.enabled: Text {
                                 text: "Direct server URL";
                                 color: Colors.text-secondary;
                                 font-size: Typography.sm;
                             }
 
-                            Input {
+                            if !AnonMode.enabled: Input {
                                 placeholder: "Direct server URL";
                                 text <=> root.server-url;
                                 disabled: root.loading;
                             }
 
-                            HorizontalLayout {
+                            if !AnonMode.enabled: HorizontalLayout {
                                 spacing: Spacing.sm;
                                 Button {
                                     text: "Localhost";
@@ -451,7 +452,7 @@ export component RegisterPage inherits Rectangle {
                             }
 
                             if AnonMode.enabled: Text {
-                                text: "Localhost and Official set the direct connection URL. With Shield on, registration uses the configured onion service over Tor.";
+                                text: "Shield is on: registration goes over Tor to the configured onion service.";
                                 color: Colors.text-muted;
                                 font-size: Typography.xxs;
                                 wrap: word-wrap;
