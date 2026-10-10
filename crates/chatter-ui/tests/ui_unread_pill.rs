@@ -17,13 +17,17 @@ use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 fn pump(w: &MainWindow) {
     // Opening on an unread row and jumping are driven by Slint `Timer`
-    // elements (1fc72cab, d33a9743). Their `running` bindings are re-read by
-    // change handlers that a real frame runs; this harness never renders, so
-    // tick them as frames would.
+    // elements (1fc72cab, d33a9743) that measure the target row's delegate
+    // after the list moved. This harness never renders, so do what a real
+    // frame does between two timer ticks: fire due timers, run change
+    // handlers, then lay out. Without the layout pass a timer re-measured the
+    // delegate's position from before the list moved, read it as converged,
+    // and a jump to row 50 stopped on row 35.
     for _ in 0..25 {
         std::thread::sleep(std::time::Duration::from_millis(16));
         slint::platform::update_timers_and_animations();
         i_slint_core::properties::ChangeTracker::run_change_handlers();
+        layout_pass(w);
     }
     slint::Timer::single_shot(std::time::Duration::from_millis(400), || {
         slint::quit_event_loop().unwrap();
@@ -37,13 +41,18 @@ fn pump(w: &MainWindow) {
 /// instantiation and change handlers until nothing moves, which is the same
 /// loop a real frame runs before it is drawn. The pointer has to actually
 /// move: an event repeating the last position triggers nothing.
-fn lay_out(w: &MainWindow) {
+fn layout_pass(w: &MainWindow) {
     thread_local!(static X: Cell<f32> = const { Cell::new(1.0) });
     let x = X.with(|x| x.replace(3.0 - x.get()));
     w.window()
         .dispatch_event(slint::platform::WindowEvent::PointerMoved {
             position: slint::LogicalPosition::new(x, 1.0),
         });
+}
+
+/// One layout pass, then frames until the list comes to rest.
+fn lay_out(w: &MainWindow) {
+    layout_pass(w);
     pump(w);
 }
 
