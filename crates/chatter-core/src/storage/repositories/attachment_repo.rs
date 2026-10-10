@@ -250,13 +250,12 @@ impl AttachmentRepository {
     /// insert) — raise its secret-chat mark to `MAX(existing, new)`, in one
     /// transaction. The mark is monotonic: an ordinary receipt never clears
     /// a secret one, and a secret receipt that loses the insert race still
-    /// marks the winner's row. An unknown (NULL) existing origin counts as
-    /// secret. Returns whether this call inserted the row.
+    /// marks the winner's row. Returns whether this call inserted the row.
     pub fn insert_or_raise_secret(&self, attachment: &Attachment) -> Result<bool, StorageError> {
         let conn = self.db.connection()?;
         let tx = conn.unchecked_transaction()?;
         let metadata_blob = db_serialize(&attachment.metadata)?;
-        let secret = attachment.secret_chat.unwrap_or(true);
+        let secret = attachment.secret_chat;
         let inserted = tx.execute(
             "INSERT INTO attachments (
                 id, metadata_blob, status, remote_url,
@@ -281,7 +280,7 @@ impl AttachmentRepository {
             resolve_shared_content(&tx, attachment);
         } else {
             let rows = tx.execute(
-                "UPDATE attachments SET secret_chat = MAX(COALESCE(secret_chat, 1), ?2)
+                "UPDATE attachments SET secret_chat = MAX(secret_chat, ?2)
                  WHERE id = ?1",
                 params![attachment.id.to_string(), secret],
             )?;
@@ -503,7 +502,7 @@ fn row_to_attachment(
     let thumbnail_bytes: Option<Vec<u8>> = row.get(6)?;
     let content_location_int: i32 = row.get(7).unwrap_or(0); // Default to NotDownloaded for old rows
     let created_at_str: String = row.get(8)?;
-    let secret_chat: Option<bool> = row.get(9)?;
+    let secret_chat: bool = row.get(9)?;
 
     let id: AttachmentId = match id_str.parse() {
         Ok(id) => id,

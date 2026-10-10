@@ -255,10 +255,8 @@ pub struct Attachment {
     pub created_at: DateTime<Utc>,
     /// Created for a secret chat (anonymous DM / group): every transfer goes
     /// over Tor. Set where the row is made — the secret-chat receive path or
-    /// an upload routed for a secret chat — and never cleared. `None` only for
-    /// a row stored before the marker existed (migration v101).
-    #[serde(default)]
-    pub secret_chat: Option<bool>,
+    /// an upload routed for a secret chat — and never cleared.
+    pub secret_chat: bool,
 }
 
 impl Attachment {
@@ -282,7 +280,7 @@ impl Attachment {
             encryption_key: None,
             encryption_iv: None,
             created_at: Utc::now(),
-            secret_chat: Some(false),
+            secret_chat: false,
         }
     }
 

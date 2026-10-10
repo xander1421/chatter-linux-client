@@ -265,11 +265,6 @@ impl AttachmentService {
     /// when the row's [`Attachment::secret_chat`] marker says it was created
     /// for one.
     ///
-    /// The marker is written wherever a row is created, so it is unknown only
-    /// on a row stored before it existed (migration v101). Such a row goes
-    /// over Tor: an unknown origin never risks a secret-chat download on the
-    /// clearnet.
-    ///
     /// [`Attachment::secret_chat`]: crate::domain::attachment::Attachment::secret_chat
     fn for_download(&self, attachment_id: &AttachmentId) -> Result<Self, AttachmentError> {
         if self.secret_chat {
@@ -277,10 +272,7 @@ impl AttachmentService {
         }
         let storage = |e: crate::error::StorageError| AttachmentError::StorageError(e.to_string());
         let secret = match self.attachment_repo.get(attachment_id).map_err(storage)? {
-            Some(attachment) => match attachment.secret_chat {
-                Some(secret) => secret,
-                None => true,
-            },
+            Some(attachment) => attachment.secret_chat,
             // No row: the transfer fails on its own lookup before any request.
             None => false,
         };
@@ -600,7 +592,7 @@ impl AttachmentService {
                 encryption_key: Some(pointer.encryption_key.clone()),
                 encryption_iv: Some(pointer.digest.clone()),
                 created_at: chrono::Utc::now(),
-                secret_chat: Some(self.secret_chat),
+                secret_chat: self.secret_chat,
             };
 
             let inserted = self.attachment_repo.insert_or_raise_secret(&attachment)?;
@@ -816,7 +808,11 @@ mod waveform_tests {
 mod secret_chat_origin_tests {
     use super::*;
 
-    fn service() -> (AttachmentService, Arc<crate::storage::Database>, tempfile::TempDir) {
+    fn service() -> (
+        AttachmentService,
+        Arc<crate::storage::Database>,
+        tempfile::TempDir,
+    ) {
         let dir = tempfile::tempdir().unwrap();
         let db = Arc::new(
             crate::storage::database::Database::open(&dir.path().join("origin.db"), "testpass")
@@ -850,10 +846,18 @@ mod secret_chat_origin_tests {
             .for_secret_chat()
             .create_from_pointers(&[pointer("secret-key")])
             .unwrap()[0];
-        let plain = service.create_from_pointers(&[pointer("plain-key")]).unwrap()[0];
+        let plain = service
+            .create_from_pointers(&[pointer("plain-key")])
+            .unwrap()[0];
 
-        assert_eq!(service.get(&secret).unwrap().unwrap().secret_chat, Some(true));
-        assert_eq!(service.get(&plain).unwrap().unwrap().secret_chat, Some(false));
+        assert_eq!(
+            service.get(&secret).unwrap().unwrap().secret_chat,
+            true
+        );
+        assert_eq!(
+            service.get(&plain).unwrap().unwrap().secret_chat,
+            false
+        );
         assert!(routed_secret(&service, &secret), "secret-chat row left Tor");
         assert!(!routed_secret(&service, &plain));
     }
@@ -864,33 +868,21 @@ mod secret_chat_origin_tests {
     #[test]
     fn the_secret_mark_is_one_way() {
         let (service, _db, _dir) = service();
-        let id = service.create_from_pointers(&[pointer("shared-key")]).unwrap()[0];
+        let id = service
+            .create_from_pointers(&[pointer("shared-key")])
+            .unwrap()[0];
         service
             .for_secret_chat()
             .create_from_pointers(&[pointer("shared-key")])
             .unwrap();
-        assert_eq!(service.get(&id).unwrap().unwrap().secret_chat, Some(true));
-        service.create_from_pointers(&[pointer("shared-key")]).unwrap();
-        assert_eq!(service.get(&id).unwrap().unwrap().secret_chat, Some(true));
+        assert_eq!(service.get(&id).unwrap().unwrap().secret_chat, true);
+        service
+            .create_from_pointers(&[pointer("shared-key")])
+            .unwrap();
+        assert_eq!(service.get(&id).unwrap().unwrap().secret_chat, true);
         assert!(routed_secret(&service, &id));
     }
 
-    /// A row from before the marker existed (NULL) goes over Tor.
-    #[test]
-    fn unknown_origin_goes_over_tor() {
-        let (service, db, _dir) = service();
-        let id = service.create_from_pointers(&[pointer("legacy-key")]).unwrap()[0];
-        db.connection()
-            .unwrap()
-            .execute("UPDATE attachments SET secret_chat = NULL", [])
-            .unwrap();
-        assert_eq!(service.get(&id).unwrap().unwrap().secret_chat, None);
-        assert!(routed_secret(&service, &id));
-        // An ordinary receipt of that key resolves "unknown" to secret,
-        // never to ordinary.
-        service.create_from_pointers(&[pointer("legacy-key")]).unwrap();
-        assert_eq!(service.get(&id).unwrap().unwrap().secret_chat, Some(true));
-    }
 
     /// Normal and secret receipts of the same unknown CDN key racing: the
     /// row ends secret whichever wins the insert.
@@ -914,7 +906,7 @@ mod secret_chat_origin_tests {
             assert_eq!(ids[0], ids[1]);
             assert_eq!(
                 service.get(&ids[0]).unwrap().unwrap().secret_chat,
-                Some(true),
+                true,
                 "round {round}"
             );
             assert!(routed_secret(&service, &ids[0]));
@@ -926,7 +918,9 @@ mod secret_chat_origin_tests {
     #[test]
     fn a_failed_origin_write_publishes_no_pointer() {
         let (service, db, _dir) = service();
-        let id = service.create_from_pointers(&[pointer("held-key")]).unwrap()[0];
+        let id = service
+            .create_from_pointers(&[pointer("held-key")])
+            .unwrap()[0];
         db.connection()
             .unwrap()
             .execute_batch(
@@ -945,7 +939,7 @@ mod secret_chat_origin_tests {
         );
         // The ordinary origin stands, but nothing claimed the secret copy
         // was stored, so no secret message references it.
-        assert_eq!(service.get(&id).unwrap().unwrap().secret_chat, Some(false));
+        assert_eq!(service.get(&id).unwrap().unwrap().secret_chat, false);
     }
 }
 

@@ -345,7 +345,7 @@ impl MeshTimeline {
             encryption_key: Some(encrypted.key.to_vec()),
             encryption_iv: Some(encrypted.digest.to_vec()),
             created_at: Utc::now(),
-            secret_chat: Some(false),
+            secret_chat: false,
         };
         if let Err(error) = self.attachments.insert_with_file_path(&attachment, &path) {
             // The row holds the only copy of the key, so a ciphertext left
@@ -415,7 +415,7 @@ impl MeshTimeline {
             encryption_key: Some(encrypted.key.to_vec()),
             encryption_iv: Some(encrypted.digest.to_vec()),
             created_at: Utc::now(),
-            secret_chat: Some(false),
+            secret_chat: false,
         };
         if let Err(error) = self.attachments.insert_with_file_path(&attachment, &path) {
             let _ = std::fs::remove_file(&path);

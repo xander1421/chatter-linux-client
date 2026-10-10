@@ -323,7 +323,7 @@ impl AttachmentService {
             encryption_key: Some(encrypt_result.key.to_vec()),
             encryption_iv: Some(encrypt_result.digest.to_vec()),
             created_at: chrono::Utc::now(),
-            secret_chat: Some(self.secret_chat),
+            secret_chat: self.secret_chat,
         };
 
         // Save to repository with file path
@@ -686,7 +686,7 @@ impl AttachmentService {
             encryption_key: Some(encrypted.key.to_vec()),
             encryption_iv: Some(encrypted.digest.to_vec()),
             created_at: chrono::Utc::now(),
-            secret_chat: Some(self.secret_chat),
+            secret_chat: self.secret_chat,
         };
 
         // Save to repository with file path
