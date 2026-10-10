@@ -111,6 +111,13 @@ pub fn spawn_call_history_recorder(
                         is_video,
                         conversation_id,
                     } => {
+                        // A ring for a call this device is already in (a
+                        // group ring presented while we joined the channel's
+                        // call) would replace our live row with a missed one.
+                        if connected.contains_key(&call) {
+                            tracing::debug!(call = %call.as_str(), "call history: ring for a connected call ignored");
+                            continue;
+                        }
                         // A replayed stale offer for a call this device already
                         // has a row for (rung, answered, declined, or an earlier
                         // expiry): `insert_entry` replaces on conflict, which
@@ -163,6 +170,12 @@ pub fn spawn_call_history_recorder(
                         connected.insert(call, chrono::Utc::now());
                     }
 
+                    CallOrchestratorEvent::IncomingWithdrawn { call, .. }
+                        if !withdrawal_closes_row(&history, &connected, &call) =>
+                    {
+                        tracing::debug!(call = %call.as_str(), "call history: withdrawn ring left the row alone");
+                    }
+
                     CallOrchestratorEvent::ActiveEnded { call, reason }
                     | CallOrchestratorEvent::IncomingWithdrawn { call, reason } => {
                         finish(&history, &call, connected.remove(&call), &reason);
@@ -179,6 +192,31 @@ pub fn spawn_call_history_recorder(
             }
         })
         .expect("Failed to spawn call history thread");
+}
+
+/// Whether a withdrawn ring is the end of `call`'s history row. It is only
+/// when the row is still the open incoming row that ring wrote. A ring for a
+/// call this device is connected to, a ring that outlived our hangup (its
+/// expiry fires after `ActiveEnded` closed the row), or a ring for a call we
+/// placed or joined ourselves says nothing about how that call went — and
+/// finishing it there took the connected timestamp with it, so the real
+/// hangup later filed a talked-through call as "No answer".
+fn withdrawal_closes_row(
+    history: &CallHistoryRepository,
+    connected: &HashMap<CallHandle, chrono::DateTime<chrono::Utc>>,
+    call: &CallHandle,
+) -> bool {
+    if connected.contains_key(call) {
+        return false;
+    }
+    match history.get(call.as_str()) {
+        Ok(Some(entry)) => {
+            entry.ended_at.is_none() && entry.direction == CallDirection::Incoming
+        }
+        // No row (or no reading it): `finish` has nothing to close either,
+        // and the bubble/badge paths read the row themselves.
+        _ => true,
+    }
 }
 
 /// Close out a history row. `connected_at` is `None` for a call that never
@@ -499,5 +537,38 @@ mod incoming_expiry_history_tests {
             assert!(row.ended_at.is_some());
             assert_eq!(row.duration_secs, None);
         }
+    }
+
+    #[test]
+    fn a_withdrawn_ring_only_closes_its_own_open_incoming_row() {
+        let directory = tempfile::tempdir().unwrap();
+        let db = Arc::new(crate::storage::Database::open(&directory.path().join("withdraw.db"), "fixture-passphrase").unwrap());
+        db.run_migrations().unwrap();
+        let history = CallHistoryRepository::new(db);
+        let row = |direction, ended: bool| {
+            let call = CallHandle::new(uuid::Uuid::new_v4().to_string());
+            history.insert_entry(&CallHistoryEntry {
+                id: call.as_str().into(), conversation_id: "fixture-channel".into(),
+                conversation_type: OrchestratedCallKind::GroupChannel.conversation_type(),
+                peer_name: "Fixture".into(), started_at: chrono::Utc::now(),
+                ended_at: ended.then(chrono::Utc::now), direction, result: CallResult::Missed,
+                duration_secs: None, has_video: false,
+            }).unwrap();
+            call
+        };
+        let mut connected = HashMap::new();
+
+        let ringing = row(CallDirection::Incoming, false);
+        assert!(withdrawal_closes_row(&history, &connected, &ringing));
+
+        // Joined the channel's call ourselves while its ring was up.
+        let joined = row(CallDirection::Outgoing, false);
+        assert!(!withdrawal_closes_row(&history, &connected, &joined));
+        connected.insert(joined.clone(), chrono::Utc::now());
+        assert!(!withdrawal_closes_row(&history, &connected, &joined));
+
+        // The ring expiring after our hangup already closed the row.
+        let ended = row(CallDirection::Incoming, true);
+        assert!(!withdrawal_closes_row(&history, &connected, &ended));
     }
 }

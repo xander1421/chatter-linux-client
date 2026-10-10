@@ -2767,6 +2767,14 @@ fn run_call_worker(
                         incoming.retire_anon();
                         continue;
                     }
+                    // A group ring whose lookup raced our own join of that
+                    // call: we are in it, so there is nothing to ring for, and
+                    // a slot left behind would be withdrawn mid-call.
+                    if incoming.kind == OrchestratedCallKind::GroupChannel
+                        && orchestrator.active.as_ref().is_some_and(|a| a.call == incoming.call)
+                    {
+                        continue;
+                    }
                     if orchestrator.incoming.get(&incoming.call).is_some_and(|old| old.session_revision != incoming.session_revision) {
                         if let Some(old) = orchestrator.incoming.remove(&incoming.call) { old.retire_anon(); }
                     }
