@@ -920,32 +920,17 @@ mod tests {
     #[test]
     fn test_channel_member_construction() {
         // Verify ChannelMember struct can be constructed
-        use crate::proto::chat_v1::channel::{ChannelMember, channel_member::InvitationStatus};
+        use crate::proto::chat_v1::channel::ChannelMember;
 
         let member = ChannelMember {
             user_id: "user-123".to_string(),
             role: ChannelRole::Member as i32,
             joined_at: 1234567890,
             muted: false,
-            banned: false,
-            ban_expires_at: 0,
             mute_expires_at: 0,
-            invitation_status: InvitationStatus::Active as i32,
         };
 
         assert_eq!(member.user_id, "user-123");
         assert_eq!(member.role, ChannelRole::Member as i32);
-        assert_eq!(member.invitation_status, InvitationStatus::Active as i32);
-    }
-
-    #[test]
-    fn test_invitation_status_values() {
-        // Verify InvitationStatus enum values
-        use crate::proto::chat_v1::channel::channel_member::InvitationStatus;
-
-        assert_eq!(InvitationStatus::Unspecified as i32, 0);
-        assert_eq!(InvitationStatus::Active as i32, 1);
-        assert_eq!(InvitationStatus::Pending as i32, 2);
-        assert_eq!(InvitationStatus::Declined as i32, 3);
     }
 }

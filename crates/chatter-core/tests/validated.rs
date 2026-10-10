@@ -13986,8 +13986,8 @@ async fn v59_server_injected_member_gets_no_skdm() {
     // ---- THE INJECTION: the server's routing table, nobody's signature -------
     let mut events_a = client_a.subscribe_events();
     let ins = psql(&format!(
-        "insert into channel_members (channel_id, user_id, role, joined_at, invitation_status) \
-         values ('{gid}', '{uid_m}', 'ADMIN', now(), 'ACCEPTED') returning user_id"
+        "insert into channel_members (channel_id, user_id, role, joined_at) \
+         values ('{gid}', '{uid_m}', 'ADMIN', now()) returning user_id"
     ));
     assert!(
         ins.contains(&uid_m.to_string()),
