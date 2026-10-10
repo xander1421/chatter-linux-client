@@ -133,7 +133,10 @@ pub enum InboxEvent {
     },
     /// Reaction received.
     DmReaction {
-        /// Actual transport conversation peer; absent on legacy self-device control envelopes.
+        /// Transport conversation peer when the delivery path names one (DM
+        /// mailbox polling). `None` from `dispatch_control_content`, whose
+        /// envelope carries no peer; admission then takes the peer from the
+        /// target's encoded destination (own-device reactions) or the reactor.
         conversation_peer_id: Option<UserId>,
         /// Peer user ID (who reacted).
         peer_id: UserId,

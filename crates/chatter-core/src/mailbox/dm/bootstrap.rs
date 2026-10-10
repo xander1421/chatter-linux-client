@@ -315,7 +315,7 @@ impl DmBootstrap {
                         token.public_key.clone(),
                         token.signature.clone(),
                         DEFAULT_MAILBOX_TTL_SECONDS,
-                        vec![], // Empty randomizer for compatibility
+                        vec![], // Deterministic blinding: no randomizer exists
                     )
                     .await
                 {
@@ -542,7 +542,7 @@ impl DmBootstrap {
                             token.public_key.clone(),
                             token.signature.clone(),
                             DEFAULT_MAILBOX_TTL_SECONDS,
-                            vec![], // Empty randomizer for legacy tokens
+                            vec![], // Deterministic blinding: no randomizer exists
                         )
                         .await
                     {

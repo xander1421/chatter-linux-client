@@ -315,8 +315,10 @@ impl MessageService {
         self.database.read_connection()?.query_row("SELECT EXISTS(SELECT 1 FROM settings WHERE key=?1 AND json_extract(value,'$.phase')='terminal')",params![key(owner,row.id)],|r|r.get(0)).map_err(Into::into)
     }
 
-    /// Only the old explicit pre-submission marker proves a legacy failed row
-    /// was never deposited. NULL/generic failures must not be guessed safe.
+    /// Only the explicit pre-submission marker (`Message not submitted`,
+    /// written by `client/send_attempt.rs`) proves a failed row without a
+    /// send journal was never deposited. NULL/generic failures must not be
+    /// guessed safe.
     fn adopt_proven_unsent_channels(&self, owner: UserId) -> Result<(), MessageError> {
         let ids: Vec<String> = {
             let conn = self.database.read_connection()?;
@@ -330,13 +332,13 @@ impl MessageService {
         for id in ids {
             let id = id
                 .parse()
-                .map_err(|_| invalid("Invalid legacy channel row identity"))?;
+                .map_err(|_| invalid("Invalid unsent channel row identity"))?;
             self.adopt_unsent_channel(owner, &id)?;
         }
         Ok(())
     }
 
-    /// Queue one proven-unsent legacy text row under its own UUID. The journal
+    /// Queue one proven-unsent text row under its own UUID. The journal
     /// insert re-checks the marker in the same statement, and manual retry
     /// clears the marker only while no journal exists, so exactly one of the
     /// two owns the row: the queue (stable request id) or a manual send.

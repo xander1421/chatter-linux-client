@@ -2122,7 +2122,8 @@ pub(crate) fn persist_saved_delete_for_me_sync(
     })
 }
 
-/// Legacy sync has no storage-kind field. Resolve only within its exact ID,
+/// A delete-for-me sync carries no storage-kind field (the sender,
+/// `services/conversation.rs`, sends none). Resolve only within its exact ID,
 /// author and clock, and refuse collisions rather than guessing a kind.
 fn admit_delete_for_me_sync(
     repo: &crate::storage::MessageRepository,
