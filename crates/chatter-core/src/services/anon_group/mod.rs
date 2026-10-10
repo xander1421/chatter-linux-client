@@ -8,7 +8,8 @@
 //! This service uses `PairwiseService` for Signal Protocol encryption, keeping
 //! a clean separation from DM-specific infrastructure:
 //!
-//! - **Invites**: Sent via existing DM channel (recipient doesn't have group mailbox yet)
+//! - **Invites**: Over Tor via the invitee's anon DM tunnel, else anonymous sealed
+//!   sender to their device inbox (they have no group mailbox yet); never the friend DM
 //! - **Group messages**: Encrypted with Signal Protocol, delivered to member's anonymous mailbox
 //!
 //! The anonymous mailbox per group ensures the server cannot correlate group membership.
@@ -52,11 +53,11 @@ use crate::storage::repositories::SettingsRepository;
 pub struct AnonGroupService {
     pub(crate) settings_repo: Arc<SettingsRepository>,
     pub(crate) anon_group_repo: Arc<AnonGroupRepository>,
-    /// For checking if invitee has anon DM conversation (to route invites via anon DM tunnel).
+    /// For routing invites through an existing anon DM tunnel.
     pub(crate) anon_dm_repo: Arc<AnonDmRepository>,
     /// Attachment storage for incoming file metadata.
     pub(crate) attachment_repo: Arc<AttachmentRepository>,
-    /// For DM-based invites (reaching someone not in group yet).
+    /// Message storage shared with the rest of the client.
     pub(crate) message_service: Arc<MessageService>,
     /// Reusable Signal Protocol pairwise encryption.
     pub(crate) pairwise_service: Arc<PairwiseService>,

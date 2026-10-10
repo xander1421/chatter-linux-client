@@ -111,29 +111,9 @@ impl AnonGroupService {
             let delay_ms = 100 + (rand::rng().next_u32() % 400);
             sleep(Duration::from_millis(delay_ms as u64)).await;
 
-            // Check if invitee has an active anon DM conversation with us
-            // If so, send invite via anon DM tunnel; otherwise use regular DM
-            let send_result =
-                if let Ok(Some(anon_dm)) = self.anon_dm_repo.get_conversation_by_peer(&invitee) {
-                    if anon_dm.is_ready() {
-                        // Send via anon DM tunnel
-                        self.send_invite_via_anon_dm(
-                            &anon_dm,
-                            group.id,
-                            &group.name,
-                            &mailbox.public_key,
-                        )
-                        .await
-                    } else {
-                        // Anon DM not ready, try regular DM
-                        self.send_invite_impl(invitee, group.id, &group.name, &mailbox.public_key)
-                            .await
-                    }
-                } else {
-                    // No anon DM, use regular DM (friend)
-                    self.send_invite_impl(invitee, group.id, &group.name, &mailbox.public_key)
-                        .await
-                };
+            let send_result = self
+                .send_invite(invitee, group.id, &group.name, &mailbox.public_key)
+                .await;
 
             if let Err(e) = send_result {
                 tracing::error!("Failed to send invite to {}: {}", invitee, e);
@@ -198,25 +178,9 @@ impl AnonGroupService {
             let delay_ms = 100 + (rand::rng().next_u32() % 400);
             sleep(Duration::from_millis(delay_ms as u64)).await;
 
-            // Check if invitee has an active anon DM conversation with us
-            let send_result =
-                if let Ok(Some(anon_dm)) = self.anon_dm_repo.get_conversation_by_peer(&invitee) {
-                    if anon_dm.is_ready() {
-                        self.send_invite_via_anon_dm(
-                            &anon_dm,
-                            group.id,
-                            &group.name,
-                            &mailbox.public_key,
-                        )
-                        .await
-                    } else {
-                        self.send_invite_impl(invitee, group.id, &group.name, &mailbox.public_key)
-                            .await
-                    }
-                } else {
-                    self.send_invite_impl(invitee, group.id, &group.name, &mailbox.public_key)
-                        .await
-                };
+            let send_result = self
+                .send_invite(invitee, group.id, &group.name, &mailbox.public_key)
+                .await;
 
             if let Err(e) = send_result {
                 tracing::error!("Failed to send invite to {}: {}", invitee, e);

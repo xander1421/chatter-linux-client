@@ -16,7 +16,6 @@ use crate::proto::content_v1::{
 };
 use crate::proto::mailbox_v1::EnvelopeType;
 use crate::services::current_user::CurrentUserProvider;
-use crate::services::message::SendDmContentParams;
 use crate::util::time::TimestampNanos;
 
 use super::{AnonGroupError, AnonGroupService};
@@ -27,32 +26,61 @@ tokio::task_local! {
 }
 
 impl AnonGroupService {
-    /// Send content via existing DM channel.
+    /// Deliver content to a peer's device inbox fully anonymously: sealed
+    /// sender, anonymous prekey fetch, blind-token send, over Tor only.
     ///
-    /// Used for **invites only** since the recipient doesn't have a group mailbox yet.
-    /// This goes through DM infrastructure (bootstrap, two-layer encryption, DM mailbox).
-    pub(crate) async fn send_via_dm(
+    /// Used for invites only, when there is no anon DM tunnel to the invitee:
+    /// they have no group mailbox yet. Mirrors
+    /// `AnonDmService::send_to_device_inbox`, which carries anon DM requests;
+    /// the receiver handles both the same way (`inbox/polling/dm.rs`).
+    async fn send_to_device_inbox_anonymously(
         &self,
-        peer_id: UserId,
+        peer_id: &UserId,
         content: Content,
     ) -> Result<(), AnonGroupError> {
-        let mut auth_client = self.grpc_pool.auth_client();
-
-        let params = SendDmContentParams {
-            auth_client: &mut auth_client,
-            peer_id: &peer_id,
-            content,
-            mailbox_manager: &self.mailbox_manager,
-            grpc_pool: Some(&self.grpc_pool),
-            attachment_ids: None,
-            channel_id: None,
-        };
-
-        self.message_service
-            .send_dm_content(params)
-            .await
+        // Over Tor or not at all; refuse before any token is spent.
+        let mut anon_client = self
+            .grpc_pool
+            .secret_message_client()
             .map_err(|e| AnonGroupError::MessageError(e.to_string()))?;
-
+        let plaintext = content.encode_to_vec();
+        let prekey_token = self.claim_token()?;
+        let ciphertext = self
+            .pairwise_service
+            .encrypt_anonymous(peer_id, &plaintext, &prekey_token)
+            .await
+            .map_err(|e| AnonGroupError::CryptoError(e.to_string()))?;
+        let send_token = self.claim_token()?;
+        let server_key_id = self
+            .settings_repo
+            .get::<u32>(
+                crate::storage::repositories::settings_repo::keys::SENDER_CERTIFICATE_SERVER_KEY_ID,
+            )
+            .ok()
+            .flatten()
+            .unwrap_or(1);
+        let sealed_message = crate::proto::chat_v1::SealedSenderMessage {
+            sealed_body: ciphertext,
+            server_key_id,
+            timestamp: TimestampNanos::now_anonymized().as_u64(),
+        };
+        anon_client
+            .send_with_anonymous_credential(
+                &peer_id.to_string(),
+                // `encrypt_anonymous` seals to the peer's device 1 only.
+                vec![crate::proto::chat_v1::SealedDeviceMessage {
+                    device_id: 1,
+                    registration_id: 0,
+                    sealed_message: Some(sealed_message),
+                }],
+                crate::proto::chat_v1::SealedDelivery::NamedDevices,
+                0,
+                &send_token.public_key,
+                &send_token.signature,
+                send_token.randomizer.as_deref(),
+            )
+            .await
+            .map_err(|e| AnonGroupError::MessageError(format!("Failed to send invite: {e}")))?;
         Ok(())
     }
 
@@ -305,11 +333,11 @@ impl AnonGroupService {
         Ok(())
     }
 
-    /// Send an invite message to a user via their existing DM session.
-    ///
-    /// Invites use DM infrastructure since the recipient doesn't have a
-    /// group mailbox yet.
-    pub(crate) async fn send_invite_impl(
+    /// Send a group invite over the secret channel, never the friend DM:
+    /// through a ready anon DM tunnel with the invitee when one exists, else
+    /// anonymously to their device inbox. Either way over Tor, so the server
+    /// never learns who is inviting whom into a secret group.
+    pub(crate) async fn send_invite(
         &self,
         invitee: UserId,
         group_id: AnonGroupId,
@@ -333,108 +361,52 @@ impl AnonGroupService {
             }
         }
 
-        let invite = AnonGroupInvite {
-            group_id: group_id.to_vec(),
-            group_name: group_name.to_string(),
-            inviter_mailbox_pk: inviter_mailbox_pk.to_vec(),
-            timestamp: TimestampNanos::now().as_u64(),
-            profile_key: profile_key.map(|k| k.to_vec()),
-            encrypted_display_name,
-            encrypted_avatar,
-        };
-
-        let content = Content {
-            content: Some(content_v1::content::Content::AnonGroupInvite(invite)),
-            ephemeral_reply_to: None,
-            timestamp: TimestampNanos::now().as_u64(),
-            padding: Self::generate_padding(160),
-        };
-
-        // Use DM infrastructure - invitee doesn't have group mailbox yet
-        self.send_via_dm(invitee, content).await?;
-
-        tracing::debug!(
-            "Sent invite for group {} to {} via regular DM",
-            group_id,
-            invitee
-        );
-        Ok(())
-    }
-
-    /// Send a group invite via an existing anon DM conversation.
-    ///
-    /// This routes the invite through the anon DM tunnel instead of regular DM,
-    /// preserving anonymity for users who connected via anonymous messaging.
-    pub(crate) async fn send_invite_via_anon_dm(
-        &self,
-        anon_dm: &crate::domain::anon_dm::AnonDm,
-        group_id: AnonGroupId,
-        group_name: &str,
-        inviter_mailbox_pk: &[u8; 32],
-    ) -> Result<(), AnonGroupError> {
-        self.require_invitation_owner(&group_id)?;
-        let peer_mailbox_pk = anon_dm.peer_mailbox_pk.ok_or_else(|| {
-            AnonGroupError::InvalidData("Anon DM conversation not ready".to_string())
-        })?;
-
-        let profile_key = self.get_my_profile_key();
-        let mut encrypted_display_name = None;
-        let mut encrypted_avatar = None;
-
-        if let Some(pk) = profile_key {
-            if let Some(name) = self.get_my_display_name() {
-                if !name.is_empty() {
-                    encrypted_display_name =
-                        crate::crypto::profile_crypto::encrypt_display_name(&pk, &name).ok();
-                }
-            }
-            if let Some(av) = self.get_my_avatar() {
-                encrypted_avatar = crate::crypto::profile_crypto::encrypt_avatar(&pk, &av).ok();
-            }
-        }
-
-        let invite = AnonGroupInvite {
-            group_id: group_id.to_vec(),
-            group_name: group_name.to_string(),
-            inviter_mailbox_pk: inviter_mailbox_pk.to_vec(),
-            timestamp: TimestampNanos::now().as_u64(),
-            profile_key: profile_key.map(|k| k.to_vec()),
-            encrypted_display_name,
-            encrypted_avatar,
-        };
-
-        // Wrap invite in Content
-        let inner_content = Content {
-            content: Some(content_v1::content::Content::AnonGroupInvite(invite)),
+        let invite = Content {
+            content: Some(content_v1::content::Content::AnonGroupInvite(
+                AnonGroupInvite {
+                    group_id: group_id.to_vec(),
+                    group_name: group_name.to_string(),
+                    inviter_mailbox_pk: inviter_mailbox_pk.to_vec(),
+                    timestamp: TimestampNanos::now().as_u64(),
+                    profile_key: profile_key.map(|k| k.to_vec()),
+                    encrypted_display_name,
+                    encrypted_avatar,
+                },
+            )),
             ephemeral_reply_to: None,
             timestamp: TimestampNanos::now().as_u64(),
             padding: Vec::new(),
         };
 
-        // Wrap in AnonDmMessage for the anon DM tunnel
-        let dm_message = AnonDmMessageProto {
-            conversation_id: anon_dm.id.to_vec(),
-            inner_content: Some(Box::new(inner_content)),
-        };
-
-        let outer_content = Content {
-            content: Some(content_v1::content::Content::AnonDmMessage(Box::new(
-                dm_message,
-            ))),
-            ephemeral_reply_to: None,
-            timestamp: TimestampNanos::now().as_u64(),
-            padding: Self::generate_padding(160),
-        };
-
-        // Send to peer's anon DM mailbox
-        self.send_to_anon_mailbox(&anon_dm.peer_id, &peer_mailbox_pk, outer_content)
-            .await?;
-
-        tracing::debug!(
-            "Sent invite for group {} to {} via anon DM tunnel",
-            group_id,
-            anon_dm.peer_id
-        );
+        let tunnel = self
+            .anon_dm_repo
+            .get_conversation_by_peer(&invitee)?
+            .filter(|dm| dm.is_ready())
+            .and_then(|dm| dm.peer_mailbox_pk.map(|pk| (dm.id, pk)));
+        if let Some((conversation_id, peer_mailbox_pk)) = tunnel {
+            let outer = Content {
+                content: Some(content_v1::content::Content::AnonDmMessage(Box::new(
+                    AnonDmMessageProto {
+                        conversation_id: conversation_id.to_vec(),
+                        inner_content: Some(Box::new(invite)),
+                    },
+                ))),
+                ephemeral_reply_to: None,
+                timestamp: TimestampNanos::now().as_u64(),
+                padding: Self::generate_padding(160),
+            };
+            self.send_to_anon_mailbox(&invitee, &peer_mailbox_pk, outer)
+                .await?;
+            tracing::debug!(%group_id, %invitee, "Sent group invite via anon DM tunnel");
+        } else {
+            let invite = Content {
+                padding: Self::generate_padding(160),
+                ..invite
+            };
+            self.send_to_device_inbox_anonymously(&invitee, invite)
+                .await?;
+            tracing::debug!(%group_id, %invitee, "Sent group invite anonymously");
+        }
         Ok(())
     }
 
@@ -1051,28 +1023,9 @@ impl AnonGroupService {
             let delay_ms = 100 + (rand::rng().next_u32() % 400);
             sleep(Duration::from_millis(delay_ms as u64)).await;
 
-            // Check if invitee has an active anon DM conversation with us
-            let send_result =
-                if let Ok(Some(anon_dm)) = self.anon_dm_repo.get_conversation_by_peer(&invitee) {
-                    if anon_dm.is_ready() {
-                        // Send via anon DM tunnel
-                        self.send_invite_via_anon_dm(
-                            &anon_dm,
-                            *group_id,
-                            &group.name,
-                            &mailbox.public_key,
-                        )
-                        .await
-                    } else {
-                        // Anon DM not ready, try regular DM
-                        self.send_invite_impl(invitee, *group_id, &group.name, &mailbox.public_key)
-                            .await
-                    }
-                } else {
-                    // No anon DM, use regular DM (friend)
-                    self.send_invite_impl(invitee, *group_id, &group.name, &mailbox.public_key)
-                        .await
-                };
+            let send_result = self
+                .send_invite(invitee, *group_id, &group.name, &mailbox.public_key)
+                .await;
 
             match send_result {
                 Ok(_) => invited_count += 1,
@@ -1498,6 +1451,31 @@ mod tests {
             submission::prepare(db, &me.to_string(), &f.owner.to_string(), &bytes).unwrap(),
             submission::Admission::Unconfirmed
         ));
+    }
+
+    /// With no Tor route an invite fails closed; it never falls back to the
+    /// friend DM, which would show the server who is invited where.
+    #[tokio::test]
+    async fn invite_without_tor_fails_closed() {
+        let f = fixture();
+        let svc = f._client.anon_groups();
+        let me = svc.current_user_id().unwrap();
+        let group = AnonGroup::new_as_owner("mine".into(), me);
+        let repo = &svc.anon_group_repo;
+        repo.insert_group(&group).unwrap();
+        repo.add_member(&AnonGroupMember::with_mailbox(
+            group.id,
+            me,
+            AnonGroupRole::Owner,
+            [1u8; 32],
+        ))
+        .unwrap();
+
+        let res = svc.send_invite(f.victim, group.id, "mine", &[1u8; 32]).await;
+        assert!(
+            matches!(&res, Err(AnonGroupError::MessageError(e)) if e.contains("Tor")),
+            "{res:?}"
+        );
     }
 
     #[tokio::test]
