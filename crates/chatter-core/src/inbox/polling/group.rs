@@ -449,18 +449,14 @@ async fn process_sealed_sender_group_message(
             requester_id,
             channel_id,
         } => {
-            // Note: With pairwise encryption, sender key requests are deprecated.
-            // Keep for backwards compatibility during transition.
-            tracing::info!(
+            // Sender-key requests travel sealed to the target's devices, never
+            // through a group mailbox.
+            tracing::warn!(
                 group_id = %group_id,
                 channel_id = %channel_id,
                 requester_id = %requester_id,
-                "Sender key request via group mailbox (legacy)"
+                "Unexpected sender key request in group mailbox"
             );
-            let _ = event_tx.send(InboxEvent::SenderKeyNeeded {
-                channel_id,
-                sender_id: requester_id,
-            });
         }
         SealedSenderResult::MailboxAnnouncement {
             sender_id,
