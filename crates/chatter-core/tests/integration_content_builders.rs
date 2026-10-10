@@ -448,18 +448,17 @@ fn test_build_saved_message_sync() {
 ///
 /// Architecture reference:
 ///   Call E2EE key exchange:
-///   CallKeyOffer { call_id, ephemeral_public_key, call_type, channel_id }
+///   CallKeyOffer { call_id, ephemeral_public_key, call_type }
 #[test]
 fn test_build_call_key_offer() {
     let ephemeral_pk = [42u8; 32];
-    let content = build_call_key_offer("call-123", ephemeral_pk, "video", "ch-456");
+    let content = build_call_key_offer("call-123", ephemeral_pk, "video");
 
     match content.content.unwrap() {
         content::Content::CallKey(ck) => {
             assert_eq!(ck.call_id, "call-123");
             assert_eq!(ck.key_material.as_slice(), &ephemeral_pk[..]);
             assert_eq!(ck.call_type, "video");
-            assert_eq!(ck.channel_id, "ch-456");
         }
         other => panic!("Expected CallKey, got {:?}", other),
     }

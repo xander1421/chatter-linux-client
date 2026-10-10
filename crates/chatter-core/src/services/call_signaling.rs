@@ -593,9 +593,8 @@ impl CallSignalingService {
         call_id: &str,
         ephemeral_public_key: [u8; 32],
         call_type: &str,
-        channel_id: &str,
     ) -> Result<(), CallSignalingError> {
-        let content = build_call_key_offer(call_id, ephemeral_public_key, call_type, channel_id);
+        let content = build_call_key_offer(call_id, ephemeral_public_key, call_type);
         match self
             .message_service
             .send_friend_dm_content(peer_id, content)
@@ -974,15 +973,8 @@ impl CallSignalingService {
         // a room nobody else joins, and every retry fails with
         // `AlreadyInCall` until the process restarts.
         let call_id_str = call.id.to_string();
-        let channel_id_str = channel_id.to_string();
         if let Err(e) = self
-            .send_call_offer(
-                peer_id,
-                &call_id_str,
-                ephemeral_public,
-                call_type_str,
-                &channel_id_str,
-            )
+            .send_call_offer(peer_id, &call_id_str, ephemeral_public, call_type_str)
             .await
         {
             tracing::error!(error = %e, call_id = %call.id, "Call offer send failed — rolling back call");

@@ -482,8 +482,6 @@ pub enum DomainEvent {
         ephemeral_public_key: [u8; 32],
         /// Call type: "Voice Call" or "Video Call".
         call_type: String,
-        /// DM channel ID for context.
-        channel_id: String,
         /// Whether caller's identity is verified (known identity key).
         is_identity_verified: bool,
         identity_warning: String,

@@ -452,8 +452,6 @@ pub enum InboxEvent {
         ephemeral_public_key: [u8; 32],
         /// Call type: "Voice Call", "Video Call", etc.
         call_type: String,
-        /// Channel/DM ID for context.
-        channel_id: String,
         /// When the server received the offer (ns) — what the ring timeout
         /// ages it by, as Signal does. The caller's own stamp only when the
         /// server gave none.

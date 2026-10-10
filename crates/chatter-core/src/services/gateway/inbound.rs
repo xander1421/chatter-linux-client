@@ -193,7 +193,6 @@ pub enum DmContent {
         ephemeral_public_key: [u8; 32],
         timestamp: u64,
         call_type: String,
-        channel_id: String,
     },
     /// Call key answer (response to ephemeral key offer).
     CallKeyAnswer {

@@ -22,7 +22,6 @@ pub(super) fn handle_call_key_offer(
     peer_id: UserId,
     _ephemeral_public_key: [u8; 32],
     call_type: String,
-    _channel_id: String,
     is_identity_verified: bool,
     _identity_warning: String,
     caller_name: String,

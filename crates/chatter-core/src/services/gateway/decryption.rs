@@ -1013,7 +1013,6 @@ impl MessageGateway {
                         ephemeral_public_key: ephemeral_pk,
                         timestamp: call_key.timestamp,
                         call_type: call_key.call_type,
-                        channel_id: call_key.channel_id,
                     })
                 } else {
                     // Answer from callee - response to our offer

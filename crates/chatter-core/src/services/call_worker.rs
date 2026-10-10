@@ -4616,7 +4616,6 @@ async fn handle_domain_event(
             peer_id,
             ephemeral_public_key,
             call_type,
-            channel_id: _,
             is_identity_verified,
             identity_warning,
             caller_name,

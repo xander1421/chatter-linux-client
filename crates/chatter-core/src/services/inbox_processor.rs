@@ -272,7 +272,6 @@ impl InboxEventProcessor {
                 call_id,
                 ephemeral_public_key,
                 call_type,
-                channel_id,
                 timestamp,
             } => {
                 // Bridge the inbox-layer offer to the domain event the call
@@ -297,7 +296,6 @@ impl InboxEventProcessor {
                         peer_id: *peer_id,
                         ephemeral_public_key: *ephemeral_public_key,
                         call_type: call_type.clone(),
-                        channel_id: channel_id.clone(),
                         is_identity_verified,
                         // No existing producer emits a warning string; a mismatch/
                         // change surfaces via the safety-number flow, not here.

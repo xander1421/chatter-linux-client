@@ -2378,7 +2378,6 @@ pub fn dispatch_control_content(
                     ephemeral_public_key,
                     timestamp,
                     call_type,
-                    channel_id,
                 }) => InboxEvent::CallKeyOfferReceived {
                     peer_id: *sender_id,
                     call_id,
@@ -2387,11 +2386,6 @@ pub fn dispatch_control_content(
                         "Voice Call".to_string()
                     } else {
                         call_type
-                    },
-                    channel_id: if channel_id.is_empty() {
-                        sender_id.to_string()
-                    } else {
-                        channel_id
                     },
                     timestamp: if server_timestamp > 0 {
                         server_timestamp
@@ -2485,7 +2479,7 @@ mod call_control_tests {
         let (event_tx, mut event_rx) = broadcast::channel(4);
         let stats = Arc::new(RwLock::new(InboxStats::default()));
         let caller = UserId::new();
-        let offer = crate::services::build_call_key_offer("call-1", [7u8; 32], "", "");
+        let offer = crate::services::build_call_key_offer("call-1", [7u8; 32], "");
 
         dispatch_control_content(
             offer.content.unwrap(),
@@ -2503,7 +2497,6 @@ mod call_control_tests {
                 call_id,
                 ephemeral_public_key,
                 call_type,
-                channel_id,
                 timestamp,
             } => {
                 // Aged by the server's receive stamp, not the caller's clock.
@@ -2512,7 +2505,6 @@ mod call_control_tests {
                 assert_eq!(call_id, "call-1");
                 assert_eq!(ephemeral_public_key, [7u8; 32]);
                 assert_eq!(call_type, "Voice Call");
-                assert_eq!(channel_id, caller.to_string());
             }
             other => panic!("expected CallKeyOfferReceived, got {other:?}"),
         }

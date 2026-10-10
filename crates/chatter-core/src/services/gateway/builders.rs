@@ -464,7 +464,6 @@ pub fn build_call_key_offer(
     call_id: &str,
     ephemeral_public_key: [u8; 32],
     call_type: &str,
-    channel_id: &str,
 ) -> Content {
     use crate::proto::content_v1::CallKeyExchange;
     let now = TimestampNanos::now().as_u64();
@@ -476,7 +475,6 @@ pub fn build_call_key_offer(
             timestamp: now,
             is_offer: true,
             call_type: call_type.to_string(),
-            channel_id: channel_id.to_string(),
         })),
         ..Default::default()
     }
@@ -501,7 +499,6 @@ pub fn build_call_key_answer(call_id: &str, ephemeral_public_key: [u8; 32]) -> C
             timestamp: now,
             is_offer: false,
             call_type: String::new(),
-            channel_id: String::new(),
         })),
         ..Default::default()
     }
@@ -757,7 +754,7 @@ mod call_self_sync_tests {
             Some(("c2".into(), Reason::DeclinedElsewhere as i32, 6))
         );
 
-        assert_eq!(synced(&build_call_key_offer("c3", [1u8; 32], "", "")), None);
+        assert_eq!(synced(&build_call_key_offer("c3", [1u8; 32], "")), None);
         assert_eq!(
             synced(&build_call_hangup_content("c4", CallHangupReason::Normal)),
             None

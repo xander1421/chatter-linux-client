@@ -897,7 +897,6 @@ pub(crate) fn dispatch_dm_content(
             ephemeral_public_key,
             timestamp,
             call_type,
-            channel_id,
         } => {
             // Call key offer received (ephemeral key for PFS)
             tracing::info!(
@@ -905,15 +904,6 @@ pub(crate) fn dispatch_dm_content(
                 call_id = %call_id,
                 "Call key offer received (incoming call with ephemeral key)"
             );
-
-            // DMs are channel-free: a DM call's conversation key is the peer
-            // (`ActiveConversation::ServerDm` start, the orchestrator's DmStandard
-            // ring, the history row), as on the sealed-sender path.
-            let resolved_channel_id = if channel_id.is_empty() {
-                sender_id.to_string()
-            } else {
-                channel_id
-            };
 
             let resolved_call_type = if call_type.is_empty() {
                 "Voice Call".to_string()
@@ -926,7 +916,6 @@ pub(crate) fn dispatch_dm_content(
                 call_id,
                 ephemeral_public_key,
                 call_type: resolved_call_type,
-                channel_id: resolved_channel_id,
                 timestamp: if server_timestamp > 0 {
                     server_timestamp
                 } else {
