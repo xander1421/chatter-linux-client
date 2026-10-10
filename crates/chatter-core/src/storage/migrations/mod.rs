@@ -2,6 +2,7 @@
 //!
 //! Migration infrastructure for schema evolution with version tracking.
 
+pub(crate) mod reaction_normalization;
 pub mod v001_initial;
 pub mod v002_users;
 pub mod v003_channels;
