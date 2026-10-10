@@ -550,6 +550,13 @@ impl ChannelInbound {
                             .is_retired_device(sid, device_id, proto_msg.timestamp)
                             .await
                         {
+                            // Nothing is asked of a retired device, so there is
+                            // no repair attempt to bound: a re-fetch drops it
+                            // again rather than reporting a retryable failure.
+                            self.messages
+                                .channel_decrypt_failures
+                                .lock()
+                                .remove(&failure_key);
                             tracing::debug!(%channel_id, %sid, device_id, message_id = %proto_msg.id,
                                 "Channel message from a retired device is unrecoverable; dropped");
                             self.messages
