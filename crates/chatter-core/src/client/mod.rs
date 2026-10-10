@@ -3465,7 +3465,9 @@ impl ChatterClient {
         // discards `draft` rather than parking it under the new account.
         let (mut drafts, changed_session) = self.composer_drafts_for_session();
         if !changed_session && !leaving.is_empty() {
-            let unchanged = drafts.get(leaving).map_or(draft.is_empty(), |held| *held == draft);
+            let unchanged = drafts
+                .get(leaving)
+                .map_or(draft.is_empty(), |held| *held == draft);
             if draft.is_empty() {
                 drafts.remove(leaving);
             } else {
@@ -4850,10 +4852,7 @@ fn roster_changes(
 }
 
 /// Whether `id` is this user's Saved Messages (Note to Self) channel.
-fn is_saved_channel(
-    id: &crate::domain::ids::ChannelId,
-    channel_service: &ChannelService,
-) -> bool {
+fn is_saved_channel(id: &crate::domain::ids::ChannelId, channel_service: &ChannelService) -> bool {
     channel_service
         .get_channel_local(id)
         .ok()

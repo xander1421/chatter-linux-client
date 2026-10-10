@@ -42,7 +42,7 @@ use chatter_core::client::ChatterClient;
 use chatter_core::crypto::{auth_crypto, opaque};
 use chatter_core::network::grpc::client_pool::TransportMode;
 use chatter_core::network::grpc::{AuthClient, GrpcClientPool};
-use chatter_core::proto::chat_v1::{auth_service_client::AuthServiceClient, RegisterRequest};
+use chatter_core::proto::chat_v1::{RegisterRequest, auth_service_client::AuthServiceClient};
 use rand::RngCore;
 
 const SERVER_URL: &str = "https://localhost:50051";

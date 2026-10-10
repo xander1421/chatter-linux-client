@@ -3166,7 +3166,10 @@ mod tests {
                 .unwrap()
                 .execute(
                     "INSERT OR REPLACE INTO settings(key,value,updated_at) VALUES(?1,?2,'now')",
-                    params![CURRENT_USER_KEY, serde_json::to_string(&owner.to_string()).unwrap()],
+                    params![
+                        CURRENT_USER_KEY,
+                        serde_json::to_string(&owner.to_string()).unwrap()
+                    ],
                 )
                 .unwrap();
         };
@@ -3174,25 +3177,41 @@ mod tests {
         set_owner(me);
         let conversation = ChannelId::new();
         let dm = |sent_at| {
-            Message::new_text(conversation, ConversationType::ServerDm, Some(peer), "x".into(), sent_at)
+            Message::new_text(
+                conversation,
+                ConversationType::ServerDm,
+                Some(peer),
+                "x".into(),
+                sent_at,
+            )
         };
         let (one, two) = (dm(100), dm(200));
-        let channel_post =
-            Message::new_text(conversation, ConversationType::Channel, Some(peer), "x".into(), 300);
+        let channel_post = Message::new_text(
+            conversation,
+            ConversationType::Channel,
+            Some(peer),
+            "x".into(),
+            300,
+        );
         for m in [&one, &two, &channel_post] {
             repo.insert(m).unwrap();
         }
         repo.delete(&one.id).unwrap();
         repo.delete_batch(&[two.id, channel_post.id]).unwrap();
         let held = |sender: &UserId, sent_at| {
-            repo.is_dm_receipt_tombstoned(&conversation, sender, sent_at).unwrap()
+            repo.is_dm_receipt_tombstoned(&conversation, sender, sent_at)
+                .unwrap()
         };
         assert!(held(&peer, 100));
         assert!(held(&peer, 200));
         assert!(!held(&peer, 300), "only server DMs");
         assert!(!held(&peer, 101));
         assert!(!held(&me, 100));
-        assert!(!repo.is_dm_receipt_tombstoned(&ChannelId::new(), &peer, 100).unwrap());
+        assert!(
+            !repo
+                .is_dm_receipt_tombstoned(&ChannelId::new(), &peer, 100)
+                .unwrap()
+        );
         set_owner(other_account);
         assert!(!held(&peer, 100), "account scoped");
     }

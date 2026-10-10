@@ -19,7 +19,7 @@ pub(crate) use group::GroupStateGate;
 mod call_event;
 pub mod channel_inbound;
 mod channel_send;
-pub(crate) use channel_send::{spawn_channel_send_recovery, owns as channel_send_owns};
+pub(crate) use channel_send::{owns as channel_send_owns, spawn_channel_send_recovery};
 pub(crate) mod dm_outbox;
 pub(crate) use dm_outbox::spawn_dm_send_recovery;
 pub mod conversion;
@@ -354,7 +354,8 @@ pub struct MessageService {
     /// [`MessageService::should_request_sender_key`].
     pub(crate) sender_key_requests: Arc<parking_lot::Mutex<group::SenderKeyRequestGate>>,
     /// Session-local backoff for exact failed channel envelopes; never an acknowledgement.
-    pub(crate) channel_decrypt_failures: Arc<parking_lot::Mutex<channel_inbound::DecryptFailureGate>>,
+    pub(crate) channel_decrypt_failures:
+        Arc<parking_lot::Mutex<channel_inbound::DecryptFailureGate>>,
     /// Group messages we already sent a `DecryptionErrorMessage` for, keyed
     /// `(message id, sender device)`: one retry request per message per device.
     pub(crate) group_retry_requests:
@@ -1523,8 +1524,7 @@ impl MessageService {
         let conversation_peer = if reactor == own {
             claimed
         } else {
-            if claimed != own || transport_peer.is_some_and(|peer| peer != reactor)
-            {
+            if claimed != own || transport_peer.is_some_and(|peer| peer != reactor) {
                 return Err(MessageError::InvalidContent(
                     "Reaction destination differs from authenticated transport".into(),
                 ));
@@ -2076,7 +2076,11 @@ mod inbound_target_tests {
         svc.message_repo.insert(&late).unwrap();
         assert!(svc.message_repo.get(&late.id).unwrap().is_none());
         // Bob cannot use Carol's timestamp to delete her DM or channel row.
-        assert!(svc.apply_targeted_dm_delete(&f.bob, Some(&f.bob.to_string()), CH_TS).unwrap().is_none());
+        assert!(
+            svc.apply_targeted_dm_delete(&f.bob, Some(&f.bob.to_string()), CH_TS)
+                .unwrap()
+                .is_none()
+        );
         assert!(
             svc.get_by_sender_timestamp(&f.carol, CH_TS)
                 .unwrap()
@@ -2095,7 +2099,11 @@ mod inbound_target_tests {
                 .unwrap()
                 .is_none()
         );
-        assert!(svc.apply_targeted_dm_delete(&f.me, Some(&f.me.to_string()), 302).unwrap().is_none());
+        assert!(
+            svc.apply_targeted_dm_delete(&f.me, Some(&f.me.to_string()), 302)
+                .unwrap()
+                .is_none()
+        );
         assert!(svc.message_repo.get(&own_channel.id).unwrap().is_some());
         let late = Message::new_text(
             ChannelId::from(f.carol),
@@ -2513,7 +2521,11 @@ mod inbound_target_tests {
         let svc = f.client.messages();
         let scope = ChannelId::from(f.carol);
         // A delete that names no author is refused and holds nothing back.
-        assert!(svc.apply_targeted_dm_delete(&f.carol, None, 910).unwrap().is_none());
+        assert!(
+            svc.apply_targeted_dm_delete(&f.carol, None, 910)
+                .unwrap()
+                .is_none()
+        );
         for author in [f.me, f.carol] {
             let message = Message::new_text(
                 scope,

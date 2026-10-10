@@ -1112,7 +1112,7 @@ mod tests {
             config,
             state,
             nostr_state,
-            storage: storage,
+            storage,
             sealer,
             router,
             ble: ble_bus,

@@ -1070,7 +1070,9 @@ impl ConversationHandle {
                 } else {
                     // Explicit delete-for-everyone: a still-unconfirmed channel
                     // send may now remove its server copy (`channel_send.rs`).
-                    self.client.messages().delete_channel_for_everyone_local(&target.id)?;
+                    self.client
+                        .messages()
+                        .delete_channel_for_everyone_local(&target.id)?;
                 }
                 Ok(())
             }
@@ -1512,7 +1514,9 @@ impl ConversationHandle {
             .unwrap_or_default();
         let attachment_ids =
             self.get_message_attachment_ids(target_author, target_sent_timestamp)?;
-        let (target_kind, _) = target.routing_key().ok_or(ConversationError::NoConversation)?;
+        let (target_kind, _) = target
+            .routing_key()
+            .ok_or(ConversationError::NoConversation)?;
         if !target_kind.accepts_forward(!attachment_ids.is_empty()) {
             return Err(ConversationError::Other(
                 "attachments cannot be forwarded into a secret chat".into(),
@@ -2517,7 +2521,11 @@ mod tests {
             );
             message.delivery_status = "delivered".into();
             let menu = stored_message_menu(&message, false, 2);
-            assert_eq!(menu.actions.forward, forward, "{:?}", message.conversation_type);
+            assert_eq!(
+                menu.actions.forward, forward,
+                "{:?}",
+                message.conversation_type
+            );
         }
     }
 
@@ -2530,7 +2538,11 @@ mod tests {
             crate::domain::anon_dm::AnonDmId::new(),
         ));
         assert!(!source.can_forward_from());
-        assert!(source.forward_destinations(&[(UserId::new(), 1)], "").is_empty());
+        assert!(
+            source
+                .forward_destinations(&[(UserId::new(), 1)], "")
+                .is_empty()
+        );
         let err = source
             .forward_to(
                 &UserId::new(),
@@ -2872,17 +2884,21 @@ mod tests {
             .delete_conversation(ActiveConversation::AnonDm(dm.id))
             .unwrap();
 
-        assert!(client
-            .anon_dms()
-            .get_conversation(&dm.id)
-            .unwrap()
-            .is_none());
-        assert!(client
-            .messages()
-            .message_repo
-            .get(&msg.id)
-            .unwrap()
-            .is_none());
+        assert!(
+            client
+                .anon_dms()
+                .get_conversation(&dm.id)
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            client
+                .messages()
+                .message_repo
+                .get(&msg.id)
+                .unwrap()
+                .is_none()
+        );
         assert!(attachments.get(&only_here).unwrap().is_none());
         assert!(
             !only_here_path.exists(),
@@ -2893,12 +2909,14 @@ mod tests {
             forwarded_path.exists(),
             "a file another chat still shows was deleted"
         );
-        assert!(client
-            .messages()
-            .message_repo
-            .get(&fwd.id)
-            .unwrap()
-            .is_some());
+        assert!(
+            client
+                .messages()
+                .message_repo
+                .get(&fwd.id)
+                .unwrap()
+                .is_some()
+        );
         assert_eq!(client.display_name(&peer), "Robin");
         assert!(client.is_profile_user_blocked(&peer));
     }
@@ -2953,12 +2971,14 @@ mod tests {
             .delete_conversation(ActiveConversation::ServerDm { peer_id: peer })
             .unwrap();
 
-        assert!(client
-            .messages()
-            .message_repo
-            .get(&msg.id)
-            .unwrap()
-            .is_none());
+        assert!(
+            client
+                .messages()
+                .message_repo
+                .get(&msg.id)
+                .unwrap()
+                .is_none()
+        );
         assert!(attachments.get(&only_here).unwrap().is_none());
         assert!(
             !only_here_path.exists(),
@@ -2969,12 +2989,14 @@ mod tests {
             forwarded_path.exists(),
             "a file another chat still shows was deleted"
         );
-        assert!(client
-            .messages()
-            .message_repo
-            .get(&fwd.id)
-            .unwrap()
-            .is_some());
+        assert!(
+            client
+                .messages()
+                .message_repo
+                .get(&fwd.id)
+                .unwrap()
+                .is_some()
+        );
     }
     #[tokio::test]
     async fn reaction_snapshot_is_scoped_and_repairs_persisted_add_remove_duplicates() {
@@ -3076,25 +3098,31 @@ mod tests {
             let snapshot = handle.reaction_snapshot(&author, sent_at).unwrap().unwrap();
             assert!(snapshot.counts.is_empty());
             assert!(snapshot.summary.is_empty());
-            assert!(client
-                .conversation(ActiveConversation::Channel(ChannelId::new()))
-                .reaction_snapshot(&author, sent_at)
-                .unwrap()
-                .is_none());
+            assert!(
+                client
+                    .conversation(ActiveConversation::Channel(ChannelId::new()))
+                    .reaction_snapshot(&author, sent_at)
+                    .unwrap()
+                    .is_none()
+            );
             assert!(handle.reaction_snapshot(&other, sent_at).unwrap().is_none());
-            assert!(handle
-                .reaction_snapshot(&author, sent_at + 100)
-                .unwrap()
-                .is_none());
+            assert!(
+                handle
+                    .reaction_snapshot(&author, sent_at + 100)
+                    .unwrap()
+                    .is_none()
+            );
         }
         // Same UUID does not make an anonymous group into a friend DM.
-        assert!(client
-            .conversation(ActiveConversation::ServerDm {
-                peer_id: encrypted_channel.to_string().parse().unwrap()
-            })
-            .reaction_snapshot(&author, 401)
-            .unwrap()
-            .is_none());
+        assert!(
+            client
+                .conversation(ActiveConversation::ServerDm {
+                    peer_id: encrypted_channel.to_string().parse().unwrap()
+                })
+                .reaction_snapshot(&author, 401)
+                .unwrap()
+                .is_none()
+        );
     }
 
     #[tokio::test]
