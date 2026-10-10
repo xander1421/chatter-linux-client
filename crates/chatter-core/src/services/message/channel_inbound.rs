@@ -744,10 +744,9 @@ impl ChannelInbound {
                 // Content changes only through the edit path (author check,
                 // edit-time ordering, 48h window: `apply_channel_edit`). A
                 // re-ingested original — backfill, resync — must not undo an
-                // applied edit or bypass those rules.
-                if existing.is_edited || existing.as_text() != Some("[Encrypted message]") {
-                    message.content = existing.content.clone();
-                }
+                // applied edit or bypass those rules. (No stored channel row
+                // holds an undecrypted placeholder: ingest decrypts or refuses.)
+                message.content = existing.content.clone();
                 message.is_edited = existing.is_edited;
                 message.edited_at = existing.edited_at;
                 if let Err(e) = messages.update_message(message) {
