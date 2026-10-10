@@ -1535,6 +1535,21 @@ impl ChatterClient {
         if !self.call_signaling().store_group_call_invite(&call_id) {
             return;
         }
+        // Our own join may have completed during the lookup above. A join
+        // makes the call active before it takes the invite, so re-checking
+        // after the store catches every order: if the join's take already
+        // ran, the call is active now and this ringing invite is stale (it
+        // would swallow the live call's keys into a buffer nobody takes);
+        // if not, that take removes it. The worker drops this ring too.
+        let parsed = call_id.parse::<crate::domain::ids::CallId>().ok();
+        if worker
+            .active_call()
+            .await
+            .is_some_and(|c| parsed == Some(c.id))
+        {
+            self.call_signaling().drop_ringing_group_call_invite(&call_id);
+            return;
+        }
         let deadline = tokio::time::Instant::now() + incoming_ring_budget(
             info.created_at, crate::util::time::TimestampNanos::now().as_u64());
         worker.orch_present_incoming_offer(

@@ -19,8 +19,6 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use tokio::sync::broadcast::error::RecvError;
-
 use crate::domain::call::{CallDirection, CallHistoryEntry, CallResult};
 use crate::domain::ids::{ChannelId, MessageId, UserId};
 use crate::domain::message::{
@@ -42,7 +40,7 @@ use crate::storage::repositories::{CallHistoryRepository, UnifiedConversationRep
 pub(crate) static LIVE_SINCE: std::sync::OnceLock<chrono::DateTime<chrono::Utc>> =
     std::sync::OnceLock::new();
 
-/// Spawn the call-history recorder. Exits when the orchestrator's broadcast
+/// Spawn the call-history recorder. Exits when the orchestrator's event
 /// channel closes.
 ///
 /// Its own thread, not a tokio task, for the same reason `RouterHandle` and
@@ -62,7 +60,10 @@ pub fn spawn_call_history_recorder(
     messages: Arc<MessageService>,
 ) {
     LIVE_SINCE.get_or_init(chrono::Utc::now);
-    let mut rx = call.subscribe_call_events();
+    // Lossless, not the lagging broadcast: a dropped `ActiveConnected` would
+    // file a talked call as "No answer", a dropped terminal event leave its
+    // row open for good.
+    let mut rx = call.subscribe_call_events_lossless();
     let history = CallHistoryRepository::new(database.clone());
     let conversations = UnifiedConversationRepository::new(database);
 
@@ -75,16 +76,9 @@ pub fn spawn_call_history_recorder(
             let mut connected: HashMap<CallHandle, chrono::DateTime<chrono::Utc>> = HashMap::new();
 
             loop {
-                let event = match rx.blocking_recv() {
-                    Ok(event) => event,
-                    Err(RecvError::Lagged(n)) => {
-                        tracing::warn!(dropped_count = n, "call history recorder lagged");
-                        continue;
-                    }
-                    Err(RecvError::Closed) => {
-                        tracing::debug!("call history recorder: channel closed, exiting");
-                        break;
-                    }
+                let Some(event) = rx.blocking_recv() else {
+                    tracing::debug!("call history recorder: channel closed, exiting");
+                    break;
                 };
                 // A too-late offer is over as it arrives: no terminal event
                 // ever follows it, so its row is written closed and its

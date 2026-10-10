@@ -207,6 +207,48 @@ pub enum CallOrchestratorEvent {
     },
 }
 
+/// Where orchestrator events go: a bounded broadcast for the UI-facing
+/// subscribers, which tolerate a lag, plus lossless taps for a consumer that
+/// cannot — the call-history recorder, for which a lost `ActiveConnected`
+/// files a talked call as "No answer". Events are rare (a handful per call),
+/// so an unbounded tap stays small.
+#[derive(Clone)]
+pub(crate) struct CallEventsTx {
+    broadcast: broadcast::Sender<CallOrchestratorEvent>,
+    lossless: Arc<parking_lot::Mutex<Vec<mpsc::UnboundedSender<CallOrchestratorEvent>>>>,
+}
+
+impl CallEventsTx {
+    fn new(capacity: usize) -> Self {
+        Self {
+            broadcast: broadcast::channel(capacity).0,
+            lossless: Arc::default(),
+        }
+    }
+
+    /// Deliver to every lossless tap, then broadcast. Mirrors
+    /// `broadcast::Sender::send`: an error only means no broadcast receiver.
+    pub(crate) fn send(
+        &self,
+        event: CallOrchestratorEvent,
+    ) -> Result<usize, broadcast::error::SendError<CallOrchestratorEvent>> {
+        self.lossless
+            .lock()
+            .retain(|tap| tap.send(event.clone()).is_ok());
+        self.broadcast.send(event)
+    }
+
+    fn subscribe(&self) -> broadcast::Receiver<CallOrchestratorEvent> {
+        self.broadcast.subscribe()
+    }
+
+    fn subscribe_lossless(&self) -> mpsc::UnboundedReceiver<CallOrchestratorEvent> {
+        let (tx, rx) = mpsc::unbounded_channel();
+        self.lossless.lock().push(tx);
+        rx
+    }
+}
+
 /// UI-facing snapshot emitted with [`CallOrchestratorEvent::AnonCallConnected`].
 ///
 /// The E2EE key is intentionally absent — it was consumed by the worker when
@@ -287,7 +329,7 @@ struct OrchestratorState {
 }
 
 impl OrchestratorState {
-    fn withdraw_expired(&mut self, now: tokio::time::Instant, presentation: &IncomingCallPresentationState, events: &broadcast::Sender<CallOrchestratorEvent>) {
+    fn withdraw_expired(&mut self, now: tokio::time::Instant, presentation: &IncomingCallPresentationState, events: &CallEventsTx) {
         for pending in self.expire_incoming(now) {
             pending.retire_anon();
             if presentation.accepts_session(pending.session_revision) {
@@ -451,9 +493,6 @@ impl IncomingCallPresentationState {
 }
 
 impl OrchestratorState {
-    fn incoming_snapshot(&self) -> IncomingCallPresentationSnapshot {
-        self.incoming_snapshot_for(None)
-    }
     fn incoming_snapshot_for(
         &self,
         session_revision: Option<u64>,
@@ -883,7 +922,7 @@ pub struct CallWorkerHandle {
     shared_video_frames: SharedVideoFrames,
     /// Broadcast sender for orchestrator events. Kept on the handle so UI
     /// subscribers can call `subscribe_call_events` any number of times.
-    call_events_tx: broadcast::Sender<CallOrchestratorEvent>,
+    call_events_tx: CallEventsTx,
     incoming_presentation: IncomingCallPresentationState,
     presentation_session: Option<u64>,
     answer_scope: Option<DmAnswerScope>,
@@ -967,7 +1006,7 @@ impl CallWorkerHandle {
     pub fn spawn(call_client: CallClient) -> Self {
         let (cmd_tx, cmd_rx) = mpsc::channel(256);
         let (events_tx, events_rx) = mpsc::channel(256);
-        let (call_events_tx, _) = broadcast::channel(64);
+        let call_events_tx = CallEventsTx::new(64);
         let (room_events_broadcast, _) = broadcast::channel(128);
 
         // Create shared video frames storage (shared between worker and UI)
@@ -1033,6 +1072,15 @@ impl CallWorkerHandle {
     /// call transitions, withdrawals). Each subscriber gets its own receiver.
     pub fn subscribe_call_events(&self) -> broadcast::Receiver<CallOrchestratorEvent> {
         self.call_events_tx.subscribe()
+    }
+
+    /// Subscribe to orchestrator events without the broadcast's lag: every
+    /// event is delivered, in order, until the worker and every handle are
+    /// gone. For a consumer whose record must not miss a transition.
+    pub(crate) fn subscribe_call_events_lossless(
+        &self,
+    ) -> mpsc::UnboundedReceiver<CallOrchestratorEvent> {
+        self.call_events_tx.subscribe_lossless()
     }
 
     pub fn for_presentation_session(&self, revision: u64) -> Self {
@@ -1993,7 +2041,7 @@ fn run_call_worker(
     events_tx: mpsc::Sender<LiveKitRoomEvent>,
     call_client: CallClient,
     shared_video_frames: SharedVideoFrames,
-    call_events_tx: broadcast::Sender<CallOrchestratorEvent>,
+    call_events_tx: CallEventsTx,
     room_events_broadcast: broadcast::Sender<LiveKitRoomEvent>,
     incoming_presentation: IncomingCallPresentationState,
 ) {
@@ -3961,7 +4009,7 @@ async fn finish_failed_recovery(
     active_call: &Rc<RefCell<Option<ActiveCallState>>>,
     ratchet_cancel: &Rc<RefCell<Option<oneshot::Sender<()>>>>,
     orchestrator: &mut OrchestratorState,
-    events: &broadcast::Sender<CallOrchestratorEvent>,
+    events: &CallEventsTx,
     call: CallHandle,
 ) {
     stop_key_ratchet_timer(ratchet_cancel);
@@ -4120,17 +4168,6 @@ const RATCHET_TICK_TOLERANCE_SECS: f64 = 0.5;
 /// server-asserted `started_at` further back would otherwise have the call
 /// worker hash up to `u32::MAX` times.
 const MAX_RATCHET_CATCH_UP: u32 = 24 * 60 * 2;
-
-/// The chain position the wall clock says is current for a call that
-/// started at `call_start`.
-fn wall_clock_epoch(call_start: chrono::DateTime<chrono::Utc>) -> u32 {
-    let elapsed = (chrono::Utc::now() - call_start).num_milliseconds() as f64 / 1000.0;
-    aligned_ratchet_schedule(
-        elapsed + RATCHET_TICK_TOLERANCE_SECS,
-        KEY_RATCHET_INTERVAL_SECS,
-    )
-    .0
-}
 
 /// Ratchet `key_state` up to chain position `target`, returning what to hand
 /// LiveKit when it moved. A chain already at or past `target` stays put: a
@@ -5020,6 +5057,51 @@ mod ring_timeout_tests {
         // Sender clock ahead of ours, or no timestamp at all: ring.
         assert!(!offer_is_stale(now + 10_000_000_000, now));
         assert!(!offer_is_stale(0, now));
+    }
+}
+
+#[cfg(test)]
+mod call_events_tx_tests {
+    use super::{CallEndReason, CallEventsTx, CallHandle, CallOrchestratorEvent};
+
+    fn ended(i: usize) -> CallOrchestratorEvent {
+        CallOrchestratorEvent::ActiveEnded {
+            call: CallHandle::from(format!("call-{i}").as_str()),
+            reason: CallEndReason::RemoteHangup,
+        }
+    }
+
+    #[test]
+    fn a_lossless_tap_gets_every_event_the_broadcast_drops() {
+        let events = CallEventsTx::new(4);
+        let mut lagging = events.subscribe();
+        let mut lossless = events.subscribe_lossless();
+        for i in 0..20 {
+            let _ = events.send(ended(i));
+        }
+        assert!(matches!(
+            lagging.try_recv(),
+            Err(tokio::sync::broadcast::error::TryRecvError::Lagged(_))
+        ));
+        for i in 0..20 {
+            assert_eq!(lossless.try_recv().unwrap(), ended(i));
+        }
+        assert!(lossless.try_recv().is_err());
+    }
+
+    #[test]
+    fn a_dropped_tap_is_pruned_and_the_channel_closes_with_its_senders() {
+        let events = CallEventsTx::new(4);
+        drop(events.subscribe_lossless());
+        let mut live = events.subscribe_lossless();
+        let _ = events.send(ended(0));
+        assert_eq!(events.lossless.lock().len(), 1);
+        drop(events);
+        assert_eq!(live.try_recv().unwrap(), ended(0));
+        assert!(matches!(
+            live.try_recv(),
+            Err(tokio::sync::mpsc::error::TryRecvError::Disconnected)
+        ));
     }
 }
 

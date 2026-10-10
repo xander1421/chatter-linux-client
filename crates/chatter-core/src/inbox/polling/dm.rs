@@ -906,12 +906,11 @@ pub(crate) fn dispatch_dm_content(
                 "Call key offer received (incoming call with ephemeral key)"
             );
 
+            // DMs are channel-free: a DM call's conversation key is the peer
+            // (`ActiveConversation::ServerDm` start, the orchestrator's DmStandard
+            // ring, the history row), as on the sealed-sender path.
             let resolved_channel_id = if channel_id.is_empty() {
-                if let Some(current_user) = current_user_id {
-                    ChannelId::from_dm_participants(current_user, sender_id).to_string()
-                } else {
-                    peer_id.to_string()
-                }
+                sender_id.to_string()
             } else {
                 channel_id
             };
