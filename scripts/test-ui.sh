@@ -3,10 +3,11 @@
 # VALIDATED-UI regression gate — the UI analog of `make test-validated`.
 #
 # Runs BOTH proof layers in one shot:
-#   LAYER 1 (headless-dynamic): the slint::testing suite in
-#       crates/chatter-ui/tests/ui_wiring.rs — boots the real MainWindow under
-#       the headless testing backend, drives real interactions, and asserts the
-#       bound property/core state changed after the round-trip.
+#   LAYER 1 (headless-dynamic): every chatter-ui test target — the lib tests
+#       and the slint::testing suites in crates/chatter-ui/tests/ (ui_wiring
+#       boots the real MainWindow under the headless testing backend, drives
+#       real interactions, and asserts the bound property/core state changed
+#       after the round-trip; the others pin layout, rendering and regressions).
 #   LAYER 2 (wiring-static): scripts/ui-wiring-lint.py — flags dangling
 #       MainWindow callbacks, LOCAL-ONLY handlers, STUB (dead) handlers,
 #       imports that never render, callbacks nothing invokes, and right-click
@@ -49,36 +50,20 @@ LINT_RC=$?
 
 echo
 echo "=================================================================="
-echo " VALIDATED-UI  ·  LAYER 1 — headless slint::testing suite"
+echo " VALIDATED-UI  ·  LAYER 1 — every chatter-ui test target, headless"
 echo "=================================================================="
-# The debug-info flag changes codegen, so the first run rebuilds; subsequent
-# runs are incremental. Filter the benign per-query debug-info notice.
-FEATURES=ui-test-debug,chatter-core/dev-trust-root,chatter-core/insecure-test-anchors
+# The lib tests and all integration targets (tests/*.rs): ui_wiring, the
+# ui_layout geometry suite, the ui_render smoke (is anything ON SCREEN), and
+# the per-regression binaries. Each target is its own process, which the
+# integration testing backend needs (it is once-per-process). The debug-info
+# flag changes codegen, so the first run rebuilds; later runs are incremental.
+# chatter-core/testing widens the service accessors reaction_snapshot uses.
+# Filter the benign per-query debug-info notice.
+FEATURES=ui-test-debug,chatter-core/dev-trust-root,chatter-core/insecure-test-anchors,chatter-core/testing
 
-cargo test -j 2 -p chatter-ui --features $FEATURES --lib --test ui_wiring 2>&1 \
+CHATTER_NO_KEYRING=1 cargo test -j 2 -p chatter-ui --features $FEATURES --tests --no-fail-fast 2>&1 \
     | grep -v 'requires the presence of debug info'
 TEST_RC=${PIPESTATUS[0]}
-
-echo
-echo "=================================================================="
-echo " VALIDATED-UI  ·  LAYER 1 — geometry/layout suite"
-echo "=================================================================="
-# Separate binary: the integration testing backend (real layout passes) is
-# once-per-process and ui_wiring already claims it.
-cargo test -j 2 -p chatter-ui --features $FEATURES --test ui_layout 2>&1 \
-    | grep -v 'requires the presence of debug info'
-LAYOUT_RC=${PIPESTATUS[0]}
-
-echo
-echo "=================================================================="
-echo " VALIDATED-UI  ·  LAYER 1 — render smoke (is anything ON SCREEN)"
-echo "=================================================================="
-# Third binary for the same once-per-process reason. This is the layer that
-# answers the question 43/43 green could not: does the main view actually
-# render its columns, or is the app a blank screen with live callbacks?
-cargo test -j 2 -p chatter-ui --features $FEATURES --test ui_render 2>&1 \
-    | grep -v 'requires the presence of debug info'
-RENDER_RC=${PIPESTATUS[0]}
 
 echo
 echo "=================================================================="
@@ -86,13 +71,10 @@ echo " RESULT"
 echo "=================================================================="
 echo "  dev-credential gate: $([ $DEVGATE_RC -eq 0 ] && echo PASS || echo 'FAIL (dev creds would ship)')"
 echo "  static wiring lint : $([ $LINT_RC -eq 0 ] && echo PASS || echo 'FAIL (stub/dead wire)')"
-echo "  headless UI suite  : $([ $TEST_RC -eq 0 ] && echo PASS || echo FAIL)"
-echo "  layout suite       : $([ $LAYOUT_RC -eq 0 ] && echo PASS || echo FAIL)"
-echo "  render smoke       : $([ $RENDER_RC -eq 0 ] && echo PASS || echo FAIL)"
+echo "  chatter-ui tests   : $([ $TEST_RC -eq 0 ] && echo PASS || echo FAIL)"
 
 # Everything the lint reports as "known" is allowlisted with a written reason in
 # scripts/ui-wiring-lint.py — 3 code-preview no-ops, 1 never-rendered import,
 # 7 never-invoked callbacks. Those allowlists are the positive control: they are
 # real findings the gate CAN see, held green so a NEW one stands out.
-[ $TEST_RC -eq 0 ] && [ $LINT_RC -eq 0 ] && [ $LAYOUT_RC -eq 0 ] && [ $RENDER_RC -eq 0 ] \
-    && [ $DEVGATE_RC -eq 0 ]
+[ $TEST_RC -eq 0 ] && [ $LINT_RC -eq 0 ] && [ $DEVGATE_RC -eq 0 ]
