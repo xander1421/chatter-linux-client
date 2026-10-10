@@ -1090,8 +1090,10 @@ mod tests {
             .unwrap();
         assert!(client.recover_composer_send(send.clone(), false).is_none());
 
+        // Sign-out as `logout` does it: the session's composer state goes
+        // first. Even another login of the same account is a new session.
+        client.clear_composer_session();
         client.auth_state().set_logged_out();
-        // Even another login of the same account is a new session.
         client.auth_state().set_logged_in(user, 1, "A again".into());
         assert!(!client.composer_session_is_current(send.session_revision));
         assert!(
@@ -1582,7 +1584,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_file_deleted_from_disk_stays_as_evidence_and_orphans_are_swept() {
+    async fn a_file_deleted_from_disk_stays_as_evidence_and_unacknowledged_files_are_kept() {
         let (client, dir) = client();
         let user = crate::domain::ids::UserId::new();
         client.auth_state().set_logged_in(user, 1, "A".into());
@@ -1602,7 +1604,9 @@ mod tests {
         let tray = client.chat_state().get_pending_attachments();
         assert_eq!(tray.len(), 1);
         assert_eq!(tray[0].path, gone.path);
-        assert!(!orphan.exists(), "orphaned staged file survived the sweep");
+        // Not named by the row, but it may be a staging write whose row
+        // update never landed: kept until removal, send or sign-out.
+        assert!(orphan.exists(), "unacknowledged staged file was deleted");
     }
 
     #[tokio::test]
