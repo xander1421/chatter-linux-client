@@ -366,10 +366,10 @@ pub fn dispatch_common_content<B: AnonInboxBackend>(
             if let Some(delete) = &data_msg.delete {
                 if delete.target_call_id.is_some()
                     || delete.destination_user_id.is_some()
-                    || delete
+                    || !delete
                         .target_author_aci
                         .as_deref()
-                        .is_some_and(|author| author.parse::<UserId>().ok() != Some(*sender_id))
+                        .is_some_and(|author| author.parse::<UserId>().ok() == Some(*sender_id))
                 {
                     return CommonDispatchOutcome::Dropped;
                 }
@@ -695,23 +695,18 @@ mod tests {
     }
 
     fn delete_events(row_matched: bool) -> usize {
-        let content = Content {
-            content: Some(content_v1::content::Content::DataMessage(
-                content_v1::DataMessage {
-                    delete: Some(content_v1::Delete {
-                        target_sent_timestamp: 42,
-                        target_author_aci: None,
-                        destination_user_id: None,
-                        target_call_id: None,
-                    }),
-                    ..Default::default()
-                },
-            )),
-            ..Default::default()
-        };
+        let sender = UserId::new();
+        let wire = crate::services::gateway::builders::build_targeted_delete_content(
+            42,
+            Some(&sender.to_string()),
+            None,
+        );
+        let content =
+            <Content as prost::Message>::decode(prost::Message::encode_to_vec(&wire).as_slice())
+                .unwrap();
         match dispatch_common_content(
             &AnonGroupId::new(),
-            &UserId::new(),
+            &sender,
             &content,
             &DeleteOnly { row_matched },
         ) {
@@ -731,24 +726,26 @@ mod tests {
     }
 
     #[test]
-    fn group_delete_rejects_forged_author_even_when_sender_row_exists() {
+    fn group_delete_rejects_forged_or_missing_author_even_when_sender_row_exists() {
         let sender = UserId::new();
-        let wire = crate::services::gateway::builders::build_targeted_delete_content(
-            42,
-            Some(&UserId::new().to_string()),
-            None,
-        );
-        let bytes = prost::Message::encode_to_vec(&wire);
-        let content = <Content as prost::Message>::decode(bytes.as_slice()).unwrap();
-        assert!(matches!(
-            dispatch_common_content(
-                &AnonGroupId::new(),
-                &sender,
-                &content,
-                &DeleteOnly { row_matched: true }
-            ),
-            CommonDispatchOutcome::Dropped
-        ));
+        for author in [Some(UserId::new().to_string()), None] {
+            let wire = crate::services::gateway::builders::build_targeted_delete_content(
+                42,
+                author.as_deref(),
+                None,
+            );
+            let bytes = prost::Message::encode_to_vec(&wire);
+            let content = <Content as prost::Message>::decode(bytes.as_slice()).unwrap();
+            assert!(matches!(
+                dispatch_common_content(
+                    &AnonGroupId::new(),
+                    &sender,
+                    &content,
+                    &DeleteOnly { row_matched: true }
+                ),
+                CommonDispatchOutcome::Dropped
+            ));
+        }
     }
 
     /// An anonymous-group edit goes through the one edit choke point: held

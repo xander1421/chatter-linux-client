@@ -2282,10 +2282,10 @@ pub fn dispatch_control_content(
                     });
                 } else if delete.target_call_id.is_some()
                     || delete.destination_user_id.is_some()
-                    || delete
+                    || !delete
                         .target_author_aci
                         .as_deref()
-                        .is_some_and(|author| author.parse::<UserId>().ok() != Some(*sender_id))
+                        .is_some_and(|author| author.parse::<UserId>().ok() == Some(*sender_id))
                 {
                     return;
                 } else if let Ok(channel_id) = dm.channel_id.parse::<ChannelId>() {

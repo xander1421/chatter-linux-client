@@ -24,7 +24,6 @@ pub(crate) mod dm_outbox;
 pub(crate) use dm_outbox::spawn_dm_send_recovery;
 pub mod conversion;
 pub mod core;
-mod pin;
 mod saved;
 pub use saved::SavedSyncOutcome;
 pub(crate) use saved::persist_saved_device_snapshot;
@@ -1606,11 +1605,6 @@ impl MessageService {
         remove: bool,
         reaction_ts: u64,
     ) -> Result<bool, MessageError> {
-        let target_sent_at_ns = self.message_repo.resolve_channel_reaction_clock(
-            scope,
-            target_author,
-            target_sent_at_ns,
-        )?;
         let allowed = *reactor == self.current_user_id()?
             || match scope.kind {
                 ConversationType::ServerDm => scope.id == ChannelId::from(*reactor),
@@ -2385,7 +2379,7 @@ mod inbound_target_tests {
         let stats = Arc::new(RwLock::new(InboxStats::default()));
         let other_channel = ChannelId::new();
         // Insert other types first to expose the old global LIMIT 1 lookup.
-        for (ts, held, explicit_author) in [(930, true, true), (931, false, false)] {
+        for (ts, held) in [(930, true), (931, false)] {
             let mut survivors = Vec::new();
             for (conversation, kind, author) in [
                 (f.channel, ConversationType::ServerDm, f.carol),
@@ -2414,7 +2408,7 @@ mod inbound_target_tests {
             let channel = f.channel.to_string();
             let content = crate::services::gateway::builders::build_targeted_delete_content(
                 ts,
-                explicit_author.then_some(author.as_str()),
+                Some(author.as_str()),
                 Some(&channel),
             );
             dispatch_control_content(
@@ -2477,6 +2471,7 @@ mod inbound_target_tests {
             (2, Some("invalid".into()), None),
             (3, Some(f.carol.to_string()), Some(f.me.to_string())),
             (4, None, Some(String::new())),
+            (5, None, None),
         ] {
             let ts = 940 + index;
             let targets: Vec<_> = [f.me, f.carol]
