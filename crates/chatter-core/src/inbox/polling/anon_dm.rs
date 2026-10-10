@@ -118,7 +118,7 @@ pub(crate) fn route_anon_dm_content(
                 responder_mailbox_pk: accept.responder_mailbox_pk,
                 profile_key: accept.profile_key,
                 encrypted_display_name: accept.encrypted_display_name,
-                encrypted_avatar: accept.encrypted_avatar,
+                avatar: accept.avatar,
                 timestamp: accept.timestamp,
             }])
         }
@@ -153,7 +153,7 @@ pub(crate) fn route_anon_dm_content(
                         timestamp: invite.timestamp,
                         profile_key: invite.profile_key.clone(),
                         encrypted_display_name: invite.encrypted_display_name.clone(),
-                        encrypted_avatar: invite.encrypted_avatar.clone(),
+                        avatar: invite.avatar.clone(),
                     }])
                 }
                 Some(content_v1::content::Content::AnonGroupJoinAck(ack)) => {
@@ -169,7 +169,7 @@ pub(crate) fn route_anon_dm_content(
                         timestamp: ack.timestamp,
                         profile_key: ack.profile_key.clone(),
                         encrypted_display_name: ack.encrypted_display_name.clone(),
-                        encrypted_avatar: ack.encrypted_avatar.clone(),
+                        avatar: ack.avatar.clone(),
                     }])
                 }
                 Some(content_v1::content::Content::AnonGroupMemberList(list)) => {
@@ -227,7 +227,7 @@ pub(crate) fn route_anon_dm_content(
             tracing::info!(
                 conversation_id = %conversation_id,
                 has_encrypted_display_name = profile_update.encrypted_display_name.is_some(),
-                has_avatar = profile_update.encrypted_avatar.is_some(),
+                has_avatar = profile_update.avatar.is_some(),
                 has_avatar_url = profile_update.avatar_url.is_some(),
                 has_bio = profile_update.bio.is_some(),
                 "[ANON_DM] Received profile update from peer"

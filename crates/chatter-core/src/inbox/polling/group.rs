@@ -516,7 +516,7 @@ async fn process_sealed_sender_group_message(
             timestamp,
             profile_key,
             encrypted_display_name,
-            encrypted_avatar,
+            avatar,
         } => {
             tracing::info!(
                 has_profile = profile_key.is_some(),
@@ -532,7 +532,7 @@ async fn process_sealed_sender_group_message(
                 timestamp,
                 profile_key,
                 encrypted_display_name,
-                encrypted_avatar,
+                avatar,
             });
         }
         SealedSenderResult::ControlContent { .. } => {

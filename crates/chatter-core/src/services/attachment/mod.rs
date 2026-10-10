@@ -366,13 +366,14 @@ impl AttachmentService {
     }
 
     /// Stream ciphertext into a private staging file without retaining the
-    /// entire object in RAM. Routing and trust match the in-memory CDN path.
+    /// entire object in RAM, refusing a body over `limit` bytes. Routing and
+    /// trust match the in-memory CDN path.
     pub(crate) async fn cdn_http_get_to_file(
         &self,
         url: &str,
         file: &mut tokio::fs::File,
+        limit: u64,
     ) -> Result<u64, AttachmentError> {
-        let limit = crate::network::anon_http::storage_response_limit() as u64;
         if self.cdn_over_tor()? {
             #[cfg(feature = "onion")]
             {

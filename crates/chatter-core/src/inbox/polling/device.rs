@@ -2061,7 +2061,7 @@ fn dispatch_secret_chat_bootstrap(
             intro_message: (!request.intro_message.is_empty()).then_some(request.intro_message),
             profile_key: request.profile_key,
             encrypted_display_name: request.encrypted_display_name,
-            encrypted_avatar: request.encrypted_avatar,
+            avatar: request.avatar,
             timestamp: request.timestamp,
         },
         content::Content::AnonGroupInvite(invite) => InboxEvent::AnonGroupInvite {
@@ -2073,7 +2073,7 @@ fn dispatch_secret_chat_bootstrap(
             timestamp: invite.timestamp,
             profile_key: invite.profile_key,
             encrypted_display_name: invite.encrypted_display_name,
-            encrypted_avatar: invite.encrypted_avatar,
+            avatar: invite.avatar,
         },
         _ => return,
     };

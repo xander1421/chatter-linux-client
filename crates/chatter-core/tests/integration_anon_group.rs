@@ -278,7 +278,7 @@ async fn test_anon_group_content_serialization() {
             .as_nanos() as u64,
         profile_key: None,
         encrypted_display_name: None,
-        encrypted_avatar: None,
+        avatar: None,
     };
 
     let content = Content {
@@ -367,7 +367,7 @@ async fn test_anon_group_join_ack_content() {
             .as_nanos() as u64,
         profile_key: None,
         encrypted_display_name: None,
-        encrypted_avatar: None,
+        avatar: None,
     };
 
     let content = Content {
@@ -505,7 +505,7 @@ async fn test_anon_group_member_list_content() {
                 role: if i == 0 { 2 } else { 0 }, // Owner = 2, Member = 0
                 profile_key: None,
                 encrypted_display_name: None,
-                encrypted_avatar: None,
+                avatar: None,
                 admission_timestamp: 0,
                 device_id: 1,
             }

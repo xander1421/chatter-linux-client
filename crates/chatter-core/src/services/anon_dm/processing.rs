@@ -269,7 +269,6 @@ impl AnonDmService {
 
                 // Validate sender is part of the conversation (double-check already done above but keep for consistency)
                 if let Ok(Some(mut conv)) = self.anon_dm_repo.get_conversation(conversation_id) {
-                    let mut decrypted_avatar = None;
                     let profile_key: Option<[u8; 32]> =
                         profile_update.profile_key.as_ref().and_then(|pk| {
                             if pk.len() == 32 {
@@ -288,25 +287,8 @@ impl AnonDmService {
                         conv.peer_display_name = Some(name.clone());
                     }
 
-                    if let (Some(pk), Some(encrypted)) =
-                        (&profile_key, &profile_update.encrypted_avatar)
-                    {
-                        if !encrypted.is_empty() {
-                            match profile_crypto::decrypt_avatar(pk, encrypted) {
-                                Ok(avatar) => {
-                                    tracing::debug!("Decrypted peer avatar from profile update");
-                                    decrypted_avatar = Some(avatar.clone());
-                                    conv.peer_avatar = Some(avatar);
-                                }
-                                Err(e) => {
-                                    tracing::debug!(
-                                        "Failed to decrypt avatar in profile update: {}",
-                                        e
-                                    );
-                                }
-                            }
-                        }
-                    }
+                    // The avatar pointer is fetched over Tor after this
+                    // (inbox_processor `refresh_peer_avatar`), never here.
 
                     // Store the updated conversation
                     if let Err(e) = self.anon_dm_repo.update_conversation(&conv) {
@@ -321,7 +303,7 @@ impl AnonDmService {
                         conversation_id: *conversation_id,
                         user_id: *sender_id,
                         display_name,
-                        avatar: decrypted_avatar,
+                        avatar: None,
                         avatar_url: profile_update.avatar_url.clone(),
                         bio: profile_update.bio.clone(),
                         timestamp: profile_update.timestamp,
@@ -339,9 +321,9 @@ impl AnonDmService {
                     pk.copy_from_slice(&invite.inviter_mailbox_pk);
                 }
 
-                // Decrypt profile if key is present
+                // Decrypt the name if the key is present. The avatar pointer
+                // is fetched only on the inbox-processor invite path.
                 let mut display_name = None;
-                let mut avatar = None;
                 let profile_key: Option<[u8; 32]> = invite.profile_key.as_ref().and_then(|pk| {
                     if pk.len() == 32 {
                         Some(pk.as_slice().try_into().unwrap())
@@ -353,9 +335,6 @@ impl AnonDmService {
                 if let Some(pk) = &profile_key {
                     if let Some(encrypted) = &invite.encrypted_display_name {
                         display_name = profile_crypto::decrypt_display_name(pk, encrypted).ok();
-                    }
-                    if let Some(encrypted) = &invite.encrypted_avatar {
-                        avatar = profile_crypto::decrypt_avatar(pk, encrypted).ok();
                     }
                 }
 
@@ -379,7 +358,7 @@ impl AnonDmService {
                         inviter_mailbox_pk: pk,
                         profile_key,
                         inviter_display_name: display_name,
-                        inviter_avatar: avatar,
+                        inviter_avatar: None,
                     });
                 }
             }
@@ -390,9 +369,8 @@ impl AnonDmService {
                     crate::domain::anon_group::AnonGroupId::try_from_slice(&ack.group_id)
                         .unwrap_or_default();
 
-                // Decrypt profile if key is present
+                // Decrypt the name if the key is present (see invite above).
                 let mut display_name = None;
-                let mut avatar = None;
                 let profile_key: Option<[u8; 32]> = ack.profile_key.as_ref().and_then(|pk| {
                     if pk.len() == 32 {
                         Some(pk.as_slice().try_into().unwrap())
@@ -404,9 +382,6 @@ impl AnonDmService {
                 if let Some(pk) = &profile_key {
                     if let Some(encrypted) = &ack.encrypted_display_name {
                         display_name = profile_crypto::decrypt_display_name(pk, encrypted).ok();
-                    }
-                    if let Some(encrypted) = &ack.encrypted_avatar {
-                        avatar = profile_crypto::decrypt_avatar(pk, encrypted).ok();
                     }
                 }
 
@@ -420,7 +395,7 @@ impl AnonDmService {
                     user_id: *sender_id,
                     profile_key,
                     display_name,
-                    avatar,
+                    avatar: None,
                 });
             }
             Some(ContentType::AnonGroupMemberList(list)) => {

@@ -49,6 +49,7 @@ pub mod presence_service;
 pub mod profile_visibility;
 pub mod quick_switcher;
 pub mod search;
+pub(crate) mod secret_avatar;
 pub mod section_service;
 pub mod semantic_search;
 pub mod server_records;

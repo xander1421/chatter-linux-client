@@ -61,6 +61,45 @@ impl AnonGroupService {
             .flatten()
     }
 
+    /// The secret-chat attachment service: every transfer over Tor.
+    fn secret_attachments(&self) -> crate::services::AttachmentService {
+        crate::services::AttachmentService::new(
+            self.attachment_repo.clone(),
+            self.grpc_pool.clone(),
+        )
+        .for_secret_chat()
+    }
+
+    /// The pointer for `avatar` (ours, or a member's we relay in a roster):
+    /// uploaded once over Tor, then reused (see [`crate::services::secret_avatar`]).
+    pub(crate) async fn avatar_pointer(
+        &self,
+        avatar: &[u8],
+    ) -> Option<crate::proto::content_v1::AttachmentPointer> {
+        crate::services::secret_avatar::pointer_for(
+            &self.settings_repo,
+            &self.secret_attachments(),
+            avatar,
+        )
+        .await
+    }
+
+    /// The avatar a member's pointer names; `current` is what we hold for them.
+    pub(crate) async fn resolve_member_avatar(
+        &self,
+        pointer: Option<&crate::proto::content_v1::AttachmentPointer>,
+        current: Option<Vec<u8>>,
+    ) -> Option<Vec<u8>> {
+        crate::services::secret_avatar::resolve(&self.secret_attachments(), pointer, current).await
+    }
+
+    /// Our avatar's pointer.
+    pub(crate) async fn my_avatar_pointer(
+        &self,
+    ) -> Option<crate::proto::content_v1::AttachmentPointer> {
+        self.avatar_pointer(&self.get_my_avatar()?).await
+    }
+
     /// Create a new anonymous group.
     ///
     /// The caller becomes the owner. Invites are sent to the specified users

@@ -75,18 +75,15 @@ impl AnonDmService {
         profile_key: Option<&[u8; 32]>,
         display_name: &str,
     ) -> Result<(), AnonDmError> {
-        // Encrypt display name and avatar with profile key if available
-        // (matches AnonDmRequest encryption for consistency)
-        let (encrypted_display_name, encrypted_avatar) = if let Some(pk) = profile_key {
+        // Name under the profile key, avatar as a pointer (as in AnonDmRequest).
+        let (encrypted_display_name, avatar) = if let Some(pk) = profile_key {
             // Encrypt display name
             let enc_name = if !display_name.is_empty() {
                 crate::crypto::profile_crypto::encrypt_display_name(pk, display_name).ok()
             } else {
                 None
             };
-            // Encrypt avatar (stored locally, shared encrypted during bootstrap)
-            let enc_avatar = self.get_encrypted_avatar(pk);
-            (enc_name, enc_avatar)
+            (enc_name, self.my_avatar_pointer().await)
         } else {
             (None, None)
         };
@@ -97,7 +94,7 @@ impl AnonDmService {
             profile_key: profile_key.map(|k| k.to_vec()),
             timestamp: TimestampNanos::now().as_u64(),
             encrypted_display_name,
-            encrypted_avatar,
+            avatar,
         };
 
         let content = Content {
@@ -321,7 +318,8 @@ impl AnonDmService {
         intro_message: Option<&str>,
         profile_key: Option<Vec<u8>>,
         encrypted_display_name: Option<Vec<u8>>,
-        encrypted_avatar: Option<Vec<u8>>,
+        // Already fetched from the sender's avatar pointer.
+        avatar: Option<Vec<u8>>,
     ) -> Result<(crate::domain::anon_dm::AnonDm, DecryptedPeerProfile), AnonDmError> {
         use crate::crypto::profile_crypto;
 
@@ -345,14 +343,6 @@ impl AnonDmService {
                 }
             }
             _ => "Unknown".to_string(),
-        };
-
-        // Decrypt avatar
-        let avatar = match (&profile_key_arr, &encrypted_avatar) {
-            (Some(pk), Some(encrypted)) if !encrypted.is_empty() => {
-                profile_crypto::decrypt_avatar(pk, encrypted).ok()
-            }
-            _ => None,
         };
 
         tracing::debug!(
@@ -398,7 +388,8 @@ impl AnonDmService {
         responder_mailbox_pk: [u8; 32],
         profile_key: Option<Vec<u8>>,
         encrypted_display_name: Option<Vec<u8>>,
-        encrypted_avatar: Option<Vec<u8>>,
+        // Already fetched from the sender's avatar pointer.
+        avatar: Option<Vec<u8>>,
     ) -> Result<DecryptedPeerProfile, AnonDmError> {
         use crate::crypto::profile_crypto;
 
@@ -422,14 +413,6 @@ impl AnonDmService {
                 }
             }
             _ => "Unknown".to_string(),
-        };
-
-        // Decrypt avatar
-        let avatar = match (&profile_key_arr, &encrypted_avatar) {
-            (Some(pk), Some(encrypted)) if !encrypted.is_empty() => {
-                profile_crypto::decrypt_avatar(pk, encrypted).ok()
-            }
-            _ => None,
         };
 
         tracing::debug!(

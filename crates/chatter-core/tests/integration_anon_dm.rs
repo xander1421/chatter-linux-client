@@ -250,7 +250,7 @@ async fn test_anon_dm_request_serialization() {
             .as_millis() as u64,
         profile_key: Some(vec![0u8; 32]), // Optional profile key
         encrypted_display_name: None,
-        encrypted_avatar: None,
+        avatar: None,
     };
 
     let content = Content {
@@ -304,7 +304,7 @@ async fn test_anon_dm_accept_serialization() {
             .as_millis() as u64,
         profile_key: Some(vec![0u8; 32]),
         encrypted_display_name: None,
-        encrypted_avatar: None,
+        avatar: None,
     };
 
     let content = Content {

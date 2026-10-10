@@ -83,7 +83,11 @@ impl AttachmentService {
         })?);
         let ciphertext_size = tokio::time::timeout(
             std::time::Duration::from_secs(20 * 60),
-            self.cdn_http_get_to_file(&download_response.download_url, &mut file),
+            self.cdn_http_get_to_file(
+                &download_response.download_url,
+                &mut file,
+                crate::network::anon_http::storage_response_limit() as u64,
+            ),
         )
         .await
         .map_err(|_| AttachmentError::NetworkError("storage download timed out".into()))??;

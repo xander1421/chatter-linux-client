@@ -300,7 +300,7 @@ impl AnonGroupService {
                     }
                 });
 
-                use crate::crypto::profile_crypto::{decrypt_avatar, decrypt_display_name};
+                use crate::crypto::profile_crypto::decrypt_display_name;
 
                 let display_name = match (&profile_key, &profile.encrypted_display_name) {
                     (Some(pk), Some(enc)) if !enc.is_empty() => {
@@ -308,15 +308,19 @@ impl AnonGroupService {
                     }
                     _ => None,
                 };
-                let avatar = match (&profile_key, &profile.encrypted_avatar) {
-                    (Some(pk), Some(enc)) if !enc.is_empty() => decrypt_avatar(pk, enc).ok(),
-                    _ => None,
-                };
+                let avatar = profile.avatar.clone();
 
                 let svc = self.clone();
                 let group_id_owned = *group_id;
                 let peer_id_owned = *peer_id;
                 tokio::spawn(async move {
+                    let current = svc
+                        .anon_group_repo
+                        .get_member(&group_id_owned, &peer_id_owned)
+                        .ok()
+                        .flatten()
+                        .and_then(|m| m.avatar);
+                    let avatar = svc.resolve_member_avatar(avatar.as_ref(), current).await;
                     if let Err(e) = svc
                         .handle_profile_share(
                             group_id_owned,

@@ -66,7 +66,7 @@ fn test_anon_group_join_ack_content_serialization() {
         timestamp,
         profile_key: None,
         encrypted_display_name: None,
-        encrypted_avatar: None,
+        avatar: None,
     };
 
     let content = Content {
@@ -107,7 +107,7 @@ fn test_sealed_sender_result_has_join_ack_variant() {
         timestamp,
         profile_key: None,
         encrypted_display_name: None,
-        encrypted_avatar: None,
+        avatar: None,
     };
 
     // Verify we can pattern match on it
@@ -183,7 +183,7 @@ fn test_inbox_event_has_join_ack_variant() {
         timestamp,
         profile_key: None,
         encrypted_display_name: None,
-        encrypted_avatar: None,
+        avatar: None,
     };
 
     // Verify we can pattern match

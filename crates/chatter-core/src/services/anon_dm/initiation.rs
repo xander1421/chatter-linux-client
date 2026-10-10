@@ -313,8 +313,9 @@ impl AnonDmService {
         intro_message: Option<&str>,
         profile_key: Option<&[u8; 32]>,
     ) -> Result<(), AnonDmError> {
-        // Encrypt display name and avatar with profile key if available
-        let (encrypted_display_name, encrypted_avatar) = if let Some(pk) = profile_key {
+        // Name under the profile key; the avatar as a pointer to its upload,
+        // never inline: this request is sealed to a device inbox (8 KiB cap).
+        let (encrypted_display_name, avatar) = if let Some(pk) = profile_key {
             // Encrypt display name
             let enc_name = {
                 let display_name = self.get_my_display_name().unwrap_or_default();
@@ -324,9 +325,7 @@ impl AnonDmService {
                     None
                 }
             };
-            // Encrypt avatar (stored locally, shared encrypted during bootstrap)
-            let enc_avatar = self.get_encrypted_avatar(pk);
-            (enc_name, enc_avatar)
+            (enc_name, self.my_avatar_pointer().await)
         } else {
             (None, None)
         };
@@ -338,7 +337,7 @@ impl AnonDmService {
             profile_key: profile_key.map(|k| k.to_vec()),
             timestamp: TimestampNanos::now().as_u64(),
             encrypted_display_name,
-            encrypted_avatar,
+            avatar,
         };
 
         let content = Content {

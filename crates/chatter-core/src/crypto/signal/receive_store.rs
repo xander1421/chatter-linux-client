@@ -947,27 +947,26 @@ mod tests {
         );
     }
     #[tokio::test]
-    async fn group_join_ack_above_reaction_and_old_envelope_limits_routes_without_journaling() {
+    async fn group_post_above_reaction_and_old_envelope_limits_routes_without_journaling() {
         let mut f = fixture().await;
         f.key.transport = "anon_group".into();
         f.body = crate::proto::content_v1::Content {
             content: Some(
-                crate::proto::content_v1::content::Content::AnonGroupJoinAck(
-                    crate::proto::content_v1::AnonGroupJoinAck {
+                crate::proto::content_v1::content::Content::AnonGroupMessage(Box::new(
+                    crate::proto::content_v1::AnonGroupMessage {
                         group_id: uuid::Uuid::new_v4().as_bytes().to_vec(),
-                        joiner_mailbox_pk: vec![7; 32],
-                        timestamp: f.key.server_timestamp_ns,
-                        profile_key: Some(vec![9; 32]),
-                        encrypted_avatar: Some(
-                            crate::crypto::profile_crypto::encrypt_avatar(
-                                &[9; 32],
-                                &vec![8; 160 * 1024],
-                            )
-                            .unwrap(),
-                        ),
-                        ..Default::default()
+                        inner_content: Some(Box::new(crate::proto::content_v1::Content {
+                            content: Some(crate::proto::content_v1::content::Content::DataMessage(
+                                crate::proto::content_v1::DataMessage {
+                                    body: "x".repeat(160 * 1024),
+                                    ..Default::default()
+                                },
+                            )),
+                            timestamp: f.key.server_timestamp_ns,
+                            ..Default::default()
+                        })),
                     },
-                ),
+                )),
             ),
             ..Default::default()
         }

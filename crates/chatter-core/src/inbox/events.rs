@@ -526,8 +526,8 @@ pub enum InboxEvent {
         profile_key: Option<Vec<u8>>,
         /// Inviter's encrypted display name.
         encrypted_display_name: Option<Vec<u8>>,
-        /// Inviter's encrypted avatar.
-        encrypted_avatar: Option<Vec<u8>>,
+        /// Pointer to the inviter's avatar upload.
+        avatar: Option<crate::proto::content_v1::AttachmentPointer>,
     },
     /// Anonymous group join acknowledgment received.
     AnonGroupJoinAck {
@@ -546,8 +546,8 @@ pub enum InboxEvent {
         profile_key: Option<Vec<u8>>,
         /// Joiner's encrypted display name.
         encrypted_display_name: Option<Vec<u8>>,
-        /// Joiner's encrypted avatar.
-        encrypted_avatar: Option<Vec<u8>>,
+        /// Pointer to the joiner's avatar upload.
+        avatar: Option<crate::proto::content_v1::AttachmentPointer>,
     },
     /// Anonymous group member list received.
     AnonGroupMemberList {
@@ -622,8 +622,8 @@ pub enum InboxEvent {
         profile_key: Option<Vec<u8>>,
         /// Encrypted display name (AES-256-GCM with profile_key).
         encrypted_display_name: Option<Vec<u8>>,
-        /// Encrypted avatar (AES-256-GCM with profile_key).
-        encrypted_avatar: Option<Vec<u8>>,
+        /// Pointer to the peer's avatar upload (fetched over Tor).
+        avatar: Option<crate::proto::content_v1::AttachmentPointer>,
         /// Timestamp.
         timestamp: u64,
     },
@@ -642,8 +642,8 @@ pub enum InboxEvent {
         profile_key: Option<Vec<u8>>,
         /// Encrypted display name (AES-256-GCM with profile_key).
         encrypted_display_name: Option<Vec<u8>>,
-        /// Encrypted avatar (AES-256-GCM with profile_key).
-        encrypted_avatar: Option<Vec<u8>>,
+        /// Pointer to the peer's avatar upload (fetched over Tor).
+        avatar: Option<crate::proto::content_v1::AttachmentPointer>,
         /// Timestamp.
         timestamp: u64,
     },

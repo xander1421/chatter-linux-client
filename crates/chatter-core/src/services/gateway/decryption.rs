@@ -586,7 +586,7 @@ impl MessageGateway {
                     timestamp: ack.timestamp,
                     profile_key: ack.profile_key,
                     encrypted_display_name: ack.encrypted_display_name,
-                    encrypted_avatar: ack.encrypted_avatar,
+                    avatar: ack.avatar,
                 });
             }
 

@@ -194,8 +194,9 @@ impl AnonDmService {
 
     /// Persist the user's avatar bytes locally.
     ///
-    /// Bytes are never uploaded to the server; they only travel over
-    /// already-established Signal sessions via `send_profile_update`.
+    /// Secret chats share it as an encrypted upload whose pointer travels
+    /// end-to-end (see [`crate::services::secret_avatar`]); the server sees
+    /// only ciphertext.
     /// Callers must size-check; we enforce [`crate::domain::anon_dm_init::MAX_AVATAR_SIZE`]
     /// as defense in depth.
     pub fn set_my_avatar_bytes(&self, bytes: &[u8]) -> Result<(), AnonDmError> {
@@ -223,9 +224,8 @@ impl AnonDmService {
     // IP-disclosure primitive against whoever received their profile update, and
     // an unbounded allocation besides.
     //
-    // Nothing is lost by deleting it: a profile update already carries the
-    // avatar inline, encrypted under the conversation key and size-bounded like
-    // any other message body, and the receiving path has always preferred those
-    // bytes (see the `avatar` branch in the UI's anon-DM profile handler). The
-    // URL was only ever the fallback. Peer-supplied URLs are now ignored.
+    // Nothing is lost by deleting it: a profile update carries an attachment
+    // pointer whose URL our own server mints, fetched over Tor and bounded,
+    // MAC- and digest-checked (`services::secret_avatar`). Peer-supplied URLs
+    // are ignored.
 }

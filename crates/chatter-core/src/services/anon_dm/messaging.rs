@@ -338,16 +338,16 @@ impl AnonDmService {
 
         let peer_mailbox_pk = dm.peer_mailbox_pk.unwrap();
 
-        // Name and avatar travel only under our profile key, which
-        // `get_my_profile_key` withholds from anon peers unless our visibility
-        // is "everyone": a stranger never reads our real name otherwise.
+        // Name (under our profile key) and avatar pointer travel only with
+        // the profile key, which `get_my_profile_key` withholds from anon
+        // peers unless our visibility is "everyone": a stranger never reads
+        // our real name or sees our avatar otherwise.
         let profile_key = self.get_my_profile_key();
-        let (encrypted_display_name, encrypted_avatar, pk_bytes) = if let Some(pk) = &profile_key {
+        let (encrypted_display_name, avatar, pk_bytes) = if let Some(pk) = &profile_key {
             let enc_name = display_name.as_deref().and_then(|name| {
                 crate::crypto::profile_crypto::encrypt_display_name(pk, name).ok()
             });
-            let enc_avatar = self.get_encrypted_avatar(pk);
-            (enc_name, enc_avatar, Some(pk.to_vec()))
+            (enc_name, self.my_avatar_pointer().await, Some(pk.to_vec()))
         } else {
             (None, None, None)
         };
@@ -362,7 +362,7 @@ impl AnonDmService {
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
                 .as_nanos() as u64,
-            encrypted_avatar,
+            avatar,
             profile_key: pk_bytes,
         };
 

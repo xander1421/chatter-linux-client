@@ -28,17 +28,65 @@ impl AnonDmService {
             .flatten()
     }
 
-    /// Get encrypted avatar for sharing during bootstrap.
-    ///
-    /// Encrypts avatar with profile key for privacy-preserving sharing.
-    pub(crate) fn get_encrypted_avatar(&self, profile_key: &[u8; 32]) -> Option<Vec<u8>> {
-        use crate::storage::repositories::settings_keys;
-        let avatar = self
-            .settings_repo
-            .get_bytes(settings_keys::AVATAR)
-            .ok()
-            .flatten()?;
-        crate::crypto::profile_crypto::encrypt_avatar(profile_key, &avatar).ok()
+    /// The secret-chat attachment service: every transfer over Tor.
+    fn secret_attachments(&self) -> crate::services::AttachmentService {
+        crate::services::AttachmentService::new(
+            self.attachment_repo.clone(),
+            self.grpc_pool.clone(),
+        )
+        .for_secret_chat()
+    }
+
+    /// Our avatar as a pointer to an encrypted upload, sent only alongside a
+    /// shared profile key (see [`crate::services::secret_avatar`]).
+    pub(crate) async fn my_avatar_pointer(
+        &self,
+    ) -> Option<crate::proto::content_v1::AttachmentPointer> {
+        let avatar = self.get_user_avatar()?;
+        crate::services::secret_avatar::pointer_for(
+            &self.settings_repo,
+            &self.secret_attachments(),
+            &avatar,
+        )
+        .await
+    }
+
+    /// The avatar a peer's pointer names; `current` is what we hold for them.
+    pub(crate) async fn resolve_peer_avatar(
+        &self,
+        pointer: Option<&crate::proto::content_v1::AttachmentPointer>,
+        current: Option<Vec<u8>>,
+    ) -> Option<Vec<u8>> {
+        crate::services::secret_avatar::resolve(&self.secret_attachments(), pointer, current).await
+    }
+
+    /// Fetch the avatar a peer's profile update points at and store it when
+    /// it differs from the one we hold. Returns the new avatar, or `None`
+    /// when nothing changed (no conversation with this peer, same avatar,
+    /// fetch failed).
+    pub(crate) async fn refresh_peer_avatar(
+        &self,
+        conversation_id: &crate::domain::anon_dm::AnonDmId,
+        peer_id: &crate::domain::UserId,
+        pointer: &crate::proto::content_v1::AttachmentPointer,
+    ) -> Result<Option<Vec<u8>>, AnonDmError> {
+        let held = match self.anon_dm_repo.get_conversation(conversation_id)? {
+            Some(dm) if dm.peer_id == *peer_id && dm.is_ready() => dm.peer_avatar,
+            _ => return Ok(None),
+        };
+        let Some(avatar) = self.resolve_peer_avatar(Some(pointer), held.clone()).await else {
+            return Ok(None);
+        };
+        if held.as_ref() == Some(&avatar) {
+            return Ok(None);
+        }
+        // Re-read: the fetch took a while and the row may have moved on.
+        let Some(mut dm) = self.anon_dm_repo.get_conversation(conversation_id)? else {
+            return Ok(None);
+        };
+        dm.peer_avatar = Some(avatar.clone());
+        self.anon_dm_repo.update_conversation(&dm)?;
+        Ok(Some(avatar))
     }
 
     /// Get our Signal Protocol identity key.

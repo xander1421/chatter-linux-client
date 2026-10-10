@@ -306,7 +306,7 @@ impl AnonGroupService {
         self.require_invitation_owner(&group_id)?;
         let profile_key = self.get_my_profile_key();
         let mut encrypted_display_name = None;
-        let mut encrypted_avatar = None;
+        let mut avatar = None;
 
         if let Some(pk) = profile_key {
             if let Some(name) = self.get_my_display_name() {
@@ -315,9 +315,7 @@ impl AnonGroupService {
                         crate::crypto::profile_crypto::encrypt_display_name(&pk, &name).ok();
                 }
             }
-            if let Some(av) = self.get_my_avatar() {
-                encrypted_avatar = crate::crypto::profile_crypto::encrypt_avatar(&pk, &av).ok();
-            }
+            avatar = self.my_avatar_pointer().await;
         }
 
         let invite = Content {
@@ -329,7 +327,7 @@ impl AnonGroupService {
                     timestamp: TimestampNanos::now().as_u64(),
                     profile_key: profile_key.map(|k| k.to_vec()),
                     encrypted_display_name,
-                    encrypted_avatar,
+                    avatar,
                 },
             )),
             ephemeral_reply_to: None,
@@ -416,7 +414,7 @@ impl AnonGroupService {
         }
         let profile_key = self.get_my_profile_key();
         let mut encrypted_display_name = None;
-        let mut encrypted_avatar = None;
+        let mut avatar = None;
 
         if let Some(pk) = profile_key {
             if let Some(name) = self.get_my_display_name() {
@@ -425,9 +423,7 @@ impl AnonGroupService {
                         crate::crypto::profile_crypto::encrypt_display_name(&pk, &name).ok();
                 }
             }
-            if let Some(av) = self.get_my_avatar() {
-                encrypted_avatar = crate::crypto::profile_crypto::encrypt_avatar(&pk, &av).ok();
-            }
+            avatar = self.my_avatar_pointer().await;
         }
 
         let ack = AnonGroupJoinAck {
@@ -436,7 +432,7 @@ impl AnonGroupService {
             timestamp: TimestampNanos::now().as_u64(),
             profile_key: profile_key.map(|k| k.to_vec()),
             encrypted_display_name,
-            encrypted_avatar,
+            avatar,
         };
 
         let content = Content {
@@ -470,7 +466,7 @@ impl AnonGroupService {
     ) -> Result<(), AnonGroupError> {
         let profile_key = self.get_my_profile_key();
         let mut encrypted_display_name = None;
-        let mut encrypted_avatar = None;
+        let mut avatar = None;
 
         if let Some(pk) = profile_key {
             if let Some(name) = self.get_my_display_name() {
@@ -479,16 +475,14 @@ impl AnonGroupService {
                         crate::crypto::profile_crypto::encrypt_display_name(&pk, &name).ok();
                 }
             }
-            if let Some(av) = self.get_my_avatar() {
-                encrypted_avatar = crate::crypto::profile_crypto::encrypt_avatar(&pk, &av).ok();
-            }
+            avatar = self.my_avatar_pointer().await;
         }
 
         let profile_share = AnonGroupProfileShare {
             group_id: group_id.to_vec(),
             profile_key: profile_key.map(|k| k.to_vec()),
             encrypted_display_name,
-            encrypted_avatar,
+            avatar,
             timestamp: TimestampNanos::now().as_u64(),
         };
 
@@ -643,56 +637,50 @@ impl AnonGroupService {
             .cloned()
             .collect();
 
-        // Build member info list
-        let member_infos: Vec<AnonGroupMemberInfo> = members
-            .iter()
-            .map(|m| {
-                let profile_key = m.profile_key.map(|k| k.to_vec());
-                let mut encrypted_display_name = None;
-                let mut encrypted_avatar = None;
+        // Build member info list. Each member's avatar is relayed as a
+        // pointer: uploaded by us once per distinct avatar, then cached.
+        let mut member_infos: Vec<AnonGroupMemberInfo> = Vec::with_capacity(members.len());
+        for m in &members {
+            let profile_key = m.profile_key.map(|k| k.to_vec());
+            let mut encrypted_display_name = None;
+            let mut avatar = None;
 
-                if let Some(pk) = m.profile_key {
-                    if let Some(ref name) = m.display_name {
-                        if !name.is_empty() {
-                            match crate::crypto::profile_crypto::encrypt_display_name(&pk, name) {
-                                Ok(enc) => encrypted_display_name = Some(enc),
-                                Err(e) => {
-                                    tracing::warn!("Failed to encrypt display name for: {}", e)
-                                }
+            if let Some(pk) = m.profile_key {
+                if let Some(ref name) = m.display_name {
+                    if !name.is_empty() {
+                        match crate::crypto::profile_crypto::encrypt_display_name(&pk, name) {
+                            Ok(enc) => encrypted_display_name = Some(enc),
+                            Err(e) => {
+                                tracing::warn!("Failed to encrypt display name for: {}", e)
                             }
                         }
                     }
-                    if let Some(ref av) = m.avatar {
-                        if !av.is_empty() {
-                            match crate::crypto::profile_crypto::encrypt_avatar(&pk, av) {
-                                Ok(enc) => encrypted_avatar = Some(enc),
-                                Err(e) => tracing::warn!("Failed to encrypt avatar for: {}", e),
-                            }
-                        }
-                    }
+                }
+                if let Some(ref av) = m.avatar {
+                    avatar = self.avatar_pointer(av).await;
+                }
+            } else {
+                tracing::debug!(
+                    "No profile key for member in group - cannot encrypt profile for broadcast"
+                );
+            }
+
+            member_infos.push(AnonGroupMemberInfo {
+                user_id: m.user_id.as_bytes().to_vec(),
+                mailbox_pk: m.mailbox_pk.map(|pk| pk.to_vec()).unwrap_or_default(),
+                role: m.role.to_i32(),
+                profile_key,
+                encrypted_display_name,
+                avatar,
+                admission_timestamp: admissions[&m.user_id],
+                device_id: if m.user_id == current_user {
+                    my_device
                 } else {
-                    tracing::debug!(
-                        "No profile key for member in group - cannot encrypt profile for broadcast"
-                    );
+                    m.device_id
                 }
-
-                AnonGroupMemberInfo {
-                    user_id: m.user_id.as_bytes().to_vec(),
-                    mailbox_pk: m.mailbox_pk.map(|pk| pk.to_vec()).unwrap_or_default(),
-                    role: m.role.to_i32(),
-                    profile_key,
-                    encrypted_display_name,
-                    encrypted_avatar,
-                    admission_timestamp: admissions[&m.user_id],
-                    device_id: if m.user_id == current_user {
-                        my_device
-                    } else {
-                        m.device_id
-                    }
-                    .unwrap_or(0),
-                }
-            })
-            .collect();
+                .unwrap_or(0),
+            });
+        }
 
         let member_list = AnonGroupMemberList {
             group_id: group_id.to_vec(),
@@ -744,6 +732,49 @@ impl AnonGroupService {
             member_count.saturating_sub(1)
         );
         Ok(())
+    }
+
+    /// Fetch the avatars a member list points at and store each that differs
+    /// from the one we hold. Our own entry is skipped. Returns whether any
+    /// member's avatar changed.
+    pub async fn refresh_roster_avatars(
+        &self,
+        group_id: &AnonGroupId,
+        members: &[AnonGroupMemberInfo],
+    ) -> Result<bool, AnonGroupError> {
+        let current_user = self.current_user_id()?;
+        let mut changed = false;
+        for info in members {
+            let (Some(pointer), Some(user_id)) =
+                (info.avatar.as_ref(), UserId::try_from_slice(&info.user_id))
+            else {
+                continue;
+            };
+            if user_id == current_user {
+                continue;
+            }
+            let Some(member) = self.anon_group_repo.get_member(group_id, &user_id)? else {
+                continue;
+            };
+            let held = member.avatar.clone();
+            let Some(avatar) = self
+                .resolve_member_avatar(Some(pointer), held.clone())
+                .await
+            else {
+                continue;
+            };
+            if held.as_ref() != Some(&avatar) {
+                self.anon_group_repo.update_member_profile(
+                    group_id,
+                    &user_id,
+                    None,
+                    None,
+                    Some(avatar),
+                )?;
+                changed = true;
+            }
+        }
+        Ok(changed)
     }
 
     /// Handle an incoming member list update.
@@ -834,7 +865,7 @@ impl AnonGroupService {
                 None
             };
 
-            use crate::crypto::profile_crypto::{decrypt_avatar, decrypt_display_name};
+            use crate::crypto::profile_crypto::decrypt_display_name;
 
             let display_name: Option<String> =
                 match (&profile_key, &member_info.encrypted_display_name) {
@@ -860,18 +891,9 @@ impl AnonGroupService {
                     }
                 };
 
-            let avatar: Option<Vec<u8>> = match (&profile_key, &member_info.encrypted_avatar) {
-                (Some(pk), Some(encrypted)) if !encrypted.is_empty() => {
-                    match decrypt_avatar(pk, encrypted) {
-                        Ok(av) => Some(av),
-                        Err(e) => {
-                            tracing::warn!("Failed to decrypt avatar for: {}", e);
-                            None
-                        }
-                    }
-                }
-                _ => None,
-            };
+            // Avatars are pointers fetched after the roster is applied
+            // (`refresh_roster_avatars`); `None` keeps what we hold.
+            let avatar: Option<Vec<u8>> = None;
 
             let member = if let Some(pk) = mailbox_pk {
                 AnonGroupMember::with_mailbox(group_id, user_id, role, pk)
@@ -1268,7 +1290,7 @@ mod tests {
             role: role.to_i32(),
             profile_key: None,
             encrypted_display_name: None,
-            encrypted_avatar: None,
+            avatar: None,
             admission_timestamp: 0,
             device_id: 0,
         }

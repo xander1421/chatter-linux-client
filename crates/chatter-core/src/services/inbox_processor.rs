@@ -415,7 +415,7 @@ impl InboxEventProcessor {
                 timestamp: _,
                 profile_key,
                 encrypted_display_name,
-                encrypted_avatar,
+                avatar,
             } => {
                 self.handle_anon_group_invite(
                     *peer_id,
@@ -425,7 +425,7 @@ impl InboxEventProcessor {
                     inviter_mailbox_pk,
                     profile_key,
                     encrypted_display_name,
-                    encrypted_avatar,
+                    avatar,
                 );
                 // Return false - UI needs to add sidebar entry
             }
@@ -438,7 +438,7 @@ impl InboxEventProcessor {
                 timestamp,
                 profile_key,
                 encrypted_display_name,
-                encrypted_avatar,
+                avatar,
             } => {
                 self.handle_anon_group_join_ack(
                     *peer_id,
@@ -447,7 +447,7 @@ impl InboxEventProcessor {
                     joiner_mailbox_pk,
                     profile_key,
                     encrypted_display_name,
-                    encrypted_avatar,
+                    avatar,
                     *timestamp,
                 );
             }
@@ -476,21 +476,34 @@ impl InboxEventProcessor {
                     };
 
                 let anon_service = self.anon_group_service.clone();
-                let members_clone = members.clone();
+                let event_bus = self.event_bus.clone();
+                let members = members.clone();
                 let sender_id = *peer_id;
                 let timestamp = *timestamp;
-                let _ = tokio::task::spawn_blocking(move || {
-                    if let Err(e) = anon_service.handle_member_list_ordered(
-                        anon_group_id,
-                        sender_id,
-                        members_clone,
-                        timestamp,
-                    ) {
-                        tracing::error!(
+                tokio::spawn(async move {
+                    let service = anon_service.clone();
+                    let roster = members.clone();
+                    let applied = tokio::task::spawn_blocking(move || {
+                        service.handle_member_list_ordered(
+                            anon_group_id,
+                            sender_id,
+                            roster,
+                            timestamp,
+                        )
+                    })
+                    .await;
+                    match applied {
+                        Ok(Ok(true)) => {
+                            refresh_roster_avatars(anon_service, event_bus, anon_group_id, members)
+                                .await
+                        }
+                        Ok(Ok(false)) => {}
+                        Ok(Err(e)) => tracing::error!(
                             group_id = ?anon_group_id,
                             error = %e,
                             "Failed to handle member list"
-                        );
+                        ),
+                        Err(e) => tracing::error!(error = %e, "member list task panicked"),
                     }
                 });
             }
@@ -643,7 +656,7 @@ impl InboxEventProcessor {
                 intro_message,
                 profile_key,
                 encrypted_display_name,
-                encrypted_avatar,
+                avatar,
                 timestamp: _,
             } => {
                 self.handle_anon_dm_request(
@@ -654,7 +667,7 @@ impl InboxEventProcessor {
                     intro_message,
                     profile_key,
                     encrypted_display_name,
-                    encrypted_avatar,
+                    avatar,
                 );
                 // Return false - UI needs to add sidebar entry
             }
@@ -666,7 +679,7 @@ impl InboxEventProcessor {
                 responder_mailbox_pk,
                 profile_key,
                 encrypted_display_name,
-                encrypted_avatar,
+                avatar,
                 timestamp: _,
             } => {
                 self.handle_anon_dm_accept(
@@ -676,7 +689,7 @@ impl InboxEventProcessor {
                     responder_mailbox_pk,
                     profile_key,
                     encrypted_display_name,
-                    encrypted_avatar,
+                    avatar,
                 );
                 // Return false - UI needs to update sidebar entry
             }
@@ -1611,7 +1624,7 @@ impl InboxEventProcessor {
         inviter_mailbox_pk: &[u8],
         profile_key: &Option<Vec<u8>>,
         encrypted_display_name: &Option<Vec<u8>>,
-        encrypted_avatar: &Option<Vec<u8>>,
+        avatar: &Option<crate::proto::content_v1::AttachmentPointer>,
     ) {
         // A secret group: no inviter, group or name in the log.
         tracing::info!(
@@ -1652,7 +1665,7 @@ impl InboxEventProcessor {
             }
         });
 
-        use crate::crypto::profile_crypto::{decrypt_avatar, decrypt_display_name};
+        use crate::crypto::profile_crypto::decrypt_display_name;
 
         let inviter_display_name: Option<String> = match (&profile_key_arr, encrypted_display_name)
         {
@@ -1664,23 +1677,23 @@ impl InboxEventProcessor {
             _ => None,
         };
 
-        let inviter_avatar: Option<Vec<u8>> = match (&profile_key_arr, encrypted_avatar) {
-            (Some(pk), Some(encrypted)) if !encrypted.is_empty() => {
-                decrypt_avatar(pk, encrypted).ok()
-            }
-            _ => None,
-        };
-
         tracing::debug!(
             has_display_name = inviter_display_name.is_some(),
             "Decrypted inviter profile for group invite"
         );
 
-        // Emit domain event for UI to show invite dialog
-        self.event_bus
-            .emit_domain(DomainEvent::AnonGroupInviteReceived {
+        // Fetch the inviter's avatar over Tor, then show the invite dialog.
+        let anon_service = self.anon_group_service.clone();
+        let event_bus = self.event_bus.clone();
+        let avatar = avatar.clone();
+        let group_name = group_name.to_string();
+        tokio::spawn(async move {
+            let inviter_avatar = anon_service
+                .resolve_member_avatar(avatar.as_ref(), None)
+                .await;
+            event_bus.emit_domain(DomainEvent::AnonGroupInviteReceived {
                 group_id: anon_group_id,
-                group_name: group_name.to_string(),
+                group_name,
                 inviter_id: peer_id,
                 inviter_device_id: sender_device_id,
                 inviter_mailbox_pk: mailbox_pk,
@@ -1688,6 +1701,7 @@ impl InboxEventProcessor {
                 inviter_display_name,
                 inviter_avatar,
             });
+        });
     }
 
     fn handle_anon_group_join_ack(
@@ -1698,7 +1712,7 @@ impl InboxEventProcessor {
         joiner_mailbox_pk: &[u8],
         profile_key: &Option<Vec<u8>>,
         encrypted_display_name: &Option<Vec<u8>>,
-        encrypted_avatar: &Option<Vec<u8>>,
+        avatar: &Option<crate::proto::content_v1::AttachmentPointer>,
         timestamp: u64,
     ) {
         // A secret group: no joiner or group in the log.
@@ -1734,7 +1748,7 @@ impl InboxEventProcessor {
             }
         });
 
-        use crate::crypto::profile_crypto::{decrypt_avatar, decrypt_display_name};
+        use crate::crypto::profile_crypto::decrypt_display_name;
 
         let display_name: Option<String> = match (&profile_key_arr, encrypted_display_name) {
             (Some(pk), Some(encrypted)) if !encrypted.is_empty() => {
@@ -1744,13 +1758,7 @@ impl InboxEventProcessor {
             }
             _ => None,
         };
-
-        let avatar: Option<Vec<u8>> = match (&profile_key_arr, encrypted_avatar) {
-            (Some(pk), Some(encrypted)) if !encrypted.is_empty() => {
-                decrypt_avatar(pk, encrypted).ok()
-            }
-            _ => None,
-        };
+        let avatar = avatar.clone();
 
         tracing::debug!(
             has_display_name = display_name.is_some(),
@@ -1762,6 +1770,9 @@ impl InboxEventProcessor {
         let event_bus = self.event_bus.clone();
 
         tokio::spawn(async move {
+            let avatar = anon_service
+                .resolve_member_avatar(avatar.as_ref(), None)
+                .await;
             match anon_service
                 .handle_join_ack_ordered(
                     anon_group_id,
@@ -1820,6 +1831,16 @@ impl InboxEventProcessor {
             ) {
                 Ok(events) => {
                     for event in events {
+                        if let DomainEvent::AnonGroupMemberListReceived { group_id, members } =
+                            &event
+                        {
+                            tokio::spawn(refresh_roster_avatars(
+                                anon_group_service.clone(),
+                                event_bus.clone(),
+                                *group_id,
+                                members.clone(),
+                            ));
+                        }
                         event_bus.emit_domain(event);
                     }
                 }
@@ -1843,12 +1864,12 @@ impl InboxEventProcessor {
         intro_message: &Option<String>,
         profile_key: &Option<Vec<u8>>,
         encrypted_display_name: &Option<Vec<u8>>,
-        encrypted_avatar: &Option<Vec<u8>>,
+        avatar: &Option<crate::proto::content_v1::AttachmentPointer>,
     ) {
         tracing::info!(
             has_intro = intro_message.is_some(),
             has_encrypted_name = encrypted_display_name.is_some(),
-            has_encrypted_avatar = encrypted_avatar.is_some(),
+            has_avatar = avatar.is_some(),
             "Received anonymous DM request"
         );
 
@@ -1876,10 +1897,13 @@ impl InboxEventProcessor {
         let intro_msg = intro_message.clone();
         let profile_key = profile_key.clone();
         let encrypted_display_name = encrypted_display_name.clone();
-        let encrypted_avatar = encrypted_avatar.clone();
+        let avatar = avatar.clone();
 
         tokio::spawn(async move {
             let intro_msg_for_event = intro_msg.clone();
+            let avatar = anon_dm_service
+                .resolve_peer_avatar(avatar.as_ref(), None)
+                .await;
             let result = tokio::task::spawn_blocking(move || {
                 anon_dm_service.handle_request_encrypted(
                     anon_dm_id,
@@ -1889,7 +1913,7 @@ impl InboxEventProcessor {
                     intro_msg.as_deref(),
                     profile_key,
                     encrypted_display_name,
-                    encrypted_avatar,
+                    avatar,
                 )
             })
             .await;
@@ -1936,14 +1960,11 @@ impl InboxEventProcessor {
         responder_mailbox_pk: &[u8],
         profile_key: &Option<Vec<u8>>,
         encrypted_display_name: &Option<Vec<u8>>,
-        encrypted_avatar: &Option<Vec<u8>>,
+        avatar: &Option<crate::proto::content_v1::AttachmentPointer>,
     ) {
         tracing::info!(
             has_encrypted_display_name = encrypted_display_name.is_some(),
-            has_encrypted_avatar = encrypted_avatar
-                .as_ref()
-                .map(|v| !v.is_empty())
-                .unwrap_or(false),
+            has_avatar = avatar.is_some(),
             "Received anonymous DM acceptance"
         );
 
@@ -1971,9 +1992,12 @@ impl InboxEventProcessor {
         let client = self.client.clone();
         let profile_key = profile_key.clone();
         let encrypted_display_name = encrypted_display_name.clone();
-        let encrypted_avatar = encrypted_avatar.clone();
+        let avatar = avatar.clone();
 
         tokio::spawn(async move {
+            let avatar = anon_dm_service
+                .resolve_peer_avatar(avatar.as_ref(), None)
+                .await;
             let service_for_handle = anon_dm_service.clone();
             let result = tokio::task::spawn_blocking(move || {
                 service_for_handle.handle_acceptance_encrypted(
@@ -1983,7 +2007,7 @@ impl InboxEventProcessor {
                     mailbox_pk,
                     profile_key,
                     encrypted_display_name,
-                    encrypted_avatar,
+                    avatar,
                 )
             })
             .await;
@@ -2076,6 +2100,19 @@ impl InboxEventProcessor {
             });
         }
 
+        if let Some(crate::proto::content_v1::content::Content::AnonDmProfileUpdate(update)) =
+            &inner_content.content
+            && let Some(pointer) = update.avatar.clone()
+        {
+            tokio::spawn(refresh_peer_avatar(
+                self.anon_dm_service.clone(),
+                self.event_bus.clone(),
+                anon_dm_id,
+                peer_id,
+                pointer,
+            ));
+        }
+
         // Delegate to service layer for business logic
         let anon_dm_service = self.anon_dm_service.clone();
         let event_bus = self.event_bus.clone();
@@ -2101,6 +2138,55 @@ impl InboxEventProcessor {
                 }
             }
         });
+    }
+}
+
+/// Fetch the avatars a member list points at (over Tor, skipping ones we
+/// already hold) and store the changed ones; when any changed, announce the
+/// roster again so an open view re-reads it. Runs after the roster is applied
+/// so a slow fetch never delays membership.
+async fn refresh_roster_avatars(
+    service: std::sync::Arc<crate::services::anon_group::AnonGroupService>,
+    event_bus: EventBus,
+    group_id: crate::domain::anon_group::AnonGroupId,
+    members: Vec<crate::proto::content_v1::AnonGroupMemberInfo>,
+) {
+    match service.refresh_roster_avatars(&group_id, &members).await {
+        Ok(true) => {
+            event_bus.emit_domain(DomainEvent::AnonGroupMemberListReceived { group_id, members });
+        }
+        Ok(false) => {}
+        Err(e) => tracing::warn!(error = %e, "Failed to store secret group avatars"),
+    }
+}
+
+/// Fetch the avatar a secret-chat profile update points at and, when it is
+/// new, store it and tell the UI. The update itself (name, bio) was applied
+/// without waiting for this fetch.
+async fn refresh_peer_avatar(
+    service: std::sync::Arc<crate::services::anon_dm::AnonDmService>,
+    event_bus: EventBus,
+    conversation_id: crate::domain::anon_dm::AnonDmId,
+    peer_id: UserId,
+    pointer: crate::proto::content_v1::AttachmentPointer,
+) {
+    match service
+        .refresh_peer_avatar(&conversation_id, &peer_id, &pointer)
+        .await
+    {
+        Ok(Some(avatar)) => {
+            event_bus.emit_domain(DomainEvent::AnonDmProfileUpdated {
+                conversation_id,
+                user_id: peer_id,
+                display_name: None,
+                avatar: Some(avatar),
+                avatar_url: None,
+                bio: None,
+                timestamp: TimestampNanos::now().as_u64(),
+            });
+        }
+        Ok(None) => {}
+        Err(e) => tracing::warn!(error = %e, "Failed to store secret chat avatar"),
     }
 }
 
