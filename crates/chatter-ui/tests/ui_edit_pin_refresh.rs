@@ -25,6 +25,18 @@ fn edit_surfaces_and_pins_follow_current_conversation_without_reordering() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     let _runtime = runtime.enter();
     let fixture = tempfile::tempdir().unwrap();
+    // Off the real keyring: the marker must exist before the client opens.
+    let db_path = chatter_core::system::Directories::with_base_dir(fixture.path().to_path_buf())
+        .unwrap()
+        .database_path();
+    std::fs::write(
+        db_path
+            .parent()
+            .unwrap()
+            .join(chatter_core::system::keyring::NO_KEYRING_MARKER),
+        b"",
+    )
+    .unwrap();
     let client = chatter_core::client::ChatterClient::builder()
         .data_dir(fixture.path().to_string_lossy().to_string())
         .build()
