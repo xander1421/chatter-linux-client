@@ -10,7 +10,6 @@
 
 use std::sync::Arc;
 
-use libsignal_protocol::CiphertextMessageType;
 
 use crate::domain::UserId;
 use crate::error::NetworkError;
@@ -74,43 +73,6 @@ impl PairwiseService {
             signal_service,
             grpc_pool,
         }
-    }
-
-    /// Decrypt sealed sender ciphertext from any peer.
-    ///
-    /// A `CiphertextMessageType::Plaintext` inner message is REFUSED here: it
-    /// bypassed `message_decrypt_*` entirely, so nothing checked the sender's
-    /// identity key, nothing rejected a replay, and it carries no forward
-    /// secrecy. The one legitimate use of that type is the
-    /// DecryptionErrorMessage ride-along, which the gateway handles — anon DMs
-    /// never carry one.
-    ///
-    /// # Arguments
-    /// * `ciphertext` - The sealed sender ciphertext
-    /// * `server_timestamp_ns` - The envelope's server timestamp (sender
-    ///   certificate validation time)
-    ///
-    /// # Returns
-    /// Tuple of (sender_id, decrypted_plaintext).
-    pub async fn decrypt_sealed_sender(
-        &self,
-        ciphertext: &[u8],
-        server_timestamp_ns: u64,
-    ) -> Result<(String, Vec<u8>), PairwiseError> {
-        let (address, plaintext, msg_type) = self
-            .signal_service
-            .decrypt_message(ciphertext, server_timestamp_ns)
-            .await
-            .map_err(|e| PairwiseError::DecryptionFailed(e.to_string()))?;
-
-        if msg_type == CiphertextMessageType::Plaintext {
-            return Err(PairwiseError::DecryptionFailed(
-                crate::services::gateway::unratcheted_plaintext_rejected(address.name())
-                    .to_string(),
-            ));
-        }
-
-        Ok((address.name().to_string(), plaintext))
     }
 
     /// Authenticated receive journal replay precedes another ratchet decrypt.

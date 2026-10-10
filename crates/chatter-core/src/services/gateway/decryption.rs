@@ -26,7 +26,7 @@ const PLAINTEXT_CONTENT_IDENTIFIER_BYTE: u8 = 0xC0;
 /// sender's identity key, nothing rejected a replay, and there is no forward
 /// secrecy. Pinned libsignal refuses the type outright in
 /// `sealed_sender_decrypt`; we only carve out the DEM ride-along.
-pub(crate) fn unratcheted_plaintext_rejected(sender: &str) -> ServiceError {
+fn unratcheted_plaintext_rejected(sender: &str) -> ServiceError {
     tracing::warn!(
         target: "chatter::crypto::decrypt_failure",
         kind = "sealed_sender",
@@ -1110,23 +1110,14 @@ impl MessageGateway {
                 ))
             }
             // Anonymous group messages (NDSS'21 style - sent via pairwise DM)
-            Some(content::Content::AnonGroupInvite(invite)) => Ok(DmContent::AnonGroupInvite {
-                group_id: invite.group_id,
-                group_name: invite.group_name,
-                inviter_mailbox_pk: invite.inviter_mailbox_pk,
-                timestamp: invite.timestamp,
-                profile_key: invite.profile_key,
-                encrypted_display_name: invite.encrypted_display_name,
-                encrypted_avatar: invite.encrypted_avatar,
-            }),
-            Some(content::Content::AnonGroupJoinAck(ack)) => Ok(DmContent::AnonGroupJoinAck {
-                group_id: ack.group_id,
-                joiner_mailbox_pk: ack.joiner_mailbox_pk,
-                timestamp: ack.timestamp,
-                profile_key: ack.profile_key,
-                encrypted_display_name: ack.encrypted_display_name,
-                encrypted_avatar: ack.encrypted_avatar,
-            }),
+            // Secret-chat bootstraps travel only over the secret channel (sealed
+            // to one device inbox, or a secret mailbox), never a friend DM.
+            Some(content::Content::AnonGroupInvite(_))
+            | Some(content::Content::AnonGroupJoinAck(_))
+            | Some(content::Content::AnonDmRequest(_))
+            | Some(content::Content::AnonDmAccept(_)) => Err(ServiceError::Validation(
+                "Secret-chat bootstrap over a friend DM refused".into(),
+            )),
             Some(content::Content::AnonGroupMemberList(list)) => {
                 Ok(DmContent::AnonGroupMemberList {
                     group_id: list.group_id,
@@ -1159,27 +1150,6 @@ impl MessageGateway {
                 })?,
             }),
             // Anonymous DM content types
-            Some(content::Content::AnonDmRequest(request)) => Ok(DmContent::AnonDmRequest {
-                conversation_id: request.conversation_id,
-                initiator_mailbox_pk: request.initiator_mailbox_pk,
-                intro_message: if request.intro_message.is_empty() {
-                    None
-                } else {
-                    Some(request.intro_message)
-                },
-                profile_key: request.profile_key,
-                encrypted_display_name: request.encrypted_display_name,
-                encrypted_avatar: request.encrypted_avatar,
-                timestamp: request.timestamp,
-            }),
-            Some(content::Content::AnonDmAccept(accept)) => Ok(DmContent::AnonDmAccept {
-                conversation_id: accept.conversation_id,
-                responder_mailbox_pk: accept.responder_mailbox_pk,
-                profile_key: accept.profile_key,
-                encrypted_display_name: accept.encrypted_display_name,
-                encrypted_avatar: accept.encrypted_avatar,
-                timestamp: accept.timestamp,
-            }),
             Some(content::Content::AnonDmMessage(msg)) => Ok(DmContent::AnonDmMessage {
                 conversation_id: msg.conversation_id,
                 inner_content: msg.inner_content.ok_or_else(|| {
@@ -1504,6 +1474,28 @@ mod thread_id_tests {
             ),
             "epoch-0 key accepted"
         );
+    }
+
+    #[test]
+    fn parse_content_refuses_secret_chat_bootstrap_over_friend_dm() {
+        use crate::proto::content_v1::{
+            AnonDmAccept, AnonDmRequest, AnonGroupInvite, AnonGroupJoinAck,
+        };
+        for inner in [
+            content::Content::AnonDmRequest(AnonDmRequest::default()),
+            content::Content::AnonDmAccept(AnonDmAccept::default()),
+            content::Content::AnonGroupInvite(AnonGroupInvite::default()),
+            content::Content::AnonGroupJoinAck(AnonGroupJoinAck::default()),
+        ] {
+            let parsed = MessageGateway::parse_content(Content {
+                content: Some(inner),
+                ..Default::default()
+            });
+            assert!(
+                matches!(parsed, Err(ServiceError::Validation(_))),
+                "a secret-chat bootstrap on the friend-DM path must be refused, got {parsed:?}"
+            );
+        }
     }
 
     #[test]

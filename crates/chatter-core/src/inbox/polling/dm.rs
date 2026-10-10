@@ -995,17 +995,6 @@ pub(crate) fn dispatch_dm_content(
         // ====================================================================
         // Anonymous Group Messages (NDSS'21 style)
         // ====================================================================
-        // Secret-chat bootstraps travel only over the secret channel (sealed
-        // to one device inbox, or a secret mailbox), never a friend DM: one
-        // arriving here is refused.
-        DmContent::AnonDmRequest { .. }
-        | DmContent::AnonDmAccept { .. }
-        | DmContent::AnonGroupInvite { .. }
-        | DmContent::AnonGroupJoinAck { .. } => {
-            tracing::warn!("Secret-chat bootstrap over a friend DM refused");
-        }
-
-
         DmContent::AnonGroupMemberList {
             group_id,
             members,

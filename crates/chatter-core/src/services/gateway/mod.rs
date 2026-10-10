@@ -20,11 +20,6 @@ use crate::services::SignalService;
 use crate::services::current_user::CurrentUserProvider;
 use crate::storage::repositories::MessageRepository;
 
-// The one refusal every non-DEM sealed-sender receive path shares. Lives with
-// the rest of the decryption logic; re-exported so `PairwiseService` reports
-// the same thing the gateway does.
-pub(crate) use decryption::unratcheted_plaintext_rejected;
-
 // Re-export inbound types (moved from inline definitions)
 use crate::util::time::TimestampNanos;
 pub use inbound::{DecryptResult, DmContent, RouteResult, SealedSenderResult, content_type_name};

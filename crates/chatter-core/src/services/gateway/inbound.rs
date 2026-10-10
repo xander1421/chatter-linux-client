@@ -217,23 +217,6 @@ pub enum DmContent {
     // ========================================================================
     // Anonymous Group Messages (NDSS'21 style)
     // ========================================================================
-    AnonGroupInvite {
-        group_id: Vec<u8>,
-        group_name: String,
-        inviter_mailbox_pk: Vec<u8>,
-        timestamp: u64,
-        profile_key: Option<Vec<u8>>,
-        encrypted_display_name: Option<Vec<u8>>,
-        encrypted_avatar: Option<Vec<u8>>,
-    },
-    AnonGroupJoinAck {
-        group_id: Vec<u8>,
-        joiner_mailbox_pk: Vec<u8>,
-        timestamp: u64,
-        profile_key: Option<Vec<u8>>,
-        encrypted_display_name: Option<Vec<u8>>,
-        encrypted_avatar: Option<Vec<u8>>,
-    },
     AnonGroupMemberList {
         group_id: Vec<u8>,
         members: Vec<crate::proto::content_v1::AnonGroupMemberInfo>,
@@ -261,23 +244,6 @@ pub enum DmContent {
     // ========================================================================
     // Anonymous DM Messages (NDSS'21 style stranger messaging)
     // ========================================================================
-    AnonDmRequest {
-        conversation_id: Vec<u8>,
-        initiator_mailbox_pk: Vec<u8>,
-        intro_message: Option<String>,
-        profile_key: Option<Vec<u8>>,
-        encrypted_display_name: Option<Vec<u8>>,
-        encrypted_avatar: Option<Vec<u8>>,
-        timestamp: u64,
-    },
-    AnonDmAccept {
-        conversation_id: Vec<u8>,
-        responder_mailbox_pk: Vec<u8>,
-        profile_key: Option<Vec<u8>>,
-        encrypted_display_name: Option<Vec<u8>>,
-        encrypted_avatar: Option<Vec<u8>>,
-        timestamp: u64,
-    },
     AnonDmMessage {
         conversation_id: Vec<u8>,
         inner_content: Box<crate::proto::content_v1::Content>,

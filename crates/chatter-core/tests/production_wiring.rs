@@ -69,18 +69,6 @@ struct Entry {
 }
 
 const TABLE: &[Entry] = &[
-    // ---- Signal: sealed sender ------------------------------------------
-    Entry {
-        symbol: "unratcheted_plaintext_rejected",
-        defined_in: "chatter-core/src/services/gateway/decryption.rs",
-        expect: Expect::Wired,
-        why: "A `CiphertextMessageType::Plaintext` sealed-sender message skipped the \
-              Double Ratchet: no is_trusted_identity, no replay protection, no forward \
-              secrecy. If no path outside decryption.rs refuses it, unratcheted \
-              attacker-chosen bytes reach `Content::decode` looking exactly like \
-              ratchet-authenticated plaintext. This is the leak ab0a1242 fixed on four \
-              paths at once.",
-    },
     // ---- Signal: key transparency ---------------------------------------
     Entry {
         symbol: "verify_kt_proof",
@@ -682,8 +670,8 @@ fn recorded_dead_wires_have_not_silently_come_alive() {
 /// expected-set assertion is the other half — a NEW consumer file must justify
 /// itself rather than inherit the carve-out by default.
 ///
-/// MUTATION: delete the `if msg_type == CiphertextMessageType::Plaintext` guard
-/// from `services/pairwise.rs`. This test goes red; no other test in the crate
+/// MUTATION: delete the `CiphertextMessageType::Plaintext` refusals from
+/// `services/gateway/decryption.rs`. This test goes red; no other test in the crate
 /// notices, because the only existing coverage
 /// (`sealed_sender_decrypt_labels_unratcheted_plaintext`) asserts the LABEL is
 /// produced, never that a caller acts on it.
@@ -694,7 +682,6 @@ fn every_sealed_sender_decrypt_consumer_refuses_unratcheted_plaintext() {
     /// fix.
     const EXPECTED_CONSUMERS: &[&str] = &[
         "chatter-core/src/services/gateway/decryption.rs",
-        "chatter-core/src/services/pairwise.rs",
         // Durable receive: `decrypt_durable_inner` returns None for Plaintext
         // before reading the bytes, surfaced as PlaintextRejected.
         "chatter-core/src/crypto/signal/receive_store.rs",
