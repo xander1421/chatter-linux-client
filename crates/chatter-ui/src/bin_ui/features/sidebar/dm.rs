@@ -277,7 +277,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 super::super::header::finish_pending_jump(&w, &ui_ctx);
                 super::super::header::refresh_pinned_ui(&w, &ui_ctx);
                     crate::bin_ui::converters::set_conversation_kind(
-                        &w, &chatter_core::domain::message::ConversationType::AnonDm, false,
+                        &w, &ui_ctx, &chatter_core::domain::message::ConversationType::AnonDm, false,
                     );
                     w.set_is_dm(true);
                     w.set_channel_name(title.into());
@@ -389,7 +389,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 w.set_loading_messages(false);
                 super::super::header::finish_pending_jump(&w, &ui_ctx);
                 super::super::header::refresh_pinned_ui(&w, &ui_ctx);
-                crate::bin_ui::converters::set_conversation_kind(&w, &conv_type, false);
+                crate::bin_ui::converters::set_conversation_kind(&w, &ui_ctx, &conv_type, false);
                 w.set_is_dm(true);
                 w.set_channel_name(title.into());
                 // A DM has no topic. This used to carry the presence word

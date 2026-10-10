@@ -1898,6 +1898,21 @@ mod shield_mode_tests {
     }
 
     #[tokio::test]
+    async fn shield_mode_turns_the_gif_picker_off() {
+        let (_dir, client) = build_test_client();
+        assert!(client.gif_picker_available_for(&ConversationType::ServerDm));
+        assert!(client.gif_picker_available());
+        client.anon_mode.store(true, Ordering::Release);
+        // GifService takes account auth: Shield must not reach it, from any
+        // conversation, nor search or fetch through it.
+        assert!(!client.gif_picker_available_for(&ConversationType::ServerDm));
+        assert!(!client.gif_picker_available_for(&ConversationType::Channel));
+        assert!(!client.gif_picker_available());
+        assert!(client.search_gifs("cat", 1).await.is_err());
+        assert!(client.fetch_gif_media("https://localhost:1/x.gif").await.is_err());
+    }
+
+    #[tokio::test]
     async fn shield_mode_refuses_identified_calls() {
         let (_dir, client) = build_test_client();
         client.anon_mode.store(true, Ordering::Release);

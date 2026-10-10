@@ -63,7 +63,7 @@ pub fn open(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, id: &str) {
         ui_ctx,
         ui_ctx.chat_state().get().attachment_revision,
     );
-    apply_header(window, &row);
+    apply_header(window, ui_ctx, &row);
     super::refresh_rows(window, ui_ctx);
 
     let owner = crate::bin_ui::features::history_owner::HistoryOwner::begin(
@@ -137,7 +137,7 @@ pub fn open(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, id: &str) {
 }
 
 /// Header, composer and the mesh strip, for the conversation being opened.
-fn apply_header(window: &MainWindow, row: &MeshRow) {
+fn apply_header(window: &MainWindow, ui_ctx: &ChatterClient, row: &MeshRow) {
     window.set_loading_messages(true);
     window.set_channel_id(row.id.clone().into());
     window.set_channel_name(row.title.clone().into());
@@ -146,7 +146,7 @@ fn apply_header(window: &MainWindow, row: &MeshRow) {
     } else {
         chatter_core::domain::message::ConversationType::Mesh
     };
-    crate::bin_ui::converters::set_conversation_kind(window, &conversation_type, false);
+    crate::bin_ui::converters::set_conversation_kind(window, ui_ctx, &conversation_type, false);
     window.set_is_dm(row.kind == "dm");
     // Not "N members": a mesh scope has no membership, only whoever happens to
     // be in range. The strip below the header owns that number so there is one

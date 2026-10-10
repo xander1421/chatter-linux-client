@@ -101,6 +101,7 @@ pub fn load_private_group_messages(
             w.set_channel_name(group_name.into());
             crate::bin_ui::converters::set_conversation_kind(
                 &w,
+                &ui_ctx_for_ui,
                 &chatter_core::domain::message::ConversationType::AnonGroup,
                 false,
             );
@@ -276,6 +277,7 @@ async fn load_private_group_messages_internal(
         w.set_channel_name(group_name.into());
         crate::bin_ui::converters::set_conversation_kind(
             &w,
+            &ui_ctx_for_ui,
             &chatter_core::domain::message::ConversationType::AnonGroup,
             false,
         );

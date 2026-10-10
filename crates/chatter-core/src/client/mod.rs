@@ -2329,14 +2329,25 @@ impl ChatterClient {
         self.services.decline_call(call_id).await
     }
 
-    /// Whether the GIF picker may be used in the open conversation: not in a
-    /// secret chat, where GifService's account auth would tie the activity to
-    /// the account ([`crate::domain::message::ConversationType::gif_picker_available`]).
+    /// Whether the GIF picker may be used in a conversation of `kind`: not in
+    /// a secret chat and not in Shield, where GifService's account auth would
+    /// tie the activity to the account
+    /// ([`crate::domain::message::ConversationType::gif_picker_available`]).
+    pub fn gif_picker_available_for(
+        &self,
+        kind: &crate::domain::message::ConversationType,
+    ) -> bool {
+        !self.anon_mode_enabled() && kind.gif_picker_available()
+    }
+
+    /// [`Self::gif_picker_available_for`] the open conversation.
     pub fn gif_picker_available(&self) -> bool {
-        self.chat_state()
-            .active_conversation()
-            .routing_key()
-            .is_none_or(|(kind, _)| kind.gif_picker_available())
+        !self.anon_mode_enabled()
+            && self
+                .chat_state()
+                .active_conversation()
+                .routing_key()
+                .is_none_or(|(kind, _)| kind.gif_picker_available())
     }
 
     /// Search GIFs. Refused in a secret chat ([`Self::gif_picker_available`]).

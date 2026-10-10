@@ -35,6 +35,7 @@ pub async fn load_jarvis_channel_into_ui(
         w.set_channel_name(chatter_core::client::JARVIS_CHANNEL_NAME.into());
         crate::bin_ui::converters::set_conversation_kind(
             &w,
+            &ui_ctx,
             &chatter_core::domain::message::ConversationType::Channel,
             true,
         );

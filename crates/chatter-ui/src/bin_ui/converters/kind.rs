@@ -32,13 +32,18 @@ pub fn conversation_type(kind: ConversationKind) -> ConversationType {
 
 /// Set the open conversation's kind on the header, thread panel and privacy
 /// line, and whether core offers the GIF picker there (not in a secret
-/// chat). `private_channel` only matters for a channel (invite-only). Clears
+/// chat, not in Shield). `private_channel` only matters for a channel (invite-only). Clears
 /// the privacy-line override, so a Jarvis statement never survives a switch
 /// into another conversation; the Jarvis view sets it again after this.
-pub fn set_conversation_kind(w: &MainWindow, ct: &ConversationType, private_channel: bool) {
+pub fn set_conversation_kind(
+    w: &MainWindow,
+    ui_ctx: &chatter_core::client::ChatterClient,
+    ct: &ConversationType,
+    private_channel: bool,
+) {
     w.set_conversation_kind(conversation_kind(ct));
     w.set_private_channel(private_channel);
-    w.set_composer_gifs_available(ct.gif_picker_available());
+    w.set_composer_gifs_available(ui_ctx.gif_picker_available_for(ct));
     w.set_privacy_line_override(Default::default());
     w.set_privacy_line_exposed(false);
 }
