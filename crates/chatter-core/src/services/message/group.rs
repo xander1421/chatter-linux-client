@@ -3127,6 +3127,134 @@ mod tests {
         );
     }
 
+    /// S25, channel 5dd10bcb: three messages sent before the SKDM Bob holds
+    /// ("old counter") were given up as delivery issues, yet the channel's
+    /// sync failed every 60 s. Giving up cleared the gate, so the next
+    /// re-fetch counted from one again and held the checkpoint, and stream
+    /// resync rejected the dropped row. A given-up message must stay settled
+    /// across re-fetches while later messages keep arriving.
+    #[tokio::test]
+    async fn given_up_old_counter_messages_stop_holding_the_sync_checkpoint() {
+        use crate::domain::ids::MessageId;
+        use crate::domain::message::{ConversationType, MessageContent, SystemMessage};
+        use crate::services::message::channel_inbound::{ChannelInbound, Ingested};
+        use crate::sync::message_sync::holds_checkpoint;
+        use prost::Message as _;
+
+        let t = two_members();
+        let m = t.bob.messages();
+        let now = TimestampNanos::now().as_u64();
+        let mut old = Vec::new();
+        for i in 0..3u64 {
+            let (ge, _) = t
+                .alice
+                .signal()
+                .encrypt_for_group(
+                    &t.channel_id,
+                    &crate::network::validation::protovalidate::test_plaintext("before"),
+                )
+                .await
+                .unwrap();
+            old.push(server_copy(&t, &MessageId::new(), now - 10_000 + i, &ge));
+        }
+        // Bob's SKDM starts past those three, as on the S25.
+        let skdm = t
+            .alice
+            .signal()
+            .create_sender_key(&t.channel_id)
+            .await
+            .unwrap();
+        t.bob
+            .signal()
+            .process_sender_key(&t.alice_id, 1, &skdm)
+            .await
+            .unwrap();
+        let inbound = ChannelInbound::new(m.clone(), t.bob.attachments().clone());
+
+        // Each sync traversal of the channel: every old message, plus one new
+        // message per pass. Gate deadlines are pulled forward so each pass is
+        // a gated attempt, as one per 60 s sync would be.
+        let mut passes = 0;
+        loop {
+            passes += 1;
+            assert!(
+                passes <= 8,
+                "the channel never stopped holding its checkpoint"
+            );
+            for (deadline, _) in m.channel_decrypt_failures.lock().values_mut() {
+                *deadline = std::time::Instant::now();
+            }
+            let mut held = false;
+            for copy in &old {
+                held |= holds_checkpoint(inbound.ingest(copy, t.channel_id, false).await);
+            }
+            let plaintext = crate::proto::content_v1::Content {
+                content: Some(crate::proto::content_v1::content::Content::DataMessage(
+                    crate::proto::content_v1::DataMessage {
+                        body: "after".into(),
+                        channel_id: t.channel_id.to_string(),
+                        timestamp: now + passes,
+                        ..Default::default()
+                    },
+                )),
+                timestamp: now + passes,
+                ..Default::default()
+            }
+            .encode_to_vec();
+            let (ge, _) = t
+                .alice
+                .signal()
+                .encrypt_for_group(&t.channel_id, &plaintext)
+                .await
+                .unwrap();
+            let fresh = server_copy(&t, &MessageId::new(), now + passes, &ge);
+            assert_eq!(
+                inbound.ingest(&fresh, t.channel_id, false).await,
+                Ingested::Stored,
+                "later messages arrive while the old ones are unreadable"
+            );
+            if !held {
+                break;
+            }
+        }
+        assert!(
+            passes > 1,
+            "positive control: the resend got its bounded chance first"
+        );
+
+        // Settled for good: later re-fetches neither retry nor hold the
+        // checkpoint, and a stream resync accepts them.
+        for _ in 0..3 {
+            for copy in &old {
+                assert_eq!(
+                    inbound.ingest(copy, t.channel_id, false).await,
+                    Ingested::DeliveryIssue
+                );
+                inbound.ingest_resynced(copy, t.channel_id).await.unwrap();
+            }
+        }
+        let rows = m
+            .message_repo
+            .list_for_conversation(&t.channel_id, &ConversationType::Channel, None, 50)
+            .unwrap();
+        let issues = rows
+            .iter()
+            .filter(|msg| {
+                matches!(
+                    msg.content,
+                    MessageContent::System(SystemMessage::DeliveryIssue)
+                )
+            })
+            .count();
+        assert_eq!(issues, 1, "one marker for the gap, not one per re-fetch");
+        assert_eq!(
+            rows.iter()
+                .filter(|msg| msg.content == MessageContent::Text("after".into()))
+                .count() as u64,
+            passes
+        );
+    }
+
     /// A peer's message from a device that no longer exists leaves a visible
     /// DeliveryIssue entry, once however often it is re-fetched.
     #[tokio::test]
@@ -3155,7 +3283,7 @@ mod tests {
         for _ in 0..2 {
             assert_eq!(
                 inbound.ingest(&copy, t.channel_id, false).await,
-                Ingested::Dropped
+                Ingested::DeliveryIssue
             );
         }
         let issues: Vec<_> = m
@@ -3374,7 +3502,7 @@ mod tests {
         let inbound = ChannelInbound::new(m.clone(), t.bob.attachments().clone());
         assert_eq!(
             inbound.ingest(&copy, t.channel_id, false).await,
-            Ingested::Dropped
+            Ingested::DeliveryIssue
         );
         assert!(m.pending_group_decrypts.lock().is_empty());
         m.request_group_resend(t.channel_id, t.alice_id, 1, &copy, &ge.ciphertext)

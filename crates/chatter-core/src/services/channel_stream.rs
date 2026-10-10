@@ -132,7 +132,9 @@ enum Applied {
 
 fn require_ingested(outcome: Ingested) -> Applied {
     match outcome {
-        Ingested::Stored | Ingested::OwnMessage | Ingested::Dropped => Applied::Complete,
+        Ingested::Stored | Ingested::OwnMessage | Ingested::Dropped | Ingested::DeliveryIssue => {
+            Applied::Complete
+        }
         Ingested::RetryableFailure | Ingested::DeferredPendingSenderKey => Applied::Pending,
     }
 }
@@ -1070,6 +1072,7 @@ mod global_checkpoints {
             require_ingested(Ingested::Dropped) == Applied::Complete,
             "terminal rejection must not poison the stream"
         );
+        assert!(require_ingested(Ingested::DeliveryIssue) == Applied::Complete);
     }
 
     #[test]

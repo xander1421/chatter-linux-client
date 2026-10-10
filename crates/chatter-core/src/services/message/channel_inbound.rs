@@ -31,10 +31,8 @@ use super::{MessageError, MessageService};
 // Scope includes the complete envelope digest, so a new edit or repaired ciphertext
 // is immediately eligible. Bounded volatile state only delays work: server recovery
 // and message-sync checkpoints remain pending until durable handling succeeds.
-pub(crate) type DecryptFailureGate = std::collections::HashMap<
-    (ChannelId, UserId, u32, [u8; 32]),
-    (std::time::Instant, u32),
->;
+pub(crate) type DecryptFailureGate =
+    std::collections::HashMap<(ChannelId, UserId, u32, [u8; 32]), (std::time::Instant, u32)>;
 
 /// Gated attempts at a message a held sender key cannot open before it is
 /// given up as a delivery issue: with the gate's 30 s doubling backoff the
@@ -73,6 +71,9 @@ pub enum Ingested {
     DeferredPendingSenderKey,
     /// Could not be used at all (bad proto, undecryptable, conversion failed).
     Dropped,
+    /// Given up for good (a peer's gets a delivery-issue marker). Terminal:
+    /// it must not hold a sync checkpoint or a stream resync.
+    DeliveryIssue,
     /// Storage or recoverable decrypt failure; stream must not acknowledge it.
     RetryableFailure,
 }
@@ -84,7 +85,7 @@ fn ensure_resync_ingested(outcome: Ingested) -> Result<(), MessageError> {
         }
         // Tombstones are handled before ingest. A rejected resync payload is
         // a validation error, never evidence that authoritative truth was applied.
-        Ingested::Stored | Ingested::OwnMessage => Ok(()),
+        Ingested::Stored | Ingested::OwnMessage | Ingested::DeliveryIssue => Ok(()),
         Ingested::Dropped => Err(MessageError::InvalidContent(
             "resync message rejected".into(),
         )),
@@ -457,14 +458,24 @@ impl ChannelInbound {
                 device_id,
                 Sha256::digest(proto_msg.encode_to_vec()).into(),
             );
-            if self
+            match self
                 .messages
                 .channel_decrypt_failures
                 .lock()
                 .get(&failure_key)
-                .is_some_and(|(due, _)| std::time::Instant::now() < *due)
             {
-                return Err(Ingested::RetryableFailure);
+                // Already given up and marked. Retrying restarted the count,
+                // so each re-fetch failed again and the channel's checkpoint
+                // never advanced. The entry lives in memory only: after a
+                // restart (or a gate eviction) the message gets another
+                // bounded round of resend requests, and the marker dedups.
+                Some((_, attempts)) if *attempts >= RESEND_GIVE_UP_ATTEMPTS => {
+                    return Err(Ingested::DeliveryIssue);
+                }
+                Some((due, _)) if std::time::Instant::now() < *due => {
+                    return Err(Ingested::RetryableFailure);
+                }
+                _ => {}
             }
 
             match self
@@ -574,7 +585,7 @@ impl ChannelInbound {
                                 "Channel message from a retired device is unrecoverable; dropped");
                             self.messages
                                 .record_channel_delivery_issue(channel_id, sid, proto_msg);
-                            return Err(Ingested::Dropped);
+                            return Err(Ingested::DeliveryIssue);
                         }
                         tracing::warn!(
                             %channel_id, %sid, device_id,
@@ -612,16 +623,14 @@ impl ChannelInbound {
                     // after a bounded number of gated attempts the gap is shown
                     // as a delivery issue and the message dropped; a resend
                     // that does arrive is still filed by its (sender, sent_at).
+                    // The gate entry stays, at the give-up count, so later
+                    // re-fetches return here without decrypting again.
                     if attempts >= RESEND_GIVE_UP_ATTEMPTS {
-                        self.messages
-                            .channel_decrypt_failures
-                            .lock()
-                            .remove(&failure_key);
                         tracing::info!(%channel_id, %sid, device_id, message_id = %proto_msg.id,
                             "Group message still undecryptable after asking for a resend; recorded as a delivery issue");
                         self.messages
                             .record_channel_delivery_issue(channel_id, sid, proto_msg);
-                        return Err(Ingested::Dropped);
+                        return Err(Ingested::DeliveryIssue);
                     }
                     tracing::warn!(%channel_id, %sid, error = %es,
                         "Failed to decrypt channel message; asking the sender to resend it");
@@ -1611,8 +1620,7 @@ mod resync_acknowledgement_tests {
         assert!(ensure_resync_ingested(Ingested::Stored).is_ok());
     }
     #[tokio::test]
-    async fn peer_channel_reaction_survives_empty_or_partial_server_resync()
-     {
+    async fn peer_channel_reaction_survives_empty_or_partial_server_resync() {
         use crate::client::ChatterClient;
         use crate::domain::channel::{
             Channel, ChannelType, MemberRole, Membership, NotificationPreference,

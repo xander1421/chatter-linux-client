@@ -143,16 +143,13 @@ impl MessageSync {
                 // message read back from the server is as readable as one that
                 // arrived live. `emit = false`: a catch-up of a hundred old
                 // messages must not fire a hundred UI events.
-                match self.inbound.ingest(proto_msg, *channel_id, false).await {
-                    Ingested::Stored => result.inserted += 1,
-                    Ingested::OwnMessage | Ingested::Dropped => {}
-                    Ingested::DeferredPendingSenderKey | Ingested::RetryableFailure => {
-                        // A retained row can fail validation or wait for an SKDM
-                        // indefinitely. Hold the checkpoint, but finish this page
-                        // and later pages so it cannot starve newer offline rows.
-                        incomplete = true;
-                    }
+                let outcome = self.inbound.ingest(proto_msg, *channel_id, false).await;
+                if outcome == Ingested::Stored {
+                    result.inserted += 1;
                 }
+                // Hold the checkpoint, but finish this page and later pages so
+                // one stuck row cannot starve newer offline rows.
+                incomplete |= holds_checkpoint(outcome);
             }
 
             // Check for next page
@@ -214,6 +211,19 @@ impl MessageSync {
     pub fn last_synced_at(&self, channel_id: &ChannelId) -> Option<u64> {
         let key = format!("sync:messages:{}:last_at_ns", channel_id);
         self.settings_repo.get::<u64>(&key).ok().flatten()
+    }
+}
+
+/// Whether this message must be fetched again, so the channel's checkpoint
+/// may not move past it. A row waiting for an SKDM or a retry can still be
+/// recovered; a message given up as a delivery issue cannot, and holding the
+/// checkpoint for it re-failed the channel's sync every cycle.
+pub(crate) fn holds_checkpoint(outcome: Ingested) -> bool {
+    match outcome {
+        Ingested::DeferredPendingSenderKey | Ingested::RetryableFailure => true,
+        Ingested::Stored | Ingested::OwnMessage | Ingested::Dropped | Ingested::DeliveryIssue => {
+            false
+        }
     }
 }
 
