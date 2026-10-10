@@ -192,16 +192,22 @@ mod tests {
     fn remembered_url_does_not_deadlock_on_shield_exit() {
         // A dedicated thread makes even a synchronous mutex regression fail
         // within a bounded deadline rather than hanging the async test suite.
+        // The deadline times the reconfiguration only: building the client
+        // (database open, migrations) took longer than it under a loaded
+        // parallel suite.
+        let (built, ready) = std::sync::mpsc::channel();
         let (done, result) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             tokio::runtime::Runtime::new().unwrap().block_on(async {
                 let (client, _dir) = client();
                 *client.push_url.lock() = Some("https://localhost:1".into());
+                built.send(()).unwrap();
                 // Signed out: restoration validates auth without dialing.
                 client.rebuild_transport_loops().await;
                 done.send(()).unwrap();
             });
         });
+        ready.recv().expect("test client built");
         result
             .recv_timeout(std::time::Duration::from_secs(3))
             .expect("Shield exit held the remembered URL mutex during reconfiguration");
