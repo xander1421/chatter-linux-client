@@ -50,7 +50,6 @@ impl AttachmentService {
         })?;
 
         tracing::debug!(
-            attachment_id = %attachment_id,
             "Downloading encrypted content to filesystem"
         );
 
@@ -121,12 +120,11 @@ impl AttachmentService {
                 .decrypt_to_memory(attachment_id)
                 .and_then(|audio| self.repair_waveform(attachment_id, audio.as_slice()));
             if let Err(error) = result {
-                tracing::warn!(%attachment_id, %error, "Could not recover audio waveform");
+                tracing::warn!(%error, "Could not recover audio waveform");
             }
         }
 
         tracing::info!(
-            attachment_id = %attachment_id,
             ciphertext_size = ciphertext_size,
             file_path = %file_path.display(),
             "Encrypted content stored on filesystem"

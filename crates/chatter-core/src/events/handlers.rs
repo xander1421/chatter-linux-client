@@ -508,11 +508,11 @@ impl EventHandlers {
             // Attachment Events
             // ================================================================
             DomainEvent::AttachmentReady {
-                attachment,
+                attachment: _,
                 message_id,
                 channel_id,
             } => {
-                trace!(?channel_id, ?message_id, attachment_id = ?attachment.id, "Attachment ready");
+                trace!(?channel_id, ?message_id, "Attachment ready");
                 // Attachment records are created by InboxEventProcessor::create_from_pointers()
                 // before the UI handler runs. Download is triggered by UI's trigger_channel_attachment_download().
             }

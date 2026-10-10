@@ -388,10 +388,6 @@ impl GroupMailboxManager {
     /// Save/update our mailbox for a group.
     pub fn save_our_mailbox(&self, mailbox: &GroupMailbox) -> Result<(), MailboxError> {
         tracing::info!(
-            group_id = %mailbox.group_id,
-            mailbox_id = %mailbox.id,
-            our_pk_hex = %hex::encode(mailbox.public_key),
-            expires_at = %mailbox.expires_at.to_rfc3339(),
             "[GROUP_MAILBOX] Saving our mailbox to database"
         );
 
@@ -424,8 +420,6 @@ impl GroupMailboxManager {
             .map_err(|e| MailboxError::Storage(e.to_string()))?;
 
         tracing::info!(
-            group_id = %mailbox.group_id,
-            mailbox_id = %mailbox.id,
             rows_affected = rows_affected,
             "[GROUP_MAILBOX] Mailbox saved successfully"
         );
@@ -439,11 +433,7 @@ impl GroupMailboxManager {
         group_id: &ChannelId,
         mailbox: &MemberMailbox,
     ) -> Result<(), MailboxError> {
-        // Debug: Log the member mailbox being stored
         tracing::info!(
-            group_id = %group_id,
-            member_id = %mailbox.user_id,
-            member_pk_hex = %hex::encode(mailbox.public_key),
             "[STORE_MEMBER_MAILBOX] Storing member mailbox"
         );
 
@@ -689,17 +679,11 @@ impl GroupMailboxManager {
             let mailbox_id: String = row
                 .get(3)
                 .map_err(|e| MailboxError::Storage(e.to_string()))?;
-            let expires_at: String = row
-                .get(4)
-                .map_err(|e| MailboxError::Storage(e.to_string()))?;
             let source: String = row
                 .get(5)
                 .map_err(|e| MailboxError::Storage(e.to_string()))?;
 
             tracing::debug!(
-                group_id = %group_id_str,
-                mailbox_id = %mailbox_id,
-                expires_at = %expires_at,
                 source = %source,
                 "[GROUP_MAILBOX] Found active mailbox"
             );
@@ -937,8 +921,6 @@ impl GroupMailboxManager {
         .map_err(|e| MailboxError::Storage(e.to_string()))?;
 
         tracing::info!(
-            channel_id = %channel_id,
-            member_id = %member_id,
             timestamp = timestamp,
             "[PENDING_CHANNEL_MSG] Queued message for member (mailbox not yet available)"
         );
@@ -1009,8 +991,6 @@ impl GroupMailboxManager {
             .map_err(|e| MailboxError::Storage(e.to_string()))?;
 
             tracing::info!(
-                channel_id = %channel_id,
-                member_id = %member_id,
                 count = messages.len(),
                 "[PENDING_CHANNEL_MSG] Drained {} pending message(s) for member",
                 messages.len()

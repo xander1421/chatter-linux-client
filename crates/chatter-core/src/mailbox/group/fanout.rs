@@ -252,10 +252,7 @@ impl GroupFanout {
     ) -> FanoutResult {
         let mut client_guard = client.lock().await;
 
-        // Debug: Log the destination public key hex
         tracing::info!(
-            member_id = %member.user_id,
-            dest_pk_hex = %hex::encode(member.public_key),
             envelope_len = encrypted_envelope.len(),
             "[FANOUT_SEND] Sending to member mailbox"
         );
@@ -270,15 +267,12 @@ impl GroupFanout {
         {
             Ok(response) => {
                 tracing::info!(
-                    member_id = %member.user_id,
-                    message_id = %response.message_id,
                     "[FANOUT_SEND] Success"
                 );
                 FanoutResult::success(member.user_id, response.message_id)
             }
             Err(e) => {
                 tracing::warn!(
-                    member_id = %member.user_id,
                     error = %e,
                     "[FANOUT_SEND] Failed"
                 );
@@ -382,7 +376,7 @@ impl GroupFanout {
             .filter_map(|(group_id, result)| match result {
                 Ok(poll_result) => Some((group_id, poll_result)),
                 Err(e) => {
-                    tracing::warn!(group_id = %group_id, error = %e, "Failed to poll group mailbox");
+                    tracing::warn!(error = %e, "Failed to poll group mailbox");
                     None
                 }
             })

@@ -131,7 +131,7 @@ impl AnonDmService {
             if let Some(path) = self.attachment_repo.get_file_path(id)? {
                 if let Err(e) = std::fs::remove_file(&path) {
                     if e.kind() != std::io::ErrorKind::NotFound {
-                        tracing::warn!(attachment_id = %id, error = %e, "anon DM delete: attachment file not removed");
+                        tracing::warn!(error = %e, "anon DM delete: attachment file not removed");
                     }
                 }
             }

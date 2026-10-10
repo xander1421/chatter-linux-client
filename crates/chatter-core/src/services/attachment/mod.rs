@@ -610,7 +610,6 @@ impl AttachmentService {
                 tracing::debug!(inserted, "Stored secret-chat attachment record");
             } else {
                 tracing::info!(
-                    attachment_id = %att_id,
                     inserted,
                     content_type = %pointer.content_type,
                     "Stored attachment record from pointer"
@@ -637,7 +636,6 @@ impl AttachmentService {
         // Reject malformed WebP before the image parser sees it.
         if let Err(e) = sanitize::validate_media(thumbnail_bytes) {
             tracing::warn!(
-                attachment_id = %attachment_id,
                 error = %e,
                 "Rejected malformed thumbnail"
             );
@@ -650,7 +648,6 @@ impl AttachmentService {
                 let rgba = img.to_rgba8();
                 let (width, height) = rgba.dimensions();
                 tracing::debug!(
-                    attachment_id = %attachment_id,
                     width = width,
                     height = height,
                     "Decoded preview image from thumbnail"
@@ -659,7 +656,6 @@ impl AttachmentService {
             }
             Err(e) => {
                 tracing::warn!(
-                    attachment_id = %attachment_id,
                     error = ?e,
                     "Failed to decode thumbnail for preview"
                 );
@@ -698,7 +694,7 @@ impl AttachmentService {
         let digest_vec = attachment.metadata.thumbnail_digest.clone()?;
         let plaintext_size = attachment.metadata.thumbnail_plaintext_size? as usize;
         if key_vec.len() != KEY_SET_LENGTH || digest_vec.len() != 32 {
-            tracing::warn!(attachment_id = %attachment_id, "Thumbnail sidecar refs malformed");
+            tracing::warn!("Thumbnail sidecar refs malformed");
             return None;
         }
 
@@ -730,7 +726,7 @@ impl AttachmentService {
         ) {
             Ok(p) => p,
             Err(e) => {
-                tracing::warn!(attachment_id = %attachment_id, error = %e, "Thumbnail sidecar decrypt failed");
+                tracing::warn!(error = %e, "Thumbnail sidecar decrypt failed");
                 return None;
             }
         };
@@ -740,7 +736,7 @@ impl AttachmentService {
         if let Err(e) = self.attachment_repo.update(&attachment) {
             tracing::debug!(error = %e, "Failed to persist fetched thumbnail (continuing)");
         }
-        tracing::debug!(attachment_id = %attachment_id, bytes = plaintext.len(), "Fetched thumbnail sidecar");
+        tracing::debug!(bytes = plaintext.len(), "Fetched thumbnail sidecar");
         Some(plaintext)
     }
 

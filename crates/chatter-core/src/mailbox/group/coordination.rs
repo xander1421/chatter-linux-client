@@ -91,7 +91,7 @@ impl GroupCoordinator {
         channel_id: &ChannelId,
         anon_mailbox_client: &mut AnonymousMailboxClient,
     ) -> Result<GroupMailboxSetupResult, MailboxError> {
-        tracing::info!(channel_id = %channel_id, "Starting group mailbox setup");
+        tracing::info!("Starting group mailbox setup");
 
         // Check if we already have a non-expired mailbox
         if let Some(state) = self.mailbox_manager.load_group_state(channel_id)? {
@@ -99,7 +99,7 @@ impl GroupCoordinator {
                 if !existing.is_expired() {
                     // Already have valid mailbox, just return announcement
                     // SKDM will be populated by caller if needed
-                    tracing::info!(channel_id = %channel_id, "Using existing non-expired mailbox");
+                    tracing::info!("Using existing non-expired mailbox");
                     let announcement = self.build_announcement(channel_id, existing);
                     return Ok(GroupMailboxSetupResult {
                         mailbox: existing.clone(),
@@ -115,7 +115,7 @@ impl GroupCoordinator {
 
         // Create ephemeral mailbox on server (with retry for transient transport errors)
         // Uses anonymous client to avoid leaking device identity alongside blind signature
-        tracing::info!(channel_id = %channel_id, "Creating ephemeral mailbox on server...");
+        tracing::info!("Creating ephemeral mailbox on server...");
         let response = {
             const MAX_RETRIES: u32 = 3;
             let mut attempt = 0;
@@ -136,7 +136,6 @@ impl GroupCoordinator {
                             let backoff =
                                 std::time::Duration::from_millis(200 * u64::from(attempt));
                             tracing::warn!(
-                                channel_id = %channel_id,
                                 error = %e,
                                 attempt,
                                 "Group mailbox creation failed (retrying)"
@@ -149,7 +148,7 @@ impl GroupCoordinator {
                 }
             }
         };
-        tracing::info!(channel_id = %channel_id, mailbox_id = %response.mailbox_id, "Ephemeral mailbox created");
+        tracing::info!("Ephemeral mailbox created");
 
         // Build our mailbox from token + response
         let mailbox = self.build_mailbox_from_token(channel_id, &token, &response)?;
@@ -211,8 +210,6 @@ impl GroupCoordinator {
             .save_member_mailbox(&channel_id, &member_mailbox)?;
 
         tracing::info!(
-            channel_id = %channel_id,
-            sender_id = %sender_id,
             "Stored member mailbox address from announcement"
         );
 
@@ -249,8 +246,6 @@ impl GroupCoordinator {
             .save_member_mailbox(channel_id, &member_mailbox)?;
 
         tracing::info!(
-            channel_id = %channel_id,
-            sender_id = %sender_id,
             "Stored member mailbox from SKDM ephemeral_reply_to (NDSS '21)"
         );
 
@@ -327,9 +322,6 @@ impl GroupCoordinator {
         mailbox: &GroupMailbox,
     ) -> GroupMailboxAddress {
         tracing::info!(
-            channel_id = %channel_id,
-            mailbox_id = %mailbox.id,
-            announce_pk_hex = %hex::encode(mailbox.public_key),
             "[BUILD_ANNOUNCEMENT] Building GroupMailboxAddress"
         );
         GroupMailboxAddress {
@@ -343,7 +335,7 @@ impl GroupCoordinator {
     ///
     /// Removes our mailbox and all member mailbox records for this channel.
     pub fn cleanup_channel(&self, channel_id: &ChannelId) -> Result<(), MailboxError> {
-        tracing::info!(channel_id = %channel_id, "Cleaning up group mailbox state");
+        tracing::info!("Cleaning up group mailbox state");
         self.mailbox_manager.delete_group_state(channel_id)
     }
 }

@@ -101,7 +101,6 @@ impl AttachmentService {
         match decode_first_frame_only(&data) {
             Ok(Some(first_frame)) => {
                 tracing::debug!(
-                    attachment_id = %attachment_id,
                     width = first_frame.width,
                     height = first_frame.height,
                     "Decoded first GIF frame"
@@ -112,12 +111,11 @@ impl AttachmentService {
                 }))
             }
             Ok(None) => {
-                tracing::debug!(attachment_id = %attachment_id, "Not a GIF");
+                tracing::debug!("Not a GIF");
                 Ok(None)
             }
             Err(e) => {
                 tracing::error!(
-                    attachment_id = %attachment_id,
                     error = ?e,
                     "Failed to decode GIF first frame"
                 );
@@ -148,7 +146,6 @@ impl AttachmentService {
             })?;
 
         tracing::debug!(
-            attachment_id = %attachment_id,
             width = width,
             height = height,
             "Got image dimensions"
@@ -231,7 +228,6 @@ impl AttachmentService {
                     })?;
 
             tracing::debug!(
-                attachment_id = %attachment_id,
                 width = width,
                 height = height,
                 "Extracted video thumbnail on receive"

@@ -62,7 +62,6 @@ impl AttachmentService {
         // Read from filesystem using mmap
         let file_path = attachment_file_path(attachment_id);
         tracing::debug!(
-            attachment_id = %attachment_id,
             file_path = %file_path.display(),
             "Reading ciphertext from filesystem via mmap"
         );
@@ -95,7 +94,6 @@ impl AttachmentService {
         }
 
         tracing::debug!(
-            attachment_id = %attachment_id,
             ciphertext_len = mmap.len(),
             plaintext_size = attachment.metadata.size,
             "Decrypting attachment to memory"
@@ -114,7 +112,6 @@ impl AttachmentService {
         .map_err(|e| AttachmentError::DecryptionError(e.to_string()))?;
 
         tracing::info!(
-            attachment_id = %attachment_id,
             plaintext_len = plaintext.len(),
             "Decrypted attachment to secure buffer"
         );
@@ -144,7 +141,7 @@ impl AttachmentService {
         attachment_id: &AttachmentId,
     ) -> Result<SecureBuffer, AttachmentError> {
         let start = std::time::Instant::now();
-        tracing::info!(attachment_id = %attachment_id, "Starting streaming decryption");
+        tracing::info!("Starting streaming decryption");
 
         // Get attachment metadata
         let attachment = self
@@ -199,7 +196,6 @@ impl AttachmentService {
             .len() as usize;
 
         tracing::debug!(
-            attachment_id = %attachment_id,
             file_path = %file_path.display(),
             file_size = file_size,
             plaintext_size = attachment.metadata.size,
@@ -231,7 +227,6 @@ impl AttachmentService {
         let total_elapsed = start.elapsed();
         let size_mb = plaintext.len() as f64 / (1024.0 * 1024.0);
         tracing::info!(
-            attachment_id = %attachment_id,
             plaintext_len = plaintext.len(),
             total_ms = total_elapsed.as_millis(),
             throughput_mbps = format_args!("{:.1}", size_mb / total_elapsed.as_secs_f64()),
@@ -357,7 +352,6 @@ impl AttachmentService {
 
         if file_size >= STREAMING_THRESHOLD {
             tracing::debug!(
-                attachment_id = %attachment_id,
                 file_size = file_size,
                 "Using streaming decryption (file >= 1MB)"
             );
