@@ -136,6 +136,7 @@ impl Caches {
         self.gifs.clear();
     }
 
+    #[cfg(test)]
     fn is_empty(&self) -> bool {
         self.avatars.len() == 0 && self.thumbnails.len() == 0 && self.gifs.len() == 0
     }

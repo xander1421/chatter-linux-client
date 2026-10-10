@@ -1,5 +1,7 @@
 //! Private, seekable video plaintext. No temporary files or external grants.
+#[cfg(any(target_os = "android", test))]
 use chatter_core::{prelude::SecureBuffer, services::attachment::CbcRangeDecryptor};
+#[cfg(any(target_os = "android", test))]
 use std::sync::Arc;
 
 /// Android always uses authenticated ranges, including absent/incorrect size
@@ -8,10 +10,13 @@ pub fn use_video_ranges(mime: &str, size: u64, android: bool) -> bool {
     mime.starts_with("video/") && (android || size >= 8 * 1024 * 1024)
 }
 
+// Android's media and thumbnail decoders are the only readers.
+#[cfg(any(target_os = "android", test))]
 pub enum VideoSource {
     Memory(SecureBuffer),
     Range(Arc<CbcRangeDecryptor>),
 }
+#[cfg(any(target_os = "android", test))]
 impl VideoSource {
     pub fn len(&self) -> usize {
         match self {
@@ -33,6 +38,7 @@ impl VideoSource {
     }
 }
 /// Independent thumbnail read budget, including empty reads and repeated seeks.
+#[cfg(any(target_os = "android", test))]
 pub struct ThumbnailSource {
     video: VideoSource,
     deadline: std::time::Instant,
@@ -40,7 +46,9 @@ pub struct ThumbnailSource {
     remaining_reads: usize,
     owner: Arc<dyn Fn() -> bool + Send + Sync>,
 }
+#[cfg(any(target_os = "android", test))]
 impl ThumbnailSource {
+    #[cfg(test)]
     pub fn new(video: VideoSource, deadline: std::time::Instant) -> Self {
         Self::new_guarded(video, deadline, Arc::new(|| true))
     }
