@@ -811,13 +811,8 @@ impl AnonGroupService {
                 continue;
             }
 
-            if !(0..=2).contains(&member_info.role)
-                || (!member_info.mailbox_pk.is_empty() && member_info.mailbox_pk.len() != 32)
-            {
-                return Err(AnonGroupError::InvalidData(
-                    "Invalid roster role or mailbox key".into(),
-                ));
-            }
+            // Role in 0..=2 and a mailbox key that is empty or 32 bytes are
+            // content.proto rules, enforced where the member list was decoded.
             let role = AnonGroupRole::from_i32(member_info.role);
             let mailbox_pk = if member_info.mailbox_pk.len() == 32 {
                 let mut pk = [0u8; 32];

@@ -388,7 +388,10 @@ impl MessageGateway {
         );
 
         // First try to parse as Content proto (preferred, contains KeyExchange)
-        if let Ok(content_proto) = Content::decode(plaintext) {
+        if let Ok(content_proto) = crate::network::validation::protovalidate::decode_inbound_content(
+            plaintext,
+            "sealed_sender",
+        ) {
             let ct_name = content_type_name(&content_proto.content);
 
             tracing::info!(
@@ -768,7 +771,10 @@ impl MessageGateway {
         }
 
         // First try to parse as Content proto (preferred, contains KeyExchange)
-        if let Ok(content_proto) = Content::decode(plaintext) {
+        if let Ok(content_proto) = crate::network::validation::protovalidate::decode_inbound_content(
+            plaintext,
+            "identified_sender",
+        ) {
             // Check for KeyExchange
             if let Some(content::Content::KeyExchange(key_exchange)) = content_proto.content {
                 tracing::debug!(
@@ -864,7 +870,10 @@ impl MessageGateway {
         }
 
         // Try to parse as Content proto first (preferred)
-        if let Ok(content_proto) = Content::decode(plaintext.as_slice()) {
+        if let Ok(content_proto) = crate::network::validation::protovalidate::decode_inbound_content(
+            plaintext.as_slice(),
+            "mailbox_dm",
+        ) {
             // Log content type before parsing
             let ct_name = content_type_name(&content_proto.content);
             tracing::info!(
@@ -1052,12 +1061,9 @@ impl MessageGateway {
                                     update.key_material.len()
                                 ))
                             })?;
-                        // Epoch 0 is a participant's own starting key, never sent.
-                        if update.key_epoch == 0 {
-                            return Err(ServiceError::Validation(
-                                "group call key at epoch 0".into(),
-                            ));
-                        }
+                        // Epoch 0 is a participant's own starting key, never
+                        // sent: `key_epoch >= 1` is declared in content.proto
+                        // and enforced where the Content was decoded.
                         GroupCallSignal::Key {
                             key,
                             epoch: update.key_epoch,
@@ -1337,9 +1343,12 @@ impl MessageGateway {
                 // ahead is recorded; `MessageService::sync_channel_state_if_behind`
                 // has the channel service fetch the changes.
                 if let Some(content::Content::DataMessage(dm)) =
-                    Content::decode(plaintext.as_slice())
-                        .ok()
-                        .and_then(|c| c.content)
+                    crate::network::validation::protovalidate::decode_inbound_content(
+                        plaintext.as_slice(),
+                        "sender_key",
+                    )
+                    .ok()
+                    .and_then(|c| c.content)
                 {
                     gate.cross_check(
                         &channel_id,
@@ -1469,12 +1478,30 @@ mod thread_id_tests {
                 other => panic!("expected DmContent::GroupCallSignal, got {other:?}"),
             }
         }
-        assert!(
-            parse(GroupCallSignal::Key {
+        // Epoch 0 is refused by content.proto's `key_epoch >= 1`, where the
+        // Content is decoded, before parse_content ever sees it.
+        use prost::Message as _;
+        let zero = build_group_call_signal_content(
+            &uuid::Uuid::new_v4().to_string(),
+            &uuid::Uuid::new_v4().to_string(),
+            GroupCallSignal::Key {
                 key: [3; 32],
-                epoch: 0
-            })
-            .is_err(),
+                epoch: 0,
+            },
+        );
+        assert!(
+            matches!(
+                crate::network::validation::protovalidate::decode_inbound_content(
+                    &zero.encode_to_vec(),
+                    "test"
+                ),
+                Err(
+                    crate::network::validation::protovalidate::ContentValidationError::Violation {
+                        rule: "uint32.gte",
+                        ..
+                    }
+                )
+            ),
             "epoch-0 key accepted"
         );
     }

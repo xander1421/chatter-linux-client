@@ -16,7 +16,6 @@ use std::collections::HashMap;
 use std::str::FromStr;
 use std::sync::Arc;
 
-use prost::Message as ProstMessage;
 use tokio::sync::mpsc;
 
 use crate::domain::UserId;
@@ -463,7 +462,10 @@ pub async fn process_anon_dm_results(
             );
 
             // Decode Content proto
-            let content: Content = match ProstMessage::decode(plaintext.as_slice()) {
+            let content: Content = match crate::network::validation::protovalidate::decode_inbound(
+                plaintext.as_slice(),
+                "anon_dm",
+            ) {
                 Ok(c) => c,
                 Err(e) => {
                     tracing::warn!(

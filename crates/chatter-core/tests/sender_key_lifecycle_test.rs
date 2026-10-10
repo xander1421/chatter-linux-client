@@ -41,12 +41,33 @@ fn party() -> Party {
     }
 }
 
+/// The sender-key plaintext: a valid encoded `Content`, as every channel send
+/// carries (the Signal actor refuses anything else).
+fn plaintext(body: &str) -> Vec<u8> {
+    use chatter_core::proto::content_v1::{Content, DataMessage, content};
+    use prost::Message as _;
+    Content {
+        content: Some(content::Content::DataMessage(DataMessage {
+            body: body.to_string(),
+            timestamp: 1,
+            ..Default::default()
+        })),
+        timestamp: 1,
+        ..Default::default()
+    }
+    .encode_to_vec()
+}
+
 async fn send(
     from: &Party,
     channel: &ChannelId,
-    body: &[u8],
+    body: &str,
 ) -> chatter_core::proto::content_v1::GroupEncrypted {
-    from.svc.encrypt_for_group(channel, body).await.unwrap().0
+    from.svc
+        .encrypt_for_group(channel, &plaintext(body))
+        .await
+        .unwrap()
+        .0
 }
 
 #[tokio::test]
@@ -56,8 +77,8 @@ async fn skdm_unlocks_only_messages_sent_after_it() {
 
     // Alice's first send creates her key; its SKDM never reaches Bob (the
     // device failure mode: "dev in channel", then "tokenless one").
-    let m0 = send(&alice, &channel, b"m0").await;
-    let m1 = send(&alice, &channel, b"m1").await;
+    let m0 = send(&alice, &channel, "m0").await;
+    let m1 = send(&alice, &channel, "m1").await;
 
     // Bob asks; Alice answers with an SKDM built NOW — at iteration 2.
     let skdm = alice.svc.create_sender_key(&channel).await.unwrap();
@@ -79,13 +100,13 @@ async fn skdm_unlocks_only_messages_sent_after_it() {
     }
 
     // Everything after the SKDM decrypts.
-    let m2 = send(&alice, &channel, b"m2").await;
+    let m2 = send(&alice, &channel, "m2").await;
     assert_eq!(
         bob.svc
             .decrypt_from_group(&alice.user_id, 1, &m2)
             .await
             .unwrap(),
-        b"m2"
+        plaintext("m2")
     );
 }
 
@@ -95,7 +116,7 @@ async fn skdm_sent_before_the_message_makes_it_decryptable() {
     let channel = ChannelId::new();
 
     // Alice already has a key and has used it (earlier members read m0).
-    let _m0 = send(&alice, &channel, b"m0").await;
+    let _m0 = send(&alice, &channel, "m0").await;
 
     // Bob joins: the send path hands him the current key BEFORE encrypting.
     let skdm = alice.svc.create_sender_key(&channel).await.unwrap();
@@ -103,13 +124,13 @@ async fn skdm_sent_before_the_message_makes_it_decryptable() {
         .process_sender_key(&alice.user_id, 1, &skdm)
         .await
         .unwrap();
-    let m1 = send(&alice, &channel, b"m1").await;
+    let m1 = send(&alice, &channel, "m1").await;
     assert_eq!(
         bob.svc
             .decrypt_from_group(&alice.user_id, 1, &m1)
             .await
             .unwrap(),
-        b"m1"
+        plaintext("m1")
     );
 }
 
@@ -123,14 +144,14 @@ async fn duplicate_skdm_is_a_no_op() {
         .process_sender_key(&alice.user_id, 1, &skdm)
         .await
         .unwrap();
-    let m0 = send(&alice, &channel, b"m0").await;
-    let m1 = send(&alice, &channel, b"m1").await;
+    let m0 = send(&alice, &channel, "m0").await;
+    let m1 = send(&alice, &channel, "m1").await;
     assert_eq!(
         bob.svc
             .decrypt_from_group(&alice.user_id, 1, &m1)
             .await
             .unwrap(),
-        b"m1"
+        plaintext("m1")
     );
 
     // The same SKDM again (19 answers to 19 requests on device) keeps Bob's
@@ -145,7 +166,7 @@ async fn duplicate_skdm_is_a_no_op() {
             .decrypt_from_group(&alice.user_id, 1, &m0)
             .await
             .unwrap(),
-        b"m0"
+        plaintext("m0")
     );
 
     // A later SKDM of the same chain (at a higher iteration) is also a no-op.
@@ -154,13 +175,13 @@ async fn duplicate_skdm_is_a_no_op() {
         .process_sender_key(&alice.user_id, 1, &later)
         .await
         .unwrap();
-    let m2 = send(&alice, &channel, b"m2").await;
+    let m2 = send(&alice, &channel, "m2").await;
     assert_eq!(
         bob.svc
             .decrypt_from_group(&alice.user_id, 1, &m2)
             .await
             .unwrap(),
-        b"m2"
+        plaintext("m2")
     );
 }
 
@@ -176,7 +197,7 @@ async fn rotating_our_key_keeps_the_keys_members_sent_us() {
         .unwrap();
 
     // Bob has his own key, handed to Alice; then rotates it (member left).
-    let _ = send(&bob, &channel, b"bob0").await;
+    let _ = send(&bob, &channel, "bob0").await;
     bob.svc
         .mark_sender_key_held(&channel, &alice.user_id.to_string(), &[(1, 7)])
         .unwrap();
@@ -192,12 +213,12 @@ async fn rotating_our_key_keeps_the_keys_members_sent_us() {
     assert!(bob.svc.sender_key_holders(&channel).unwrap().is_empty());
 
     // Alice's chain did not rotate, so Bob still reads her.
-    let m = send(&alice, &channel, b"after bob rotated").await;
+    let m = send(&alice, &channel, "after bob rotated").await;
     assert_eq!(
         bob.svc
             .decrypt_from_group(&alice.user_id, 1, &m)
             .await
             .unwrap(),
-        b"after bob rotated"
+        plaintext("after bob rotated")
     );
 }

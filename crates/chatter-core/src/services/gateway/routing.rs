@@ -3,11 +3,9 @@
 //! Handles routing of encrypted messages to appropriate handlers
 //! based on message type (sender key, control, distribution, etc.).
 
-use prost::Message as ProstMessage;
-
 use crate::domain::ids::{ChannelId, UserId};
 use crate::error::ServiceError;
-use crate::proto::content_v1::{Content, content};
+use crate::proto::content_v1::content;
 
 use super::{DecryptResult, MessageGateway, RouteResult};
 
@@ -146,7 +144,12 @@ impl MessageGateway {
             {
                 DecryptResult::Plaintext(plaintext) => {
                     // Check if this is a GroupMailboxAddress announcement
-                    if let Ok(content) = Content::decode(plaintext.as_slice()) {
+                    if let Ok(content) =
+                        crate::network::validation::protovalidate::decode_inbound_content(
+                            plaintext.as_slice(),
+                            "sender_key_control",
+                        )
+                    {
                         if let Some(content::Content::GroupMailboxAddress(announcement)) =
                             content.content
                         {

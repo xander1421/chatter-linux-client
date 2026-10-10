@@ -5,7 +5,6 @@ use crate::domain::{ChannelId, UserId};
 use crate::error::StorageError;
 use crate::inbox::DomainEvent;
 use crate::storage::{MessageRepository, receive_artifact::ReceiveArtifact};
-use prost::Message;
 use std::sync::Arc;
 
 pub(crate) fn group_destination_matches(actual: ChannelId, claimed: &[u8]) -> bool {
@@ -17,19 +16,17 @@ pub(crate) fn decode_artifact_reaction(
     artifact: &ReceiveArtifact,
     scope: &ReactionScope,
 ) -> Option<(UserId, crate::proto::content_v1::Reaction)> {
-    use crate::proto::content_v1::{Content, content::Content as Body};
-    let mut content = Content::decode(artifact.content.as_slice()).ok()?;
+    use crate::proto::content_v1::content::Content as Body;
+    let mut content = crate::network::validation::protovalidate::decode_inbound_content(
+        artifact.content.as_slice(),
+        "reaction_journal",
+    )
+    .ok()?;
     for depth in 0..=4 {
         match content.content? {
             Body::Reaction(reaction) => {
-                if reaction.target_sent_timestamp == 0
-                    || reaction.target_sent_timestamp > i64::MAX as u64
-                    || reaction.timestamp > i64::MAX as u64
-                    || reaction.emoji.is_empty()
-                    || reaction.emoji.len() > 128
-                {
-                    return None;
-                }
+                // Timestamp and emoji bounds are content.proto rules, already
+                // enforced by `decode_inbound_content` (nested wrappers too).
                 let author =
                     if let Some(encoded) = reaction.target_author_aci.strip_prefix("channel:") {
                         if scope.kind != ConversationType::AnonGroup {
@@ -144,6 +141,7 @@ mod tests {
         Database,
         receive_artifact::{self, ReceiveKey},
     };
+    use prost::Message;
     use rusqlite::params;
 
     fn open(path: &std::path::Path, own: UserId) -> (Arc<Database>, Arc<MessageRepository>) {

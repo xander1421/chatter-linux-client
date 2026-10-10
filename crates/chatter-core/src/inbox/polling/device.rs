@@ -558,7 +558,10 @@ async fn process_sender_key_message(
                 "[INBOX_SK] Decrypted control content"
             );
             // Parse as Content proto (typing, reaction, edit, pin, delete)
-            match Content::decode(plaintext.as_slice()) {
+            match crate::network::validation::protovalidate::decode_inbound_content(
+                plaintext.as_slice(),
+                "device_sender_key_control",
+            ) {
                 Ok(content_proto) => {
                     if let Some(inner) = content_proto.content {
                         if let Err(error) = persist_exact_saved_delete_before_ack(
@@ -751,7 +754,10 @@ fn process_decrypted_data_message(
         "[INBOX_DM] Decoding DataMessage from plaintext"
     );
 
-    match DataMessage::decode(plaintext) {
+    match crate::network::validation::protovalidate::decode_inbound::<DataMessage>(
+        plaintext,
+        "device_sender_key_data",
+    ) {
         Ok(data_message) => {
             tracing::debug!(
                 message_guid = %msg.message_guid,

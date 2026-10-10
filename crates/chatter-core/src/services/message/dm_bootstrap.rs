@@ -979,11 +979,18 @@ mod tests {
         let first = ms
             .signal_service
             .actor
-            .encrypt_sealed_bounded_batch(b"handshake".to_vec(), cert.clone(), vec![bob.clone()])
+            .encrypt_sealed_bounded_batch(
+                crate::network::validation::protovalidate::test_plaintext("handshake"),
+                cert.clone(),
+                vec![bob.clone()],
+            )
             .await
             .unwrap();
         let (plain, kind) = open_fixture_sealed(&mut remote, &alice, &bob, &first[0].1).await;
-        assert_eq!(plain, b"handshake");
+        assert_eq!(
+            plain,
+            crate::network::validation::protovalidate::test_plaintext("handshake")
+        );
         assert_eq!(kind, CiphertextMessageType::PreKey);
         let reply = libsignal_protocol::message_encrypt(
             b"ack",
@@ -1100,6 +1107,7 @@ mod tests {
         cache_device(ms, &friend, 1, &mut StdRng::seed_from_u64(0x8192)).await;
         let address = ProtocolAddress::new(friend.to_string(), DeviceId::new(1).unwrap());
         let base = SignalStore::new(ms.signal_service.key_store.clone());
+        let small = crate::network::validation::protovalidate::test_plaintext("small");
         for target in [8192, 8193] {
             let before = ms
                 .signal_service
@@ -1110,16 +1118,10 @@ mod tests {
                 let cert = fixture_sender_certificate(&client, me, None);
                 let mut staged = StagedSignalStore::new(base.clone());
                 let mut identities = staged.clone();
-                SealedSenderManager::encrypt(
-                    b"small",
-                    &cert,
-                    &address,
-                    &mut staged,
-                    &mut identities,
-                )
-                .await
-                .unwrap()
-                .len()
+                SealedSenderManager::encrypt(&small, &cert, &address, &mut staged, &mut identities)
+                    .await
+                    .unwrap()
+                    .len()
             };
             let gap = target - baseline;
             let mut exact = None;
@@ -1130,7 +1132,7 @@ mod tests {
                 let mut staged = StagedSignalStore::new(base.clone());
                 let mut identities = staged.clone();
                 let wrapped = SealedSenderManager::encrypt(
-                    b"small",
+                    &small,
                     &cert,
                     &address,
                     &mut staged,
@@ -1146,7 +1148,7 @@ mod tests {
             let cert = exact.expect("actual envelope must hit the exact cap boundary");
             let (result, started, _) = track_submission(
                 ms.signal_service.actor.encrypt_sealed_bounded_batch(
-                    b"small".to_vec(),
+                    small.clone(),
                     cert,
                     vec![address.clone()],
                 ),
@@ -1349,7 +1351,7 @@ mod tests {
             &mut auth,
             &friend,
             6,
-            b"queued",
+            &crate::network::validation::protovalidate::test_plaintext("queued"),
             &[7u8; 32],
         )
         .await

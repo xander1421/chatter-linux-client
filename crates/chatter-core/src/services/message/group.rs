@@ -770,27 +770,30 @@ impl MessageService {
                 .await
             {
                 Ok(plaintext) => {
-                    use prost::Message as ProstMessage;
                     // The sender-key plaintext is a `content_v1::Content`
                     // wrapping a `DataMessage` (see message/core.rs send path
                     // and the streaming decrypt in client/channels.rs) — NOT a
                     // `chat_v1::message::Content`. Decoding it as the wire
                     // Content silently yielded r#type=None and dropped every
                     // healed message; mirror the stream path exactly instead.
-                    let dm = match crate::proto::content_v1::Content::decode(plaintext.as_slice())
+                    let dm =
+                        match crate::network::validation::protovalidate::decode_inbound_content(
+                            plaintext.as_slice(),
+                            "channel_retry",
+                        )
                         .ok()
                         .and_then(|c| c.content)
-                    {
-                        Some(crate::proto::content_v1::content::Content::DataMessage(dm)) => dm,
-                        _ => {
-                            tracing::warn!(
-                                sender_id = %sender_id,
-                                device_id,
-                                "Retry: decrypted plaintext is not a valid DataMessage; dropping"
-                            );
-                            continue;
-                        }
-                    };
+                        {
+                            Some(crate::proto::content_v1::content::Content::DataMessage(dm)) => dm,
+                            _ => {
+                                tracing::warn!(
+                                    sender_id = %sender_id,
+                                    device_id,
+                                    "Retry: decrypted plaintext is not a valid DataMessage; dropping"
+                                );
+                                continue;
+                            }
+                        };
                     if dm.channel_id.parse::<ChannelId>().ok() != Some(channel_id)
                         || dm.timestamp == 0
                         || proto_msg.channel_id.parse::<ChannelId>().ok() != Some(channel_id)
@@ -3054,7 +3057,10 @@ mod tests {
         let (ge, _) = t
             .alice
             .signal()
-            .encrypt_for_group(&t.channel_id, b"lost key")
+            .encrypt_for_group(
+                &t.channel_id,
+                &crate::network::validation::protovalidate::test_plaintext("lost key"),
+            )
             .await
             .unwrap();
         let message_id = MessageId::new();
@@ -3101,7 +3107,10 @@ mod tests {
         let (ge, _) = t
             .alice
             .signal()
-            .encrypt_for_group(&t.channel_id, b"no key yet")
+            .encrypt_for_group(
+                &t.channel_id,
+                &crate::network::validation::protovalidate::test_plaintext("no key yet"),
+            )
             .await
             .unwrap();
         let parked = server_copy(&t, &MessageId::new(), TimestampNanos::now().as_u64(), &ge);
@@ -3162,7 +3171,10 @@ mod tests {
         let (ge, _) = t
             .alice
             .signal()
-            .encrypt_for_group(&t.channel_id, b"from device 1")
+            .encrypt_for_group(
+                &t.channel_id,
+                &crate::network::validation::protovalidate::test_plaintext("from device 1"),
+            )
             .await
             .unwrap();
         let copy = server_copy(&t, &MessageId::new(), TimestampNanos::now().as_u64(), &ge);
@@ -3202,7 +3214,10 @@ mod tests {
         let (ge, _) = t
             .alice
             .signal()
-            .encrypt_for_group(&t.channel_id, b"gone")
+            .encrypt_for_group(
+                &t.channel_id,
+                &crate::network::validation::protovalidate::test_plaintext("gone"),
+            )
             .await
             .unwrap();
         let copy = server_copy(&t, &MessageId::new(), TimestampNanos::now().as_u64(), &ge);
@@ -3420,7 +3435,10 @@ mod tests {
         let (ge, _) = t
             .alice
             .signal()
-            .encrypt_for_group(&t.channel_id, b"old install")
+            .encrypt_for_group(
+                &t.channel_id,
+                &crate::network::validation::protovalidate::test_plaintext("old install"),
+            )
             .await
             .unwrap();
         let copy = server_copy(&t, &MessageId::new(), now - 3600 * 1_000_000_000, &ge);
@@ -3590,7 +3608,10 @@ mod tests {
         let (ge, _) = t
             .alice
             .signal()
-            .encrypt_for_group(&t.channel_id, b"flood")
+            .encrypt_for_group(
+                &t.channel_id,
+                &crate::network::validation::protovalidate::test_plaintext("flood"),
+            )
             .await
             .unwrap();
         let ts = TimestampNanos::now().as_u64();
@@ -4253,7 +4274,8 @@ mod tests {
         use crate::domain::ids::MessageId;
         use crate::services::message::channel_inbound::{ChannelInbound, Ingested};
         let t = two_members();
-        let plaintext = b"from the server's ghost";
+        let plaintext =
+            &crate::network::validation::protovalidate::test_plaintext("from the server's ghost");
         let (ge, _) = t
             .alice
             .signal()

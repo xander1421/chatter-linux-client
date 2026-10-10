@@ -1203,9 +1203,10 @@ async fn try_parse_bootstrap_response(
 
     // Step 3: Decrypt the Signal Protocol content, against the responder's
     // device — named by the frame, since the Signal layer needs it to open.
-    let frame = match <crate::proto::content_v1::BootstrapResponseFrame as prost::Message>::decode(
-        signal_ciphertext.as_slice(),
-    ) {
+    let frame = match crate::network::validation::protovalidate::decode_inbound::<
+        crate::proto::content_v1::BootstrapResponseFrame,
+    >(signal_ciphertext.as_slice(), "bootstrap_response_frame")
+    {
         Ok(frame) => frame,
         Err(e) => {
             tracing::warn!(peer_id = %peer_id, error = %e, "Bootstrap response frame malformed");

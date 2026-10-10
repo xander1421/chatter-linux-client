@@ -529,7 +529,8 @@ impl MessageGateway {
                 let user: UserId = target.user_id.parse().map_err(|_| {
                     ServiceError::Validation("SyncSent has invalid receipt recipient".into())
                 })?;
-                if user != destination || user == current_user || target.device_id == 0 {
+                // `device_id` in 1..=127 is a content.proto rule, enforced at decode.
+                if user != destination || user == current_user {
                     return Err(ServiceError::Validation(
                         "SyncSent has invalid receipt target".into(),
                     ));

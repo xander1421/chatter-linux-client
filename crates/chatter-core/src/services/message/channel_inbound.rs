@@ -452,19 +452,23 @@ impl ChannelInbound {
                 .await
             {
                 Ok(plaintext) => {
-                    let dm = match content_v1::Content::decode(plaintext.as_slice())
+                    let dm =
+                        match crate::network::validation::protovalidate::decode_inbound_content(
+                            plaintext.as_slice(),
+                            "channel",
+                        )
                         .ok()
                         .and_then(|c| c.content)
-                    {
-                        Some(content_v1::content::Content::DataMessage(dm)) => dm,
-                        _ => {
-                            tracing::warn!(
-                                %channel_id, %sid,
-                                "Decrypted channel plaintext is not a DataMessage; dropping"
-                            );
-                            return Err(Ingested::Dropped);
-                        }
-                    };
+                        {
+                            Some(content_v1::content::Content::DataMessage(dm)) => dm,
+                            _ => {
+                                tracing::warn!(
+                                    %channel_id, %sid,
+                                    "Decrypted channel plaintext is not a DataMessage; dropping"
+                                );
+                                return Err(Ingested::Dropped);
+                            }
+                        };
 
                     if dm.channel_id.parse::<ChannelId>().ok() != Some(channel_id)
                         || dm.timestamp == 0

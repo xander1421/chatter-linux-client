@@ -43,6 +43,21 @@ impl From<crate::error::StorageError> for DurableReceiveError {
     }
 }
 
+/// Every plaintext this actor encrypts for a peer (sealed, identified or
+/// sender-key) is a `content_v1::Content`. Refuse one that breaks the rules
+/// declared in content.proto, which every receiving client enforces, before it
+/// reaches the ratchet: the caller gets an error instead of a peer silently
+/// dropping the message. DecryptionErrorMessage reports are not Content and go
+/// through `encrypt_decryption_error_sealed`, which this does not gate.
+fn admit_outgoing_content(plaintext: &[u8]) -> Result<(), ServiceError> {
+    use crate::network::validation::protovalidate::{ValidatedContent, validate_encoded};
+    validate_encoded(
+        <crate::proto::content_v1::Content as ValidatedContent>::FULL_NAME,
+        plaintext,
+    )
+    .map_err(|e| ServiceError::Validation(format!("outgoing content refused: {e}")))
+}
+
 /// Map an identified-sender decrypt failure.
 ///
 /// `UntrustedIdentity` must survive as its own error — collapsed into
@@ -985,6 +1000,7 @@ impl SignalActorHandle {
         sender_cert: SenderCertificate,
         recipient_address: ProtocolAddress,
     ) -> Result<Vec<u8>, ServiceError> {
+        admit_outgoing_content(&plaintext)?;
         self.send(|tx| SignalCommand::EncryptSealed {
             plaintext,
             sender_cert,
@@ -1000,6 +1016,7 @@ impl SignalActorHandle {
         sender_cert: SenderCertificate,
         destinations: Vec<ProtocolAddress>,
     ) -> Result<Vec<(ProtocolAddress, Vec<u8>, u32)>, ServiceError> {
+        admit_outgoing_content(&plaintext)?;
         let permit = crate::services::gateway::submission::SubmissionPermit::capture();
         self.send(|tx| SignalCommand::EncryptSealedBoundedBatch {
             plaintext,
@@ -1016,6 +1033,7 @@ impl SignalActorHandle {
         plaintext: Vec<u8>,
         recipient_address: ProtocolAddress,
     ) -> Result<(Vec<u8>, u8), ServiceError> {
+        admit_outgoing_content(&plaintext)?;
         self.send(|tx| SignalCommand::EncryptIdentified {
             plaintext,
             recipient_address,
@@ -1103,6 +1121,7 @@ impl SignalActorHandle {
         our_address: ProtocolAddress,
         plaintext: Vec<u8>,
     ) -> Result<Vec<u8>, ServiceError> {
+        admit_outgoing_content(&plaintext)?;
         self.send(|tx| SignalCommand::EncryptForGroup {
             channel_id,
             our_address,
