@@ -5379,6 +5379,15 @@ mod transport_switch_tests {
                     &user.to_string(),
                 )
                 .unwrap();
+            // A persisted session is a user id AND a device token (ec677fb7).
+            crate::storage::repositories::settings_repo::SettingsRepository::new(
+                client.services.database.clone(),
+            )
+            .set_bytes(
+                crate::storage::repositories::settings_repo::keys::DEVICE_AUTH_TOKEN,
+                b"token",
+            )
+            .unwrap();
             client.auth_state().set_logged_in(user, 1, "Me".into());
             assert!(
                 client.is_logged_in(),
