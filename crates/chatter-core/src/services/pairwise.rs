@@ -10,7 +10,6 @@
 
 use std::sync::Arc;
 
-
 use crate::domain::UserId;
 use crate::error::NetworkError;
 use crate::mailbox::token_manager::{MailboxToken, TokenManager};
@@ -161,8 +160,10 @@ impl PairwiseService {
     /// (Tor) channel; no authenticated request names the peer.
     ///
     /// `device_id` is the peer device the chat is bound to. `None` (first
-    /// contact) lets the server pick the peer's current device; the device the
-    /// bundle names is returned so the caller can pin it. A pinned device the
+    /// contact) fetches every device (`*`; the server requires a device id)
+    /// and binds ONE of them, the lowest device id the server serves a
+    /// bundle for ([`single_device_bundle`]); that device is returned so the
+    /// caller can pin it. A pinned device the
     /// server no longer has fails ([`PairwiseError::PeerDeviceGone`]) — the
     /// chat never moves to another of the peer's devices.
     pub async fn encrypt_anonymous(
@@ -179,7 +180,7 @@ impl PairwiseService {
         let bundle_response = anon_auth
             .get_pre_key_bundle_anonymous(
                 &peer_id_str,
-                &device_id.map(|d| d.to_string()).unwrap_or_default(),
+                &prekey_request_device(device_id),
                 &token.public_key,
                 &token.signature,
             )
@@ -188,19 +189,13 @@ impl PairwiseService {
                 (Some(_), NetworkError::NotFound(_)) => PairwiseError::PeerDeviceGone,
                 _ => PairwiseError::SessionError(format!("Anonymous prekey fetch failed: {}", e)),
             })?;
-        let bundle_device = match &bundle_response.result {
-            Some(crate::proto::chat_v1::get_pre_key_bundle_response::Result::Bundle(b)) => {
-                b.device_id
-            }
-            _ => {
-                return Err(PairwiseError::SessionError(
-                    "anonymous prekey fetch returned no single-device bundle".into(),
-                ));
-            }
+        let bundle = single_device_bundle(bundle_response.result, device_id)?;
+        let bundle_device = bundle.device_id;
+        let bundle_response = crate::proto::chat_v1::GetPreKeyBundleResponse {
+            result: Some(
+                crate::proto::chat_v1::get_pre_key_bundle_response::Result::Bundle(bundle),
+            ),
         };
-        if device_id.is_some_and(|d| d != bundle_device) {
-            return Err(PairwiseError::PeerDeviceGone);
-        }
 
         // KT gate: the peer's identity key is verified against its signed Key
         // Transparency proof, fetched over the same anonymous channel, before
@@ -282,9 +277,101 @@ impl PairwiseService {
     }
 }
 
+/// The `GetPreKeyBundleRequest.device_id` for an anonymous fetch: the bound
+/// device, or `*` (all devices) on first contact. Never empty: the server
+/// requires a device id (`auth.proto` `min_len: 1`).
+fn prekey_request_device(device_id: Option<u32>) -> String {
+    device_id.map_or_else(|| "*".to_string(), |d| d.to_string())
+}
+
+/// The ONE bundle a secret chat binds to. A pinned fetch must answer with
+/// that device's bundle. A first-contact (`*`) fetch answers with every
+/// device that has Kyber material; the lowest device id is taken, so the
+/// choice is deterministic.
+// Known cost: a `*` fetch also pops one one-time prekey on each device not
+// chosen (as Signal's all-device fetch does); a per-device listing RPC would
+// avoid that if one-time prekey exhaustion shows up.
+fn single_device_bundle(
+    result: Option<crate::proto::chat_v1::get_pre_key_bundle_response::Result>,
+    pinned: Option<u32>,
+) -> Result<crate::proto::chat_v1::SignalPreKeyBundle, PairwiseError> {
+    use crate::proto::chat_v1::get_pre_key_bundle_response::Result as R;
+    match (result, pinned) {
+        (Some(R::Bundle(bundle)), Some(device)) if bundle.device_id != device => {
+            Err(PairwiseError::PeerDeviceGone)
+        }
+        (Some(R::Bundle(bundle)), _) => Ok(bundle),
+        (Some(R::Devices(list)), None) => {
+            let mut bundle = list
+                .bundles
+                .into_iter()
+                .min_by_key(|b| b.device_id)
+                .ok_or_else(|| {
+                    PairwiseError::SessionError("peer has no device with prekeys".into())
+                })?;
+            if bundle.identity_key.is_empty() {
+                bundle.identity_key = list.identity_key;
+            }
+            Ok(bundle)
+        }
+        _ => Err(PairwiseError::SessionError(
+            "anonymous prekey fetch returned no single-device bundle".into(),
+        )),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// First contact must name a device the server accepts: an empty
+    /// device_id failed validation, so "Start secret chat" never worked.
+    #[test]
+    fn first_contact_prekey_request_names_a_valid_device() {
+        let first = prekey_request_device(None);
+        assert!(!first.is_empty());
+        assert_eq!(first, "*");
+        assert_eq!(prekey_request_device(Some(3)), "3");
+    }
+
+    #[test]
+    fn first_contact_binds_the_lowest_device_and_a_pin_holds() {
+        use crate::proto::chat_v1::SignalPreKeyBundle;
+        use crate::proto::chat_v1::{
+            PreKeyBundleDeviceList, get_pre_key_bundle_response::Result as R,
+        };
+        let b = |device_id| SignalPreKeyBundle {
+            device_id,
+            ..Default::default()
+        };
+        let list = || {
+            Some(R::Devices(PreKeyBundleDeviceList {
+                bundles: vec![b(7), b(2), b(5)],
+                identity_key: vec![9; 33],
+            }))
+        };
+        let chosen = single_device_bundle(list(), None).unwrap();
+        assert_eq!(chosen.device_id, 2);
+        assert_eq!(
+            chosen.identity_key,
+            vec![9; 33],
+            "list identity key fills an empty one"
+        );
+        assert!(single_device_bundle(Some(R::Devices(Default::default())), None).is_err());
+        // A pinned chat takes only its device's bundle.
+        assert_eq!(
+            single_device_bundle(Some(R::Bundle(b(4))), Some(4))
+                .unwrap()
+                .device_id,
+            4
+        );
+        assert!(matches!(
+            single_device_bundle(Some(R::Bundle(b(5))), Some(4)),
+            Err(PairwiseError::PeerDeviceGone)
+        ));
+        assert!(single_device_bundle(list(), Some(2)).is_err());
+        assert!(single_device_bundle(None, None).is_err());
+    }
 
     /// A secret send must never issue a request on the normal (direct, or
     /// Shield) transport: every secret-path entry point fails closed on a pool
