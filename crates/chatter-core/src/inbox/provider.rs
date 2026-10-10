@@ -847,6 +847,13 @@ impl DeviceInboxProvider {
                                         })
                                         .unwrap_or(false)
                                 };
+                                let bound_device = |conv: &crate::domain::anon_dm::AnonDmId| {
+                                    anon_repo
+                                        .get_conversation(conv)
+                                        .ok()
+                                        .flatten()
+                                        .and_then(|dm| dm.peer_device_id)
+                                };
                                 // Capture exact current-envelope binding before processing and
                                 // retain it until the actual upstream ACK result is known.
                                 let ack_bindings:std::collections::HashMap<_,_>=results.iter().flat_map(|result|result.messages.iter().filter_map(|message|{
@@ -860,6 +867,7 @@ impl DeviceInboxProvider {
                                     &dm_deduplicator,
                                     current_user_id.as_ref(),
                                     &is_blocked,
+                                    &bound_device,
                                     &message_repo,
                                     domain_tx.as_ref(),
                                 )

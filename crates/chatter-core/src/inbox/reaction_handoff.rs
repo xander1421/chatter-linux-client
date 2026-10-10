@@ -393,11 +393,13 @@ mod tests {
         let mut dm = AnonDm::new_initiated(peer);
         dm.status = AnonDmStatus::Active;
         dm.peer_mailbox_pk = Some([1; 32]);
+        dm.peer_device_id = Some(2);
         let dms = AnonDmRepository::new(db.clone());
         dms.insert_conversation(&dm).unwrap();
         let mut foreign = AnonDm::new_initiated(outsider);
         foreign.status = AnonDmStatus::Active;
         foreign.peer_mailbox_pk = Some([2; 32]);
+        foreign.peer_device_id = Some(2);
         dms.insert_conversation(&foreign).unwrap();
         let scope = ReactionScope::new(dm.id.into(), ConversationType::AnonDm);
         let other = ReactionScope::new(foreign.id.into(), ConversationType::AnonDm);
@@ -454,6 +456,36 @@ mod tests {
                 .unwrap()
                 .is_empty(),
             "already applied add cannot reverse peer's later remove"
+        );
+    }
+    #[test]
+    fn secret_chat_reaction_from_another_peer_device_is_refused() {
+        use crate::domain::anon_dm::{AnonDm, AnonDmStatus};
+        use crate::storage::repositories::anon_dm_repo::AnonDmRepository;
+        let dir = tempfile::tempdir().unwrap();
+        let own = UserId::new();
+        let peer = UserId::new();
+        let author = UserId::new();
+        let (db, repo) = open(&dir.path().join("bound.db"), own);
+        let mut dm = AnonDm::new_initiated(peer);
+        dm.status = AnonDmStatus::Active;
+        dm.peer_mailbox_pk = Some([1; 32]);
+        // journal() certifies device 2; the chat is bound to device 7.
+        dm.peer_device_id = Some(7);
+        AnonDmRepository::new(db.clone())
+            .insert_conversation(&dm)
+            .unwrap();
+        let scope = ReactionScope::new(dm.id.into(), ConversationType::AnonDm);
+        seed(&repo, &scope, author);
+        let a = certify_actor(
+            &db,
+            journal(&db, own, &scope, author, 10, false, None),
+            peer,
+        );
+        apply(&repo, &a, None).expect("refused, not retained");
+        assert!(
+            repo.get_reactions(&scope, &author, 100).unwrap().is_empty(),
+            "a reaction from a peer device the secret chat is not bound to is refused"
         );
     }
     #[test]
@@ -753,6 +785,7 @@ mod tests {
         let mut dm = AnonDm::new_initiated(peer);
         dm.status = AnonDmStatus::Active;
         dm.peer_mailbox_pk = Some([1; 32]);
+        dm.peer_device_id = Some(2);
         let group = AnonGroup::new_as_owner("delayed roster".into(), own);
         let dm_scope = ReactionScope::new(dm.id.into(), ConversationType::AnonDm);
         let group_scope = ReactionScope::new(group.id.into(), ConversationType::AnonGroup);
@@ -837,6 +870,7 @@ mod tests {
         let mut dm = AnonDm::new_initiated(peer);
         dm.status = AnonDmStatus::Active;
         dm.peer_mailbox_pk = Some([1; 32]);
+        dm.peer_device_id = Some(2);
         let held = ReactionScope::new(dm.id.into(), ConversationType::AnonDm);
         let ready = ReactionScope::new(ChannelId::new(), ConversationType::AnonGroup);
         for scope in [&held, &ready] {

@@ -1310,14 +1310,14 @@ impl UnifiedMessageRepository {
             // artifact path bypasses its nonreaction router, not its block policy.
             let blocked:bool=tx.query_row("SELECT EXISTS(SELECT 1 FROM friendships WHERE user_id=?1 AND friend_id=?2 AND status=2)",params![account,actor.to_string()],|r|r.get(0))?;
             let allowed=!blocked && (own || match scope.kind {
-                ConversationType::AnonDm=>tx.query_row("SELECT EXISTS(SELECT 1 FROM anon_dm_conversations WHERE id=?1 AND peer_id=?2 AND status=1 AND length(peer_mailbox_pk)=32) AND NOT EXISTS(SELECT 1 FROM anon_dm_blocked_users WHERE user_id=?2)",params![scope.id.to_string(),actor.to_string()],|r|r.get::<_,bool>(0))?,
+                ConversationType::AnonDm=>tx.query_row("SELECT EXISTS(SELECT 1 FROM anon_dm_conversations WHERE id=?1 AND peer_id=?2 AND peer_device_id=?3 AND status=1 AND length(peer_mailbox_pk)=32) AND NOT EXISTS(SELECT 1 FROM anon_dm_blocked_users WHERE user_id=?2)",params![scope.id.to_string(),actor.to_string(),stored.sender_device],|r|r.get::<_,bool>(0))?,
                 ConversationType::Channel=>tx.query_row("SELECT EXISTS(SELECT 1 FROM memberships WHERE channel_id=?1 AND user_id=?2)",params![scope.id.to_string(),actor.to_string()],|r|r.get::<_,bool>(0))?,
                 ConversationType::AnonGroup=>tx.query_row("SELECT EXISTS(SELECT 1 FROM anon_group_members g JOIN anon_groups a ON a.id=g.group_id WHERE g.group_id=?1 AND g.user_id=?2 AND a.status<>2) AND NOT EXISTS(SELECT 1 FROM anon_group_blocked_users WHERE group_id=?1 AND user_id=?2)",params![scope.id.to_string(),actor.to_string()],|r|r.get::<_,bool>(0))?,
                 _=>false,
             });
             if !allowed && !blocked {
                 let refused:bool=match scope.kind {
-                    ConversationType::AnonDm=>tx.query_row("SELECT EXISTS(SELECT 1 FROM anon_dm_blocked_users WHERE user_id=?2) OR EXISTS(SELECT 1 FROM anon_dm_conversations WHERE id=?1 AND (status IN (2,3) OR peer_id<>?2))",params![scope.id.to_string(),actor.to_string()],|r|r.get(0))?,
+                    ConversationType::AnonDm=>tx.query_row("SELECT EXISTS(SELECT 1 FROM anon_dm_blocked_users WHERE user_id=?2) OR EXISTS(SELECT 1 FROM anon_dm_conversations WHERE id=?1 AND (status IN (2,3) OR peer_id<>?2 OR (status=1 AND peer_device_id IS NOT ?3)))",params![scope.id.to_string(),actor.to_string(),stored.sender_device],|r|r.get(0))?,
                     ConversationType::AnonGroup=>tx.query_row("SELECT EXISTS(SELECT 1 FROM anon_group_blocked_users WHERE group_id=?1 AND user_id=?2) OR EXISTS(SELECT 1 FROM anon_groups WHERE id=?1 AND status=2)",params![scope.id.to_string(),actor.to_string()],|r|r.get(0))?,
                     _=>false,
                 };

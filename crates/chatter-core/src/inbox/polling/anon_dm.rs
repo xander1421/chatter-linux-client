@@ -124,7 +124,6 @@ pub(crate) fn route_anon_dm_content(
         }
         Some(content_v1::content::Content::AnonDmMessage(dm_msg)) => {
             tracing::info!(
-                sender_id = %sender_id,
                 conversation_id = %conversation_id,
                 has_inner = dm_msg.inner_content.is_some(),
                 "Received anonymous DM message from mailbox poll"
@@ -175,8 +174,6 @@ pub(crate) fn route_anon_dm_content(
                 }
                 Some(content_v1::content::Content::AnonGroupMemberList(list)) => {
                     tracing::info!(
-                        sender_id = %sender_id,
-                        group_id = %hex::encode(&list.group_id),
                         "Received anonymous group member list inside anon DM"
                     );
                     AnonDmRoute::Deliver(vec![InboxEvent::AnonGroupMemberList {
@@ -199,11 +196,9 @@ pub(crate) fn route_anon_dm_content(
         Some(content_v1::content::Content::Receipt(receipt)) => {
             // Handle read/delivery receipts
             tracing::info!(
-                sender_id = %sender_id,
                 conversation_id = %conversation_id,
                 receipt_type = receipt.r#type,
                 timestamp_count = receipt.timestamps.len(),
-                timestamps = ?receipt.timestamps,
                 "[ANON_DM_RECEIPT] Received receipt from peer"
             );
             AnonDmRoute::Deliver(vec![rewrap(content_v1::content::Content::Receipt(receipt))])
@@ -211,7 +206,6 @@ pub(crate) fn route_anon_dm_content(
         Some(content_v1::content::Content::Typing(typing)) => {
             // Handle typing indicators
             tracing::debug!(
-                sender_id = %sender_id,
                 conversation_id = %conversation_id,
                 "[ANON_DM] Received typing indicator from peer"
             );
@@ -220,7 +214,6 @@ pub(crate) fn route_anon_dm_content(
         Some(content_v1::content::Content::AnonDmPresence(presence)) => {
             // Handle presence updates
             tracing::debug!(
-                sender_id = %sender_id,
                 conversation_id = %conversation_id,
                 status = ?presence.status,
                 "[ANON_DM] Received presence update from peer"
@@ -232,7 +225,6 @@ pub(crate) fn route_anon_dm_content(
         Some(content_v1::content::Content::AnonDmProfileUpdate(profile_update)) => {
             // Handle profile updates
             tracing::info!(
-                sender_id = %sender_id,
                 conversation_id = %conversation_id,
                 has_encrypted_display_name = profile_update.encrypted_display_name.is_some(),
                 has_avatar = profile_update.encrypted_avatar.is_some(),
@@ -253,7 +245,6 @@ pub(crate) fn route_anon_dm_content(
                 _ => "Other",
             };
             tracing::warn!(
-                sender_id = %sender_id,
                 conversation_id = %conversation_id,
                 content_type = content_type,
                 "[ANON_DM] Unexpected content type in anonymous DM mailbox"
@@ -262,6 +253,14 @@ pub(crate) fn route_anon_dm_content(
             AnonDmRoute::Deliver(Vec::new())
         }
     }
+}
+
+/// Whether an envelope from `sender_device_id` must be refused by a chat
+/// bound to `bound`. An unbound chat is not yet active (a request binds the
+/// sender's device, an acceptance pins ours), so only its acceptance can be
+/// processed downstream; that acceptance is what binds it.
+pub(crate) fn from_unbound_device(bound: Option<u32>, sender_device_id: u32) -> bool {
+    bound.is_some_and(|device| device != sender_device_id)
 }
 
 /// Result of processing anonymous DM poll results.
@@ -288,6 +287,8 @@ pub async fn process_anon_dm_results(
     deduplicator: &MessageDeduplicator,
     current_user_id: Option<&UserId>,
     is_blocked: &(dyn Fn(&UserId, &AnonDmId) -> bool + Send + Sync),
+    // The peer device the conversation is bound to (v103), if any.
+    bound_device: &(dyn Fn(&AnonDmId) -> Option<u32> + Send + Sync),
     message_repo: &Arc<MessageRepository>,
     domain_tx: Option<&tokio::sync::broadcast::Sender<DomainEvent>>,
 ) -> ProcessedAnonDmMessages {
@@ -398,7 +399,6 @@ pub async fn process_anon_dm_results(
                 Err(e) => {
                     tracing::warn!(
                         error = %e,
-                        sender_uuid = %sender_uuid,
                         "Invalid sender UUID in anonymous DM"
                     );
                     if anon_dm_failure_decision(
@@ -443,7 +443,6 @@ pub async fn process_anon_dm_results(
             if is_blocked(&sender_id, &conversation_id) {
                 tracing::debug!(
                     conversation_id = %conversation_id,
-                    sender_id = %sender_id,
                     "Dropping message from blocked sender/conversation"
                 );
                 deduplicator.mark_processed(&message_id);
@@ -454,10 +453,24 @@ pub async fn process_anon_dm_results(
                 continue;
             }
 
-            tracing::info!(
+            // A secret chat is bound to one peer device: anything another
+            // device sends into it is refused, on every message, not only at
+            // acceptance. Deterministic in the envelope, so drain it.
+            if from_unbound_device(bound_device(&conversation_id), sender_device_id) {
+                tracing::warn!(
+                    conversation_id = %conversation_id,
+                    "[ANON_DM] Dropping message from a device this chat is not bound to"
+                );
+                deduplicator.mark_processed(&message_id);
+                processed
+                    .entry(conversation_id)
+                    .or_default()
+                    .push(message_id);
+                continue;
+            }
+
+            tracing::debug!(
                 conversation_id = %conversation_id,
-                sender_id = %sender_id,
-                plaintext_len = plaintext.len(),
                 "[ANON_DM] Decrypted message, parsing Content proto"
             );
 
@@ -497,11 +510,15 @@ pub async fn process_anon_dm_results(
             // Route based on content type. The routing table itself is
             // `route_anon_dm_content`, so every outcome is one value the ack
             // policy can be applied to instead of a bare bool.
-            let decision = match route_anon_dm_content(content, sender_id, sender_device_id, conversation_id) {
+            let decision = match route_anon_dm_content(
+                content,
+                sender_id,
+                sender_device_id,
+                conversation_id,
+            ) {
                 AnonDmRoute::Deliver(events) => {
                     for event in events {
-                        if event_tx.send(event).await.is_err()
-                        {
+                        if event_tx.send(event).await.is_err() {
                             return processed;
                         }
                     }
@@ -528,4 +545,17 @@ pub async fn process_anon_dm_results(
     }
 
     processed
+}
+
+#[cfg(test)]
+mod bound_device_tests {
+    use super::from_unbound_device;
+
+    #[test]
+    fn bound_secret_chat_refuses_every_other_device() {
+        assert!(from_unbound_device(Some(2), 3), "another device of the peer is refused");
+        assert!(!from_unbound_device(Some(2), 2), "the bound device is accepted");
+        // Unbound chats are not yet active; their acceptance binds them.
+        assert!(!from_unbound_device(None, 3));
+    }
 }
