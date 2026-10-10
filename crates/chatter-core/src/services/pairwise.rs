@@ -1,17 +1,12 @@
-//! Pairwise encryption service.
+//! Pairwise Signal Protocol encryption for secret chats (anonymous DMs and
+//! anonymous groups).
 //!
-//! Provides reusable Signal Protocol pairwise encryption that can be used by:
-//! - DMs (with additional mailbox encryption layer)
-//! - Anonymous groups (direct pairwise to anonymous mailboxes)
-//! - Any future pairwise messaging context
-//!
-//! # Separation of Concerns
-//!
-//! This service handles ONLY encryption/decryption using Signal Protocol.
-//! Delivery and mailbox management are handled by the calling context:
-//! - DM: `DmConversationManager` + two-layer encryption
-//! - AnonGroup: Anonymous mailbox per group
-//! - ServerGroup: Uses sender keys (different service)
+//! Every network call here rides the secret (Tor) channel and fails closed:
+//! session establishment is an anonymous prekey fetch + KT check, and the only
+//! identified request — refreshing our own sender certificate — goes over Tor
+//! too. Nothing here uses the normal pool transport. Delivery to mailboxes is
+//! the calling context's job; DMs and server groups use `SignalService`
+//! directly.
 
 use std::sync::Arc;
 
@@ -19,8 +14,7 @@ use libsignal_protocol::CiphertextMessageType;
 
 use crate::domain::UserId;
 use crate::error::NetworkError;
-use crate::mailbox::token_manager::MailboxToken;
-use crate::network::grpc::auth_client::AuthClient;
+use crate::mailbox::token_manager::{MailboxToken, TokenManager};
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::services::signal::SignalService;
 
@@ -48,9 +42,19 @@ pub enum PairwiseError {
     #[error("network error: {0}")]
     Network(#[from] NetworkError),
 
-    /// No cached sender certificate (required for anonymous encryption).
-    #[error("no cached sender certificate - ensure pre-fetch during login")]
-    NoCachedCertificate,
+    /// The peer device this secret chat is bound to no longer exists (or the
+    /// server offered a different one). The chat is never moved to another of
+    /// the peer's devices.
+    #[error("this contact's device for the secret chat is gone")]
+    PeerDeviceGone,
+
+    /// No pre-fetched blind-signature token left for the anonymous request.
+    #[error("no anonymous token available: {0}")]
+    NoToken(String),
+
+    /// Local state the caller records around a send could not be written.
+    #[error("storage error: {0}")]
+    Storage(#[from] crate::error::StorageError),
 }
 
 /// Reusable pairwise encryption service using Signal Protocol.
@@ -70,49 +74,6 @@ impl PairwiseService {
             signal_service,
             grpc_pool,
         }
-    }
-
-    /// Create an auth client for key fetching.
-    pub fn auth_client(&self) -> AuthClient {
-        self.grpc_pool.auth_client()
-    }
-
-    /// Encrypt plaintext for a peer using Signal Protocol (Sealed Sender).
-    ///
-    /// Establishes a session if one doesn't exist (fetches prekey bundle).
-    /// Uses Double Ratchet for forward secrecy and Sealed Sender for
-    /// sender anonymity from the server.
-    ///
-    /// # Arguments
-    /// * `peer_id` - The recipient's user ID
-    /// * `plaintext` - The data to encrypt
-    ///
-    /// # Returns
-    /// The sealed sender ciphertext (Signal Protocol encrypted).
-    pub async fn encrypt(
-        &self,
-        peer_id: &UserId,
-        plaintext: &[u8],
-    ) -> Result<Vec<u8>, PairwiseError> {
-        let mut auth_client = self.auth_client();
-        self.encrypt_with_client(&mut auth_client, peer_id, plaintext)
-            .await
-    }
-
-    /// Encrypt with a provided auth client (for batching).
-    pub async fn encrypt_with_client(
-        &self,
-        auth_client: &mut AuthClient,
-        peer_id: &UserId,
-        plaintext: &[u8],
-    ) -> Result<Vec<u8>, PairwiseError> {
-        let peer_id_str = peer_id.to_string();
-        let device_id = 1u32; // Primary device
-
-        self.signal_service
-            .encrypt_message(auth_client, &peer_id_str, device_id, plaintext)
-            .await
-            .map_err(|e| PairwiseError::EncryptionFailed(e.to_string()))
     }
 
     /// Decrypt sealed sender ciphertext from any peer.
@@ -171,31 +132,30 @@ impl PairwiseService {
             })
     }
 
-    /// Returns true if a usable Signal session already exists with this peer's
-    /// primary device.
-    ///
-    /// Callers use this to avoid an authenticated prekey fetch on first
-    /// contact (which would leak the sender→recipient pair to the server),
-    /// branching to `encrypt_anonymous` instead when no session exists yet.
-    pub async fn has_session(&self, peer_id: &UserId) -> Result<bool, PairwiseError> {
-        let peer_id_str = peer_id.to_string();
+    // =========================================================================
+    // Secret chats (anon DMs, anon groups) — Tor only, no identified request
+    // on the normal transport, ever
+    // =========================================================================
+
+    /// Whether a usable session exists with `device_id` of `peer_id`.
+    pub async fn has_session(
+        &self,
+        peer_id: &UserId,
+        device_id: u32,
+    ) -> Result<bool, PairwiseError> {
         self.signal_service
-            .has_session(&peer_id_str, 1u32)
+            .has_session(&peer_id.to_string(), device_id)
             .await
             .map_err(|e| PairwiseError::SessionError(e.to_string()))
     }
 
     /// Ensure our own sealed-sender certificate is cached.
     ///
-    /// The anonymous encryption path (`encrypt_anonymous` → sealed encrypt)
-    /// uses the *cached* certificate only and errors with NoCachedCertificate
-    /// if it is missing. The login-time prefetch is fire-and-forget, so a send
-    /// fired immediately after login can race ahead of it. Call this before an
-    /// anonymous send to close that window.
-    ///
-    /// The certificate is our OWN (carries no recipient identity), so the
-    /// fallback authenticated fetch does not reveal who we are messaging. No-op
-    /// once cached — cheap to call on every send.
+    /// Secret-chat encryption uses the cached certificate only. When it is
+    /// missing or due for refresh, the ONE identified request a secret send may
+    /// make — fetching our own certificate, which names no recipient — goes
+    /// over Tor (`secret_route_auth_client`), never the normal pool client;
+    /// with no Tor route it fails closed. No-op once cached.
     pub async fn ensure_sender_certificate(&self) -> Result<(), PairwiseError> {
         if self
             .signal_service
@@ -205,7 +165,7 @@ impl PairwiseService {
         {
             return Ok(());
         }
-        let mut auth_client = self.auth_client();
+        let mut auth_client = self.grpc_pool.secret_route_auth_client()?;
         self.signal_service
             .get_or_request_sender_certificate(&mut auth_client)
             .await
@@ -213,101 +173,84 @@ impl PairwiseService {
             .map_err(|e| PairwiseError::SessionError(e.to_string()))
     }
 
-    /// Ensure a session exists for a peer (pre-fetch keys).
+    /// Encrypt to the session we already hold with `device_id` of `peer_id`.
     ///
-    /// Call this before encryption if you want to warm up sessions
-    /// (e.g., when a user opens a conversation).
-    pub async fn ensure_session(&self, peer_id: &UserId) -> Result<(), PairwiseError> {
-        let mut auth_client = self.auth_client();
-        let peer_id_str = peer_id.to_string();
-        let device_id = 1u32;
-
-        self.signal_service
-            .ensure_session(&mut auth_client, &peer_id_str, device_id)
-            .await
-            .map_err(|e| PairwiseError::SessionError(e.to_string()))
-    }
-
-    // =========================================================================
-    // Multi-Device Operations
-    // =========================================================================
-
-    /// Ensure sessions exist for all devices of a peer.
-    ///
-    /// Use this to pre-warm sessions before encryption.
-    pub async fn ensure_sessions_all_devices(
+    /// Local only: the certificate refresh above is the only possible network
+    /// call. If the session vanished since the caller checked, this fails
+    /// (`SessionUnusable`) instead of re-establishing it — the caller decides
+    /// whether to go through [`Self::encrypt_anonymous`].
+    pub async fn encrypt_existing_session(
         &self,
         peer_id: &UserId,
-    ) -> Result<Vec<u32>, PairwiseError> {
-        let mut auth_client = self.auth_client();
-        let peer_id_str = peer_id.to_string();
-
+        device_id: u32,
+        plaintext: &[u8],
+    ) -> Result<Vec<u8>, PairwiseError> {
+        self.ensure_sender_certificate().await?;
         self.signal_service
-            .ensure_sessions_all_devices(&mut auth_client, &peer_id_str)
+            .encrypt_message_anonymous(&peer_id.to_string(), device_id, plaintext)
             .await
-            .map_err(|e| PairwiseError::SessionError(e.to_string()))
+            .map_err(|e| PairwiseError::EncryptionFailed(e.to_string()))
     }
 
-    // =========================================================================
-    // Anonymous Operations (for AnonDM - no authenticated requests)
-    // =========================================================================
-
-    /// Encrypt plaintext anonymously for a peer.
+    /// Establish a session anonymously if needed, then encrypt.
     ///
-    /// This method fetches prekeys using an anonymous credential (blind signature)
-    /// and encrypts using a cached sender certificate. NO authenticated requests
-    /// are made, so the server cannot link this encryption to the sender.
+    /// The prekey bundle is fetched with a blind-signature token and its
+    /// identity key checked against Key Transparency, both over the secret
+    /// (Tor) channel; no authenticated request names the peer.
     ///
-    /// # Pre-conditions
-    ///
-    /// - Sender certificate must be cached (pre-fetched during login)
-    /// - A valid blind signature token must be provided
-    ///
-    /// # Privacy Guarantees
-    ///
-    /// - Server knows: which user's prekeys are being fetched (peer_id)
-    /// - Server does NOT know: who is fetching the prekeys (uses anonymous credential)
-    /// - No authenticated requests are made during this operation
+    /// `device_id` is the peer device the chat is bound to. `None` (first
+    /// contact) lets the server pick the peer's current device; the device the
+    /// bundle names is returned so the caller can pin it. A pinned device the
+    /// server no longer has fails ([`PairwiseError::PeerDeviceGone`]) — the
+    /// chat never moves to another of the peer's devices.
     pub async fn encrypt_anonymous(
         &self,
         peer_id: &UserId,
+        device_id: Option<u32>,
         plaintext: &[u8],
         token: &MailboxToken,
-    ) -> Result<Vec<u8>, PairwiseError> {
+    ) -> Result<(Vec<u8>, u32), PairwiseError> {
+        self.ensure_sender_certificate().await?;
         let peer_id_str = peer_id.to_string();
-        let device_id = 1u32;
 
-        // Fetch prekey bundle ANONYMOUSLY using blind signature token. Only
-        // secret chats use this path, so it rides the secret (Tor) channel.
         let mut anon_auth = self.grpc_pool.secret_auth_client()?;
         let bundle_response = anon_auth
             .get_pre_key_bundle_anonymous(
                 &peer_id_str,
-                &device_id.to_string(),
+                &device_id.map(|d| d.to_string()).unwrap_or_default(),
                 &token.public_key,
                 &token.signature,
                 token.randomizer.as_deref(),
             )
             .await
-            .map_err(|e| {
-                PairwiseError::SessionError(format!("Anonymous prekey fetch failed: {}", e))
+            .map_err(|e| match (device_id, &e) {
+                (Some(_), NetworkError::NotFound(_)) => PairwiseError::PeerDeviceGone,
+                _ => PairwiseError::SessionError(format!("Anonymous prekey fetch failed: {}", e)),
             })?;
+        let bundle_device = match &bundle_response.result {
+            Some(crate::proto::chat_v1::get_pre_key_bundle_response::Result::Bundle(b)) => {
+                b.device_id
+            }
+            _ => {
+                return Err(PairwiseError::SessionError(
+                    "anonymous prekey fetch returned no single-device bundle".into(),
+                ));
+            }
+        };
+        if device_id.is_some_and(|d| d != bundle_device) {
+            return Err(PairwiseError::PeerDeviceGone);
+        }
 
-        // Establish session using the anonymously-fetched bundle.
-        //
-        // KT gate (Phase 3a): the peer's identity key is verified against its
-        // signed Key Transparency proof — fetched over the ANONYMOUS channel, so
-        // no authenticated identity is used — before the session is established.
-        // A server-forged identity key is REJECTED here, closing the anon-path
-        // MITM hole. The proof fetch reveals only which peer is looked up (the
-        // same user_id already sent in the anonymous prekey fetch above); VRF
-        // query-privacy for that lookup is the remaining Phase 3b work.
+        // KT gate: the peer's identity key is verified against its signed Key
+        // Transparency proof, fetched over the same anonymous channel, before
+        // the session is established. A server-forged identity key is
+        // REJECTED here.
         let mut anon_kt_client = self.grpc_pool.secret_kt_client()?;
         self.signal_service
             .ensure_session_with_bundle(
                 &mut anon_kt_client,
                 &peer_id_str,
-                device_id,
+                bundle_device,
                 bundle_response,
             )
             .await
@@ -318,10 +261,134 @@ impl PairwiseService {
                 e => PairwiseError::SessionError(e.to_string()),
             })?;
 
-        // Encrypt using cached sender certificate (no auth request)
-        self.signal_service
-            .encrypt_message_anonymous(&peer_id_str, device_id, plaintext)
+        let ciphertext = self
+            .signal_service
+            .encrypt_message_anonymous(&peer_id_str, bundle_device, plaintext)
             .await
-            .map_err(|e| PairwiseError::EncryptionFailed(e.to_string()))
+            .map_err(|e| PairwiseError::EncryptionFailed(e.to_string()))?;
+        Ok((ciphertext, bundle_device))
+    }
+
+    /// Deliver `plaintext` to ONE of a peer's device inboxes, fully
+    /// anonymously: anonymous prekey fetch (blind token #1), sealed sender,
+    /// blind-token send (#2), over Tor only. Carries secret-chat bootstraps —
+    /// anon DM requests and anon-group invites — so the request is bound to
+    /// the one device that can open it, and so accept it.
+    ///
+    /// `device_id` as in [`Self::encrypt_anonymous`]. `before_send` runs with
+    /// the sealed-to device after encryption, right before the send RPC (the
+    /// caller records that the request may now have left); its error aborts
+    /// the send. Returns the device.
+    pub async fn send_to_device_inbox(
+        &self,
+        tokens: &TokenManager,
+        peer_id: &UserId,
+        device_id: Option<u32>,
+        plaintext: &[u8],
+        before_send: impl FnOnce(u32) -> Result<(), PairwiseError>,
+    ) -> Result<u32, PairwiseError> {
+        // Over Tor or not at all; refuse before any token is spent.
+        let mut anon_client = self.grpc_pool.secret_message_client()?;
+        let claim = || {
+            tokens
+                .claim_prefetched_token()
+                .map_err(|e| PairwiseError::NoToken(e.to_string()))
+        };
+        let (sealed_body, device) = self
+            .encrypt_anonymous(peer_id, device_id, plaintext, &claim()?)
+            .await?;
+        let send_token = claim()?;
+        before_send(device)?;
+        anon_client
+            .send_with_anonymous_credential(
+                &peer_id.to_string(),
+                vec![crate::proto::chat_v1::SealedDeviceMessage {
+                    device_id: device,
+                    registration_id: 0,
+                    sealed_message: Some(crate::proto::chat_v1::SealedSenderMessage {
+                        sealed_body,
+                        server_key_id: self.signal_service.get_server_key_id(),
+                        timestamp: crate::util::time::TimestampNanos::now_anonymized().as_u64(),
+                    }),
+                }],
+                crate::proto::chat_v1::SealedDelivery::NamedDevices,
+                0,
+                &send_token.public_key,
+                &send_token.signature,
+                send_token.randomizer.as_deref(),
+            )
+            .await?;
+        Ok(device)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A secret send must never issue a request on the normal (direct, or
+    /// Shield) transport: every secret-path entry point fails closed on a pool
+    /// with no Tor route, and the pool's normal channel is never even built.
+    #[tokio::test]
+    async fn secret_paths_never_touch_the_normal_transport() {
+        static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
+        MOCK_KEYRING.call_once(|| {
+            keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let client = crate::client::ChatterClient::builder()
+            .server_url("https://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .expect("build client");
+        // A fresh pool: nothing has built its normal channel yet.
+        let pool = Arc::new(GrpcClientPool::new("https://localhost:1").unwrap());
+        assert!(pool.try_channel().is_none());
+        let pairwise = PairwiseService::new(
+            client.anon_dms().pairwise_service().signal_service.clone(),
+            pool.clone(),
+        );
+        let peer = UserId::new();
+        let token = MailboxToken {
+            id: "t".into(),
+            public_key: vec![1; 32],
+            private_key: vec![2; 64],
+            signature: vec![3; 64],
+            randomizer: None,
+        };
+        let no_tor = |r: &PairwiseError| {
+            matches!(
+                r,
+                PairwiseError::Network(NetworkError::SecretChatNeedsTor(_))
+            )
+        };
+
+        // No cached certificate: the refresh is the one identified request,
+        // and it has no Tor route, so it fails rather than going direct.
+        let e = pairwise.ensure_sender_certificate().await.unwrap_err();
+        assert!(no_tor(&e), "{e}");
+        let e = pairwise
+            .encrypt_existing_session(&peer, 2, b"x")
+            .await
+            .unwrap_err();
+        assert!(no_tor(&e), "{e}");
+        let e = pairwise
+            .encrypt_anonymous(&peer, Some(2), b"x", &token)
+            .await
+            .unwrap_err();
+        assert!(no_tor(&e), "{e}");
+        let tokens = client.anon_dms().token_manager.clone();
+        let e = pairwise
+            .send_to_device_inbox(&tokens, &peer, None, b"x", |_| {
+                panic!("nothing may be marked sent")
+            })
+            .await
+            .unwrap_err();
+        assert!(no_tor(&e), "{e}");
+
+        assert!(
+            pool.try_channel().is_none(),
+            "a secret-chat path built the normal transport channel"
+        );
     }
 }

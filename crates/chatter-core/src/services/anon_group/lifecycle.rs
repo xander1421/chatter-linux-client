@@ -116,15 +116,11 @@ impl AnonGroupService {
                 .await;
 
             if let Err(e) = send_result {
-                tracing::error!("Failed to send invite to {}: {}", invitee, e);
+                tracing::error!("Failed to send invite to: {}", e);
             }
         }
 
-        tracing::info!(
-            "Created anonymous group {} with {} invites",
-            group.id,
-            invitee_count
-        );
+        tracing::info!("Created anonymous group with {} invites", invitee_count);
 
         Ok(group)
     }
@@ -183,13 +179,12 @@ impl AnonGroupService {
                 .await;
 
             if let Err(e) = send_result {
-                tracing::error!("Failed to send invite to {}: {}", invitee, e);
+                tracing::error!("Failed to send invite to: {}", e);
             }
         }
 
         tracing::info!(
-            "Created anonymous group {} with {} invites (with roles)",
-            group.id,
+            "Created anonymous group with {} invites (with roles)",
             invitee_count
         );
 
@@ -270,7 +265,6 @@ impl AnonGroupService {
         })?;
 
         tracing::info!(
-            group_id = %group_id,
             mailbox_id = %response.mailbox_id,
             expires_at = response.expires_at,
             "Created ephemeral mailbox on server for anonymous group"
@@ -299,6 +293,9 @@ impl AnonGroupService {
         group_name: String,
         owner_id: UserId,
         inviter_id: UserId,
+        // The device the invite was sealed from (sender certificate): it owns
+        // `inviter_mailbox_pk`, so the group binds the inviter to it.
+        inviter_device_id: u32,
         inviter_mailbox_pk: [u8; 32],
         inviter_profile_key: Option<[u8; 32]>,
         inviter_display_name: Option<String>,
@@ -379,25 +376,17 @@ impl AnonGroupService {
         // local actions (UI controls, kick/ban prompts) trust the wrong
         // actor. Member is the safe lower bound; the next member-list
         // signal upgrades to Owner / Admin if applicable.
-        let inviter_member = AnonGroupMember::with_mailbox(
-            group_id,
-            inviter_id,
-            AnonGroupRole::Member,
-            inviter_mailbox_pk,
-        )
-        .with_profile(
-            inviter_profile_key,
-            inviter_display_name.clone(),
-            inviter_avatar,
-        );
+        let inviter_member = AnonGroupMember {
+            device_id: Some(inviter_device_id),
+            ..AnonGroupMember::with_mailbox(
+                group_id,
+                inviter_id,
+                AnonGroupRole::Member,
+                inviter_mailbox_pk,
+            )
+            .with_profile(inviter_profile_key, inviter_display_name, inviter_avatar)
+        };
         self.anon_group_repo.add_member(&inviter_member)?;
-
-        tracing::debug!(
-            "Stored inviter {} with display_name={:?} in group {}",
-            inviter_id,
-            inviter_display_name,
-            group_id
-        );
 
         // 5. Send JoinAck to inviter's anonymous mailbox
         self.send_join_ack(
@@ -408,11 +397,7 @@ impl AnonGroupService {
         )
         .await?;
 
-        tracing::info!(
-            "Joined anonymous group {} from inviter {}",
-            group_id,
-            inviter_id
-        );
+        tracing::info!("Joined secret group");
         Ok(group)
     }
 
@@ -490,14 +475,12 @@ impl AnonGroupService {
             // Self-row may not exist if the group is in a weird state; log but
             // keep going — the broadcast below still rotates on the peer side.
             tracing::warn!(
-                group_id = %group_id,
                 error = %e,
                 "Failed to update our own mailbox_pk in member roster during refresh"
             );
         }
 
         tracing::info!(
-            group_id = %group_id,
             mailbox_id = %new_mailbox.id,
             expires_at = %new_mailbox.expires_at.to_rfc3339(),
             old_mailbox_id = ?old_mailbox.as_ref().map(|m| &m.id),
@@ -510,7 +493,6 @@ impl AnonGroupService {
             // our updated mailbox_pk to every confirmed member.
             if let Err(e) = self.broadcast_member_list(group_id).await {
                 tracing::warn!(
-                    group_id = %group_id,
                     error = %e,
                     "Failed to broadcast member list after mailbox refresh"
                 );
@@ -540,19 +522,13 @@ impl AnonGroupService {
                         .await
                     {
                         tracing::warn!(
-                            group_id = %group_id,
-                            owner_id = %group.owner_id,
                             error = %e,
                             "Failed to send refresh JoinAck to owner"
                         );
                     }
                 }
                 None => {
-                    tracing::warn!(
-                        group_id = %group_id,
-                        owner_id = %group.owner_id,
-                        "Cannot announce refreshed mailbox: owner mailbox_pk unknown"
-                    );
+                    tracing::warn!("Cannot announce refreshed mailbox: owner mailbox_pk unknown");
                 }
             }
         }
@@ -623,7 +599,6 @@ impl AnonGroupService {
             match self.refresh_group_mailbox(&group.id).await {
                 Ok(new_mailbox) => {
                     tracing::info!(
-                        group_id = %group.id,
                         new_mailbox_id = %new_mailbox.id,
                         old_expires_at = %mailbox.expires_at.to_rfc3339(),
                         new_expires_at = %new_mailbox.expires_at.to_rfc3339(),
@@ -633,7 +608,6 @@ impl AnonGroupService {
                 }
                 Err(e) => {
                     tracing::error!(
-                        group_id = %group.id,
                         error = %e,
                         "[ANON_GROUP_REFRESH] Failed to refresh expiring mailbox; will retry on next cycle"
                     );

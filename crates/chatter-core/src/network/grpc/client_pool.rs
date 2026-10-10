@@ -1166,6 +1166,36 @@ impl GrpcClientPool {
         Ok(super::AnonymousKtClient::new(self.secret_channel()?))
     }
 
+    /// AUTHENTICATED auth client over Tor, for the one identified call a
+    /// secret-chat send can need: refreshing our OWN sender certificate.
+    ///
+    /// A fresh lazy channel to the pinned `.onion` on the account's Tor
+    /// circuit-group — never the secret-chat circuit (that would put the
+    /// account on the circuit that carries its anonymous traffic) and never the
+    /// direct transport. Fails closed exactly like [`Self::secret_channel`].
+    /// Not cached: the certificate is refreshed about once a day.
+    pub fn secret_route_auth_client(&self) -> Result<super::AuthClient, NetworkError> {
+        let onion = self
+            .onion_addr
+            .read()
+            .clone()
+            .ok_or(NetworkError::SecretChatNeedsTor(
+                "no server .onion address is pinned",
+            ))?;
+        #[cfg(feature = "onion")]
+        {
+            let ch: GrpcTransport = Self::create_endpoint(&onion, self.timeout)?
+                .connect_with_connector_lazy(self.onion_connector())
+                .into();
+            Ok(super::AuthClient::new(ch, self.auth_clone()))
+        }
+        #[cfg(not(feature = "onion"))]
+        {
+            let _ = onion;
+            Err(NetworkError::SecretChatNeedsTor("this build has none"))
+        }
+    }
+
     /// File client for secret-chat attachments: no auth header (the URL-mint
     /// methods are auth-exempt), so the cdn_key is tied to no account.
     pub fn secret_file_client(&self) -> Result<super::FileClient, NetworkError> {

@@ -508,6 +508,9 @@ pub enum InboxEvent {
     AnonGroupInvite {
         /// Peer user ID (inviter).
         peer_id: UserId,
+        /// The sealed-sender-authenticated device it came from: the one
+        /// device this secret chat is bound to.
+        sender_device_id: u32,
         /// Group ID (16 bytes UUID).
         group_id: Vec<u8>,
         /// Human-readable group name.
@@ -527,6 +530,9 @@ pub enum InboxEvent {
     AnonGroupJoinAck {
         /// Peer user ID (joiner).
         peer_id: UserId,
+        /// The sealed-sender-authenticated device it came from: the one
+        /// device this secret chat is bound to.
+        sender_device_id: u32,
         /// Group ID.
         group_id: Vec<u8>,
         /// Joiner's mailbox public key.
@@ -600,6 +606,9 @@ pub enum InboxEvent {
     AnonDmRequest {
         /// Peer user ID (initiator).
         peer_id: UserId,
+        /// The sealed-sender-authenticated device it came from: the one
+        /// device this secret chat is bound to.
+        sender_device_id: u32,
         /// Conversation ID (16 bytes UUID).
         conversation_id: Vec<u8>,
         /// Initiator's mailbox public key.
@@ -619,6 +628,9 @@ pub enum InboxEvent {
     AnonDmAccept {
         /// Peer user ID (responder).
         peer_id: UserId,
+        /// The sealed-sender-authenticated device it came from: the one
+        /// device this secret chat is bound to.
+        sender_device_id: u32,
         /// Conversation ID.
         conversation_id: Vec<u8>,
         /// Responder's mailbox public key.

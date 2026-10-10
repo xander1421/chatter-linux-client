@@ -104,6 +104,17 @@ pub enum AnonDmError {
     InvalidFriendCode(String),
 }
 
+impl From<crate::services::pairwise::PairwiseError> for AnonDmError {
+    fn from(e: crate::services::pairwise::PairwiseError) -> Self {
+        use crate::services::pairwise::PairwiseError;
+        match e {
+            PairwiseError::Network(e) => Self::MessageError(e.to_string()),
+            PairwiseError::Storage(e) => Self::Storage(e),
+            e => Self::CryptoError(e.to_string()),
+        }
+    }
+}
+
 /// Decrypted profile data from an anonymous DM request or acceptance.
 #[derive(Debug, Clone)]
 pub struct DecryptedPeerProfile {

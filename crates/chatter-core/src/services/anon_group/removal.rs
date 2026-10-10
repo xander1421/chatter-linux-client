@@ -68,16 +68,21 @@ impl AnonGroupService {
                 .expect("get_members_with_mailbox guarantees mailbox_pk");
 
             if let Err(e) = self
-                .send_to_anon_mailbox(&member.user_id, &mailbox_pk, content.clone())
+                .send_to_anon_mailbox(
+                    &member.user_id,
+                    member.device_id,
+                    &mailbox_pk,
+                    content.clone(),
+                )
                 .await
             {
-                tracing::warn!("Failed to notify {} of leave: {}", member.user_id, e);
+                tracing::warn!("Failed to notify of leave: {}", e);
             }
         }
 
         // Local group data and removals were committed before network fanout.
 
-        tracing::info!("Left group {}", group_id);
+        tracing::info!("Left group");
         Ok(())
     }
 
@@ -169,18 +174,19 @@ impl AnonGroupService {
                 .mailbox_pk
                 .expect("get_members_with_mailbox guarantees mailbox_pk");
             if let Err(e) = self
-                .send_to_anon_mailbox(&member.user_id, &mailbox_pk, content.clone())
+                .send_to_anon_mailbox(
+                    &member.user_id,
+                    member.device_id,
+                    &mailbox_pk,
+                    content.clone(),
+                )
                 .await
             {
-                tracing::warn!(
-                    "Failed to notify {} of ownership transfer: {}",
-                    member.user_id,
-                    e
-                );
+                tracing::warn!("Failed to notify of ownership transfer: {}", e);
             }
         }
 
-        tracing::info!("Transferred group {} to {}", group_id, new_owner);
+        tracing::info!("Transferred group to");
         Ok(())
     }
 
@@ -263,16 +269,21 @@ impl AnonGroupService {
                 .expect("get_members_with_mailbox guarantees mailbox_pk");
 
             if let Err(e) = self
-                .send_to_anon_mailbox(&member.user_id, &mailbox_pk, content.clone())
+                .send_to_anon_mailbox(
+                    &member.user_id,
+                    member.device_id,
+                    &mailbox_pk,
+                    content.clone(),
+                )
                 .await
             {
-                tracing::warn!("Failed to notify {} of kick: {}", member.user_id, e);
+                tracing::warn!("Failed to notify of kick: {}", e);
             }
         }
 
         // Removal and its tombstone were committed before network fanout.
 
-        tracing::info!("Kicked {} from group {}", target_user_id, group_id);
+        tracing::info!("Kicked from group");
         Ok(())
     }
 

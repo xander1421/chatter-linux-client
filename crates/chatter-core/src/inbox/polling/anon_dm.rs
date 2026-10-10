@@ -87,6 +87,8 @@ pub(crate) enum AnonDmRoute {
 pub(crate) fn route_anon_dm_content(
     content: Content,
     sender_id: UserId,
+    // The sealed-sender-authenticated device it came from.
+    sender_device_id: u32,
     conversation_id: AnonDmId,
 ) -> AnonDmRoute {
     // Kept for the envelopes that are re-wrapped into a fresh `Content` below.
@@ -108,14 +110,11 @@ pub(crate) fn route_anon_dm_content(
 
     match content.content {
         Some(content_v1::content::Content::AnonDmAccept(accept)) => {
-            tracing::info!(
-                sender_id = %sender_id,
-                conversation_id = %conversation_id,
-                "Received anonymous DM acceptance from mailbox poll"
-            );
+            tracing::info!(%conversation_id, "Received secret chat acceptance");
 
             AnonDmRoute::Deliver(vec![InboxEvent::AnonDmAccept {
                 peer_id: sender_id,
+                sender_device_id,
                 conversation_id: conversation_bytes,
                 responder_mailbox_pk: accept.responder_mailbox_pk,
                 profile_key: accept.profile_key,
@@ -146,13 +145,10 @@ pub(crate) fn route_anon_dm_content(
             // Check if the inner content is an anon group management message
             match inner.content.as_ref() {
                 Some(content_v1::content::Content::AnonGroupInvite(invite)) => {
-                    tracing::info!(
-                        sender_id = %sender_id,
-                        group_id = %hex::encode(&invite.group_id),
-                        "Received anonymous group invite inside anon DM"
-                    );
+                    tracing::info!("Received secret group invite inside a secret chat");
                     AnonDmRoute::Deliver(vec![InboxEvent::AnonGroupInvite {
                         peer_id: sender_id,
+                        sender_device_id,
                         group_id: invite.group_id.clone(),
                         group_name: invite.group_name.clone(),
                         inviter_mailbox_pk: invite.inviter_mailbox_pk.clone(),
@@ -164,13 +160,12 @@ pub(crate) fn route_anon_dm_content(
                 }
                 Some(content_v1::content::Content::AnonGroupJoinAck(ack)) => {
                     tracing::info!(
-                        sender_id = %sender_id,
-                        group_id = %hex::encode(&ack.group_id),
                         has_profile = ack.profile_key.is_some(),
-                        "Received anonymous group join ack inside anon DM"
+                        "Received secret group join ack inside a secret chat"
                     );
                     AnonDmRoute::Deliver(vec![InboxEvent::AnonGroupJoinAck {
                         peer_id: sender_id,
+                        sender_device_id,
                         group_id: ack.group_id.clone(),
                         joiner_mailbox_pk: ack.joiner_mailbox_pk.clone(),
                         timestamp: ack.timestamp,
@@ -338,7 +333,7 @@ pub async fn process_anon_dm_results(
                 }
             };
             // Decrypt using pairwise service (sealed sender)
-            let (sender_uuid, plaintext) = match pairwise_service
+            let (sender_uuid, sender_device_id, plaintext) = match pairwise_service
                 .decrypt_reaction_durable(&msg.encrypted_envelope, &key)
                 .await
             {
@@ -359,7 +354,11 @@ pub async fn process_anon_dm_results(
                         }
                         continue;
                     }
-                    (received.address.name().to_string(), received.content)
+                    (
+                        received.address.name().to_string(),
+                        u32::from(received.address.device_id()),
+                        received.content,
+                    )
                 }
                 Err(crate::error::ServiceError::Storage(_))
                 | Err(crate::error::ServiceError::Crypto(crate::error::CryptoError::Storage(_))) => {
@@ -496,7 +495,7 @@ pub async fn process_anon_dm_results(
             // Route based on content type. The routing table itself is
             // `route_anon_dm_content`, so every outcome is one value the ack
             // policy can be applied to instead of a bare bool.
-            let decision = match route_anon_dm_content(content, sender_id, conversation_id) {
+            let decision = match route_anon_dm_content(content, sender_id, sender_device_id, conversation_id) {
                 AnonDmRoute::Deliver(events) => {
                     for event in events {
                         if event_tx.send(event).await.is_err()

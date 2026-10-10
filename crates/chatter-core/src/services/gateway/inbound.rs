@@ -407,6 +407,8 @@ pub enum SealedSenderResult {
     /// Anonymous group join acknowledgment received.
     AnonGroupJoinAckReceived {
         sender_id: UserId,
+        /// The sealed-sender-authenticated joiner device (owns its mailbox).
+        sender_device_id: u32,
         group_id: Vec<u8>,
         joiner_mailbox_pk: Vec<u8>,
         timestamp: u64,
@@ -417,6 +419,14 @@ pub enum SealedSenderResult {
     /// Channel control content (reaction, pin, edit, typing, delete) received
     /// via per-device sealed sender — caller dispatches to the right event.
     ControlContent {
+        sender_id: UserId,
+        sender_device_id: u32,
+        content: Box<crate::proto::content_v1::Content>,
+    },
+    /// A secret-chat bootstrap (anon DM request or anon-group invite) sealed
+    /// to this device's inbox. `sender_device_id` is the device the chat binds
+    /// to.
+    SecretChatBootstrap {
         sender_id: UserId,
         sender_device_id: u32,
         content: Box<crate::proto::content_v1::Content>,

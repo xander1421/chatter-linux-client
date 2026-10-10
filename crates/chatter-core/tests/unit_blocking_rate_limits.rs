@@ -78,6 +78,8 @@ fn create_test_anon_dm(peer_id: UserId) -> AnonDm {
         updated_at: now,
         last_message_at: None,
         unread_count: 0,
+        peer_device_id: None,
+        request_submitted: false,
     }
 }
 

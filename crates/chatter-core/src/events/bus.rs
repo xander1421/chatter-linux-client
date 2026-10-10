@@ -278,6 +278,7 @@ mod tests {
         let event = DomainEvent::AnonDmInitReceived {
             conversation_id,
             sender_id,
+            sender_device_id: 2,
             sender_display_name: "TestSender".to_string(),
             sender_avatar: None,
             peer_mailbox_pk: [0u8; 32],

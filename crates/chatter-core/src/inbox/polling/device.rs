@@ -1198,6 +1198,15 @@ async fn process_identified_sender_message(
             );
             stats.write().messages_failed += 1;
         }
+        // A secret-chat bootstrap names its sender to the server on this path;
+        // secret chats only start sealed. Refused.
+        Ok(SealedSenderResult::SecretChatBootstrap { .. }) => {
+            tracing::warn!(
+                message_id = %msg.message_guid,
+                "[INBOX] Secret-chat bootstrap via identified sender refused"
+            );
+            stats.write().messages_failed += 1;
+        }
         Ok(SealedSenderResult::ControlContent {
             sender_id: actual_sender,
             sender_device_id,
@@ -1387,8 +1396,6 @@ async fn process_ecies_init_message(
     tracing::info!(
         message_guid = %msg.message_guid,
         conversation_id = %init_msg.conversation_id,
-        sender_id = %init_msg.sender_id,
-        intro_len = init_msg.intro_message.len(),
         "[INBOX_ECIES] Successfully decrypted NDSS'21 private contact request"
     );
 
@@ -1397,6 +1404,7 @@ async fn process_ecies_init_message(
         let event = DomainEvent::AnonDmInitReceived {
             conversation_id: init_msg.conversation_id,
             sender_id: init_msg.sender_id,
+            sender_device_id: init_msg.sender_device_id,
             sender_display_name: init_msg.sender_display_name.clone(),
             sender_avatar: init_msg.sender_avatar.clone(),
             peer_mailbox_pk: init_msg.mailbox_pk,
@@ -1615,6 +1623,16 @@ async fn process_sealed_sender_message(
                 "[INBOX] AnonGroupJoinAck via device sealed sender (wrong path)"
             );
             stats.write().messages_failed += 1;
+        }
+        Ok(SealedSenderResult::SecretChatBootstrap {
+            sender_id,
+            sender_device_id,
+            content,
+        }) => {
+            if let Some(inner) = content.content {
+                dispatch_secret_chat_bootstrap(inner, sender_id, sender_device_id, event_tx);
+            }
+            stats.write().messages_processed += 1;
         }
         Ok(SealedSenderResult::ControlContent {
             sender_id: actual_sender,
@@ -2018,6 +2036,44 @@ fn persist_exact_saved_delete_before_ack(
 
 /// Dispatch channel control content based on type.
 ///
+/// A secret-chat bootstrap sealed to this device inbox becomes its request or
+/// invite event, bound to the device that sent it (`sender_device_id`, from
+/// the sender certificate): only this device received it, so only this device
+/// can accept it.
+fn dispatch_secret_chat_bootstrap(
+    inner: content::Content,
+    sender_id: UserId,
+    sender_device_id: u32,
+    event_tx: &broadcast::Sender<InboxEvent>,
+) {
+    let event = match inner {
+        content::Content::AnonDmRequest(request) => InboxEvent::AnonDmRequest {
+            peer_id: sender_id,
+            sender_device_id,
+            conversation_id: request.conversation_id,
+            initiator_mailbox_pk: request.initiator_mailbox_pk,
+            intro_message: (!request.intro_message.is_empty()).then_some(request.intro_message),
+            profile_key: request.profile_key,
+            encrypted_display_name: request.encrypted_display_name,
+            encrypted_avatar: request.encrypted_avatar,
+            timestamp: request.timestamp,
+        },
+        content::Content::AnonGroupInvite(invite) => InboxEvent::AnonGroupInvite {
+            peer_id: sender_id,
+            sender_device_id,
+            group_id: invite.group_id,
+            group_name: invite.group_name,
+            inviter_mailbox_pk: invite.inviter_mailbox_pk,
+            timestamp: invite.timestamp,
+            profile_key: invite.profile_key,
+            encrypted_display_name: invite.encrypted_display_name,
+            encrypted_avatar: invite.encrypted_avatar,
+        },
+        _ => return,
+    };
+    let _ = event_tx.send(event);
+}
+
 /// Parses the Content proto inner type and emits appropriate channel events.
 pub fn dispatch_control_content(
     inner: content::Content,

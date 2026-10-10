@@ -145,6 +145,8 @@ impl AnonDmService {
         &self,
         conversation_id: AnonDmId,
         peer_id: UserId,
+        // Sealed-sender-authenticated device the acceptance came from.
+        peer_device_id: u32,
         responder_mailbox_pk: [u8; 32],
         profile_key: Option<[u8; 32]>,
         peer_display_name: Option<String>,
@@ -161,6 +163,15 @@ impl AnonDmService {
                 "Acceptance from unexpected peer".to_string(),
             ));
         }
+
+        // The chat is bound to the device our request was sealed to; an
+        // acceptance from any other device is refused (a Shield ECIES request
+        // went unbound, so the accepting device binds it here).
+        self.anon_dm_repo
+            .pin_peer_device(&conversation_id, peer_device_id)
+            .map_err(|_| {
+                AnonDmError::InvalidData("Acceptance from an unexpected device".to_string())
+            })?;
 
         // Update with peer's mailbox, display name, avatar, and activate
         dm.peer_mailbox_pk = Some(responder_mailbox_pk);
@@ -183,6 +194,9 @@ impl AnonDmService {
         &self,
         conversation_id: AnonDmId,
         sender_id: UserId,
+        // Sealed-sender-authenticated device the request came from: the chat
+        // is bound to it.
+        sender_device_id: u32,
         sender_mailbox_pk: [u8; 32],
         intro_message: Option<&str>,
         profile_key: Option<[u8; 32]>,
@@ -204,6 +218,7 @@ impl AnonDmService {
 
         // Create conversation as incoming request
         let mut dm = AnonDm::from_request(conversation_id, sender_id, sender_mailbox_pk);
+        dm.peer_device_id = Some(sender_device_id);
         dm.peer_profile_key = profile_key;
         dm.peer_display_name = peer_display_name;
         dm.peer_avatar = peer_avatar;
@@ -301,6 +316,7 @@ impl AnonDmService {
         &self,
         conversation_id: AnonDmId,
         sender_id: UserId,
+        sender_device_id: u32,
         sender_mailbox_pk: [u8; 32],
         intro_message: Option<&str>,
         profile_key: Option<Vec<u8>>,
@@ -354,6 +370,7 @@ impl AnonDmService {
         let dm = self.handle_request(
             conversation_id,
             sender_id,
+            sender_device_id,
             sender_mailbox_pk,
             intro_message,
             profile_key_arr,
@@ -377,6 +394,7 @@ impl AnonDmService {
         &self,
         conversation_id: AnonDmId,
         peer_id: UserId,
+        peer_device_id: u32,
         responder_mailbox_pk: [u8; 32],
         profile_key: Option<Vec<u8>>,
         encrypted_display_name: Option<Vec<u8>>,
@@ -429,6 +447,7 @@ impl AnonDmService {
         self.handle_acceptance(
             conversation_id,
             peer_id,
+            peer_device_id,
             responder_mailbox_pk,
             profile_key_arr,
             Some(display_name),

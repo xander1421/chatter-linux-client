@@ -304,6 +304,9 @@ pub enum DomainEvent {
         group_id: AnonGroupId,
         group_name: String,
         inviter_id: UserId,
+        /// The inviter's device the invite came from; the group binds the
+        /// inviter (owner) to it.
+        inviter_device_id: u32,
         inviter_mailbox_pk: [u8; 32],
         profile_key: Option<[u8; 32]>,
         inviter_display_name: Option<String>,
@@ -399,6 +402,8 @@ pub enum DomainEvent {
     AnonDmInitReceived {
         conversation_id: AnonDmId,
         sender_id: UserId,
+        /// Initiator's device (owns `peer_mailbox_pk`); the chat binds to it.
+        sender_device_id: u32,
         sender_display_name: String,
         sender_avatar: Option<Vec<u8>>,
         peer_mailbox_pk: [u8; 32],

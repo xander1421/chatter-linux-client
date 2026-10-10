@@ -577,6 +577,7 @@ impl MessageGateway {
                 );
                 return Ok(SealedSenderResult::AnonGroupJoinAckReceived {
                     sender_id,
+                    sender_device_id: u32::from(sender_address.device_id()),
                     group_id: ack.group_id,
                     joiner_mailbox_pk: ack.joiner_mailbox_pk,
                     timestamp: ack.timestamp,
@@ -610,6 +611,20 @@ impl MessageGateway {
                     sender_id,
                     group_id,
                     inner_content: Box::new(content_proto),
+                });
+            }
+
+            // Secret-chat bootstraps are sealed to ONE device inbox; the device
+            // they came from is the one that chat is bound to.
+            if matches!(
+                content_proto.content,
+                Some(content::Content::AnonDmRequest(_))
+                    | Some(content::Content::AnonGroupInvite(_))
+            ) {
+                return Ok(SealedSenderResult::SecretChatBootstrap {
+                    sender_id,
+                    sender_device_id: u32::from(sender_address.device_id()),
+                    content: Box::new(content_proto),
                 });
             }
 

@@ -261,6 +261,11 @@ pub struct AnonGroupMember {
     pub avatar: Option<Vec<u8>>,
     /// When the member joined.
     pub joined_at: DateTime<Utc>,
+    /// The member's device this group is bound to: the one that owns
+    /// `mailbox_pk` and so the only one that can open what we seal to it.
+    /// Learned with the mailbox (their JoinAck, the owner's roster, or the
+    /// invite that came from it); `None` until then, and nothing is sent.
+    pub device_id: Option<u32>,
 }
 
 impl AnonGroupMember {
@@ -276,6 +281,7 @@ impl AnonGroupMember {
             display_name: None,
             avatar: None,
             joined_at: Utc::now(),
+            device_id: None,
         }
     }
 
@@ -296,6 +302,7 @@ impl AnonGroupMember {
             display_name: None,
             avatar: None,
             joined_at: Utc::now(),
+            device_id: None,
         }
     }
 

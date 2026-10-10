@@ -408,6 +408,7 @@ impl InboxEventProcessor {
             // =================================================================
             InboxEvent::AnonGroupInvite {
                 peer_id,
+                sender_device_id,
                 group_id,
                 group_name,
                 inviter_mailbox_pk,
@@ -418,6 +419,7 @@ impl InboxEventProcessor {
             } => {
                 self.handle_anon_group_invite(
                     *peer_id,
+                    *sender_device_id,
                     group_id,
                     group_name,
                     inviter_mailbox_pk,
@@ -430,6 +432,7 @@ impl InboxEventProcessor {
 
             InboxEvent::AnonGroupJoinAck {
                 peer_id,
+                sender_device_id,
                 group_id,
                 joiner_mailbox_pk,
                 timestamp,
@@ -439,6 +442,7 @@ impl InboxEventProcessor {
             } => {
                 self.handle_anon_group_join_ack(
                     *peer_id,
+                    *sender_device_id,
                     group_id,
                     joiner_mailbox_pk,
                     profile_key,
@@ -628,6 +632,7 @@ impl InboxEventProcessor {
             // =================================================================
             InboxEvent::AnonDmRequest {
                 peer_id,
+                sender_device_id,
                 conversation_id,
                 initiator_mailbox_pk,
                 intro_message,
@@ -638,6 +643,7 @@ impl InboxEventProcessor {
             } => {
                 self.handle_anon_dm_request(
                     *peer_id,
+                    *sender_device_id,
                     conversation_id,
                     initiator_mailbox_pk,
                     intro_message,
@@ -650,6 +656,7 @@ impl InboxEventProcessor {
 
             InboxEvent::AnonDmAccept {
                 peer_id,
+                sender_device_id,
                 conversation_id,
                 responder_mailbox_pk,
                 profile_key,
@@ -659,6 +666,7 @@ impl InboxEventProcessor {
             } => {
                 self.handle_anon_dm_accept(
                     *peer_id,
+                    *sender_device_id,
                     conversation_id,
                     responder_mailbox_pk,
                     profile_key,
@@ -1580,6 +1588,7 @@ impl InboxEventProcessor {
     fn handle_anon_group_invite(
         &self,
         peer_id: UserId,
+        sender_device_id: u32,
         group_id: &[u8],
         group_name: &str,
         inviter_mailbox_pk: &[u8],
@@ -1656,6 +1665,7 @@ impl InboxEventProcessor {
                 group_id: anon_group_id,
                 group_name: group_name.to_string(),
                 inviter_id: peer_id,
+                inviter_device_id: sender_device_id,
                 inviter_mailbox_pk: mailbox_pk,
                 profile_key: profile_key_arr,
                 inviter_display_name,
@@ -1666,6 +1676,7 @@ impl InboxEventProcessor {
     fn handle_anon_group_join_ack(
         &self,
         peer_id: UserId,
+        sender_device_id: u32,
         group_id: &[u8],
         joiner_mailbox_pk: &[u8],
         profile_key: &Option<Vec<u8>>,
@@ -1673,9 +1684,8 @@ impl InboxEventProcessor {
         encrypted_avatar: &Option<Vec<u8>>,
         timestamp: u64,
     ) {
+        // A secret group: no joiner or group in the log.
         tracing::info!(
-            peer_id = %peer_id,
-            group_id = ?group_id,
             has_profile = profile_key.is_some(),
             "Received anonymous group join acknowledgment"
         );
@@ -1726,8 +1736,7 @@ impl InboxEventProcessor {
         };
 
         tracing::debug!(
-            peer_id = %peer_id,
-            display_name = ?display_name,
+            has_display_name = display_name.is_some(),
             "Decrypted profile for join ack"
         );
 
@@ -1740,6 +1749,7 @@ impl InboxEventProcessor {
                 .handle_join_ack_ordered(
                     anon_group_id,
                     peer_id_clone,
+                    sender_device_id,
                     mailbox_pk,
                     profile_key_arr,
                     display_name,
@@ -1755,12 +1765,7 @@ impl InboxEventProcessor {
                         event_bus.emit_domain(event);
                     }
                 }
-                Err(e) => tracing::error!(
-                    group_id = ?anon_group_id,
-                    peer_id = %peer_id_clone,
-                    error = %e,
-                    "Failed to handle join ack"
-                ),
+                Err(e) => tracing::error!(error = %e, "Failed to handle join ack"),
             }
         });
     }
@@ -1815,6 +1820,7 @@ impl InboxEventProcessor {
     fn handle_anon_dm_request(
         &self,
         peer_id: UserId,
+        sender_device_id: u32,
         conversation_id: &[u8],
         initiator_mailbox_pk: &[u8],
         intro_message: &Option<String>,
@@ -1823,8 +1829,6 @@ impl InboxEventProcessor {
         encrypted_avatar: &Option<Vec<u8>>,
     ) {
         tracing::info!(
-            peer_id = %peer_id,
-            conversation_id_len = conversation_id.len(),
             has_intro = intro_message.is_some(),
             has_encrypted_name = encrypted_display_name.is_some(),
             has_encrypted_avatar = encrypted_avatar.is_some(),
@@ -1863,6 +1867,7 @@ impl InboxEventProcessor {
                 anon_dm_service.handle_request_encrypted(
                     anon_dm_id,
                     peer_id,
+                    sender_device_id,
                     mailbox_pk,
                     intro_msg.as_deref(),
                     profile_key,
@@ -1897,7 +1902,7 @@ impl InboxEventProcessor {
                     });
                 }
                 Ok(Err(e)) => {
-                    tracing::debug!(peer_id = %peer_id, error = %e, "Failed to handle AnonDmRequest");
+                    tracing::debug!(error = %e, "Failed to handle AnonDmRequest");
                 }
                 Err(e) => {
                     tracing::error!(error = %e, "spawn_blocking panicked in AnonDmRequest handler");
@@ -1909,6 +1914,7 @@ impl InboxEventProcessor {
     fn handle_anon_dm_accept(
         &self,
         peer_id: UserId,
+        sender_device_id: u32,
         conversation_id: &[u8],
         responder_mailbox_pk: &[u8],
         profile_key: &Option<Vec<u8>>,
@@ -1916,8 +1922,6 @@ impl InboxEventProcessor {
         encrypted_avatar: &Option<Vec<u8>>,
     ) {
         tracing::info!(
-            peer_id = %peer_id,
-            conversation_id_len = conversation_id.len(),
             has_encrypted_display_name = encrypted_display_name.is_some(),
             has_encrypted_avatar = encrypted_avatar.as_ref().map(|v| !v.is_empty()).unwrap_or(false),
             "Received anonymous DM acceptance"
@@ -1955,6 +1959,7 @@ impl InboxEventProcessor {
                 service_for_handle.handle_acceptance_encrypted(
                     anon_dm_id,
                     peer_id,
+                    sender_device_id,
                     mailbox_pk,
                     profile_key,
                     encrypted_display_name,

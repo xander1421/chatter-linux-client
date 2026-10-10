@@ -514,6 +514,7 @@ async fn process_sealed_sender_group_message(
         }
         SealedSenderResult::AnonGroupJoinAckReceived {
             sender_id,
+            sender_device_id,
             group_id: anon_group_id,
             joiner_mailbox_pk,
             timestamp,
@@ -522,17 +523,14 @@ async fn process_sealed_sender_group_message(
             encrypted_avatar,
         } => {
             tracing::info!(
-                sender_id = %sender_id,
-                group_id_hex = %hex::encode(&anon_group_id),
-                joiner_mailbox_pk_len = joiner_mailbox_pk.len(),
-                timestamp = timestamp,
                 has_profile = profile_key.is_some(),
-                "Received anonymous group join ack, emitting event to update member mailbox"
+                "Received secret group join ack, emitting event to update member mailbox"
             );
 
-            // Emit event to update the joiner's mailbox key and profile
+            // Emit event to update the joiner's mailbox key, device and profile
             let _ = event_tx.send(InboxEvent::AnonGroupJoinAck {
                 peer_id: sender_id,
+                sender_device_id,
                 group_id: anon_group_id,
                 joiner_mailbox_pk,
                 timestamp,
@@ -544,6 +542,10 @@ async fn process_sealed_sender_group_message(
         SealedSenderResult::ControlContent { .. } => {
             // ControlContent rides the device inbox, not the group mailbox.
             // Drop if it lands here — match must stay exhaustive.
+        }
+        SealedSenderResult::SecretChatBootstrap { .. } => {
+            // Requests and invites ride the device inbox, not the group
+            // mailbox. Drop if it lands here.
         }
         SealedSenderResult::ProfileKeyReceived { .. } => {
             // Friend-DM profile-key handshake rides the device inbox, not

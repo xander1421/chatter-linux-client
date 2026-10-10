@@ -995,55 +995,16 @@ pub(crate) fn dispatch_dm_content(
         // ====================================================================
         // Anonymous Group Messages (NDSS'21 style)
         // ====================================================================
-        DmContent::AnonGroupInvite {
-            group_id,
-            group_name,
-            inviter_mailbox_pk,
-            timestamp,
-            profile_key,
-            encrypted_display_name,
-            encrypted_avatar,
-        } => {
-            tracing::info!(
-                peer_id = %peer_id,
-                group_name = %group_name,
-                "Anonymous group invite received"
-            );
-            let _ = event_tx.send(InboxEvent::AnonGroupInvite {
-                peer_id,
-                group_id,
-                group_name,
-                inviter_mailbox_pk,
-                timestamp,
-                profile_key,
-                encrypted_display_name,
-                encrypted_avatar,
-            });
+        // Secret-chat bootstraps travel only over the secret channel (sealed
+        // to one device inbox, or a secret mailbox), never a friend DM: one
+        // arriving here is refused.
+        DmContent::AnonDmRequest { .. }
+        | DmContent::AnonDmAccept { .. }
+        | DmContent::AnonGroupInvite { .. }
+        | DmContent::AnonGroupJoinAck { .. } => {
+            tracing::warn!("Secret-chat bootstrap over a friend DM refused");
         }
 
-        DmContent::AnonGroupJoinAck {
-            group_id,
-            joiner_mailbox_pk,
-            timestamp,
-            profile_key,
-            encrypted_display_name,
-            encrypted_avatar,
-        } => {
-            tracing::info!(
-                peer_id = %peer_id,
-                has_profile = profile_key.is_some(),
-                "Anonymous group join ack received"
-            );
-            let _ = event_tx.send(InboxEvent::AnonGroupJoinAck {
-                peer_id,
-                group_id,
-                joiner_mailbox_pk,
-                timestamp,
-                profile_key,
-                encrypted_display_name,
-                encrypted_avatar,
-            });
-        }
 
         DmContent::AnonGroupMemberList {
             group_id,
@@ -1133,61 +1094,6 @@ pub(crate) fn dispatch_dm_content(
         // =====================================================================
         // Anonymous DM Messages
         // =====================================================================
-        DmContent::AnonDmRequest {
-            conversation_id,
-            initiator_mailbox_pk,
-            intro_message,
-            profile_key,
-            encrypted_display_name,
-            encrypted_avatar,
-            timestamp,
-        } => {
-            tracing::info!(
-                peer_id = %peer_id,
-                conversation_id_len = conversation_id.len(),
-                has_intro = intro_message.is_some(),
-                has_encrypted_name = encrypted_display_name.is_some(),
-                has_encrypted_avatar = encrypted_avatar.is_some(),
-                timestamp = timestamp,
-                "Anonymous DM request received"
-            );
-            let _ = event_tx.send(InboxEvent::AnonDmRequest {
-                peer_id,
-                conversation_id,
-                initiator_mailbox_pk,
-                intro_message,
-                profile_key,
-                encrypted_display_name,
-                encrypted_avatar,
-                timestamp,
-            });
-        }
-        DmContent::AnonDmAccept {
-            conversation_id,
-            responder_mailbox_pk,
-            profile_key,
-            encrypted_display_name,
-            encrypted_avatar,
-            timestamp,
-        } => {
-            tracing::info!(
-                peer_id = %peer_id,
-                conversation_id_len = conversation_id.len(),
-                has_encrypted_display_name = encrypted_display_name.is_some(),
-                has_encrypted_avatar = encrypted_avatar.is_some(),
-                timestamp = timestamp,
-                "Anonymous DM acceptance received"
-            );
-            let _ = event_tx.send(InboxEvent::AnonDmAccept {
-                peer_id,
-                conversation_id,
-                responder_mailbox_pk,
-                profile_key,
-                encrypted_display_name,
-                encrypted_avatar,
-                timestamp,
-            });
-        }
         DmContent::AnonDmMessage {
             conversation_id,
             inner_content,

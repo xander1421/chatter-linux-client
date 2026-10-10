@@ -508,6 +508,7 @@ async fn test_anon_group_member_list_content() {
                 encrypted_display_name: None,
                 encrypted_avatar: None,
                 admission_timestamp: 0,
+                device_id: 1,
             }
         })
         .collect();

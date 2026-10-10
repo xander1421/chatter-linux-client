@@ -509,6 +509,7 @@ fn an_anon_dm_message_with_no_inner_content_cannot_be_left_to_redeliver_forever(
             padding: Vec::new(),
         },
         UserId::new(),
+        1,
         conversation,
     );
 

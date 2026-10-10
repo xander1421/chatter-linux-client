@@ -99,6 +99,7 @@ mod v099_dm_receive_tombstones;
 mod v100_drop_message_deletion_token;
 mod v101_attachment_secret_chat;
 mod v102_drop_call_room_tokens;
+mod v103_secret_chat_peer_device;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -426,4 +427,5 @@ pub fn default_migrations() -> MigrationRunner {
         .register(v100_drop_message_deletion_token::V100DropMessageDeletionToken)
         .register(v101_attachment_secret_chat::V101AttachmentSecretChat)
         .register(v102_drop_call_room_tokens::V102DropCallRoomTokens)
+        .register(v103_secret_chat_peer_device::V103SecretChatPeerDevice)
 }

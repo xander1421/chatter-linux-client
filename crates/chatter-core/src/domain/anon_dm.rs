@@ -97,6 +97,15 @@ pub struct AnonDm {
     pub last_message_at: Option<DateTime<Utc>>,
     /// Unread message count.
     pub unread_count: u32,
+    /// The ONE peer device this secret chat is bound to: the device our
+    /// request was sealed to, or the device whose request we received. `None`
+    /// until known. Pairwise encryption targets only this device; if it
+    /// disappears the chat is refused, never moved or fanned out.
+    pub peer_device_id: Option<u32>,
+    /// For a chat we initiated: whether our request may have left this
+    /// device. `false` means it provably never did (failed before the send
+    /// RPC), so starting again is safe; `true` keeps uncertain delivery as is.
+    pub request_submitted: bool,
 }
 
 impl AnonDm {
@@ -116,6 +125,8 @@ impl AnonDm {
             updated_at: now,
             last_message_at: None,
             unread_count: 0,
+            peer_device_id: None,
+            request_submitted: false,
         }
     }
 
@@ -135,6 +146,8 @@ impl AnonDm {
             updated_at: now,
             last_message_at: None,
             unread_count: 1,
+            peer_device_id: None,
+            request_submitted: false,
         }
     }
 
@@ -169,6 +182,12 @@ impl AnonDm {
     /// Check if this is an incoming request we haven't responded to.
     pub fn is_incoming_request(&self) -> bool {
         !self.initiated_by_us && self.status == AnonDmStatus::Pending
+    }
+
+    /// Our request that provably never left this device (it failed before
+    /// the send RPC). Safe to discard and start again.
+    pub fn is_unsent_request(&self) -> bool {
+        self.is_outgoing_request() && !self.request_submitted
     }
 
     /// Check if this is an outgoing request that hasn't been accepted.

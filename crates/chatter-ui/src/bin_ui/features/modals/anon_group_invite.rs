@@ -19,6 +19,7 @@ struct PendingGroupInvite {
     group_id: AnonGroupId,
     group_name: String,
     inviter_id: UserId,
+    inviter_device_id: u32,
     inviter_mailbox_pk: [u8; 32],
     profile_key: Option<[u8; 32]>,
     inviter_display_name: Option<String>,
@@ -105,7 +106,6 @@ pub fn spawn_anon_group_invite_handler(
     weak_window: Weak<MainWindow>,
     ui_ctx: &Arc<ChatterClient>,
 ) -> tokio::task::JoinHandle<()> {
-    let ui_ctx_handler = ui_ctx.clone();
     let mut event_rx = ui_ctx.subscribe_anon_group_invites();
 
     tokio::spawn(async move {
@@ -114,6 +114,7 @@ pub fn spawn_anon_group_invite_handler(
                 group_id,
                 group_name,
                 inviter_id,
+                inviter_device_id,
                 inviter_mailbox_pk,
                 profile_key,
                 inviter_display_name,
@@ -130,15 +131,8 @@ pub fn spawn_anon_group_invite_handler(
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             };
 
-            let inviter_name = inviter_display_name
-                .clone()
-                .unwrap_or_else(|| ui_ctx_handler.display_name(&inviter_id));
-            tracing::info!(
-                group_id = %group_id,
-                group_name = %group_name,
-                inviter_name = %inviter_name,
-                "Received anon group invite - adding to pending list"
-            );
+            // A secret group: no group, name or inviter in the log.
+            tracing::info!("Received anon group invite - adding to pending list");
 
             // Store invite for later accept/decline
             {
@@ -149,6 +143,7 @@ pub fn spawn_anon_group_invite_handler(
                         group_id,
                         group_name,
                         inviter_id,
+                        inviter_device_id,
                         inviter_mailbox_pk,
                         profile_key,
                         inviter_display_name,
@@ -195,6 +190,7 @@ pub fn wire_group_invite_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClie
                         invite.group_name.clone(),
                         invite.inviter_id, // owner_id
                         invite.inviter_id,
+                        invite.inviter_device_id,
                         invite.inviter_mailbox_pk,
                         invite.profile_key,
                         invite.inviter_display_name,

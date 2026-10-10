@@ -1448,6 +1448,10 @@ impl SignalService {
         let lock = self.get_encrypt_lock(&lock_key).await;
         let _guard = lock.lock().await;
 
+        // Same send-side identity-change wedge as `ensure_session`: never
+        // encrypt under a stale ratchet the peer's new install cannot open.
+        self.refuse_pending_identity_change(recipient_id)?;
+
         let device_id_struct = DeviceId::try_from(device_id)
             .map_err(|_| ServiceError::Validation("Invalid device ID".into()))?;
         let address = ProtocolAddress::new(recipient_id.to_string(), device_id_struct);

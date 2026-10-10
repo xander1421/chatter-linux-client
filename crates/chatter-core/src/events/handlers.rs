@@ -702,6 +702,7 @@ impl EventHandlers {
             DomainEvent::AnonDmInitReceived {
                 conversation_id,
                 sender_id,
+                sender_device_id,
                 sender_display_name,
                 sender_avatar,
                 peer_mailbox_pk,
@@ -712,10 +713,13 @@ impl EventHandlers {
             } => {
                 // NDSS'21 ECIES init — create conversation in DB (was previously in UI)
                 if let Some(ref svc) = self.anon_dm_service {
-                    let dm = crate::domain::anon_dm::AnonDm::from_request(
+                    let mut dm = crate::domain::anon_dm::AnonDm::from_request(
                         conversation_id, sender_id, peer_mailbox_pk,
                     ).with_display_name(&sender_display_name)
                      .with_avatar_opt(sender_avatar);
+                    // Bound to the initiator's device named in the init: our
+                    // acceptance is sealed to it alone.
+                    dm.peer_device_id = Some(sender_device_id);
 
                     if let Err(e) = svc.create_incoming_conversation(
                         &dm, &peer_identity_key, &peer_delivery_token,
@@ -728,7 +732,6 @@ impl EventHandlers {
                     } else {
                         debug!(
                             conversation_id = %conversation_id,
-                            sender_id = %sender_id,
                             "Created anon DM conversation from ECIES init"
                         );
                     }

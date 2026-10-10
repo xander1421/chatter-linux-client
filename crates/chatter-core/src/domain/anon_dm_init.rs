@@ -15,22 +15,22 @@
 //! # Wire Format
 //!
 //! ```text
-//! | version (1) | conversation_id (16) | sender_id (16) | mailbox_pk (32) |
+//! | version (1) | conversation_id (16) | sender_id (16) | sender_device_id (4) | mailbox_pk (32) |
 //! | identity_key (33) | delivery_token (12) | name_len (1) | sender_display_name (variable, max 64) |
 //! | intro_len (2) | intro_message (variable) | avatar_len (4) | sender_avatar (variable, max 1000000) |
 //! ```
 //!
-//! Total fixed size: 1 + 16 + 16 + 32 + 33 + 12 + 1 + 2 + 4 = 117 bytes + display_name + intro + avatar
+//! Total fixed size: 1 + 16 + 16 + 4 + 32 + 33 + 12 + 1 + 2 + 4 = 121 bytes + display_name + intro + avatar
 
 use super::UserId;
 use super::anon_dm::AnonDmId;
 
 /// Current version of the init message format.
-pub const INIT_MESSAGE_VERSION: u8 = 5;
+pub const INIT_MESSAGE_VERSION: u8 = 6;
 
 /// Minimum size of init message (without display_name, intro, or avatar).
 /// avatar_len is u32 (4 bytes) to support up to 1MB avatars.
-pub const MIN_INIT_SIZE: usize = 1 + 16 + 16 + 32 + 33 + 12 + 1 + 2 + 4; // 117 bytes
+pub const MIN_INIT_SIZE: usize = 1 + 16 + 16 + 4 + 32 + 33 + 12 + 1 + 2 + 4; // 121 bytes
 
 /// Maximum intro message length.
 pub const MAX_INTRO_LENGTH: usize = 500;
@@ -53,6 +53,9 @@ pub struct AnonDmInitMessage {
     pub conversation_id: AnonDmId,
     /// Initiator's user ID (revealed after decryption per NDSS'21).
     pub sender_id: UserId,
+    /// Initiator's device (the one that owns `mailbox_pk`): the secret chat is
+    /// bound to it, so the acceptance is sealed to this device only.
+    pub sender_device_id: u32,
     /// Initiator's ephemeral mailbox public key (32 bytes Ed25519).
     /// Recipient sends acceptance to this mailbox.
     pub mailbox_pk: [u8; 32],
@@ -110,6 +113,7 @@ impl AnonDmInitMessage {
     pub fn new(
         conversation_id: AnonDmId,
         sender_id: UserId,
+        sender_device_id: u32,
         mailbox_pk: [u8; 32],
         identity_key: [u8; 33],
         delivery_token: [u8; 12],
@@ -120,6 +124,7 @@ impl AnonDmInitMessage {
         Self {
             conversation_id,
             sender_id,
+            sender_device_id,
             mailbox_pk,
             identity_key,
             delivery_token,
@@ -161,6 +166,7 @@ impl AnonDmInitMessage {
         bytes.push(INIT_MESSAGE_VERSION);
         bytes.extend_from_slice(self.conversation_id.as_bytes());
         bytes.extend_from_slice(self.sender_id.as_bytes());
+        bytes.extend_from_slice(&self.sender_device_id.to_be_bytes());
         bytes.extend_from_slice(&self.mailbox_pk);
         bytes.extend_from_slice(&self.identity_key);
         bytes.extend_from_slice(&self.delivery_token);
@@ -207,6 +213,14 @@ impl AnonDmInitMessage {
         let sender_id = UserId::try_from_slice(&bytes[offset..offset + 16])
             .ok_or_else(|| InitMessageError::InvalidData("invalid sender_id".into()))?;
         offset += 16;
+
+        let sender_device_id = u32::from_be_bytes([
+            bytes[offset],
+            bytes[offset + 1],
+            bytes[offset + 2],
+            bytes[offset + 3],
+        ]);
+        offset += 4;
 
         let mut mailbox_pk = [0u8; 32];
         mailbox_pk.copy_from_slice(&bytes[offset..offset + 32]);
@@ -289,6 +303,7 @@ impl AnonDmInitMessage {
         Ok(Self {
             conversation_id,
             sender_id,
+            sender_device_id,
             mailbox_pk,
             identity_key,
             delivery_token,
@@ -339,6 +354,7 @@ mod tests {
         let msg = AnonDmInitMessage::new(
             AnonDmId::new(),
             UserId::new(),
+            2,
             mailbox_pk,
             identity_key,
             delivery_token,
@@ -352,6 +368,7 @@ mod tests {
 
         assert_eq!(msg.conversation_id, parsed.conversation_id);
         assert_eq!(msg.sender_id, parsed.sender_id);
+        assert_eq!(msg.sender_device_id, parsed.sender_device_id);
         assert_eq!(msg.mailbox_pk, parsed.mailbox_pk);
         assert_eq!(msg.identity_key, parsed.identity_key);
         assert_eq!(msg.delivery_token, parsed.delivery_token);
@@ -369,6 +386,7 @@ mod tests {
         let msg = AnonDmInitMessage::new(
             AnonDmId::new(),
             UserId::new(),
+            2,
             mailbox_pk,
             identity_key,
             delivery_token,
@@ -396,6 +414,7 @@ mod tests {
         let msg = AnonDmInitMessage::new(
             AnonDmId::new(),
             UserId::new(),
+            2,
             mailbox_pk,
             identity_key,
             delivery_token,
@@ -421,6 +440,7 @@ mod tests {
         let msg = AnonDmInitMessage::new(
             AnonDmId::new(),
             UserId::new(),
+            2,
             mailbox_pk,
             identity_key,
             delivery_token,
@@ -443,6 +463,7 @@ mod tests {
         let msg = AnonDmInitMessage::new(
             AnonDmId::new(),
             UserId::new(),
+            2,
             mailbox_pk,
             identity_key,
             delivery_token,
@@ -467,6 +488,7 @@ mod tests {
         let msg = AnonDmInitMessage::new(
             AnonDmId::new(),
             UserId::new(),
+            2,
             mailbox_pk,
             identity_key,
             delivery_token,
@@ -489,6 +511,7 @@ mod tests {
         let msg = AnonDmInitMessage::new(
             AnonDmId::new(),
             UserId::new(),
+            2,
             mailbox_pk,
             identity_key,
             delivery_token,

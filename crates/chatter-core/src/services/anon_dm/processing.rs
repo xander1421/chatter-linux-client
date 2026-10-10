@@ -364,15 +364,24 @@ impl AnonDmService {
                     "Processing anonymous group invite in anon DM"
                 );
 
-                events.push(DomainEvent::AnonGroupInviteReceived {
-                    group_id,
-                    group_name: invite.group_name.clone(),
-                    inviter_id: *sender_id,
-                    inviter_mailbox_pk: pk,
-                    profile_key,
-                    inviter_display_name: display_name,
-                    inviter_avatar: avatar,
-                });
+                // Only this chat's bound device holds the tunnel, so the invite
+                // came from it; the group binds the inviter to that device.
+                let inviter_device = self
+                    .anon_dm_repo
+                    .get_conversation(conversation_id)?
+                    .and_then(|c| c.peer_device_id);
+                if let Some(inviter_device_id) = inviter_device {
+                    events.push(DomainEvent::AnonGroupInviteReceived {
+                        group_id,
+                        group_name: invite.group_name.clone(),
+                        inviter_id: *sender_id,
+                        inviter_device_id,
+                        inviter_mailbox_pk: pk,
+                        profile_key,
+                        inviter_display_name: display_name,
+                        inviter_avatar: avatar,
+                    });
+                }
             }
             Some(ContentType::AnonGroupJoinAck(ack)) => {
                 use crate::crypto::profile_crypto;

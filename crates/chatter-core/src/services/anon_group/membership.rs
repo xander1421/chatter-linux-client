@@ -26,64 +26,6 @@ tokio::task_local! {
 }
 
 impl AnonGroupService {
-    /// Deliver content to a peer's device inbox fully anonymously: sealed
-    /// sender, anonymous prekey fetch, blind-token send, over Tor only.
-    ///
-    /// Used for invites only, when there is no anon DM tunnel to the invitee:
-    /// they have no group mailbox yet. Mirrors
-    /// `AnonDmService::send_to_device_inbox`, which carries anon DM requests;
-    /// the receiver handles both the same way (`inbox/polling/dm.rs`).
-    async fn send_to_device_inbox_anonymously(
-        &self,
-        peer_id: &UserId,
-        content: Content,
-    ) -> Result<(), AnonGroupError> {
-        // Over Tor or not at all; refuse before any token is spent.
-        let mut anon_client = self
-            .grpc_pool
-            .secret_message_client()
-            .map_err(|e| AnonGroupError::MessageError(e.to_string()))?;
-        let plaintext = content.encode_to_vec();
-        let prekey_token = self.claim_token()?;
-        let ciphertext = self
-            .pairwise_service
-            .encrypt_anonymous(peer_id, &plaintext, &prekey_token)
-            .await
-            .map_err(|e| AnonGroupError::CryptoError(e.to_string()))?;
-        let send_token = self.claim_token()?;
-        let server_key_id = self
-            .settings_repo
-            .get::<u32>(
-                crate::storage::repositories::settings_repo::keys::SENDER_CERTIFICATE_SERVER_KEY_ID,
-            )
-            .ok()
-            .flatten()
-            .unwrap_or(1);
-        let sealed_message = crate::proto::chat_v1::SealedSenderMessage {
-            sealed_body: ciphertext,
-            server_key_id,
-            timestamp: TimestampNanos::now_anonymized().as_u64(),
-        };
-        anon_client
-            .send_with_anonymous_credential(
-                &peer_id.to_string(),
-                // `encrypt_anonymous` seals to the peer's device 1 only.
-                vec![crate::proto::chat_v1::SealedDeviceMessage {
-                    device_id: 1,
-                    registration_id: 0,
-                    sealed_message: Some(sealed_message),
-                }],
-                crate::proto::chat_v1::SealedDelivery::NamedDevices,
-                0,
-                &send_token.public_key,
-                &send_token.signature,
-                send_token.randomizer.as_deref(),
-            )
-            .await
-            .map_err(|e| AnonGroupError::MessageError(format!("Failed to send invite: {e}")))?;
-        Ok(())
-    }
-
     /// Send content to a member's anonymous group mailbox.
     ///
     /// Uses pairwise Signal Protocol encryption (forward secrecy) and delivers
@@ -91,11 +33,15 @@ impl AnonGroupService {
     ///
     /// # Arguments
     /// * `peer_id` - The recipient's user ID (for Signal Protocol session)
+    /// * `peer_device` - The recipient device that owns `mailbox_pk`
+    ///   ([`AnonGroupMember::device_id`]); `None` refuses — the only device that
+    ///   could open the message is unknown, and no other device is guessed.
     /// * `mailbox_pk` - The recipient's anonymous group mailbox public key
     /// * `content` - The Content proto to send
     pub(crate) async fn send_to_anon_mailbox(
         &self,
         peer_id: &UserId,
+        peer_device: Option<u32>,
         mailbox_pk: &[u8; 32],
         content: Content,
     ) -> Result<(), AnonGroupError> {
@@ -124,6 +70,20 @@ impl AnonGroupService {
             None
         };
 
+        // No known recipient device: nothing could open the message, and no
+        // other device of theirs is guessed. Placed after the submission
+        // lookup so an already-claimed post still reports its own state.
+        let Some(device) = peer_device else {
+            if let Some(key) = retained.as_ref() {
+                crate::services::gateway::submission::discard_before_encryption(
+                    self.settings_repo.database(),
+                    key,
+                );
+            }
+            return Err(AnonGroupError::InvalidData(
+                "recipient is not bound to a device".into(),
+            ));
+        };
         // 2. Encrypt with Signal Protocol (pairwise, no DM-specific layers).
         //
         // If a usable session already exists, encrypt locally — no prekey
@@ -135,10 +95,9 @@ impl AnonGroupService {
         // bootstrap the session ANONYMOUSLY (blind token + anonymous prekey
         // fetch), matching the anon-DM design. Cost stays at ~1 token per new
         // peer (first contact only), not per message.
-        //
         let has_session = self
             .pairwise_service
-            .has_session(peer_id)
+            .has_session(peer_id, device)
             .await
             .map_err(|e| {
                 if let Some(key) = retained.as_ref() {
@@ -168,30 +127,30 @@ impl AnonGroupService {
             }
             return Err(AnonGroupError::MessageError(e.to_string()));
         }
+        // Our own sealed-sender certificate first (fetched over Tor if it
+        // must be — never the normal transport), so a missing one fails before
+        // any token is spent. Names no recipient.
+        self.pairwise_service
+            .ensure_sender_certificate()
+            .await
+            .map_err(|e| {
+                if let Some(key) = retained.as_ref() {
+                    crate::services::gateway::submission::discard_before_encryption(
+                        self.settings_repo.database(),
+                        key,
+                    );
+                }
+                AnonGroupError::from(e)
+            })?;
         let ciphertext = if has_session {
             self.check_group_recipient(&content, peer_id, mailbox_pk)?;
             self.admit_recipient_encryption(retained.as_deref())?;
+            // Local only; a session that vanished since the check fails here
+            // rather than being re-established.
             self.pairwise_service
-                .encrypt(peer_id, &plaintext)
-                .await
-                .map_err(|e| AnonGroupError::CryptoError(e.to_string()))?
+                .encrypt_existing_session(peer_id, device, &plaintext)
+                .await?
         } else {
-            // First contact: pre-warm our own sealed-sender cert before the
-            // anonymous encrypt, which uses the cached cert only. Closes the
-            // post-login race where the fire-and-forget login prefetch hasn't
-            // landed yet. Self-cert fetch — no recipient linkage leaked.
-            self.pairwise_service
-                .ensure_sender_certificate()
-                .await
-                .map_err(|e| {
-                    if let Some(key) = retained.as_ref() {
-                        crate::services::gateway::submission::discard_before_encryption(
-                            self.settings_repo.database(),
-                            key,
-                        );
-                    }
-                    AnonGroupError::CryptoError(e.to_string())
-                })?;
             // Refuse an expired originating session before consuming a token.
             self.check_recipient_session(retained.as_deref())?;
             let token = self.claim_token().map_err(|e| {
@@ -206,9 +165,9 @@ impl AnonGroupService {
             self.check_group_recipient(&content, peer_id, mailbox_pk)?;
             self.admit_recipient_encryption(retained.as_deref())?;
             self.pairwise_service
-                .encrypt_anonymous(peer_id, &plaintext, &token)
-                .await
-                .map_err(|e| AnonGroupError::CryptoError(e.to_string()))?
+                .encrypt_anonymous(peer_id, Some(device), &plaintext, &token)
+                .await?
+                .0
         };
 
         self.check_group_recipient(&content, peer_id, mailbox_pk)?;
@@ -382,8 +341,8 @@ impl AnonGroupService {
             .anon_dm_repo
             .get_conversation_by_peer(&invitee)?
             .filter(|dm| dm.is_ready())
-            .and_then(|dm| dm.peer_mailbox_pk.map(|pk| (dm.id, pk)));
-        if let Some((conversation_id, peer_mailbox_pk)) = tunnel {
+            .and_then(|dm| dm.peer_mailbox_pk.map(|pk| (dm.id, dm.peer_device_id, pk)));
+        if let Some((conversation_id, peer_device, peer_mailbox_pk)) = tunnel {
             let outer = Content {
                 content: Some(content_v1::content::Content::AnonDmMessage(Box::new(
                     AnonDmMessageProto {
@@ -395,17 +354,29 @@ impl AnonGroupService {
                 timestamp: TimestampNanos::now().as_u64(),
                 padding: Self::generate_padding(160),
             };
-            self.send_to_anon_mailbox(&invitee, &peer_mailbox_pk, outer)
+            // The secret DM's own device binding: only that device holds the
+            // tunnel, so only it receives (and can accept) the invite.
+            self.send_to_anon_mailbox(&invitee, peer_device, &peer_mailbox_pk, outer)
                 .await?;
-            tracing::debug!(%group_id, %invitee, "Sent group invite via anon DM tunnel");
+            tracing::debug!("Sent group invite via anon DM tunnel");
         } else {
             let invite = Content {
                 padding: Self::generate_padding(160),
                 ..invite
             };
-            self.send_to_device_inbox_anonymously(&invitee, invite)
+            // Sealed to ONE device of the invitee (the server's current one):
+            // that device alone can open the invite, so it is the one that
+            // accepts, and its JoinAck binds the member to it.
+            self.pairwise_service
+                .send_to_device_inbox(
+                    &self.token_manager,
+                    &invitee,
+                    None,
+                    &invite.encode_to_vec(),
+                    |_| Ok(()),
+                )
                 .await?;
-            tracing::debug!(%group_id, %invitee, "Sent group invite anonymously");
+            tracing::debug!("Sent group invite anonymously");
         }
         Ok(())
     }
@@ -475,11 +446,16 @@ impl AnonGroupService {
             padding: Self::generate_padding(160),
         };
 
-        // Send to inviter's anonymous group mailbox (not DM)
-        self.send_to_anon_mailbox(inviter_id, inviter_mailbox_pk, content)
+        // Send to inviter's anonymous group mailbox (not DM), on the device
+        // the invite came from.
+        let inviter_device = self
+            .anon_group_repo
+            .get_member(&group_id, inviter_id)?
+            .and_then(|m| m.device_id);
+        self.send_to_anon_mailbox(inviter_id, inviter_device, inviter_mailbox_pk, content)
             .await?;
 
-        tracing::debug!("Sent JoinAck for group {} to {}", group_id, inviter_id);
+        tracing::debug!("Sent JoinAck for group to");
         Ok(())
     }
 
@@ -525,10 +501,14 @@ impl AnonGroupService {
             padding: Self::generate_padding(160),
         };
 
-        self.send_to_anon_mailbox(member_id, member_mailbox_pk, content)
+        let device = self
+            .anon_group_repo
+            .get_member(group_id, member_id)?
+            .and_then(|m| m.device_id);
+        self.send_to_anon_mailbox(member_id, device, member_mailbox_pk, content)
             .await?;
 
-        tracing::debug!("Sent profile share for group {} to {}", group_id, member_id);
+        tracing::debug!("Sent profile share for group to");
         Ok(())
     }
 
@@ -563,53 +543,25 @@ impl AnonGroupService {
                 .send_profile_share(group_id, &member.user_id, &mailbox_pk)
                 .await
             {
-                tracing::warn!(
-                    "Failed to send profile share to {} in group {}: {}",
-                    member.user_id,
-                    group_id,
-                    e
-                );
+                tracing::warn!("Failed to send profile share to in group: {}", e);
             } else {
                 share_count += 1;
             }
         }
 
-        tracing::info!(
-            "Shared profile with {} members in group {}",
-            share_count,
-            group_id
-        );
+        tracing::info!("Shared profile with {} members in group", share_count);
         Ok(())
     }
 
-    /// Handle a JoinAck from an invitee.
-    ///
-    /// Updates the member's mailbox key, profile, and broadcasts updated member list.
-    pub async fn handle_join_ack(
-        &self,
-        group_id: AnonGroupId,
-        joiner_id: UserId,
-        joiner_mailbox_pk: [u8; 32],
-        profile_key: Option<[u8; 32]>,
-        display_name: Option<String>,
-        avatar: Option<Vec<u8>>,
-    ) -> Result<(), AnonGroupError> {
-        self.handle_join_ack_ordered(
-            group_id,
-            joiner_id,
-            joiner_mailbox_pk,
-            profile_key,
-            display_name,
-            avatar,
-            0,
-        )
-        .await
-    }
-
+    /// Handle a JoinAck from an invitee: record its mailbox key, device and
+    /// profile, and broadcast the updated member list.
     pub async fn handle_join_ack_ordered(
         &self,
         group_id: AnonGroupId,
         joiner_id: UserId,
+        // The sealed-sender-authenticated device the JoinAck came from: it
+        // owns `joiner_mailbox_pk`, so the member is bound to it.
+        joiner_device_id: u32,
         joiner_mailbox_pk: [u8; 32],
         profile_key: Option<[u8; 32]>,
         display_name: Option<String>,
@@ -625,21 +577,20 @@ impl AnonGroupService {
         if !group.is_admin_or_owner() {
             // SECURITY: If we're not owner/admin, we don't handle JoinAcks.
             // Regular members learn about new members via MemberList broadcasts from the owner.
-            tracing::warn!(
-                "Rejected JoinAck from {} for group {} - not owner/admin",
-                joiner_id,
-                group_id
-            );
+            tracing::warn!("Rejected JoinAck for a secret group - not owner/admin");
             return Ok(());
         }
 
-        let member = AnonGroupMember::with_mailbox(
-            group_id,
-            joiner_id,
-            AnonGroupRole::Member,
-            joiner_mailbox_pk,
-        )
-        .with_profile(profile_key, display_name, avatar);
+        let member = AnonGroupMember {
+            device_id: Some(joiner_device_id),
+            ..AnonGroupMember::with_mailbox(
+                group_id,
+                joiner_id,
+                AnonGroupRole::Member,
+                joiner_mailbox_pk,
+            )
+            .with_profile(profile_key, display_name, avatar)
+        };
         if !self
             .anon_group_repo
             .apply_ordered_join_ack(&member, timestamp)?
@@ -654,8 +605,6 @@ impl AnonGroupService {
             .await
         {
             tracing::warn!(
-                group_id = %group_id,
-                joiner_id = %joiner_id,
                 error = %e,
                 "Failed to drain pending anon group messages after JoinAck"
             );
@@ -666,11 +615,7 @@ impl AnonGroupService {
             self.broadcast_member_list(&group_id).await?;
         }
 
-        tracing::info!(
-            "Member {} joined group {} with mailbox key",
-            joiner_id,
-            group_id
-        );
+        tracing::info!("Member joined group with mailbox key");
         Ok(())
     }
 
@@ -688,6 +633,10 @@ impl AnonGroupService {
         let admissions: std::collections::HashMap<UserId, u64> =
             snapshot.iter().map(|(m, ts)| (m.user_id, *ts)).collect();
         let members: Vec<_> = snapshot.into_iter().map(|(m, _)| m).collect();
+        // Our own entry carries this device: it owns our group mailbox.
+        let my_device: Option<u32> = self
+            .settings_repo
+            .get(crate::storage::repositories::settings_repo::keys::CURRENT_DEVICE_ID)?;
         let confirmed_members: Vec<_> = members
             .iter()
             .filter(|m| m.mailbox_pk.is_some())
@@ -707,7 +656,9 @@ impl AnonGroupService {
                         if !name.is_empty() {
                             match crate::crypto::profile_crypto::encrypt_display_name(&pk, name) {
                                 Ok(enc) => encrypted_display_name = Some(enc),
-                                Err(e) => tracing::warn!("Failed to encrypt display name for {}: {}", m.user_id, e),
+                                Err(e) => {
+                                    tracing::warn!("Failed to encrypt display name for: {}", e)
+                                }
                             }
                         }
                     }
@@ -715,12 +666,14 @@ impl AnonGroupService {
                         if !av.is_empty() {
                             match crate::crypto::profile_crypto::encrypt_avatar(&pk, av) {
                                 Ok(enc) => encrypted_avatar = Some(enc),
-                                Err(e) => tracing::warn!("Failed to encrypt avatar for {}: {}", m.user_id, e),
+                                Err(e) => tracing::warn!("Failed to encrypt avatar for: {}", e),
                             }
                         }
                     }
                 } else {
-                    tracing::debug!("No profile key for member {} in group {} - cannot encrypt profile for broadcast", m.user_id, group_id);
+                    tracing::debug!(
+                        "No profile key for member in group - cannot encrypt profile for broadcast"
+                    );
                 }
 
                 AnonGroupMemberInfo {
@@ -731,6 +684,12 @@ impl AnonGroupService {
                     encrypted_display_name,
                     encrypted_avatar,
                     admission_timestamp: admissions[&m.user_id],
+                    device_id: if m.user_id == current_user {
+                        my_device
+                    } else {
+                        m.device_id
+                    }
+                    .unwrap_or(0),
                 }
             })
             .collect();
@@ -768,16 +727,20 @@ impl AnonGroupService {
             sleep(Duration::from_millis(delay_ms as u64)).await;
 
             if let Err(e) = self
-                .send_to_anon_mailbox(&member.user_id, &mailbox_pk, content.clone())
+                .send_to_anon_mailbox(
+                    &member.user_id,
+                    member.device_id,
+                    &mailbox_pk,
+                    content.clone(),
+                )
                 .await
             {
-                tracing::error!("Failed to send member list to {}: {}", member.user_id, e);
+                tracing::error!("Failed to send member list to: {}", e);
             }
         }
 
         tracing::debug!(
-            "Broadcasting member list for group {} to {} members",
-            group_id,
+            "Broadcasting member list for group to {} members",
             member_count.saturating_sub(1)
         );
         Ok(())
@@ -819,12 +782,7 @@ impl AnonGroupService {
         // role or a re-pointed mailbox_pk, and is rejected whole. Same rule as
         // AnonGroupRoleChange in `handle_update`.
         if sender_id != group.owner_id {
-            tracing::warn!(
-                sender_id = %sender_id,
-                owner_id = %group.owner_id,
-                group_id = %group_id,
-                "Rejected member list from non-owner"
-            );
+            tracing::warn!("Rejected member list from non-owner");
             return Err(AnonGroupError::InsufficientPermissions(
                 "Only the group owner can send member lists".to_string(),
             ));
@@ -883,41 +841,36 @@ impl AnonGroupService {
 
             use crate::crypto::profile_crypto::{decrypt_avatar, decrypt_display_name};
 
-            let display_name: Option<String> = match (
-                &profile_key,
-                &member_info.encrypted_display_name,
-            ) {
-                (Some(pk), Some(encrypted)) if !encrypted.is_empty() => {
-                    match decrypt_display_name(pk, encrypted) {
-                        Ok(name) if !name.is_empty() => {
-                            tracing::debug!(user_id = %user_id, "Decrypted member display name");
-                            Some(name)
-                        }
-                        Ok(_) => {
-                            tracing::debug!("Decrypted empty display name for {}", user_id);
-                            None
-                        }
-                        Err(e) => {
-                            tracing::warn!("Failed to decrypt display name for {}: {}", user_id, e);
-                            None
+            let display_name: Option<String> =
+                match (&profile_key, &member_info.encrypted_display_name) {
+                    (Some(pk), Some(encrypted)) if !encrypted.is_empty() => {
+                        match decrypt_display_name(pk, encrypted) {
+                            Ok(name) if !name.is_empty() => {
+                                tracing::debug!("Decrypted member display name");
+                                Some(name)
+                            }
+                            Ok(_) => {
+                                tracing::debug!("Decrypted empty display name for");
+                                None
+                            }
+                            Err(e) => {
+                                tracing::warn!("Failed to decrypt display name for: {}", e);
+                                None
+                            }
                         }
                     }
-                }
-                _ => {
-                    tracing::trace!(
-                        "No profile key or encrypted name for member {} in list",
-                        user_id
-                    );
-                    None
-                }
-            };
+                    _ => {
+                        tracing::trace!("No profile key or encrypted name for member in list");
+                        None
+                    }
+                };
 
             let avatar: Option<Vec<u8>> = match (&profile_key, &member_info.encrypted_avatar) {
                 (Some(pk), Some(encrypted)) if !encrypted.is_empty() => {
                     match decrypt_avatar(pk, encrypted) {
                         Ok(av) => Some(av),
                         Err(e) => {
-                            tracing::warn!("Failed to decrypt avatar for {}: {}", user_id, e);
+                            tracing::warn!("Failed to decrypt avatar for: {}", e);
                             None
                         }
                     }
@@ -931,6 +884,10 @@ impl AnonGroupService {
                 AnonGroupMember::new(group_id, user_id, role)
             }
             .with_profile(profile_key, display_name, avatar);
+            let member = AnonGroupMember {
+                device_id: (member_info.device_id != 0).then_some(member_info.device_id),
+                ..member
+            };
             parsed.push((member, member_info.admission_timestamp));
         }
 
@@ -993,7 +950,7 @@ impl AnonGroupService {
                 .anon_group_repo
                 .can_retry_invitation(group_id, &invitee)?;
             if existing_members.contains(&invitee) && !retry_pending {
-                tracing::debug!("User {} is already a member of group {}", invitee, group_id);
+                tracing::debug!("User is already a member of group");
                 continue;
             }
 
@@ -1030,7 +987,7 @@ impl AnonGroupService {
             match send_result {
                 Ok(_) => invited_count += 1,
                 Err(e) => {
-                    tracing::error!("Failed to send invite to {}: {}", invitee, e);
+                    tracing::error!("Failed to send invite to: {}", e);
                     if first_send_error.is_none() {
                         first_send_error = Some(e);
                     }
@@ -1038,7 +995,7 @@ impl AnonGroupService {
             }
         }
 
-        tracing::info!("Invited {} members to group {}", invited_count, group_id);
+        tracing::info!("Invited {} members to group", invited_count);
 
         if let Some(error) = first_send_error {
             return Err(error);
@@ -1211,9 +1168,7 @@ impl AnonGroupService {
                             .await
                         {
                             tracing::warn!(
-                                "Failed to send profile update to member {} in group {}: {}",
-                                member.user_id,
-                                group.id,
+                                "Failed to send profile update to member in group: {}",
                                 e
                             );
                         }
@@ -1286,26 +1241,20 @@ mod tests {
         let repo = &client.anon_groups().anon_group_repo;
         repo.insert_group(&AnonGroup::from_invite(group_id, "g".into(), owner))
             .unwrap();
-        repo.add_member(&AnonGroupMember::with_mailbox(
-            group_id,
-            owner,
-            AnonGroupRole::Owner,
-            [1u8; 32],
-        ))
+        repo.add_member(&AnonGroupMember {
+            device_id: Some(2),
+            ..AnonGroupMember::with_mailbox(group_id, owner, AnonGroupRole::Owner, [1u8; 32])
+        })
         .unwrap();
-        repo.add_member(&AnonGroupMember::with_mailbox(
-            group_id,
-            mallory,
-            AnonGroupRole::Member,
-            [2u8; 32],
-        ))
+        repo.add_member(&AnonGroupMember {
+            device_id: Some(2),
+            ..AnonGroupMember::with_mailbox(group_id, mallory, AnonGroupRole::Member, [2u8; 32])
+        })
         .unwrap();
-        repo.add_member(&AnonGroupMember::with_mailbox(
-            group_id,
-            victim,
-            AnonGroupRole::Member,
-            VICTIM_PK,
-        ))
+        repo.add_member(&AnonGroupMember {
+            device_id: Some(2),
+            ..AnonGroupMember::with_mailbox(group_id, victim, AnonGroupRole::Member, VICTIM_PK)
+        })
         .unwrap();
         Fixture {
             _client: client,
@@ -1326,6 +1275,7 @@ mod tests {
             encrypted_display_name: None,
             encrypted_avatar: None,
             admission_timestamp: 0,
+            device_id: 0,
         }
     }
 
@@ -1440,7 +1390,7 @@ mod tests {
             .scope(
                 session,
                 submission::track_submission(
-                    svc.send_to_anon_mailbox(&f.owner, &[1; 32], content),
+                    svc.send_to_anon_mailbox(&f.owner, Some(1), &[1; 32], content),
                     None,
                 ),
             )
@@ -1471,7 +1421,9 @@ mod tests {
         ))
         .unwrap();
 
-        let res = svc.send_invite(f.victim, group.id, "mine", &[1u8; 32]).await;
+        let res = svc
+            .send_invite(f.victim, group.id, "mine", &[1u8; 32])
+            .await;
         assert!(
             matches!(&res, Err(AnonGroupError::MessageError(e)) if e.contains("Tor")),
             "{res:?}"

@@ -1183,6 +1183,7 @@ impl ChatterClient {
                     Ok(DomainEvent::AnonDmInitReceived {
                         conversation_id,
                         sender_id,
+                        sender_device_id: _,
                         sender_display_name,
                         sender_avatar,
                         peer_mailbox_pk,
@@ -1232,6 +1233,7 @@ impl ChatterClient {
                         group_id,
                         group_name,
                         inviter_id,
+                        inviter_device_id,
                         inviter_mailbox_pk,
                         profile_key,
                         inviter_display_name,
@@ -1242,6 +1244,7 @@ impl ChatterClient {
                                 group_id,
                                 group_name,
                                 inviter_id,
+                                inviter_device_id,
                                 inviter_mailbox_pk,
                                 profile_key,
                                 inviter_display_name,

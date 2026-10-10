@@ -89,7 +89,7 @@ impl AnonGroupRepository {
             ));
         }
         let members = {
-            let mut stmt = tx.prepare("SELECT id,group_id,user_id,role,mailbox_pk,joined_at,profile_key,display_name,avatar FROM anon_group_members WHERE group_id = ?1 ORDER BY joined_at")?;
+            let mut stmt = tx.prepare("SELECT id,group_id,user_id,role,mailbox_pk,joined_at,profile_key,display_name,avatar,device_id FROM anon_group_members WHERE group_id = ?1 ORDER BY joined_at")?;
             let rows = stmt.query_map([group.to_string()], row_to_member)?;
             rows.collect::<Result<Vec<_>, _>>()?
         };
@@ -282,8 +282,8 @@ impl AnonGroupRepository {
             })?,
         );
         record_member_change(&tx, &member.group_id, &member.user_id, changed_at)?;
-        tx.execute("UPDATE anon_group_members SET mailbox_pk = ?1,profile_key = COALESCE(?2,profile_key),display_name = COALESCE(?3,display_name),avatar = COALESCE(?4,avatar) WHERE group_id = ?5 AND user_id = ?6",
-            params![member.mailbox_pk.as_ref().map(|v|v.as_slice()),member.profile_key.as_ref().map(|v|v.as_slice()),member.display_name,member.avatar,member.group_id.to_string(),member.user_id.to_string()])?;
+        tx.execute("UPDATE anon_group_members SET mailbox_pk = ?1,profile_key = COALESCE(?2,profile_key),display_name = COALESCE(?3,display_name),avatar = COALESCE(?4,avatar),device_id = COALESCE(?7,device_id) WHERE group_id = ?5 AND user_id = ?6",
+            params![member.mailbox_pk.as_ref().map(|v|v.as_slice()),member.profile_key.as_ref().map(|v|v.as_slice()),member.display_name,member.avatar,member.group_id.to_string(),member.user_id.to_string(),member.device_id])?;
         tx.execute("INSERT INTO anon_group_member_order(group_id,user_id,acknowledged_at) VALUES (?1,?2,?3) ON CONFLICT(group_id,user_id) DO UPDATE SET acknowledged_at = excluded.acknowledged_at",
             params![member.group_id.to_string(),member.user_id.to_string(),timestamp])?;
         tx.execute("DELETE FROM anon_group_pending WHERE group_id = ?1 AND user_id = ?2 AND action = 'invite'",params![member.group_id.to_string(),member.user_id.to_string()])?;
@@ -671,11 +671,12 @@ impl AnonGroupRepository {
     pub fn add_member(&self, member: &AnonGroupMember) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
         conn.execute(
-            "INSERT INTO anon_group_members (id, group_id, user_id, role, mailbox_pk, joined_at, profile_key, display_name, avatar)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
+            "INSERT INTO anon_group_members (id, group_id, user_id, role, mailbox_pk, joined_at, profile_key, display_name, avatar, device_id)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
              ON CONFLICT(group_id, user_id) DO UPDATE SET
                 role = excluded.role,
                 mailbox_pk = COALESCE(excluded.mailbox_pk, mailbox_pk),
+                device_id = COALESCE(excluded.device_id, device_id),
                 profile_key = COALESCE(excluded.profile_key, profile_key),
                 display_name = COALESCE(excluded.display_name, display_name),
                 avatar = COALESCE(excluded.avatar, avatar)",
@@ -689,6 +690,7 @@ impl AnonGroupRepository {
                 member.profile_key.as_ref().map(|pk| pk.as_slice()),
                 member.display_name,
                 member.avatar,
+                member.device_id,
             ],
         )?;
         Ok(())
@@ -842,7 +844,7 @@ impl AnonGroupRepository {
     ) -> Result<Vec<AnonGroupMember>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
-            "SELECT id, group_id, user_id, role, mailbox_pk, joined_at, profile_key, display_name, avatar
+            "SELECT id, group_id, user_id, role, mailbox_pk, joined_at, profile_key, display_name, avatar, device_id
              FROM anon_group_members WHERE group_id = ?1 ORDER BY joined_at",
         )?;
 
@@ -863,7 +865,7 @@ impl AnonGroupRepository {
     ) -> Result<Vec<AnonGroupMember>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
-            "SELECT id, group_id, user_id, role, mailbox_pk, joined_at, profile_key, display_name, avatar
+            "SELECT id, group_id, user_id, role, mailbox_pk, joined_at, profile_key, display_name, avatar, device_id
              FROM anon_group_members WHERE group_id = ?1 AND mailbox_pk IS NOT NULL
              ORDER BY joined_at",
         )?;
@@ -889,7 +891,7 @@ impl AnonGroupRepository {
     ) -> Result<Vec<AnonGroupMember>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
-            "SELECT id, group_id, user_id, role, mailbox_pk, joined_at, profile_key, display_name, avatar
+            "SELECT id, group_id, user_id, role, mailbox_pk, joined_at, profile_key, display_name, avatar, device_id
              FROM anon_group_members WHERE group_id = ?1 AND mailbox_pk IS NULL
              ORDER BY joined_at",
         )?;
@@ -912,7 +914,7 @@ impl AnonGroupRepository {
     ) -> Result<Option<AnonGroupMember>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
-            "SELECT id, group_id, user_id, role, mailbox_pk, joined_at, profile_key, display_name, avatar
+            "SELECT id, group_id, user_id, role, mailbox_pk, joined_at, profile_key, display_name, avatar, device_id
              FROM anon_group_members WHERE group_id = ?1 AND user_id = ?2",
         )?;
 
@@ -1444,6 +1446,7 @@ fn row_to_member(row: &rusqlite::Row<'_>) -> rusqlite::Result<AnonGroupMember> {
         display_name: row.get(7)?,
         avatar: row.get(8)?,
         joined_at: parse_datetime(&row.get::<_, String>(5)?),
+        device_id: row.get(9)?,
     })
 }
 
@@ -1482,13 +1485,13 @@ fn write_ordered_member(
     conn: &rusqlite::Connection,
     member: &AnonGroupMember,
 ) -> Result<(), StorageError> {
-    conn.execute("INSERT INTO anon_group_members(id,group_id,user_id,role,mailbox_pk,joined_at,profile_key,display_name,avatar)
-        VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9) ON CONFLICT(group_id,user_id) DO UPDATE SET
-        role = excluded.role, mailbox_pk = COALESCE(excluded.mailbox_pk,mailbox_pk),
+    conn.execute("INSERT INTO anon_group_members(id,group_id,user_id,role,mailbox_pk,joined_at,profile_key,display_name,avatar,device_id)
+        VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(group_id,user_id) DO UPDATE SET
+        role = excluded.role, mailbox_pk = COALESCE(excluded.mailbox_pk,mailbox_pk), device_id = COALESCE(excluded.device_id,device_id),
         profile_key = COALESCE(excluded.profile_key,profile_key), display_name = COALESCE(excluded.display_name,display_name), avatar = COALESCE(excluded.avatar,avatar)",
         params![member.id,member.group_id.to_string(),member.user_id.to_string(),member.role.to_i32(),
             member.mailbox_pk.as_ref().map(|v|v.as_slice()),member.joined_at.to_rfc3339(),
-            member.profile_key.as_ref().map(|v|v.as_slice()),member.display_name,member.avatar])?;
+            member.profile_key.as_ref().map(|v|v.as_slice()),member.display_name,member.avatar,member.device_id])?;
     Ok(())
 }
 

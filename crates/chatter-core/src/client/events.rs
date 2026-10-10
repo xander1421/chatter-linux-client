@@ -79,6 +79,8 @@ pub struct AnonGroupInviteEvent {
     pub group_id: AnonGroupId,
     pub group_name: String,
     pub inviter_id: UserId,
+    /// The inviter's device the invite came from (pass back on accept).
+    pub inviter_device_id: u32,
     pub inviter_mailbox_pk: [u8; 32],
     pub profile_key: Option<[u8; 32]>,
     pub inviter_display_name: Option<String>,

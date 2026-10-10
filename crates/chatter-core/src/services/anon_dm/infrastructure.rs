@@ -1,6 +1,5 @@
 use crate::domain::UserId;
 use crate::domain::anon_dm::{AnonDmId, AnonDmMailbox};
-use crate::proto::chat_v1::SealedSenderMessage;
 use crate::proto::content_v1::Content;
 use crate::proto::mailbox_v1::EnvelopeType;
 use chrono::Utc;
@@ -10,81 +9,34 @@ use uuid::Uuid;
 use super::{AnonDmError, AnonDmService};
 
 impl AnonDmService {
-    /// Send content to a peer's device inbox (for message requests).
+    /// Send our message request for `conversation_id` to ONE of the peer's
+    /// device inboxes, fully anonymously over Tor
+    /// ([`PairwiseService::send_to_device_inbox`]). The server picks the
+    /// peer's current device; the conversation is bound to it and marked
+    /// submitted right before the send RPC, so a failure before that point
+    /// provably sent nothing.
     ///
-    /// Uses FULLY ANONYMOUS operations:
-    /// 1. Anonymous prekey fetch (blind signature token #1)
-    /// 2. Anonymous message send (blind signature token #2)
+    /// [`PairwiseService::send_to_device_inbox`]: crate::services::pairwise::PairwiseService::send_to_device_inbox
     pub(crate) async fn send_to_device_inbox(
         &self,
+        conversation_id: &AnonDmId,
         peer_id: &UserId,
         content: Content,
     ) -> Result<(), AnonDmError> {
-        // Secret-chat traffic goes over Tor or not at all; refuse before any
-        // token is spent.
-        let mut anon_client = self
-            .grpc_pool
-            .secret_message_client()
-            .map_err(|e| AnonDmError::MessageError(e.to_string()))?;
-
-        // Serialize content
-        let plaintext = content.encode_to_vec();
-
-        // Get token #1 for anonymous prekey fetch (claim = fetch + mark used atomically)
-        let prekey_token = self.claim_token()?;
-
-        // Encrypt with Signal Protocol ANONYMOUSLY
-        let ciphertext = self
-            .pairwise_service
-            .encrypt_anonymous(peer_id, &plaintext, &prekey_token)
-            .await
-            .map_err(|e| AnonDmError::CryptoError(e.to_string()))?;
-
-        // Get token #2 for anonymous message send (claim = fetch + mark used atomically)
-        let send_token = self.claim_token()?;
-
-        // Build SealedSenderMessage
-        let server_key_id = self
-            .settings_repo
-            .get::<u32>(
-                crate::storage::repositories::settings_repo::keys::SENDER_CERTIFICATE_SERVER_KEY_ID,
+        let repo = &self.anon_dm_repo;
+        self.pairwise_service
+            .send_to_device_inbox(
+                &self.token_manager,
+                peer_id,
+                None,
+                &content.encode_to_vec(),
+                |device| {
+                    repo.pin_peer_device(conversation_id, device)?;
+                    repo.mark_request_submitted(conversation_id)?;
+                    Ok(())
+                },
             )
-            .ok()
-            .flatten()
-            .unwrap_or(1);
-        let sealed_message = SealedSenderMessage {
-            sealed_body: ciphertext,
-            server_key_id,
-            timestamp: crate::util::time::TimestampNanos::now_anonymized().as_u64(),
-        };
-
-        // Send to device inbox using the secret-chat client (no auth headers, Tor)
-        anon_client
-            .send_with_anonymous_credential(
-                &peer_id.to_string(),
-                // `encrypt_anonymous` seals to the peer's device 1 session
-                // only, so only device 1 can open it.
-                vec![crate::proto::chat_v1::SealedDeviceMessage {
-                    device_id: 1,
-                    registration_id: 0,
-                    sealed_message: Some(sealed_message),
-                }],
-                crate::proto::chat_v1::SealedDelivery::NamedDevices,
-                0,
-                &send_token.public_key,
-                &send_token.signature,
-                send_token.randomizer.as_deref(),
-            )
-            .await
-            .map_err(|e| {
-                AnonDmError::MessageError(format!("Failed to send to device inbox: {}", e))
-            })?;
-
-        tracing::debug!(
-            peer_id = %peer_id,
-            "Sent to device inbox using fully anonymous path"
-        );
-
+            .await?;
         Ok(())
     }
 
@@ -134,90 +86,57 @@ impl AnonDmService {
             None
         };
 
-        tracing::debug!(
-            peer_id = %peer_id,
-            mailbox_pk = hex::encode(&mailbox_pk[..8]),
-            plaintext_len = plaintext.len(),
-            "[ANON_DM_MAILBOX] Encrypting message for peer"
-        );
-
-        // Encrypt with Signal Protocol. If a session already exists, encrypt
-        // locally (no server contact keyed to the peer). If it does NOT — e.g.
-        // after a session was archived/invalidated — re-establishing via the
-        // authenticated prekey
-        // fetch would leak this anon-DM's sender->recipient edge to the server.
-        // Re-establish anonymously instead (blind token + anonymous fetch),
-        // mirroring the anon-group path. Without this guard a reset silently
-        // deanonymizes the conversation on the next message.
-        let ciphertext = if self
-            .pairwise_service
-            .has_session(peer_id)
-            .await
-            .map_err(|e| {
-                if let Some(key) = retained.as_ref() {
-                    crate::services::gateway::submission::discard_before_encryption(
-                        self.settings_repo.database(),
-                        key,
-                    );
-                }
-                AnonDmError::CryptoError(e.to_string())
-            })? {
-            crate::services::gateway::submission::mark_submission_started().map_err(|e| {
-                if let Some(key) = retained.as_ref() {
-                    crate::services::gateway::submission::discard_before_encryption(
-                        self.settings_repo.database(),
-                        key,
-                    );
-                }
-                e
-            })?;
-            self.pairwise_service
-                .encrypt(peer_id, &plaintext)
-                .await
-                .map_err(|e| AnonDmError::CryptoError(e.to_string()))?
-        } else {
-            self.pairwise_service
-                .ensure_sender_certificate()
-                .await
-                .map_err(|e| {
-                    if let Some(key) = retained.as_ref() {
-                        crate::services::gateway::submission::discard_before_encryption(
-                            self.settings_repo.database(),
-                            key,
-                        );
-                    }
-                    AnonDmError::CryptoError(e.to_string())
-                })?;
-            let token = self.claim_token().map_err(|e| {
-                if let Some(key) = retained.as_ref() {
-                    crate::services::gateway::submission::discard_before_encryption(
-                        self.settings_repo.database(),
-                        key,
-                    );
-                }
-                e
-            })?;
-            crate::services::gateway::submission::mark_submission_started().map_err(|e| {
-                if let Some(key) = retained.as_ref() {
-                    crate::services::gateway::submission::discard_before_encryption(
-                        self.settings_repo.database(),
-                        key,
-                    );
-                }
-                e
-            })?;
-            self.pairwise_service
-                .encrypt_anonymous(peer_id, &plaintext, &token)
-                .await
-                .map_err(|e| AnonDmError::CryptoError(e.to_string()))?
+        // Encrypt to the ONE peer device this chat is bound to, never over the
+        // normal transport. With a session: local encrypt. Without one (first
+        // contact as responder, or after the session was archived):
+        // re-establish anonymously (blind token + anonymous fetch over Tor) —
+        // an authenticated prekey fetch would leak this chat's
+        // sender->recipient edge. A chat with no bound device sends nothing.
+        let discard = |e: AnonDmError| {
+            if let Some(key) = retained.as_ref() {
+                crate::services::gateway::submission::discard_before_encryption(
+                    self.settings_repo.database(),
+                    key,
+                );
+            }
+            e
         };
-
-        tracing::debug!(
-            peer_id = %peer_id,
-            mailbox_pk = hex::encode(&mailbox_pk[..8]),
-            ciphertext_len = ciphertext.len(),
-            "[ANON_DM_MAILBOX] Sending to mailbox"
-        );
+        let device = self
+            .anon_dm_repo
+            .get_conversation_by_peer(peer_id)
+            .map_err(|e| discard(e.into()))?
+            .and_then(|dm| dm.peer_device_id)
+            .ok_or_else(|| {
+                discard(AnonDmError::InvalidData(
+                    "secret chat is not bound to a peer device".into(),
+                ))
+            })?;
+        let has_session = self
+            .pairwise_service
+            .has_session(peer_id, device)
+            .await
+            .map_err(|e| discard(e.into()))?;
+        // Our certificate first (over Tor if it must be fetched), so a missing
+        // one fails before any token is spent or submission started.
+        self.pairwise_service
+            .ensure_sender_certificate()
+            .await
+            .map_err(|e| discard(e.into()))?;
+        let ciphertext = if has_session {
+            crate::services::gateway::submission::mark_submission_started()
+                .map_err(|e| discard(e.into()))?;
+            self.pairwise_service
+                .encrypt_existing_session(peer_id, device, &plaintext)
+                .await?
+        } else {
+            let token = self.claim_token().map_err(discard)?;
+            crate::services::gateway::submission::mark_submission_started()
+                .map_err(|e| discard(e.into()))?;
+            self.pairwise_service
+                .encrypt_anonymous(peer_id, Some(device), &plaintext, &token)
+                .await?
+                .0
+        };
 
         if let Some(key) = retained.as_ref() {
             crate::services::gateway::submission::ciphertext(
@@ -232,11 +151,7 @@ impl AnonDmService {
             .send_to_secret_mailbox(mailbox_pk, ciphertext, EnvelopeType::SealedSender)
             .await
             .map_err(|e| {
-                tracing::error!(
-                    mailbox_pk = hex::encode(&mailbox_pk[..8]),
-                    error = %e,
-                    "[ANON_DM_MAILBOX] Failed to send to mailbox"
-                );
+                tracing::warn!(error = %e, "[ANON_DM_MAILBOX] Failed to send to mailbox");
                 if retained.is_some() {
                     AnonDmError::DeliveryUnconfirmed
                 } else {
@@ -247,12 +162,6 @@ impl AnonDmService {
             crate::services::gateway::submission::confirm(self.settings_repo.database(), key)
                 .map_err(|_| AnonDmError::DeliveryUnconfirmed)?;
         }
-
-        tracing::info!(
-            peer_id = %peer_id,
-            mailbox_pk = hex::encode(&mailbox_pk[..8]),
-            "[ANON_DM_MAILBOX] Successfully sent to peer mailbox"
-        );
 
         Ok(())
     }

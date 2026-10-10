@@ -101,6 +101,7 @@ fn test_sealed_sender_result_has_join_ack_variant() {
     // This compiles only if the variant exists
     let result = SealedSenderResult::AnonGroupJoinAckReceived {
         sender_id,
+        sender_device_id: 2,
         group_id: group_id.clone(),
         joiner_mailbox_pk: joiner_mailbox_pk.clone(),
         timestamp,
@@ -176,6 +177,7 @@ fn test_inbox_event_has_join_ack_variant() {
     // This compiles only if the variant exists
     let event = InboxEvent::AnonGroupJoinAck {
         peer_id,
+        sender_device_id: 2,
         group_id: group_id.clone(),
         joiner_mailbox_pk: joiner_mailbox_pk.clone(),
         timestamp,

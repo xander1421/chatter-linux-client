@@ -70,3 +70,14 @@ pub enum AnonGroupError {
     #[error("user is blocked in group: {0}")]
     UserBlocked(UserId),
 }
+
+impl From<crate::services::pairwise::PairwiseError> for AnonGroupError {
+    fn from(e: crate::services::pairwise::PairwiseError) -> Self {
+        use crate::services::pairwise::PairwiseError;
+        match e {
+            PairwiseError::Network(e) => Self::MessageError(e.to_string()),
+            PairwiseError::Storage(e) => Self::Storage(e),
+            e => Self::CryptoError(e.to_string()),
+        }
+    }
+}

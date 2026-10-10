@@ -393,7 +393,12 @@ impl AnonGroupService {
 
             // Send to member's anonymous group mailbox (not DM)
             match self
-                .send_to_anon_mailbox(&member.user_id, &mailbox_pk, content.clone())
+                .send_to_anon_mailbox(
+                    &member.user_id,
+                    member.device_id,
+                    &mailbox_pk,
+                    content.clone(),
+                )
                 .await
             {
                 Ok(()) => {
@@ -407,11 +412,7 @@ impl AnonGroupService {
                 Err(e) if parkable => {
                     // An expired originating session must not park old content.
                     crate::services::gateway::submission::mark_submission_started()?;
-                    tracing::info!(
-                        "Send to member {} failed ({}); parked for retry",
-                        member.user_id,
-                        e
-                    );
+                    tracing::info!("Send to member failed ({}); parked for retry", e);
                     super::send_ledger::enqueue(
                         &self.message_service.database,
                         &self.anon_group_repo,
@@ -452,11 +453,10 @@ impl AnonGroupService {
         }
 
         tracing::debug!(
-            "Sent message to group {} ({} members, {} parked, {} queued for pending joiners)",
-            group_id,
+            "Sent message to group ({} members, {} parked, {} queued for pending joiners)",
             sent_count,
             parked_count,
-            queued_count,
+            queued_count
         );
         if unconfirmed || parked_count > 0 || queued_count > 0 {
             return Err(AnonGroupError::DeliveryUnconfirmed);
@@ -491,7 +491,6 @@ impl AnonGroupService {
         }
 
         tracing::info!(
-            group_id = %group_id,
             recipient = %recipient_user_id,
             count = pending.len(),
             "Draining pending anon group messages after JoinAck"
@@ -512,8 +511,17 @@ impl AnonGroupService {
                 }
             };
 
+            let device = self
+                .anon_group_repo
+                .get_member(group_id, recipient_user_id)?
+                .and_then(|m| m.device_id);
             match self
-                .send_to_anon_mailbox(recipient_user_id, recipient_mailbox_pk, content.clone())
+                .send_to_anon_mailbox(
+                    recipient_user_id,
+                    device,
+                    recipient_mailbox_pk,
+                    content.clone(),
+                )
                 .await
             {
                 Ok(()) => {
@@ -610,7 +618,7 @@ impl AnonGroupService {
                                     )
                                     .await
                                 {
-                                    tracing::warn!(%error, group_id=%group.id, "Bootstrap reannouncement failed; bounded retry retained");
+                                    tracing::warn!(%error, "Bootstrap reannouncement failed; bounded retry retained");
                                 }
                             }
                         }
@@ -648,11 +656,12 @@ impl AnonGroupService {
                 Ok(members
                     .into_iter()
                     .filter(|m| m.user_id != current)
-                    .filter_map(|m| m.mailbox_pk.map(|key| (m.user_id, key)))
+                    .filter_map(|m| m.mailbox_pk.map(|key| (m.user_id, m.device_id, key)))
                     .collect())
             },
-            |(peer, key), content| async move {
-                self.send_to_anon_mailbox(&peer, &key, content).await
+            |(peer, device, key), content| async move {
+                self.send_to_anon_mailbox(&peer, device, &key, content)
+                    .await
             },
         )
         .await
@@ -709,24 +718,21 @@ impl AnonGroupService {
                 .expect("get_members_with_mailbox guarantees mailbox_pk");
 
             if let Err(e) = self
-                .send_to_anon_mailbox(&member.user_id, &mailbox_pk, content.clone())
+                .send_to_anon_mailbox(
+                    &member.user_id,
+                    member.device_id,
+                    &mailbox_pk,
+                    content.clone(),
+                )
                 .await
             {
-                tracing::warn!(
-                    "Failed to send ephemeral to member {}: {}",
-                    member.user_id,
-                    e
-                );
+                tracing::warn!("Failed to send ephemeral to member: {}", e);
             } else {
                 sent_count += 1;
             }
         }
 
-        tracing::debug!(
-            "Sent ephemeral message to group {} ({} members)",
-            group_id,
-            sent_count
-        );
+        tracing::debug!("Sent ephemeral message to group ({} members)", sent_count);
         Ok(())
     }
 }
@@ -796,15 +802,15 @@ mod tests {
 /// Production reaction fanout adapter, with injected mailbox effects for tests.
 /// A partial send retains the same action locally: some peers have observed it.
 /// Zero confirmed deliveries fails, including a group with no ready recipients.
-async fn dispatch_reaction_content<G, S, F>(
+async fn dispatch_reaction_content<R, G, S, F>(
     group_id: &AnonGroupId,
     inner_content: Content,
     gate: G,
     mut send: S,
 ) -> Result<(), AnonGroupError>
 where
-    G: FnOnce() -> Result<Vec<(crate::domain::UserId, [u8; 32])>, AnonGroupError>,
-    S: FnMut((crate::domain::UserId, [u8; 32]), Content) -> F,
+    G: FnOnce() -> Result<Vec<R>, AnonGroupError>,
+    S: FnMut(R, Content) -> F,
     F: std::future::Future<Output = Result<(), AnonGroupError>>,
 {
     let recipients = gate()?;
