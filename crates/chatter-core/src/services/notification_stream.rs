@@ -90,8 +90,6 @@ impl RecentIds {
 #[derive(Debug, Deserialize)]
 struct DeviceLinkedMeta {
     #[serde(default)]
-    device_id: u32,
-    #[serde(default)]
     linked_device_id: u32,
     #[serde(default)]
     device_info: Option<String>,
@@ -232,15 +230,8 @@ fn dispatch_notification(
                 Some(m) => m,
                 None => return,
             };
-            // linked_device_id is the new device's ID; device_id may also
-            // appear in older server versions. Prefer linked_device_id.
-            let device_id = if meta.linked_device_id > 0 {
-                meta.linked_device_id
-            } else {
-                meta.device_id
-            };
             let _ = sender.send(DomainEvent::DeviceLinked {
-                device_id,
+                device_id: meta.linked_device_id,
                 // The server cannot read device names (encrypted to the
                 // account identity key), so its notification carries none.
                 device_name: None,
@@ -476,23 +467,6 @@ mod tests {
                     "stream-side receiver is never the approver"
                 );
             }
-            other => panic!("wrong event variant: {:?}", other),
-        }
-    }
-
-    #[test]
-    fn dispatch_device_linked_prefers_linked_device_id() {
-        // Legacy-shape payload with only `device_id` — client must still
-        // parse it (forward-compat for older servers).
-        let (bus, mut rx) = bus_with_receiver();
-        let meta = r#"{"device_id":5,"linked_device_id":0}"#;
-        dispatch_notification(
-            &bus,
-            &recording_service().0,
-            notif(NotificationType::DeviceLinked, meta),
-        );
-        match rx.try_recv().expect("event expected") {
-            DomainEvent::DeviceLinked { device_id, .. } => assert_eq!(device_id, 5),
             other => panic!("wrong event variant: {:?}", other),
         }
     }
