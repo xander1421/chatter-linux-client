@@ -835,7 +835,7 @@ mod tests {
         );
     }
     #[test]
-    fn eligible_pending_target_after_thousand_unresolved_heads_is_not_starved() {
+    fn eligible_pending_target_after_thousand_ineligible_heads_is_not_starved() {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("fair-pending.db");
         let own = UserId::new();
@@ -848,8 +848,8 @@ mod tests {
             let conn = db.connection().unwrap();
             let tx = conn.unchecked_transaction().unwrap();
             tx.execute("WITH RECURSIVE n(x) AS (SELECT 1 UNION ALL SELECT x+1 FROM n WHERE x<1000) INSERT INTO messages(id,conversation_id,conversation_type,sender_id,content_type,content_json,sent_at,created_at,updated_at) SELECT printf('held-%d',x),?1,'anon_dm',?2,0,?3,x,'2026-01-01','2026-01-01' FROM n",params![held.id.to_string(),author.to_string(),serde_json::to_string(&crate::domain::message::MessageContent::Text("preserved legacy held message".into())).unwrap()]).unwrap();
-            tx.execute("INSERT INTO reaction_scope_unresolved SELECT conversation_id,conversation_type,sender_id,sent_at FROM messages WHERE conversation_id=?1",[held.id.to_string()]).unwrap();
-            tx.execute("INSERT INTO pending_scoped_reactions SELECT conversation_id,conversation_type,sender_id,sent_at,?2,'👍',0,1,1 FROM messages WHERE conversation_id=?1",params![held.id.to_string(),own.to_string()]).unwrap();
+            // A stranger's votes on an anon DM with no conversation row are never eligible.
+            tx.execute("INSERT INTO pending_scoped_reactions SELECT conversation_id,conversation_type,sender_id,sent_at,?2,'👍',0,1,1 FROM messages WHERE conversation_id=?1",params![held.id.to_string(),UserId::new().to_string()]).unwrap();
             // Represents a restored history queue exceeding the live admission cap.
             tx.execute(
                 "INSERT INTO pending_scoped_reactions VALUES(?1,'anon_group',?2,100,?3,'👍',0,1,1)",
@@ -875,6 +875,6 @@ mod tests {
                 r.get(0)
             })
             .unwrap();
-        assert_eq!(pending, 1000, "unresolved history remains preserved");
+        assert_eq!(pending, 1000, "ineligible held history remains preserved");
     }
 }

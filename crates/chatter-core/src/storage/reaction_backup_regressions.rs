@@ -27,7 +27,6 @@ fn payload(groups: &[Vec<u8>], order: &[usize], own: UserId) -> Vec<u8> {
             payload_version: PAYLOAD_VERSION,
             user_id: own.to_string(),
             created_at_ms: 0,
-            reaction_selection_version: 0,
         }),
     );
     for &i in order {
@@ -117,12 +116,12 @@ fn assert_projection(
 use rusqlite::OptionalExtension;
 
 #[test]
-fn reaction_backup_rc57_new_and_unversioned_permutations_reexport_and_delayed_add() {
+fn reaction_backup_admits_only_the_selected_vote_in_every_frame_order_and_reexports() {
     let own = UserId::new();
     let author = UserId::new();
     let scope = ReactionScope::new(ChannelId::new(), ConversationType::Channel);
-    // RC57 stacked clocked rows, new-format ledger, and clockless old rows.
-    for format in 0..3 {
+    // Two stacked clocked votes; the selection names B, so only B is admitted.
+    {
         let source_dir = tempfile::tempdir().unwrap();
         let source = open(&source_dir.path().join("src.db"), own);
         let source_repo = MessageRepository::new(source.clone());
@@ -155,26 +154,22 @@ fn reaction_backup_rc57_new_and_unversioned_permutations_reexport_and_delayed_ad
             )
             .unwrap();
         }
-        if format < 2 {
+        {
             conn.execute("INSERT INTO reaction_action_versions VALUES(?1,'channel',?2,100,?3,'A',10,0),(?1,'channel',?2,100,?3,'B',20,0)",rusqlite::params![scope.id.to_string(),author.to_string(),own.to_string()]).unwrap();
         }
-        if format == 1 {
+        {
             conn.execute(
                 "INSERT INTO reaction_actor_selections VALUES(?1,'channel',?2,100,?3,'B',20)",
                 rusqlite::params![scope.id.to_string(), author.to_string(), own.to_string()],
             )
             .unwrap();
         }
-        let tables = if format == 1 {
-            vec![
-                "messages",
-                "unified_reactions",
-                "reaction_action_versions",
-                "reaction_actor_selections",
-            ]
-        } else {
-            vec!["messages", "unified_reactions", "reaction_action_versions"]
-        };
+        let tables = [
+            "messages",
+            "unified_reactions",
+            "reaction_action_versions",
+            "reaction_actor_selections",
+        ];
         for reverse in [false, true] {
             let sections = groups(&conn, &tables, reverse);
             for order in permutations(&(0..tables.len()).collect::<Vec<_>>()) {
@@ -183,23 +178,14 @@ fn reaction_backup_rc57_new_and_unversioned_permutations_reexport_and_delayed_ad
                 let target = open(&target_dir.path().join("dst.db"), own);
                 import_frames(&mut target.connection().unwrap(), &bytes).unwrap();
                 let repo = MessageRepository::new(target.clone());
-                let expected = if format < 2 { vec!["B"] } else { vec![] };
+                let expected = ["B"];
                 assert_projection(
                     &target,
                     &repo,
                     &scope,
                     author,
                     &expected,
-                    if format < 2 { Some(("B", 20)) } else { None },
-                );
-                assert_eq!(
-                    target
-                        .connection()
-                        .unwrap()
-                        .query_row("SELECT count(*) FROM reaction_scoped_quarantine", [], |r| r
-                            .get::<_, i64>(0))
-                        .unwrap(),
-                    if format < 2 { 1 } else { 2 }
+                    Some(("B", 20)),
                 );
                 let exported = dump_frames(&target.connection().unwrap(), &own.to_string())
                     .unwrap()
@@ -210,8 +196,8 @@ fn reaction_backup_rc57_new_and_unversioned_permutations_reexport_and_delayed_ad
                         .rows_inserted,
                     0
                 );
-                // Actual production exporter re-exports quarantined evidence and
-                // actor state, not merely a test's desired projection.
+                // Actual production exporter re-exports actor state, not merely
+                // a test's desired projection.
                 let again_dir = tempfile::tempdir().unwrap();
                 let again = open(&again_dir.path().join("again.db"), own);
                 import_frames(&mut again.connection().unwrap(), &exported).unwrap();
@@ -222,32 +208,21 @@ fn reaction_backup_rc57_new_and_unversioned_permutations_reexport_and_delayed_ad
                     &scope,
                     author,
                     &expected,
-                    if format < 2 { Some(("B", 20)) } else { None },
+                    Some(("B", 20)),
                 );
-                assert_eq!(
-                    again
-                        .connection()
+                assert!(
+                    !again_repo
+                        .add_reaction_at(&scope, &author, 100, &own, &own, "C", 15)
                         .unwrap()
-                        .query_row("SELECT count(*) FROM reaction_scoped_quarantine", [], |r| r
-                            .get::<_, i64>(0))
-                        .unwrap(),
-                    if format < 2 { 1 } else { 2 }
                 );
-                if format < 2 {
-                    assert!(
-                        !again_repo
-                            .add_reaction_at(&scope, &author, 100, &own, &own, "C", 15)
-                            .unwrap()
-                    );
-                    assert_projection(&again, &again_repo, &scope, author, &["B"], Some(("B", 20)));
-                }
+                assert_projection(&again, &again_repo, &scope, author, &["B"], Some(("B", 20)));
             }
         }
     }
 }
 
 #[test]
-fn reaction_backup_retains_local_selected_removed_authority_exact_kinds_and_legacy_quarantine() {
+fn reaction_backup_retains_local_selected_removed_authority_exact_kinds() {
     let own = UserId::new();
     let author = UserId::new();
     let id = ChannelId::new();
@@ -271,29 +246,8 @@ fn reaction_backup_retains_local_selected_removed_authority_exact_kinds_and_lega
     let scoped = dump_frames(&src.connection().unwrap(), &own.to_string())
         .unwrap()
         .0;
-    // Genuine legacy header; unique and ambiguous targets are both tested below.
-    let conn = src.connection().unwrap();
-    conn.execute(
-        "INSERT INTO reaction_legacy_unscoped VALUES('legacy',?1,100,?2,'X','old')",
-        rusqlite::params![author.to_string(), own.to_string()],
-    )
-    .unwrap();
-    let mut legacy_group = Vec::new();
-    let mut rows = 0;
-    dump_table(
-        &conn,
-        &mut legacy_group,
-        "reaction_legacy_unscoped",
-        "SELECT * FROM reaction_legacy_unscoped",
-        &[],
-        &mut rows,
-        &|_| Ok(true),
-    )
-    .unwrap();
-    let legacy = payload(&[legacy_group], &[0], own);
-    drop(conn);
     for removed in [false, true] {
-        for ambiguous in [false, true] {
+        for other_local in [false, true] {
             let dir = tempfile::tempdir().unwrap();
             let db = open(&dir.path().join("local.db"), own);
             let repo = MessageRepository::new(db.clone());
@@ -311,7 +265,7 @@ fn reaction_backup_retains_local_selected_removed_authority_exact_kinds_and_lega
                 repo.remove_reaction_at(&scope, &author, 100, &own, &own, "B", 30)
                     .unwrap();
             }
-            if ambiguous {
+            if other_local {
                 repo.insert(&Message::new_text(
                     other.id,
                     other.kind.clone(),
@@ -321,28 +275,11 @@ fn reaction_backup_retains_local_selected_removed_authority_exact_kinds_and_lega
                 ))
                 .unwrap();
             }
-            import_frames(&mut db.connection().unwrap(), &legacy).unwrap();
-            // Unordered X cannot bypass B's retained actor authority. It stays
-            // masked in legacy quarantine even when there is a unique target.
-            assert_projection(&db, &repo, &scope, author, &[], Some(("B", 20)));
-            assert_eq!(
-                db.connection()
-                    .unwrap()
-                    .query_row("SELECT count(*) FROM reaction_legacy_unscoped", [], |r| r
-                        .get::<_, i64>(
-                        0
-                    ))
-                    .unwrap(),
-                1
-            );
-            assert!(
-                repo.ensure_reaction_scope_resolved(&scope, &author, 100)
-                    .is_err()
-            );
             // A scoped old A also cannot clobber local B or its removed state.
             import_frames(&mut db.connection().unwrap(), &scoped).unwrap();
-            assert_projection(&db, &repo, &scope, author, &[], Some(("B", 20)));
-            assert_projection(&db, &repo, &other, author, &[], Some(("A", 10)));
+            let local: &[&str] = if removed { &[] } else { &["B"] };
+            assert_projection(&db, &repo, &scope, author, local, Some(("B", 20)));
+            assert_projection(&db, &repo, &other, author, &["A"], Some(("A", 10)));
             assert_eq!(
                 import_frames(&mut db.connection().unwrap(), &scoped)
                     .unwrap()
@@ -405,18 +342,18 @@ fn reaction_backup_invalid_frame_rolls_back_projection_index_and_authority() {
         .unwrap(),
         1
     );
-    // The temporary local-authority snapshot rolls back too; a valid retry works.
+    // A valid retry after the rollback works.
     let valid = dump_frames(&conn, &own.to_string()).unwrap().0;
     drop(conn);
     import_frames(&mut db.connection().unwrap(), &valid).unwrap();
 }
 
 #[test]
-fn reaction_backup_repairs_rc59_removal_selection_and_keeps_rc60_equal_clock_add() {
+fn reaction_backup_equal_clock_removal_stays_removed_in_every_frame_order() {
     let own = UserId::new();
     let author = UserId::new();
     let scope = ReactionScope::new(ChannelId::new(), ConversationType::Channel);
-    for old_format in [true, false] {
+    {
         let dir = tempfile::tempdir().unwrap();
         let src = open(&dir.path().join("src.db"), own);
         let repo = MessageRepository::new(src.clone());
@@ -432,20 +369,8 @@ fn reaction_backup_repairs_rc59_removal_selection_and_keeps_rc60_equal_clock_add
             .unwrap();
         repo.add_reaction_at(&scope, &author, 100, &own, &own, "B", 20)
             .unwrap();
-        if old_format {
-            repo.remove_reaction_at(&scope, &author, 100, &own, &own, "A", 30)
-                .unwrap();
-            src.connection()
-                .unwrap()
-                .execute(
-                    "UPDATE reaction_actor_selections SET emoji='A',action_ts=30",
-                    [],
-                )
-                .unwrap();
-        } else {
-            repo.remove_reaction_at(&scope, &author, 100, &own, &own, "B", 20)
-                .unwrap();
-        }
+        repo.remove_reaction_at(&scope, &author, 100, &own, &own, "B", 20)
+            .unwrap();
         let sections = groups(
             &src.connection().unwrap(),
             &[
@@ -457,16 +382,7 @@ fn reaction_backup_repairs_rc59_removal_selection_and_keeps_rc60_equal_clock_add
             false,
         );
         for order in permutations(&[0, 1, 2, 3]) {
-            let bytes = payload(&sections, &order, own);
-            let mut input = bytes.as_slice();
-            let mut tagged = Vec::new();
-            while input.has_remaining() {
-                let mut f = Frame::decode_length_delimited(&mut input).unwrap();
-                if let Some(frame::Payload::Info(info)) = &mut f.payload {
-                    info.reaction_selection_version = if old_format { 0 } else { 88 };
-                }
-                f.encode_length_delimited(&mut tagged).unwrap();
-            }
+            let tagged = payload(&sections, &order, own);
             let dst_dir = tempfile::tempdir().unwrap();
             let dst = open(&dst_dir.path().join("dst.db"), own);
             import_frames(&mut dst.connection().unwrap(), &tagged).unwrap();
@@ -476,7 +392,7 @@ fn reaction_backup_repairs_rc59_removal_selection_and_keeps_rc60_equal_clock_add
                 &repo,
                 &scope,
                 author,
-                if old_format { &["B"] } else { &[] },
+                &[],
                 Some(("B", 20)),
             );
             assert!(
@@ -556,7 +472,6 @@ fn reaction_backup_duplicate_equal_clock_versions_remove_wins_in_both_row_orders
                     payload_version: PAYLOAD_VERSION,
                     user_id: own.to_string(),
                     created_at_ms: 0,
-                    reaction_selection_version: 88,
                 }),
             );
             for &i in &order {

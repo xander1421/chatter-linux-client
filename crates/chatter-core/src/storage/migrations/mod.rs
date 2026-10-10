@@ -101,6 +101,8 @@ mod v101_attachment_secret_chat;
 mod v102_drop_call_room_tokens;
 mod v103_secret_chat_peer_device;
 mod v104_reaction_send_clocks;
+mod v105_drop_legacy_reaction_evidence;
+pub(crate) mod reaction_normalization;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -430,4 +432,5 @@ pub fn default_migrations() -> MigrationRunner {
         .register(v102_drop_call_room_tokens::V102DropCallRoomTokens)
         .register(v103_secret_chat_peer_device::V103SecretChatPeerDevice)
         .register(v104_reaction_send_clocks::V104ReactionSendClocks)
+        .register(v105_drop_legacy_reaction_evidence::V105DropLegacyReactionEvidence)
 }

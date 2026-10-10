@@ -1,7 +1,7 @@
 //! Repair already-installed v087; changing v087 alone never upgrades a device.
 use super::Migration;
 use crate::{
-    error::StorageError, storage::repositories::unified_message_repo::reaction_normalization,
+    error::StorageError, storage::migrations::reaction_normalization,
 };
 use rusqlite::Connection;
 

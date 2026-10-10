@@ -1617,7 +1617,7 @@ mod resync_acknowledgement_tests {
         assert!(ensure_resync_ingested(Ingested::Stored).is_ok());
     }
     #[tokio::test]
-    async fn peer_channel_reaction_survives_empty_or_partial_server_resync_and_legacy_ambiguity_remains_hidden()
+    async fn peer_channel_reaction_survives_empty_or_partial_server_resync()
      {
         use crate::client::ChatterClient;
         use crate::domain::channel::{
@@ -1742,33 +1742,6 @@ mod resync_acknowledgement_tests {
                 .user_has_reacted(&scope, &author, 100, "👍")
                 .unwrap(),
             "live/backfill projection preserves own highlight too"
-        );
-        service
-            .database
-            .connection()
-            .unwrap()
-            .execute(
-                "INSERT INTO reaction_scope_unresolved VALUES(?1,'channel',?2,100)",
-                rusqlite::params![id.to_string(), author.to_string()],
-            )
-            .unwrap();
-        envelope.reactions.clear();
-        inbound.ingest_resynced(&envelope, id).await.unwrap();
-        assert!(
-            service
-                .message_repo
-                .ensure_reaction_scope_resolved(&scope, &author, 100)
-                .is_err(),
-            "an empty server projection cannot invent complete legacy authority"
-        );
-        assert!(
-            service
-                .get_message_local(&message.id)
-                .unwrap()
-                .unwrap()
-                .reaction_counts
-                .is_empty(),
-            "quarantined old projection stays masked"
         );
     }
 }

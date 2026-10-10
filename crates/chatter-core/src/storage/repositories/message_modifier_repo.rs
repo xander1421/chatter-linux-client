@@ -630,16 +630,6 @@ pub(crate) fn take_on_arrival<'a>(
         }
     }
     others.clear();
-    // Historical uncertainty never prevents storing the message itself. Retain
-    // scoped pending reactions until complete authoritative recovery resolves it.
-    let legacy_ambiguous:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM reaction_legacy_unscoped WHERE sender_id=?1 AND sent_at_ns=?2)",params![author,message.sent_at as i64],|r|r.get(0))?;
-    let resolved_target:bool=conn.query_row("SELECT EXISTS(SELECT 1 FROM messages WHERE conversation_id=?1 AND conversation_type=?2 AND sender_id=?3 AND sent_at=?4) AND NOT EXISTS(SELECT 1 FROM reaction_scope_unresolved WHERE conversation_id=?1 AND conversation_type=?2 AND sender_id=?3 AND sent_at_ns=?4)",params![conversation,message.conversation_type.as_str(),author,message.sent_at as i64],|r|r.get(0))?;
-    if legacy_ambiguous && !resolved_target {
-        return Ok(Arrival::Store {
-            message: stored,
-            reactions: Vec::new(),
-        });
-    }
     let mut scoped = conn.prepare("SELECT actor_id,emoji,remove,action_ts FROM pending_scoped_reactions WHERE conversation_id=?1 AND conversation_type=?2 AND author_id=?3 AND target_sent_at=?4 UNION ALL SELECT actor_id,emoji,0,action_ts FROM pending_reaction_add_selections WHERE conversation_id=?1 AND conversation_type=?2 AND author_id=?3 AND target_sent_at=?4 ORDER BY action_ts,remove,emoji")?;
     let scoped_rows = scoped
         .query_map(

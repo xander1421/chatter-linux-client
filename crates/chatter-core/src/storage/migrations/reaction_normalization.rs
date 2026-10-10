@@ -1,4 +1,6 @@
-//! Shared restore/upgrade policy. Votes are projections; adds select an emoji,
+//! Migration-only (v087/v088) reaction repair, kept as frozen migration history:
+//! later migrations drop the quarantine and legacy tables it fills.
+//! Votes are projections; adds select an emoji,
 //! removals only tombstone that emoji. A vote without an action clock is evidence,
 //! not an ordered intent: retain it in exact-scope quarantine, never invent a clock.
 use crate::{

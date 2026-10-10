@@ -29,7 +29,7 @@ impl Migration for V087SingleReaction {
     }
     fn apply(&self, conn: &Connection) -> Result<(), StorageError> {
         conn.execute_batch(self.up())?;
-        crate::storage::repositories::unified_message_repo::reaction_normalization::normalize(conn)
+        super::reaction_normalization::normalize(conn)
     }
 }
 

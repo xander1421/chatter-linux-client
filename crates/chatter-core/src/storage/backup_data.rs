@@ -36,8 +36,6 @@
 //!   mailbox-scoped state tied to those mailbox keys; such a conversation is
 //!   re-established, not restored. Their message rows are excluded with them
 //!   (a restored row without its conversation would be invisible anyway).
-//!   Reaction ledgers and pending state require a matching retained target;
-//!   unscoped evidence without one provable eligible owner stays local only.
 //! - `settings` beyond the own-profile keys — auth tokens and `crypto.*`
 //!   material must never leave the device in a history backup.
 //!
@@ -58,7 +56,8 @@ use rusqlite::types::{Value as SqlValue, ValueRef};
 
 use crate::error::StorageError;
 use crate::storage::repositories::settings_repo::keys;
-use crate::storage::repositories::unified_message_repo::reaction_normalization;
+use crate::storage::repositories::unified_message_repo::reaction_projection;
+use std::collections::HashSet;
 
 /// Payload schema version (independent of the container's format_version).
 pub const PAYLOAD_VERSION: u32 = 1;
@@ -76,13 +75,9 @@ pub const BACKUP_TABLES: &[&str] = &[
     "attachments",
     "threads",
     "unified_reactions",
-    "reaction_legacy_unscoped",
-    "reaction_scope_unresolved",
-    "reaction_legacy_pending",
     "pending_scoped_reactions",
     "reaction_action_versions",
     "reaction_actor_selections",
-    "reaction_scoped_quarantine",
     "pending_reaction_add_selections",
 ];
 
@@ -104,10 +99,6 @@ pub struct BackupInfo {
     pub user_id: String,
     #[prost(int64, tag = "3")]
     pub created_at_ms: i64,
-    /// Missing in RC57/RC59. v088 distinguishes repaired latest-add selections
-    /// from shipped v087 removal-derived rows, including equal-clock removals.
-    #[prost(uint32, tag = "4")]
-    pub reaction_selection_version: u32,
 }
 
 #[derive(Clone, PartialEq, ::prost::Message)]
@@ -259,7 +250,6 @@ pub fn dump_frames(conn: &Connection, user_id: &str) -> Result<(Vec<u8>, usize),
             payload_version: PAYLOAD_VERSION,
             user_id: user_id.to_string(),
             created_at_ms: chrono::Utc::now().timestamp_millis(),
-            reaction_selection_version: 88,
         }),
     );
 
@@ -274,7 +264,7 @@ pub fn dump_frames(conn: &Connection, user_id: &str) -> Result<(Vec<u8>, usize),
         // Reaction metadata must obey the same privacy boundary as history.
         // A scope string alone is insufficient: require its retained target.
         let ownership = match table {
-            "unified_reactions" | "reaction_scope_unresolved" | "reaction_scoped_quarantine" => Some(format!(
+            "unified_reactions" => Some(format!(
                 "EXISTS (SELECT 1 FROM messages m WHERE m.conversation_type IN {MESSAGE_CONVERSATION_TYPES}
                  AND m.conversation_type={table}.conversation_type AND m.conversation_id={table}.conversation_id
                  AND m.sender_id={table}.sender_id AND m.sent_at={table}.sent_at_ns)")),
@@ -282,16 +272,6 @@ pub fn dump_frames(conn: &Connection, user_id: &str) -> Result<(Vec<u8>, usize),
                 "EXISTS (SELECT 1 FROM messages m WHERE m.conversation_type IN {MESSAGE_CONVERSATION_TYPES}
                  AND m.conversation_type={table}.conversation_type AND m.conversation_id={table}.conversation_id
                  AND m.sender_id={table}.author_id AND m.sent_at={table}.target_sent_at)")),
-            "reaction_legacy_unscoped" => Some(format!(
-                "(SELECT count(*) FROM messages m WHERE m.sender_id={table}.sender_id AND m.sent_at={table}.sent_at_ns)=1
-                 AND EXISTS (SELECT 1 FROM messages m WHERE m.sender_id={table}.sender_id AND m.sent_at={table}.sent_at_ns
-                 AND m.conversation_type IN {MESSAGE_CONVERSATION_TYPES})")),
-            "reaction_legacy_pending" => Some(format!(
-                "{table}.kind='reaction'
-                 AND (SELECT count(*) FROM messages m WHERE m.sender_id={table}.author_id AND m.sent_at={table}.target_sent_at)=1
-                 AND EXISTS (SELECT 1 FROM messages m WHERE m.sender_id={table}.author_id AND m.sent_at={table}.target_sent_at
-                 AND m.conversation_type IN {MESSAGE_CONVERSATION_TYPES}
-                 AND ({table}.conversation_id IS NULL OR {table}.conversation_id=m.conversation_id))")),
             "messages" => Some(format!("conversation_type IN {MESSAGE_CONVERSATION_TYPES}")),
             _ => None,
         };
@@ -400,7 +380,6 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
         /// Indices into the frame's value vector, aligned with insert_sql
         /// placeholders (backup columns unknown to the live schema dropped).
         value_indices: Vec<usize>,
-        legacy_id_index: Option<usize>,
         scoped_indices: Option<[usize; 6]>,
         ledger_table: Option<String>,
         columns: Vec<String>,
@@ -408,22 +387,21 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
     let tx = conn.transaction()?;
     // A restore merges history, never overrides a locally retained actor. The
     // guard is per actor, not per emoji, including removed and held selections.
-    tx.execute_batch("CREATE TEMP TABLE rc60_local_reaction_actors AS
-        SELECT conversation_id,conversation_type,author_id,target_sent_at,actor_id FROM reaction_action_versions
-        UNION SELECT conversation_id,conversation_type,author_id,target_sent_at,actor_id FROM reaction_actor_selections
-        UNION SELECT conversation_id,conversation_type,sender_id,sent_at_ns,user_id FROM unified_reactions
-        UNION SELECT conversation_id,conversation_type,author_id,target_sent_at,actor_id FROM pending_scoped_reactions
-        UNION SELECT conversation_id,conversation_type,author_id,target_sent_at,actor_id FROM pending_reaction_add_selections;")?;
-    // DDL participates in the import transaction; malformed frames restore the
-    // index and all evidence on rollback. Normalize before recreating the index.
-    tx.execute_batch("DROP INDEX IF EXISTS idx_ur_single_actor")?;
+    let local_actors: HashSet<(String, String, String, i64, String)> = tx
+        .prepare(
+            "SELECT conversation_id,conversation_type,author_id,target_sent_at,actor_id FROM reaction_action_versions
+            UNION SELECT conversation_id,conversation_type,author_id,target_sent_at,actor_id FROM reaction_actor_selections
+            UNION SELECT conversation_id,conversation_type,sender_id,sent_at_ns,user_id FROM unified_reactions
+            UNION SELECT conversation_id,conversation_type,author_id,target_sent_at,actor_id FROM pending_scoped_reactions
+            UNION SELECT conversation_id,conversation_type,author_id,target_sent_at,actor_id FROM pending_reaction_add_selections",
+        )?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
+        .collect::<Result<_, _>>()?;
     let mut ledgers = Vec::new();
     let mut scoped_votes = Vec::new();
     let mut current: Option<TableState> = None;
-    let mut legacy_votes = Vec::new();
 
     let mut saw_info = false;
-    let mut reaction_selection_version = 0;
     while buf.has_remaining() {
         let f = Frame::decode_length_delimited(&mut buf)
             .map_err(|e| StorageError::InvalidData(format!("backup frame undecodable: {e}")))?;
@@ -434,18 +412,12 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
                         "backup payload has duplicate info frames".into(),
                     ));
                 }
-                if info.reaction_selection_version != 0 && info.reaction_selection_version != 88 {
-                    return Err(StorageError::InvalidData(
-                        "unsupported reaction selection semantics".into(),
-                    ));
-                }
                 if info.payload_version != PAYLOAD_VERSION {
                     return Err(StorageError::InvalidData(format!(
                         "unsupported backup payload version {}",
                         info.payload_version
                     )));
                 }
-                reaction_selection_version = info.reaction_selection_version;
                 saw_info = true;
             }
             Some(frame::Payload::Table(th)) => {
@@ -455,33 +427,8 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
                     current = None;
                     continue;
                 }
-                let legacy_reactions = th.table == "unified_reactions"
-                    && !th.columns.iter().any(|c| c == "conversation_id")
-                    && !th.columns.iter().any(|c| c == "conversation_type");
-                let target = if legacy_reactions {
-                    "reaction_legacy_unscoped"
-                } else {
-                    &th.table
-                };
-                if target == "reaction_legacy_unscoped" {
-                    let required = [
-                        "id",
-                        "sender_id",
-                        "sent_at_ns",
-                        "user_id",
-                        "emoji",
-                        "created_at",
-                    ];
-                    if required
-                        .iter()
-                        .any(|name| !th.columns.iter().any(|c| c == name))
-                    {
-                        return Err(StorageError::InvalidData(
-                            "legacy reaction payload missing required columns".into(),
-                        ));
-                    }
-                }
-                let live_cols = table_columns(&tx, target)?;
+                let table = th.table.as_str();
+                let live_cols = table_columns(&tx, table)?;
                 let mut names = Vec::new();
                 let mut value_indices = Vec::new();
                 for (i, col) in th.columns.iter().enumerate() {
@@ -494,24 +441,8 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
                     current = None;
                     continue;
                 }
-                let placeholders = names.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-                let insert_sql = if th.table == "unified_reactions"
-                    || target == "reaction_scoped_quarantine"
-                    || target == "reaction_legacy_unscoped"
-                {
-                    // Ignore only uniqueness conflicts, never NOT NULL failures.
-                    format!(
-                        "INSERT INTO {target} ({}) VALUES ({placeholders}) ON CONFLICT DO NOTHING",
-                        names.join(", ")
-                    )
-                } else {
-                    format!(
-                        "INSERT OR IGNORE INTO {target} ({}) VALUES ({placeholders})",
-                        names.join(", ")
-                    )
-                };
                 let ledger_table = matches!(
-                    th.table.as_str(),
+                    table,
                     "reaction_action_versions"
                         | "reaction_actor_selections"
                         | "pending_reaction_add_selections"
@@ -519,10 +450,7 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
                 )
                 .then(|| th.table.clone());
                 let scoped_indices: Option<[usize; 6]> =
-                    if (th.table == "unified_reactions" && !legacy_reactions)
-                        || th.table == "reaction_scoped_quarantine"
-                        || ledger_table.is_some()
-                    {
+                    if table == "unified_reactions" || ledger_table.is_some() {
                         let identity = if ledger_table.is_some() {
                             [
                                 "conversation_id",
@@ -563,23 +491,11 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
                     } else {
                         None
                     };
+                let placeholders = names.iter().map(|_| "?").collect::<Vec<_>>().join(",");
                 let insert_sql = if let Some(table) = &ledger_table {
                     names.iter().position(|n| n == "action_ts").ok_or_else(|| {
                         StorageError::InvalidData("Reaction backup lacks action clock".into())
                     })?;
-                    let i = scoped_indices.unwrap();
-                    let guard = format!(
-                        "NOT EXISTS(SELECT 1 FROM rc60_local_reaction_actors l WHERE l.conversation_id=?{} AND l.conversation_type=?{} AND l.author_id=?{} AND l.target_sent_at=?{} AND l.actor_id=?{})",
-                        i[0] + 1,
-                        i[1] + 1,
-                        i[2] + 1,
-                        i[3] + 1,
-                        i[4] + 1
-                    );
-                    let numbered = (1..=names.len())
-                        .map(|n| format!("?{n}"))
-                        .collect::<Vec<_>>()
-                        .join(",");
                     let mut updates =
                         "emoji=excluded.emoji,action_ts=excluded.action_ts".to_string();
                     let mut tie = format!("excluded.emoji>{table}.emoji");
@@ -605,22 +521,28 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
                     } else {
                         "conversation_type,conversation_id,author_id,target_sent_at,actor_id"
                     };
-                    // Numbered placeholders preserve arbitrary serialized column order.
                     format!(
-                        "INSERT INTO {table} ({}) SELECT {numbered} WHERE {guard} ON CONFLICT({conflict}) DO UPDATE SET {updates} WHERE excluded.action_ts>{table}.action_ts OR (excluded.action_ts={table}.action_ts AND {tie})",
+                        "INSERT INTO {table} ({}) VALUES ({placeholders}) ON CONFLICT({conflict}) DO UPDATE SET {updates} WHERE excluded.action_ts>{table}.action_ts OR (excluded.action_ts={table}.action_ts AND {tie})",
                         names.join(",")
                     )
+                } else if table == "unified_reactions" {
+                    // Ignore only uniqueness conflicts, never NOT NULL failures.
+                    format!(
+                        "INSERT INTO {table} ({}) VALUES ({placeholders}) ON CONFLICT DO NOTHING",
+                        names.join(", ")
+                    )
                 } else {
-                    insert_sql
+                    format!(
+                        "INSERT OR IGNORE INTO {table} ({}) VALUES ({placeholders})",
+                        names.join(", ")
+                    )
                 };
                 current = Some(TableState {
                     insert_sql,
                     scoped_indices,
                     ledger_table,
-                    columns: names.clone(),
+                    columns: names,
                     value_indices,
-                    legacy_id_index: (target == "reaction_legacy_unscoped")
-                        .then(|| names.iter().position(|name| name == "id").unwrap()),
                 });
                 summary.tables += 1;
             }
@@ -638,17 +560,6 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
                             .unwrap_or(SqlValue::Null)
                     })
                     .collect();
-                if let Some(id_index) = state.legacy_id_index {
-                    if params.iter().any(|v| matches!(v, SqlValue::Null)) {
-                        return Err(StorageError::InvalidData(
-                            "legacy reaction payload contains NULL evidence".into(),
-                        ));
-                    }
-                    // Defer until every message frame is present, independent of
-                    // table order. Never let scoped NOT NULL silently discard votes.
-                    legacy_votes.push((state.insert_sql.clone(), id_index, params));
-                    continue;
-                }
                 if let Some(indices) = state.scoped_indices {
                     let text = |i: usize| match params.get(i) {
                         Some(SqlValue::Text(value)) => Ok(value.clone()),
@@ -664,14 +575,14 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
                             ));
                         }
                     };
-                    let key = (
+                    let actor = (
                         text(indices[0])?,
                         text(indices[1])?,
                         text(indices[2])?,
                         timestamp,
                         text(indices[4])?,
-                        text(indices[5])?,
                     );
+                    let emoji = text(indices[5])?;
                     if let Some(table) = &state.ledger_table {
                         let clock_index =
                             state.columns.iter().position(|n| n == "action_ts").unwrap();
@@ -688,19 +599,11 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
                                 ));
                             }
                         }
-                        ledgers.push((table.clone(), state.insert_sql.clone(), params));
-                    } else {
-                        let id_index =
-                            state
-                                .columns
-                                .iter()
-                                .position(|n| n == "id")
-                                .ok_or_else(|| {
-                                    StorageError::InvalidData(
-                                        "Scoped backup vote lacks evidence ID".into(),
-                                    )
-                                })?;
-                        scoped_votes.push((state.insert_sql.clone(), params, key, id_index));
+                        if !local_actors.contains(&actor) {
+                            ledgers.push((table.clone(), state.insert_sql.clone(), params));
+                        }
+                    } else if !local_actors.contains(&actor) {
+                        scoped_votes.push((state.insert_sql.clone(), params, actor, emoji));
                     }
                     continue;
                 }
@@ -717,8 +620,8 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
             "backup payload missing info frame".into(),
         ));
     }
-    // All action evidence is installed before any projection, regardless of
-    // frame order. LWW merge applies only to actors absent before this restore.
+    // All action evidence is installed before any vote, regardless of frame
+    // order. LWW merge applies only to actors absent before this restore.
     // Receipt metadata and duplicate vote IDs are sorted for stable re-export.
     ledgers.sort_by_key(|row| format!("{:?}", row));
     for (_, sql, values) in ledgers {
@@ -726,90 +629,18 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
             .prepare_cached(&sql)?
             .execute(rusqlite::params_from_iter(values))?;
     }
-    let mut imported_legacy_ids = Vec::new();
+    // A vote is admitted only when the restored selection names it and that
+    // selection's action is an add: the ledger, not the projection, orders actions.
     scoped_votes.sort_by_key(|row| format!("{:?}", row));
-    for (sql, values, key, id_index) in scoped_votes {
-        let (active_seen, quarantined_seen): (bool, bool) = tx.query_row("SELECT EXISTS(SELECT 1 FROM unified_reactions WHERE id=?6 AND conversation_id=?1 AND conversation_type=?2 AND sender_id=?3 AND sent_at_ns=?4 AND user_id=?5 AND emoji=?7), EXISTS(SELECT 1 FROM reaction_scoped_quarantine WHERE id=?6 AND conversation_id=?1 AND conversation_type=?2 AND sender_id=?3 AND sent_at_ns=?4 AND user_id=?5 AND emoji=?7)",rusqlite::params![key.0,key.1,key.2,key.3,key.4,values[id_index],key.5],|r|Ok((r.get(0)?,r.get(1)?)))?;
-        let local: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM rc60_local_reaction_actors WHERE conversation_id=?1 AND conversation_type=?2 AND author_id=?3 AND target_sent_at=?4 AND actor_id=?5)",rusqlite::params![key.0,key.1,key.2,key.3,key.4],|r|r.get(0))?;
-        let clocked: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM reaction_action_versions WHERE conversation_id=?1 AND conversation_type=?2 AND author_id=?3 AND target_sent_at=?4 AND actor_id=?5 AND emoji=?6 AND action_ts>0)",rusqlite::params![key.0,key.1,key.2,key.3,key.4,key.5],|r|r.get(0))?;
-        if active_seen
-            || (quarantined_seen
-                && (local || !clocked || sql.starts_with("INSERT INTO reaction_scoped_quarantine")))
-        {
-            continue;
-        }
-        let mut inserted = 0;
-        if !local && clocked {
-            inserted = tx
+    for (sql, values, actor, emoji) in scoped_votes {
+        let selected: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM reaction_actor_selections s JOIN reaction_action_versions v ON v.conversation_id=s.conversation_id AND v.conversation_type=s.conversation_type AND v.author_id=s.author_id AND v.target_sent_at=s.target_sent_at AND v.actor_id=s.actor_id AND v.emoji=s.emoji WHERE s.conversation_id=?1 AND s.conversation_type=?2 AND s.author_id=?3 AND s.target_sent_at=?4 AND s.actor_id=?5 AND s.emoji=?6 AND v.remove=0 AND v.action_ts=s.action_ts)",rusqlite::params![actor.0,actor.1,actor.2,actor.3,actor.4,emoji],|r|r.get(0))?;
+        if selected {
+            summary.rows_inserted += tx
                 .prepare_cached(&sql)?
                 .execute(rusqlite::params_from_iter(values.iter()))?;
         }
-        if inserted == 0 {
-            // Unclocked votes never enter the active table's global-ID/dedup
-            // constraints. Keep every scoped row in quarantine, including ID
-            // collisions and votes rejected by retained local actor authority.
-            let quarantine = sql.replace(
-                "INSERT INTO unified_reactions",
-                "INSERT INTO reaction_scoped_quarantine",
-            );
-            inserted = tx
-                .prepare_cached(&quarantine)?
-                .execute(rusqlite::params_from_iter(values.iter()))?;
-        }
-        summary.rows_inserted += inserted;
     }
-    for (sql, id_index, params) in legacy_votes {
-        // Preserve skip-existing policy, including an already recovered vote.
-        let id = &params[id_index];
-        let existing: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM unified_reactions WHERE id=?1)",
-            [id],
-            |r| r.get(0),
-        )?;
-        if !existing {
-            let inserted = tx
-                .prepare_cached(&sql)?
-                .execute(rusqlite::params_from_iter(params.iter()))?;
-            summary.rows_inserted += inserted;
-            if inserted != 0 {
-                imported_legacy_ids.push(id.clone());
-            }
-        }
-    }
-    for id in imported_legacy_ids {
-        // Unique target identity does not establish action order. Promote only
-        // clocked evidence for an actor absent locally; the same normalizer
-        // then applies selection/removal authority to scoped and legacy votes.
-        tx.execute("INSERT INTO unified_reactions
-            SELECT r.id,m.conversation_id,m.conversation_type,r.sender_id,r.sent_at_ns,r.user_id,r.emoji,r.created_at
-            FROM reaction_legacy_unscoped r JOIN messages m ON m.sender_id=r.sender_id AND m.sent_at=r.sent_at_ns
-            WHERE r.id=?1 AND (SELECT count(*) FROM messages x WHERE x.sender_id=r.sender_id AND x.sent_at=r.sent_at_ns)=1
-            AND EXISTS(SELECT 1 FROM reaction_action_versions v WHERE v.conversation_id=m.conversation_id AND v.conversation_type=m.conversation_type AND v.author_id=r.sender_id AND v.target_sent_at=r.sent_at_ns AND v.actor_id=r.user_id AND v.emoji=r.emoji AND v.action_ts>0)
-            AND NOT EXISTS(SELECT 1 FROM rc60_local_reaction_actors l WHERE l.conversation_id=m.conversation_id AND l.conversation_type=m.conversation_type AND l.author_id=r.sender_id AND l.target_sent_at=r.sent_at_ns AND l.actor_id=r.user_id)
-            ON CONFLICT DO NOTHING", [&id])?;
-    }
-    tx.execute("INSERT OR IGNORE INTO reaction_scope_unresolved
-        SELECT DISTINCT m.conversation_id,m.conversation_type,m.sender_id,m.sent_at
-        FROM messages m JOIN reaction_legacy_unscoped r ON r.sender_id=m.sender_id AND r.sent_at_ns=m.sent_at
-        WHERE NOT EXISTS(SELECT 1 FROM reaction_action_versions v WHERE v.conversation_id=m.conversation_id AND v.conversation_type=m.conversation_type AND v.author_id=r.sender_id AND v.target_sent_at=r.sent_at_ns AND v.actor_id=r.user_id AND v.emoji=r.emoji)", [])?;
-    if reaction_selection_version < 88 {
-        // Repair old backup ledger semantics without touching retained local
-        // selections (especially RC60's legitimate equal-clock add/remove).
-        let repair = reaction_normalization::REPAIR_V087_SELECTIONS.replace(
-            "WHERE EXISTS (",
-            "WHERE NOT EXISTS(SELECT 1 FROM rc60_local_reaction_actors l WHERE l.conversation_id=s.conversation_id AND l.conversation_type=s.conversation_type AND l.author_id=s.author_id AND l.target_sent_at=s.target_sent_at AND l.actor_id=s.actor_id) AND EXISTS (",
-        );
-        tx.execute_batch(&repair)?;
-    }
-    reaction_normalization::normalize(&tx)?;
-    reaction_normalization::normalize_pending(&tx)?;
-    // Remove only evidence recovered as this exact surviving active vote.
-    // Losers/unordered legacy evidence remains quarantined, including orphans.
-    tx.execute("DELETE FROM reaction_legacy_unscoped AS r WHERE EXISTS
-        (SELECT 1 FROM unified_reactions u WHERE u.id=r.id AND u.sender_id=r.sender_id
-        AND u.sent_at_ns=r.sent_at_ns AND u.user_id=r.user_id AND u.emoji=r.emoji AND u.created_at=r.created_at)", [])?;
-
-    tx.execute_batch("DROP TABLE rc60_local_reaction_actors")?;
+    reaction_projection::rebuild_all(&tx)?;
     tx.commit()?;
     Ok(summary)
 }
@@ -857,41 +688,14 @@ mod tests {
                 )
                 .unwrap();
                 conn.execute("INSERT INTO unified_reactions(id,conversation_id,conversation_type,sender_id,sent_at_ns,user_id,emoji,created_at) VALUES(?1,?1,?2,'user-a',?3,'voter','👍','now')",rusqlite::params![scope,kind,timestamp]).unwrap();
-                conn.execute(
-                    "INSERT INTO reaction_scope_unresolved VALUES(?1,?2,'user-a',?3)",
-                    rusqlite::params![scope, kind, timestamp],
-                )
-                .unwrap();
                 conn.execute("INSERT INTO pending_scoped_reactions VALUES(?1,?2,'user-a',?3,'actor','👍',0,1,1)",rusqlite::params![scope,kind,timestamp]).unwrap();
                 conn.execute("INSERT INTO reaction_action_versions VALUES(?1,?2,'user-a',?3,'actor','👍',1,0)",rusqlite::params![scope,kind,timestamp]).unwrap();
-                conn.execute("INSERT INTO reaction_scoped_quarantine VALUES(?1,?1,?2,'user-a',?3,'unknown','X','old')",rusqlite::params![scope,kind,timestamp]).unwrap();
                 conn.execute("INSERT INTO pending_reaction_add_selections VALUES(?1,?2,'user-a',?3,'actor','👍',1)",rusqlite::params![scope,kind,timestamp]).unwrap();
-                conn.execute("INSERT INTO reaction_legacy_unscoped(id,sender_id,sent_at_ns,user_id,emoji,created_at) VALUES(?1,'user-a',?2,'legacy-voter','👍','now')",rusqlite::params![format!("legacy-{scope}"),timestamp]).unwrap();
-                conn.execute("INSERT INTO reaction_legacy_pending(author_id,target_sent_at,kind,actor_id,emoji,conversation_id,body,action_ts,remove,received_at) VALUES('user-a',?1,'reaction',?2,'👍',NULL,NULL,1,0,1)",rusqlite::params![timestamp,format!("legacy-pending-{scope}")]).unwrap();
-            }
-            // Ambiguity spans retained and excluded history. Counting only
-            // retained messages would incorrectly leak this unscoped vote.
-            insert_message(&conn, "amb-kept", "retained ambiguous target", 60);
-            insert_message(
-                &conn,
-                "excluded-amb-target",
-                "excluded ambiguous target",
-                60,
-            );
-            conn.execute("UPDATE messages SET conversation_type='anon_dm',conversation_id='excluded-amb-target' WHERE id='excluded-amb-target'",[]).unwrap();
-            for (marker, timestamp) in [
-                ("excluded-ambiguous-evidence", 60),
-                ("excluded-orphan-evidence", 70),
-            ] {
-                conn.execute("INSERT INTO reaction_legacy_unscoped(id,sender_id,sent_at_ns,user_id,emoji,created_at) VALUES(?1,'user-a',?2,?1,'👍','now')",rusqlite::params![marker,timestamp]).unwrap();
-                conn.execute("INSERT INTO reaction_legacy_pending(author_id,target_sent_at,kind,actor_id,emoji,conversation_id,body,action_ts,remove,received_at) VALUES('user-a',?1,'reaction',?2,'👍',NULL,NULL,1,0,1)",rusqlite::params![timestamp,marker]).unwrap();
             }
             // An eligible-looking scope without its actual target is excluded.
             conn.execute_batch("INSERT INTO unified_reactions VALUES('excluded-fake-scope','keep-channel','channel','user-a',999,'voter','👍','now');
-                INSERT INTO reaction_scope_unresolved VALUES('excluded-fake-scope','channel','user-a',999);
                 INSERT INTO pending_scoped_reactions VALUES('excluded-fake-scope','channel','user-a',999,'actor','👍',0,1,1);
                 INSERT INTO reaction_action_versions VALUES('excluded-fake-scope','channel','user-a',999,'actor','👍',1,0);
-                INSERT INTO reaction_scoped_quarantine VALUES('excluded-fake-scope','keep-channel','channel','user-a',999,'unknown','X','old');
                 INSERT INTO pending_reaction_add_selections VALUES('excluded-fake-scope','channel','user-a',999,'actor','👍',1);").unwrap();
         }
         let payload = dump_frames(&db.connection().unwrap(), "owner").unwrap().0;
@@ -906,9 +710,6 @@ mod tests {
         for marker in [
             "excluded-anon-dm",
             "excluded-anon-group",
-            "excluded-amb-target",
-            "excluded-ambiguous-evidence",
-            "excluded-orphan-evidence",
             "excluded-fake-scope",
         ] {
             assert!(
@@ -930,12 +731,8 @@ mod tests {
         }
         for table in [
             "unified_reactions",
-            "reaction_scope_unresolved",
             "pending_scoped_reactions",
             "reaction_action_versions",
-            "reaction_legacy_unscoped",
-            "reaction_legacy_pending",
-            "reaction_scoped_quarantine",
             "pending_reaction_add_selections",
         ] {
             assert_eq!(
@@ -944,293 +741,7 @@ mod tests {
                 "exact eligible controls for {table}"
             );
         }
-        assert_eq!(counts.get("messages"), Some(&4));
-        let conn = db.connection().unwrap();
-        assert_eq!(
-            conn.query_row("SELECT count(*) FROM reaction_legacy_unscoped", [], |r| r
-                .get::<_, i64>(
-                0
-            ))
-            .unwrap(),
-            7,
-            "export must not delete quarantine"
-        );
-        assert_eq!(
-            conn.query_row("SELECT count(*) FROM reaction_legacy_pending", [], |r| r
-                .get::<_, i64>(0))
-                .unwrap(),
-            7,
-            "export must not delete pending evidence"
-        );
-    }
-
-    /// Real pre-v084 table headers, not migration-only SQL. Deferred votes
-    /// must survive even when their table arrives before message ownership.
-    #[test]
-    fn legacy_payload_recovers_only_unique_votes_and_quarantines_the_rest() {
-        use crate::domain::ids::{ChannelId, UserId};
-        use crate::domain::message::ConversationType;
-        use crate::domain::reaction::ReactionScope;
-        use crate::storage::repositories::unified_message_repo::UnifiedMessageRepository;
-        use std::sync::Arc;
-
-        let src_dir = tempfile::tempdir().unwrap();
-        let dst_dir = tempfile::tempdir().unwrap();
-        let src = test_db(src_dir.path());
-        let dst = Arc::new(test_db(dst_dir.path()));
-        let author = UserId::new();
-        let voter = UserId::new();
-        let other = UserId::new();
-        let conv_a = ChannelId::new();
-        let conv_b = ChannelId::new();
-        let scope_a = ReactionScope::new(conv_a, ConversationType::Channel);
-        let scope_b = ReactionScope::new(conv_b, ConversationType::Channel);
-        let mut payload = Vec::new();
-        push_frame(
-            &mut payload,
-            frame::Payload::Info(BackupInfo {
-                payload_version: PAYLOAD_VERSION,
-                user_id: author.to_string(),
-                created_at_ms: 0,
-                reaction_selection_version: 0,
-            }),
-        );
-        {
-            let conn = src.connection().unwrap();
-            // Construct the actual old six-column schema and dump its header
-            // and rows through the production frame serializer.
-            conn.execute_batch("DROP TABLE unified_reactions;
-                CREATE TABLE unified_reactions(id TEXT PRIMARY KEY,sender_id TEXT NOT NULL,
-                sent_at_ns INTEGER NOT NULL,user_id TEXT NOT NULL,emoji TEXT NOT NULL,created_at TEXT NOT NULL);").unwrap();
-            for (id, timestamp) in [("known", 10), ("ambiguous", 20), ("orphan", 30)] {
-                conn.execute(
-                    "INSERT INTO unified_reactions VALUES(?1,?2,?3,?4,'👍','2026-01-01')",
-                    rusqlite::params![id, author.to_string(), timestamp, voter.to_string()],
-                )
-                .unwrap();
-            }
-            insert_message(&conn, "unique", "known history", 10);
-            insert_message(&conn, "amb-a", "ambiguous history a", 20);
-            insert_message(&conn, "amb-b", "ambiguous history b", 20);
-            conn.execute(
-                "UPDATE messages SET sender_id=?1,conversation_id=CASE WHEN id='amb-b' THEN ?3 ELSE ?2 END",
-                rusqlite::params![author.to_string(), conv_a.to_string(), conv_b.to_string()],
-            )
-            .unwrap();
-            conn.execute(
-                "UPDATE messages SET conversation_id=?1 WHERE id='amb-b'",
-                [conv_b.to_string()],
-            )
-            .unwrap();
-            conn.execute("UPDATE messages SET reaction_counts_blob=X'CAFE',current_user_reactions_blob=X'BEEF' WHERE sent_at=20", []).unwrap();
-            let mut rows = 0;
-            dump_table(
-                &conn,
-                &mut payload,
-                "unified_reactions",
-                "SELECT * FROM unified_reactions",
-                &[],
-                &mut rows,
-                &|_| Ok(true),
-            )
-            .unwrap();
-            dump_table(
-                &conn,
-                &mut payload,
-                "messages",
-                "SELECT * FROM messages",
-                &[],
-                &mut rows,
-                &|_| Ok(true),
-            )
-            .unwrap();
-            conn.execute(
-                "INSERT INTO reaction_action_versions VALUES(?1,'channel',?2,10,?3,'👍',10,0)",
-                rusqlite::params![conv_a.to_string(), author.to_string(), voter.to_string()],
-            )
-            .unwrap();
-            dump_table(
-                &conn,
-                &mut payload,
-                "reaction_action_versions",
-                "SELECT * FROM reaction_action_versions",
-                &[],
-                &mut rows,
-                &|_| Ok(true),
-            )
-            .unwrap();
-            assert_eq!(rows, 7);
-        }
-        {
-            let mut conn = dst.connection().unwrap();
-            insert_message(&conn, "local-history", "keep local history", 99);
-            conn.execute("INSERT INTO channels(id,channel_type,name,owner_id,created_at,updated_at) VALUES(?1,0,'local',?2,'now','now')",rusqlite::params![conv_a.to_string(),author.to_string()]).unwrap();
-            conn.execute("INSERT INTO drafts(id,channel_id,content,created_at,updated_at) VALUES('local-draft',?1,'keep draft','now','now')",[conv_a.to_string()]).unwrap();
-            let result = import_frames(&mut conn, &payload).unwrap();
-            assert_eq!(result.rows_seen, 7);
-            assert_eq!(result.rows_inserted, 7);
-            assert_eq!(import_frames(&mut conn, &payload).unwrap().rows_inserted, 0);
-            assert_eq!(conn.query_row("SELECT count(*) FROM unified_reactions WHERE id='known' AND conversation_id=?1",[conv_a.to_string()],|r|r.get::<_,i64>(0)).unwrap(),1);
-            assert_eq!(
-                conn.query_row("SELECT count(*) FROM reaction_legacy_unscoped", [], |r| r
-                    .get::<_, i64>(
-                    0
-                ))
-                .unwrap(),
-                2
-            );
-            assert_eq!(
-                conn.query_row("SELECT count(*) FROM reaction_scope_unresolved", [], |r| {
-                    r.get::<_, i64>(0)
-                })
-                .unwrap(),
-                2
-            );
-        }
-        let repo = UnifiedMessageRepository::new(Arc::clone(&dst));
-        assert!(
-            repo.add_reaction(&scope_a, &author, 10, &other, &voter, "🎉")
-                .unwrap()
-        );
-        assert!(
-            repo.remove_reaction(&scope_a, &author, 10, &other, &voter, "🎉")
-                .unwrap()
-        );
-        for scope in [&scope_a, &scope_b] {
-            assert!(
-                repo.add_reaction(scope, &author, 20, &other, &voter, "🎉")
-                    .is_err()
-            );
-            assert!(
-                repo.remove_reaction(scope, &author, 20, &voter, &voter, "👍")
-                    .is_err()
-            );
-        }
-        {
-            let conn = dst.connection().unwrap();
-            assert_eq!(
-                conn.query_row(
-                    "SELECT count(*) FROM unified_reactions WHERE id='known'",
-                    [],
-                    |r| r.get::<_, i64>(0)
-                )
-                .unwrap(),
-                1,
-                "add/remove must retain recovered old vote"
-            );
-            for id in ["amb-a", "amb-b"] {
-                let blobs:(Vec<u8>,Vec<u8>) = conn.query_row("SELECT reaction_counts_blob,current_user_reactions_blob FROM messages WHERE id=?1",[id],|r|Ok((r.get(0)?,r.get(1)?))).unwrap();
-                assert_eq!(blobs, (vec![0xca, 0xfe], vec![0xbe, 0xef]));
-            }
-            assert_eq!(
-                conn.query_row(
-                    "SELECT content FROM drafts WHERE id='local-draft'",
-                    [],
-                    |r| r.get::<_, String>(0)
-                )
-                .unwrap(),
-                "keep draft"
-            );
-            assert_eq!(
-                conn.query_row(
-                    "SELECT content_json FROM messages WHERE id='local-history'",
-                    [],
-                    |r| r.get::<_, String>(0)
-                )
-                .unwrap(),
-                "{\"text\":\"keep local history\"}"
-            );
-            // Orphans are not assigned by guesswork; later history arrival
-            // activates the migration's ambiguity trigger instead.
-            conn.execute("INSERT INTO messages(id,conversation_type,conversation_id,sender_id,content_type,content_json,created_at,updated_at,sent_at) VALUES('late-orphan','channel',?1,?2,0,'{}','now','now',30)",rusqlite::params![conv_b.to_string(),author.to_string()]).unwrap();
-        }
-        assert!(
-            repo.add_reaction(&scope_b, &author, 30, &other, &voter, "🎉")
-                .is_err()
-        );
-        assert!(
-            repo.remove_reaction(&scope_b, &author, 30, &voter, &voter, "👍")
-                .is_err()
-        );
-        assert_eq!(
-            dst.connection()
-                .unwrap()
-                .query_row("SELECT count(*) FROM reaction_legacy_unscoped", [], |r| r
-                    .get::<_, i64>(
-                    0
-                ))
-                .unwrap(),
-            2
-        );
-    }
-
-    #[test]
-    fn legacy_reaction_null_evidence_is_an_error_not_a_silent_skip() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = test_db(dir.path());
-        let mut payload = Vec::new();
-        push_frame(
-            &mut payload,
-            frame::Payload::Info(BackupInfo {
-                payload_version: PAYLOAD_VERSION,
-                user_id: "owner".into(),
-                created_at_ms: 0,
-                reaction_selection_version: 0,
-            }),
-        );
-        push_frame(
-            &mut payload,
-            frame::Payload::Table(TableHeader {
-                table: "unified_reactions".into(),
-                columns: [
-                    "id",
-                    "sender_id",
-                    "sent_at_ns",
-                    "user_id",
-                    "emoji",
-                    "created_at",
-                ]
-                .iter()
-                .map(|s| s.to_string())
-                .collect(),
-            }),
-        );
-        push_frame(
-            &mut payload,
-            frame::Payload::Row(RowFrame {
-                values: vec![
-                    ColumnValue {
-                        kind: Some(column_value::Kind::Text("legacy".into())),
-                    },
-                    ColumnValue {
-                        kind: Some(column_value::Kind::Text("author".into())),
-                    },
-                    ColumnValue {
-                        kind: Some(column_value::Kind::Integer(10)),
-                    },
-                    ColumnValue {
-                        kind: Some(column_value::Kind::Text("voter".into())),
-                    },
-                    ColumnValue {
-                        kind: Some(column_value::Kind::Text("👍".into())),
-                    },
-                    ColumnValue { kind: None },
-                ],
-            }),
-        );
-        let mut conn = db.connection().unwrap();
-        assert!(matches!(
-            import_frames(&mut conn, &payload),
-            Err(StorageError::InvalidData(_))
-        ));
-        assert_eq!(
-            conn.query_row("SELECT count(*) FROM reaction_legacy_unscoped", [], |r| r
-                .get::<_, i64>(
-                0
-            ))
-            .unwrap(),
-            0
-        );
+        assert_eq!(counts.get("messages"), Some(&3));
     }
 
     /// Round-trip: rows dumped from one DB appear byte-exact in a fresh DB.
@@ -1255,6 +766,7 @@ mod tests {
             )
             .unwrap();
             conn.execute("INSERT INTO reaction_action_versions VALUES('m1','channel','user-a',1111,'user-b','👍',10,0)", []).unwrap();
+            conn.execute("INSERT INTO reaction_actor_selections VALUES('m1','channel','user-a',1111,'user-b','👍',10)", []).unwrap();
             conn.execute(
                 "INSERT INTO users (id, username, svr_public_key, last_active, created_at) \
                  VALUES ('user-b', 'bob', X'00', '2026-01-01', '2026-01-01')",

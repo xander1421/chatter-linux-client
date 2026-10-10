@@ -359,10 +359,6 @@ impl ConversationHandle {
             return Ok(None);
         };
         let scope = crate::domain::reaction::ReactionScope::of(&message);
-        self.client
-            .messages()
-            .message_repo
-            .ensure_reaction_scope_resolved(&scope, author, sent_at)?;
         Ok(Some(ReactionSnapshot {
             scope,
             conversation: self.conversation,
