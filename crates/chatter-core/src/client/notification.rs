@@ -161,7 +161,7 @@ impl ChatterClient {
         #[cfg(feature = "media")]
         {
             let bridge = {
-                let mut slot = self.call_notification_bridge.lock();
+                let slot = self.call_notification_bridge.lock();
                 if slot.as_ref().is_some_and(|(owner, _)| *owner == revision) {
                     slot.as_ref().map(|(_, bridge)| bridge.clone())
                 } else {

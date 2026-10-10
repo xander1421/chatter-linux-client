@@ -425,40 +425,20 @@ impl ChatterClient {
             }
 
             AC::Channel(channel_id) => {
-                // Channel could be a 1:1 DM or a group — resolve peer locally.
-                if let Some(peer_id) = self.get_dm_peer_local(&channel_id) {
-                    let call_id = self
-                        .start_dm_call(&peer_id, channel_id, call_type, user_id)
-                        .await?;
-                    let peer = RingingPeer {
-                        user_id: peer_id.to_string(),
-                        info: self.resolve_call_participant(&peer_id.to_string()),
-                    };
-                    Ok(OutgoingCallStart {
-                        call_id: call_id.to_string(),
-                        channel_id: channel_id.to_string(),
-                        is_video,
-                        is_anonymous: false,
-                        verification_emojis: None,
-                        title: peer.info.display_name.clone(),
-                        peer: Some(peer),
-                    })
-                } else {
-                    let setup = self
-                        .start_group_call(channel_id, call_type, user_id)
-                        .await?;
-                    Ok(OutgoingCallStart {
-                        call_id: setup.call_id.to_string(),
-                        channel_id: channel_id.to_string(),
-                        is_video,
-                        is_anonymous: false,
-                        // A group call has no SAS (as in Signal): no key is
-                        // shared by everyone who could compare one.
-                        verification_emojis: None,
-                        title: String::new(), // UI substitutes channel name.
-                        peer: None,
-                    })
-                }
+                let setup = self
+                    .start_group_call(channel_id, call_type, user_id)
+                    .await?;
+                Ok(OutgoingCallStart {
+                    call_id: setup.call_id.to_string(),
+                    channel_id: channel_id.to_string(),
+                    is_video,
+                    is_anonymous: false,
+                    // A group call has no SAS (as in Signal): no key is
+                    // shared by everyone who could compare one.
+                    verification_emojis: None,
+                    title: String::new(), // UI substitutes channel name.
+                    peer: None,
+                })
             }
         }
     }
@@ -2119,7 +2099,7 @@ impl ChatterClient {
             None => return Ok(()), // No active call
         };
 
-        // Only rotate for channel-based group calls (not anon, not DM).
+        // Only rotate for channel-based group calls (not anon, not Saved Messages).
         // Anonymous calls have a random channel_id that won't resolve.
         let channel = match self.channels().get_channel_local(&call.channel_id) {
             Ok(Some(c)) => c,
@@ -2127,10 +2107,7 @@ impl ChatterClient {
         };
 
         use crate::domain::channel::ChannelType;
-        if matches!(
-            channel.channel_type,
-            ChannelType::DirectMessage | ChannelType::SavedMessages
-        ) {
+        if matches!(channel.channel_type, ChannelType::SavedMessages) {
             return Ok(());
         }
 

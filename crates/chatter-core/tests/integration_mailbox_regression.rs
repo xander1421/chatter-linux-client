@@ -301,7 +301,6 @@ async fn test_message_before_mailbox_exchange() {
             vec![],
             false,
             vec![],
-            Vec::new(),
         )
         .await;
 
@@ -889,7 +888,6 @@ async fn test_e2e_message_with_mailbox_exchange() {
                 vec![],
                 false,
                 vec![],
-                Vec::new(),
             )
             .await,
     );
@@ -913,7 +911,6 @@ async fn test_e2e_message_with_mailbox_exchange() {
                 vec![],
                 false,
                 vec![],
-                Vec::new(),
             )
             .await,
     );

@@ -1070,18 +1070,6 @@ impl ConversationHandle {
             _ => {
                 let content = prepared_content;
                 self.dispatch_content(content).await?;
-                // The server keeps an authorless copy of a sealed-sender
-                // message; take it down too, or a device fetching history
-                // gets it back. Best-effort: the E2E delete already went out.
-                if let Err(e) = self
-                    .client
-                    .messages()
-                    .delete_sealed_server_copy(&target)
-                    .await
-                {
-                    tracing::warn!(message_id = %target.id, error = %e,
-                        "delete-for-everyone: server copy of sealed message not deleted");
-                }
                 if target.conversation_type == ConversationType::ServerDm
                     && crate::storage::repositories::message_modifier_repo::canonical_call_record_id(&target).is_none()
                 {
@@ -1185,18 +1173,11 @@ impl ConversationHandle {
                     continue;
                 }
                 let (message, content) = self.prepare_delete_for_everyone(&author, timestamp)?;
-                let deletion_token = self
-                    .client
-                    .messages()
-                    .message_repo
-                    .deletion_token(&message.id)?
-                    .map(|t| t.to_vec())
-                    .unwrap_or_default();
                 prepared.push(PreparedDelete {
                     author,timestamp,message_id:message.id,conversation_id:message.conversation_id,
                     conversation_type:message.conversation_type.clone(),
                     call_id:crate::storage::repositories::message_modifier_repo::canonical_call_record_id(&message).map(|id|id.to_string()),
-                    deletion_token,control:content.encode_to_vec(),control_sent:false,local_completed:false,
+                    control:content.encode_to_vec(),control_sent:false,local_completed:false,
                 });
             }
             let batch = PreparedBatch {
@@ -1278,18 +1259,8 @@ impl ConversationHandle {
             let server_targets = batch
                 .targets
                 .iter()
-                .filter(|t| {
-                    matches!(self.conversation, ActiveConversation::Channel(_))
-                        || matches!(self.conversation, ActiveConversation::ServerDm { .. })
-                            && !t.deletion_token.is_empty()
-                })
-                .map(|t| {
-                    (
-                        t.message_id.to_string(),
-                        t.conversation_id.to_string(),
-                        t.deletion_token.clone(),
-                    )
-                })
+                .filter(|_| matches!(self.conversation, ActiveConversation::Channel(_)))
+                .map(|t| (t.message_id.to_string(), t.conversation_id.to_string()))
                 .collect::<Vec<_>>();
             if !server_targets.is_empty() {
                 self.client
@@ -1301,9 +1272,6 @@ impl ConversationHandle {
             }
             self.require_deletion_session(account, revision)?;
             batch.server_committed = true;
-            for target in &mut batch.targets {
-                target.deletion_token.clear();
-            }
             journal.progress(account, scope, batch)?;
         }
         for i in 0..batch.targets.len() {

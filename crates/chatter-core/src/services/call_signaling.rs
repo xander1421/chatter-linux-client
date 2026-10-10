@@ -634,20 +634,15 @@ impl CallSignalingService {
 
     /// Send a call hangup notification to the DM peer.
     ///
-    /// Looks up the peer from the DM channel automatically.
+    /// A DM call has no server channel: its local "channel_id" IS the peer's
+    /// user_id.
     pub async fn send_call_hangup(
         &self,
         channel_id: &ChannelId,
         call_id: &str,
         reason: CallHangupReason,
     ) -> Result<(), CallSignalingError> {
-        // For a channel/group DM there's a server DM channel to look the peer up
-        // in. For a private (anon-derived) DM call there is no server channel —
-        // the "channel_id" IS the peer's user_id — so fall back to that.
-        let peer_id = match self.channel_service.get_dm_peer_local(channel_id)? {
-            Some(p) => p,
-            None => UserId::from_uuid(*channel_id.as_uuid()),
-        };
+        let peer_id = UserId::from_uuid(*channel_id.as_uuid());
         self.send_call_hangup_to(&peer_id, call_id, reason).await
     }
 
@@ -2515,7 +2510,7 @@ mod named_dm_completion_tests {
 
     #[tokio::test]
     async fn dm_hangup_authentication_keeps_peer_binding_after_connect() {
-        use crate::services::call_worker::OrchestratedCallKind;
+        use crate::services::call_worker::{OrchestratedCallKind, SignalHangupDisposition};
         let (_dir, _client, worker, revision) = fixture();
         let worker = worker.for_presentation_session(revision);
         let peer = UserId::new();
@@ -2527,18 +2522,18 @@ mod named_dm_completion_tests {
             "Peer".into(),
             false,
         );
-        assert!(!worker.authenticate_dm_hangup("call", other, false).await);
-        assert!(!worker.authenticate_dm_hangup("unknown", peer, false).await);
-        assert!(worker.authenticate_dm_hangup("call", peer, false).await);
+        assert!(!matches!(worker.authenticate_signal_hangup("call", other, false).await, SignalHangupDisposition::Forward));
+        assert!(!matches!(worker.authenticate_signal_hangup("unknown", peer, false).await, SignalHangupDisposition::Forward));
+        assert!(matches!(worker.authenticate_signal_hangup("call", peer, false).await, SignalHangupDisposition::Forward));
         worker.orch_mark_connected(
             CallHandle::from("call"),
             OrchestratedCallKind::DmStandard,
             peer,
             false,
         );
-        assert!(worker.authenticate_dm_hangup("call", peer, false).await);
-        assert!(!worker.authenticate_dm_hangup("call", other, false).await);
-        assert!(!worker.authenticate_dm_hangup("call", peer, true).await);
+        assert!(matches!(worker.authenticate_signal_hangup("call", peer, false).await, SignalHangupDisposition::Forward));
+        assert!(!matches!(worker.authenticate_signal_hangup("call", other, false).await, SignalHangupDisposition::Forward));
+        assert!(!matches!(worker.authenticate_signal_hangup("call", peer, true).await, SignalHangupDisposition::Forward));
     }
 
     #[tokio::test]

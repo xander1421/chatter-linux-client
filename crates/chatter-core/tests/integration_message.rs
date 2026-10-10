@@ -92,7 +92,6 @@ async fn test_send_and_get_message() {
                 vec![],
                 false,
                 vec![],
-                Vec::new(),
             )
             .await,
     );
@@ -160,14 +159,13 @@ async fn test_delete_message() {
                 vec![],
                 false,
                 vec![],
-                Vec::new(),
             )
             .await,
     );
 
     // Delete it
     let result = msg_client
-        .delete_message(&message.id, &channel_id, Vec::new())
+        .delete_message(&message.id, &channel_id)
         .await;
     assert!(result.is_ok(), "Delete should succeed");
 
@@ -247,7 +245,6 @@ async fn test_message_search() {
                 vec![],
                 false,
                 vec![],
-                Vec::new(),
             )
             .await,
     );
@@ -309,7 +306,6 @@ async fn test_send_to_nonexistent_channel() {
             vec![],
             false,
             vec![],
-            Vec::new(),
         )
         .await;
 

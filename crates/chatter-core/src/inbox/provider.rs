@@ -761,7 +761,6 @@ impl DeviceInboxProvider {
                 &event_tx,
                 &settings_repo,
                 &message_repo,
-                &channel_repo,
                 &attachment_repo,
                 &user_repo,
                 domain_tx.as_ref(),

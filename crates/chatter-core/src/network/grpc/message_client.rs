@@ -30,7 +30,7 @@ use crate::proto::chat_v1::{
 /// pool.connect().await?;
 ///
 /// let mut client = MessageClient::new(pool.channel(), pool.auth_clone());
-/// let message = client.send_message("channel-123", content, None, false, None, vec![], false, vec![], Vec::new()).await?;
+/// let message = client.send_message("channel-123", content, None, false, None, vec![], false, vec![]).await?;
 /// ```
 pub struct MessageClient {
     inner: MessageServiceClient<InterceptedService<GrpcTransport, AuthInterceptor>>,
@@ -58,8 +58,6 @@ impl MessageClient {
     /// * `mentioned_integrations` - Integration IDs mentioned in message
     /// * `targets_ai_bot` - Whether message targets AI bot
     /// * `mentioned_file_ids` - File IDs mentioned in message
-    /// * `deletion_token_hash` - SHA-256 of this message's deletion token;
-    ///   required (32 bytes) for sealed-sender content, empty otherwise
     #[allow(clippy::too_many_arguments)]
     pub async fn send_message(
         &mut self,
@@ -71,7 +69,6 @@ impl MessageClient {
         mentioned_integrations: Vec<String>,
         targets_ai_bot: bool,
         mentioned_file_ids: Vec<String>,
-        deletion_token_hash: Vec<u8>,
     ) -> Result<Message, NetworkError> {
         let request = SendMessageRequest {
             channel_id: channel_id.to_string(),
@@ -83,14 +80,13 @@ impl MessageClient {
             mentioned_integrations,
             targets_ai_bot,
             mentioned_file_ids,
-            deletion_token_hash,
         };
 
         self.send_prepared_message(request).await
     }
 
     /// Submit a previously persisted channel request without changing its
-    /// request identity, ciphertext, timestamp, or deletion-token hash.
+    /// request identity, ciphertext or timestamp.
     pub async fn send_prepared_message(
         &mut self,
         request: SendMessageRequest,
@@ -135,19 +131,15 @@ impl MessageClient {
     ///
     /// * `message_id` - ID of message to delete
     /// * `channel_id` - Channel containing the message
-    /// * `deletion_token` - the sealed-sender message's deletion token (the
-    ///   preimage of the hash sent with it); empty for other messages
     pub async fn delete_message(
         &mut self,
         message_id: &str,
         channel_id: &str,
-        deletion_token: Vec<u8>,
     ) -> Result<(), NetworkError> {
         let request = DeleteMessageRequest {
             message_id: message_id.to_string(),
             channel_id: channel_id.to_string(),
             request_id: uuid::Uuid::new_v4().to_string(),
-            deletion_token,
         };
 
         self.inner
@@ -161,16 +153,15 @@ impl MessageClient {
     /// older servers return Unimplemented and leave the batch intact.
     pub async fn delete_messages(
         &mut self,
-        targets: Vec<(String, String, Vec<u8>)>,
+        targets: Vec<(String, String)>,
     ) -> Result<(), NetworkError> {
         let messages = targets
             .into_iter()
             .map(
-                |(message_id, channel_id, deletion_token)| DeleteMessageRequest {
+                |(message_id, channel_id)| DeleteMessageRequest {
                     message_id,
                     channel_id,
                     request_id: uuid::Uuid::new_v4().to_string(),
-                    deletion_token,
                 },
             )
             .collect();

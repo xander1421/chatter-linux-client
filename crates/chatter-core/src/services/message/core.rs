@@ -127,16 +127,15 @@ impl MessageService {
             )),
         };
 
-        // Get encryption settings from channel config
-        let (is_dm, require_encryption) = self
-            .get_channel_encryption_settings(channel_id, channel_client)
+        let require_encryption = self
+            .channel_requires_encryption(channel_id, channel_client)
             .await?;
 
         // Sender-key channel: every key decision reads the VERIFIED membership.
         // No verified state, a failed verification or a fork blocks the send
         // before anything is encrypted; otherwise the state stamps the
         // DataMessage for the receivers' fork / staleness cross-check.
-        let group_state = if require_encryption && !is_dm {
+        let group_state = if require_encryption {
             self.sync_channel_state_if_behind(channel_id);
             Some(self.group_gate().for_distribution(channel_id)?)
         } else {
@@ -210,18 +209,16 @@ impl MessageService {
 
         // Sender-key channel: members who lack our current key get it BEFORE
         // this message is encrypted, or they can never read it.
-        if require_encryption && !is_dm {
+        if require_encryption {
             self.distribute_sender_key_to_new_members(channel_id)
                 .await?;
         }
 
         let (content_to_send, skdm_opt) = self
             .prepare_encrypted_content(
-                auth_client,
                 channel_id,
                 &plaintext_bytes,
                 content,
-                is_dm,
                 require_encryption,
                 sent_at,
             )
@@ -251,10 +248,6 @@ impl MessageService {
             ),
             None => (false, None),
         };
-        // A sealed-sender row is stored with no author, so the server can only
-        // let us delete it later against a secret we hold: a fresh random
-        // token per message, of which the server keeps just the SHA-256.
-        let deletion_token = sealed_deletion_token(&content_to_send);
         crate::services::gateway::submission::mark_submission_started()?;
         let request = chat_v1::SendMessageRequest {
             channel_id: channel_id.to_string(),
@@ -269,14 +262,9 @@ impl MessageService {
                 .collect(),
             targets_ai_bot,
             mentioned_file_ids: attachment_ids.iter().map(ToString::to_string).collect(),
-            deletion_token_hash: deletion_token
-                .as_ref()
-                .map(deletion_token_hash)
-                .unwrap_or_default(),
         };
         let request = super::channel_send::retain_channel_request(
             request,
-            deletion_token.as_ref(),
             group_state.as_ref().map(|state| state.state_hash.to_vec()),
         )?;
         let proto_message = message_client.send_prepared_message(request).await?;
@@ -287,29 +275,6 @@ impl MessageService {
             message_id = %proto_message.id,
             "[SEND_MESSAGE] Server API success, message_id={}", proto_message.id
         );
-
-        // Signal-style multi-device self-sync for DMs: the channel send above
-        // delivers ONE ciphertext (encrypted for recipient's primary device).
-        // Every other device that needs to see this message — recipient's other
-        // devices + our own linked devices — gets its own sealed-sender copy
-        // addressed directly via pairwise endpoint.
-        if is_dm {
-            if let Err(e) = self
-                .fanout_dm_sync_copies(
-                    auth_client,
-                    message_client,
-                    channel_id,
-                    trimmed_text.as_bytes(),
-                )
-                .await
-            {
-                tracing::warn!(
-                    channel_id = %channel_id,
-                    error = %e,
-                    "DM multi-device sync fanout failed (primary delivery still succeeded)"
-                );
-            }
-        }
 
         // Server-managed channels: delivery happens via server → device inbox fanout
         // only. Pairwise group-mailbox fanout is reserved for anon groups (which go
@@ -330,10 +295,10 @@ impl MessageService {
             sender_id,
             conv_type,
             sent_at,
-            is_dm || require_encryption,
+            require_encryption,
         )?;
         message.attachments = attachment_ids;
-        if !(is_dm || require_encryption) && !super::channel_send::has_channel_queue() {
+        if !require_encryption && !super::channel_send::has_channel_queue() {
             crate::storage::repositories::message_receipt_repo::MessageReceiptRepository::new(
                 self.database.clone(),
             )
@@ -374,9 +339,6 @@ impl MessageService {
             "[SEND_MESSAGE] Storing message locally"
         );
         self.message_repo.insert_or_ignore(&message)?;
-        if let Some(token) = &deletion_token {
-            self.message_repo.set_deletion_token(&message.id, token)?;
-        }
         if let Some(stored) = self.message_repo.get(&message.id)? {
             message.delivery_status = stored.delivery_status;
         }
@@ -404,63 +366,6 @@ impl MessageService {
         }
 
         Ok(message)
-    }
-
-    /// Fan a DM message out to every device that needs a sync copy.
-    ///
-    /// Signal-style multi-device: the primary channel send addresses the
-    /// recipient's primary device only. This helper delivers the same
-    /// plaintext (sealed-sender encrypted per device) to:
-    ///
-    /// * every recipient device, primary included
-    /// * our own linked devices other than this one
-    ///
-    /// Through `deposit_sealed_to_all_devices`, the path 1:1 DMs and channel
-    /// control fanout share, so a device the server has retired gets its
-    /// session archived instead of being encrypted to on every send.
-    ///
-    /// Failures here do not abort the outer send — the primary device already
-    /// got the message via the channel path; sync is best-effort.
-    async fn fanout_dm_sync_copies(
-        &self,
-        auth_client: &mut AuthClient,
-        message_client: &mut MessageClient,
-        channel_id: &ChannelId,
-        plaintext: &[u8],
-    ) -> Result<(), MessageError> {
-        use crate::storage::repositories::settings_repo::keys;
-
-        let our_user_id = self
-            .settings_repo
-            .get_string(keys::CURRENT_USER_ID)
-            .map_err(MessageError::Storage)?
-            .ok_or(MessageError::NotLoggedIn)?;
-
-        // Find the DM peer (the other channel member).
-        let members = self
-            .channel_repo
-            .list_members(channel_id)
-            .unwrap_or_default();
-        let recipient_id = members
-            .iter()
-            .find(|m| m.user_id.to_string() != our_user_id)
-            .map(|m| m.user_id.to_string());
-
-        // Recipient fanout: EVERY device, including primary. The channel
-        // SendMessage stores the sealed copy server-side (history) but delivers
-        // it only over the ServerDm stream, which can't decrypt sealed sender —
-        // so live delivery for the recipient's primary device must go through
-        // the device-inbox path here (the gateway decrypts + stores locally).
-        if let Some(rid) = recipient_id {
-            self.deposit_sealed_to_all_devices(auth_client, message_client, &rid, plaintext)
-                .await;
-        }
-
-        // Self fanout: every own device EXCEPT this one.
-        self.deposit_sealed_to_all_devices(auth_client, message_client, &our_user_id, plaintext)
-            .await;
-
-        Ok(())
     }
 
     /// Send a message to a channel (simplified API - no client params).
@@ -1067,7 +972,6 @@ impl MessageService {
                 Vec::new(),    // mentioned_integrations (not typically used with ephemeral)
                 false,         // targets_ai_bot
                 attachment_ids.iter().map(|id| id.to_string()).collect(),
-                Vec::new(),
             )
             .await?;
 
@@ -1185,16 +1089,10 @@ impl MessageService {
             }
         }
 
-        // Call server. A sealed-sender row names no author; the token we kept
-        // at send time is what authorizes deleting it.
-        let deletion_token = self.message_repo.deletion_token(message_id)?;
+        // Call server: SpiceDB authorizes us as the message's author.
         let mut message_client = self.message_client();
         message_client
-            .delete_message(
-                &message_id.to_string(),
-                &channel_id.to_string(),
-                deletion_token.map(|t| t.to_vec()).unwrap_or_default(),
-            )
+            .delete_message(&message_id.to_string(), &channel_id.to_string())
             .await?;
 
         // Soft delete locally - keep for history/sync
@@ -1235,83 +1133,10 @@ impl MessageService {
             {
                 return Err(MessageError::NotAuthor);
             }
-            let token = self.message_repo.deletion_token(id)?;
-            targets.push((
-                id.to_string(),
-                channel_id.to_string(),
-                token.map(|t| t.to_vec()).unwrap_or_default(),
-            ));
+            targets.push((id.to_string(), channel_id.to_string()));
         }
         self.message_client().delete_messages(targets).await?;
         self.message_repo.soft_delete_batch(message_ids)?;
-        Ok(())
-    }
-
-    /// Server-only batch phase for channels; caller retains local retry data
-    /// until all E2E controls have been queued successfully.
-    pub async fn delete_channel_server_copies(
-        &self,
-        messages: &[Message],
-    ) -> Result<(), MessageError> {
-        if messages.is_empty() {
-            return Ok(());
-        }
-        let mut targets = Vec::with_capacity(messages.len());
-        for message in messages {
-            let token = self.message_repo.deletion_token(&message.id)?;
-            targets.push((
-                message.id.to_string(),
-                message.conversation_id.to_string(),
-                token.map(|t| t.to_vec()).unwrap_or_default(),
-            ));
-        }
-        self.message_client().delete_messages(targets).await?;
-        Ok(())
-    }
-
-    /// Remove all owned sealed-sender server copies in one atomic request.
-    /// Messages without a local authorship token have no deletable server copy.
-    /// This does not atomically deliver E2E peer controls: callers must report
-    /// peer fanout failures separately and must not erase local retry data first.
-    pub async fn delete_sealed_server_copies(
-        &self,
-        messages: &[Message],
-    ) -> Result<(), MessageError> {
-        let mut seen = std::collections::HashSet::new();
-        let mut targets = Vec::new();
-        for message in messages {
-            if !seen.insert(message.id) {
-                continue;
-            }
-            if let Some(token) = self.message_repo.deletion_token(&message.id)? {
-                targets.push((
-                    message.id.to_string(),
-                    message.conversation_id.to_string(),
-                    token.to_vec(),
-                ));
-            }
-        }
-        if !targets.is_empty() {
-            self.message_client().delete_messages(targets).await?;
-        }
-        Ok(())
-    }
-
-    /// Delete-for-everyone, server half: remove the server's copy of a
-    /// sealed-sender message we sent by presenting the deletion token kept at
-    /// send time. A message without a token (not sent by us as sealed sender)
-    /// has no server copy we can prove we own, so this is a no-op for it.
-    pub async fn delete_sealed_server_copy(&self, message: &Message) -> Result<(), MessageError> {
-        let Some(token) = self.message_repo.deletion_token(&message.id)? else {
-            return Ok(());
-        };
-        self.message_client()
-            .delete_message(
-                &message.id.to_string(),
-                &message.conversation_id.to_string(),
-                token.to_vec(),
-            )
-            .await?;
         Ok(())
     }
 
@@ -1445,11 +1270,9 @@ impl MessageService {
     /// Helper to encrypt content based on channel type.
     pub(crate) async fn prepare_encrypted_content(
         &self,
-        auth_client: &mut AuthClient,
         channel_id: &ChannelId,
         plaintext: &[u8],
         original_content: chat_v1::message::Content,
-        is_dm: bool,
         require_encryption: bool,
         sent_at: u64,
     ) -> Result<
@@ -1459,78 +1282,6 @@ impl MessageService {
         ),
         MessageError,
     > {
-        // DM: Use sealed sender (pairwise encryption)
-        // Multi-device: encrypt for ALL recipient devices, send primary ciphertext
-        // Server handles device routing via channel subscription
-        if is_dm {
-            // Resolve the peer from channel membership. A ServerDm channel_id is
-            // a deterministic v5 UUID, NOT the peer's user_id — encrypting to the
-            // channel_id fetches a prekey bundle for a non-user and fails. The
-            // recipient is the sole member that isn't us.
-            let our_user_id = self.settings_repo.current_user_id()?;
-            let recipient_id = self
-                .channel_repo
-                .list_members(channel_id)
-                .unwrap_or_default()
-                .into_iter()
-                .map(|m| m.user_id)
-                .find(|uid| *uid != our_user_id);
-            if let Some(recipient_id) = recipient_id {
-                crate::services::gateway::submission::mark_submission_started()?;
-                // Encrypt for ALL recipient devices (Signal multi-device)
-                match self
-                    .signal_service
-                    .encrypt_message_all_devices(auth_client, &recipient_id.to_string(), plaintext)
-                    .await
-                {
-                    Ok(device_ciphertexts) => {
-                        // For channel DMs, server handles device addressing
-                        // Use primary device (1) ciphertext, fallback to first available
-                        let primary_ciphertext = device_ciphertexts
-                            .get(&1)
-                            .or_else(|| device_ciphertexts.values().next())
-                            .cloned();
-
-                        if let Some(ciphertext) = primary_ciphertext {
-                            tracing::debug!(
-                                recipient = %recipient_id,
-                                device_count = device_ciphertexts.len(),
-                                "Channel DM encrypted for devices"
-                            );
-
-                            let encrypted_content = chat_v1::message::Content {
-                                r#type: Some(chat_v1::message::content::Type::SealedSender(
-                                    chat_v1::SealedSenderMessage {
-                                        sealed_body: ciphertext,
-                                        server_key_id: self.signal_service.get_server_key_id(),
-                                        timestamp:
-                                            crate::util::time::TimestampNanos::now_anonymized()
-                                                .as_u64(),
-                                    },
-                                )),
-                            };
-                            return Ok((encrypted_content, None));
-                        }
-                        // Fail closed: never downgrade a DM to cleartext.
-                        return Err(MessageError::EncryptionFailed(
-                            "DM encryption produced no ciphertexts".into(),
-                        ));
-                    }
-                    Err(e) => {
-                        return Err(MessageError::EncryptionFailed(format!(
-                            "DM encryption failed: {}",
-                            e
-                        )));
-                    }
-                }
-            }
-            // No peer membership synced for this DM — fail closed rather than
-            // encrypt to the wrong identity.
-            return Err(MessageError::EncryptionFailed(
-                "DM recipient could not be resolved for encryption".into(),
-            ));
-        }
-
         // Encrypted channel: Use sender keys (group encryption)
         if require_encryption {
             // A locally blocked rotation is definite preparation refusal.
@@ -1582,7 +1333,7 @@ impl MessageService {
             }
         }
 
-        // FAIL CLOSED (F14a): we are about to ship PLAINTEXT on a non-DM,
+        // FAIL CLOSED (F14a): we are about to ship PLAINTEXT on a
         // non-encrypted channel. That is only legitimate for an explicitly
         // PUBLIC channel (world-readable by design). A PRIVATE/group channel
         // must never leave the client in cleartext — if one reached here with
@@ -1612,76 +1363,10 @@ impl MessageService {
     }
 }
 
-/// A fresh deletion token when `content` goes out as sealed sender, else None.
-fn sealed_deletion_token(content: &chat_v1::message::Content) -> Option<[u8; 32]> {
-    use rand::TryRngCore;
-    matches!(
-        content.r#type,
-        Some(chat_v1::message::content::Type::SealedSender(_))
-    )
-    .then(|| {
-        let mut token = [0u8; 32];
-        rand::rngs::OsRng
-            .try_fill_bytes(&mut token)
-            .expect("OS RNG unavailable");
-        token
-    })
-}
-
-/// What the server stores for a deletion token: SHA-256 of it.
-fn deletion_token_hash(token: &[u8; 32]) -> Vec<u8> {
-    use sha2::{Digest, Sha256};
-    Sha256::digest(token).to_vec()
-}
-
 // Re-export proto conversion functions from conversion module
 pub use super::conversion::{
     proto_content_to_domain, proto_to_domain_message, proto_to_domain_message_with_sender,
 };
-
-#[cfg(test)]
-mod deletion_token_tests {
-    use super::{chat_v1, deletion_token_hash, sealed_deletion_token};
-    use sha2::{Digest, Sha256};
-
-    fn content(t: chat_v1::message::content::Type) -> chat_v1::message::Content {
-        chat_v1::message::Content { r#type: Some(t) }
-    }
-
-    #[test]
-    fn only_sealed_sender_gets_a_token_and_each_is_fresh() {
-        let sealed = content(chat_v1::message::content::Type::SealedSender(
-            chat_v1::SealedSenderMessage::default(),
-        ));
-        let a = sealed_deletion_token(&sealed).expect("sealed sender carries a token");
-        let b = sealed_deletion_token(&sealed).expect("sealed sender carries a token");
-        assert_ne!(a, b, "a token per message, never reused");
-        assert_ne!(a, [0u8; 32]);
-        assert!(
-            sealed_deletion_token(&content(chat_v1::message::content::Type::Text("hi".into())))
-                .is_none()
-        );
-        assert!(
-            sealed_deletion_token(&content(chat_v1::message::content::Type::Encrypted(
-                chat_v1::EncryptedData::default(),
-            )))
-            .is_none()
-        );
-    }
-
-    #[test]
-    fn server_gets_sha256_of_the_token() {
-        let token = [7u8; 32];
-        let h = deletion_token_hash(&token);
-        assert_eq!(h, Sha256::digest(token).to_vec());
-        assert_eq!(h.len(), 32);
-        assert_ne!(
-            h,
-            token.to_vec(),
-            "the token itself never leaves at send time"
-        );
-    }
-}
 
 #[cfg(test)]
 mod send_failure_tests {

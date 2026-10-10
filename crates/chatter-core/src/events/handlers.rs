@@ -1094,7 +1094,7 @@ impl std::fmt::Debug for EventHandlers {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::domain::ids::{ChannelId, MessageId, UserId};
+    use crate::domain::ids::{ChannelId, UserId};
     use crate::domain::message::{ConversationType, Message, MessageContent};
 
     fn create_handlers() -> EventHandlers {

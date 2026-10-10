@@ -15,7 +15,9 @@
 
 use crate::domain::attachment::Attachment;
 use crate::domain::ids::{AttachmentId, ChannelId, MessageId, UserId};
-use crate::domain::message::{ConversationType, Message, MessageContent, MixedContent};
+use crate::domain::message::{ConversationType, Message};
+#[cfg(test)]
+use crate::domain::message::{MessageContent, MixedContent};
 use crate::domain::reaction::ReactionScope;
 use crate::network::grpc::message_client::MessageClient;
 use crate::proto::content_v1::{
@@ -1041,7 +1043,7 @@ mod tests {
             .unwrap();
         let scope = ReactionScope::new(ChannelId::from(own), ConversationType::SavedMessages);
         let sent_at = 5_000;
-        let saved = Message::new_text(scope.id, scope.kind, Some(own), "saved".into(), sent_at);
+        let saved = Message::new_text(scope.id, scope.kind.clone(), Some(own), "saved".into(), sent_at);
         let twin = Message::new_text(
             scope.id,
             ConversationType::Channel,

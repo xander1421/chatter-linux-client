@@ -277,7 +277,6 @@ async fn test_send_message_to_group() {
                 vec![],
                 false,
                 vec![],
-                Vec::new(),
             )
             .await,
     );
@@ -329,7 +328,6 @@ async fn test_group_message_thread() {
                 vec![],
                 false,
                 vec![],
-                Vec::new(),
             )
             .await,
     );
@@ -350,7 +348,6 @@ async fn test_group_message_thread() {
                 vec![],
                 false,
                 vec![],
-                Vec::new(),
             )
             .await,
     );
@@ -622,7 +619,6 @@ async fn test_group_message_pagination() {
                 vec![],
                 false,
                 vec![],
-                Vec::new(),
             )
             .await;
     }
@@ -730,7 +726,6 @@ async fn test_non_member_cannot_send_to_private_group() {
             vec![],
             false,
             vec![],
-            Vec::new(),
         )
         .await;
 

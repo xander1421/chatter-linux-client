@@ -31,7 +31,6 @@ use crate::domain::{
 use crate::error::{NetworkError, StorageError};
 use crate::proto::chat_v1::{SealedDelivery, SealedDeviceMessage, SendSealedMessageRequest};
 use crate::proto::content_v1::Content;
-use crate::services::current_user::CurrentUserProvider;
 use crate::storage::database::Database;
 use prost::Message as _;
 use rusqlite::{OptionalExtension, params};
@@ -614,13 +613,15 @@ pub(crate) fn spawn_dm_send_recovery(
                     .unwrap_or("Not delivered")
                     .to_owned();
                 match messages.settle_sealed_dm(id, generation, &Err(error), true) {
-                    Ok(true) => client.event_bus().emit_domain(
-                        crate::events::DomainEvent::MessageSendFailed {
-                            channel_id: conversation,
-                            error: reason,
-                            message_timestamps: vec![sent_at],
-                        },
-                    ),
+                    Ok(true) => {
+                        client.event_bus().emit_domain(
+                            crate::events::DomainEvent::MessageSendFailed {
+                                channel_id: conversation,
+                                error: reason,
+                                message_timestamps: vec![sent_at],
+                            },
+                        );
+                    }
                     Ok(false) => {}
                     Err(error) => tracing::warn!(%error, "Sealed DM failure not recorded"),
                 }
@@ -663,12 +664,14 @@ pub(crate) fn spawn_dm_send_recovery(
                 let final_failure = matches!(&result, Err(e) if !transient(e));
                 match result {
                     Ok(()) => match messages.settle_sealed_dm(&id, &generation, &Ok(()), false) {
-                        Ok(true) => client.event_bus().emit_domain(
-                            crate::events::DomainEvent::DmBootstrapCompleted {
-                                peer_id: UserId::from_uuid(*conversation.as_uuid()),
-                                sent_timestamps: vec![sent_at],
-                            },
-                        ),
+                        Ok(true) => {
+                            client.event_bus().emit_domain(
+                                crate::events::DomainEvent::DmBootstrapCompleted {
+                                    peer_id: UserId::from_uuid(*conversation.as_uuid()),
+                                    sent_timestamps: vec![sent_at],
+                                },
+                            );
+                        }
                         Ok(false) => {}
                         Err(error) => {
                             tracing::warn!(%error, "Sealed DM confirmation not recorded; it will replay")
@@ -807,7 +810,7 @@ mod tests {
             .unwrap();
         attempt("g2", peer.to_string(), "guid").await.unwrap();
         assert_eq!(sealed_at(), Some(5));
-        assert_eq!(request.messages, vec![envelope]);
+        assert_eq!(request.messages, vec![envelope.clone()]);
         assert!(owns(&db, &me.to_string(), &row.id.to_string()).unwrap());
         assert!(!owns(&db, &peer.to_string(), &row.id.to_string()).unwrap());
         db.connection()

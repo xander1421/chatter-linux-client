@@ -215,8 +215,8 @@ fn path_bit(key: &[u8; 32], level: usize) -> u8 {
 /// Port of `crypto.VerifyInclusion` (merkle.go).
 ///
 /// CRYPTO-1: the side each sibling is folded in on is derived from `key` and
-/// NOTHING ELSE. The wire `InclusionProof.bits` field is deliberately not a
-/// parameter: it is a function of the key, so a server that gets to state it can
+/// NOTHING ELSE. The path bits are deliberately not a parameter (the wire no
+/// longer carries them): they are a function of the key, so a server that got to state them could
 /// place a leaf at a position the key does not determine — and then commit two
 /// leaves for one VRF index at two positions in one tree, serving different
 /// identity keys to different clients under one validly signed root. Signal's
@@ -451,7 +451,6 @@ pub fn verify_proof(
         .as_slice()
         .try_into()
         .map_err(|_| KtError::Malformed("prefix_root is not 32 bytes"))?;
-    // `proof.bits` is ignored on purpose: see recompute_root.
     let recomputed = recompute_root(proof_key, &proof.value, &proof.sibling_hashes)
         .ok_or(KtError::InclusionInvalid)?;
     if &recomputed != prefix_root {

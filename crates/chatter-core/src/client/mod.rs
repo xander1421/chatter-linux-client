@@ -1382,14 +1382,6 @@ impl ChatterClient {
         self.anon_dms().get_conversation(id).ok().flatten()
     }
 
-    /// Resolve the peer user id of a regular DM channel (2-member channel).
-    pub fn get_dm_peer_local(
-        &self,
-        channel_id: &crate::domain::ids::ChannelId,
-    ) -> Option<crate::domain::ids::UserId> {
-        self.channels().get_dm_peer_local(channel_id).ok().flatten()
-    }
-
     // ── Local AI settings façade ─────────────────────────────────────────
 
     pub fn set_local_ai_enabled(
@@ -1883,19 +1875,14 @@ impl ChatterClient {
         channels
     }
 
-    /// The channel to select on load: first non-DM, non-SavedMessages channel
-    /// in MRU order.
+    /// The channel to select on load: first non-SavedMessages channel in MRU
+    /// order.
     pub fn first_selectable_channel_id(&self) -> Option<crate::domain::ids::ChannelId> {
         use crate::domain::channel::ChannelType;
         self.get_channels_mru()
             .iter()
             .filter(|c| !c.id.0.is_nil()) // never auto-select the local AI channel
-            .find(|c| {
-                !matches!(
-                    c.channel_type,
-                    ChannelType::DirectMessage | ChannelType::SavedMessages
-                )
-            })
+            .find(|c| !matches!(c.channel_type, ChannelType::SavedMessages))
             .map(|c| c.id)
     }
 
@@ -3611,10 +3598,10 @@ impl ChatterClient {
                 .map(|m| self.refresh_profile_if_stale(&m.user_id)),
         )
         .await;
-        // Our own role, for what we may do to each row. DMs and Saved
-        // Messages have no moderation (the server refuses it).
+        // Our own role, for what we may do to each row. Saved Messages has
+        // no moderation (the server refuses it).
         let actor = self.get_channel_local(channel_id).and_then(|c| {
-            if c.is_dm() || matches!(c.channel_type, crate::domain::ChannelType::SavedMessages) {
+            if matches!(c.channel_type, crate::domain::ChannelType::SavedMessages) {
                 return None;
             }
             let me = me.as_ref()?;

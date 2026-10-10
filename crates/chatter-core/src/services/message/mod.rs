@@ -58,8 +58,6 @@ use crate::storage::repositories::settings_repo::SettingsRepository;
 use crate::storage::repositories::user_repo::UserRepository;
 use crate::storage::repositories::{MessageRepository, PendingDmRepository};
 
-use crate::domain::channel::ChannelType;
-
 /// Message service errors.
 #[derive(Debug, thiserror::Error)]
 pub enum MessageError {
@@ -1104,32 +1102,7 @@ impl MessageService {
         target_author: Option<&str>,
         target_sent_at: u64,
     ) -> Result<Option<Message>, MessageError> {
-        let target = self.targeted_dm_delete_target(peer, target_author, target_sent_at)?;
-        let token = target
-            .as_ref()
-            .map(|message| self.message_repo.deletion_token(&message.id))
-            .transpose()?
-            .flatten();
-        let deleted = self.apply_targeted_dm_delete(peer, target_author, target_sent_at)?;
-        if let (Some(message), Some(token)) = (&deleted, token) {
-            if target
-                .as_ref()
-                .is_some_and(|target| target.id == message.id)
-            {
-                let mut remote = self.message_client();
-                let (message_id, conversation_id) =
-                    (message.id.to_string(), message.conversation_id.to_string());
-                tokio::spawn(async move {
-                    if let Err(error) = remote
-                        .delete_message(&message_id, &conversation_id, token.to_vec())
-                        .await
-                    {
-                        tracing::warn!(message_id = %message_id, error = %error, "Peer DM deletion: server copy cleanup failed");
-                    }
-                });
-            }
-        }
-        Ok(deleted)
+        self.apply_targeted_dm_delete(peer, target_author, target_sent_at)
     }
 
     fn admitted_dm_delete_author(
@@ -1919,20 +1892,17 @@ impl MessageService {
             .map_err(MessageError::from)
     }
 
-    /// Get encryption settings for a channel.
+    /// Whether a channel requires end-to-end encryption.
     ///
     /// Looks up channel locally first, fetches from server if not found.
-    /// Returns (is_dm, require_encryption) tuple.
-    pub(crate) async fn get_channel_encryption_settings(
+    pub(crate) async fn channel_requires_encryption(
         &self,
         channel_id: &ChannelId,
         channel_client: &mut ChannelClient,
-    ) -> Result<(bool, bool), MessageError> {
+    ) -> Result<bool, MessageError> {
         // Try local lookup first
         if let Ok(Some(channel)) = self.channel_repo.get(channel_id) {
-            let is_dm = channel.channel_type == ChannelType::DirectMessage;
-            let require_encryption = channel.config.require_encryption;
-            return Ok((is_dm, require_encryption));
+            return Ok(channel.config.require_encryption);
         }
 
         // Not found locally - fetch from server
@@ -1942,15 +1912,7 @@ impl MessageService {
         );
 
         let proto_channel = channel_client.get_channel(&channel_id.to_string()).await?;
-
-        // Server channels are never DMs anymore (DMs are channel-free,
-        // Signal-style — the DIRECT_MESSAGE channel type no longer exists
-        // on the wire). A server-fetched channel row is always a real
-        // group/public/saved-messages channel.
-        let is_dm = false;
-        let require_encryption = proto_channel.config.map(|c| c.encrypted).unwrap_or(false);
-
-        Ok((is_dm, require_encryption))
+        Ok(proto_channel.config.map(|c| c.encrypted).unwrap_or(false))
     }
 }
 
@@ -2011,7 +1973,9 @@ enum InboundTarget {
 #[cfg(test)]
 mod inbound_target_tests {
     use super::*;
-    use crate::domain::channel::{Channel, MemberRole, Membership, NotificationPreference};
+    use crate::domain::channel::{
+        Channel, ChannelType, MemberRole, Membership, NotificationPreference,
+    };
     use crate::storage::repositories::settings_repo::keys;
 
     struct Fixture {
@@ -2117,9 +2081,6 @@ mod inbound_target_tests {
                     ts,
                 );
                 svc.message_repo.insert(&msg).unwrap();
-                svc.message_repo
-                    .set_deletion_token(&msg.id, &[9; 32])
-                    .unwrap();
                 msg
             } else {
                 svc.get_by_sender_timestamp(&author, ts).unwrap().unwrap()

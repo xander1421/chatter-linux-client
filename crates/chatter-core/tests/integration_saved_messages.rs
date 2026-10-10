@@ -219,7 +219,6 @@ async fn test_send_message_to_saved_messages() {
             vec![],
             false,
             vec![],
-            Vec::new(),
         )
         .await;
 
@@ -301,7 +300,6 @@ async fn test_retrieve_saved_messages() {
                 vec![],
                 false,
                 vec![],
-                Vec::new(),
             )
             .await;
     }
@@ -376,7 +374,6 @@ async fn test_saved_message_with_text_only() {
             vec![],
             false,
             vec![],
-            Vec::new(),
         )
         .await;
 
@@ -432,7 +429,6 @@ async fn test_saved_messages_pagination() {
                 vec![],
                 false,
                 vec![],
-                Vec::new(),
             )
             .await
         {
@@ -519,7 +515,6 @@ async fn test_saved_messages_not_visible_to_others() {
                 vec![],
                 false,
                 vec![],
-                Vec::new(),
             )
             .await;
     }
@@ -651,7 +646,6 @@ async fn test_saved_messages_from_single_device() {
             vec![],
             false,
             vec![],
-            Vec::new(),
         )
         .await;
 

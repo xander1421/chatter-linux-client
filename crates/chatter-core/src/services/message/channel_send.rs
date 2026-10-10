@@ -8,7 +8,7 @@ use crate::domain::{
 };
 use crate::error::{NetworkError, StorageError};
 use crate::proto::chat_v1::SendMessageRequest;
-use crate::services::{current_user::CurrentUserProvider, gateway::QuoteIntent};
+use crate::services::gateway::QuoteIntent;
 use crate::storage::database::Database;
 use crate::storage::repositories::settings_repo::keys;
 use prost::Message as _;
@@ -25,27 +25,18 @@ const MAX_PENDING: i64 = 64;
 const LIVE: &str = "('queued','preparing','submitted','accepted','deleting')";
 /// The retained (`unresolved`) shape of a journal whose bubble the user
 /// deleted: the plaintext entry and lease fields go, while the exact request,
-/// token, response, canonical id, intent and sending device stay (the device
+/// response, canonical id, intent and sending device stay (the device
 /// is part of the request key, `settle_cancelled_deposit`). `?2` is now.
 const RETAIN: &str = "json_set(json_remove(value,'$.entry','$.generation','$.attempts','$.next_at'),'$.phase','unresolved','$.row_id',COALESCE(json_extract(value,'$.row_id'),json_extract(value,'$.entry.row.id')),'$.channel_id',COALESCE(json_extract(value,'$.channel_id'),json_extract(value,'$.entry.row.conversation_id')),'$.device',COALESCE(json_extract(value,'$.device'),json_extract(value,'$.entry.device')),'$.retained_at',COALESCE(json_extract(value,'$.retained_at'),?2))";
 /// After the server forgets a client_request_id (`SendRequestRetention`, 7d,
 /// server `types.go:21`; one day of clock margin here) retained request bytes
-/// can resolve nothing. Only they are dropped; token and identities stay.
+/// can resolve nothing. Only they are dropped; identities stay.
 const REQUEST_WINDOW: i64 = 8 * 24 * 60 * 60;
-/// Longest replay of a prepared (unsealed) request after `prepared.at`.
+/// Longest replay of a prepared request after `prepared.at`.
 const REPLAY_HORIZON: i64 = 23 * 60 * 60;
-/// A prepared request may be replayed only below sealed-sender freshness.
-/// A sealed (deletion-token) request embeds our sender certificate, which
-/// has only 12 h left when used: it gets the sealed DM outbox's window.
 fn replayable(prepared: &Prepared) -> bool {
     // Tolerate a small backward clock step instead of expiring at once.
-    let age = now() - prepared.at;
-    let horizon = if prepared.deletion_token.is_some() {
-        super::dm_outbox::REPLAY_WINDOW_SECONDS
-    } else {
-        REPLAY_HORIZON
-    };
-    (-300..horizon).contains(&age)
+    (-300..REPLAY_HORIZON).contains(&(now() - prepared.at))
 }
 
 /// The server's SendMessage idempotency key for this account, device,
@@ -71,8 +62,7 @@ fn send_request_key(owner: UserId, device: u32, channel: ChannelId, request: &st
 /// removed, so every later fetch drops it as an ordinary tombstone. Nothing
 /// else is held off. Delete-for-me stays local; only a journal carrying the
 /// explicit delete-for-everyone intent (`remote_delete`) goes on to
-/// `deleting`, where the recovery worker removes the server copy with the
-/// retained token.
+/// `deleting`, where the recovery worker removes the server copy.
 pub(crate) fn settle_cancelled_deposit(
     db: &Database,
     owner: UserId,
@@ -80,7 +70,7 @@ pub(crate) fn settle_cancelled_deposit(
     post: &crate::proto::chat_v1::Message,
 ) -> Result<bool, StorageError> {
     if post.send_request_key.len() != 32
-        || !(post.author_id.is_empty() || post.author_id.parse::<UserId>().ok() == Some(owner))
+        || post.author_id.parse::<UserId>().ok() != Some(owner)
     {
         return Ok(false);
     }
@@ -115,8 +105,8 @@ pub(crate) fn settle_cancelled_deposit(
 }
 
 /// What removing a send's server copy needs once its plaintext entry may be
-/// gone (`RETAIN`): the channel and the sending device. The canonical id and
-/// the deletion token stay on the journal itself.
+/// gone (`RETAIN`): the channel and the sending device. The canonical id
+/// stays on the journal itself.
 struct Target {
     channel: ChannelId,
     device: u32,
@@ -141,7 +131,6 @@ struct Entry {
 #[derive(Serialize, Deserialize)]
 struct Prepared {
     request: Vec<u8>,
-    deletion_token: Option<[u8; 32]>,
     state_hash: Option<Vec<u8>>,
     at: i64,
 }
@@ -165,8 +154,7 @@ fn invalid(text: &str) -> StorageError {
 /// Settle a journal whose bubble was deleted. Delete-for-me and expiry stay
 /// local. Only an explicit delete-for-everyone (`remote_delete`) on a known
 /// canonical id goes on to `deleting`. Nothing is replayed to learn an
-/// unknown id: an uncertain deposit keeps its exact request, token and
-/// intent. A known canonical id is suppressed so catch-up cannot restore it.
+/// unknown id: an uncertain deposit keeps its exact request and intent. A known canonical id is suppressed so catch-up cannot restore it.
 /// Returns true when server deletion is due.
 fn retire_deleted(conn: &rusqlite::Connection, key: &str) -> Result<bool, StorageError> {
     conn.execute("INSERT OR IGNORE INTO deleted_messages(id) SELECT json_extract(value,'$.server_id') FROM settings WHERE key=?1 AND json_extract(value,'$.server_id') IS NOT NULL",params![key])?;
@@ -208,12 +196,11 @@ fn settle_admission(
 /// suspended preparer cannot deposit after recovery claimed its generation.
 pub(super) fn retain_channel_request(
     mut request: SendMessageRequest,
-    token: Option<&[u8; 32]>,
     state_hash: Option<Vec<u8>>,
 ) -> Result<SendMessageRequest, StorageError> {
     CHANNEL_DEPOSIT.try_with(|deposit| {
         request.client_request_id = deposit.id.to_string();
-        let prepared = Prepared {request:request.encode_to_vec(),deletion_token:token.copied(),state_hash,at:now()};
+        let prepared = Prepared {request:request.encode_to_vec(),state_hash,at:now()};
         let raw = serde_json::to_string(&prepared).map_err(|_|invalid("Cannot retain channel request"))?;
         let conn = deposit.db.connection()?;
         let changed = conn.execute("UPDATE settings SET value=json_set(value,'$.phase','submitted','$.prepared',json(?3)) WHERE key=?1 AND json_extract(value,'$.generation')=?2 AND json_extract(value,'$.phase')='preparing' AND EXISTS(SELECT 1 FROM messages WHERE id=json_extract(settings.value,'$.entry.row.id') AND is_deleted=0) AND NOT EXISTS(SELECT 1 FROM deleted_messages WHERE id=json_extract(settings.value,'$.entry.row.id'))", params![deposit.key, deposit.generation,raw])?;
@@ -481,8 +468,7 @@ impl MessageService {
         entry: &Entry,
         prepared: &Prepared,
     ) -> Result<Message, MessageError> {
-        // Stop comfortably before sealed envelope freshness (24h) and server
-        // dedupe retention (7d). Never manufacture a fresh request after expiry.
+        // Stop comfortably before server dedupe retention (7d). Never manufacture a fresh request after expiry.
         if !replayable(prepared) {
             return Err(MessageError::InvalidContent(
                 "Queued channel request expired".into(),
@@ -714,9 +700,6 @@ impl MessageService {
                 if let Some(raw) = prepared {
                     let prepared: Prepared = serde_json::from_str(&raw)
                         .map_err(|_| invalid("Invalid accepted channel request"))?;
-                    if let Some(token) = prepared.deletion_token.as_ref() {
-                        self.message_repo.set_deletion_token(&sent.id, token)?;
-                    }
                     let request = SendMessageRequest::decode(prepared.request.as_slice())
                         .map_err(|_| invalid("Invalid accepted channel request protobuf"))?;
                     if let Some(ttl) = request
@@ -735,8 +718,8 @@ impl MessageService {
                 }
                 // Confirm the exact generation, settle this send's own admission
                 // claims, mark the canonical row sent and remove the parked
-                // bubble atomically. The journal (ciphertext, token, response)
-                // is dropped: the token now lives on the canonical row. A
+                // bubble atomically. The journal (ciphertext, response) is
+                // dropped. A
                 // crash cannot strand admission after recovery succeeded, and
                 // a lost generation leaves everything to its new owner.
                 {
@@ -804,7 +787,7 @@ impl MessageService {
                     // Nothing ever reached the server: keep only the marker
                     // that refuses a fresh post on manual retry. A terminal
                     // journal holding a request or response may have been
-                    // deposited, so its token stays for a later deletion.
+                    // deposited, so it stays for a later deletion.
                     tx.execute("UPDATE settings SET value=json_object('phase','terminal','row_id',json_extract(value,'$.entry.row.id')) WHERE key=?1 AND json_extract(value,'$.phase')='terminal' AND json_extract(value,'$.prepared') IS NULL AND json_extract(value,'$.response') IS NULL",params![journal_key])?;
                     tx.commit()?;
                 }
@@ -819,10 +802,9 @@ impl MessageService {
     /// The user deleted this bubble for everyone and the canonical id is
     /// known, from the stored response (`retire_deleted`) or from the exact
     /// request key of the deposit (`settle_cancelled_deposit`). Remove the
-    /// server copy with the retained token; no plaintext entry is needed. The
-    /// journal, and with it the only deletion authority for a sealed post, is
-    /// dropped only after the server confirms the copy is gone. Anything else
-    /// keeps it retained.
+    /// server copy as its authenticated author; no plaintext entry is needed.
+    /// The journal is dropped only after the server confirms the copy is
+    /// gone. Anything else keeps it retained.
     async fn finish_channel_deletion(
         &self,
         journal_key: &str,
@@ -830,21 +812,17 @@ impl MessageService {
         owner: UserId,
         target: &Target,
     ) -> Result<(), MessageError> {
-        let held: Option<(Option<String>, String)> = self.database.read_connection()?.query_row(
-            "SELECT json_extract(value,'$.prepared'),json_extract(value,'$.server_id') FROM settings WHERE key=?1 AND json_extract(value,'$.generation')=?2 AND json_extract(value,'$.phase')='deleting' AND json_extract(value,'$.remote_delete') AND json_extract(value,'$.server_id') IS NOT NULL",
-            params![journal_key, generation], |r| Ok((r.get(0)?, r.get(1)?))).optional()?;
+        let held: Option<String> = self.database.read_connection()?.query_row(
+            "SELECT json_extract(value,'$.server_id') FROM settings WHERE key=?1 AND json_extract(value,'$.generation')=?2 AND json_extract(value,'$.phase')='deleting' AND json_extract(value,'$.remote_delete') AND json_extract(value,'$.server_id') IS NOT NULL",
+            params![journal_key, generation], |r| r.get(0)).optional()?;
         let retain = || -> Result<(), MessageError> {
             self.database.connection()?.execute(&format!("UPDATE settings SET value={RETAIN} WHERE key=?1 AND json_extract(value,'$.generation')=?3"),params![journal_key,now(),generation])?;
             Ok(())
         };
-        let Some((prepared, server_id)) = held else {
+        let Some(server_id) = held else {
             // No explicit intent or no canonical id: never replay to learn one.
             return retain();
         };
-        let prepared: Option<Prepared> = prepared
-            .map(|raw| serde_json::from_str(&raw))
-            .transpose()
-            .map_err(|_| invalid("Invalid prepared channel request"))?;
         let server_id: MessageId = server_id
             .parse()
             .map_err(|_| invalid("Invalid accepted message id"))?;
@@ -865,19 +843,14 @@ impl MessageService {
         if owner != self.current_user_id()?
             || self.settings_repo.get::<u32>(keys::CURRENT_DEVICE_ID)? != Some(target.device)
         {
-            tracing::warn!(message_id=%server_id, "Channel delete-for-everyone sender changed; token retained");
+            tracing::warn!(message_id=%server_id, "Channel delete-for-everyone sender changed; deletion retained");
             return retain();
         }
-        let token = prepared
-            .and_then(|p| p.deletion_token)
-            .map(|t| t.to_vec())
-            .unwrap_or_default();
         match tokio::time::timeout(
             std::time::Duration::from_secs(30),
             self.message_client().delete_message(
                 &server_id.to_string(),
                 &target.channel.to_string(),
-                token,
             ),
         )
         .await
@@ -896,7 +869,7 @@ impl MessageService {
                 Err(e.into())
             }
             Err(e) => {
-                tracing::warn!(error=%e, message_id=%server_id, "Server refused deleting a channel post; token retained");
+                tracing::warn!(error=%e, message_id=%server_id, "Server refused deleting a channel post; deletion retained");
                 retain()
             }
         }
@@ -967,7 +940,7 @@ pub(crate) fn spawn_channel_send_recovery(
                 let tx = conn.transaction()?;
                 let pattern = format!("{PREFIX}{owner}:%");
                 // A deleted refusal that never reached the server is forgotten;
-                // one holding a request or response is retired with its token.
+                // one holding a request or response is retired.
                 tx.execute("DELETE FROM settings WHERE key LIKE ?1 AND json_extract(value,'$.phase')='terminal' AND json_extract(value,'$.prepared') IS NULL AND json_extract(value,'$.response') IS NULL AND (EXISTS(SELECT 1 FROM deleted_messages WHERE id=COALESCE(json_extract(settings.value,'$.row_id'),json_extract(settings.value,'$.entry.row.id'))) OR EXISTS(SELECT 1 FROM messages WHERE id=COALESCE(json_extract(settings.value,'$.row_id'),json_extract(settings.value,'$.entry.row.id')) AND is_deleted=1))",params![pattern])?;
                 let refused: Vec<String> = {
                     let mut stmt = tx.prepare("SELECT key FROM settings WHERE key LIKE ?1 AND json_extract(value,'$.phase')='terminal' AND (json_extract(value,'$.prepared') IS NOT NULL OR json_extract(value,'$.response') IS NOT NULL) AND (EXISTS(SELECT 1 FROM deleted_messages WHERE id=json_extract(settings.value,'$.entry.row.id')) OR EXISTS(SELECT 1 FROM messages WHERE id=json_extract(settings.value,'$.entry.row.id') AND is_deleted=1))")?;
@@ -1163,17 +1136,19 @@ mod tests {
         assert!(!settles(&post(&me.to_string(), 3, send_request_key(me, 4, channel, &request.to_string()))));
         assert!(!settles(&post(&me.to_string(), 3, send_request_key(other, 3, channel, &request.to_string()))));
         assert!(!settles(&post(&me.to_string(), 3, send_request_key(me, 3, ChannelId::new(), &request.to_string()))));
-        assert!(!settle_cancelled_deposit(&db, other, channel, &post("", 3, exact)).unwrap());
+        assert!(!settle_cancelled_deposit(&db, other, channel, &post(&other.to_string(), 3, exact)).unwrap());
+        // Every post is authored: one without an author is not ours.
+        assert!(!settles(&post("", 3, exact)));
         // The exact key, but claimed by someone else's post.
         assert!(!settles(&post(&other.to_string(), 3, exact)));
         assert!(!settles(&post(&me.to_string(), 4, exact)));
-        // The deposit itself, sealed (no author) or not: learned and tombstoned.
-        let sealed = post("", 3, exact);
-        assert!(settles(&sealed));
+        // The deposit itself: learned and tombstoned.
+        let deposit = post(&me.to_string(), 3, exact);
+        assert!(settles(&deposit));
         let tombstoned: bool = db
             .read_connection()
             .unwrap()
-            .query_row("SELECT EXISTS(SELECT 1 FROM deleted_messages WHERE id=?1)", params![sealed.id], |r| r.get(0))
+            .query_row("SELECT EXISTS(SELECT 1 FROM deleted_messages WHERE id=?1)", params![deposit.id], |r| r.get(0))
             .unwrap();
         assert!(tombstoned);
         // Settled once: the journal now knows its id and matches nothing more.
@@ -1190,7 +1165,7 @@ mod tests {
         let (me, channel) = (UserId::new(), ChannelId::new());
         let (local, remote) = (MessageId::new(), MessageId::new());
         for (request, intent) in [(local, false), (remote, true)] {
-            let mut value = serde_json::json!({"phase":"unresolved","channel_id":channel,"device":5,"prepared":{"at":now(),"deletion_token":[7u8;32]}});
+            let mut value = serde_json::json!({"phase":"unresolved","channel_id":channel,"device":5,"prepared":{"at":now()}});
             if intent {
                 value["remote_delete"] = serde_json::json!(true);
             }
@@ -1205,6 +1180,7 @@ mod tests {
         let post = |request: MessageId| crate::proto::chat_v1::Message {
             id: MessageId::new().to_string(),
             channel_id: channel.to_string(),
+            author_id: me.to_string(),
             send_request_key: send_request_key(me, 5, channel, &request.to_string()).to_vec(),
             ..Default::default()
         };

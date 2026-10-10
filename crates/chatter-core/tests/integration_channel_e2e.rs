@@ -272,7 +272,6 @@ async fn test_e2e_users_send_messages_in_channel() {
                     vec![], // mentioned_integrations
                     false,  // targets_ai_bot
                     vec![], // mentioned_file_ids
-                    vec![], // deletion_token_hash
                 )
                 .await,
         );

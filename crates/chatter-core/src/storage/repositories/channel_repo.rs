@@ -341,46 +341,6 @@ impl ChannelRepository {
             .optional()?)
     }
 
-    /// Get DM channel by peer user ID.
-    ///
-    /// Looks up the DM channel where both the current user and the peer are members.
-    /// This returns the server-assigned channel ID, NOT a derived one.
-    pub fn get_dm_channel_by_peer(
-        &self,
-        current_user_id: &UserId,
-        peer_id: &UserId,
-    ) -> Result<Option<Channel>, StorageError> {
-        let conn = self.db.connection()?;
-        let mut stmt = conn.prepare(
-            "SELECT c.id, c.channel_type, c.name, c.description, c.icon, c.owner_id,
-                    c.persistence, c.max_members, c.default_ttl_seconds,
-                    c.allow_reactions, c.allow_threads, c.allow_attachments, c.require_encryption,
-                    c.created_at, c.updated_at, c.archived,
-                    (SELECT COUNT(*) FROM messages WHERE conversation_id = c.id AND conversation_type = 'channel' AND is_read = 0 AND is_deleted = 0) as unread_count,
-                    (SELECT MAX(created_at) FROM messages WHERE conversation_id = c.id AND conversation_type = 'channel' AND is_deleted = 0) as last_message_at,
-                    (SELECT COUNT(*) FROM memberships WHERE channel_id = c.id) as member_count
-             FROM channels c
-             INNER JOIN memberships m1 ON c.id = m1.channel_id AND m1.user_id = ?1
-             INNER JOIN memberships m2 ON c.id = m2.channel_id AND m2.user_id = ?2
-             WHERE c.channel_type = ?3",
-        )?;
-
-        let result = stmt.query_row(
-            params![
-                current_user_id.to_string(),
-                peer_id.to_string(),
-                channel_type_to_i32(ChannelType::DirectMessage)
-            ],
-            row_to_channel,
-        );
-
-        match result {
-            Ok(channel) => Ok(Some(channel)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(StorageError::Database(e)),
-        }
-    }
-
     /// List all channels of a specific type.
     pub fn list_by_type(&self, channel_type: ChannelType) -> Result<Vec<Channel>, StorageError> {
         let conn = self.db.connection()?;
@@ -830,7 +790,6 @@ fn channel_type_to_i32(ct: ChannelType) -> i32 {
     match ct {
         ChannelType::Public => 0,
         ChannelType::Private => 1,
-        ChannelType::DirectMessage => 2,
         ChannelType::SavedMessages => 3,
     }
 }
@@ -838,7 +797,6 @@ fn channel_type_to_i32(ct: ChannelType) -> i32 {
 fn channel_type_from_i32(value: i32) -> ChannelType {
     match value {
         1 => ChannelType::Private,
-        2 => ChannelType::DirectMessage,
         3 => ChannelType::SavedMessages,
         _ => ChannelType::Public,
     }

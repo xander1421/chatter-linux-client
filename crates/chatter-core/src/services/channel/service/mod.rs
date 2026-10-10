@@ -103,7 +103,7 @@ impl ChannelService {
     /// # Arguments
     ///
     /// * `name` - Channel name
-    /// * `channel_type` - Type of channel (Public, Private, DirectMessage)
+    /// * `channel_type` - Type of channel (Public, Private)
     /// * `config` - Optional channel configuration
     /// * `description` - Optional channel description
     /// * `icon` - Optional raw image bytes (PNG/JPEG/WebP, ≤64KB)

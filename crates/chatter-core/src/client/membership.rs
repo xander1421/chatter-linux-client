@@ -763,7 +763,6 @@ mod tests {
     fn has_log_only_for_channels() {
         assert!(has_membership_log(ChannelType::Public));
         assert!(has_membership_log(ChannelType::Private));
-        assert!(!has_membership_log(ChannelType::DirectMessage));
         assert!(!has_membership_log(ChannelType::SavedMessages));
     }
 }

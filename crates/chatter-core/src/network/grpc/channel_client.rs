@@ -64,7 +64,7 @@ impl ChannelClient {
     /// # Arguments
     ///
     /// * `name` - Channel name
-    /// * `channel_type` - Channel type (Public, Private, DirectMessage)
+    /// * `channel_type` - Channel type (Public, Private)
     /// * `config` - Optional channel configuration
     /// * `description` - Optional channel description
     /// * `icon` - Optional raw image bytes for the channel icon (≤64KB)

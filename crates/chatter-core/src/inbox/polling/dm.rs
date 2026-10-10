@@ -22,9 +22,7 @@ use crate::services::attachment::AttachmentService;
 use crate::services::gateway::{DmContent, MessageGateway};
 use crate::storage::repositories::settings_repo::keys;
 use crate::storage::repositories::user_repo::UserRepository;
-use crate::storage::{
-    AttachmentRepository, ChannelRepository, MessageRepository, SettingsRepository,
-};
+use crate::storage::{AttachmentRepository, MessageRepository, SettingsRepository};
 
 /// Decide what to do with a DM envelope whose decrypt failed.
 ///
@@ -147,7 +145,6 @@ pub async fn poll_dm_mailboxes(
     event_tx: &broadcast::Sender<InboxEvent>,
     settings_repo: &Arc<SettingsRepository>,
     message_repo: &Arc<MessageRepository>,
-    channel_repo: &Arc<ChannelRepository>,
     attachment_repo: &Arc<AttachmentRepository>,
     user_repo: &Arc<UserRepository>,
     domain_tx: Option<&broadcast::Sender<DomainEvent>>,
@@ -361,7 +358,6 @@ pub async fn poll_dm_mailboxes(
                                     &current_user_id,
                                     event_tx,
                                     message_repo,
-                                    channel_repo,
                                     attachment_repo,
                                     user_repo,
                                     conversation_manager,
@@ -506,7 +502,6 @@ pub(crate) fn dispatch_dm_content(
     current_user_id: &Option<UserId>,
     event_tx: &broadcast::Sender<InboxEvent>,
     message_repo: &Arc<MessageRepository>,
-    channel_repo: &Arc<ChannelRepository>,
     attachment_repo: &Arc<AttachmentRepository>,
     user_repo: &Arc<UserRepository>,
     conversation_manager: &DmConversationManager,
@@ -911,16 +906,9 @@ pub(crate) fn dispatch_dm_content(
                 "Call key offer received (incoming call with ephemeral key)"
             );
 
-            // Look up the actual DM channel by peer ID (server-assigned, NOT derived)
             let resolved_channel_id = if channel_id.is_empty() {
                 if let Some(current_user) = current_user_id {
-                    match channel_repo.get_dm_channel_by_peer(current_user, sender_id) {
-                        Ok(Some(channel)) => channel.id.to_string(),
-                        _ => {
-                            let derived = ChannelId::from_dm_participants(current_user, sender_id);
-                            derived.to_string()
-                        }
-                    }
+                    ChannelId::from_dm_participants(current_user, sender_id).to_string()
                 } else {
                     peer_id.to_string()
                 }
@@ -1578,7 +1566,6 @@ mod tests {
                 &Some(me),
                 &event_tx,
                 &message_repo,
-                &Arc::new(ChannelRepository::new(db.clone())),
                 &Arc::new(AttachmentRepository::new(db.clone())),
                 &Arc::new(UserRepository::new(db.clone())),
                 &DmConversationManager::new(db.clone()),

@@ -77,15 +77,10 @@ pub fn proto_channel_type_to_domain(proto_type: i32) -> ChannelType {
 }
 
 /// Convert domain ChannelType to proto ChannelType.
-///
-/// `ChannelType::DirectMessage` has no server-side channel type anymore
-/// (DMs are channel-free); this arm is unreachable in practice since no
-/// client code path creates/updates a DM channel. Mapped to `ChannelPrivate`
-/// defensively rather than panicking.
 pub fn domain_channel_type_to_proto(channel_type: ChannelType) -> chat_v1::ChannelType {
     match channel_type {
         ChannelType::Public => chat_v1::ChannelType::ChannelPublic,
-        ChannelType::Private | ChannelType::DirectMessage => chat_v1::ChannelType::ChannelPrivate,
+        ChannelType::Private => chat_v1::ChannelType::ChannelPrivate,
         ChannelType::SavedMessages => chat_v1::ChannelType::SavedMessages,
     }
 }
@@ -231,10 +226,6 @@ mod tests {
             domain_channel_type_to_proto(ChannelType::Private),
             chat_v1::ChannelType::ChannelPrivate
         );
-        assert_eq!(
-            domain_channel_type_to_proto(ChannelType::DirectMessage),
-            chat_v1::ChannelType::ChannelPrivate
-        );
     }
 
     #[test]
@@ -283,10 +274,11 @@ mod tests {
 
     #[test]
     fn test_channel_type_roundtrip() {
-        // DirectMessage is intentionally excluded: it has no server-side
-        // proto counterpart anymore (DMs are channel-free), so it does not
-        // round-trip.
-        for ct in [ChannelType::Public, ChannelType::Private] {
+        for ct in [
+            ChannelType::Public,
+            ChannelType::Private,
+            ChannelType::SavedMessages,
+        ] {
             let proto = domain_channel_type_to_proto(ct);
             let back = proto_channel_type_to_domain(proto as i32);
             assert_eq!(back, ct);

@@ -74,7 +74,6 @@ async fn normal_receive_from_mailbox(
                 &Some(me),
                 &tx,
                 &svc.message_repo,
-                &svc.channel_repo,
                 &svc.attachment_repo,
                 &svc.user_repo,
                 &manager,

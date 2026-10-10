@@ -1129,7 +1129,6 @@ mod tests {
 
         // DM: pinned at 10, unpinned at 20 but delivered first.
         let dm_with_peer = ChannelId::from(peer);
-        let reaction_scope = ReactionScope::new(dm_with_peer, ConversationType::ServerDm);
         assert!(m
             .resolve_inbound_pin(&dm_with_peer, &peer, &peer, 100, true, 20)
             .unwrap()

@@ -290,7 +290,6 @@ async fn test_messages_visible_across_devices() {
                 vec![],
                 false,
                 vec![],
-                Vec::new(),
             )
             .await,
     );
@@ -435,7 +434,6 @@ async fn test_concurrent_device_operations() {
                     vec![],
                     false,
                     vec![],
-                    Vec::new(),
                 )
                 .await
         });

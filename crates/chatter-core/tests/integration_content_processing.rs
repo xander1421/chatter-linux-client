@@ -289,7 +289,6 @@ async fn test_server_text_message_roundtrip() {
                 vec![],
                 false,
                 vec![],
-                Vec::new(),
             )
             .await,
     );

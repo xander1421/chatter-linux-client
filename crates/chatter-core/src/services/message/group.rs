@@ -2347,7 +2347,6 @@ mod tests {
             .alice
             .messages()
             .prepare_encrypted_content(
-                &mut t.alice.messages().auth_client(),
                 &t.channel_id,
                 &plaintext,
                 crate::proto::chat_v1::message::Content {
@@ -2355,7 +2354,6 @@ mod tests {
                         "bold target".into(),
                     )),
                 },
-                false,
                 true,
                 sent,
             )

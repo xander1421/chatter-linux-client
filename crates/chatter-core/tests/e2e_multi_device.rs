@@ -147,7 +147,6 @@ async fn test_e2e_channel_message_reaches_device() {
                 vec![],
                 false,
                 vec![],
-                Vec::new(),
             )
             .await,
     );

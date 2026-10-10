@@ -470,33 +470,6 @@ impl UnifiedMessageRepository {
         }
     }
 
-    /// Store the sealed-sender deletion token of a message we sent.
-    pub fn set_deletion_token(&self, id: &MessageId, token: &[u8; 32]) -> Result<(), StorageError> {
-        let rows = self.db.connection()?.execute(
-            "UPDATE messages SET deletion_token = ?1 WHERE id = ?2",
-            params![&token[..], id.to_string()],
-        )?;
-        if rows == 0 {
-            return Err(StorageError::NotFound(format!("Message {}", id)));
-        }
-        Ok(())
-    }
-
-    /// The sealed-sender deletion token of a message we sent, if it has one.
-    pub fn deletion_token(&self, id: &MessageId) -> Result<Option<[u8; 32]>, StorageError> {
-        let conn = self.db.connection()?;
-        let token: Option<Vec<u8>> = match conn.query_row(
-            "SELECT deletion_token FROM messages WHERE id = ?1",
-            params![id.to_string()],
-            |row| row.get(0),
-        ) {
-            Ok(t) => t,
-            Err(rusqlite::Error::QueryReturnedNoRows) => None,
-            Err(e) => return Err(StorageError::Database(e)),
-        };
-        Ok(token.and_then(|t| <[u8; 32]>::try_from(t.as_slice()).ok()))
-    }
-
     pub fn update_reply_parent(
         &self,
         id: &MessageId,
@@ -3361,38 +3334,6 @@ mod tests {
         assert!(!repo.is_dm_receipt_tombstoned(&ChannelId::new(), &peer, 100).unwrap());
         set_owner(other_account);
         assert!(!held(&peer, 100), "account scoped");
-    }
-
-    #[test]
-    fn deletion_token_round_trips_through_the_message_row() {
-        let dir = tempfile::tempdir().expect("tempdir");
-        let db = Arc::new(Database::open(&dir.path().join("m.db"), "testpass").expect("open"));
-        db.run_migrations().expect("migrations");
-        let repo = UnifiedMessageRepository::new(db);
-        let msg = Message::new_text(
-            ChannelId::new(),
-            ConversationType::ServerDm,
-            Some(UserId::new()),
-            "hi".into(),
-            1,
-        );
-        repo.insert(&msg).unwrap();
-
-        assert_eq!(
-            repo.deletion_token(&msg.id).unwrap(),
-            None,
-            "no token until one is set"
-        );
-        repo.set_deletion_token(&msg.id, &[3u8; 32]).unwrap();
-        assert_eq!(repo.deletion_token(&msg.id).unwrap(), Some([3u8; 32]));
-        // A full-row update must not clobber it.
-        repo.update(&msg).unwrap();
-        assert_eq!(repo.deletion_token(&msg.id).unwrap(), Some([3u8; 32]));
-        assert!(
-            repo.set_deletion_token(&MessageId::new(), &[1u8; 32])
-                .is_err()
-        );
-        assert_eq!(repo.deletion_token(&MessageId::new()).unwrap(), None);
     }
 
     #[test]

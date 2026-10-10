@@ -225,7 +225,6 @@ struct LocalChannelSettings {
     is_owner: bool,
     can_leave: bool,
     member_count: i32,
-    roster_pending: bool,
 }
 
 fn present_local_channel_settings(w: &MainWindow, settings: &LocalChannelSettings) {
@@ -256,7 +255,7 @@ fn present_local_channel_settings(w: &MainWindow, settings: &LocalChannelSetting
     w.set_channel_settings_members(ModelRc::default());
     w.set_channel_settings_can_view_bans(false);
     w.set_channel_settings_banned_members(ModelRc::default());
-    w.set_channel_settings_loading(settings.roster_pending);
+    w.set_channel_settings_loading(true);
     w.set_channel_settings_error("".into());
 }
 
@@ -329,7 +328,6 @@ pub fn open_channel_settings(
         };
 
         let current_user_id = ui_ctx.session_current_user_id();
-        let is_dm = channel.is_dm();
         let (is_owner, can_edit, can_manage_members, can_archive, can_delete) =
             match current_user_id.as_ref() {
                 Some(uid) => (
@@ -351,7 +349,6 @@ pub fn open_channel_settings(
         let channel_type_str = match channel.channel_type {
             ChannelType::Public => "public",
             ChannelType::Private => "private",
-            ChannelType::DirectMessage => "dm",
             ChannelType::SavedMessages => "saved",
         };
         let local = LocalChannelSettings {
@@ -374,7 +371,6 @@ pub fn open_channel_settings(
             is_owner,
             can_leave,
             member_count: i32::try_from(channel.member_count).unwrap_or(i32::MAX),
-            roster_pending: !is_dm,
         };
 
         let weak_access = weak_window.clone();
@@ -396,10 +392,6 @@ pub fn open_channel_settings(
                 );
             },
         );
-
-        if is_dm {
-            return;
-        }
 
         // Core shapes the rows; the images are decoded on the UI thread below
         // (a slint::Image is not Send). This await must stay after the local

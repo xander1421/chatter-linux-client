@@ -12,7 +12,6 @@ pub enum ChannelType {
     #[default]
     Public,
     Private,
-    DirectMessage,
     SavedMessages,
 }
 
@@ -98,19 +97,10 @@ impl Channel {
         }
     }
 
-    /// Check if this is a direct message channel.
-    #[must_use]
-    pub fn is_dm(&self) -> bool {
-        matches!(self.channel_type, ChannelType::DirectMessage)
-    }
-
-    /// Check if this channel is private (Private or DirectMessage).
+    /// Check if this channel is private.
     #[must_use]
     pub fn is_private(&self) -> bool {
-        matches!(
-            self.channel_type,
-            ChannelType::Private | ChannelType::DirectMessage
-        )
+        matches!(self.channel_type, ChannelType::Private)
     }
 
     /// Get the correct ConversationType for this channel.
@@ -123,7 +113,6 @@ impl Channel {
     pub fn conversation_type(&self) -> crate::domain::message::ConversationType {
         use crate::domain::message::ConversationType;
         match self.channel_type {
-            ChannelType::DirectMessage => ConversationType::ServerDm,
             ChannelType::SavedMessages => ConversationType::SavedMessages,
             _ => ConversationType::Channel,
         }
@@ -137,34 +126,34 @@ impl Channel {
 
     /// Whether `user_id` may edit this channel's metadata (name, description, icon).
     ///
-    /// Owner-only, and DMs are not editable (no name/description to set).
+    /// Owner-only.
     #[must_use]
     pub fn can_user_edit(&self, user_id: &UserId) -> bool {
-        self.is_owner(user_id) && !self.is_dm()
+        self.is_owner(user_id)
     }
 
     /// Whether `user_id` may add/remove members or change roles.
     ///
-    /// Owner-only, and DMs have a fixed two-party membership.
+    /// Owner-only.
     #[must_use]
     pub fn can_user_manage_members(&self, user_id: &UserId) -> bool {
-        self.is_owner(user_id) && !self.is_dm()
+        self.is_owner(user_id)
     }
 
     /// Whether `user_id` may archive/unarchive this channel.
     ///
-    /// Owner-only, and DMs cannot be archived.
+    /// Owner-only.
     #[must_use]
     pub fn can_user_archive(&self, user_id: &UserId) -> bool {
-        self.is_owner(user_id) && !self.is_dm()
+        self.is_owner(user_id)
     }
 
     /// Whether `user_id` may delete this channel.
     ///
-    /// Owner-only, and DMs are deleted via the DM-delete flow, not channel delete.
+    /// Owner-only.
     #[must_use]
     pub fn can_user_delete(&self, user_id: &UserId) -> bool {
-        self.is_owner(user_id) && !self.is_dm()
+        self.is_owner(user_id)
     }
 
     /// Whether `user_id` may leave this channel. Every member but the owner:
@@ -177,10 +166,7 @@ impl Channel {
     pub fn can_user_leave(&self, user_id: &UserId, still_member: bool) -> bool {
         still_member
             && !self.is_owner(user_id)
-            && !matches!(
-                self.channel_type,
-                ChannelType::DirectMessage | ChannelType::SavedMessages
-            )
+            && !matches!(self.channel_type, ChannelType::SavedMessages)
     }
 }
 
@@ -551,13 +537,6 @@ mod send_block_tests {
         assert!(ch.can_user_leave(&member, true));
         assert!(!ch.can_user_leave(&owner, true));
         assert!(!ch.can_user_leave(&member, false));
-        let dm = Channel::new(
-            ChannelId::new(),
-            String::new(),
-            ChannelType::DirectMessage,
-            owner,
-        );
-        assert!(!dm.can_user_leave(&member, true));
     }
 
     #[test]

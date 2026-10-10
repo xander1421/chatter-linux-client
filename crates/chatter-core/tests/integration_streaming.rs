@@ -154,7 +154,6 @@ async fn test_message_stream_receives_new_messages() {
                 vec![],
                 false,
                 vec![],
-                Vec::new(),
             )
             .await;
     }
@@ -473,7 +472,6 @@ async fn test_message_stream_with_cursor() {
                 vec![],
                 false,
                 vec![],
-                Vec::new(),
             )
             .await
             .expect("Send should succeed");

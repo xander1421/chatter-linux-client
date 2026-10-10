@@ -4144,9 +4144,9 @@ impl EventType {
 // pinned client stopped opening new sessions.
 
 /// InclusionProof mirrors crypto.InclusionProof. A client recomputes the leaf
-/// hash H(0x00 || key || value) and walks sibling_hashes up to the root using
-/// the per-level direction bits, then checks the result equals the tree head
-/// root_hash.
+/// hash H(0x00 || key || value) and walks sibling_hashes up to the root, taking
+/// the direction at each level from the key's own bits (never from the prover),
+/// then checks the result equals the tree head root_hash.
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct InclusionProof {
     /// 32-byte sparse-Merkle tree key for this user. Phase 3b: this is the VRF
@@ -4160,10 +4160,6 @@ pub struct InclusionProof {
     /// Sibling hashes from the leaf toward the root; each entry is 32 bytes.
     #[prost(bytes="vec", repeated, tag="3")]
     pub sibling_hashes: ::prost::alloc::vec::Vec<::prost::alloc::vec::Vec<u8>>,
-    /// Direction at each level (0 = current node is the left child, 1 = right).
-    /// Same length as sibling_hashes.
-    #[prost(uint32, repeated, tag="4")]
-    pub bits: ::prost::alloc::vec::Vec<u32>,
 }
 /// SignedTreeHead mirrors crypto.SignedTreeHead. The signature is Ed25519 over
 /// SHA-256("ChatterKT-v2" || epoch_le64 || root_hash || tree_size_le64), made
@@ -4569,13 +4565,6 @@ pub struct SendMessageRequest {
     /// File IDs that are mentioned in the message (e.g., @fileID)
     #[prost(string, repeated, tag="11")]
     pub mentioned_file_ids: ::prost::alloc::vec::Vec<::prost::alloc::string::String>,
-    /// SHA-256 of a random 32-byte deletion token the sending client generated
-    /// for this message and keeps locally. Required (exactly 32 bytes) when
-    /// content is sealed_sender, rejected otherwise. A sealed-sender row has no
-    /// author, so presenting the preimage in DeleteMessageRequest.deletion_token
-    /// is the only proof of authorship; the stored hash names nobody.
-    #[prost(bytes="vec", tag="12")]
-    pub deletion_token_hash: ::prost::alloc::vec::Vec<u8>,
 }
 /// NEW: Crypto status information
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
@@ -4629,11 +4618,6 @@ pub struct DeleteMessageRequest {
     pub channel_id: ::prost::alloc::string::String,
     #[prost(string, tag="3")]
     pub request_id: ::prost::alloc::string::String,
-    /// Deleting a sealed-sender message: the 32-byte token whose SHA-256 the
-    /// sender supplied as SendMessageRequest.deletion_token_hash. Ignored for
-    /// every other content type (SpiceDB decides those).
-    #[prost(bytes="vec", tag="4")]
-    pub deletion_token: ::prost::alloc::vec::Vec<u8>,
 }
 /// All selected targets are authorized before any storage mutation. A separate
 /// RPC ensures older servers reject batches instead of silently deleting a subset.

@@ -23,7 +23,6 @@ pub(crate) struct PreparedDelete {
     pub conversation_type: ConversationType,
     pub call_id: Option<String>,
     pub control: Vec<u8>,
-    pub deletion_token: Vec<u8>,
     pub control_sent: bool,
     pub local_completed: bool,
 }

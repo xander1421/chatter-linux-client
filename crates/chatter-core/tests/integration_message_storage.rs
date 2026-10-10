@@ -58,7 +58,7 @@ fn create_dm_channel(
     let channel = Channel::new(
         channel_id,
         format!("DM with {}", user_b),
-        ChannelType::DirectMessage,
+        ChannelType::Private,
         *user_a,
     );
     channel_repo.insert(&channel).unwrap();
@@ -655,40 +655,6 @@ fn test_channel_unread_count_increment() {
 
     // Verify in database
     let loaded = channel_repo.get(&channel.id).unwrap().unwrap();
-    assert_eq!(loaded.unread_count, 2);
-}
-
-#[test]
-fn test_dm_channel_unread_count() {
-    let (_temp_dir, db) = setup_test_db();
-    let channel_repo = ChannelRepository::new(db.clone());
-    let message_repo = MessageRepository::new(db.clone());
-
-    let alice = UserId::new();
-    let bob = UserId::new();
-
-    let dm_channel = create_dm_channel(&channel_repo, &alice, &bob);
-
-    // Add unread received messages
-    let msg1 = Message::new_text(
-        dm_channel.id,
-        ConversationType::Channel,
-        Some(bob),
-        "hey alice".to_string(),
-        next_timestamp_ns(),
-    );
-    message_repo.insert(&msg1).unwrap();
-
-    let msg2 = Message::new_text(
-        dm_channel.id,
-        ConversationType::Channel,
-        Some(bob),
-        "are you there?".to_string(),
-        next_timestamp_ns(),
-    );
-    message_repo.insert(&msg2).unwrap();
-
-    let loaded = channel_repo.get(&dm_channel.id).unwrap().unwrap();
     assert_eq!(loaded.unread_count, 2);
 }
 

@@ -296,10 +296,10 @@ impl ChatterClient {
         self.channel_send_notice(channel_id)
     }
 
-    /// DMs and Saved Messages have no moderation (the server refuses it).
+    /// Saved Messages has no moderation (the server refuses it).
     fn is_moderated_channel(&self, channel_id: &crate::domain::ids::ChannelId) -> bool {
         self.get_channel_local(channel_id)
-            .is_some_and(|c| !c.is_dm() && !matches!(c.channel_type, ChannelType::SavedMessages))
+            .is_some_and(|c| !matches!(c.channel_type, ChannelType::SavedMessages))
     }
 
     /// A channel's active bans shaped for display, or `None` when our role
