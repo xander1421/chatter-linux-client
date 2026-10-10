@@ -236,7 +236,7 @@ impl MessageService {
                     message_client,
                     member_id,
                     &plaintext,
-                    None,
+                    Some(channel_id.as_bytes()),
                 )
                 .await;
             success_count += outcome.delivered;
@@ -1020,7 +1020,7 @@ impl MessageService {
                 &mut message_client,
                 &member_id_str,
                 &plaintext,
-                None,
+                Some(channel_id.as_bytes()),
             )
             .await;
 
@@ -1280,7 +1280,7 @@ impl MessageService {
                 &mut message_client,
                 &target_id_str,
                 &plaintext,
-                None,
+                Some(channel_id.as_bytes()),
             )
             .await;
 

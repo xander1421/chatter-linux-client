@@ -829,7 +829,7 @@ impl MessageService {
             }
         }
 
-        self.record_pairwise_send(content, &deposits);
+        self.record_pairwise_send(content, &deposits, Some(channel_id.as_bytes()));
 
         tracing::debug!(
             channel_id = %channel_id,

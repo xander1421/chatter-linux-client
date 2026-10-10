@@ -109,6 +109,7 @@ mod v108_drop_channel_message_clocks;
 mod v109_drop_mailbox_randomizer;
 mod v110_attachment_secret_chat_known;
 mod v111_secret_chat_request_state;
+mod v112_send_log_group_id;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -445,4 +446,5 @@ pub fn default_migrations() -> MigrationRunner {
         .register(v109_drop_mailbox_randomizer::V109DropMailboxRandomizer)
         .register(v110_attachment_secret_chat_known::V110AttachmentSecretChatKnown)
         .register(v111_secret_chat_request_state::V111SecretChatRequestState)
+        .register(v112_send_log_group_id::V112SendLogGroupId)
 }

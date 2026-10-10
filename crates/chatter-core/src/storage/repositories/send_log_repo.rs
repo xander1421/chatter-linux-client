@@ -30,6 +30,9 @@ pub struct SentPayload {
     /// `sent_at` of our own stored message this payload carries (a message,
     /// its `SyncSent` copy) or edits; `None` when it carries none.
     pub message_ts: Option<u64>,
+    /// The sealed-sender group id it was sent with (a channel's pairwise
+    /// control content); `None` for a 1:1 DM.
+    pub group_id: Option<Vec<u8>>,
 }
 
 pub struct SendLogRepository {
@@ -50,6 +53,7 @@ impl SendLogRepository {
         &self,
         content: &[u8],
         message_ts: Option<u64>,
+        group_id: Option<&[u8]>,
         now: u64,
         expires_at: u64,
         recipients: &[(UserId, u32, u64)],
@@ -60,8 +64,8 @@ impl SendLogRepository {
         let conn = self.db.connection()?;
         let tx = conn.unchecked_transaction()?;
         tx.execute(
-            "INSERT INTO send_log_payloads (content, message_ts, expires_at) VALUES (?1, ?2, ?3)",
-            params![content, message_ts.map(|t| t as i64), expires_at as i64],
+            "INSERT INTO send_log_payloads (content, message_ts, group_id, expires_at) VALUES (?1, ?2, ?3, ?4)",
+            params![content, message_ts.map(|t| t as i64), group_id, expires_at as i64],
         )?;
         let payload_id = tx.last_insert_rowid();
         for (peer, device, server_ts_ns) in recipients {
@@ -92,7 +96,7 @@ impl SendLogRepository {
         let key = params![peer.to_string(), device as i64, server_ts_ms as i64];
         let found = tx
             .query_row(
-                "SELECT p.id, p.content, p.message_ts, p.expires_at
+                "SELECT p.id, p.content, p.message_ts, p.expires_at, p.group_id
                  FROM send_log_recipients r JOIN send_log_payloads p ON p.id = r.payload_id
                  WHERE r.peer_id = ?1 AND r.device_id = ?2 AND r.server_ts_ms = ?3",
                 key,
@@ -102,11 +106,12 @@ impl SendLogRepository {
                         row.get::<_, Vec<u8>>(1)?,
                         row.get::<_, Option<i64>>(2)?,
                         row.get::<_, i64>(3)?,
+                        row.get::<_, Option<Vec<u8>>>(4)?,
                     ))
                 },
             )
             .optional()?;
-        let Some((payload_id, content, message_ts, expires_at)) = found else {
+        let Some((payload_id, content, message_ts, expires_at, group_id)) = found else {
             return Ok(None);
         };
         tx.execute(
@@ -126,6 +131,7 @@ impl SendLogRepository {
         Ok(Some(SentPayload {
             content,
             message_ts: message_ts.map(|t| t as u64),
+            group_id,
         }))
     }
 
@@ -164,6 +170,7 @@ mod tests {
         log.record(
             b"bytes",
             Some(7),
+            Some(b"channel"),
             now,
             now + 10,
             &[(peer, 1, 5_000_000), (peer, 2, 6_000_000)],
@@ -188,7 +195,8 @@ mod tests {
             got,
             SentPayload {
                 content: b"bytes".to_vec(),
-                message_ts: Some(7)
+                message_ts: Some(7),
+                group_id: Some(b"channel".to_vec()),
             }
         );
         assert_eq!(
@@ -207,7 +215,7 @@ mod tests {
         let (_dir, log) = repo();
         let peer = UserId::new();
         let now = 1_000_000_000_000;
-        log.record(b"old", None, now, now + 5, &[(peer, 1, 1_000_000)])
+        log.record(b"old", None, None, now, now + 5, &[(peer, 1, 1_000_000)])
             .unwrap();
         assert_eq!(
             log.take(&peer, 1, 1, now + 5).unwrap(),
@@ -218,6 +226,7 @@ mod tests {
         for i in 0..=MAX_PAYLOADS as u64 {
             log.record(
                 b"m",
+                None,
                 None,
                 now,
                 now + 100,

@@ -35,8 +35,9 @@ pub(crate) const RESEND_MAX_AGE_NS: u64 = 14 * 24 * 60 * 60 * 1_000_000_000;
 /// What a retry request is answered with.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) enum Resend {
-    /// The bytes we sent, exactly.
-    Original(Vec<u8>),
+    /// The bytes we sent, exactly, and the sealed-sender group id they went
+    /// out with (a channel's pairwise control content; `None` for a DM).
+    Original(Vec<u8>, Option<Vec<u8>>),
     /// Nothing we may send again: a `NullMessage`, to heal the session.
     NullMessage(Vec<u8>),
 }
@@ -95,7 +96,7 @@ impl MessageService {
             .iter()
             .map(|&(device, server_ts)| (peer, device, server_ts))
             .collect();
-        self.record_pairwise_send(content, &recipients);
+        self.record_pairwise_send(content, &recipients, None);
     }
 
     /// Log `content` as deposited on every `(peer, device, server timestamp
@@ -103,11 +104,13 @@ impl MessageService {
     /// content (reaction, edit, delete, pin) is fanned out pairwise to each
     /// member device (`fanout_control_to_device_inboxes`), so a member device
     /// that cannot decrypt it reports it the same way a DM recipient does and
-    /// is answered from here (OPEN-ITEMS §5).
+    /// is answered from here (OPEN-ITEMS §5). `group_id` is the sealed-sender
+    /// group id the copies carried; the resend carries it again.
     pub(crate) fn record_pairwise_send(
         &self,
         content: &Content,
         recipients: &[(UserId, u32, u64)],
+        group_id: Option<&[u8]>,
     ) {
         let Some(message_ts) = loggable(content) else {
             return;
@@ -119,6 +122,7 @@ impl MessageService {
         if let Err(e) = self.send_log().record(
             &content.encode_to_vec(),
             message_ts,
+            group_id,
             now,
             expires_at(content, now),
             recipients,
@@ -139,7 +143,7 @@ impl MessageService {
         timestamp_ms: u64,
     ) {
         match self.resend_dm(peer_id, peer_device_id, timestamp_ms).await {
-            Ok(Some(Resend::Original(_))) => tracing::info!(%peer_id, peer_device_id, timestamp_ms,
+            Ok(Some(Resend::Original(..))) => tracing::info!(%peer_id, peer_device_id, timestamp_ms,
                 "Resent a DM after the peer's DecryptionErrorMessage"),
             Ok(Some(Resend::NullMessage(_))) => {
                 tracing::info!(%peer_id, peer_device_id, timestamp_ms,
@@ -165,22 +169,27 @@ impl MessageService {
             return Ok(None);
         }
         let resend = self.dm_resend_plaintext(peer_id, peer_device_id, timestamp_ms)?;
-        let plaintext = match &resend {
-            Resend::Original(bytes) | Resend::NullMessage(bytes) => bytes,
+        let (plaintext, group_id) = match &resend {
+            Resend::Original(bytes, group_id) => (bytes, group_id.as_deref()),
+            Resend::NullMessage(bytes) => (bytes, None),
         };
         let sealed_body = self
             .signal_service
-            .encrypt_message(
+            .encrypt_message_devices_bounded(
                 &mut self.auth_client(),
                 &peer_id.to_string(),
-                peer_device_id,
+                &[peer_device_id],
                 plaintext,
+                group_id,
             )
             .await
             .map_err(|e| match e {
                 crate::error::ServiceError::Network(e) => MessageError::Network(e),
                 e => MessageError::EncryptionFailed(e.to_string()),
-            })?;
+            })?
+            .remove(&peer_device_id)
+            .ok_or_else(|| MessageError::EncryptionFailed("resend produced no ciphertext".into()))?
+            .ciphertext;
         if *peer_id == self.settings_repo.current_user_id()? {
             // Identified on the authenticated channel, as every own-device
             // copy is (`sync_to_own_devices`).
@@ -230,7 +239,7 @@ impl MessageService {
                 return Ok(null());
             }
         }
-        Ok(Resend::Original(payload.content))
+        Ok(Resend::Original(payload.content, payload.group_id))
     }
 }
 
@@ -316,7 +325,7 @@ mod tests {
         );
         assert_eq!(
             m.dm_resend_plaintext(&bob, 1, ms).unwrap(),
-            Resend::Original(content.encode_to_vec())
+            Resend::Original(content.encode_to_vec(), None)
         );
         assert!(
             is_null_message(&m.dm_resend_plaintext(&bob, 1, ms).unwrap()),
@@ -353,11 +362,11 @@ mod tests {
         m.record_dm_send(alice_id, &reaction, &[(2, 9_000_000)]);
         assert_eq!(
             m.dm_resend_plaintext(&bob, 1, 9).unwrap(),
-            Resend::Original(reaction.encode_to_vec())
+            Resend::Original(reaction.encode_to_vec(), None)
         );
         assert_eq!(
             m.dm_resend_plaintext(&alice_id, 2, 9).unwrap(),
-            Resend::Original(reaction.encode_to_vec())
+            Resend::Original(reaction.encode_to_vec(), None)
         );
 
         // Typing is never logged.
@@ -403,7 +412,12 @@ mod tests {
             "ours, edited",
             Some(&cid),
         );
-        m.record_pairwise_send(&edit, &[(bob, 1, 20_000_000), (carol, 3, 21_000_000)]);
+        let gid = Some(channel.as_bytes().to_vec());
+        m.record_pairwise_send(
+            &edit,
+            &[(bob, 1, 20_000_000), (carol, 3, 21_000_000)],
+            gid.as_deref(),
+        );
         m.record_pairwise_send(
             &delete,
             &[
@@ -411,11 +425,12 @@ mod tests {
                 (carol, 3, 31_000_000),
                 (alice_id, 2, 32_000_000),
             ],
+            gid.as_deref(),
         );
 
         assert_eq!(
             m.dm_resend_plaintext(&bob, 1, 20).unwrap(),
-            Resend::Original(edit.encode_to_vec())
+            Resend::Original(edit.encode_to_vec(), gid.clone())
         );
         assert!(
             is_null_message(&m.dm_resend_plaintext(&carol, 1, 21).unwrap()),
@@ -430,7 +445,7 @@ mod tests {
         for (who, device, ms) in [(bob, 1, 30), (carol, 3, 31), (alice_id, 2, 32)] {
             assert_eq!(
                 m.dm_resend_plaintext(&who, device, ms).unwrap(),
-                Resend::Original(delete.encode_to_vec())
+                Resend::Original(delete.encode_to_vec(), gid.clone())
             );
             assert!(is_null_message(
                 &m.dm_resend_plaintext(&who, device, ms).unwrap()
