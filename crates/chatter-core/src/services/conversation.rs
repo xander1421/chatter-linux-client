@@ -523,29 +523,12 @@ impl ConversationHandle {
                         }
                         _ => target_author_str.clone(),
                     };
-                    let wire_clock = if matches!(self.conversation, ActiveConversation::Channel(_))
-                    {
-                        let target = self
-                            .client
-                            .messages()
-                            .message_repo
-                            .get_by_reaction_scope(&scope, target_author, target_sent_timestamp)?
-                            .ok_or_else(|| {
-                                ConversationError::Other("Reaction target no longer stored".into())
-                            })?;
-                        self.client
-                            .messages()
-                            .message_repo
-                            .authenticated_channel_reaction_clock(&target)?
-                    } else {
-                        target_sent_timestamp
-                    };
                     let content =
                         crate::services::gateway::builders::build_reaction_content_with_channel_at(
                             emoji,
                             remove,
                             &wire_author,
-                            wire_clock,
+                            target_sent_timestamp,
                             self.active_channel_id().as_deref(),
                             action_ts,
                         );

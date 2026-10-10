@@ -871,7 +871,6 @@ impl MessageService {
                                 self,
                                 &mut message,
                                 channel_id,
-                                !dm.message_id.is_empty(),
                             ) {
                                 continue;
                             }
@@ -2315,14 +2314,9 @@ mod tests {
     /// missing SKDM -> authenticated retry -> controls in both directions.
     #[tokio::test]
     async fn delayed_channel_receive_preserves_authenticated_reaction_identity() {
-        delayed_reaction_fixture(false).await;
-        delayed_reaction_fixture(true).await;
-    }
-
-    async fn delayed_reaction_fixture(legacy: bool) {
         use crate::domain::{
             MessageId,
-            message::{ConversationType, Message, MessageContent},
+            message::{ConversationType, MessageContent},
             reaction::ReactionScope,
         };
         use crate::inbox::{polling::device::dispatch_control_content, state::InboxStats};
@@ -2342,11 +2336,7 @@ mod tests {
             .unwrap();
         let dm = content_v1::DataMessage {
             body: "bold target".into(),
-            message_id: if legacy {
-                id.to_string()
-            } else {
-                String::new()
-            },
+            message_id: String::new(),
             channel_id: t.channel_id.to_string(),
             timestamp: sent,
             ..Default::default()
@@ -2417,21 +2407,6 @@ mod tests {
             Ingested::DeferredPendingSenderKey
         );
         let scope = ReactionScope::new(t.channel_id, ConversationType::Channel);
-        if legacy {
-            let mut old = Message::new_text(
-                t.channel_id,
-                ConversationType::Channel,
-                Some(t.alice_id),
-                "[Encrypted message]".into(),
-                transport,
-            );
-            old.id = id;
-            t.bob.messages().store_message_local(&old).unwrap();
-            t.bob
-                .messages()
-                .record_reaction_at(&scope, &t.alice_id, transport, &t.bob_id, "😂", false, 1)
-                .unwrap();
-        }
         // Target-missing is retained, never guessed from a nearby clock.
         assert!(
             !t.bob
@@ -2456,18 +2431,9 @@ mod tests {
             .messages()
             .retry_pending_group_decrypts(t.channel_id, t.alice_id, 1)
             .await;
-        let retained = if legacy { transport } else { sent };
         let received = t.bob.messages().get_message_local(&id).unwrap().unwrap();
-        assert_eq!(received.sent_at, retained);
+        assert_eq!(received.sent_at, sent);
         assert_eq!(received.as_text(), Some("bold target"));
-        assert_eq!(
-            t.bob
-                .messages()
-                .message_repo
-                .authenticated_channel_reaction_clock(&received)
-                .unwrap(),
-            sent
-        );
         assert_eq!(
             t.bob
                 .messages()
@@ -2475,7 +2441,7 @@ mod tests {
                 .get_reaction_counts(&scope, &t.alice_id, sent)
                 .unwrap()[0]
                 .count,
-            if legacy { 2 } else { 1 }
+            1
         );
         // Existing local ledger ownership survives; each peer's new control
         // addresses the canonical authenticated clock through real dispatch.
@@ -2514,14 +2480,7 @@ mod tests {
             .reaction_snapshot(&t.alice_id, sent)
             .unwrap()
             .unwrap();
-            assert_eq!(
-                snapshot.sent_at,
-                if Arc::ptr_eq(client, &t.bob) {
-                    retained
-                } else {
-                    sent
-                }
-            );
+            assert_eq!(snapshot.sent_at, sent);
             assert_eq!(snapshot.counts[0].count, 2);
             assert!(snapshot.own_emojis.contains(&"😂".to_string()));
         }
@@ -2538,7 +2497,7 @@ mod tests {
                 .unwrap()
                 .unwrap()
                 .sent_at,
-            retained
+            sent
         );
         let reopened = crate::client::ChatterClient::builder()
             .server_url("https://localhost:1")
@@ -2549,11 +2508,6 @@ mod tests {
             crate::storage::repositories::unified_message_repo::UnifiedMessageRepository::new(
                 reopened.messages().database.clone(),
             );
-        assert_eq!(
-            repo.resolve_channel_reaction_clock(&scope, &t.alice_id, sent)
-                .unwrap(),
-            retained
-        );
         assert_eq!(
             repo.get_reaction_counts(&scope, &t.alice_id, sent).unwrap()[0].count,
             2
@@ -2569,31 +2523,6 @@ mod tests {
                 .unwrap()
                 .is_none()
         );
-        for invalid in [
-            Message {
-                sender_id: Some(UserId::new()),
-                ..received.clone()
-            },
-            Message {
-                conversation_id: ChannelId::new(),
-                ..received.clone()
-            },
-            Message {
-                conversation_type: ConversationType::ServerDm,
-                ..received.clone()
-            },
-        ] {
-            assert!(repo.bind_authenticated_channel_clock(&invalid).is_err());
-        }
-        if legacy {
-            assert!(
-                repo.bind_authenticated_channel_clock(&Message {
-                    sent_at: sent + 1,
-                    ..received.clone()
-                })
-                .is_err()
-            );
-        }
         assert_eq!(
             repo.get_reaction_counts(&scope, &t.alice_id, sent).unwrap()[0].count,
             2
@@ -3533,68 +3462,30 @@ mod tests {
             !m.solicited_resends
                 .contains(&(t.channel_id, t.alice_id, ts3 / 1_000_000))
         );
-        // A solicited authenticated UUID can bind an old transport-clock row;
-        // an unsolicited or foreign-author claim cannot change its history.
-        use crate::domain::{
-            message::{ConversationType, Message},
-            reaction::ReactionScope,
-        };
+        // A solicited UUID naming a row held at another clock is refused;
+        // the retained row keeps its clock and content.
+        use crate::domain::message::{ConversationType, Message};
         let sent = ts3 + 20_000_000;
-        let transport = sent + 445_413_938;
-        let mut old = Message::new_text(
+        let mut held = Message::new_text(
             t.channel_id,
             ConversationType::Channel,
             Some(t.alice_id),
-            "[Encrypted message]".into(),
-            transport,
+            "held".into(),
+            sent + 1,
         );
-        old.id = MessageId::new();
-        m.store_message_local(&old).unwrap();
-        let scope = ReactionScope::of(&old);
-        m.record_reaction_at(&scope, &t.alice_id, transport, &t.bob_id, "👍", false, 1)
-            .unwrap();
-        assert!(
-            !m.record_inbound_reaction(&scope, &t.alice_id, &t.alice_id, sent, "👍", false, 2)
-                .unwrap()
-        );
+        held.id = MessageId::new();
+        m.store_message_local(&held).unwrap();
         m.solicited_resends
             .insert((t.channel_id, t.alice_id, sent / 1_000_000));
-        gateway
-            .store_data_message(resend(old.id, sent), Some(t.alice_id))
-            .await
-            .unwrap();
-        let healed = m.get_message_local(&old.id).unwrap().unwrap();
-        assert_eq!(healed.sent_at, transport);
-        assert_eq!(healed.as_text(), Some("resent"));
-        assert_eq!(
-            m.message_repo
-                .get_reaction_counts(&scope, &t.alice_id, sent)
-                .unwrap()[0]
-                .count,
-            2
-        );
-        let mut second = old.clone();
-        second.id = MessageId::new();
-        second.sent_at = transport + 1;
-        m.store_message_local(&second).unwrap();
         assert!(
-            m.message_repo
-                .bind_authenticated_channel_clock(&Message {
-                    sent_at: sent,
-                    ..second.clone()
-                })
+            gateway
+                .store_data_message(resend(held.id, sent), Some(t.alice_id))
+                .await
                 .is_err()
         );
-        assert_eq!(
-            m.get_message_local(&second.id).unwrap().unwrap().sent_at,
-            transport + 1
-        );
-        assert_eq!(
-            m.message_repo
-                .resolve_channel_reaction_clock(&scope, &t.alice_id, sent)
-                .unwrap(),
-            transport
-        );
+        let kept = m.get_message_local(&held.id).unwrap().unwrap();
+        assert_eq!(kept.sent_at, sent + 1);
+        assert_eq!(kept.as_text(), Some("held"));
     }
 
     /// Past the parked cap the oldest message is evicted — and its sender is

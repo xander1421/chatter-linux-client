@@ -4,7 +4,6 @@
 
 use std::path::Path;
 
-use crate::domain::ephemeral::MessageTTL;
 use crate::domain::ids::{AttachmentId, ChannelId, IntegrationId, MessageId};
 use crate::domain::message::{Message, MessageContent};
 use crate::mailbox::group::GroupFanout;
@@ -882,98 +881,6 @@ impl MessageService {
             tracing::debug!(channel_id = %channel_id, error = %e, "Member refresh did not update local roster");
         }
         memberships.into_iter().map(|m| m.user_id).collect()
-    }
-
-    /// Send an ephemeral (self-destructing) message to a channel.
-    #[allow(clippy::too_many_arguments)]
-    pub async fn send_ephemeral_message(
-        &self,
-        message_client: &mut MessageClient,
-        channel_id: &ChannelId,
-        text: &str,
-        ttl: MessageTTL,
-        attachment_ids: Vec<AttachmentId>,
-        thread_id: Option<&MessageId>,
-    ) -> Result<Message, MessageError> {
-        // Check logged in
-        let sender_id = self.settings_repo.current_user_id()?;
-
-        // Validate content - must have text or attachments
-        let trimmed_text = text.trim();
-        if trimmed_text.is_empty() && attachment_ids.is_empty() {
-            return Err(MessageError::InvalidContent(
-                "message must have text or attachments".to_string(),
-            ));
-        }
-
-        // Build proto content
-        let content = chat_v1::message::Content {
-            r#type: Some(chat_v1::message::content::Type::Text(
-                trimmed_text.to_string(),
-            )),
-        };
-
-        // Convert TTL to prost Duration
-        let ephemeral_ttl = Some(prost_types::Duration {
-            seconds: ttl.as_secs() as i64,
-            nanos: 0,
-        });
-
-        let provisional = crate::util::time::TimestampNanos::now().as_u64();
-        self.snapshot_channel_receipt_targets(
-            *channel_id,
-            provisional,
-            &mut self.grpc_pool.auth_client(),
-            &mut self.grpc_pool.channel_client(),
-        )
-        .await?;
-
-        // Call server with ephemeral flag
-        let proto_message = message_client
-            .send_message(
-                &channel_id.to_string(),
-                content,
-                thread_id.map(|id| id.to_string()).as_deref(),
-                true,          // ephemeral = true
-                ephemeral_ttl, // TTL duration
-                Vec::new(),    // mentioned_integrations (not typically used with ephemeral)
-                false,         // targets_ai_bot
-                attachment_ids.iter().map(|id| id.to_string()).collect(),
-            )
-            .await?;
-
-        // Convert to domain message and preserve attachment IDs
-        let conv_type =
-            super::conversion::conversation_type_for_channel(&self.channel_repo, channel_id);
-        let mut message = proto_to_domain_message(&proto_message, sender_id, conv_type)?;
-        message.attachments = attachment_ids;
-
-        // IMPORTANT: Ensure channel_id matches (server might return different format)
-        if message.conversation_id != *channel_id {
-            tracing::warn!(
-                input_channel_id = %channel_id,
-                server_channel_id = %message.conversation_id,
-                "[SEND_EPHEMERAL] CHANNEL_ID MISMATCH! Server returned different channel_id"
-            );
-            message.conversation_id = *channel_id;
-        }
-
-        crate::storage::repositories::message_receipt_repo::MessageReceiptRepository::new(
-            self.database.clone(),
-        )
-        .bind_send_timestamp(
-            *channel_id,
-            message.conversation_type.clone(),
-            sender_id,
-            provisional,
-            message.sent_at,
-        )?;
-        self.message_repo.insert_or_ignore(&message)?;
-        if let Some(stored) = self.message_repo.get(&message.id)? {
-            message.delivery_status = stored.delivery_status;
-        }
-
-        Ok(message)
     }
 
     /// Edit a message in a channel.

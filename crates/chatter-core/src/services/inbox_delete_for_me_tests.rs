@@ -198,36 +198,3 @@ fn saved_requires_own_id_and_author_and_unsupported_kinds_never_delete() {
         assert!(f.repo.get(&target.id).unwrap().is_some());
     }
 }
-
-#[test]
-fn authenticated_channel_clock_resolves_only_exact_scope_and_author() {
-    let f = Fixture::new();
-    let id = ChannelId::new();
-    let author = UserId::new();
-    let target = f.insert(id, CT::Channel, author, 100);
-    let mut authenticated = target.clone();
-    authenticated.sent_at = 200;
-    f.repo
-        .bind_authenticated_channel_clock(&authenticated)
-        .unwrap();
-    let foreign = f.insert(ChannelId::new(), CT::Channel, author, 200);
-    let mut rx = f.bus.subscribe_domain();
-    f.admit(
-        Some(f.own),
-        f.own,
-        &id.to_string(),
-        &author.to_string(),
-        200,
-    )
-    .unwrap();
-    let DomainEvent::DeleteForMeSync {
-        target_message_id, ..
-    } = rx.try_recv().unwrap()
-    else {
-        panic!("wrong event")
-    };
-    assert_eq!(target_message_id, target.id);
-    f.repo.delete(&target_message_id).unwrap();
-    assert!(f.repo.get(&target.id).unwrap().is_none());
-    assert!(f.repo.get(&foreign.id).unwrap().is_some());
-}
