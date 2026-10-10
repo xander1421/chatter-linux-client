@@ -918,8 +918,15 @@ mod tests {
             .is_some());
 
         // Someone else's DM cannot name it.
-        assert!(m.apply_dm_delete(&UserId::new(), sent).unwrap().is_none());
-        assert!(m.apply_dm_delete(&peer, sent).unwrap().is_some());
+        let stranger = UserId::new();
+        assert!(m
+            .apply_targeted_dm_delete(&stranger, Some(&stranger.to_string()), sent)
+            .unwrap()
+            .is_none());
+        assert!(m
+            .apply_targeted_dm_delete(&peer, Some(&peer.to_string()), sent)
+            .unwrap()
+            .is_some());
         // Deleted before it is announced, not by a later event subscriber.
         assert!(m
             .message_repo

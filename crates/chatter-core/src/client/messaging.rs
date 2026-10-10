@@ -2548,7 +2548,7 @@ mod section_row_tests {
         .unwrap()
         .expect("applied");
         assert_eq!(preview(), "edited from S9");
-        m.apply_dm_delete(&peer, sent + 1_000)
+        m.apply_targeted_dm_delete(&peer, Some(&peer.to_string()), sent + 1_000)
             .unwrap()
             .expect("matched");
         assert_eq!(preview(), "earlier");

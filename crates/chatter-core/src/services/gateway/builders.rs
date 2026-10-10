@@ -374,21 +374,7 @@ pub fn build_saved_message_sync_content(sync: SavedMessageSync) -> Content {
     }
 }
 
-/// Create a Content proto for delete-for-everyone.
-/// This sends a DataMessage with a Delete field to notify the peer.
-pub fn build_delete_for_everyone_content(target_sent_timestamp: u64) -> Content {
-    build_delete_for_everyone_content_with_channel(target_sent_timestamp, None)
-}
-
-/// Create a Content proto for delete-for-everyone with optional channel context.
-pub fn build_delete_for_everyone_content_with_channel(
-    target_sent_timestamp: u64,
-    channel_id: Option<&str>,
-) -> Content {
-    build_targeted_delete_content(target_sent_timestamp, None, channel_id)
-}
-
-/// Exact author route for all production deletes. None is legacy sender-only.
+/// Delete-for-everyone, routed to the exact target author.
 pub fn build_targeted_delete_content(
     target_sent_timestamp: u64,
     target_author_aci: Option<&str>,

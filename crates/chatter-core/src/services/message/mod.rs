@@ -992,17 +992,6 @@ impl MessageService {
         )
     }
 
-    /// Receive path captures our server deletion capability before deleting
-    /// its source row. Cleanup failure leaves the scoped local tombstone intact.
-    pub async fn apply_dm_delete_received(
-        &self,
-        peer: &UserId,
-        target_sent_at: u64,
-    ) -> Result<Option<Message>, MessageError> {
-        self.apply_targeted_dm_delete_received(peer, None, target_sent_at)
-            .await
-    }
-
     /// Explicit call identity never falls back to timestamp semantics on refusal.
     pub(crate) async fn apply_scoped_call_or_timestamp_delete_received(
         &self,
@@ -1061,7 +1050,7 @@ impl MessageService {
     }
 
     /// Route using the authenticated sender, accepting a destination only on
-    /// self-device copies. No legacy self-copy destination or author guessing.
+    /// self-device copies. No missing self-copy destination, no author guessing.
     pub async fn apply_scoped_dm_delete_received(
         &self,
         sender: &UserId,
@@ -1120,7 +1109,7 @@ impl MessageService {
                 Ok(author) => author,
                 Err(_) => return Ok(None),
             },
-            None => *peer,
+            None => return Ok(None),
         };
         Ok((author == *peer || author == me).then_some(author))
     }
@@ -1142,15 +1131,6 @@ impl MessageService {
             &author,
             timestamp,
         )?)
-    }
-
-    /// Legacy compatibility: only the authenticated sender's message.
-    pub fn apply_dm_delete(
-        &self,
-        peer: &UserId,
-        timestamp: u64,
-    ) -> Result<Option<Message>, MessageError> {
-        self.apply_targeted_dm_delete(peer, None, timestamp)
     }
 
     /// Exact author and exact arrival conversation/type; never guess a second author.
@@ -1572,7 +1552,7 @@ impl MessageService {
     }
 
     /// Authenticate a DM destination claim against the actual envelope sender.
-    /// Legacy self-device envelopes have no destination and are rejected.
+    /// Self-device envelopes without a destination are rejected.
     pub fn dm_reaction_admission(
         &self,
         transport_peer: Option<UserId>,
@@ -1821,7 +1801,7 @@ impl MessageService {
         }
         // Client channel reactions travel as sealed peer controls. A server
         // Message.reactions projection is not a complete snapshot of that ledger,
-        // even when nonempty, and cannot clear legacy ambiguity or tombstones.
+        // even when nonempty, and cannot clear ambiguity or tombstones.
         // Retain verified local votes/projections; peer controls remain authority.
         Ok(())
     }
@@ -2148,7 +2128,7 @@ mod inbound_target_tests {
         svc.message_repo.insert(&late).unwrap();
         assert!(svc.message_repo.get(&late.id).unwrap().is_none());
         // Bob cannot use Carol's timestamp to delete her DM or channel row.
-        assert!(svc.apply_dm_delete(&f.bob, CH_TS).unwrap().is_none());
+        assert!(svc.apply_targeted_dm_delete(&f.bob, Some(&f.bob.to_string()), CH_TS).unwrap().is_none());
         assert!(
             svc.get_by_sender_timestamp(&f.carol, CH_TS)
                 .unwrap()
@@ -2167,7 +2147,7 @@ mod inbound_target_tests {
                 .unwrap()
                 .is_none()
         );
-        assert!(svc.apply_dm_delete(&f.me, 302).unwrap().is_none());
+        assert!(svc.apply_targeted_dm_delete(&f.me, Some(&f.me.to_string()), 302).unwrap().is_none());
         assert!(svc.message_repo.get(&own_channel.id).unwrap().is_some());
         let late = Message::new_text(
             ChannelId::from(f.carol),
@@ -2579,30 +2559,23 @@ mod inbound_target_tests {
     }
 
     #[tokio::test]
-    async fn exact_dm_delete_legacy_and_forged_author_admission() {
+    async fn exact_dm_delete_authorless_and_forged_author_admission() {
         let f = fixture();
         let svc = f.client.messages();
         let scope = ChannelId::from(f.carol);
-        // Legacy may queue only its authenticated sender, never our matching timestamp.
-        assert!(svc.apply_dm_delete(&f.carol, 910).unwrap().is_none());
-        let own = Message::new_text(
-            scope,
-            ConversationType::ServerDm,
-            Some(f.me),
-            "own".into(),
-            910,
-        );
-        svc.message_repo.insert(&own).unwrap();
-        assert!(svc.message_repo.get(&own.id).unwrap().is_some());
-        let peer = Message::new_text(
-            scope,
-            ConversationType::ServerDm,
-            Some(f.carol),
-            "peer".into(),
-            910,
-        );
-        svc.message_repo.insert(&peer).unwrap();
-        assert!(svc.message_repo.get(&peer.id).unwrap().is_none());
+        // A delete that names no author is refused and holds nothing back.
+        assert!(svc.apply_targeted_dm_delete(&f.carol, None, 910).unwrap().is_none());
+        for author in [f.me, f.carol] {
+            let message = Message::new_text(
+                scope,
+                ConversationType::ServerDm,
+                Some(author),
+                "kept".into(),
+                910,
+            );
+            svc.message_repo.insert(&message).unwrap();
+            assert!(svc.message_repo.get(&message.id).unwrap().is_some());
+        }
         // Explicit missing own target queues only own, preserving the peer collision.
         assert!(
             svc.apply_targeted_dm_delete(&f.carol, Some(&f.me.to_string()), 911)
@@ -2643,13 +2616,16 @@ mod inbound_target_tests {
         );
         svc.message_repo.insert(&foreign).unwrap();
         assert!(svc.message_repo.get(&foreign.id).unwrap().is_some());
-        let legacy = svc
+        let peer_message = svc
             .get_by_sender_timestamp(&f.carol, DM_TS)
             .unwrap()
             .unwrap();
         assert_eq!(
-            svc.apply_dm_delete(&f.carol, DM_TS).unwrap().unwrap().id,
-            legacy.id
+            svc.apply_targeted_dm_delete(&f.carol, Some(&f.carol.to_string()), DM_TS)
+                .unwrap()
+                .unwrap()
+                .id,
+            peer_message.id
         );
     }
 
@@ -2812,8 +2788,8 @@ mod inbound_target_tests {
                 assert!(svc.message_repo.get(&target.id).unwrap().is_none());
             }
         }
-        // Explicit and legacy missing deletes leave the other author's collision alive.
-        for (timestamp, explicit) in [(820, true), (821, false)] {
+        // An explicit missing delete leaves the other author's collision alive.
+        for (timestamp, explicit) in [(820, true)] {
             let content = crate::services::gateway::builders::build_targeted_delete_content(
                 timestamp,
                 explicit.then(|| f.me.to_string()).as_deref(),
@@ -2835,15 +2811,19 @@ mod inbound_target_tests {
             svc.message_repo.insert(&survivor).unwrap();
             assert!(svc.message_repo.get(&survivor.id).unwrap().is_some());
         }
-        let legacy = Message::new_text(
+        let peer_message = Message::new_text(
             dm.id.into(),
             ConversationType::AnonDm,
             Some(f.carol),
-            "legacy author".into(),
+            "peer author".into(),
             822,
         );
-        svc.message_repo.insert(&legacy).unwrap();
-        let content = crate::services::build_delete_for_everyone_content(822);
+        svc.message_repo.insert(&peer_message).unwrap();
+        let content = crate::services::gateway::builders::build_targeted_delete_content(
+            822,
+            Some(&f.carol.to_string()),
+            None,
+        );
         assert_eq!(
             anon.process_incoming_content(&dm.id, &f.carol, &content)
                 .unwrap()
@@ -3342,7 +3322,7 @@ mod inbound_target_tests {
         assert!(
             svc.dm_reaction_admission(None, f.me, &f.carol.to_string())
                 .is_err(),
-            "legacy own-device ambiguity is never guessed"
+            "own-device ambiguity is never guessed"
         );
         assert!(
             svc.dm_reaction_admission(Some(f.bob), f.bob, &encoded)

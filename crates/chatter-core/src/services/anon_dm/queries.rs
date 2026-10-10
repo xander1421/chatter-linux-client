@@ -184,16 +184,6 @@ impl AnonDmService {
     }
 
     /// Authenticated peer may delete either participant's message in this DM.
-    /// Legacy compatibility targets only the authenticated peer author.
-    pub fn apply_received_delete(
-        &self,
-        conversation_id: &AnonDmId,
-        peer: &UserId,
-        sent_timestamp: u64,
-    ) -> Result<Option<Message>, AnonDmError> {
-        self.apply_targeted_received_delete(conversation_id, peer, None, sent_timestamp)
-    }
-
     pub fn apply_targeted_received_delete(
         &self,
         conversation_id: &AnonDmId,
@@ -217,7 +207,7 @@ impl AnonDmService {
                 Ok(author) => author,
                 Err(_) => return Ok(None),
             },
-            None => *peer,
+            None => return Ok(None),
         };
         if author != *peer && author != me {
             return Ok(None);

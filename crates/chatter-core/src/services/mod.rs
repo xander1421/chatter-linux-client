@@ -102,8 +102,6 @@ pub use gateway::{
     build_call_key_offer,
     build_data_message_content,
     build_data_message_content_with_quote,
-    build_delete_for_everyone_content,
-    build_delete_for_everyone_content_with_channel,
     build_delete_for_me_content,
     build_delivery_receipt_content,
     build_delivery_receipt_content_with_channel,
@@ -120,6 +118,7 @@ pub use gateway::{
     build_reply_content,
     build_saved_message_sync_content,
     // DataMessage builders
+    build_targeted_delete_content,
     build_text_content,
     // Control message builders
     build_typing_content,

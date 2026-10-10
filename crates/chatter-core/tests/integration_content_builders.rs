@@ -12,7 +12,7 @@ use chatter_core::proto::content_v1::{self, content};
 use chatter_core::services::{
     CallHangupReason, PADDING_GROUP_CONTROL, PADDING_LARGE, PADDING_MESSAGE,
     build_call_hangup_content, build_call_key_answer, build_call_key_offer,
-    build_data_message_content, build_delete_for_everyone_content, build_delete_for_me_content,
+    build_data_message_content, build_delete_for_me_content, build_targeted_delete_content,
     build_delivery_receipt_content, build_edit_content, build_edit_content_with_channel,
     build_group_call_signal_content, build_pin_content, build_reaction_content,
     build_reaction_content_with_channel, build_read_receipt_content,
@@ -394,14 +394,14 @@ fn test_build_delete_for_me() {
 /// Test building a delete-for-everyone message.
 #[test]
 fn test_build_delete_for_everyone() {
-    let content = build_delete_for_everyone_content(12345);
+    let content = build_targeted_delete_content(12345, Some("author"), None);
     match content.content.unwrap() {
         content::Content::DataMessage(dm) => {
             // Delete-for-everyone is a DataMessage with a delete field
             assert!(dm.delete.is_some());
             let delete = dm.delete.unwrap();
             assert_eq!(delete.target_sent_timestamp, 12345);
-            assert!(delete.target_author_aci.is_none());
+            assert_eq!(delete.target_author_aci.as_deref(), Some("author"));
             assert!(delete.destination_user_id.is_none());
         }
         other => panic!("Expected DataMessage with delete, got {:?}", other),

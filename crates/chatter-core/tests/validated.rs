@@ -6028,7 +6028,7 @@ async fn v19_own_typing_is_not_self_synced() {
 //
 // WHY THIS TEST EXISTS (finding F13): delete-for-everyone rides an empty-body
 // `DataMessage` carrying the `delete` field on the sealed ServerDm path
-// (builders::build_delete_for_everyone_content_with_channel). On the receive
+// (builders::build_targeted_delete_content). On the receive
 // side, MessageGateway::process_incoming_message matched ANY
 // `Content::DataMessage` and handed it to `store_data_message`
 // (services/gateway/decryption.rs) — which ignores `delete` entirely. The

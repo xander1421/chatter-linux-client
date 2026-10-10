@@ -527,7 +527,7 @@ impl MessageGateway {
             if let Some(content::Content::DataMessage(data_message)) = content_proto.content {
                 // Delete-for-everyone rides an empty-body `DataMessage` carrying
                 // the `delete` field on this same sealed ServerDm path
-                // (builders::build_delete_for_everyone_content_with_channel). It
+                // (builders::build_targeted_delete_content). It
                 // is CONTROL, not stored content: `store_data_message` ignores
                 // `delete`, so routing it there would persist a junk empty-body
                 // row and leave the TARGET message intact — the recipient would
