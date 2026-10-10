@@ -692,39 +692,28 @@ impl ChatterClient {
             .await;
 
         let final_result = match &result {
-            Err(crate::services::svr_backup_service::SvrBackupError::BackupNotFound)
-            | Err(crate::services::svr_backup_service::SvrBackupError::Network(
-                crate::error::NetworkError::NotFound(_),
-            )) => {
-                // The server answers a WRONG old PIN with the same NotFound it
-                // uses for "no backup" (svr repository ChangePinBackup). Only
-                // the second may fall back to creating one: doing it for the
-                // first replaced a live backup without the current PIN.
-                match self.svr_backup().has_key_backup().await {
-                    Ok(false) => {
-                        tracing::info!(
-                            "No existing SVR backup found, creating new backup with new PIN"
-                        );
-                        self.svr_backup()
-                            .create_and_upload_backup(
-                                &new_svr_secret,
-                                &identity_keypair,
-                                &profile_key,
-                                &full_username,
-                            )
-                            .await
-                            .map(|_| ())
-                    }
-                    Ok(true) => {
-                        old_svr_secret.zeroize();
-                        new_svr_secret.zeroize();
-                        identity_keypair.zeroize();
-                        profile_key.zeroize();
-                        new_reg_lock.zeroize();
-                        return Err(ClientError::Validation("Current PIN is incorrect".into()));
-                    }
-                    Err(e) => Err(e),
-                }
+            // NOT_FOUND means the account has no backup at all, so there is
+            // nothing to re-encrypt: create one under the new PIN. A wrong
+            // old PIN is the distinct WrongPin (§114) and is refused below.
+            Err(crate::services::svr_backup_service::SvrBackupError::BackupNotFound) => {
+                tracing::info!("No existing SVR backup found, creating new backup with new PIN");
+                self.svr_backup()
+                    .create_and_upload_backup(
+                        &new_svr_secret,
+                        &identity_keypair,
+                        &profile_key,
+                        &full_username,
+                    )
+                    .await
+                    .map(|_| ())
+            }
+            Err(crate::services::svr_backup_service::SvrBackupError::WrongPin) => {
+                old_svr_secret.zeroize();
+                new_svr_secret.zeroize();
+                identity_keypair.zeroize();
+                profile_key.zeroize();
+                new_reg_lock.zeroize();
+                return Err(ClientError::Validation("Current PIN is incorrect".into()));
             }
             _ => result.map(|_| ()),
         };
@@ -823,25 +812,7 @@ impl ChatterClient {
                 // Classify rather than collapse. Which failure this was decides
                 // whether the user retypes a PIN, waits, or accepts losing
                 // their conversations — see `key_recovery::classify_restore_failure`.
-                let mut need = crate::services::key_recovery::classify_restore_failure(&e);
-                // A miss is ambiguous by construction — the backup id is
-                // PIN-derived, so "wrong PIN" and "no backup at all" both land
-                // here. `classify_restore_failure` takes the cautious reading
-                // (never authorise minting on a typo); ask the server, which is
-                // the only party that can actually tell, before settling.
-                if need == KeyRecoveryNeed::WrongPin {
-                    match self.svr_backup().has_key_backup().await {
-                        Ok(false) => need = KeyRecoveryNeed::NoBackup,
-                        Ok(true) => {}
-                        // Unknown: keep the cautious reading rather than
-                        // upgrading a network blip into permission to destroy
-                        // the user's identity key.
-                        Err(probe_err) => tracing::warn!(
-                            "could not determine whether a key backup exists: {}",
-                            probe_err
-                        ),
-                    }
-                }
+                let need = crate::services::key_recovery::classify_restore_failure(&e);
                 tracing::warn!(?need, "SVR restore failed: {}", e);
                 result.key_recovery = Some(need);
                 return;

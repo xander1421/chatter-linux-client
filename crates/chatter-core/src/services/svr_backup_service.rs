@@ -46,9 +46,14 @@ pub enum SvrBackupError {
     #[error("rate limited: no fetch attempts remaining")]
     RateLimited,
 
-    /// Backup not found on server.
+    /// The account has no backup on the server (NOT_FOUND).
     #[error("backup not found")]
     BackupNotFound,
+
+    /// A backup exists but the PIN-derived id does not match it
+    /// (PERMISSION_DENIED). The attempt cost a server-side PIN strike.
+    #[error("wrong PIN")]
+    WrongPin,
 
     /// Backup permanently destroyed by server (too many failed PIN attempts).
     #[error("backup destroyed: re-register PIN to create a new backup")]
@@ -59,6 +64,22 @@ pub enum SvrBackupError {
     /// transport and crypto layers; this variant covers the glue.
     #[error("svr backup: {0}")]
     Generic(String),
+}
+
+/// Map the errors of a PIN-checked SVR RPC (FetchBackup, ChangePinBackup).
+/// The server answers NOT_FOUND only when the account has no backup and
+/// PERMISSION_DENIED when one exists under a different PIN-derived id.
+fn classify_pin_rpc_error(e: NetworkError) -> SvrBackupError {
+    match e {
+        NetworkError::NotFound(_) => SvrBackupError::BackupNotFound,
+        NetworkError::PermissionDenied => SvrBackupError::WrongPin,
+        NetworkError::RateLimited => SvrBackupError::RateLimited,
+        NetworkError::DataLoss(_) => {
+            tracing::error!("SVR backup destroyed by server (too many failed PIN attempts)");
+            SvrBackupError::BackupDestroyed
+        }
+        e => SvrBackupError::Network(e),
+    }
 }
 
 /// Result of a successful backup restore.
@@ -460,17 +481,7 @@ impl SvrBackupService {
         let result = client
             .fetch_backup(backup_id_hash.to_vec())
             .await
-            .map_err(|e| match &e {
-                NetworkError::NotFound(_) => SvrBackupError::BackupNotFound,
-                NetworkError::RateLimited => SvrBackupError::RateLimited,
-                NetworkError::DataLoss(_) => {
-                    tracing::error!(
-                        "SVR backup destroyed by server (too many failed PIN attempts)"
-                    );
-                    SvrBackupError::BackupDestroyed
-                }
-                _ => SvrBackupError::Network(e),
-            })?;
+            .map_err(classify_pin_rpc_error)?;
 
         // 3. Check remaining attempts
         if result.remaining_attempts <= 0 {
@@ -561,7 +572,8 @@ impl SvrBackupService {
                 new_registration_lock.to_vec(),
                 new_svr_public_key.to_vec(),
             )
-            .await?;
+            .await
+            .map_err(classify_pin_rpc_error)?;
 
         // 6. Persist confirmed version locally
         self.settings

@@ -152,9 +152,14 @@ impl ChatterClient {
 
         let mut fingerprint = match self.svr_backup().verify_pin_against_backup(pin, username).await {
             Ok(fp) => fp,
-            Err(SvrBackupError::BackupNotFound | SvrBackupError::Crypto(_)) => {
+            Err(SvrBackupError::WrongPin | SvrBackupError::Crypto(_)) => {
                 return Err(ClientError::Validation(
                     "Wrong PIN. Your key backup allows only a few wrong tries before it locks.".into(),
+                ))
+            }
+            Err(SvrBackupError::BackupNotFound) => {
+                return Err(ClientError::Validation(
+                    "This account has no key backup to check the PIN against. Set up your PIN again.".into(),
                 ))
             }
             Err(SvrBackupError::RateLimited) => {

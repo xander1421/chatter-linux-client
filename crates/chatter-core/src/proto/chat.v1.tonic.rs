@@ -4481,7 +4481,9 @@ pub mod svr_service_client {
                 .insert(GrpcMethod::new("chat.v1.SvrService", "StoreBackup"));
             self.inner.unary(req, path, codec).await
         }
-        /** Retrieve encrypted backup with PIN proof (rate-limited)
+        /** Retrieve encrypted backup with PIN proof (rate-limited: every call is a
+ PIN strike). NOT_FOUND = the account has no backup; PERMISSION_DENIED =
+ a backup exists and the PIN-derived id is wrong.
 */
         pub async fn fetch_backup(
             &mut self,
@@ -4508,8 +4510,7 @@ pub mod svr_service_client {
             self.inner.unary(req, path, codec).await
         }
         /** Whether this account has a key backup at all, independent of any PIN.
- See HasKeyBackupRequest — this is what lets a client tell "wrong PIN" from
- "nothing to recover" without guessing.
+ See HasKeyBackupRequest — answers without spending a PIN strike.
 */
         pub async fn has_key_backup(
             &mut self,
@@ -4558,7 +4559,8 @@ pub mod svr_service_client {
                 .insert(GrpcMethod::new("chat.v1.SvrService", "DeleteBackup"));
             self.inner.unary(req, path, codec).await
         }
-        /** Change PIN: re-encrypt backup with new SVR secret, update registration lock
+        /** Change PIN: re-encrypt backup with new SVR secret, update registration lock.
+ Same errors as FetchBackup for the old PIN, and the same strike.
 */
         pub async fn change_pin_backup(
             &mut self,
