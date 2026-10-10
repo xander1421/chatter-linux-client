@@ -16,6 +16,15 @@ use i_slint_backend_testing as testing;
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 fn pump(w: &MainWindow) {
+    // Opening on an unread row and jumping are driven by Slint `Timer`
+    // elements (1fc72cab, d33a9743). Their `running` bindings are re-read by
+    // change handlers that a real frame runs; this harness never renders, so
+    // tick them as frames would.
+    for _ in 0..25 {
+        std::thread::sleep(std::time::Duration::from_millis(16));
+        slint::platform::update_timers_and_animations();
+        i_slint_core::properties::ChangeTracker::run_change_handlers();
+    }
     slint::Timer::single_shot(std::time::Duration::from_millis(400), || {
         slint::quit_event_loop().unwrap();
     });
