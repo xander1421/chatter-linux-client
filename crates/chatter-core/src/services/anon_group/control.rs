@@ -16,7 +16,7 @@ impl AnonGroupService {
         self.anon_group_repo
             .update_status(group_id, AnonGroupStatus::Blocked)?;
         self.held_posts.forget(group_id);
-        tracing::info!("Blocked group {}", group_id);
+        tracing::info!("Blocked group");
         Ok(())
     }
 
@@ -24,7 +24,7 @@ impl AnonGroupService {
     pub fn unblock_group(&self, group_id: &AnonGroupId) -> Result<(), AnonGroupError> {
         self.anon_group_repo
             .update_status(group_id, AnonGroupStatus::Active)?;
-        tracing::info!("Unblocked group {}", group_id);
+        tracing::info!("Unblocked group");
         Ok(())
     }
 
@@ -32,7 +32,7 @@ impl AnonGroupService {
     pub fn mute_group(&self, group_id: &AnonGroupId) -> Result<(), AnonGroupError> {
         self.anon_group_repo
             .update_status(group_id, AnonGroupStatus::Muted)?;
-        tracing::info!("Muted group {}", group_id);
+        tracing::info!("Muted group");
         Ok(())
     }
 
@@ -40,7 +40,7 @@ impl AnonGroupService {
     pub fn unmute_group(&self, group_id: &AnonGroupId) -> Result<(), AnonGroupError> {
         self.anon_group_repo
             .update_status(group_id, AnonGroupStatus::Active)?;
-        tracing::info!("Unmuted group {}", group_id);
+        tracing::info!("Unmuted group");
         Ok(())
     }
 
@@ -66,7 +66,7 @@ impl AnonGroupService {
             .ok_or(AnonGroupError::GroupNotFound(*group_id))?;
 
         self.anon_group_repo.block_user(group_id, user_id, reason)?;
-        tracing::info!("Blocked user {} in group {}", user_id, group_id);
+        tracing::info!("Blocked user in group");
         Ok(())
     }
 
@@ -77,7 +77,7 @@ impl AnonGroupService {
         user_id: &UserId,
     ) -> Result<(), AnonGroupError> {
         self.anon_group_repo.unblock_user(group_id, user_id)?;
-        tracing::info!("Unblocked user {} in group {}", user_id, group_id);
+        tracing::info!("Unblocked user in group");
         Ok(())
     }
 
@@ -105,8 +105,7 @@ impl AnonGroupService {
 
         if count > Self::RATE_LIMIT_MESSAGES {
             tracing::warn!(
-                "Rate limit exceeded for group {}: {} messages in window",
-                group_id,
+                "Rate limit exceeded for group: {} messages in window",
                 count
             );
             return Err(AnonGroupError::RateLimitExceeded(Self::RATE_LIMIT_MESSAGES));

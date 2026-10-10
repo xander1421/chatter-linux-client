@@ -32,9 +32,8 @@ impl AnonGroupService {
         let msg_id_str = message.id.to_string();
         self.message_service.message_repo.insert(&message)?;
         tracing::debug!(
-            "Stored system message {} in group {} at {}",
+            "Stored system message {} in group at {}",
             msg_id_str,
-            group_id,
             sent_at
         );
         Ok(AnonGroupMessageId::from_string(msg_id_str))
@@ -67,9 +66,8 @@ impl AnonGroupService {
         let msg_id_str = message.id.to_string();
         self.message_service.message_repo.insert(&message)?;
         tracing::debug!(
-            "Stored message {} in group {} with sent_at={}",
+            "Stored message {} in group with sent_at={}",
             msg_id_str,
-            group_id,
             sent_at
         );
         Ok(AnonGroupMessageId::from_string(msg_id_str))
@@ -98,9 +96,8 @@ impl AnonGroupService {
         let msg_id_str = message.id.to_string();
         self.message_service.message_repo.insert(&message)?;
         tracing::debug!(
-            "Stored text message {} in group {} with sent_at={}",
+            "Stored text message {} in group with sent_at={}",
             msg_id_str,
-            group_id,
             sent_at
         );
         Ok(AnonGroupMessageId::from_string(msg_id_str))
@@ -136,9 +133,8 @@ impl AnonGroupService {
         let msg_id_str = message.id.to_string();
         self.message_service.message_repo.insert(&message)?;
         tracing::debug!(
-            "Stored message {} in group {} with sent_at={}, attachments={}",
+            "Stored message {} in group with sent_at={}, attachments={}",
             msg_id_str,
-            group_id,
             sent_at,
             attachment_ids.len()
         );

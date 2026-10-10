@@ -158,7 +158,7 @@ impl AnonGroupService {
             Err(_) => true,
         };
         if group_blocked {
-            tracing::debug!(group_id = %group_id, "Dropped content for blocked group");
+            tracing::debug!("Dropped content for blocked group");
             return Ok(vec![]);
         }
         let sender_blocked = self
@@ -173,7 +173,7 @@ impl AnonGroupService {
                 | Some(ContentType::AnonGroupUpdate(_))
         );
         if sender_blocked && !structural {
-            tracing::debug!(group_id = %group_id, "Dropped content from member blocked in group");
+            tracing::debug!("Dropped content from member blocked in group");
             return Ok(vec![]);
         }
 
@@ -196,8 +196,10 @@ impl AnonGroupService {
                     now,
                 );
             }
-            tracing::debug!(group_id = %group_id, sender_id = %peer_id, held,
-                "Content from a sender outside the roster not delivered");
+            tracing::debug!(
+                held,
+                "Content from a sender outside the roster not delivered"
+            );
             return Ok(vec![]);
         }
 
@@ -231,7 +233,7 @@ impl AnonGroupService {
                         }
                     })
                 {
-                    tracing::warn!(group_id = %group_id, error = %e, "Failed to handle member list");
+                    tracing::warn!( error = %e, "Failed to handle member list");
                     return Ok(events);
                 }
 
@@ -242,7 +244,7 @@ impl AnonGroupService {
                 // Posts that raced this list in are delivered now.
                 events.extend(self.release_held_posts(group_id));
 
-                tracing::info!(group_id = %group_id, sender_id = %peer_id, "Processed group member list");
+                tracing::info!("Processed group member list");
             }
             Some(ContentType::AnonGroupLeave(leave)) => {
                 match self.handle_leave_ordered(*group_id, *peer_id, leave.timestamp) {
@@ -251,7 +253,7 @@ impl AnonGroupService {
                             group_id: *group_id,
                             user_id: *peer_id,
                         });
-                        tracing::info!(group_id = %group_id, sender_id = %peer_id, "Member left group");
+                        tracing::info!("Member left group");
                     }
                     Ok(false) => {}
                     Err(e) => tracing::warn!(error = %e, "Failed to handle group leave"),
@@ -281,7 +283,7 @@ impl AnonGroupService {
                             user_id: kicked_user_id,
                             kicked_by: *peer_id,
                         });
-                        tracing::info!(group_id = %group_id, kicked = %kicked_user_id, by = %peer_id, "Member kicked");
+                        tracing::info!("Member kicked");
                     }
                     Ok(false) => {}
                     Err(e) => tracing::warn!(error = %e, "Failed to handle group kick"),
@@ -329,7 +331,7 @@ impl AnonGroupService {
                     }
                 });
 
-                tracing::debug!(group_id = %group_id, sender_id = %peer_id, "Processed profile share");
+                tracing::debug!("Processed profile share");
             }
             Some(ContentType::AnonGroupUpdate(update)) => {
                 // Applied here too: updates (renames, roles, the ownership
@@ -342,16 +344,16 @@ impl AnonGroupService {
                             update: update.clone(),
                             updated_by: *peer_id,
                         });
-                        tracing::info!(group_id = %group_id, sender_id = %peer_id, "Group updated");
+                        tracing::info!("Group updated");
                     }
                     Ok(false) => {}
                     Err(e) => {
-                        tracing::warn!(group_id = %group_id, error = %e, "Failed to handle group update")
+                        tracing::warn!( error = %e, "Failed to handle group update")
                     }
                 }
             }
             _ => {
-                tracing::debug!(group_id = %group_id, "Ignoring unhandled inner content type");
+                tracing::debug!("Ignoring unhandled inner content type");
             }
         }
 
@@ -381,7 +383,7 @@ impl AnonGroupService {
                 match self.process_incoming_content(group, &post.sender, &post.content) {
                     Ok(delivered) => events.extend(delivered),
                     Err(e) => {
-                        tracing::warn!(group_id = %group, error = %e, "Held post failed on release")
+                        tracing::warn!( error = %e, "Held post failed on release")
                     }
                 }
             } else {

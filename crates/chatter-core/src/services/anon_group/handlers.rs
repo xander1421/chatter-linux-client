@@ -58,21 +58,13 @@ impl AnonGroupService {
             .ok_or(AnonGroupError::MemberNotFound(sender_id))?;
 
         if sender_id != _group.owner_id && !sender_role.can_kick() {
-            tracing::warn!(
-                "Kick from unauthorized member {} in group {} - ignoring",
-                sender_id,
-                group_id
-            );
+            tracing::warn!("Kick from unauthorized member in group - ignoring");
             return Ok(false);
         }
 
         // SECURITY: The owner can never be kicked.
         if kicked_user_id == _group.owner_id {
-            tracing::warn!(
-                sender_id = %sender_id,
-                group_id = %group_id,
-                "Rejected attempt to kick the group owner"
-            );
+            tracing::warn!("Rejected attempt to kick the group owner");
             return Ok(false);
         }
 
@@ -92,14 +84,10 @@ impl AnonGroupService {
             admin_signature,
         ) {
             Ok(true) => {
-                tracing::debug!("Kick signature verified for group {}", group_id);
+                tracing::debug!("Kick signature verified for group");
             }
             Ok(false) => {
-                tracing::warn!(
-                    "Invalid kick signature from {} in group {} - ignoring",
-                    sender_id,
-                    group_id
-                );
+                tracing::warn!("Invalid kick signature from in group - ignoring");
                 return Ok(false);
             }
             Err(e) => {
