@@ -224,8 +224,10 @@ impl ChannelService {
                 Some(channel_event::Event::ChannelCreated(proto_channel)) => {
                     let channel = proto_to_domain_channel(&proto_channel)
                         .map_err(|e| crate::error::NetworkError::InvalidRequest(e.to_string()))?;
+                    // Upsert: this client's own channel-event stream may have
+                    // stored the same server row first.
                     self.channel_repo
-                        .insert(&channel)
+                        .upsert(&channel)
                         .map_err(|e| crate::error::NetworkError::Unknown(e.to_string()))?;
                     return Ok(channel);
                 }
