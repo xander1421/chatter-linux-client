@@ -1268,14 +1268,7 @@ fn test_reaction_via_signal_style_lookup() {
         .unwrap();
     let me = UserId::new();
     message_repo
-        .add_reaction(
-            &ReactionScope::of(&found),
-            &sender,
-            sent_at,
-            &me,
-            &me,
-            "👍",
-        )
+        .add_reaction(&ReactionScope::of(&found), &sender, sent_at, &me, &me, "👍")
         .unwrap();
 
     // Verify reaction persisted
