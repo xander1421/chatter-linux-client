@@ -283,13 +283,3 @@ pub fn reaction_presentation(
         })
         .collect()
 }
-
-/// Server channel recovery can reach current Channel rows or encrypted legacy
-/// AnonGroup rows. A plain channel envelope can never own a foreign DM/group row.
-pub fn channel_snapshot_kind_matches(
-    kind: &crate::domain::message::ConversationType,
-    encrypted: bool,
-) -> bool {
-    use crate::domain::message::ConversationType;
-    *kind == ConversationType::Channel || (encrypted && *kind == ConversationType::AnonGroup)
-}

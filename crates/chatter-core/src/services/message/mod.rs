@@ -1614,7 +1614,7 @@ impl MessageService {
         let allowed = *reactor == self.current_user_id()?
             || match scope.kind {
                 ConversationType::ServerDm => scope.id == ChannelId::from(*reactor),
-                ConversationType::Channel | ConversationType::AnonGroup => self
+                ConversationType::Channel => self
                     .channel_repo
                     .get_membership(&scope.id, reactor)?
                     .is_some(),
@@ -1782,10 +1782,7 @@ impl MessageService {
             return Ok(());
         };
         if local.conversation_id != channel_id
-            || !crate::domain::reaction::channel_snapshot_kind_matches(
-                &local.conversation_type,
-                encrypted,
-            )
+            || local.conversation_type != ConversationType::Channel
         {
             return Err(MessageError::InvalidContent(
                 "Reaction snapshot conversation kind/id mismatch".into(),

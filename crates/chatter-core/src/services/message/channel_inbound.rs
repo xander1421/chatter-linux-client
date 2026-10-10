@@ -268,10 +268,8 @@ impl ChannelInbound {
         if let Some(local) = &existing {
             // Encrypted envelopes carry a transport clock; the cached sent_at
             // is the authenticated DataMessage clock, so do not equate them.
-            if !crate::domain::reaction::channel_snapshot_kind_matches(
-                &local.conversation_type,
-                encrypted,
-            ) || local.sender_id != author
+            if local.conversation_type != crate::domain::message::ConversationType::Channel
+                || local.sender_id != author
                 || local.thread_id != envelope.thread_id
                 || (!encrypted && local.sent_at != proto_msg.timestamp)
             {
@@ -1431,7 +1429,11 @@ mod tests {
         ));
         // Same channel UUID/author/clock is insufficient authority for a
         // channel snapshot to replace a foreign conversation-kind ledger.
-        for kind in [ConversationType::ServerDm, ConversationType::AnonDm] {
+        for kind in [
+            ConversationType::ServerDm,
+            ConversationType::AnonDm,
+            ConversationType::AnonGroup,
+        ] {
             let mut foreign = Message::new_text(
                 channel_id,
                 kind.clone(),
@@ -1474,37 +1476,6 @@ mod tests {
             );
             assert_eq!(foreign.reaction_counts[0].count, 1);
         }
-        let legacy = Message::new_text(
-            channel_id,
-            ConversationType::AnonGroup,
-            Some(author),
-            "legacy encrypted history".into(),
-            sent,
-        );
-        client.messages().store_message_local(&legacy).unwrap();
-        let plain = message(&legacy.id, author, "legacy encrypted history", 0);
-        assert!(matches!(
-            inbound.ingest_resynced(&plain, channel_id).await,
-            Err(MessageError::InvalidContent(_))
-        ));
-        let encrypted = chat_v1::Message {
-            author_device_id: 1,
-            content: encrypted_replay.content.clone(),
-            ..plain
-        };
-        inbound
-            .ingest_resynced(&encrypted, channel_id)
-            .await
-            .unwrap();
-        assert_eq!(
-            client
-                .messages()
-                .get_message_local(&legacy.id)
-                .unwrap()
-                .unwrap()
-                .conversation_type,
-            ConversationType::AnonGroup
-        );
         // Valid replay still succeeds after invalid rows were rejected.
         inbound.ingest_resynced(&replay, channel_id).await.unwrap();
         assert_eq!(edits(), 0);

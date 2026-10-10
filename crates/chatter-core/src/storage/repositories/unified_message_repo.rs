@@ -1302,44 +1302,10 @@ impl UnifiedMessageRepository {
         let intent = crate::inbox::reaction_handoff::decode_artifact_reaction(&stored, &scope);
         let mut applied = None;
         if let Some((author, reaction)) = intent {
+            // Only server channels send a `channel:` target, and their rows
+            // are always stored as Channel, whichever transport carried it.
             if reaction.target_author_aci.starts_with("channel:") {
-                let encrypted: Option<bool> = tx
-                    .query_row(
-                        "SELECT require_encryption FROM channels WHERE id=?1",
-                        [scope.id.to_string()],
-                        |r| r.get(0),
-                    )
-                    .optional()?;
-                let encrypted = encrypted.ok_or_else(|| {
-                    StorageError::InvalidData(
-                        "Reaction channel metadata not ready; authenticated artifact retained"
-                            .into(),
-                    )
-                })?;
-                let mut stmt=tx.prepare("SELECT DISTINCT m.conversation_type FROM messages m WHERE m.conversation_id=?1 AND m.sender_id=?2 AND (m.sent_at=?3 OR EXISTS(SELECT 1 FROM channel_message_clocks a WHERE a.message_id=m.id AND a.conversation_id=m.conversation_id AND a.conversation_type=m.conversation_type AND a.author_id=m.sender_id AND a.authenticated_sent_at=?3)) AND m.conversation_type IN ('channel','anon_group') AND m.is_deleted=0")?;
-                let kinds = stmt
-                    .query_map(
-                        params![
-                            scope.id.to_string(),
-                            author.to_string(),
-                            reaction.target_sent_timestamp as i64
-                        ],
-                        |r| r.get::<_, String>(0),
-                    )?
-                    .collect::<Result<Vec<_>, _>>()?;
-                drop(stmt);
-                if kinds.len() > 1 {
-                    return Err(StorageError::InvalidData(
-                        "Ambiguous channel receive storage kind".into(),
-                    ));
-                }
-                scope.kind = if let Some(kind) = kinds.first() {
-                    ConversationType::from_str_value(kind)?
-                } else if encrypted {
-                    ConversationType::AnonGroup
-                } else {
-                    ConversationType::Channel
-                };
+                scope.kind = ConversationType::Channel;
             }
             let actor: UserId = stored.sender.parse().map_err(|_| {
                 StorageError::InvalidData("Invalid certified reaction sender".into())
@@ -1351,7 +1317,7 @@ impl UnifiedMessageRepository {
             let allowed=!blocked && (own || match scope.kind {
                 ConversationType::AnonDm=>tx.query_row("SELECT EXISTS(SELECT 1 FROM anon_dm_conversations WHERE id=?1 AND peer_id=?2 AND status=1 AND length(peer_mailbox_pk)=32) AND NOT EXISTS(SELECT 1 FROM anon_dm_blocked_users WHERE user_id=?2)",params![scope.id.to_string(),actor.to_string()],|r|r.get::<_,bool>(0))?,
                 ConversationType::Channel=>tx.query_row("SELECT EXISTS(SELECT 1 FROM memberships WHERE channel_id=?1 AND user_id=?2)",params![scope.id.to_string(),actor.to_string()],|r|r.get::<_,bool>(0))?,
-                ConversationType::AnonGroup=>tx.query_row("SELECT EXISTS(SELECT 1 FROM memberships WHERE channel_id=?1 AND user_id=?2) OR (EXISTS(SELECT 1 FROM anon_group_members g JOIN anon_groups a ON a.id=g.group_id WHERE g.group_id=?1 AND g.user_id=?2 AND a.status<>2) AND NOT EXISTS(SELECT 1 FROM anon_group_blocked_users WHERE group_id=?1 AND user_id=?2))",params![scope.id.to_string(),actor.to_string()],|r|r.get::<_,bool>(0))?,
+                ConversationType::AnonGroup=>tx.query_row("SELECT EXISTS(SELECT 1 FROM anon_group_members g JOIN anon_groups a ON a.id=g.group_id WHERE g.group_id=?1 AND g.user_id=?2 AND a.status<>2) AND NOT EXISTS(SELECT 1 FROM anon_group_blocked_users WHERE group_id=?1 AND user_id=?2)",params![scope.id.to_string(),actor.to_string()],|r|r.get::<_,bool>(0))?,
                 _=>false,
             });
             if !allowed && !blocked {
@@ -1467,7 +1433,7 @@ impl UnifiedMessageRepository {
                 AND NOT EXISTS(SELECT 1 FROM friendships f WHERE f.user_id=?1 AND f.friend_id=p.actor_id AND f.status=2)
                 AND (p.actor_id=?1
                     OR (p.conversation_type='server_dm' AND p.conversation_id=p.actor_id)
-                    OR (p.conversation_type IN ('channel','anon_group') AND EXISTS(SELECT 1 FROM memberships v WHERE v.channel_id=p.conversation_id AND v.user_id=p.actor_id))
+                    OR (p.conversation_type='channel' AND EXISTS(SELECT 1 FROM memberships v WHERE v.channel_id=p.conversation_id AND v.user_id=p.actor_id))
                     OR (p.conversation_type='anon_dm' AND EXISTS(SELECT 1 FROM anon_dm_conversations d WHERE d.id=p.conversation_id AND d.peer_id=p.actor_id AND d.status=1 AND length(d.peer_mailbox_pk)=32) AND NOT EXISTS(SELECT 1 FROM anon_dm_blocked_users b WHERE b.user_id=p.actor_id))
                     OR (p.conversation_type='anon_group' AND EXISTS(SELECT 1 FROM anon_group_members g JOIN anon_groups a ON a.id=g.group_id WHERE g.group_id=p.conversation_id AND g.user_id=p.actor_id AND a.status<>2) AND NOT EXISTS(SELECT 1 FROM anon_group_blocked_users b WHERE b.group_id=p.conversation_id AND b.user_id=p.actor_id)))
                 ORDER BY p.conversation_type,p.conversation_id,p.author_id,p.target_sent_at LIMIT 1000")?;

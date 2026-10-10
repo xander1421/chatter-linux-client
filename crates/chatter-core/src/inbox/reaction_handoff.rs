@@ -554,7 +554,7 @@ mod tests {
         );
     }
     #[test]
-    fn encrypted_server_channel_artifact_uses_real_channel_id_and_legacy_storage_kind() {
+    fn encrypted_server_channel_artifact_uses_real_channel_id_and_channel_storage_kind() {
         use crate::domain::channel::{
             Channel, ChannelType, MemberRole, Membership, NotificationPreference,
         };
@@ -586,7 +586,9 @@ mod tests {
                 notification_preference: NotificationPreference::default(),
             })
             .unwrap();
-        let encrypted = ReactionScope::new(id, ConversationType::AnonGroup);
+        // Group-mailbox transport scope; server channel rows are always Channel.
+        let transport = ReactionScope::new(id, ConversationType::AnonGroup);
+        let encrypted = ReactionScope::new(id, ConversationType::Channel);
         let collision = ReactionScope::new(id, ConversationType::ServerDm);
         for scope in [&encrypted, &collision] {
             seed(&repo, scope, author);
@@ -609,7 +611,7 @@ mod tests {
         let add = encode(
             certify_actor(
                 &db,
-                journal(&db, own, &encrypted, author, 10, false, None),
+                journal(&db, own, &transport, author, 10, false, None),
                 peer,
             ),
             id,
@@ -627,7 +629,7 @@ mod tests {
         let remove = encode(
             certify_actor(
                 &db,
-                journal(&db, own, &encrypted, author, 20, true, None),
+                journal(&db, own, &transport, author, 20, true, None),
                 peer,
             ),
             id,
@@ -641,7 +643,7 @@ mod tests {
         let foreign = encode(
             certify_actor(
                 &db,
-                journal(&db, own, &encrypted, author, 30, false, None),
+                journal(&db, own, &transport, author, 30, false, None),
                 peer,
             ),
             ChannelId::new(),
@@ -663,7 +665,7 @@ mod tests {
         let blocked = encode(
             certify_actor(
                 &db,
-                journal(&db, own, &encrypted, author, 40, false, None),
+                journal(&db, own, &transport, author, 40, false, None),
                 peer,
             ),
             id,
@@ -674,6 +676,67 @@ mod tests {
                 .unwrap()
                 .is_empty(),
             "durable artifact does not bypass Gateway's global block policy"
+        );
+    }
+    #[test]
+    fn encrypted_server_channel_reaction_held_before_target_applies_on_arrival() {
+        use crate::domain::channel::{
+            Channel, ChannelType, MemberRole, Membership, NotificationPreference,
+        };
+        use crate::storage::{ChannelRepository, UserRepository};
+        let dir = tempfile::tempdir().unwrap();
+        let own = UserId::new();
+        let peer = UserId::new();
+        let author = UserId::new();
+        let (db, repo) = open(&dir.path().join("held-encrypted-channel.db"), own);
+        let users = UserRepository::new(db.clone());
+        for user in [own, peer] {
+            users.ensure_user_exists(&user).unwrap();
+        }
+        let id = ChannelId::new();
+        let mut channel = Channel::new(id, "encrypted".into(), ChannelType::Private, own);
+        channel.config.require_encryption = true;
+        let channels = ChannelRepository::new(db.clone());
+        channels.insert(&channel).unwrap();
+        channels
+            .insert_membership(&Membership {
+                channel_id: id,
+                user_id: peer,
+                role: MemberRole::Member,
+                joined_at: chrono::Utc::now(),
+                last_read_message_id: None,
+                is_muted: false,
+                muted_until: None,
+                notification_preference: NotificationPreference::default(),
+            })
+            .unwrap();
+        // Group-mailbox transport scope; the target is stored as a Channel row.
+        let transport = ReactionScope::new(id, ConversationType::AnonGroup);
+        let stored = ReactionScope::new(id, ConversationType::Channel);
+        let mut artifact = certify_actor(
+            &db,
+            journal(&db, own, &transport, author, 10, false, None),
+            peer,
+        );
+        let mut content = content_v1::Content::decode(artifact.content.as_slice()).unwrap();
+        if let Some(Body::Reaction(reaction)) = &mut content.content {
+            reaction.target_author_aci = format!("channel:{id}:{author}");
+        }
+        artifact.content = content.encode_to_vec();
+        db.connection()
+            .unwrap()
+            .execute(
+                "UPDATE reaction_receive_artifacts SET content=?1 WHERE id=?2",
+                params![artifact.content, artifact.id],
+            )
+            .unwrap();
+        apply(&repo, &artifact, None).unwrap();
+        seed(&repo, &stored, author);
+        replay(&repo, None);
+        assert_eq!(
+            repo.get_reaction_counts(&stored, &author, 100).unwrap()[0].count,
+            1,
+            "held reaction must apply to the Channel row that arrives later"
         );
     }
     #[test]
