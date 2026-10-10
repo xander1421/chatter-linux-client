@@ -168,31 +168,8 @@ impl MessageModifierRepository {
         Ok(Some(message))
     }
 
-    /// Hold `author`'s delete-for-everyone of its message sent at
-    /// `target_sent_at`, so the message is never stored when it arrives.
-    pub fn queue_delete(
-        &self,
-        author: &UserId,
-        target_sent_at: u64,
-        conversation: Option<ChannelId>,
-        now: u64,
-    ) -> Result<(), StorageError> {
-        self.upsert(
-            author,
-            target_sent_at,
-            "delete",
-            None,
-            "",
-            conversation,
-            None,
-            0,
-            false,
-            now,
-        )
-    }
-
     /// Author-only channel tombstone, isolated by both channel and type.
-    /// A separate uniqueness namespace preserves the legacy and typed DM paths.
+    /// A separate uniqueness namespace keeps it apart from typed DM deletes.
     pub fn queue_channel_delete(
         &self,
         author: &UserId,
@@ -217,7 +194,7 @@ impl MessageModifierRepository {
 
     /// Typed DM tombstone: author is one of the authenticated DM participants.
     /// The existing body field carries the type; emoji namespaces distinct DMs
-    /// in the legacy uniqueness key without changing the schema.
+    /// in the uniqueness key without changing the schema.
     pub fn queue_dm_delete(
         &self,
         author: &UserId,
@@ -571,13 +548,13 @@ pub(crate) fn take_on_arrival<'a>(
     let key = params![author, message.sent_at as i64, conversation];
 
     let deleted: bool = conn.query_row(
-        &format!("SELECT EXISTS(SELECT 1 FROM pending_message_modifiers WHERE kind = 'delete' AND {matching} AND (body IS NULL OR body = ?4))"),
+        &format!("SELECT EXISTS(SELECT 1 FROM pending_message_modifiers WHERE kind = 'delete' AND {matching} AND body = ?4)"),
         params![author, message.sent_at as i64, conversation, message.conversation_type.as_str()],
         |row| row.get(0),
     )?;
     if deleted {
         conn.execute(
-            &format!("DELETE FROM pending_message_modifiers WHERE {matching} AND (kind != 'delete' OR body IS NULL)"),
+            &format!("DELETE FROM pending_message_modifiers WHERE {matching} AND kind != 'delete'"),
             key,
         )?;
         return Ok(Arrival::Deleted);
@@ -611,7 +588,7 @@ pub(crate) fn take_on_arrival<'a>(
         }
     }
     conn.execute(
-        &format!("DELETE FROM pending_message_modifiers WHERE {matching} AND (kind != 'delete' OR body IS NULL)"),
+        &format!("DELETE FROM pending_message_modifiers WHERE {matching} AND kind != 'delete'"),
         key,
     )?;
 
@@ -775,7 +752,7 @@ mod tests {
             .queue_edit(&peer, 100, Some(ChannelId::from(peer)), "edit", 150, now)
             .unwrap();
         modifiers
-            .queue_delete(&peer, 100, Some(ChannelId::from(peer)), now)
+            .queue_dm_delete(&peer, 100, Some(ChannelId::from(peer)), now)
             .unwrap();
 
         let message = dm(peer, "regret", 100);
@@ -810,7 +787,7 @@ mod tests {
         // `other` claims to delete peer's message; peer's edit names another
         // conversation.
         modifiers
-            .queue_delete(&other, 100, Some(ChannelId::from(other)), now)
+            .queue_dm_delete(&other, 100, Some(ChannelId::from(other)), now)
             .unwrap();
         modifiers
             .queue_edit(&peer, 100, Some(ChannelId::from(other)), "x", 150, now)
@@ -828,10 +805,10 @@ mod tests {
         let (_dir, modifiers, messages) = repos();
         let peer = UserId::new();
         let now = 2_000_000_000_000_000_000;
-        modifiers.queue_delete(&peer, 1, None, now).unwrap();
+        modifiers.queue_dm_delete(&peer, 1, None, now).unwrap();
         // A later write prunes what has waited past MAX_AGE.
         modifiers
-            .queue_delete(&peer, 2, None, now + MAX_AGE_NS)
+            .queue_dm_delete(&peer, 2, None, now + MAX_AGE_NS)
             .unwrap();
         assert!(messages
             .insert_or_ignore(&dm(peer, "arrived late", 1))
@@ -839,7 +816,7 @@ mod tests {
 
         for i in 0..=MAX_PENDING as u64 {
             modifiers
-                .queue_delete(&peer, 1_000 + i, None, now + MAX_AGE_NS + 1 + i)
+                .queue_dm_delete(&peer, 1_000 + i, None, now + MAX_AGE_NS + 1 + i)
                 .unwrap();
         }
         assert!(
@@ -962,7 +939,7 @@ mod tests {
         modifiers
             .queue_edit(&peer, 100, scope, "edited", 150, now)
             .unwrap();
-        modifiers.queue_delete(&peer, 200, scope, now).unwrap();
+        modifiers.queue_dm_delete(&peer, 200, scope, now).unwrap();
 
         let stored = messages
             .insert_received(&dm(peer, "original", 100))
