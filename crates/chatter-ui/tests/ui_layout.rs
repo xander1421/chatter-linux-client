@@ -218,7 +218,14 @@ fn composer_drawer_and_recording_have_usable_geometry() {
             assert!(emoji.size().width <= 420.0 && emoji.size().width >= 300.0);
         }
         assert!(ep.x >= cp.x && ep.x + emoji.size().width <= cp.x + chat.size().width + 1.0);
-        assert!(ep.y >= composer.absolute_position().y + composer.size().height - 1.0);
+        // Touch docks the drawer under the composer; desktop floats it as a
+        // popover directly above the composer (f417a0b7).
+        let composer_top = composer.absolute_position().y;
+        if mobile {
+            assert!(ep.y >= composer_top + composer.size().height - 1.0);
+        } else {
+            assert!(ep.y >= cp.y && ep.y + emoji.size().height <= composer_top + 1.0);
+        }
         assert!(ep.y + emoji.size().height <= cp.y + chat.size().height + 1.0);
         // A user edit must not detach the search field from later tab/reset
         // updates. Inspect the visible input, not just the backing query.

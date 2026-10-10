@@ -88,7 +88,9 @@ fn edit_surfaces_and_pins_follow_current_conversation_without_reordering() {
             // a vertically centered accessory material passes button geometry.
             let gap_x = left.absolute_position().x + left.size().width + 8.0;
             let gap_y = left.absolute_position().y + left.size().height / 2.0;
+            // A reply's preview fills that gap (649b152a); otherwise it is empty.
             let mut materials = 0;
+            let mut gap_painted = false;
             for layer in testing::ElementHandle::find_by_element_type_name(&w, "Backdrop") {
                 let pos = layer.absolute_position();
                 let size = layer.size();
@@ -97,12 +99,19 @@ fn edit_surfaces_and_pins_follow_current_conversation_without_reordering() {
                 }
                 if pos.y <= gap_y && pos.y + size.height > gap_y {
                     materials += 1;
-                    assert!(
-                        !(pos.x <= gap_x && pos.x + size.width > gap_x),
-                        "Material paints the empty action center: {pos:?} {size:?}"
-                    );
+                    if pos.x <= gap_x && pos.x + size.width > gap_x {
+                        assert!(
+                            replying,
+                            "Material paints the empty action center: {pos:?} {size:?}"
+                        );
+                        gap_painted = true;
+                    }
                 }
             }
+            assert!(
+                !replying || gap_painted,
+                "the reply preview does not fill the action gap"
+            );
             assert!(
                 materials > 0,
                 "Regression must inspect actual material layers"

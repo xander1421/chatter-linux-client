@@ -278,33 +278,25 @@ fn main_view_renders_its_columns_and_they_cover_the_window() {
         "BLANK SCREEN on mobile: the conversation has no composer"
     );
 
-    // ---- 6. The composer does not resize on the first character -----------
-    // Geometry, because that is what the bug is. On Android the composer sits
-    // under a TextInput whose IME transaction is still in flight for a few
-    // hundred ms after the tap that focused it, and anything that grows
-    // `MessageComposer.height` inside that window hides the just-shown soft
-    // keyboard. Both gates tried so far for the formatting toolbar
-    // (`text-input.has-focus`, then `root.text != ""`) grew it there — the
-    // first mid-tap, the second on the first keystroke, which is why "press a
-    // key, keyboard vanishes, press again and it types fine".
+    // ---- 6. The first character does not raise the formatting bar ---------
+    // On Android the composer sits under a TextInput whose IME transaction is
+    // still in flight for a few hundred ms after the tap that focused it, and
+    // the formatting toolbar appearing there hid the just-shown soft keyboard
+    // (gates on `has-focus`, then on `text != ""`). It now shows only for a
+    // selection — see the show-formatting comment in
+    // ui/chat/message_composer.slint.
     //
-    // So: same conversation, empty draft vs. a one-character draft, same
-    // height. Nothing about a bare `if` on the draft text can satisfy this.
-    let empty_h = find(&w, "MessageComposer")
-        .expect("MessageComposer missing before typing")
-        .h;
+    // The composer itself does grow on the first character since 26ff21f2
+    // (actions rise above a populated field). That change keeps the same
+    // native input and its focus; ui_phone_layout.rs asserts that.
     w.set_composer_text("a".into());
     pump(&w);
-    let typed_h = find(&w, "MessageComposer")
-        .expect("MessageComposer missing after typing")
-        .h;
     assert!(
-        (typed_h - empty_h).abs() < 0.5,
-        "the composer grew {}px -> {}px on the FIRST character. On Android that \
+        testing::ElementHandle::find_by_accessible_label(&w, "Bold")
+            .next()
+            .is_none(),
+        "the formatting bar appeared on the FIRST character. On Android that \
          resize lands while the IME is still animating in and hides the soft \
-         keyboard — see the show-formatting comment in \
-         ui/chat/message_composer.slint",
-        empty_h,
-        typed_h
+         keyboard"
     );
 }
