@@ -19,10 +19,9 @@ const PAGE_SIZE: i32 = 50;
 pub struct MessageSync {
     grpc_pool: Arc<GrpcClientPool>,
     settings_repo: Arc<SettingsRepository>,
-    /// Shared decrypt → persist path. Without it this sync wrote every
-    /// sender-key encrypted channel message to disk as the literal string
-    /// "[Encrypted message]" (`proto_content_to_domain`'s placeholder), so
-    /// catching up after being offline produced unreadable history.
+    /// Shared decrypt → persist path: catch-up decrypts sender-key channel
+    /// messages exactly as live delivery does, instead of converting them
+    /// with `proto_content_to_domain`, which holds no key.
     inbound: Arc<ChannelInbound>,
 }
 
