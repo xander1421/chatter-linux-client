@@ -2129,11 +2129,19 @@ mod tests {
             Channel, ChannelType, MemberRole, Membership, NotificationPreference,
         };
 
-        static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
-        MOCK_KEYRING.call_once(|| {
-            keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
-        });
         let client = |dir: &tempfile::TempDir, user: UserId| {
+            // Keyless, with the passphrase in a file beside the database, so
+            // a test can reopen the same store (a mock keyring forgets it).
+            let db = crate::system::Directories::with_base_dir(dir.path().to_path_buf())
+                .unwrap()
+                .database_path();
+            std::fs::write(
+                db.parent()
+                    .unwrap()
+                    .join(crate::system::keyring::NO_KEYRING_MARKER),
+                b"",
+            )
+            .unwrap();
             let c = ChatterClient::builder()
                 .server_url("https://localhost:1")
                 .data_dir(dir.path().to_str().unwrap())
