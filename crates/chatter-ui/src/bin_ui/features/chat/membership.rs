@@ -29,11 +29,13 @@ pub fn apply_header(w: &MainWindow, header: &ChannelMembershipHeader) {
             });
             g.set_banner_title(b.title.as_str().into());
             g.set_banner_detail(b.detail.as_str().into());
+            g.set_banner_can_acknowledge(b.can_acknowledge);
         }
         None => {
             g.set_banner_severity("".into());
             g.set_banner_title("".into());
             g.set_banner_detail("".into());
+            g.set_banner_can_acknowledge(false);
         }
     }
     g.set_public_badge(header.public_badge.as_str().into());
@@ -229,6 +231,25 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     .map(|()| None)
             },
         );
+    });
+
+    let (weak, ctx) = (window.as_weak(), ui_ctx.clone());
+    g.on_acknowledge_fork(move |channel_id| {
+        let Some(channel_id) = parse_channel(&channel_id) else {
+            return;
+        };
+        let (weak, ctx) = (weak.clone(), ctx.clone());
+        tokio::spawn(async move {
+            if let Err(e) = ctx.acknowledge_membership_fork(&channel_id) {
+                tracing::warn!(%channel_id, error = %e, "Could not acknowledge membership fork");
+            }
+            let header = ctx.channel_membership_header(&channel_id);
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak.upgrade() {
+                    apply_header(&w, &header);
+                }
+            });
+        });
     });
 
     let (weak, ctx) = (window.as_weak(), ui_ctx.clone());

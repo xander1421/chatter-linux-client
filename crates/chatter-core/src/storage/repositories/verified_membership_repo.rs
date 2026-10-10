@@ -350,6 +350,22 @@ impl VerifiedMembershipRepository {
         Ok(())
     }
 
+    /// The user's acknowledgement of a fork: back to `Ok` on the state this
+    /// device verified. `false` when the channel was not forked. The next
+    /// contradiction (a peer stamp or a relayed change) forks it again.
+    pub fn acknowledge_fork(&self, channel_id: &ChannelId) -> Result<bool, StorageError> {
+        let conn = self.db.connection()?;
+        let rows = conn.execute(
+            "UPDATE verified_channel_state SET status = ?2 WHERE channel_id = ?1 AND status = ?3",
+            params![
+                channel_id.to_string(),
+                VerificationStatus::Ok as u8,
+                VerificationStatus::Fork as u8
+            ],
+        )?;
+        Ok(rows > 0)
+    }
+
     /// The state hash recorded for `revision`, if this device accepted that
     /// change (for `compare_peer_state` against a peer that is behind).
     pub fn state_hash_at(
@@ -553,6 +569,17 @@ mod tests {
             after.excluded.contains(&bob.0),
             "exclusion lasts while the user is in state"
         );
+
+        // §127: the user can acknowledge a fork; only a fork.
+        assert!(repo.acknowledge_fork(&channel).unwrap());
+        let acked = repo.load(&channel).unwrap().unwrap();
+        assert_eq!(acked.status, VerificationStatus::Ok);
+        assert_eq!(acked.state, after.state, "the verified state is kept");
+        assert!(!repo.acknowledge_fork(&channel).unwrap());
+        repo.set_status(&channel, VerificationStatus::VerificationFailed)
+            .unwrap();
+        assert!(!repo.acknowledge_fork(&channel).unwrap());
+        repo.set_status(&channel, VerificationStatus::Fork).unwrap();
 
         // A signed removal ends the exclusion.
         repo.set_status(&channel, VerificationStatus::VerificationFailed)

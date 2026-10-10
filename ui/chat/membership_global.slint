@@ -25,6 +25,8 @@ export global MembershipGlobal {
     in property <string> banner-severity: "";
     in property <string> banner-title: "";
     in property <string> banner-detail: "";
+    // A fork: offer "Resume sending" under Details (§127).
+    in property <bool> banner-can-acknowledge: false;
     // "Public — anyone can join and read", or "".
     in property <string> public-badge: "";
 
@@ -49,4 +51,5 @@ export global MembershipGlobal {
     callback revoke-link(string /* channel-id */, string /* link id */);
     callback approve-request(string /* channel-id */, string /* user-id */);
     callback reject-request(string /* channel-id */, string /* user-id */);
+    callback acknowledge-fork(string /* channel-id */);
 }

@@ -3,9 +3,9 @@
 // for exactly these states (`GroupStateGate::for_distribution`).
 //
 // Wording comes from chatter-core (`ChatterClient::channel_membership_header`).
-// Not dismissable: it explains why the channel will not send. "Details" only
-// reveals the core-supplied explanation and state code; there is no action
-// that lifts the block from here.
+// Not dismissable: it explains why the channel will not send. "Details"
+// reveals the core-supplied explanation and state code; for a fork, which
+// nothing else clears, it also offers "Resume sending" (core decides when).
 
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -14,6 +14,7 @@ import { Icons } from "../theme/icons.slint";
 import { MembershipGlobal } from "membership_global.slint";
 
 export component MembershipBar inherits Rectangle {
+    in property <string> channel-id;
     property <bool> alert: MembershipGlobal.banner-severity == "alert";
     property <color> accent: root.alert ? Colors.error : Colors.warning;
     property <bool> expanded: false;
@@ -71,6 +72,33 @@ export component MembershipBar inherits Rectangle {
                 wrap: word-wrap;
                 accessible-role: text;
                 accessible-label: MembershipGlobal.banner-detail;
+            }
+
+            if root.expanded && MembershipGlobal.banner-can-acknowledge: HorizontalLayout {
+                alignment: start;
+                Rectangle {
+                    width: resume-label.preferred-width + Spacing.lg;
+                    height: Spacing.touch-target-min;
+                    border-radius: Spacing.radius-sm;
+                    background: resume-touch.has-hover ? root.accent.with-alpha(0.28) : root.accent.with-alpha(0.16);
+
+                    resume-label := Text {
+                        text: "Resume sending";
+                        color: Colors.text-primary;
+                        font-size: Typography.xs;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                        width: 100%;
+                        height: 100%;
+                    }
+
+                    resume-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        accessible-role: button;
+                        accessible-label: "Resume sending in this channel";
+                        clicked => { MembershipGlobal.acknowledge-fork(root.channel-id); }
+                    }
+                }
             }
         }
 

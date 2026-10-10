@@ -424,6 +424,7 @@ export component ChatLayout inherits Rectangle {
         // shows and what it says (`channel_membership_header`).
         if root.conversation-kind == ConversationKind.channel
             && MembershipGlobal.banner-severity != "": MembershipBar {
+            channel-id: root.channel-id;
             width: 100%;
             vertical-stretch: 0;
         }

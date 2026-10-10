@@ -703,6 +703,18 @@ impl MembershipLog {
         }))
     }
 
+    /// The user compared the state code and chose to resume sending on the
+    /// state this device verified (§127). Sender keys still go only to that
+    /// verified set; the next contradiction forks the channel again.
+    pub fn acknowledge_fork(&self, channel_id: &ChannelId) -> Result<bool, StorageError> {
+        let acknowledged = self.repo.acknowledge_fork(channel_id)?;
+        if acknowledged {
+            tracing::warn!(%channel_id, "Membership fork acknowledged by the user; sending resumes");
+            self.notify(channel_id, MembershipNotice::Verified);
+        }
+        Ok(acknowledged)
+    }
+
     /// Forget a channel's verified state (it was deleted).
     pub fn forget(&self, channel_id: &ChannelId) -> Result<(), StorageError> {
         self.repo.delete(channel_id)

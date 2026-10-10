@@ -41,7 +41,8 @@ pub enum ChannelVerification {
     /// A change failed verification; cleared by the next one that verifies.
     VerificationFailed,
     /// The server showed different changes at one revision. Sending stays
-    /// blocked; there is no acknowledgement that lifts it.
+    /// blocked until the user acknowledges it
+    /// ([`ChatterClient::acknowledge_membership_fork`]).
     Fork,
 }
 
@@ -83,6 +84,8 @@ pub struct MembershipBanner {
     /// Shown on "Details": what happened, the revision and the state code a
     /// user can compare with another member.
     pub detail: String,
+    /// Offer "Resume sending" (a fork, which only the user can clear).
+    pub can_acknowledge: bool,
 }
 
 /// What the open channel's header shows about membership.
@@ -162,6 +165,7 @@ pub(crate) fn banner_for(
         ChannelVerification::NotApplicable | ChannelVerification::Ok => None,
         ChannelVerification::NotYetVerified => Some(MembershipBanner {
             severity: BannerSeverity::Warning,
+            can_acknowledge: false,
             title: "Membership not verified yet \u{2014} sending is paused".into(),
             detail: "This device has no verified member list for this channel yet, so it does not know who may \
                      receive your messages. Sending resumes once the channel's signed membership log verifies."
@@ -169,6 +173,7 @@ pub(crate) fn banner_for(
         }),
         ChannelVerification::VerificationFailed => Some(MembershipBanner {
             severity: BannerSeverity::Warning,
+            can_acknowledge: false,
             title: "Membership could not be verified \u{2014} sending is paused".into(),
             detail: format!(
                 "A change to this channel's member list was not signed by someone allowed to make it, or did not \
@@ -179,11 +184,13 @@ pub(crate) fn banner_for(
         }),
         ChannelVerification::Fork => Some(MembershipBanner {
             severity: BannerSeverity::Alert,
+            can_acknowledge: true,
             title: "The server is showing members different member lists".into(),
             detail: format!(
                 "Another member, or the server's log, has a different member list at a revision this device \
-                 already verified. Sending stays paused for this channel. Compare the state code below with \
-                 another member over a channel you trust. {}",
+                 already verified. Sending stays paused for this channel until you resume it. Compare the state \
+                 code below with another member over a channel you trust first: resuming sends only to the \
+                 members this device verified, and a new mismatch pauses it again. {}",
                 verified.map(at).unwrap_or_default()
             ),
         }),
@@ -342,6 +349,18 @@ impl ChatterClient {
             ),
             public_badge: public_badge(channel.channel_type, verified.as_ref()),
         }
+    }
+
+    /// Resume sending in a forked channel on the state this device verified
+    /// (§127). `false` when the channel was not forked.
+    pub fn acknowledge_membership_fork(
+        &self,
+        channel_id: &ChannelId,
+    ) -> Result<bool, ChannelError> {
+        self.channels()
+            .membership_log()
+            .acknowledge_fork(channel_id)
+            .map_err(ChannelError::from)
     }
 
     /// Whether `user_id`, listed by the server, is outside the verified
@@ -667,9 +686,16 @@ mod tests {
         let b = banner_for(ChannelVerification::Fork, Some(&fork)).unwrap();
         assert_eq!(b.severity, BannerSeverity::Alert);
         assert!(b.detail.contains("Sending stays paused"));
+        assert!(b.can_acknowledge, "only the user can clear a fork");
 
         let b = banner_for(ChannelVerification::NotYetVerified, None).unwrap();
         assert!(b.title.contains("sending is paused"));
+        assert!(!b.can_acknowledge);
+        let b = banner_for(ChannelVerification::VerificationFailed, Some(&failed)).unwrap();
+        assert!(
+            !b.can_acknowledge,
+            "a later verified change clears a failure"
+        );
     }
 
     #[test]
