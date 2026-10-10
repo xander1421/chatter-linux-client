@@ -282,53 +282,6 @@ impl BlindingSecret {
     }
 }
 
-/// Message randomizer from blinding operation.
-///
-/// Required for unblinding when deterministic padding is NOT used.
-/// The randomizer is a fixed 32-byte value.
-#[derive(Clone, zeroize::Zeroize, zeroize::ZeroizeOnDrop)]
-pub struct MessageRandomizer {
-    /// Serialized randomizer bytes (fixed 32 bytes).
-    randomizer_bytes: Option<[u8; 32]>,
-}
-
-impl MessageRandomizer {
-    /// Create from blind-rsa-signatures message randomizer.
-    fn from_inner(randomizer: Option<blind_rsa_signatures::MessageRandomizer>) -> Self {
-        Self {
-            randomizer_bytes: randomizer.map(|r| *r.as_ref()),
-        }
-    }
-
-    /// Reconstruct the message randomizer from stored bytes.
-    fn to_inner(&self) -> Option<blind_rsa_signatures::MessageRandomizer> {
-        self.randomizer_bytes
-            .map(blind_rsa_signatures::MessageRandomizer::from)
-    }
-
-    /// Get the raw bytes for storage.
-    pub fn as_bytes(&self) -> Option<&[u8]> {
-        self.randomizer_bytes.as_ref().map(|b| b.as_slice())
-    }
-
-    /// Create from raw bytes (loaded from storage).
-    ///
-    /// Returns None if bytes is None or wrong length.
-    pub fn from_bytes(bytes: Option<Vec<u8>>) -> Self {
-        Self {
-            randomizer_bytes: bytes.and_then(|b| {
-                if b.len() == 32 {
-                    let mut arr = [0u8; 32];
-                    arr.copy_from_slice(&b);
-                    Some(arr)
-                } else {
-                    None
-                }
-            }),
-        }
-    }
-}
-
 /// Result of a blinding operation.
 ///
 /// Contains the blinded message to send to the server and the secret
@@ -338,8 +291,6 @@ pub struct BlindingOperation {
     pub blinded_message: Vec<u8>,
     /// The blinding secret (must be kept until unblind).
     pub secret: BlindingSecret,
-    /// The message randomizer (must be kept until unblind).
-    pub randomizer: MessageRandomizer,
 }
 
 /// An unblinded token ready for use.
@@ -384,12 +335,11 @@ pub fn blind_key(
     // using salt_len=48 (standard for SHA-384-PSS)
     let options = Options::new(blind_rsa_signatures::Hash::Sha384, true, 48);
 
-    // Perform blinding - the API takes (msg, include_randomizer, options)
-    // Using deterministic mode (false) for server verification compatibility
+    // Perform blinding - the API takes (msg, include_randomizer, options).
+    // Deterministic mode (false): no message randomizer exists, so none is
+    // kept, sent or stored.
     let BlindingResult {
-        blind_msg,
-        secret,
-        msg_randomizer,
+        blind_msg, secret, ..
     } = server_pk
         .inner()
         .blind(ephemeral_pk, false, &options)
@@ -398,7 +348,6 @@ pub fn blind_key(
     Ok(BlindingOperation {
         blinded_message: blind_msg.as_slice().to_vec(),
         secret: BlindingSecret::from_inner(&secret),
-        randomizer: MessageRandomizer::from_inner(msg_randomizer),
     })
 }
 
@@ -409,7 +358,6 @@ pub fn blind_key(
 /// * `server_pk` - The server's RSA public key (must be same as used for blinding)
 /// * `blinded_sig` - The blind signature from the server
 /// * `secret` - The blinding secret from the original blinding operation
-/// * `randomizer` - The message randomizer from the original blinding operation
 /// * `original_message` - The original message (Ed25519 public key) that was blinded
 ///
 /// # Returns
@@ -423,7 +371,6 @@ pub fn unblind(
     server_pk: &ServerPublicKey,
     blinded_sig: &[u8],
     secret: &BlindingSecret,
-    randomizer: &MessageRandomizer,
     original_message: &[u8],
 ) -> Result<Vec<u8>, MailboxError> {
     if !server_pk.is_valid() {
@@ -437,9 +384,7 @@ pub fn unblind(
     // Parse blinded signature
     let blind_sig = BlindSignature::from(blinded_sig.to_vec());
 
-    // Restore blinding secret and randomizer
     let blinding_secret = secret.to_inner();
-    let msg_randomizer = randomizer.to_inner();
 
     // Finalize (unblind) the signature
     let signature = server_pk
@@ -447,7 +392,7 @@ pub fn unblind(
         .finalize(
             &blind_sig,
             &blinding_secret,
-            msg_randomizer,
+            None,
             original_message,
             &options,
         )
@@ -465,7 +410,6 @@ pub fn unblind(
 /// * `server_pk` - The server's RSA public key
 /// * `message` - The original message (Ed25519 public key)
 /// * `signature` - The unblinded signature
-/// * `randomizer` - The message randomizer from the blinding operation
 ///
 /// # Returns
 ///
@@ -474,7 +418,6 @@ pub fn verify(
     server_pk: &ServerPublicKey,
     message: &[u8],
     signature: &[u8],
-    randomizer: &MessageRandomizer,
 ) -> bool {
     if !server_pk.is_valid() {
         return false;
@@ -484,10 +427,9 @@ pub fn verify(
     // using salt_len=48 (standard for SHA-384-PSS)
     let options = Options::new(blind_rsa_signatures::Hash::Sha384, true, 48);
     let sig = blind_rsa_signatures::Signature::from(signature.to_vec());
-    let msg_randomizer = randomizer.to_inner();
     server_pk
         .inner()
-        .verify(&sig, msg_randomizer, message, &options)
+        .verify(&sig, None, message, &options)
         .is_ok()
 }
 
@@ -746,22 +688,6 @@ pub(crate) mod tests {
         assert_eq!(secret.as_bytes(), &fake_bytes);
     }
 
-    #[test]
-    fn test_message_randomizer_roundtrip() {
-        // Test with Some value (32 bytes)
-        let fake_bytes: Vec<u8> = (0..32).collect();
-        let randomizer = MessageRandomizer::from_bytes(Some(fake_bytes.clone()));
-        assert_eq!(randomizer.as_bytes(), Some(fake_bytes.as_slice()));
-
-        // Test with None value
-        let randomizer = MessageRandomizer::from_bytes(None);
-        assert_eq!(randomizer.as_bytes(), None);
-
-        // Test with wrong length (should become None)
-        let wrong_length = vec![1, 2, 3, 4];
-        let randomizer = MessageRandomizer::from_bytes(Some(wrong_length));
-        assert_eq!(randomizer.as_bytes(), None);
-    }
 
     #[test]
     fn test_server_public_key_validity() {

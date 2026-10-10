@@ -23,7 +23,7 @@ use uuid::Uuid;
 
 use crate::error::MailboxError;
 use crate::mailbox::blind_signature::{
-    BlindingSecret, MessageRandomizer, ServerPublicKey, blind_key, unblind,
+    BlindingSecret, ServerPublicKey, blind_key, unblind,
 };
 use crate::network::grpc::{AnonymousKtClient, MailboxClient};
 use crate::storage::Database;
@@ -48,8 +48,6 @@ pub struct MailboxToken {
     pub private_key: Vec<u8>,
     /// Unblinded RSA signature over the public key.
     pub signature: Vec<u8>,
-    /// Message randomizer for signature verification.
-    pub randomizer: Option<Vec<u8>>,
 }
 
 /// Map a GetMailboxTokens failure. The server is the only authority on the
@@ -290,7 +288,6 @@ impl TokenManager {
                 priv_key,
                 &op.blinded_message,
                 &op.secret,
-                &op.randomizer,
                 &server_key.key_id,
             )?;
         }
@@ -320,7 +317,6 @@ impl TokenManager {
                     &server_key,
                     blinded_sig,
                     &op.secret,
-                    &op.randomizer,
                     pub_key,
                 ) {
                     Ok(signature) => {
@@ -331,7 +327,6 @@ impl TokenManager {
                                 pub_key,
                                 priv_key,
                                 &signature,
-                                &op.randomizer,
                                 &server_key.key_id,
                             )
                             .is_ok()
@@ -370,7 +365,6 @@ impl TokenManager {
         ephemeral_sk: &[u8],
         blinded_message: &[u8],
         secret: &BlindingSecret,
-        randomizer: &MessageRandomizer,
         server_key_id: &str,
     ) -> Result<(), MailboxError> {
         let conn = self
@@ -378,19 +372,17 @@ impl TokenManager {
             .connection()
             .map_err(|e| MailboxError::Storage(e.to_string()))?;
         let now = Utc::now().to_rfc3339();
-        let randomizer_bytes = randomizer.as_bytes().map(|b| b.to_vec());
 
         conn.execute(
             "INSERT INTO mailbox_pending_blinds
-             (id, ephemeral_public_key, ephemeral_private_key, blinded_message, blinding_secret, message_randomizer, server_key_id, created_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+             (id, ephemeral_public_key, ephemeral_private_key, blinded_message, blinding_secret, server_key_id, created_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             rusqlite::params![
                 id,
                 ephemeral_pk,
                 ephemeral_sk,
                 blinded_message,
                 secret.as_bytes(),
-                randomizer_bytes,
                 server_key_id,
                 now
             ],
@@ -420,7 +412,6 @@ impl TokenManager {
         ephemeral_pk: &[u8],
         ephemeral_sk: &[u8],
         signature: &[u8],
-        randomizer: &MessageRandomizer,
         server_key_id: &str,
     ) -> Result<(), MailboxError> {
         let conn = self
@@ -428,18 +419,16 @@ impl TokenManager {
             .connection()
             .map_err(|e| MailboxError::Storage(e.to_string()))?;
         let now = Utc::now().to_rfc3339();
-        let randomizer_bytes = randomizer.as_bytes().map(|b| b.to_vec());
 
         conn.execute(
             "INSERT INTO mailbox_tokens
-             (id, ephemeral_public_key, ephemeral_private_key, signature, message_randomizer, server_key_id, created_at, used_at)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, NULL)",
+             (id, ephemeral_public_key, ephemeral_private_key, signature, server_key_id, created_at, used_at)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, NULL)",
             rusqlite::params![
                 id,
                 ephemeral_pk,
                 ephemeral_sk,
                 signature,
-                randomizer_bytes,
                 server_key_id,
                 now
             ],
@@ -459,22 +448,21 @@ impl TokenManager {
             .connection()
             .map_err(|e| MailboxError::Storage(e.to_string()))?;
 
-        let result: Option<(String, Vec<u8>, Vec<u8>, Vec<u8>, Option<Vec<u8>>)> = conn
+        let result: Option<(String, Vec<u8>, Vec<u8>, Vec<u8>)> = conn
             .query_row(
-                "SELECT id, ephemeral_public_key, ephemeral_private_key, signature, message_randomizer
+                "SELECT id, ephemeral_public_key, ephemeral_private_key, signature
                  FROM mailbox_tokens WHERE used_at IS NULL ORDER BY created_at ASC LIMIT 1",
                 [],
-                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+                |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
             )
             .ok();
 
         match result {
-            Some((id, public_key, private_key, signature, randomizer)) => Ok(Some(MailboxToken {
+            Some((id, public_key, private_key, signature)) => Ok(Some(MailboxToken {
                 id,
                 public_key,
                 private_key,
                 signature,
-                randomizer,
             })),
             None => Ok(None),
         }
@@ -515,7 +503,7 @@ impl TokenManager {
                  ORDER BY t.created_at ASC \
                  LIMIT 1 \
              ) \
-             RETURNING id, ephemeral_public_key, ephemeral_private_key, signature, message_randomizer",
+             RETURNING id, ephemeral_public_key, ephemeral_private_key, signature",
             rusqlite::params![now, now_nanos],
             |row| {
                 Ok((
@@ -523,18 +511,16 @@ impl TokenManager {
                     row.get::<_, Vec<u8>>(1)?,
                     row.get::<_, Vec<u8>>(2)?,
                     row.get::<_, Vec<u8>>(3)?,
-                    row.get::<_, Option<Vec<u8>>>(4)?,
                 ))
             },
         );
 
         match result {
-            Ok((id, public_key, private_key, signature, randomizer)) => Ok(Some(MailboxToken {
+            Ok((id, public_key, private_key, signature)) => Ok(Some(MailboxToken {
                 id,
                 public_key,
                 private_key,
                 signature,
-                randomizer,
             })),
             Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
             Err(e) => Err(MailboxError::Storage(e.to_string())),
@@ -636,13 +622,11 @@ mod tests {
             public_key: vec![0u8; 32],
             private_key: vec![0u8; 64],
             signature: vec![0u8; 256],
-            randomizer: Some(vec![0u8; 32]),
         };
         assert_eq!(token.id, "test-id");
         assert_eq!(token.public_key.len(), 32);
         assert_eq!(token.private_key.len(), 64);
         assert_eq!(token.signature.len(), 256);
-        assert!(token.randomizer.is_some());
     }
 
     fn test_db() -> Arc<Database> {

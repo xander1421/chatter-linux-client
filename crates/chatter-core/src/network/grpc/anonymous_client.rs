@@ -140,7 +140,6 @@ impl AnonymousMessageClient {
         envelope_type: i32,
         public_key: &[u8],
         signature: &[u8],
-        randomizer: Option<&[u8]>,
     ) -> Result<SendSealedMessageResponse, NetworkError> {
         use base64::Engine;
         use tonic::Request;
@@ -160,9 +159,6 @@ impl AnonymousMessageClient {
         let credential = serde_json::json!({
             "public_key": base64::engine::general_purpose::STANDARD.encode(public_key),
             "signature": base64::engine::general_purpose::STANDARD.encode(signature),
-            "randomizer": randomizer
-                .map(|r| base64::engine::general_purpose::STANDARD.encode(r))
-                .unwrap_or_default(),
         });
 
         // Add ONLY the anonymous credential - no auth token
@@ -220,7 +216,6 @@ impl AnonymousAuthClient {
         device_id: &str,
         public_key: &[u8],
         signature: &[u8],
-        randomizer: Option<&[u8]>,
     ) -> Result<GetPreKeyBundleResponse, NetworkError> {
         use base64::Engine;
         use tonic::Request;
@@ -237,9 +232,6 @@ impl AnonymousAuthClient {
         let credential = serde_json::json!({
             "public_key": base64::engine::general_purpose::STANDARD.encode(public_key),
             "signature": base64::engine::general_purpose::STANDARD.encode(signature),
-            "randomizer": randomizer
-                .map(|r| base64::engine::general_purpose::STANDARD.encode(r))
-                .unwrap_or_default(),
         });
 
         // Add ONLY the anonymous credential - no auth token

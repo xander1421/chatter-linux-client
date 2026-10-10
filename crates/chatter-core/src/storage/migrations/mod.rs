@@ -105,7 +105,7 @@ mod v105_drop_legacy_reaction_evidence;
 mod v106_drop_anon_group_legacy_lock;
 mod v107_drop_attachment_local_path;
 mod v108_drop_channel_message_clocks;
-pub(crate) mod reaction_normalization;
+mod v109_drop_mailbox_randomizer;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -439,4 +439,5 @@ pub fn default_migrations() -> MigrationRunner {
         .register(v106_drop_anon_group_legacy_lock::V106DropAnonGroupLegacyLock)
         .register(v107_drop_attachment_local_path::V107DropAttachmentLocalPath)
         .register(v108_drop_channel_message_clocks::V108DropChannelMessageClocks)
+        .register(v109_drop_mailbox_randomizer::V109DropMailboxRandomizer)
 }

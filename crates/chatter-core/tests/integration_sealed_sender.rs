@@ -415,7 +415,6 @@ async fn test_blind_signature_flow() {
         &server_pk,
         &response.blinded_signatures[0],
         &blinding_op.secret,
-        &blinding_op.randomizer,
         &public_key_bytes,
     ));
 
@@ -510,20 +509,15 @@ async fn test_create_ephemeral_mailbox_with_real_signature() {
         &server_pk,
         &tokens_response.blinded_signatures[0],
         &blinding_op.secret,
-        &blinding_op.randomizer,
         &public_key_bytes,
     ));
 
     // Step 5: Create ephemeral mailbox with real signature
-    // Generate a random message randomizer for the mailbox
-    let mut message_randomizer = [0u8; 32];
-    rand::fill(&mut message_randomizer);
     let create_result = mailbox_client
         .create_ephemeral_mailbox(
             public_key_bytes.clone(),
             signature,
             86400,
-            message_randomizer.to_vec(),
         )
         .await;
 
@@ -581,20 +575,16 @@ async fn test_ephemeral_mailbox_poll_with_real_signature() {
         &server_pk,
         &tokens_response.blinded_signatures[0],
         &blinding_op.secret,
-        &blinding_op.randomizer,
         &public_key_bytes,
     ));
 
     // Create mailbox
-    let mut message_randomizer = [0u8; 32];
-    rand::fill(&mut message_randomizer);
     let create_response = assert_ok(
         mailbox_client
             .create_ephemeral_mailbox(
                 public_key_bytes.clone(),
                 signature,
                 86400,
-                message_randomizer.to_vec(),
             )
             .await,
     );
@@ -668,19 +658,15 @@ async fn test_send_to_ephemeral_mailbox() {
         &server_pk,
         &tokens_response.blinded_signatures[0],
         &blinding_op.secret,
-        &blinding_op.randomizer,
         &public_key_bytes,
     ));
 
-    let mut message_randomizer = [0u8; 32];
-    rand::fill(&mut message_randomizer);
     let create_response = assert_ok(
         mailbox_client
             .create_ephemeral_mailbox(
                 public_key_bytes.clone(),
                 signature,
                 86400,
-                message_randomizer.to_vec(),
             )
             .await,
     );

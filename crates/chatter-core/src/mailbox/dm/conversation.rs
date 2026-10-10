@@ -52,8 +52,6 @@ pub struct DmMailbox {
     pub encryption_private_key: [u8; 32],
     /// Unblinded RSA signature over the public key.
     pub signature: Vec<u8>,
-    /// Message randomizer for signature verification (optional).
-    pub randomizer: Option<Vec<u8>>,
     /// Token ID this mailbox was created from (for tracking).
     pub token_id: String,
     /// When this mailbox was created.
@@ -440,7 +438,7 @@ impl DmConversationManager {
                 // During rotation two mailboxes coexist for a conversation; the
                 // NEWEST is the active one that sends must target. (All non-expired
                 // rows are still polled for receive via get_active_mailbox_keys.)
-                "SELECT id, mailbox_public_key, mailbox_private_key, signature, randomizer,
+                "SELECT id, mailbox_public_key, mailbox_private_key, signature,
                         token_id, created_at, expires_at, last_polled_at,
                         mailbox_encryption_private_key
                  FROM dm_mailboxes WHERE conversation_id = ?1
@@ -453,19 +451,17 @@ impl DmConversationManager {
             let public_key: Vec<u8> = row.get(1)?;
             let private_key: Vec<u8> = row.get(2)?;
             let signature: Vec<u8> = row.get(3)?;
-            let randomizer: Option<Vec<u8>> = row.get(4)?;
-            let token_id: String = row.get(5)?;
-            let created_at: String = row.get(6)?;
-            let expires_at: String = row.get(7)?;
-            let last_polled_at: Option<String> = row.get(8)?;
-            let encryption_private_key: Vec<u8> = row.get(9)?;
+            let token_id: String = row.get(4)?;
+            let created_at: String = row.get(5)?;
+            let expires_at: String = row.get(6)?;
+            let last_polled_at: Option<String> = row.get(7)?;
+            let encryption_private_key: Vec<u8> = row.get(8)?;
 
             Ok((
                 id,
                 public_key,
                 private_key,
                 signature,
-                randomizer,
                 token_id,
                 created_at,
                 expires_at,
@@ -480,7 +476,6 @@ impl DmConversationManager {
                 public_key,
                 private_key,
                 signature,
-                randomizer,
                 token_id,
                 created_at,
                 expires_at,
@@ -515,7 +510,6 @@ impl DmConversationManager {
                     private_key: private_key_arr,
                     encryption_private_key,
                     signature,
-                    randomizer,
                     token_id,
                     created_at,
                     expires_at,
@@ -630,16 +624,15 @@ impl DmConversationManager {
         conn.execute(
             "INSERT OR REPLACE INTO dm_mailboxes
              (id, conversation_id, mailbox_public_key, mailbox_private_key, signature,
-              randomizer, token_id, created_at, expires_at, last_polled_at,
+              token_id, created_at, expires_at, last_polled_at,
               mailbox_encryption_private_key)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             rusqlite::params![
                 mailbox.id,
                 peer_id_str,
                 mailbox.public_key.as_slice(),
                 mailbox.private_key.as_slice(),
                 mailbox.signature,
-                mailbox.randomizer,
                 mailbox.token_id,
                 mailbox.created_at.to_rfc3339(),
                 mailbox.expires_at.to_rfc3339(),
@@ -1250,7 +1243,6 @@ mod tests {
             private_key: [0u8; 64],
             encryption_private_key: [0u8; 32],
             signature: vec![],
-            randomizer: None,
             token_id: "token".to_string(),
             created_at: Utc::now(),
             expires_at: Utc::now() + Duration::hours(12),
@@ -1270,7 +1262,6 @@ mod tests {
             private_key: [0u8; 64],
             encryption_private_key: [0u8; 32],
             signature: vec![],
-            randomizer: None,
             token_id: "token".to_string(),
             created_at: Utc::now() - Duration::days(8),
             expires_at: Utc::now() - Duration::hours(1),
@@ -1292,7 +1283,6 @@ mod tests {
             private_key: [0u8; 64],
             encryption_private_key: [0u8; 32],
             signature: vec![],
-            randomizer: None,
             token_id: "token".to_string(),
             created_at: Utc::now(),
             expires_at: Utc::now() + Duration::days(7),
@@ -1374,7 +1364,6 @@ mod tests {
             private_key: [7u8; 64],
             encryption_private_key: [7u8; 32],
             signature: vec![1, 2, 3],
-            randomizer: None,
             token_id: TEST_TOKEN_ID.to_string(),
             created_at,
             expires_at,

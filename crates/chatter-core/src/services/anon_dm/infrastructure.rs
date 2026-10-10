@@ -210,7 +210,6 @@ impl AnonDmService {
                     token.public_key.clone(),
                     token.signature.clone(),
                     ttl_seconds,
-                    token.randomizer.clone().unwrap_or_default(),
                 )
                 .await
             {

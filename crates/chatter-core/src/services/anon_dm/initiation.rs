@@ -295,7 +295,6 @@ impl AnonDmService {
                 ENVELOPE_TYPE_ECIES_INIT,
                 &token.public_key,
                 &token.signature,
-                token.randomizer.as_deref(),
             )
             .await
             .map_err(|e| {

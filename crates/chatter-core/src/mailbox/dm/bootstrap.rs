@@ -315,7 +315,6 @@ impl DmBootstrap {
                         token.public_key.clone(),
                         token.signature.clone(),
                         DEFAULT_MAILBOX_TTL_SECONDS,
-                        vec![], // Deterministic blinding: no randomizer exists
                     )
                     .await
                 {
@@ -417,7 +416,6 @@ impl DmBootstrap {
             private_key,
             encryption_private_key,
             signature: token.signature.clone(),
-            randomizer: token.randomizer.clone(),
             token_id: token.id.clone(),
             created_at: Utc::now(),
             expires_at: Utc::now() + Duration::seconds(DEFAULT_MAILBOX_TTL_SECONDS as i64),
@@ -542,7 +540,6 @@ impl DmBootstrap {
                             token.public_key.clone(),
                             token.signature.clone(),
                             DEFAULT_MAILBOX_TTL_SECONDS,
-                            vec![], // Deterministic blinding: no randomizer exists
                         )
                         .await
                     {
@@ -648,7 +645,6 @@ mod tests {
                 private_key: [2u8; 64],
                 encryption_private_key: [2u8; 32],
                 signature: vec![3u8; 256],
-                randomizer: Some(vec![4u8; 32]),
                 token_id: "test-token".to_string(),
                 created_at: Utc::now(),
                 expires_at: Utc::now() + Duration::days(7),

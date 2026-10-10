@@ -176,7 +176,6 @@ fn test_dm_conversation_ready_states() {
         private_key: [0u8; 64],
         encryption_private_key: [0u8; 32],
         signature: vec![],
-        randomizer: None,
         token_id: "token".to_string(),
         created_at: Utc::now(),
         expires_at: Utc::now() + Duration::days(7),
@@ -238,7 +237,7 @@ fn create_test_mailbox(
     rand::fill(&mut ephemeral_public);
 
     // Create mailbox token (parent of dm_mailboxes)
-    // Schema: id, ephemeral_public_key, ephemeral_private_key, signature, message_randomizer, server_key_id, created_at, expires_at, used_at
+    // Schema: id, ephemeral_public_key, ephemeral_private_key, signature, server_key_id, created_at, expires_at, used_at
     conn.execute(
         "INSERT INTO mailbox_tokens (id, ephemeral_public_key, ephemeral_private_key, signature, server_key_id, created_at)
          VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
@@ -258,7 +257,6 @@ fn create_test_mailbox(
         private_key: [2u8; 64],
         encryption_private_key: [2u8; 32],
         signature: vec![3, 4, 5],
-        randomizer: Some(vec![6, 7, 8]),
         token_id: token_id.to_string(),
         created_at: Utc::now(),
         expires_at: Utc::now() + Duration::days(7),

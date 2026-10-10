@@ -34,7 +34,7 @@ pub mod token_manager;
 
 // Re-export key types for easier access
 pub use blind_signature::{
-    BlindingOperation, BlindingSecret, MessageRandomizer, ServerPublicKey, UnblindedToken,
+    BlindingOperation, BlindingSecret, ServerPublicKey, UnblindedToken,
     blind_key, unblind, verify,
 };
 pub use token_manager::{

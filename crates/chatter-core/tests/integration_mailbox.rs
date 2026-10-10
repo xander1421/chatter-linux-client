@@ -158,15 +158,12 @@ async fn test_create_ephemeral_mailbox_requires_valid_signature() {
     rand::fill(&mut ephemeral_public_key[..]);
 
     let invalid_signature = vec![0u8; 256]; // Invalid signature
-    let mut message_randomizer = vec![0u8; 32];
-    rand::fill(&mut message_randomizer[..]);
 
     let result = mailbox_client
         .create_ephemeral_mailbox(
             ephemeral_public_key,
             invalid_signature,
             86400, // 1 day TTL
-            message_randomizer,
         )
         .await;
 

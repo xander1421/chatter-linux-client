@@ -92,7 +92,6 @@ async fn test_create_ephemeral_mailbox() {
             public_key.clone(),
             fake_signature,
             ttl_seconds,
-            vec![], // No randomizer for fake test
         )
         .await;
 

@@ -182,7 +182,6 @@ impl PairwiseService {
                 &device_id.map(|d| d.to_string()).unwrap_or_default(),
                 &token.public_key,
                 &token.signature,
-                token.randomizer.as_deref(),
             )
             .await
             .map_err(|e| match (device_id, &e) {
@@ -277,7 +276,6 @@ impl PairwiseService {
                 0,
                 &send_token.public_key,
                 &send_token.signature,
-                send_token.randomizer.as_deref(),
             )
             .await?;
         Ok(device)
@@ -316,7 +314,6 @@ mod tests {
             public_key: vec![1; 32],
             private_key: vec![2; 64],
             signature: vec![3; 64],
-            randomizer: None,
         };
         let no_tor = |r: &PairwiseError| {
             matches!(

@@ -414,7 +414,6 @@ async fn handle_bootstrap_request_async(
             0,
             &token.public_key,
             &token.signature,
-            token.randomizer.as_deref(),
         )
         .await
         .map_err(|e| format!("Failed to send bootstrap: {}", e))?;

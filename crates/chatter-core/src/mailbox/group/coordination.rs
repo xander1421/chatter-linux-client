@@ -126,7 +126,6 @@ impl GroupCoordinator {
                         token.public_key.clone(),
                         token.signature.clone(),
                         DEFAULT_GROUP_MAILBOX_TTL_SECONDS,
-                        vec![], // Empty randomizer for compatibility
                     )
                     .await
                 {
@@ -307,7 +306,6 @@ impl GroupCoordinator {
             public_key,
             private_key,
             signature: token.signature.clone(),
-            randomizer: token.randomizer.clone(),
             token_id: token.id.clone(),
             created_at: Utc::now(),
             expires_at: Utc::now() + Duration::seconds(DEFAULT_GROUP_MAILBOX_TTL_SECONDS as i64),
@@ -361,7 +359,6 @@ mod tests {
             public_key: [1u8; 32],
             private_key: [2u8; 64],
             signature: vec![3u8; 256],
-            randomizer: Some(vec![4u8; 32]),
             token_id: "test-token".to_string(),
             created_at: Utc::now(),
             expires_at: Utc::now() + Duration::days(7),

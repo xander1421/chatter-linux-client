@@ -98,19 +98,16 @@ impl AnonymousMailboxClient {
     /// * `public_key` - The ephemeral public key (Ed25519)
     /// * `signature` - The unblinded blind signature (proves valid user)
     /// * `ttl_seconds` - Requested TTL in seconds
-    /// * `message_randomizer` - Randomizer used during blinding
     pub async fn create_ephemeral_mailbox(
         &mut self,
         public_key: Vec<u8>,
         signature: Vec<u8>,
         ttl_seconds: u64,
-        message_randomizer: Vec<u8>,
     ) -> Result<CreateEphemeralMailboxResponse, NetworkError> {
         let request = CreateEphemeralMailboxRequest {
             public_key,
             signature,
             ttl_seconds,
-            message_randomizer,
         };
 
         self.inner

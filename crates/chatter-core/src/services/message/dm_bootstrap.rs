@@ -496,7 +496,6 @@ impl MessageService {
                     0,
                     &credential_token.public_key,
                     &credential_token.signature,
-                    credential_token.randomizer.as_deref(),
                 )
                 .await
             {
@@ -1398,7 +1397,6 @@ mod tests {
             private_key: [pk; 64],
             encryption_private_key: [pk; 32],
             signature: vec![],
-            randomizer: None,
             token_id: format!("tok-{pk}"),
             created_at: chrono::Utc::now(),
             expires_at: chrono::Utc::now() + chrono::Duration::hours(40),

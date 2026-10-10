@@ -139,7 +139,6 @@ impl KeyRollingService {
                 token.public_key.clone(),
                 token.signature.clone(),
                 crate::mailbox::dm::bootstrap::DEFAULT_MAILBOX_TTL_SECONDS,
-                token.randomizer.clone().unwrap_or_default(),
             )
             .await
             .map_err(|e| MailboxError::Network(e.to_string()))?;
@@ -159,7 +158,6 @@ impl KeyRollingService {
             private_key,
             encryption_private_key,
             signature: token.signature.clone(),
-            randomizer: token.randomizer.clone(),
             token_id: token.id.clone(),
             created_at: Utc::now(),
             expires_at: Utc::now()
@@ -226,7 +224,6 @@ impl KeyRollingService {
                 token.public_key.clone(),
                 token.signature.clone(),
                 crate::mailbox::dm::bootstrap::DEFAULT_MAILBOX_TTL_SECONDS,
-                token.randomizer.clone().unwrap_or_default(),
             )
             .await
             .map_err(|e| MailboxError::Network(e.to_string()))?;
@@ -242,7 +239,6 @@ impl KeyRollingService {
             public_key,
             private_key,
             signature: token.signature.clone(),
-            randomizer: token.randomizer.clone(),
             token_id: token.id.clone(),
             created_at: Utc::now(),
             expires_at: Utc::now()
@@ -604,7 +600,6 @@ mod tests {
                 private_key: [2u8; 64],
                 encryption_private_key: [2u8; 32],
                 signature: vec![1, 2, 3],
-                randomizer: None,
                 token_id: TEST_TOKEN_ID.into(),
                 created_at: now - Duration::hours(40),
                 expires_at: now + Duration::hours(6),
@@ -621,7 +616,6 @@ mod tests {
                 public_key: [3u8; 32],
                 private_key: [4u8; 64],
                 signature: vec![1, 2, 3],
-                randomizer: None,
                 token_id: TEST_TOKEN_ID.into(),
                 created_at: now - Duration::hours(40),
                 expires_at: now + Duration::hours(6),
