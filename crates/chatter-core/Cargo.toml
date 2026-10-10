@@ -52,6 +52,9 @@ tonic = { version = "0.14", features = ["tls-ring"] }
 tonic-prost = "0.14"
 prost = "0.14"
 prost-types = "0.14"
+# Reflection over the generated descriptors: evaluates the buf.validate rules
+# declared on E2E content (network/validation/protovalidate.rs).
+prost-reflect = "0.16"
 tower = "0.5"
 
 # ============================================================================

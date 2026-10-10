@@ -4,6 +4,7 @@
 
 pub mod deduplicator;
 pub mod orderer;
+pub mod protovalidate;
 pub mod validator;
 
 pub use deduplicator::{DeduplicatorStats, MessageDeduplicator};
