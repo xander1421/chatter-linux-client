@@ -110,7 +110,7 @@ impl MessageSync {
 
         loop {
             let mut client = self.grpc_pool.message_client();
-            let response = client
+            let response = match client
                 .get_messages(
                     &channel_id_str,
                     PAGE_SIZE,
@@ -121,7 +121,18 @@ impl MessageSync {
                     last_sync, // reference_time — only fetch messages after this
                 )
                 .await
-                .map_err(|e| SyncError::Network(format!("channel {}: {}", channel_id, e)))?;
+            {
+                Ok(response) => response,
+                // Refused, not failed: we left or lost the channel after it
+                // was listed (the channel sync files that departure), or the
+                // server lists a channel it will not let us read. Retrying on
+                // every sync cannot help; the checkpoint stays where it was.
+                Err(e) if e.is_access_refused() => {
+                    tracing::info!(%channel_id, error = %e, "Channel messages refused; skipping");
+                    return Ok(());
+                }
+                Err(e) => return Err(SyncError::Network(format!("channel {}: {}", channel_id, e))),
+            };
 
             result.pages += 1;
             let page_count = response.messages.len();

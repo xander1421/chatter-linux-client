@@ -190,6 +190,15 @@ impl NetworkError {
         )
     }
 
+    /// The server refuses this caller the resource (`PermissionDenied`) or
+    /// says it is gone (`NotFound`): retrying the same request cannot help.
+    pub fn is_access_refused(&self) -> bool {
+        matches!(
+            self,
+            NetworkError::PermissionDenied | NetworkError::NotFound(_)
+        )
+    }
+
     /// The server refused a sealed send because a device it names is not
     /// registered (retired by Log Out / unlink): `MismatchedDevices` with
     /// `extra` devices. The sender should stop encrypting to those devices.
@@ -201,6 +210,21 @@ impl NetworkError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// A channel the server refuses us (left, removed, deleted, or never
+    /// authorized) is skipped by the syncs instead of failing every cycle.
+    #[test]
+    fn refused_channel_access_is_not_retried() {
+        for status in [
+            Status::permission_denied("no permission to read channel messages"),
+            Status::not_found("channel not found"),
+        ] {
+            let err = NetworkError::from_status(&status);
+            assert!(err.is_access_refused(), "{err}");
+            assert!(!err.is_retryable(), "{err}");
+        }
+        assert!(!NetworkError::from_status(&Status::internal("x")).is_access_refused());
+    }
 
     #[test]
     fn test_from_status_unavailable() {

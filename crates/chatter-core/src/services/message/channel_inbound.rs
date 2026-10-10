@@ -36,6 +36,32 @@ pub(crate) type DecryptFailureGate = std::collections::HashMap<
     (std::time::Instant, u32),
 >;
 
+/// Gated attempts at a message a held sender key cannot open before it is
+/// given up as a delivery issue: with the gate's 30 s doubling backoff the
+/// resend has had about 7.5 minutes to arrive.
+const RESEND_GIVE_UP_ATTEMPTS: u32 = 5;
+
+/// Record one failed decrypt in the gate: the next attempt waits 30 s,
+/// doubling per failure up to 15 minutes. Returns the failures so far.
+fn record_decrypt_failure(
+    failures: &mut DecryptFailureGate,
+    key: (ChannelId, UserId, u32, [u8; 32]),
+    now: std::time::Instant,
+) -> u32 {
+    // Evict one oldest deadline, never clear every sender's gate.
+    if failures.len() >= 512 && !failures.contains_key(&key) {
+        if let Some(oldest) = failures.iter().min_by_key(|(_, v)| v.0).map(|(k, _)| *k) {
+            failures.remove(&oldest);
+        }
+    }
+    let entry = failures.entry(key).or_insert((now, 0));
+    let delay = std::time::Duration::from_secs(30)
+        .saturating_mul(1u32 << entry.1.min(10))
+        .min(std::time::Duration::from_secs(15 * 60));
+    *entry = (now + delay, entry.1.saturating_add(1));
+    entry.1
+}
+
 /// Outcome of ingesting one server-delivered channel message.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Ingested {
@@ -517,25 +543,11 @@ impl ChannelInbound {
                     patched
                 }
                 Err(e) => {
-                    {
-                        let mut failures = self.messages.channel_decrypt_failures.lock();
-                        // Evict one oldest deadline, never clear every sender's gate.
-                        if failures.len() >= 512 && !failures.contains_key(&failure_key) {
-                            if let Some(oldest) = failures
-                                .iter()
-                                .min_by_key(|(_, v)| v.0)
-                                .map(|(key, _)| *key)
-                            {
-                                failures.remove(&oldest);
-                            }
-                        }
-                        let now = std::time::Instant::now();
-                        let entry = failures.entry(failure_key).or_insert((now, 0));
-                        let delay = std::time::Duration::from_secs(30)
-                            .saturating_mul(1u32 << entry.1.min(10))
-                            .min(std::time::Duration::from_secs(15 * 60));
-                        *entry = (now + delay, entry.1.saturating_add(1));
-                    }
+                    let attempts = record_decrypt_failure(
+                        &mut self.messages.channel_decrypt_failures.lock(),
+                        failure_key,
+                        std::time::Instant::now(),
+                    );
                     let es = e.to_string();
                     if es.contains("no sender key")
                         || es.contains("missing sender key")
@@ -594,7 +606,23 @@ impl ChannelInbound {
                     }
                     // We hold a key, but not one that opens this message
                     // (typically "old counter": it predates the SKDM we got).
-                    // Only the sender can give it back.
+                    // Only the sender can give it back, and it answers only
+                    // from a 24h send log. Holding the sync checkpoint until it
+                    // does re-fetched the channel on every sync forever, so
+                    // after a bounded number of gated attempts the gap is shown
+                    // as a delivery issue and the message dropped; a resend
+                    // that does arrive is still filed by its (sender, sent_at).
+                    if attempts >= RESEND_GIVE_UP_ATTEMPTS {
+                        self.messages
+                            .channel_decrypt_failures
+                            .lock()
+                            .remove(&failure_key);
+                        tracing::info!(%channel_id, %sid, device_id, message_id = %proto_msg.id,
+                            "Group message still undecryptable after asking for a resend; recorded as a delivery issue");
+                        self.messages
+                            .record_channel_delivery_issue(channel_id, sid, proto_msg);
+                        return Err(Ingested::Dropped);
+                    }
                     tracing::warn!(%channel_id, %sid, error = %es,
                         "Failed to decrypt channel message; asking the sender to resend it");
                     let msg_svc = self.messages.clone();
@@ -766,6 +794,25 @@ mod tests {
     use super::*;
     use crate::client::ChatterClient;
     use crate::domain::message::{ConversationType, MessageContent};
+
+    /// An unanswered resend used to hold the channel's sync checkpoint
+    /// forever ("message ingestion must be retried" on every sync). The gate
+    /// must report enough failures to give up within a bounded schedule.
+    #[test]
+    fn decrypt_failure_gate_reaches_give_up_on_a_bounded_schedule() {
+        let mut gate = DecryptFailureGate::new();
+        let key = (ChannelId::new(), UserId::new(), 1, [7u8; 32]);
+        let mut now = std::time::Instant::now();
+        let start = now;
+        let mut attempts = 0;
+        while attempts < RESEND_GIVE_UP_ATTEMPTS {
+            attempts = record_decrypt_failure(&mut gate, key, now);
+            // The next attempt is allowed once the gate's deadline passes.
+            now = gate[&key].0;
+        }
+        assert_eq!(attempts, RESEND_GIVE_UP_ATTEMPTS);
+        assert!(now - start <= std::time::Duration::from_secs(30 * 60));
+    }
 
     #[test]
     fn a_new_edit_is_not_a_duplicate_of_the_original() {

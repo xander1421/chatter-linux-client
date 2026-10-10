@@ -683,10 +683,17 @@ impl ChannelEventService {
     pub async fn reconcile_roster(
         &self,
         channel_id: &ChannelId,
+        channel_type: crate::domain::channel::ChannelType,
         memberships: &[Membership],
         last_sync: Option<chrono::DateTime<Utc>>,
     ) -> Result<(usize, usize), StorageError> {
-        if let Err(e) = self.membership_log.catch_up(channel_id).await {
+        use crate::domain::channel::ChannelType;
+        // Saved Messages has no signed membership log (the server never
+        // stores a genesis for it); asking for one only earned a NotFound
+        // warning on every sync.
+        if matches!(channel_type, ChannelType::Public | ChannelType::Private)
+            && let Err(e) = self.membership_log.catch_up(channel_id).await
+        {
             tracing::warn!(%channel_id, error = %e, "Membership log catch-up failed; roster changes shown without reasons");
         }
         let me = self.settings_repo.current_user_id().ok();
@@ -1856,7 +1863,12 @@ mod tests {
 
         // Back online: the roster sync for the channel.
         w.service
-            .reconcile_roster(&w.ch, &server_roster(&w), None)
+            .reconcile_roster(
+                &w.ch,
+                crate::domain::channel::ChannelType::Private,
+                &server_roster(&w),
+                None,
+            )
             .await
             .unwrap();
 

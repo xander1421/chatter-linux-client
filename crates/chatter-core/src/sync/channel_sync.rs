@@ -133,7 +133,7 @@ impl ChannelSync {
         // Sync memberships for each channel so local member queries reflect
         // server state (join/leave/role changes that happened while offline).
         for channel in &all_channels {
-            match self.sync_channel_members(&channel.id, last_sync).await {
+            match self.sync_channel_members(channel, last_sync).await {
                 Ok((added, removed)) => {
                     result.members_synced += added;
                     result.members_removed += removed;
@@ -221,18 +221,28 @@ impl ChannelSync {
     /// signed log first, then the roster diff). Returns (added_or_updated, removed).
     async fn sync_channel_members(
         &self,
-        channel_id: &ChannelId,
+        channel: &Channel,
         last_sync: Option<DateTime<Utc>>,
     ) -> Result<(usize, usize), SyncError> {
+        let channel_id = &channel.id;
         let mut client = self.grpc_pool.channel_client();
         // The one paginated fetch, shared with every other "everyone" caller.
         // This function used to carry its own page loop — correct, but a local
         // exception that let the truncating single-page pattern survive
         // everywhere else (OPEN-ITEMS §16).
-        let all_members = client
+        let all_members = match client
             .get_all_channel_members(&channel_id.to_string())
             .await
-            .map_err(|e| SyncError::Network(e.to_string()))?;
+        {
+            Ok(members) => members,
+            // Refused, not failed (see `MessageSync::sync_channel_into`): it
+            // must not hold the sync timestamp back and refetch every cycle.
+            Err(e) if e.is_access_refused() => {
+                tracing::info!(%channel_id, error = %e, "Channel members refused; skipping");
+                return Ok((0, 0));
+            }
+            Err(e) => return Err(SyncError::Network(e.to_string())),
+        };
 
         // Convert the whole page set before replacing. One bad proto must not
         // delete the member it failed to name.
@@ -251,7 +261,7 @@ impl ChannelSync {
             }
         }
         self.channel_events
-            .reconcile_roster(channel_id, &memberships, last_sync)
+            .reconcile_roster(channel_id, channel.channel_type, &memberships, last_sync)
             .await
             .map_err(|e| SyncError::Storage(e.to_string()))
     }
