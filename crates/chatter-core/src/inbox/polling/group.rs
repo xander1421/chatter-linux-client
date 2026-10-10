@@ -405,12 +405,14 @@ async fn process_sealed_sender_group_message(
             // Create attachment records from pointers (service layer responsibility)
             if !attachments.is_empty() {
                 let attachment_service = AttachmentService::new_local(attachment_repo.clone());
-                let created_ids = attachment_service.create_from_pointers(&attachments);
-                tracing::debug!(
-                    channel_id = %channel_id,
-                    attachment_count = created_ids.len(),
-                    "Created attachment records from pointers"
-                );
+                match attachment_service.create_from_pointers(&attachments) {
+                    Ok(created_ids) => tracing::debug!(
+                        channel_id = %channel_id,
+                        attachment_count = created_ids.len(),
+                        "Created attachment records from pointers"
+                    ),
+                    Err(error) => tracing::warn!(%error, "Failed to store attachment records"),
+                }
             }
 
             // Emit UI event so message appears in chat

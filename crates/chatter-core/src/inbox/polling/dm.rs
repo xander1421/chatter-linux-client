@@ -676,12 +676,14 @@ pub(crate) fn dispatch_dm_content(
             // Create attachment records from pointers (service layer responsibility)
             if !attachments.is_empty() {
                 let attachment_service = AttachmentService::new_local(attachment_repo.clone());
-                let created_ids = attachment_service.create_from_pointers(&attachments);
-                tracing::debug!(
-                    peer_id = %peer_id,
-                    attachment_count = created_ids.len(),
-                    "Created attachment records from pointers"
-                );
+                match attachment_service.create_from_pointers(&attachments) {
+                    Ok(created_ids) => tracing::debug!(
+                        peer_id = %peer_id,
+                        attachment_count = created_ids.len(),
+                        "Created attachment records from pointers"
+                    ),
+                    Err(error) => tracing::warn!(%error, "Failed to store attachment records"),
+                }
             }
 
             let _ = event_tx.send(InboxEvent::DmReceived {

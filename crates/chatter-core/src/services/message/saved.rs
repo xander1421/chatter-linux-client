@@ -815,17 +815,7 @@ impl SavedSnapshotStore {
             ));
         }
         let mut ids = AttachmentService::new_local(self.attachment_repo.clone())
-            .create_from_pointers(&sync.attachments);
-        for pointer in &sync.attachments {
-            let id = AttachmentId::from_cdn_key(&pointer.cdn_key);
-            if self.attachment_repo.get(&id)?.is_none() {
-                return Err(MessageError::Storage(
-                    crate::error::StorageError::InvalidData(format!(
-                        "Saved attachment {id} was not registered"
-                    )),
-                ));
-            }
-        }
+            .create_from_pointers(&sync.attachments)?;
         for key in sync.attachment_ids.iter().filter(|k| !k.is_empty()) {
             let legacy = AttachmentId::from_cdn_key(key);
             if !ids.contains(&legacy) {

@@ -481,8 +481,10 @@ impl ChannelInbound {
 
                     inbound_quote = dm.quote.clone();
 
-                    if !dm.attachments.is_empty() {
-                        self.attachments.create_from_pointers(&dm.attachments);
+                    if !dm.attachments.is_empty()
+                        && let Err(error) = self.attachments.create_from_pointers(&dm.attachments)
+                    {
+                        tracing::warn!(%error, "Failed to store attachment records");
                     }
 
                     let files: Vec<chat_v1::FileMetadata> = dm

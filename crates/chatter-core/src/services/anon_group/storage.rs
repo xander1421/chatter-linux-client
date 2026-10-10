@@ -195,11 +195,12 @@ impl AnonGroupService {
     /// Create attachment records from pointers, marked as a secret chat's so
     /// their downloads go over Tor only.
     ///
-    /// Returns the list of created attachment IDs for storing in the message.
+    /// Returns the list of created attachment IDs for storing in the message;
+    /// an error when any origin could not be persisted.
     pub fn create_attachments_from_pointers(
         &self,
         pointers: &[crate::proto::content_v1::AttachmentPointer],
-    ) -> Vec<AttachmentId> {
+    ) -> Result<Vec<AttachmentId>, crate::error::StorageError> {
         AttachmentService::new_local(self.attachment_repo.clone())
             .for_secret_chat()
             .create_from_pointers(pointers)

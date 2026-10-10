@@ -288,17 +288,53 @@ impl AttachmentRepository {
         Ok(found)
     }
 
-    /// Mark an existing row as carried by a secret chat. One-way: a row
-    /// first stored for an ordinary conversation and then received in a
-    /// secret chat (the same CDN key) goes over Tor from then on; nothing
-    /// clears the mark. Returns whether the row exists.
-    pub fn mark_secret_chat(&self, id: &AttachmentId) -> Result<bool, StorageError> {
+    /// Store a row built from a received pointer, or — when the row already
+    /// exists (the CDN key was seen before, or a concurrent receipt won the
+    /// insert) — raise its secret-chat mark to `MAX(existing, new)`, in one
+    /// transaction. The mark is monotonic: an ordinary receipt never clears
+    /// a secret one, and a secret receipt that loses the insert race still
+    /// marks the winner's row. An unknown (NULL) existing origin counts as
+    /// secret. Returns whether this call inserted the row.
+    pub fn insert_or_raise_secret(&self, attachment: &Attachment) -> Result<bool, StorageError> {
         let conn = self.db.connection()?;
-        let rows = conn.execute(
-            "UPDATE attachments SET secret_chat = 1 WHERE id = ?1",
-            params![id.to_string()],
-        )?;
-        Ok(rows > 0)
+        let tx = conn.unchecked_transaction()?;
+        let metadata_blob = db_serialize(&attachment.metadata)?;
+        let secret = attachment.secret_chat.unwrap_or(true);
+        let inserted = tx.execute(
+            "INSERT INTO attachments (
+                id, metadata_blob, status, local_path, remote_url,
+                encryption_key, encryption_iv, thumbnail_bytes, content_location, created_at,
+                secret_chat
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+            ON CONFLICT(id) DO NOTHING",
+            params![
+                attachment.id.to_string(),
+                metadata_blob,
+                status_to_int(attachment.status),
+                attachment.local_path,
+                attachment.remote_url,
+                attachment.encryption_key,
+                attachment.encryption_iv,
+                attachment.metadata.thumbnail.as_deref(),
+                content_location_to_int(attachment.content_location),
+                attachment.created_at.to_rfc3339(),
+                secret,
+            ],
+        )? == 1;
+        if inserted {
+            resolve_shared_content(&tx, attachment);
+        } else {
+            let rows = tx.execute(
+                "UPDATE attachments SET secret_chat = MAX(COALESCE(secret_chat, 1), ?2)
+                 WHERE id = ?1",
+                params![attachment.id.to_string(), secret],
+            )?;
+            if rows != 1 {
+                return Err(StorageError::NotFound(format!("Attachment {}", attachment.id)));
+            }
+        }
+        tx.commit()?;
+        Ok(inserted)
     }
 
     /// Update an existing attachment.

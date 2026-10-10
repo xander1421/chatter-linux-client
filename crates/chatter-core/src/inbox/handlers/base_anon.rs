@@ -225,7 +225,12 @@ pub trait AnonInboxBackend {
         false
     }
 
-    fn create_attachment_records(&self, pointers: &[AttachmentPointer]) -> Vec<AttachmentId>;
+    /// Persist the pointers' rows; an error means the envelope is retained,
+    /// never stored with attachments whose origin was not recorded.
+    fn create_attachment_records(
+        &self,
+        pointers: &[AttachmentPointer],
+    ) -> Result<Vec<AttachmentId>, crate::error::StorageError>;
 
     fn store_data_message(
         &self,
@@ -404,7 +409,10 @@ pub fn dispatch_common_content<B: AnonInboxBackend>(
             }
 
             let attachment_ids = if has_attachments {
-                backend.create_attachment_records(&data_msg.attachments)
+                match backend.create_attachment_records(&data_msg.attachments) {
+                    Ok(ids) => ids,
+                    Err(e) => return CommonDispatchOutcome::Failed(e),
+                }
             } else {
                 Vec::new()
             };
@@ -618,8 +626,11 @@ mod tests {
         fn label(&self) -> &'static str {
             "test"
         }
-        fn create_attachment_records(&self, _: &[AttachmentPointer]) -> Vec<AttachmentId> {
-            vec![]
+        fn create_attachment_records(
+            &self,
+            _: &[AttachmentPointer],
+        ) -> Result<Vec<AttachmentId>, crate::error::StorageError> {
+            Ok(vec![])
         }
         fn store_data_message(
             &self,

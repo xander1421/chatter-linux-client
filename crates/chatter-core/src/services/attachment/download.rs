@@ -175,7 +175,8 @@ mod tests {
             cdn_key: "missing-waveform".into(),
             content_type: "audio/wav".into(),
             ..Default::default()
-        }]);
+        }])
+        .unwrap();
         let mut audio = std::io::Cursor::new(Vec::new());
         {
             let mut writer = hound::WavWriter::new(

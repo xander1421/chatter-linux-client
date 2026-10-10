@@ -693,8 +693,10 @@ impl InboxEventProcessor {
                         .filter(|p| !p.cdn_key.is_empty())
                         .cloned()
                         .collect();
-                    if !pointers.is_empty() {
-                        self.attachment_service.create_from_pointers(&pointers);
+                    if !pointers.is_empty()
+                        && let Err(error) = self.attachment_service.create_from_pointers(&pointers)
+                    {
+                        tracing::warn!(%error, "Failed to store attachment records");
                     }
                 }
 
@@ -742,8 +744,10 @@ impl InboxEventProcessor {
                         .filter(|p| !p.cdn_key.is_empty())
                         .cloned()
                         .collect();
-                    if !pointers.is_empty() {
-                        self.attachment_service.create_from_pointers(&pointers);
+                    if !pointers.is_empty()
+                        && let Err(error) = self.attachment_service.create_from_pointers(&pointers)
+                    {
+                        tracing::warn!(%error, "Failed to store attachment records");
                     }
                 }
 

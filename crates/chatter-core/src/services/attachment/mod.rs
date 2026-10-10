@@ -519,8 +519,20 @@ impl AttachmentService {
     /// This is the single entry point for creating attachment records from
     /// received messages. Called by inbox handlers after message decryption.
     ///
-    /// Returns the list of attachment IDs that were created or already existed.
-    pub fn create_from_pointers(&self, pointers: &[AttachmentPointer]) -> Vec<AttachmentId> {
+    /// Returns the IDs of every pointer's row — created now or already
+    /// held. A row already held (the same CDN key from another conversation,
+    /// or a concurrent receipt that won the insert) keeps its data, and a
+    /// secret chat's receipt raises its mark so its transfers go over Tor
+    /// (see [`AttachmentRepository::insert_or_raise_secret`]). Any storage
+    /// failure is an error and no ID is returned: a pointer whose origin was
+    /// not persisted must not be published as stored, or a later download
+    /// could trust a stale ordinary origin.
+    ///
+    /// [`AttachmentRepository::insert_or_raise_secret`]: crate::storage::repositories::attachment_repo::AttachmentRepository::insert_or_raise_secret
+    pub fn create_from_pointers(
+        &self,
+        pointers: &[AttachmentPointer],
+    ) -> Result<Vec<AttachmentId>, crate::error::StorageError> {
         use crate::domain::attachment::{Attachment, AttachmentStatus, FileMetadata};
 
         let mut ids = Vec::with_capacity(pointers.len());
@@ -531,27 +543,7 @@ impl AttachmentService {
             }
 
             let att_id = AttachmentId::from_cdn_key(&pointer.cdn_key);
-            ids.push(att_id);
 
-            // Check if already exists (idempotent). A secret chat receiving a
-            // CDN key this device already holds still marks it: its transfers
-            // go over Tor from now on.
-            if let Ok(Some(existing)) = self.attachment_repo.get(&att_id) {
-                if self.secret_chat
-                    && existing.secret_chat != Some(true)
-                    && let Err(e) = self.attachment_repo.mark_secret_chat(&att_id)
-                {
-                    tracing::warn!(attachment_id = %att_id, error = %e, "secret-chat mark failed");
-                }
-                tracing::debug!(
-                    attachment_id = %att_id,
-                    cdn_key = %pointer.cdn_key,
-                    "Attachment record already exists"
-                );
-                continue;
-            }
-
-            // Create new Attachment record from pointer
             let attachment = Attachment {
                 id: att_id,
                 metadata: FileMetadata {
@@ -624,28 +616,22 @@ impl AttachmentService {
                 secret_chat: Some(self.secret_chat),
             };
 
-            // Insert (ignore errors - may be race condition)
-            if let Err(e) = self.attachment_repo.insert(&attachment) {
-                tracing::debug!(
-                    attachment_id = %att_id,
-                    cdn_key = %pointer.cdn_key,
-                    error = %e,
-                    "Attachment insert failed (race condition), continuing"
-                );
+            let inserted = self.attachment_repo.insert_or_raise_secret(&attachment)?;
+            ids.push(att_id);
+            if self.secret_chat {
+                // Nothing about a secret chat's file reaches the log.
+                tracing::debug!(inserted, "Stored secret-chat attachment record");
             } else {
                 tracing::info!(
                     attachment_id = %att_id,
-                    cdn_key = %pointer.cdn_key,
-                    filename = %pointer.file_name,
+                    inserted,
                     content_type = %pointer.content_type,
-                    thumbnail_cdn_key = %pointer.thumbnail_cdn_key,
-                    waveform_samples = pointer.waveform.len(),
-                    "Created attachment record from pointer"
+                    "Stored attachment record from pointer"
                 );
             }
         }
 
-        ids
+        Ok(ids)
     }
 
     /// Get preview image data (decoded RGBA) from stored thumbnail.
@@ -804,14 +790,16 @@ mod waveform_tests {
             duration_ms: 1250,
             ..Default::default()
         };
-        let ids = service.create_from_pointers(std::slice::from_ref(&pointer));
+        let ids = service
+            .create_from_pointers(std::slice::from_ref(&pointer))
+            .unwrap();
         let stored = service.get(&ids[0]).unwrap().unwrap();
         assert_eq!(
             stored.metadata.waveform_samples,
             Some(pointer.waveform.clone())
         );
         assert_eq!(stored.metadata.duration_seconds, Some(1.25));
-        assert_eq!(service.create_from_pointers(&[pointer]), ids);
+        assert_eq!(service.create_from_pointers(&[pointer]).unwrap(), ids);
         assert_eq!(
             service
                 .get(&ids[0])
@@ -877,8 +865,9 @@ mod secret_chat_origin_tests {
         let (service, _db, _dir) = service();
         let secret = service
             .for_secret_chat()
-            .create_from_pointers(&[pointer("secret-key")])[0];
-        let plain = service.create_from_pointers(&[pointer("plain-key")])[0];
+            .create_from_pointers(&[pointer("secret-key")])
+            .unwrap()[0];
+        let plain = service.create_from_pointers(&[pointer("plain-key")]).unwrap()[0];
 
         assert_eq!(service.get(&secret).unwrap().unwrap().secret_chat, Some(true));
         assert_eq!(service.get(&plain).unwrap().unwrap().secret_chat, Some(false));
@@ -892,12 +881,13 @@ mod secret_chat_origin_tests {
     #[test]
     fn the_secret_mark_is_one_way() {
         let (service, _db, _dir) = service();
-        let id = service.create_from_pointers(&[pointer("shared-key")])[0];
+        let id = service.create_from_pointers(&[pointer("shared-key")]).unwrap()[0];
         service
             .for_secret_chat()
-            .create_from_pointers(&[pointer("shared-key")]);
+            .create_from_pointers(&[pointer("shared-key")])
+            .unwrap();
         assert_eq!(service.get(&id).unwrap().unwrap().secret_chat, Some(true));
-        service.create_from_pointers(&[pointer("shared-key")]);
+        service.create_from_pointers(&[pointer("shared-key")]).unwrap();
         assert_eq!(service.get(&id).unwrap().unwrap().secret_chat, Some(true));
         assert!(routed_secret(&service, &id));
     }
@@ -906,13 +896,73 @@ mod secret_chat_origin_tests {
     #[test]
     fn unknown_origin_goes_over_tor() {
         let (service, db, _dir) = service();
-        let id = service.create_from_pointers(&[pointer("legacy-key")])[0];
+        let id = service.create_from_pointers(&[pointer("legacy-key")]).unwrap()[0];
         db.connection()
             .unwrap()
             .execute("UPDATE attachments SET secret_chat = NULL", [])
             .unwrap();
         assert_eq!(service.get(&id).unwrap().unwrap().secret_chat, None);
         assert!(routed_secret(&service, &id));
+        // An ordinary receipt of that key resolves "unknown" to secret,
+        // never to ordinary.
+        service.create_from_pointers(&[pointer("legacy-key")]).unwrap();
+        assert_eq!(service.get(&id).unwrap().unwrap().secret_chat, Some(true));
+    }
+
+    /// Normal and secret receipts of the same unknown CDN key racing: the
+    /// row ends secret whichever wins the insert.
+    #[test]
+    fn concurrent_normal_and_secret_receipts_end_secret() {
+        let (service, _db, _dir) = service();
+        for round in 0..50 {
+            let key = format!("race-{round}");
+            let barrier = Arc::new(std::sync::Barrier::new(2));
+            let handles: Vec<_> = [service.clone(), service.for_secret_chat()]
+                .into_iter()
+                .map(|svc| {
+                    let (barrier, key) = (barrier.clone(), key.clone());
+                    std::thread::spawn(move || {
+                        barrier.wait();
+                        svc.create_from_pointers(&[pointer(&key)]).unwrap()[0]
+                    })
+                })
+                .collect();
+            let ids: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+            assert_eq!(ids[0], ids[1]);
+            assert_eq!(
+                service.get(&ids[0]).unwrap().unwrap().secret_chat,
+                Some(true),
+                "round {round}"
+            );
+            assert!(routed_secret(&service, &ids[0]));
+        }
+    }
+
+    /// A secret receipt whose mark cannot be written is an error, and no
+    /// pointer ID is handed back as stored — likewise a failed insert.
+    #[test]
+    fn a_failed_origin_write_publishes_no_pointer() {
+        let (service, db, _dir) = service();
+        let id = service.create_from_pointers(&[pointer("held-key")]).unwrap()[0];
+        db.connection()
+            .unwrap()
+            .execute_batch(
+                "CREATE TRIGGER fail_mark BEFORE UPDATE OF secret_chat ON attachments
+                 BEGIN SELECT RAISE(ABORT, 'injected'); END;
+                 CREATE TRIGGER fail_insert BEFORE INSERT ON attachments
+                 BEGIN SELECT RAISE(ABORT, 'injected'); END;",
+            )
+            .unwrap();
+        let secret = service.for_secret_chat();
+        assert!(secret.create_from_pointers(&[pointer("held-key")]).is_err());
+        assert!(
+            secret
+                .create_from_pointers(&[pointer("new-key"), pointer("held-key")])
+                .is_err()
+        );
+        // The ordinary origin stands, but nothing claimed the secret copy
+        // was stored, so no secret message references it.
+        assert_eq!(service.get(&id).unwrap().unwrap().secret_chat, Some(false));
     }
 }
 

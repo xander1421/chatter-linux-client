@@ -30,7 +30,10 @@ impl AnonInboxBackend for AnonGroupService {
     // `process_incoming_content`, which has the group id; these trait hooks
     // (keyed by sender alone, or by id alone) stay at their defaults.
 
-    fn create_attachment_records(&self, pointers: &[AttachmentPointer]) -> Vec<AttachmentId> {
+    fn create_attachment_records(
+        &self,
+        pointers: &[AttachmentPointer],
+    ) -> Result<Vec<AttachmentId>, crate::error::StorageError> {
         self.create_attachments_from_pointers(pointers)
     }
 

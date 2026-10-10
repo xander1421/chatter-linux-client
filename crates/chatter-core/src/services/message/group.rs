@@ -812,7 +812,10 @@ impl MessageService {
                             crate::services::attachment::AttachmentService::new_local(
                                 self.attachment_repo.clone(),
                             );
-                        attachment_service.create_from_pointers(&dm.attachments);
+                        if let Err(error) = attachment_service.create_from_pointers(&dm.attachments)
+                        {
+                            tracing::warn!(%error, "Failed to store attachment records");
+                        }
                     }
 
                     // Rebuild the wire proto with the decrypted text +

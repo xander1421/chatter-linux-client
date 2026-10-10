@@ -29,7 +29,10 @@ impl AnonInboxBackend for AnonDmService {
         AnonDmService::is_conversation_blocked(self, id).unwrap_or(false)
     }
 
-    fn create_attachment_records(&self, pointers: &[AttachmentPointer]) -> Vec<AttachmentId> {
+    fn create_attachment_records(
+        &self,
+        pointers: &[AttachmentPointer],
+    ) -> Result<Vec<AttachmentId>, crate::error::StorageError> {
         // Marked as a secret chat's: its downloads go over Tor only.
         AttachmentService::new_local(self.attachment_repo.clone())
             .for_secret_chat()
