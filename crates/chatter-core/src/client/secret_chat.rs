@@ -44,9 +44,10 @@ impl ChatterClient {
 
     /// Start a secret chat with `peer`, or return the one that already exists
     /// (the anon DM service keeps one per peer). A declined one is restarted,
-    /// and so is our own request that provably never left this device (it
-    /// failed before the send RPC); one that may have left is returned as is,
-    /// never blindly resent. The caller opens the returned conversation
+    /// and so is our own request that provably never left this device; one
+    /// whose send outcome is unknown is resent under its original request id
+    /// (the server queues it at most once); one the server queued is returned
+    /// as is. The caller opens the returned conversation
     /// (`ActiveConversation::AnonDm`).
     pub async fn start_secret_chat(&self, peer: UserId) -> Result<AnonDm, SecretChatError> {
         self.secret_chat_peer_check(&peer)?;
@@ -58,7 +59,8 @@ impl ChatterClient {
             .and_then(|id| self.get_anon_dm_conversation(&id))
         {
             match existing.status {
-                AnonDmStatus::Pending if existing.is_unsent_request() => {}
+                AnonDmStatus::Pending
+                    if existing.is_unsent_request() || existing.is_uncertain_request() => {}
                 AnonDmStatus::Active | AnonDmStatus::Pending => return Ok(existing),
                 AnonDmStatus::Blocked => return Err(SecretChatError::Blocked),
                 AnonDmStatus::Declined => {}

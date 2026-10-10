@@ -90,7 +90,8 @@ impl AnonGroupService {
         pointer: Option<&crate::proto::content_v1::AttachmentPointer>,
         current: Option<Vec<u8>>,
     ) -> Option<Vec<u8>> {
-        crate::services::secret_avatar::resolve(&self.secret_attachments(), pointer, current).await
+        crate::services::secret_avatar::resolve_once(&self.secret_attachments(), pointer, current)
+            .await
     }
 
     /// Our avatar's pointer.

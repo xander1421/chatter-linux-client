@@ -1,5 +1,5 @@
 use crate::domain::UserId;
-use crate::domain::anon_dm::{AnonDmId, AnonDmMailbox};
+use crate::domain::anon_dm::{AnonDm, AnonDmId, AnonDmMailbox, RequestState};
 use crate::proto::content_v1::Content;
 use crate::proto::mailbox_v1::EnvelopeType;
 use chrono::Utc;
@@ -8,13 +8,30 @@ use uuid::Uuid;
 
 use super::{AnonDmError, AnonDmService};
 
+/// The send RPC's idempotency key for our request in `conversation_id`: the
+/// same on every resend, so the server queues the request at most once per
+/// device. Hashed so the server never sees the conversation id, and shaped
+/// like any random v4 UUID.
+pub(crate) fn request_id(conversation_id: &AnonDmId) -> String {
+    use sha2::{Digest, Sha256};
+    let digest = Sha256::new()
+        .chain_update(b"chatter.secret-chat.request-id")
+        .chain_update(conversation_id.to_string())
+        .finalize();
+    let mut bytes = [0u8; 16];
+    bytes.copy_from_slice(&digest[..16]);
+    uuid::Builder::from_random_bytes(bytes)
+        .into_uuid()
+        .to_string()
+}
+
 impl AnonDmService {
     /// Send our message request for `conversation_id` to ONE of the peer's
     /// device inboxes, fully anonymously over Tor
-    /// ([`PairwiseService::send_to_device_inbox`]). The server picks the
-    /// peer's current device; the conversation is bound to it and marked
-    /// submitted right before the send RPC, so a failure before that point
-    /// provably sent nothing.
+    /// ([`PairwiseService::send_to_device_inbox`]). A first attempt lets the
+    /// server pick the peer's current device and binds the chat to it; a
+    /// resend goes to that device. The outcome is recorded by
+    /// [`Self::settle_request_send`].
     ///
     /// [`PairwiseService::send_to_device_inbox`]: crate::services::pairwise::PairwiseService::send_to_device_inbox
     pub(crate) async fn send_to_device_inbox(
@@ -23,20 +40,61 @@ impl AnonDmService {
         peer_id: &UserId,
         content: Content,
     ) -> Result<(), AnonDmError> {
+        use crate::services::pairwise::PairwiseError;
         let repo = &self.anon_dm_repo;
-        self.pairwise_service
+        let dm = repo
+            .get_conversation(conversation_id)?
+            .ok_or(AnonDmError::ConversationNotFound(*conversation_id))?;
+        let mut reached_rpc = false;
+        let result = self
+            .pairwise_service
             .send_to_device_inbox(
                 &self.token_manager,
+                &request_id(conversation_id),
                 peer_id,
-                None,
+                dm.peer_device_id,
                 &content.encode_to_vec(),
                 |device| {
                     repo.pin_peer_device(conversation_id, device)?;
-                    repo.mark_request_submitted(conversation_id)?;
+                    repo.set_request_state(conversation_id, RequestState::Uncertain)?;
+                    reached_rpc = true;
                     Ok(())
                 },
             )
-            .await?;
+            .await;
+        if reached_rpc {
+            let rpc = match &result {
+                Ok(_) => Ok(()),
+                Err(PairwiseError::Network(e)) => Err(e),
+                // Only the RPC fails after the hook.
+                Err(_) => Err(&crate::error::NetworkError::Unavailable),
+            };
+            self.settle_request_send(&dm, rpc)?;
+        }
+        result?;
+        Ok(())
+    }
+
+    /// Record how a request's send RPC ended. Marked [`RequestState::Uncertain`]
+    /// right before the RPC; the server accepting it makes it
+    /// [`RequestState::Submitted`]. A definite refusal of the FIRST attempt
+    /// (`dm` was [`RequestState::Unsent`]) proves nothing left this device, so
+    /// it goes back to `Unsent` and the caller discards it. Anything else
+    /// stays uncertain — a resend may be refused after an earlier attempt
+    /// went through — and is resent under the same [`request_id`].
+    pub(crate) fn settle_request_send(
+        &self,
+        dm: &AnonDm,
+        rpc: Result<(), &crate::error::NetworkError>,
+    ) -> Result<(), AnonDmError> {
+        let state = match rpc {
+            Ok(()) => RequestState::Submitted,
+            Err(e) if dm.request == RequestState::Unsent && e.is_definite_rejection() => {
+                RequestState::Unsent
+            }
+            Err(_) => return Ok(()),
+        };
+        self.anon_dm_repo.set_request_state(&dm.id, state)?;
         Ok(())
     }
 

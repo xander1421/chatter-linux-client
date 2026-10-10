@@ -124,28 +124,76 @@ async fn upload(
 
 /// The avatar a received pointer names. `current` is the avatar already held
 /// for this peer: returned as is, without a fetch, when the pointer names the
-/// same image. `None` when there is no pointer or the fetch or any check
-/// fails, which callers treat as "avatar unchanged".
+/// same image. `Ok(None)` when there is no usable pointer or the blob fails a
+/// check (callers treat it as "avatar unchanged"); `Err` when the fetch itself
+/// failed, which is worth retrying ([`retrying`]).
 pub(crate) async fn resolve(
     attachments: &AttachmentService,
     pointer: Option<&AttachmentPointer>,
     current: Option<Vec<u8>>,
-) -> Option<Vec<u8>> {
-    let pointer = pointer?;
+) -> Result<Option<Vec<u8>>, AttachmentError> {
+    let Some(pointer) = pointer else {
+        return Ok(None);
+    };
     if let Some(current) = current
         && !pointer.plaintext_hash.is_empty()
         && plaintext_hash(&current) == pointer.plaintext_hash
     {
-        return Some(current);
+        return Ok(Some(current));
     }
-    let bound = fetch_bound(pointer)?;
-    match fetch(&attachments.for_secret_chat(), pointer, bound).await {
-        Ok(ciphertext) => open(pointer, &ciphertext),
-        Err(e) => {
-            tracing::debug!(error = %e, "Secret-chat avatar fetch failed");
+    let Some(bound) = fetch_bound(pointer) else {
+        return Ok(None);
+    };
+    let ciphertext = fetch(&attachments.for_secret_chat(), pointer, bound).await?;
+    Ok(open(pointer, &ciphertext))
+}
+
+/// [`resolve`] once, for a caller that will not retry: a failed fetch is
+/// logged and reads as "no avatar".
+pub(crate) async fn resolve_once(
+    attachments: &AttachmentService,
+    pointer: Option<&AttachmentPointer>,
+    current: Option<Vec<u8>>,
+) -> Option<Vec<u8>> {
+    resolve(attachments, pointer, current)
+        .await
+        .unwrap_or_else(|e| {
+            tracing::warn!(error = %e, "Secret-chat avatar fetch failed");
             None
+        })
+}
+
+/// Waits before each fetch attempt of a peer's avatar. Tor circuits to the
+/// storage onion fail in bursts (RC107: the S25 dropped its peer's avatar for
+/// good after one failed fetch), so a failed fetch is tried again later rather
+/// than dropped. Retries live in memory only: a restart forgets them, and the
+/// peer's next profile update brings the pointer again.
+pub(crate) const RETRY_DELAYS: [std::time::Duration; 5] = [
+    std::time::Duration::ZERO,
+    std::time::Duration::from_secs(30),
+    std::time::Duration::from_secs(120),
+    std::time::Duration::from_secs(600),
+    std::time::Duration::from_secs(1800),
+];
+
+/// Run `attempt` (a [`resolve`]) after each of `delays` until it does not
+/// fail. Its answer, or `None` when every attempt's fetch failed.
+pub(crate) async fn retrying<F, Fut>(
+    delays: &[std::time::Duration],
+    mut attempt: F,
+) -> Option<Vec<u8>>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<Option<Vec<u8>>, AttachmentError>>,
+{
+    for delay in delays {
+        tokio::time::sleep(*delay).await;
+        match attempt().await {
+            Ok(avatar) => return avatar,
+            Err(e) => tracing::warn!(error = %e, "Secret-chat avatar fetch failed; will retry"),
         }
     }
+    None
 }
 
 /// The most ciphertext a well-formed pointer can name: the padded plaintext
@@ -266,13 +314,59 @@ mod tests {
             crate::storage::repositories::AttachmentRepository::new(std::sync::Arc::new(db)),
         ));
         let got = resolve(&attachments, Some(&pointer), Some(avatar.clone())).await;
-        assert_eq!(got.as_deref(), Some(avatar.as_slice()));
-        // A different held avatar would need the fetch, which fails here.
+        assert_eq!(got.unwrap().as_deref(), Some(avatar.as_slice()));
+        // A different held avatar would need the fetch, which fails here, and
+        // says so (retryable) instead of reading as "no avatar".
+        assert!(
+            resolve(&attachments, Some(&pointer), Some(vec![1, 2, 3]))
+                .await
+                .is_err()
+        );
         assert_eq!(
-            resolve(&attachments, Some(&pointer), Some(vec![1, 2, 3])).await,
+            resolve(&attachments, None, Some(avatar)).await.unwrap(),
             None
         );
-        assert_eq!(resolve(&attachments, None, Some(avatar)).await, None);
+    }
+
+    /// A fetch that fails (flaky Tor circuit) is tried again; the first answer
+    /// that is not a fetch failure ends the retries.
+    #[tokio::test]
+    async fn failed_fetch_is_retried_until_it_answers() {
+        use std::time::Duration;
+        let tries = std::cell::Cell::new(0);
+        let attempt = || {
+            tries.set(tries.get() + 1);
+            let n = tries.get();
+            async move {
+                if n < 3 {
+                    Err(AttachmentError::NetworkError(
+                        "hidden service circuit".into(),
+                    ))
+                } else {
+                    Ok(Some(vec![n as u8]))
+                }
+            }
+        };
+        let got = retrying(&[Duration::ZERO; 5], attempt).await;
+        assert_eq!((got, tries.get()), (Some(vec![3]), 3));
+
+        // Every attempt failing gives up after the last delay.
+        let tries = std::cell::Cell::new(0);
+        let failing = || {
+            tries.set(tries.get() + 1);
+            async { Err(AttachmentError::NetworkError("down".into())) }
+        };
+        assert_eq!(retrying(&[Duration::ZERO; 2], failing).await, None);
+        assert_eq!(tries.get(), 2);
+
+        // An unusable pointer is an answer, not a failure: no retry.
+        let tries = std::cell::Cell::new(0);
+        let unusable = || {
+            tries.set(tries.get() + 1);
+            async { Ok(None) }
+        };
+        assert_eq!(retrying(&[Duration::ZERO; 5], unusable).await, None);
+        assert_eq!(tries.get(), 1);
     }
 
     /// Every secret-chat control that names an avatar, built with a realistic

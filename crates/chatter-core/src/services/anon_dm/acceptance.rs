@@ -16,7 +16,7 @@ impl AnonDmService {
         let _current_user = self.current_user_id()?;
 
         // Get the conversation
-        let mut dm = self
+        let dm = self
             .anon_dm_repo
             .get_conversation(&conversation_id)?
             .ok_or(AnonDmError::ConversationNotFound(conversation_id))?;
@@ -54,10 +54,14 @@ impl AnonDmService {
         )
         .await?;
 
-        // Update conversation status
-        dm.status = AnonDmStatus::Active;
-        dm.updated_at = Utc::now();
-        self.anon_dm_repo.update_conversation(&dm)?;
+        // Status alone: `dm` is a snapshot from before the sends above, and a
+        // peer avatar fetched meanwhile must not be overwritten with it.
+        self.anon_dm_repo
+            .update_status(&conversation_id, AnonDmStatus::Active)?;
+        let dm = self
+            .anon_dm_repo
+            .get_conversation(&conversation_id)?
+            .ok_or(AnonDmError::ConversationNotFound(conversation_id))?;
 
         // Secret chat: no peer identity in the log.
         tracing::info!(%conversation_id, "Accepted secret chat");
@@ -207,10 +211,10 @@ impl AnonDmService {
             return Err(AnonDmError::CannotMessageSelf);
         }
 
-        // Check if conversation already exists
-        if let Some(existing) = self.anon_dm_repo.get_conversation(&conversation_id)? {
-            // Already have this conversation
-            return Ok(existing);
+        // A request we already hold is a resend of it (the initiator resends
+        // an uncertain request under the same id): nothing new to show.
+        if self.anon_dm_repo.get_conversation(&conversation_id)?.is_some() {
+            return Err(AnonDmError::ConversationExists(sender_id));
         }
 
         // Create conversation as incoming request

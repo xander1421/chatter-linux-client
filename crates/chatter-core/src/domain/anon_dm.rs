@@ -102,10 +102,33 @@ pub struct AnonDm {
     /// until known. Pairwise encryption targets only this device; if it
     /// disappears the chat is refused, never moved or fanned out.
     pub peer_device_id: Option<u32>,
-    /// For a chat we initiated: whether our request may have left this
-    /// device. `false` means it provably never did (failed before the send
-    /// RPC), so starting again is safe; `true` keeps uncertain delivery as is.
-    pub request_submitted: bool,
+    /// For a chat we initiated: how far our request got.
+    pub request: RequestState,
+}
+
+/// How far our own secret-chat request got. Stored as an integer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[repr(i32)]
+pub enum RequestState {
+    /// Provably never left this device (failed before the send RPC, or the
+    /// server definitively refused the only attempt): discard and start again.
+    #[default]
+    Unsent = 0,
+    /// May have left (marked right before the send RPC; the outcome is not
+    /// known). Resent under the same request id, never restarted.
+    Uncertain = 1,
+    /// The server queued it for the peer's device.
+    Submitted = 2,
+}
+
+impl RequestState {
+    pub fn from_i32(v: i32) -> Self {
+        match v {
+            0 => Self::Unsent,
+            2 => Self::Submitted,
+            _ => Self::Uncertain,
+        }
+    }
 }
 
 impl AnonDm {
@@ -126,7 +149,7 @@ impl AnonDm {
             last_message_at: None,
             unread_count: 0,
             peer_device_id: None,
-            request_submitted: false,
+            request: RequestState::Unsent,
         }
     }
 
@@ -147,7 +170,7 @@ impl AnonDm {
             last_message_at: None,
             unread_count: 1,
             peer_device_id: None,
-            request_submitted: false,
+            request: RequestState::Unsent,
         }
     }
 
@@ -184,10 +207,15 @@ impl AnonDm {
         !self.initiated_by_us && self.status == AnonDmStatus::Pending
     }
 
-    /// Our request that provably never left this device (it failed before
-    /// the send RPC). Safe to discard and start again.
+    /// Our request that provably never left this device. Safe to discard
+    /// and start again.
     pub fn is_unsent_request(&self) -> bool {
-        self.is_outgoing_request() && !self.request_submitted
+        self.is_outgoing_request() && self.request == RequestState::Unsent
+    }
+
+    /// Our request whose delivery is not known: resend it as is.
+    pub fn is_uncertain_request(&self) -> bool {
+        self.is_outgoing_request() && self.request == RequestState::Uncertain
     }
 
     /// Check if this is an outgoing request that hasn't been accepted.

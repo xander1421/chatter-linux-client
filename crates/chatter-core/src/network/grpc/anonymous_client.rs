@@ -131,9 +131,13 @@ impl AnonymousMessageClient {
     /// - Server does NOT know: sender identity (only that they're a valid user)
     /// - Server cannot read: message content (sealed sender encryption)
     /// - Server cannot link: multiple messages from same sender (one-time tokens)
+    ///
+    /// `client_request_id` is the server's idempotency key: a resend under the
+    /// same id is queued at most once per device.
     #[allow(clippy::too_many_arguments)]
     pub async fn send_with_anonymous_credential(
         &mut self,
+        client_request_id: &str,
         destination_user_id: &str,
         messages: Vec<SealedDeviceMessage>,
         delivery: SealedDelivery,
@@ -147,7 +151,7 @@ impl AnonymousMessageClient {
         let proto_request = SendSealedMessageRequest {
             destination_user_id: destination_user_id.to_string(),
             messages,
-            client_request_id: uuid::Uuid::new_v4().to_string(),
+            client_request_id: client_request_id.to_string(),
             envelope_type,
             delivery: delivery as i32,
         };

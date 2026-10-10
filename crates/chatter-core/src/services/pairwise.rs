@@ -234,10 +234,16 @@ impl PairwiseService {
     /// `device_id` as in [`Self::encrypt_anonymous`]. `before_send` runs with
     /// the sealed-to device after encryption, right before the send RPC (the
     /// caller records that the request may now have left); its error aborts
-    /// the send. Returns the device.
+    /// the send. `request_id` is the server's idempotency key
+    /// ([`AnonymousMessageClient::send_with_anonymous_credential`]). Returns
+    /// the device.
+    ///
+    /// [`AnonymousMessageClient::send_with_anonymous_credential`]: crate::network::grpc::anonymous_client::AnonymousMessageClient::send_with_anonymous_credential
+    #[allow(clippy::too_many_arguments)]
     pub async fn send_to_device_inbox(
         &self,
         tokens: &TokenManager,
+        request_id: &str,
         peer_id: &UserId,
         device_id: Option<u32>,
         plaintext: &[u8],
@@ -257,6 +263,7 @@ impl PairwiseService {
         before_send(device)?;
         anon_client
             .send_with_anonymous_credential(
+                request_id,
                 &peer_id.to_string(),
                 vec![crate::proto::chat_v1::SealedDeviceMessage {
                     device_id: device,
@@ -425,7 +432,7 @@ mod tests {
         assert!(no_tor(&e), "{e}");
         let tokens = client.anon_dms().token_manager.clone();
         let e = pairwise
-            .send_to_device_inbox(&tokens, &peer, None, b"x", |_| {
+            .send_to_device_inbox(&tokens, "r", &peer, None, b"x", |_| {
                 panic!("nothing may be marked sent")
             })
             .await

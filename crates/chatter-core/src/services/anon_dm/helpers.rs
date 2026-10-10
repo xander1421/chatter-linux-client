@@ -1,4 +1,5 @@
 use super::{AnonDmError, AnonDmService};
+use crate::domain::anon_dm::AnonDmStatus;
 
 impl AnonDmService {
     /// Our profile key, when the visibility setting shares it with anon
@@ -52,41 +53,60 @@ impl AnonDmService {
     }
 
     /// The avatar a peer's pointer names; `current` is what we hold for them.
+    /// `Err` when the fetch failed (worth retrying, see
+    /// [`Self::refresh_peer_avatar`]).
     pub(crate) async fn resolve_peer_avatar(
         &self,
         pointer: Option<&crate::proto::content_v1::AttachmentPointer>,
         current: Option<Vec<u8>>,
-    ) -> Option<Vec<u8>> {
+    ) -> Result<Option<Vec<u8>>, crate::services::attachment::AttachmentError> {
         crate::services::secret_avatar::resolve(&self.secret_attachments(), pointer, current).await
     }
 
-    /// Fetch the avatar a peer's profile update points at and store it when
-    /// it differs from the one we hold. Returns the new avatar, or `None`
-    /// when nothing changed (no conversation with this peer, same avatar,
-    /// fetch failed).
+    /// Fetch the avatar a peer's pointer names, after each of `delays` until
+    /// a fetch goes through, and store it when it differs from the one we
+    /// hold. Returns the new avatar, or `None` when nothing changed (no
+    /// conversation with this peer, same avatar, every fetch failed).
     pub(crate) async fn refresh_peer_avatar(
         &self,
         conversation_id: &crate::domain::anon_dm::AnonDmId,
         peer_id: &crate::domain::UserId,
         pointer: &crate::proto::content_v1::AttachmentPointer,
+        delays: &[std::time::Duration],
     ) -> Result<Option<Vec<u8>>, AnonDmError> {
         let held = match self.anon_dm_repo.get_conversation(conversation_id)? {
-            Some(dm) if dm.peer_id == *peer_id && dm.is_ready() => dm.peer_avatar,
+            Some(dm) if dm.peer_id == *peer_id && dm.status != AnonDmStatus::Blocked => {
+                dm.peer_avatar
+            }
             _ => return Ok(None),
         };
-        let Some(avatar) = self.resolve_peer_avatar(Some(pointer), held.clone()).await else {
-            return Ok(None);
-        };
-        if held.as_ref() == Some(&avatar) {
-            return Ok(None);
+        let avatar = crate::services::secret_avatar::retrying(delays, || {
+            self.resolve_peer_avatar(Some(pointer), held.clone())
+        })
+        .await;
+        match avatar {
+            Some(avatar) => self.store_peer_avatar(conversation_id, peer_id, avatar),
+            None => Ok(None),
         }
-        // Re-read: the fetch took a while and the row may have moved on.
-        let Some(mut dm) = self.anon_dm_repo.get_conversation(conversation_id)? else {
-            return Ok(None);
-        };
-        dm.peer_avatar = Some(avatar.clone());
-        self.anon_dm_repo.update_conversation(&dm)?;
-        Ok(Some(avatar))
+    }
+
+    /// Store `avatar` as the peer's when it is new. Re-reads the row (a fetch
+    /// takes a while) and writes the avatar column alone, so no other writer's
+    /// snapshot is replaced. Returns the avatar when it changed.
+    pub(crate) fn store_peer_avatar(
+        &self,
+        conversation_id: &crate::domain::anon_dm::AnonDmId,
+        peer_id: &crate::domain::UserId,
+        avatar: Vec<u8>,
+    ) -> Result<Option<Vec<u8>>, AnonDmError> {
+        match self.anon_dm_repo.get_conversation(conversation_id)? {
+            Some(dm) if dm.peer_id == *peer_id && dm.peer_avatar.as_ref() != Some(&avatar) => {
+                self.anon_dm_repo
+                    .set_peer_avatar(conversation_id, &avatar)?;
+                Ok(Some(avatar))
+            }
+            _ => Ok(None),
+        }
     }
 
     /// Get our Signal Protocol identity key.

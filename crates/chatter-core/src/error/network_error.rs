@@ -167,6 +167,21 @@ impl NetworkError {
         )
     }
 
+    /// The server answered and refused the request, so nothing it carried
+    /// was accepted. Transport failures, timeouts and server-side errors are
+    /// not definite: the server may have processed the request anyway.
+    pub fn is_definite_rejection(&self) -> bool {
+        matches!(
+            self,
+            NetworkError::InvalidRequest(_)
+                | NetworkError::PermissionDenied
+                | NetworkError::Unauthenticated
+                | NetworkError::NotFound(_)
+                | NetworkError::RateLimited
+                | NetworkError::MismatchedDevices { .. }
+        )
+    }
+
     /// Returns true if this error indicates a transport/connection failure.
     ///
     /// Transport errors mean the HTTP/2 connection is stale or broken.

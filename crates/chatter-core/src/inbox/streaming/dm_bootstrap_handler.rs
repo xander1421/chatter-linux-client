@@ -404,6 +404,7 @@ async fn handle_bootstrap_request_async(
 
     anon_client
         .send_with_anonymous_credential(
+            &uuid::Uuid::new_v4().to_string(),
             &peer_id_str,
             vec![crate::proto::chat_v1::SealedDeviceMessage {
                 device_id: peer_device_id,

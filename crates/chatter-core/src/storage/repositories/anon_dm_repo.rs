@@ -6,7 +6,7 @@
 use std::str::FromStr;
 
 use crate::domain::UserId;
-use crate::domain::anon_dm::{AnonDm, AnonDmId, AnonDmMailbox, AnonDmStatus};
+use crate::domain::anon_dm::{AnonDm, AnonDmId, AnonDmMailbox, AnonDmStatus, RequestState};
 use crate::error::StorageError;
 use crate::storage::Database;
 use chrono::{DateTime, Utc};
@@ -34,7 +34,7 @@ impl AnonDmRepository {
     pub fn insert_conversation(&self, dm: &AnonDm) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
         conn.execute(
-            "INSERT INTO anon_dm_conversations (id, peer_id, initiated_by_us, status, peer_mailbox_pk, peer_profile_key, peer_display_name, peer_avatar, created_at, updated_at, peer_device_id, request_submitted)
+            "INSERT INTO anon_dm_conversations (id, peer_id, initiated_by_us, status, peer_mailbox_pk, peer_profile_key, peer_display_name, peer_avatar, created_at, updated_at, peer_device_id, request_state)
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
             params![
                 dm.id.to_string(),
@@ -48,7 +48,7 @@ impl AnonDmRepository {
                 dm.created_at.to_rfc3339(),
                 dm.updated_at.to_rfc3339(),
                 dm.peer_device_id,
-                dm.request_submitted as i32,
+                dm.request as i32,
             ],
         )?;
         Ok(())
@@ -73,13 +73,17 @@ impl AnonDmRepository {
         Ok(())
     }
 
-    /// Record that our request for this conversation may have left this
-    /// device. Set right before the send RPC; never cleared.
-    pub fn mark_request_submitted(&self, id: &AnonDmId) -> Result<(), StorageError> {
+    /// Record how far our request for this conversation got
+    /// ([`RequestState`]).
+    pub fn set_request_state(
+        &self,
+        id: &AnonDmId,
+        state: RequestState,
+    ) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
         let rows = conn.execute(
-            "UPDATE anon_dm_conversations SET request_submitted = 1 WHERE id = ?1",
-            params![id.to_string()],
+            "UPDATE anon_dm_conversations SET request_state = ?2 WHERE id = ?1",
+            params![id.to_string(), state as i32],
         )?;
         if rows == 0 {
             return Err(StorageError::NotFound(format!("AnonDm {id}")));
@@ -93,7 +97,7 @@ impl AnonDmRepository {
         let mut stmt = conn.prepare(
             "SELECT id, peer_id, initiated_by_us, status, peer_mailbox_pk, peer_profile_key, peer_display_name, peer_avatar, created_at, updated_at, \
              (SELECT MAX(created_at) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_deleted = 0) as last_message_at, \
-             (SELECT COUNT(*) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_read = 0 AND is_deleted = 0) as unread_count, peer_device_id, request_submitted \
+             (SELECT COUNT(*) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_read = 0 AND is_deleted = 0) as unread_count, peer_device_id, request_state \
              FROM anon_dm_conversations WHERE id = ?1",
         )?;
 
@@ -115,7 +119,7 @@ impl AnonDmRepository {
         let mut stmt = conn.prepare(
             "SELECT id, peer_id, initiated_by_us, status, peer_mailbox_pk, peer_profile_key, peer_display_name, peer_avatar, created_at, updated_at, \
              (SELECT MAX(created_at) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_deleted = 0) as last_message_at, \
-             (SELECT COUNT(*) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_read = 0 AND is_deleted = 0) as unread_count, peer_device_id, request_submitted \
+             (SELECT COUNT(*) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_read = 0 AND is_deleted = 0) as unread_count, peer_device_id, request_state \
              FROM anon_dm_conversations WHERE peer_id = ?1",
         )?;
 
@@ -146,6 +150,19 @@ impl AnonDmRepository {
         )?;
         if rows == 0 {
             return Err(StorageError::NotFound(format!("AnonDm {}", dm.id)));
+        }
+        Ok(())
+    }
+
+    /// Set the peer's avatar alone.
+    pub fn set_peer_avatar(&self, id: &AnonDmId, avatar: &[u8]) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        let rows = conn.execute(
+            "UPDATE anon_dm_conversations SET peer_avatar = ?1, updated_at = ?2 WHERE id = ?3",
+            params![avatar, Utc::now().to_rfc3339(), id.to_string()],
+        )?;
+        if rows == 0 {
+            return Err(StorageError::NotFound(format!("AnonDm {id}")));
         }
         Ok(())
     }
@@ -183,7 +200,7 @@ impl AnonDmRepository {
         let mut stmt = conn.prepare(
             "SELECT id, peer_id, initiated_by_us, status, peer_mailbox_pk, peer_profile_key, peer_display_name, peer_avatar, created_at, updated_at, \
              (SELECT MAX(created_at) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_deleted = 0) as last_msg_at, \
-             (SELECT COUNT(*) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_read = 0 AND is_deleted = 0) as unread_count, peer_device_id, request_submitted \
+             (SELECT COUNT(*) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_read = 0 AND is_deleted = 0) as unread_count, peer_device_id, request_state \
              FROM anon_dm_conversations ORDER BY last_msg_at DESC NULLS LAST, updated_at DESC",
         )?;
 
@@ -203,7 +220,7 @@ impl AnonDmRepository {
         let mut stmt = conn.prepare(
             "SELECT id, peer_id, initiated_by_us, status, peer_mailbox_pk, peer_profile_key, peer_display_name, peer_avatar, created_at, updated_at, \
              (SELECT MAX(created_at) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_deleted = 0) as last_msg_at, \
-             (SELECT COUNT(*) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_read = 0 AND is_deleted = 0) as unread_count, peer_device_id, request_submitted \
+             (SELECT COUNT(*) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_read = 0 AND is_deleted = 0) as unread_count, peer_device_id, request_state \
              FROM anon_dm_conversations WHERE status = ?1 ORDER BY last_msg_at DESC NULLS LAST, updated_at DESC",
         )?;
 
@@ -231,7 +248,7 @@ impl AnonDmRepository {
         let mut stmt = conn.prepare(
             "SELECT id, peer_id, initiated_by_us, status, peer_mailbox_pk, peer_profile_key, peer_display_name, peer_avatar, created_at, updated_at, \
              (SELECT MAX(created_at) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_deleted = 0) as last_msg_at, \
-             (SELECT COUNT(*) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_read = 0 AND is_deleted = 0) as unread_count, peer_device_id, request_submitted \
+             (SELECT COUNT(*) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_read = 0 AND is_deleted = 0) as unread_count, peer_device_id, request_state \
              FROM anon_dm_conversations WHERE status = ?1 AND initiated_by_us = 0 ORDER BY created_at DESC",
         )?;
 
@@ -256,7 +273,7 @@ impl AnonDmRepository {
         let mut stmt = conn.prepare(
             "SELECT id, peer_id, initiated_by_us, status, peer_mailbox_pk, peer_profile_key, peer_display_name, peer_avatar, created_at, updated_at, \
              (SELECT MAX(created_at) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_deleted = 0) as last_msg_at, \
-             (SELECT COUNT(*) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_read = 0 AND is_deleted = 0) as unread_count, peer_device_id, request_submitted \
+             (SELECT COUNT(*) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_read = 0 AND is_deleted = 0) as unread_count, peer_device_id, request_state \
              FROM anon_dm_conversations WHERE status = ?1 AND initiated_by_us = 1 ORDER BY created_at DESC",
         )?;
 
@@ -515,7 +532,7 @@ fn row_to_conversation(row: &rusqlite::Row) -> Result<AnonDm, rusqlite::Error> {
     let last_message_at_str: Option<String> = row.get(10)?;
     let unread_count: u32 = row.get(11)?;
     let peer_device_id: Option<u32> = row.get(12)?;
-    let request_submitted: i32 = row.get(13)?;
+    let request_state: i32 = row.get(13)?;
 
     let peer_mailbox_pk_arr = vec_to_array_32(peer_mailbox_pk);
     let peer_profile_key_arr = vec_to_array_32(peer_profile_key);
@@ -540,7 +557,7 @@ fn row_to_conversation(row: &rusqlite::Row) -> Result<AnonDm, rusqlite::Error> {
             .map(|dt| dt.with_timezone(&Utc)),
         unread_count,
         peer_device_id,
-        request_submitted: request_submitted != 0,
+        request: RequestState::from_i32(request_state),
     })
 }
 

@@ -490,6 +490,7 @@ impl MessageService {
             match grpc_pool
                 .anonymous_message_client()
                 .send_with_anonymous_credential(
+                    &uuid::Uuid::new_v4().to_string(),
                     &peer_id_str,
                     messages,
                     delivery,

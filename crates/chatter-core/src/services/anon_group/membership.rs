@@ -368,6 +368,7 @@ impl AnonGroupService {
             self.pairwise_service
                 .send_to_device_inbox(
                     &self.token_manager,
+                    &uuid::Uuid::new_v4().to_string(),
                     &invitee,
                     None,
                     &invite.encode_to_vec(),

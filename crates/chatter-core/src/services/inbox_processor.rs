@@ -1901,11 +1901,10 @@ impl InboxEventProcessor {
 
         tokio::spawn(async move {
             let intro_msg_for_event = intro_msg.clone();
-            let avatar = anon_dm_service
-                .resolve_peer_avatar(avatar.as_ref(), None)
-                .await;
+            let (resolved, retry) = first_avatar_fetch(&anon_dm_service, avatar).await;
+            let service_for_handle = anon_dm_service.clone();
             let result = tokio::task::spawn_blocking(move || {
-                anon_dm_service.handle_request_encrypted(
+                service_for_handle.handle_request_encrypted(
                     anon_dm_id,
                     peer_id,
                     sender_device_id,
@@ -1913,10 +1912,20 @@ impl InboxEventProcessor {
                     intro_msg.as_deref(),
                     profile_key,
                     encrypted_display_name,
-                    avatar,
+                    resolved,
                 )
             })
             .await;
+            if let (Ok(Ok(_)), Some(pointer)) = (&result, retry) {
+                tokio::spawn(refresh_peer_avatar(
+                    anon_dm_service,
+                    event_bus.clone(),
+                    anon_dm_id,
+                    peer_id,
+                    pointer,
+                    &crate::services::secret_avatar::RETRY_DELAYS[1..],
+                ));
+            }
 
             match result {
                 Ok(Ok((_dm, profile))) => {
@@ -1995,9 +2004,7 @@ impl InboxEventProcessor {
         let avatar = avatar.clone();
 
         tokio::spawn(async move {
-            let avatar = anon_dm_service
-                .resolve_peer_avatar(avatar.as_ref(), None)
-                .await;
+            let (avatar, retry) = first_avatar_fetch(&anon_dm_service, avatar).await;
             let service_for_handle = anon_dm_service.clone();
             let result = tokio::task::spawn_blocking(move || {
                 service_for_handle.handle_acceptance_encrypted(
@@ -2012,6 +2019,16 @@ impl InboxEventProcessor {
             })
             .await;
 
+            if let (Ok(Ok(_)), Some(pointer)) = (&result, retry) {
+                tokio::spawn(refresh_peer_avatar(
+                    anon_dm_service.clone(),
+                    event_bus.clone(),
+                    anon_dm_id,
+                    peer_id,
+                    pointer,
+                    &crate::services::secret_avatar::RETRY_DELAYS[1..],
+                ));
+            }
             match result {
                 Ok(Ok(profile)) => {
                     // Emit acceptance event
@@ -2110,6 +2127,7 @@ impl InboxEventProcessor {
                 anon_dm_id,
                 peer_id,
                 pointer,
+                &crate::services::secret_avatar::RETRY_DELAYS,
             ));
         }
 
@@ -2160,18 +2178,38 @@ async fn refresh_roster_avatars(
     }
 }
 
-/// Fetch the avatar a secret-chat profile update points at and, when it is
-/// new, store it and tell the UI. The update itself (name, bio) was applied
-/// without waiting for this fetch.
+/// The first fetch of the avatar a secret-chat request or acceptance points
+/// at, made before the chat is stored. Returns the avatar, and the pointer
+/// again when the fetch failed so it is retried once the chat exists.
+async fn first_avatar_fetch(
+    service: &crate::services::anon_dm::AnonDmService,
+    pointer: Option<crate::proto::content_v1::AttachmentPointer>,
+) -> (
+    Option<Vec<u8>>,
+    Option<crate::proto::content_v1::AttachmentPointer>,
+) {
+    match service.resolve_peer_avatar(pointer.as_ref(), None).await {
+        Ok(avatar) => (avatar, None),
+        Err(e) => {
+            tracing::warn!(error = %e, "Secret-chat avatar fetch failed; will retry");
+            (None, pointer)
+        }
+    }
+}
+
+/// Fetch the avatar a secret-chat control points at (retrying a failed fetch
+/// after each of `delays`) and, when it is new, store it and tell the UI. The
+/// control itself (name, bio, the chat) was applied without waiting for this.
 async fn refresh_peer_avatar(
     service: std::sync::Arc<crate::services::anon_dm::AnonDmService>,
     event_bus: EventBus,
     conversation_id: crate::domain::anon_dm::AnonDmId,
     peer_id: UserId,
     pointer: crate::proto::content_v1::AttachmentPointer,
+    delays: &'static [std::time::Duration],
 ) {
     match service
-        .refresh_peer_avatar(&conversation_id, &peer_id, &pointer)
+        .refresh_peer_avatar(&conversation_id, &peer_id, &pointer, delays)
         .await
     {
         Ok(Some(avatar)) => {
