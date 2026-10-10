@@ -22,7 +22,7 @@ use std::time::{Duration, SystemTime};
 use libsignal_protocol::{
     CiphertextMessageType, DeviceId, IdentityKeyStore, KyberPreKeyStore, PreKeySignalMessage,
     PreKeyStore, ProtocolAddress, PublicKey, SessionStore, SignalMessage, SignalProtocolError,
-    SignedPreKeyStore, Timestamp, message_decrypt_prekey, message_decrypt_signal,
+    SignedPreKeyStore, Timestamp, message_decrypt_prekey, message_decrypt_signal, message_encrypt,
     sealed_sender_decrypt_to_usmc, sealed_sender_encrypt, sealed_sender_encrypt_from_usmc,
 };
 // SECURITY: each ephemeral-key draw must hit the OS directly so a process
@@ -108,6 +108,7 @@ impl SealedSenderManager {
         plaintext: &[u8],
         sender_cert: &SenderCertificate,
         destinations: &[ProtocolAddress],
+        group_id: Option<&[u8]>,
         base: &crate::crypto::SignalStore,
         permit: &crate::services::gateway::submission::SubmissionPermit,
     ) -> Result<Vec<(ProtocolAddress, Vec<u8>, u32)>, crate::error::ServiceError> {
@@ -123,10 +124,11 @@ impl SealedSenderManager {
                     "duplicate sealed destination".into(),
                 ));
             }
-            let ciphertext = Self::encrypt(
+            let ciphertext = Self::encrypt_in_group(
                 plaintext,
                 sender_cert,
                 destination,
+                group_id,
                 &mut staged,
                 &mut identities,
             )
@@ -230,6 +232,63 @@ impl SealedSenderManager {
             "SealedSender: encryption complete"
         );
         Ok(result)
+    }
+
+    /// [`Self::encrypt`] with the USMC's group id set (Signal's `groupId`),
+    /// libsignal's `sealed_sender_encrypt` otherwise verbatim. A pairwise copy
+    /// of a channel message names its channel there, inside the sealed layer,
+    /// so a recipient that cannot decrypt it still knows where the loss
+    /// belongs.
+    pub(crate) async fn encrypt_in_group<S, I>(
+        plaintext: &[u8],
+        sender_cert: &SenderCertificate,
+        destination: &ProtocolAddress,
+        group_id: Option<&[u8]>,
+        session_store: &mut S,
+        identity_store: &mut I,
+    ) -> Result<Vec<u8>, CryptoError>
+    where
+        S: SessionStore,
+        I: IdentityKeyStore,
+    {
+        let Some(group_id) = group_id else {
+            return Self::encrypt(
+                plaintext,
+                sender_cert,
+                destination,
+                session_store,
+                identity_store,
+            )
+            .await;
+        };
+        let failed = |e: SignalProtocolError| CryptoError::EncryptionFailed(e.to_string());
+        let mut rng = OsRng.unwrap_err();
+        let sender_address = ProtocolAddress::new(
+            sender_cert.sender_uuid().map_err(failed)?.to_owned(),
+            sender_cert.sender_device_id().map_err(failed)?,
+        );
+        let message = message_encrypt(
+            plaintext,
+            destination,
+            &sender_address,
+            session_store,
+            identity_store,
+            SystemTime::now(),
+            &mut rng,
+        )
+        .await
+        .map_err(failed)?;
+        let usmc = UnidentifiedSenderMessageContent::new(
+            message.message_type(),
+            sender_cert.clone(),
+            message.serialize().to_vec(),
+            ContentHint::Default,
+            Some(group_id.to_vec()),
+        )
+        .map_err(failed)?;
+        sealed_sender_encrypt_from_usmc(destination, &usmc, identity_store, &mut rng)
+            .await
+            .map_err(failed)
     }
 
     /// Decrypt sealed sender message and validate the sender certificate.
@@ -377,8 +436,16 @@ impl SealedSenderManager {
         // Envelope opened and sender authenticated. From here on a failure is
         // an INNER (session/ratchet) failure — surface it as SessionDesync so
         // the caller can send a DecryptionErrorMessage back to the sender.
+        let group_id = usmc.group_id().ok().flatten().map(<[u8]>::to_vec);
         let map_inner_err = |e: SignalProtocolError| {
-            classify_inner_failure(e, &sender_uuid, sender_device_id, msg_type, contents)
+            classify_inner_failure(
+                e,
+                &sender_uuid,
+                sender_device_id,
+                msg_type,
+                contents,
+                group_id.clone(),
+            )
         };
 
         let mut rng = OsRng.unwrap_err();
@@ -767,6 +834,7 @@ fn classify_inner_failure(
     sender_device_id: DeviceId,
     msg_type: CiphertextMessageType,
     contents: &[u8],
+    group_id: Option<Vec<u8>>,
 ) -> CryptoError {
     // The peer's identity key changed (reinstall, device wipe — or a MITM).
     // NOT a desync: no session-layer action changes which key is pinned, so a
@@ -828,6 +896,7 @@ fn classify_inner_failure(
         msg_type: msg_type as u8,
         ciphertext: contents.to_vec(),
         reason: error.to_string(),
+        group_id,
     }
 }
 
@@ -875,6 +944,7 @@ mod tests {
             device,
             CiphertextMessageType::Whisper,
             &ciphertext,
+            None,
         );
         assert!(
             matches!(duplicate, CryptoError::DuplicateMessage { .. }),
@@ -893,6 +963,7 @@ mod tests {
             device,
             CiphertextMessageType::Whisper,
             &ciphertext,
+            None,
         );
         match wedged {
             CryptoError::SessionDesync {
@@ -930,6 +1001,7 @@ mod tests {
             device,
             CiphertextMessageType::PreKey,
             &[0xAAu8; 8],
+            None,
         );
 
         match changed {
@@ -1078,6 +1150,102 @@ mod tests {
             CiphertextMessageType::Plaintext,
             "decrypt must label unratcheted bytes so non-DEM callers can refuse them"
         );
+    }
+
+    /// §5: the sealed layer's group id survives an inner decrypt failure, so
+    /// the receiver can mark the loss in the channel a pairwise channel
+    /// control belongs to (Signal-Desktop places a `groupId` failure there).
+    #[tokio::test]
+    async fn an_inner_failure_carries_the_sealed_group_id() {
+        use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
+        use libsignal_protocol::{
+            IdentityKeyPair, InMemSignalProtocolStore, KeyPair, PrivateKey,
+            sealed_sender_encrypt_from_usmc,
+        };
+        let mut rng = OsRng.unwrap_err();
+        let trust_root_private = PrivateKey::deserialize(
+            &BASE64
+                .decode("ELMk0o1RlhsHCk8vQ/bWbtRDeQvcC4PuN8+U1Xg90Ek=")
+                .expect("known-good base64"),
+        )
+        .expect("dev trust root private key");
+        let server_keys = KeyPair::generate(&mut rng);
+        let server_cert =
+            ServerCertificate::new(1, server_keys.public_key, &trust_root_private, &mut rng)
+                .expect("server certificate");
+        let sender_identity = IdentityKeyPair::generate(&mut rng);
+        let expiration = Timestamp::from_epoch_millis(
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64
+                + 3_600_000,
+        );
+        let sender_cert = SenderCertificate::new(
+            "11111111-1111-4111-8111-111111111111".to_string(),
+            None,
+            *sender_identity.public_key(),
+            DeviceId::new(1).expect("device id"),
+            expiration,
+            server_cert,
+            &server_keys.private_key,
+            &mut rng,
+        )
+        .expect("sender certificate");
+
+        let channel = [9u8; 16];
+        // No session exists, so this Whisper message cannot be opened.
+        let usmc = UnidentifiedSenderMessageContent::new(
+            CiphertextMessageType::Whisper,
+            sender_cert,
+            vec![0x33; 64],
+            ContentHint::Default,
+            Some(channel.to_vec()),
+        )
+        .expect("usmc");
+
+        let recipient_uuid = "22222222-2222-4222-8222-222222222222";
+        let recipient_device = DeviceId::new(1).expect("device id");
+        let recipient_address = ProtocolAddress::new(recipient_uuid.to_string(), recipient_device);
+        let recipient_identity = IdentityKeyPair::generate(&mut rng);
+        let mut recipient_store =
+            InMemSignalProtocolStore::new(recipient_identity, 1234).expect("recipient store");
+        let mut sender_store =
+            InMemSignalProtocolStore::new(sender_identity, 5678).expect("sender store");
+        sender_store
+            .save_identity(&recipient_address, recipient_identity.identity_key())
+            .await
+            .expect("save recipient identity");
+        let sealed =
+            sealed_sender_encrypt_from_usmc(&recipient_address, &usmc, &sender_store, &mut rng)
+                .await
+                .expect("seal");
+
+        let mut s2 = recipient_store.clone();
+        let mut s3 = recipient_store.clone();
+        let mut s4 = recipient_store.clone();
+        let s6 = recipient_store.clone();
+        let err = SealedSenderManager::decrypt(
+            &sealed,
+            &TRUST_ROOT_PUBLIC_KEY,
+            Timestamp::from_epoch_millis(0),
+            None,
+            recipient_uuid.to_string(),
+            recipient_device,
+            &mut recipient_store,
+            &mut s2,
+            &mut s3,
+            &s6,
+            &mut s4,
+        )
+        .await
+        .expect_err("no session: the inner message cannot open");
+        match err {
+            CryptoError::SessionDesync { group_id, .. } => {
+                assert_eq!(group_id.as_deref(), Some(&channel[..]));
+            }
+            other => panic!("expected SessionDesync, got {other:?}"),
+        }
     }
 
     /// The sender certificate is judged at the envelope's SERVER timestamp,

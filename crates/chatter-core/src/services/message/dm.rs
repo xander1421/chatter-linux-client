@@ -234,6 +234,7 @@ impl MessageService {
                     &mut self.message_client(),
                     &me,
                     &sync.encode_to_vec(),
+                    None,
                 )
                 .await;
             // What that device's DecryptionErrorMessage will name

@@ -195,6 +195,10 @@ pub enum CryptoError {
         ciphertext: Vec<u8>,
         /// Underlying libsignal error string.
         reason: String,
+        /// The sealed-sender layer's group id (Signal's USMC `groupId`): the
+        /// channel a pairwise channel control belongs to, so the failure is
+        /// shown there rather than in a DM with the sender.
+        group_id: Option<Vec<u8>>,
     },
 
     /// Encryption operation failed.

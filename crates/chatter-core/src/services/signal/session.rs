@@ -1134,6 +1134,7 @@ impl SignalService {
         recipient_id: &str,
         plaintext: &[u8],
         need_access_policy: bool,
+        group_id: Option<&[u8]>,
     ) -> Result<(HashMap<u32, DeviceCiphertext>, bool), ServiceError> {
         let (devices, unrestricted) = self
             .ensure_sessions_and_access_policy_all_devices(
@@ -1143,7 +1144,13 @@ impl SignalService {
             )
             .await?;
         let ciphertexts = self
-            .encrypt_message_devices_bounded(auth_client, recipient_id, &devices, plaintext)
+            .encrypt_message_devices_bounded(
+                auth_client,
+                recipient_id,
+                &devices,
+                plaintext,
+                group_id,
+            )
             .await?;
         Ok((ciphertexts, unrestricted))
     }
@@ -1156,6 +1163,7 @@ impl SignalService {
         recipient_id: &str,
         devices: &[u32],
         plaintext: &[u8],
+        group_id: Option<&[u8]>,
     ) -> Result<HashMap<u32, DeviceCiphertext>, ServiceError> {
         let mut devices = devices.to_vec();
         devices.sort_unstable();
@@ -1179,7 +1187,12 @@ impl SignalService {
         let certificate = self.get_or_request_sender_certificate(auth_client).await?;
         let batch = self
             .actor
-            .encrypt_sealed_bounded_batch(plaintext.to_vec(), certificate, destinations)
+            .encrypt_sealed_bounded_batch(
+                plaintext.to_vec(),
+                certificate,
+                destinations,
+                group_id.map(<[u8]>::to_vec),
+            )
             .await?;
         Ok(batch
             .into_iter()

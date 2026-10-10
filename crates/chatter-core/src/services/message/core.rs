@@ -814,6 +814,7 @@ impl MessageService {
                     &mut message_client,
                     &member_id,
                     &plaintext,
+                    Some(channel_id.as_bytes()),
                 )
                 .await;
             deposits.extend(

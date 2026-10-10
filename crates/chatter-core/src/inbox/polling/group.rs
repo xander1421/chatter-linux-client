@@ -306,6 +306,7 @@ async fn process_sealed_sender_group_message(
             sender_id,
             sender_device_id,
             dem_serialized,
+            ..
         } => {
             tracing::warn!(
                 group_id = %group_id,

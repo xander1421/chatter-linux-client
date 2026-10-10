@@ -158,6 +158,31 @@ fn channel_marker_target(
     }
 }
 
+/// Where a pairwise decrypt failure is shown. A channel control fanned out
+/// pairwise names its channel in the sealed-sender group id, so it is marked
+/// there, as Signal-Desktop places a failure carrying a `groupId` in that
+/// group. Only a channel we hold, and that names the sender a member, may be
+/// marked: anything else (no group id, an unknown channel, a non-member) is
+/// the DM with the sender.
+pub(super) fn desync_marker_target(
+    channel_repo: &Arc<ChannelRepository>,
+    channel_id: Option<ChannelId>,
+    sender_id: UserId,
+    envelope_ts_ns: u64,
+) -> crate::inbox::ack_policy::MarkerTarget {
+    match channel_id {
+        Some(channel_id)
+            if matches!(
+                channel_repo.get_membership(&channel_id, &sender_id),
+                Ok(Some(_))
+            ) =>
+        {
+            channel_marker_target(channel_repo, channel_id, Some(sender_id), envelope_ts_ns)
+        }
+        _ => crate::inbox::ack_policy::dm_target(sender_id, envelope_ts_ns),
+    }
+}
+
 /// Decide what to do with a sender-key (channel) envelope whose routing failed.
 ///
 /// `channel_id` is `Some` only when the failure got far enough to name one.
@@ -490,6 +515,7 @@ pub async fn process_device_message(
         stats,
         message_gateway,
         message_repo,
+        channel_repo,
         domain_tx,
         retry_budget,
     )
@@ -1459,6 +1485,7 @@ async fn process_sealed_sender_message(
     stats: &Arc<RwLock<InboxStats>>,
     message_gateway: &Arc<MessageGateway>,
     message_repo: &Arc<MessageRepository>,
+    channel_repo: &Arc<ChannelRepository>,
     domain_tx: Option<&broadcast::Sender<DomainEvent>>,
     retry_budget: &crate::inbox::ack_policy::RetryBudget,
 ) -> crate::inbox::ack_policy::AckDecision {
@@ -1709,6 +1736,7 @@ async fn process_sealed_sender_message(
             sender_id,
             sender_device_id,
             dem_serialized,
+            channel_id,
         }) => {
             tracing::warn!(
                 message_id = %msg.message_guid,
@@ -1740,7 +1768,7 @@ async fn process_sealed_sender_message(
             return ack_policy::record_marker_then_ack(
                 message_repo,
                 domain_tx,
-                ack_policy::dm_target(sender_id, msg.server_timestamp),
+                desync_marker_target(channel_repo, channel_id, sender_id, msg.server_timestamp),
                 ack_policy::FailureMarker::DeliveryIssue,
             );
         }

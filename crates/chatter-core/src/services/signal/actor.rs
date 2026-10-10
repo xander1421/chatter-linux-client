@@ -140,6 +140,7 @@ pub(crate) enum SignalCommand {
         plaintext: Vec<u8>,
         sender_cert: SenderCertificate,
         destinations: Vec<ProtocolAddress>,
+        group_id: Option<Vec<u8>>,
         permit: crate::services::gateway::submission::SubmissionPermit,
         response: oneshot::Sender<Result<Vec<(ProtocolAddress, Vec<u8>, u32)>, ServiceError>>,
     },
@@ -479,8 +480,8 @@ impl SignalActorHandle {
                             let _ = response.send(res);
                         }
 
-                        SignalCommand::EncryptSealedBoundedBatch { plaintext, sender_cert, destinations, permit, response } => {
-                            let res = SealedSenderManager::encrypt_bounded_batch(&plaintext, &sender_cert, &destinations, &store, &permit).await;
+                        SignalCommand::EncryptSealedBoundedBatch { plaintext, sender_cert, destinations, group_id, permit, response } => {
+                            let res = SealedSenderManager::encrypt_bounded_batch(&plaintext, &sender_cert, &destinations, group_id.as_deref(), &store, &permit).await;
                             let _ = response.send(res);
                         }
 
@@ -1015,6 +1016,7 @@ impl SignalActorHandle {
         plaintext: Vec<u8>,
         sender_cert: SenderCertificate,
         destinations: Vec<ProtocolAddress>,
+        group_id: Option<Vec<u8>>,
     ) -> Result<Vec<(ProtocolAddress, Vec<u8>, u32)>, ServiceError> {
         admit_outgoing_content(&plaintext)?;
         let permit = crate::services::gateway::submission::SubmissionPermit::capture();
@@ -1022,6 +1024,7 @@ impl SignalActorHandle {
             plaintext,
             sender_cert,
             destinations,
+            group_id,
             permit,
             response: tx,
         })

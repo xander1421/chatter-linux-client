@@ -231,7 +231,13 @@ impl MessageService {
             // Sender keys are per (user, device), so every device gets its own
             // ciphertext. Our own current device already holds the sender key.
             let outcome = self
-                .deposit_sealed_to_all_devices(auth_client, message_client, member_id, &plaintext)
+                .deposit_sealed_to_all_devices(
+                    auth_client,
+                    message_client,
+                    member_id,
+                    &plaintext,
+                    None,
+                )
                 .await;
             success_count += outcome.delivered;
             self.record_sender_key_holders(channel_id, member_id, &outcome);
@@ -1002,6 +1008,7 @@ impl MessageService {
                 &mut message_client,
                 &member_id_str,
                 &plaintext,
+                None,
             )
             .await;
 
@@ -1243,6 +1250,7 @@ impl MessageService {
                 &mut message_client,
                 &target_id_str,
                 &plaintext,
+                None,
             )
             .await;
 

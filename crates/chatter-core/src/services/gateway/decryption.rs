@@ -71,6 +71,7 @@ impl MessageGateway {
                 msg_type,
                 ciphertext,
                 reason,
+                group_id,
             })) => {
                 return self.build_decryption_error_report(
                     &sender_uuid,
@@ -78,6 +79,7 @@ impl MessageGateway {
                     msg_type,
                     &ciphertext,
                     &reason,
+                    group_id,
                     envelope.timestamp,
                 );
             }
@@ -167,6 +169,7 @@ impl MessageGateway {
                     msg_type,
                     ciphertext,
                     reason,
+                    group_id,
                 }),
             )) => {
                 return self
@@ -176,6 +179,7 @@ impl MessageGateway {
                         msg_type,
                         &ciphertext,
                         &reason,
+                        group_id,
                         envelope.timestamp,
                     )
                     .map(|outcome| (None, Some(outcome)));
@@ -206,6 +210,7 @@ impl MessageGateway {
         msg_type: u8,
         failed_ciphertext: &[u8],
         reason: &str,
+        group_id: Option<Vec<u8>>,
         envelope_timestamp: u64,
     ) -> Result<SealedSenderResult, ServiceError> {
         let sender_id: UserId = sender_uuid.parse().map_err(|e| {
@@ -250,6 +255,9 @@ impl MessageGateway {
             sender_id,
             sender_device_id,
             dem_serialized: dem.serialized().to_vec(),
+            channel_id: group_id
+                .as_deref()
+                .and_then(crate::domain::ChannelId::try_from_slice),
         })
     }
 
@@ -1149,13 +1157,9 @@ impl MessageGateway {
                     ServiceError::Validation("AnonGroupMessage missing inner_content".into())
                 })?,
             }),
-            // Anonymous DM content types
-            Some(content::Content::AnonDmMessage(msg)) => Ok(DmContent::AnonDmMessage {
-                conversation_id: msg.conversation_id,
-                inner_content: msg.inner_content.ok_or_else(|| {
-                    ServiceError::Validation("AnonDmMessage missing inner_content".into())
-                })?,
-            }),
+            // Secret chats are delivered only by their own mailbox poll
+            // (inbox/polling/anon_dm.rs), which enforces the device binding.
+            Some(content::Content::AnonDmMessage(_)) => Ok(DmContent::SecretChatOffMailbox),
             // L4 mailbox rotation announce: peer minted a new mailbox and wants
             // future sends directed there. Does not touch the ratchet.
             Some(content::Content::DmMailboxRotation(rotation)) => Ok(DmContent::MailboxRotation {
@@ -1567,6 +1571,27 @@ mod null_message_tests {
         let parsed =
             MessageGateway::parse_content(content).expect("NullMessage must not be an error");
         assert!(matches!(parsed, DmContent::NullMessage), "got {parsed:?}");
+    }
+
+    /// t5a: a secret chat's message carried by an account DM mailbox would
+    /// skip the chat's device binding (and Tor); it is refused, not routed,
+    /// and not reported as a decrypt failure.
+    #[test]
+    fn secret_chat_content_in_account_mailbox_is_refused() {
+        let content = Content {
+            content: Some(content::Content::AnonDmMessage(Box::new(
+                crate::proto::content_v1::AnonDmMessage {
+                    conversation_id: vec![7; 16],
+                    inner_content: Some(Box::new(Content::default())),
+                },
+            ))),
+            ..Default::default()
+        };
+        let parsed = MessageGateway::parse_content(content).expect("refusal is not an error");
+        assert!(
+            matches!(parsed, DmContent::SecretChatOffMailbox),
+            "got {parsed:?}"
+        );
     }
 }
 

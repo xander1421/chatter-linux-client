@@ -1072,33 +1072,15 @@ pub(crate) fn dispatch_dm_content(
                 peer_id = %peer_id,
                 "Anonymous group message received"
             );
-            let _ = event_tx.send(
-                InboxEvent::AnonGroupMessage {
-                    peer_id,
-                    group_id,
-                    inner_content,
-                },
-            );
+            let _ = event_tx.send(InboxEvent::AnonGroupMessage {
+                peer_id,
+                group_id,
+                inner_content,
+            });
         }
-        // =====================================================================
-        // Anonymous DM Messages
-        // =====================================================================
-        DmContent::AnonDmMessage {
-            conversation_id,
-            inner_content,
-        } => {
-            tracing::info!(
-                peer_id = %peer_id,
-                conversation_id_len = conversation_id.len(),
-                "Anonymous DM message received"
-            );
-            let _ = event_tx.send(
-                InboxEvent::AnonDmMessage {
-                    peer_id,
-                    conversation_id,
-                    inner_content,
-                },
-            );
+        // Refused: secret-chat content never rides an account DM mailbox.
+        DmContent::SecretChatOffMailbox => {
+            tracing::warn!("Dropping secret-chat content that arrived outside its mailbox");
         }
         // Unreachable in practice — the poll loop routes this to
         // `ack_policy::drop_and_ack` before it ever calls dispatch, because the
@@ -1389,6 +1371,7 @@ mod tests {
                 msg_type: CiphertextMessageType::Whisper as u8,
                 ciphertext,
                 reason: "Bad Mac".into(),
+                group_id: None,
             })
         };
         let local = local_recipient_address(&us, 6).unwrap();

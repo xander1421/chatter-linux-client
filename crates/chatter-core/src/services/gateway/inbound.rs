@@ -241,13 +241,12 @@ pub enum DmContent {
         group_id: Vec<u8>,
         inner_content: Box<crate::proto::content_v1::Content>,
     },
-    // ========================================================================
-    // Anonymous DM Messages (NDSS'21 style stranger messaging)
-    // ========================================================================
-    AnonDmMessage {
-        conversation_id: Vec<u8>,
-        inner_content: Box<crate::proto::content_v1::Content>,
-    },
+    /// Secret-chat content that arrived in an account DM mailbox. A secret
+    /// chat speaks only through its own anonymous mailbox, from the one peer
+    /// device it is bound to (v103); this path carries neither guarantee, so
+    /// the content is refused unparsed. Dispatching it does nothing; the
+    /// caller acks.
+    SecretChatOffMailbox,
     /// Session-switch carrier with nothing to show (Signal's `NullMessage`):
     /// the peer reset its sessions with us and sent this so the new session
     /// takes over now. Decrypting it already did that; dispatching it must do
@@ -405,6 +404,9 @@ pub enum SealedSenderResult {
         sender_id: UserId,
         sender_device_id: u32,
         dem_serialized: Vec<u8>,
+        /// The channel the lost message belonged to, from the sealed-sender
+        /// group id (pairwise channel controls set it); `None` for a DM.
+        channel_id: Option<crate::domain::ChannelId>,
     },
     /// SENDER half of the 1:1 session self-heal: a peer's
     /// `DecryptionErrorMessage` about a message we sent was processed.

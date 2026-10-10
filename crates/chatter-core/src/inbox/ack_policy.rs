@@ -688,6 +688,7 @@ mod tests {
             msg_type: 2,
             ciphertext: vec![1, 2, 3],
             reason: "bad mac".into(),
+            group_id: None,
         };
         assert_eq!(classify_crypto(&e), Durability::Permanent);
         assert_eq!(marker_for_crypto(&e), FailureMarker::DeliveryIssue);

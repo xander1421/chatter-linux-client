@@ -340,6 +340,7 @@ impl MessageService {
                                 &peer,
                                 devices,
                                 &plaintext,
+                                None,
                             )
                             .await
                             .map_err(|e| MessageError::from_signal_send(e, "device encryption"))?
@@ -361,6 +362,7 @@ impl MessageService {
                             &mut message_client,
                             &peer,
                             &plaintext,
+                            None,
                         )
                         .await
                     }

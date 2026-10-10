@@ -867,3 +867,48 @@ fn a_blocked_senders_message_leaves_nothing_behind_in_the_conversation() {
          notification from the person the user blocked"
     );
 }
+
+/// §5: a pairwise channel control that cannot be decrypted names its channel
+/// in the sealed-sender group id, so the loss is marked in that channel — but
+/// only one we hold with the sender as a member; anything else stays in the
+/// DM with the sender, as before.
+#[test]
+fn a_desync_naming_a_channel_is_marked_in_that_channel_only_for_its_member() {
+    use crate::domain::channel::{
+        Channel, ChannelType, MemberRole, Membership, NotificationPreference,
+    };
+    let (_d, _repo, channels) = channel_repo();
+    let member = UserId::new();
+    let outsider = UserId::new();
+    let id = ChannelId::new();
+    channels
+        .insert(&Channel::new(id, "c".into(), ChannelType::Private, member))
+        .unwrap();
+    channels
+        .insert_membership(&Membership {
+            channel_id: id,
+            user_id: member,
+            role: MemberRole::Member,
+            joined_at: chrono::Utc::now(),
+            last_read_message_id: None,
+            is_muted: false,
+            muted_until: None,
+            notification_preference: NotificationPreference::default(),
+        })
+        .unwrap();
+
+    let target = super::device::desync_marker_target(&channels, Some(id), member, 5);
+    assert_eq!(target.conversation_id, id);
+    assert_eq!(target.conversation_type, ConversationType::Channel);
+    assert_eq!(target.peer_id, Some(member));
+
+    for (channel, sender) in [
+        (Some(id), outsider),
+        (Some(ChannelId::new()), member),
+        (None, member),
+    ] {
+        let target = super::device::desync_marker_target(&channels, channel, sender, 5);
+        assert_eq!(target.conversation_type, ConversationType::ServerDm);
+        assert_eq!(target.conversation_id, ChannelId::from(sender));
+    }
+}

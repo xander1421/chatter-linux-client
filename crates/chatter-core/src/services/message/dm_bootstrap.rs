@@ -983,6 +983,7 @@ mod tests {
                 crate::network::validation::protovalidate::test_plaintext("handshake"),
                 cert.clone(),
                 vec![bob.clone()],
+                None,
             )
             .await
             .unwrap();
@@ -1052,6 +1053,7 @@ mod tests {
                 bytes,
                 cert.clone(),
                 vec![bob.clone(), fresh],
+                None,
             ),
             None,
         )
@@ -1080,6 +1082,7 @@ mod tests {
                 bytes.clone(),
                 cert,
                 vec![bob.clone()],
+                None,
             ),
             None,
         )
@@ -1151,6 +1154,7 @@ mod tests {
                     small.clone(),
                     cert,
                     vec![address.clone()],
+                    None,
                 ),
                 None,
             )

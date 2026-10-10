@@ -612,6 +612,7 @@ impl MessageService {
                 &mut message_client,
                 &peer_id_str,
                 &plaintext,
+                None,
             )
             .await;
 
@@ -782,6 +783,7 @@ impl MessageService {
         message_client: &mut MessageClient,
         recipient_id: &str,
         plaintext: &[u8],
+        group_id: Option<&[u8]>,
     ) -> DepositOutcome {
         let client_request_id =
             super::dm_outbox::request_id().unwrap_or_else(|| uuid::Uuid::new_v4().to_string());
@@ -791,6 +793,7 @@ impl MessageService {
                 message_client,
                 recipient_id,
                 plaintext,
+                group_id,
                 &client_request_id,
             )
             .await
@@ -842,6 +845,7 @@ impl MessageService {
                 message_client,
                 recipient_id,
                 plaintext,
+                group_id,
                 &client_request_id,
             )
             .await
@@ -869,6 +873,7 @@ impl MessageService {
         message_client: &mut MessageClient,
         recipient_id: &str,
         plaintext: &[u8],
+        group_id: Option<&[u8]>,
         client_request_id: &str,
     ) -> Result<DepositOutcome, crate::error::NetworkError> {
         // To our own user (self-sync, SKDM, SenderKeyRequest) the deposit is
@@ -896,6 +901,7 @@ impl MessageService {
                 recipient_id,
                 plaintext,
                 !is_self && !has_profile_key,
+                group_id,
             )
             .await
         {
