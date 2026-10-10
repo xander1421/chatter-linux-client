@@ -1260,18 +1260,23 @@ fn test_reaction_via_signal_style_lookup() {
     );
     message_repo.insert(&msg).unwrap();
 
-    // Simulate reaction: lookup by (sender_id, sent_at) and add reaction
-    let mut found = message_repo
+    // Simulate reaction: lookup by (sender_id, sent_at), then vote. Counts are
+    // a projection of the vote table, so `update()` does not write them.
+    let found = message_repo
         .get_by_sender_timestamp(&sender, sent_at)
         .unwrap()
         .unwrap();
-    use chatter_core::domain::message::ReactionCount;
-    found.reaction_counts.push(ReactionCount {
-        emoji: "👍".to_string(),
-        count: 1,
-    });
-    found.current_user_reactions.push("👍".to_string());
-    message_repo.update(&found).unwrap();
+    let me = UserId::new();
+    message_repo
+        .add_reaction(
+            &ReactionScope::of(&found),
+            &sender,
+            sent_at,
+            &me,
+            &me,
+            "👍",
+        )
+        .unwrap();
 
     // Verify reaction persisted
     let reloaded = message_repo
