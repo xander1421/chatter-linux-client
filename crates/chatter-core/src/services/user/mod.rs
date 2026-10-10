@@ -921,6 +921,14 @@ impl UserService {
             // the requester (added via friend code), leaving the DM out of the
             // sidebar.
             self.record_accepted_friend_local(friend_id)?;
+            // Resolve their name before the caller rebuilds the sidebar from
+            // storage, so the new DM row never starts as `User <id8>`
+            // (OPEN-ITEMS §119). `get_user_profile` decrypts with the key the
+            // request envelope carried and upserts; a miss keeps the stored
+            // name. Best-effort: the friendship is already accepted.
+            if let Err(e) = self.get_user_profile(friend_id).await {
+                tracing::warn!(peer_id = %friend_id, error = %e, "Accept: friend profile fetch failed");
+            }
             let friendship = Friendship {
                 requester_id: current_user,
                 addressee_id: *friend_id,

@@ -480,9 +480,12 @@ impl InboxEventProcessor {
                 let sender_id = *peer_id;
                 let timestamp = *timestamp;
                 let _ = tokio::task::spawn_blocking(move || {
-                    if let Err(e) =
-                        anon_service.handle_member_list_ordered(anon_group_id, sender_id, members_clone, timestamp)
-                    {
+                    if let Err(e) = anon_service.handle_member_list_ordered(
+                        anon_group_id,
+                        sender_id,
+                        members_clone,
+                        timestamp,
+                    ) {
                         tracing::error!(
                             group_id = ?anon_group_id,
                             error = %e,
@@ -517,7 +520,9 @@ impl InboxEventProcessor {
                 let peer_id_clone = *peer_id;
                 let timestamp = *timestamp;
                 let _ = tokio::task::spawn_blocking(move || {
-                    if let Err(e) = anon_service.handle_leave_ordered(anon_group_id, peer_id_clone, timestamp) {
+                    if let Err(e) =
+                        anon_service.handle_leave_ordered(anon_group_id, peer_id_clone, timestamp)
+                    {
                         tracing::error!(
                             group_id = ?anon_group_id,
                             peer_id = %peer_id_clone,
@@ -870,17 +875,21 @@ impl InboxEventProcessor {
                         .authenticate_signal_hangup(call_id, *peer_id, own_elsewhere)
                         .await
                     {
-                        super::call_worker::SignalHangupDisposition::Forward => {},
-                        super::call_worker::SignalHangupDisposition::GroupRingWithdrawn(revision) => {
+                        super::call_worker::SignalHangupDisposition::Forward => {}
+                        super::call_worker::SignalHangupDisposition::GroupRingWithdrawn(
+                            revision,
+                        ) => {
                             if self.client.auth_state().get().session_revision == revision {
-                                self.client.call_signaling().drop_ringing_group_call_invite(call_id);
+                                self.client
+                                    .call_signaling()
+                                    .drop_ringing_group_call_invite(call_id);
                             }
                             return;
-                        },
+                        }
                         super::call_worker::SignalHangupDisposition::Reject => {
                             tracing::warn!(%call_id, %peer_id, "Ignoring hangup without a matching peer or pending group caller");
                             return;
-                        },
+                        }
                     }
                 }
                 self.event_bus.emit_domain(DomainEvent::CallHangupReceived {
@@ -1495,6 +1504,11 @@ impl InboxEventProcessor {
                         }
                         self.event_bus
                             .emit_domain(DomainEvent::FriendAccepted { friend_id });
+                        // Resolve their name now rather than at the next
+                        // profile fetch (OPEN-ITEMS §119). Without their key
+                        // yet this keeps the stored name; their handshake then
+                        // brings the key and refreshes again.
+                        self.spawn_peer_profile_refresh(friend_id);
 
                         // Establish the DM Signal session in the background now
                         // that we're friends, so the first call offer / message
@@ -1544,32 +1558,7 @@ impl InboxEventProcessor {
             // server-managed profile stream emits, so the existing UI
             // handler (sidebar / header / friends list refresh) just works.
             InboxEvent::ProfileKeyReceived { sender_id } => {
-                let sender_id = *sender_id;
-                let user_service = self.user_service.clone();
-                let event_bus = self.event_bus.clone();
-                tokio::spawn(async move {
-                    match user_service.get_user_profile(&sender_id).await {
-                        Ok(profile) => {
-                            event_bus.emit_domain(DomainEvent::UserProfileUpdated {
-                                user_id: sender_id,
-                                display_name: profile.display_name,
-                                status_message: profile
-                                    .status_message
-                                    .as_ref()
-                                    .map(|s| s.text.clone()),
-                                avatar_bytes: profile.avatar_bytes,
-                                timestamp: chrono::Utc::now().timestamp_millis() as u64,
-                            });
-                        }
-                        Err(e) => {
-                            tracing::warn!(
-                                peer_id = %sender_id,
-                                error = %e,
-                                "ProfileKeyReceived: failed to fetch/decrypt peer profile"
-                            );
-                        }
-                    }
-                });
+                self.spawn_peer_profile_refresh(*sender_id);
             }
 
             // =================================================================
@@ -1584,6 +1573,34 @@ impl InboxEventProcessor {
     // =====================================================================
     // Helper methods
     // =====================================================================
+
+    /// Fetch + decrypt a peer's profile (`get_user_profile` upserts it
+    /// locally) and emit it as `UserProfileUpdated`, the event the UI already
+    /// handles for sidebar / header / friends-list refresh.
+    fn spawn_peer_profile_refresh(&self, peer_id: UserId) {
+        let user_service = self.user_service.clone();
+        let event_bus = self.event_bus.clone();
+        tokio::spawn(async move {
+            match user_service.get_user_profile(&peer_id).await {
+                Ok(profile) => {
+                    event_bus.emit_domain(DomainEvent::UserProfileUpdated {
+                        user_id: peer_id,
+                        display_name: profile.display_name,
+                        status_message: profile.status_message.as_ref().map(|s| s.text.clone()),
+                        avatar_bytes: profile.avatar_bytes,
+                        timestamp: chrono::Utc::now().timestamp_millis() as u64,
+                    });
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        peer_id = %peer_id,
+                        error = %e,
+                        "failed to fetch/decrypt peer profile"
+                    );
+                }
+            }
+        });
+    }
 
     fn handle_anon_group_invite(
         &self,
@@ -1923,7 +1940,10 @@ impl InboxEventProcessor {
     ) {
         tracing::info!(
             has_encrypted_display_name = encrypted_display_name.is_some(),
-            has_encrypted_avatar = encrypted_avatar.as_ref().map(|v| !v.is_empty()).unwrap_or(false),
+            has_encrypted_avatar = encrypted_avatar
+                .as_ref()
+                .map(|v| !v.is_empty())
+                .unwrap_or(false),
             "Received anonymous DM acceptance"
         );
 
