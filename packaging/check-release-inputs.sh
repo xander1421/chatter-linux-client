@@ -62,6 +62,9 @@ CHECK
 printf '%s\n' "$CHATTER_TLS_ROOT_CA_PEM" | openssl x509 -noout -checkend 0 >/dev/null || die 'CA is invalid or expired'
 ca_info=$(printf '%s\n' "$CHATTER_TLS_ROOT_CA_PEM" | openssl x509 -noout -text)
 [[ "$ca_info" == *'CA:TRUE'* ]] || die 'TLS anchor must be a CA certificate'
+# create-certs.sh mints a per-checkout localhost CA under this subject; its key
+# sits unprotected in a developer's certs/ (provision-trust-root.sh DEV_CA_MARKER).
+[[ "$ca_info" != *'Chatter Local Development CA'* ]] || die 'CHATTER_TLS_ROOT_CA_PEM is a create-certs.sh development CA'
 # The committed development CA (config.rs DEV_TLS_ROOT_CA_PEM) is public too.
 dev_ca="$(dirname "$0")/../crates/chatter-core/assets/dev_tls_root_ca.pem"
 fp() { openssl x509 -noout -fingerprint -sha256; }

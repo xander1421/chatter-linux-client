@@ -20,8 +20,10 @@ export CFLAGS="${CFLAGS:-} -march=x86-64 -mtune=generic"
 export CXXFLAGS="${CXXFLAGS:-} -march=x86-64 -mtune=generic"
 # Dedicated output avoids packaging the developer installer's old release binary.
 export CARGO_TARGET_DIR="$ROOT/target/linux-production"
-features='desktop,jarvis,mesh,quic'
-[ -z "${CHATTER_ONION_ADDR:-}" ] || features+=',onion'  # shape checked above
+# onion is in chatter-ui's default set (secret chats ride Tor only); keep it
+# here too. Without a pinned CHATTER_ONION_ADDR secret chats and Shield fail closed.
+features='desktop,jarvis,mesh,quic,onion'
+[ -n "${CHATTER_ONION_ADDR:-}" ] || echo 'WARNING: no CHATTER_ONION_ADDR: secret chats and Shield will be unavailable in this build' >&2
 cargo build --locked --release --target x86_64-unknown-linux-gnu -p chatter-ui \
     --bin chatter-ui --no-default-features --features "$features"
 BIN="$CARGO_TARGET_DIR/x86_64-unknown-linux-gnu/release/chatter-ui"

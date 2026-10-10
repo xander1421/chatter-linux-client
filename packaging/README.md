@@ -47,7 +47,12 @@ ENV_FILE=.env.alpha ../scripts/anchors.sh exec env \
 ```
 
 with the signing variables (and optional push/onion) already exported. Output:
-`android/app/build/outputs/apk/release/app-release.apk` plus its `.sha256`.
+`android/app/build/outputs/apk/release/app-release.apk` (sideload/smoke test)
+and `android/app/build/outputs/bundle/release/app-release.aab` (the Google Play
+upload; Play takes only bundles for a new app), each with a `.sha256`. The
+script fails unless the bundle carries the APK's release certificate. The app
+targets API 36, which Play has required for new apps and updates since
+2026-08-31.
 This neither creates nor rotates a signer, and does not provision anchors. Keep
 the release keystore and its passwords backed up outside the repository:
 losing them means no upgrade path for installed copies. The release APK has a
@@ -75,10 +80,11 @@ pins match the actual production server; local syntax checks cannot prove that.
 The existing Rust compile-time guards remain active.
 
 It runs a locked release build with
-`--no-default-features --features desktop,jarvis,mesh,quic`
-(full GStreamer decoding, LiveKit calls, desktop integration and the mesh/QUIC
-transports). Supplying the provisioned v3 `CHATTER_ONION_ADDR` also enables the
-onion feature; the script checks the hostname shape rather than inventing one.
+`--no-default-features --features desktop,jarvis,mesh,quic,onion`
+(full GStreamer decoding, LiveKit calls, desktop integration and the
+mesh/QUIC/Tor transports). Secret chats and Shield also need the provisioned v3
+`CHATTER_ONION_ADDR` pinned; without it they fail closed and the script warns.
+It checks the hostname shape rather than inventing one.
 Public push configuration still uses `CHATTER_NTFY_URL`. The build targets
 `x86_64-unknown-linux-gnu` and `target-cpu=x86-64` rather than `native`. The existing
 mold and duplicate-definition linker arguments are preserved. C/C++ flags append
