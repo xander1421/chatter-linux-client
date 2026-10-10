@@ -4138,7 +4138,10 @@ mod tests {
         let gateway = bob_gateway(&t);
         let plaintext = content_v1::Content {
             content: Some(content_v1::content::Content::DataMessage(
-                content_v1::DataMessage::default(),
+                content_v1::DataMessage {
+                    timestamp: 1,
+                    ..Default::default()
+                },
             )),
             ..Default::default()
         }
