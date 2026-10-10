@@ -16,7 +16,8 @@ use chatter_core::state::{ActiveConversation, ChatState};
 use super::attachments::process_and_add_file;
 use crate::MainWindow;
 
-/// Wire up drag and drop file handling, and report window focus to core.
+/// Wire up drag and drop file handling, and report window focus to core
+/// (flushing pending drafts when focus leaves).
 ///
 /// Files dropped anywhere on the window will be added as pending attachments
 /// if there's an active conversation.
@@ -34,6 +35,14 @@ pub(crate) fn wire_drag_drop(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         match event {
             WindowEvent::Focused(focused) => {
                 let _rt = crate::rt_handle().enter();
+                if !*focused {
+                    // Leaving the window is the desktop's lifecycle edge: a
+                    // session logout or kill may follow, so store the draft
+                    // now rather than after the autosave delay.
+                    if let Some(w) = weak.upgrade() {
+                        super::flush_drafts(&w, &ui_ctx);
+                    }
+                }
                 ui_ctx.set_app_visible(*focused);
                 EventResult::Propagate
             }
