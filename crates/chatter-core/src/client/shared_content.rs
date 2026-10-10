@@ -74,7 +74,8 @@ impl ChatterClient {
     /// The tab strip for a conversation: label + count per non-empty category,
     /// in fixed display order. Empty when nothing has ever been shared.
     ///
-    /// This is also where a conversation whose history predates the index gets
+    /// This is also where history that arrived without being indexed (a backup
+    /// restore or a linked-device history import writes rows directly) gets
     /// backfilled — once, gated on a `settings` marker. Opening a profile is
     /// the natural moment: it is the only screen that reads the index, and the
     /// scan is already off the UI thread here.
@@ -133,7 +134,7 @@ impl ChatterClient {
     }
 }
 
-/// Index a conversation's pre-v064 history, at most once per conversation.
+/// Index a conversation's unindexed (restored) history, at most once per conversation.
 ///
 /// Blocking — callers are already on a worker. Failures are logged and
 /// swallowed: a drawer missing its old items is worse than an error dialog,
