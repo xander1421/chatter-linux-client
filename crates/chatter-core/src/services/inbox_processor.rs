@@ -1587,10 +1587,8 @@ impl InboxEventProcessor {
         encrypted_display_name: &Option<Vec<u8>>,
         encrypted_avatar: &Option<Vec<u8>>,
     ) {
+        // A secret group: no inviter, group or name in the log.
         tracing::info!(
-            peer_id = %peer_id,
-            group_id = ?group_id,
-            group_name = %group_name,
             has_profile = profile_key.is_some(),
             "Received anonymous group invite"
         );
@@ -1599,7 +1597,7 @@ impl InboxEventProcessor {
             Some(id) => id,
             None => {
                 tracing::warn!(
-                    group_id = ?group_id,
+                    group_id_len = group_id.len(),
                     "Invalid group_id length for AnonGroupInvite (expected 16 bytes)"
                 );
                 return;
@@ -1648,8 +1646,7 @@ impl InboxEventProcessor {
         };
 
         tracing::debug!(
-            peer_id = %peer_id,
-            inviter_display_name = ?inviter_display_name,
+            has_display_name = inviter_display_name.is_some(),
             "Decrypted inviter profile for group invite"
         );
 

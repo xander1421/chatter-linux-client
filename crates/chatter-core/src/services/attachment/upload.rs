@@ -141,9 +141,9 @@ impl AttachmentService {
 
         let mime_type = detect_mime_type(file_path).await;
 
+        // No filename, object key or plaintext size in upload logs: the same
+        // path uploads secret-chat files.
         tracing::debug!(
-            filename = %filename,
-            plaintext_size = plaintext_size,
             mime_type = %mime_type,
             "Encrypting attachment for CDN upload (streaming)"
         );
@@ -196,7 +196,7 @@ impl AttachmentService {
             let cdn_key = upload_response.cdn_key;
             let upload_url = upload_response.upload_url;
 
-            tracing::debug!(cdn_key = %cdn_key, "Got presigned URL, streaming encrypted content");
+            tracing::debug!("Got presigned URL, streaming encrypted content");
 
             let upload_start = std::time::Instant::now();
 
@@ -255,7 +255,7 @@ impl AttachmentService {
                 )));
             }
 
-            tracing::info!(cdn_key = %cdn_key, elapsed = ?upload_start.elapsed(), "CDN upload complete");
+            tracing::info!(elapsed = ?upload_start.elapsed(), "CDN upload complete");
 
             // Confirm upload with server
             file_client
@@ -338,10 +338,6 @@ impl AttachmentService {
         }
 
         tracing::info!(
-            cdn_key = %cdn_key,
-            attachment_id = %attachment_id,
-            filename = %filename,
-            plaintext_size = plaintext_size,
             encrypted_size = encrypt_result.ciphertext_size,
             "Encrypted attachment uploaded to CDN (streaming)"
         );
@@ -424,7 +420,7 @@ impl AttachmentService {
             }
         }
         let _ = file_client.confirm_attachment_upload(&cdn_key).await;
-        tracing::debug!(cdn_key = %cdn_key, plaintext_size, "Thumbnail sidecar uploaded");
+        tracing::debug!("Thumbnail sidecar uploaded");
         Some((
             cdn_key,
             encrypted.key.to_vec(),
@@ -573,12 +569,7 @@ impl AttachmentService {
         let content = content.as_ref();
         let plaintext_size = content.len() as u64;
 
-        tracing::debug!(
-            filename = %filename,
-            plaintext_size = plaintext_size,
-            mime_type = %mime_type,
-            "Encrypting bytes for CDN upload"
-        );
+        tracing::debug!(mime_type = %mime_type, "Encrypting bytes for CDN upload");
 
         // Encrypt with Signal-compatible encryption
         let encrypt_start = std::time::Instant::now();
@@ -604,10 +595,7 @@ impl AttachmentService {
         let cdn_key = upload_response.cdn_key;
         let upload_url = upload_response.upload_url;
 
-        tracing::debug!(
-            cdn_key = %cdn_key,
-            "Got presigned URL, uploading encrypted content"
-        );
+        tracing::debug!("Got presigned URL, uploading encrypted content");
 
         // Upload encrypted ciphertext via HTTP PUT (over Tor in anon mode).
         let upload_start = std::time::Instant::now();
@@ -626,7 +614,7 @@ impl AttachmentService {
             )));
         }
 
-        tracing::info!(cdn_key = %cdn_key, elapsed = ?upload_start.elapsed(), "CDN upload complete");
+        tracing::info!(elapsed = ?upload_start.elapsed(), "CDN upload complete");
 
         // Confirm upload with server
         file_client
@@ -715,12 +703,7 @@ impl AttachmentService {
         }
 
         tracing::info!(
-            cdn_key = %cdn_key,
-            attachment_id = %attachment_id,
-            filename = %filename,
-            plaintext_size = plaintext_size,
             encrypted_size = encrypted_size,
-            file_path = %file_path.display(),
             "Encrypted bytes uploaded to CDN and stored on filesystem"
         );
 

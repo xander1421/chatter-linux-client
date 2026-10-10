@@ -160,10 +160,9 @@ impl AnonDmService {
         match self.get_conversation(conversation_id) {
             Ok(Some(dm)) => {
                 if dm.peer_id != *sender_id {
+                    // Secret chat: no identities in the log.
                     tracing::info!(
-                        sender_id = %sender_id,
                         conversation_id = %conversation_id,
-                        expected_peer_id = %dm.peer_id,
                         "[ANON_DM] Dropped message from unexpected sender"
                     );
                     return Ok(vec![]);
@@ -180,7 +179,6 @@ impl AnonDmService {
             Ok(None) => {
                 tracing::info!(
                     conversation_id = %conversation_id,
-                    sender_id = %sender_id,
                     "[ANON_DM] Dropped message for unknown conversation"
                 );
                 return Ok(vec![]);
@@ -296,10 +294,7 @@ impl AnonDmService {
                         if !encrypted.is_empty() {
                             match profile_crypto::decrypt_avatar(pk, encrypted) {
                                 Ok(avatar) => {
-                                    tracing::info!(
-                                        avatar_size = avatar.len(),
-                                        "Decrypted peer avatar from profile update"
-                                    );
+                                    tracing::debug!("Decrypted peer avatar from profile update");
                                     decrypted_avatar = Some(avatar.clone());
                                     conv.peer_avatar = Some(avatar);
                                 }
@@ -365,8 +360,6 @@ impl AnonDmService {
                 }
 
                 tracing::info!(
-                    sender_id = %sender_id,
-                    group_id = %group_id,
                     has_profile = profile_key.is_some(),
                     "Processing anonymous group invite in anon DM"
                 );
@@ -409,8 +402,6 @@ impl AnonDmService {
                 }
 
                 tracing::info!(
-                    sender_id = %sender_id,
-                    group_id = %group_id,
                     has_profile = profile_key.is_some(),
                     "Processing anonymous group join ack in anon DM"
                 );
@@ -429,8 +420,6 @@ impl AnonDmService {
                         .unwrap_or_default();
 
                 tracing::info!(
-                    sender_id = %sender_id,
-                    group_id = %group_id,
                     member_count = list.members.len(),
                     "Processing anonymous group member list in anon DM"
                 );

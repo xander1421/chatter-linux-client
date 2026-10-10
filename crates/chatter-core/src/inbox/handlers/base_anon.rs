@@ -342,7 +342,6 @@ pub fn dispatch_common_content<B: AnonInboxBackend>(
 
     if backend.is_sender_blocked(sender_id) {
         tracing::info!(
-            sender_id = %sender_id,
             id = %id,
             label = backend.label(),
             "Dropped content from blocked sender"
@@ -382,7 +381,6 @@ pub fn dispatch_common_content<B: AnonInboxBackend>(
                     Ok(true) => {
                         tracing::info!(
                             timestamp = delete.target_sent_timestamp,
-                            sender_id = %sender_id,
                             id = %id,
                             "Deleted message (delete-for-everyone)"
                         );

@@ -59,11 +59,8 @@ impl AnonDmService {
         dm.updated_at = Utc::now();
         self.anon_dm_repo.update_conversation(&dm)?;
 
-        tracing::info!(
-            "Accepted anonymous DM conversation {} from {}",
-            conversation_id,
-            dm.peer_id
-        );
+        // Secret chat: no peer identity in the log.
+        tracing::info!(%conversation_id, "Accepted secret chat");
 
         Ok(dm)
     }
@@ -114,11 +111,7 @@ impl AnonDmService {
         self.send_to_anon_mailbox(peer_id, peer_mailbox_pk, content)
             .await?;
 
-        tracing::debug!(
-            "Sent acceptance for conversation {} to {}",
-            conversation_id,
-            peer_id
-        );
+        tracing::debug!(%conversation_id, "Sent secret chat acceptance");
         Ok(())
     }
 
@@ -140,11 +133,7 @@ impl AnonDmService {
         self.anon_dm_repo
             .update_status(conversation_id, AnonDmStatus::Declined)?;
 
-        tracing::info!(
-            "Declined anonymous DM conversation {} from {}",
-            conversation_id,
-            dm.peer_id
-        );
+        tracing::info!(%conversation_id, "Declined secret chat");
 
         Ok(())
     }
@@ -182,11 +171,7 @@ impl AnonDmService {
         dm.updated_at = Utc::now();
         self.anon_dm_repo.update_conversation(&dm)?;
 
-        tracing::info!(
-            "Received acceptance for conversation {} from {}",
-            conversation_id,
-            peer_id
-        );
+        tracing::info!(%conversation_id, "Received secret chat acceptance");
 
         Ok(())
     }
@@ -267,11 +252,7 @@ impl AnonDmService {
             }
         }
 
-        tracing::info!(
-            "Received message request {} from {}",
-            conversation_id,
-            sender_id
-        );
+        tracing::info!(%conversation_id, "Received secret chat request");
 
         Ok(dm)
     }
@@ -300,7 +281,6 @@ impl AnonDmService {
 
         tracing::info!(
             conversation_id = %dm.id,
-            peer_id = %dm.peer_id,
             "Created incoming conversation from ECIES init message"
         );
 
@@ -359,9 +339,7 @@ impl AnonDmService {
             _ => None,
         };
 
-        tracing::info!(
-            peer_id = %sender_id,
-            display_name = %display_name,
+        tracing::debug!(
             has_avatar = avatar.is_some(),
             "Decrypted sender profile from AnonDmRequest"
         );
@@ -436,9 +414,7 @@ impl AnonDmService {
             _ => None,
         };
 
-        tracing::info!(
-            peer_id = %peer_id,
-            display_name = %display_name,
+        tracing::debug!(
             has_avatar = avatar.is_some(),
             "Decrypted responder profile from AnonDmAccept"
         );

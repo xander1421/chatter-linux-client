@@ -192,7 +192,6 @@ impl AnonDmService {
             conversation_id = %conversation_id,
             message_id = %message_id,
             sent_at,
-            text_len = text.len(),
             "[ANON_DM_SEND] inserted own outgoing message into local DB"
         );
 
@@ -515,8 +514,6 @@ impl AnonDmService {
 
         tracing::info!(
             conversation_id = %conversation_id,
-            peer_id = %peer_id,
-            peer_mailbox_pk = hex::encode(&peer_mailbox_pk[..8]),
             content_type = content_type,
             "[ANON_DM_EPHEMERAL] Sending ephemeral message"
         );
@@ -542,7 +539,6 @@ impl AnonDmService {
             Ok(()) => {
                 tracing::info!(
                     conversation_id = %conversation_id,
-                    peer_mailbox_pk = hex::encode(&peer_mailbox_pk[..8]),
                     content_type = content_type,
                     "[ANON_DM_EPHEMERAL] Successfully sent ephemeral message"
                 );
@@ -551,7 +547,6 @@ impl AnonDmService {
             Err(e) => {
                 tracing::error!(
                     conversation_id = %conversation_id,
-                    peer_mailbox_pk = hex::encode(&peer_mailbox_pk[..8]),
                     content_type = content_type,
                     error = %e,
                     "[ANON_DM_EPHEMERAL] Failed to send ephemeral message"
@@ -572,7 +567,6 @@ impl AnonDmService {
         tracing::info!(
             conversation_id = %conversation_id,
             timestamp_count = message_timestamps.len(),
-            timestamps = ?message_timestamps,
             "[ANON_DM_SEND_RECEIPT] Attempting to send read receipt"
         );
 
@@ -610,7 +604,6 @@ impl AnonDmService {
 
         tracing::info!(
             conversation_id = %conversation_id,
-            peer_id = %dm.peer_id,
             timestamp_count = message_timestamps.len(),
             "[ANON_DM_SEND_RECEIPT] Sending read receipt to peer"
         );
@@ -773,8 +766,6 @@ impl AnonDmService {
 
         tracing::info!(
             conversation_id = %conversation_id,
-            peer_id = %dm.peer_id,
-            peer_mailbox_pk = hex::encode(&peer_mailbox_pk[..8]),
             "[ANON_DM] Sent message to peer's mailbox"
         );
 

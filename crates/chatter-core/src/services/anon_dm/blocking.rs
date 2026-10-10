@@ -32,14 +32,14 @@ impl AnonDmService {
     /// Block a user globally (block all anonymous DMs from this user).
     pub fn block_user(&self, user_id: &UserId, reason: Option<&str>) -> Result<(), AnonDmError> {
         self.anon_dm_repo.block_user(user_id, reason)?;
-        tracing::info!("Globally blocked user {} for anonymous DMs", user_id);
+        tracing::info!("Globally blocked a user for secret chats");
         Ok(())
     }
 
     /// Unblock a user globally.
     pub fn unblock_user(&self, user_id: &UserId) -> Result<(), AnonDmError> {
         self.anon_dm_repo.unblock_user(user_id)?;
-        tracing::info!("Unblocked user {} for anonymous DMs", user_id);
+        tracing::info!("Unblocked a user for secret chats");
         Ok(())
     }
 

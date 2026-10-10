@@ -119,18 +119,6 @@ pub struct CdnUploadResult {
 impl CdnUploadResult {
     /// Convert to AttachmentPointer proto.
     pub fn to_attachment_pointer(&self) -> AttachmentPointer {
-        tracing::debug!(
-            "Creating AttachmentPointer: cdn_key={}, content_type={}, \
-             thumbnail_bytes={}, thumbnail_size={}x{}, width={}, height={}, waveform_len={}",
-            self.cdn_key,
-            self.content_type,
-            self.thumbnail.len(),
-            self.thumbnail_width,
-            self.thumbnail_height,
-            self.width,
-            self.height,
-            self.waveform.len()
-        );
         AttachmentPointer {
             cdn_key: self.cdn_key.clone(),
             encryption_key: self.encryption_key.to_vec(),
@@ -725,7 +713,7 @@ impl AttachmentService {
         let ciphertext = match self.cdn_http_get(&dl.download_url).await {
             Ok(bytes) => bytes,
             Err(e) => {
-                tracing::warn!(cdn_key = %cdn_key, error = %e, "Thumbnail sidecar GET failed");
+                tracing::warn!(error = %e, "Thumbnail sidecar GET failed");
                 return None;
             }
         };
