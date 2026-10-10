@@ -35,6 +35,9 @@ pub const DEFAULT_TOKEN_REQUEST_COUNT: u32 = 5;
 /// Request more mailbox tokens when below this threshold.
 pub const MIN_TOKEN_THRESHOLD: u32 = 2;
 
+/// Most tokens one GetMailboxTokens request may ask for (proto `lte: 10`).
+pub const MAX_TOKENS_PER_REQUEST: u32 = 10;
+
 /// A ready-to-use mailbox token.
 ///
 /// Contains the ephemeral Ed25519 keypair and its blind signature.
@@ -234,8 +237,11 @@ impl TokenManager {
 
         // No local quota gate: the server owns the daily budget (it clamps the
         // count to what is left and answers ResourceExhausted at zero). A local
-        // mirror disagreed with it — see `grant_error`.
-        let request_count = count;
+        // mirror disagreed with it — see `grant_error`. The request itself is
+        // capped at 10 (mailbox.proto GetMailboxTokensRequest.count `lte: 10`); a
+        // larger count is rejected outright, so callers get at most 10 and
+        // loop for more (`top_up`).
+        let request_count = count.min(MAX_TOKENS_PER_REQUEST);
         tracing::info!("TokenManager: will request {} tokens", request_count);
 
         // Get/refresh server key
