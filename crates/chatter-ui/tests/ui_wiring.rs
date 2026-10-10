@@ -4178,7 +4178,8 @@ fn headers_use_the_shared_header_button() {
         "\\u{2715}",
         "\\u{22EE}",
     ];
-    const NOT_A_HEADER: [(&str, &str); 10] = [
+    const NOT_A_HEADER: [(&str, &str); 11] = [
+        ("chat/chat_layout.slint", "Icons.x"), // clear the picker drawer's search field
         ("chat/message_composer.slint", "Icons.x"), // cancel reply / edit strip
         ("chat/message_composer.slint", "\\u{00D7}"), // remove a pending attachment
         ("chat/pinned_bar.slint", "Icons.x"),       // dismiss the pinned banner
@@ -4714,9 +4715,12 @@ fn tablet_sidebar_opens_the_calls_screen() {
     w.set_missed_call_count(0);
     w.window().set_size(slint::LogicalSize::new(400.0, 800.0));
     assert!(w.get_compact_layout());
-    // The tab bar's own Calls tab carries the same label, so exactly one.
+    // The tab bar's own Calls tab carries the same label (an accessible tab
+    // since ae492dbb, over its visible Text), so exactly one control.
     assert_eq!(
-        testing::ElementHandle::find_by_accessible_label(&w, "Calls").count(),
+        testing::ElementHandle::find_by_accessible_label(&w, "Calls")
+            .filter(|e| e.accessible_role() != Some(testing::AccessibleRole::Text))
+            .count(),
         1,
         "phone layout shows a sidebar Calls row next to the tab bar's Calls tab"
     );
@@ -4807,6 +4811,7 @@ fn toggle_rows_flip_from_anywhere_on_the_row() {
     w.on_channel_settings_toggle_ai(move |v| a.borrow_mut().push(v));
 
     chatter_ui::bin_ui::features::back::push(&w, "channel-settings");
+    slint::platform::update_timers_and_animations();
     tap_text(&w, "Notifications");
 
     tap_text(&w, "Mute Channel");
@@ -5475,12 +5480,13 @@ fn secondary_chrome_exposes_its_shared_material() {
         1,
         "only the jump capsule floats over the list"
     );
-    // The date and unread chips are row content: a plain tinted fill, never a
-    // backdrop sample per row (glass_surface.slint:1).
+    // The date and unread chips, and the history-retry notice that reuses
+    // the unread chip (41464d63), are a plain tinted fill, never a backdrop
+    // sample per row (glass_surface.slint:1).
     assert_eq!(
         list.matches("background: Materials.regular;").count(),
-        2,
-        "date and unread chips"
+        3,
+        "date, unread and history-retry chips"
     );
     assert!(!list.contains("Colors.action-fill.with-alpha(0.97)"));
     let profile = include_str!("../../../ui/modals/user_profile.slint");
@@ -5644,7 +5650,8 @@ fn polish_shared_controls_and_rc28_regressions() {
     );
     let picker = source("chat/reaction_picker.slint");
     assert!(picker.contains("max-picker-width: picker-shell.width;"));
-    assert!(picker.contains("max-picker-height: max(0px, picker-shell.height - Spacing.touch-target-min - Spacing.stroke);"));
+    // The quick row is taller on touch (9d055847); the picker gets the rest.
+    assert!(picker.contains("max-picker-height: max(0px, picker-shell.height - root.quick-row-height - Spacing.stroke);"));
     // D3 and the notification-inbox portion of D9 were already migrated to
     // the shared shell before this pass; protect the title and that route.
     assert!(source("settings/account_menu.slint").contains("title: \"Profile\";"));
@@ -5819,13 +5826,14 @@ fn video_call_lives_in_the_header_more_menu() {
             .mock_single_click(slint::platform::PointerEventButton::Left);
     };
 
-    // Phone DM, then two-pane channel, private group and anon DM: every header
-    // variant keeps Voice call in the row and Video call only behind ⋯.
-    for (phone, kind, name, settings_row) in [
-        (true, ConversationKind::ServerDm, "Bob", true),
-        (false, ConversationKind::Channel, "general", true),
-        (false, ConversationKind::AnonGroup, "Group", true),
-        (true, ConversationKind::AnonDm, "Anon", false),
+    // Phone DM and two-pane channel keep Voice call in the row and Video
+    // call only behind ⋯. Secret chats (anon group, anon DM) have no calls
+    // at all (owner decision 2026-10-10): neither the row nor the menu.
+    for (phone, kind, name, settings_row, calls) in [
+        (true, ConversationKind::ServerDm, "Bob", true, true),
+        (false, ConversationKind::Channel, "general", true, true),
+        (false, ConversationKind::AnonGroup, "Group", true, false),
+        (true, ConversationKind::AnonDm, "Anon", false, false),
     ] {
         w.set_is_mobile_platform(phone);
         w.window().set_size(if phone {
@@ -5838,9 +5846,10 @@ fn video_call_lives_in_the_header_more_menu() {
         w.set_mobile_show_chat(true);
         slint::platform::update_timers_and_animations();
 
-        assert!(
+        assert_eq!(
             button(&w, "Voice call").is_some(),
-            "{kind:?}: voice call left the header"
+            calls,
+            "{kind:?}: Voice call in the header"
         );
         assert!(
             button(&w, "Video call").is_none(),
@@ -5857,18 +5866,29 @@ fn video_call_lives_in_the_header_more_menu() {
             settings_row,
             "{kind:?}: Conversation settings row"
         );
-        let before = started.get();
-        click(&w, "Video call");
-        assert_eq!(
-            started.get(),
-            before + 1,
-            "{kind:?}: the menu's Video call did not start a video call"
-        );
-        assert_eq!(
-            w.get_active_modal().as_str(),
-            "none",
-            "{kind:?}: the menu stayed open over the call"
-        );
+        if calls {
+            let before = started.get();
+            click(&w, "Video call");
+            assert_eq!(
+                started.get(),
+                before + 1,
+                "{kind:?}: the menu's Video call did not start a video call"
+            );
+            assert_eq!(
+                w.get_active_modal().as_str(),
+                "none",
+                "{kind:?}: the menu stayed open over the call"
+            );
+        } else {
+            assert!(
+                button(&w, "Video call").is_none(),
+                "{kind:?}: a secret chat offers a video call"
+            );
+            w.set_modal_stack(slint::ModelRc::new(slint::VecModel::from(Vec::<
+                slint::SharedString,
+            >::new(
+            ))));
+        }
 
         if settings_row {
             click(&w, "More options");
@@ -6722,9 +6742,12 @@ fn definite_send_failure_parks_exact_reply_and_files_without_overwriting_new_inp
     assert!(!h.w.get_composer_is_replying());
     h.open(h.a);
     assert_eq!(h.w.get_composer_text().as_str(), "newer draft");
+    // Clearing the newer draft makes room: re-entering the conversation
+    // takes the parked send through the production path, where core moves
+    // its files into the tray durably (dc3ee9d0) and the UI restores the rest.
     h.w.set_composer_text("".into());
-    let recovered = h.client.take_parked_send(true).unwrap();
-    chatter_ui::bin_ui::features::chat::send_message::restore_composer(&h.w, &h.client, recovered);
+    h.open(h.b);
+    h.open(h.a);
     assert_eq!(h.w.get_composer_text().as_str(), "failed caption");
     assert_eq!(h.staged(), ["missing.png"]);
     let reply = chatter_ui::bin_ui::features::chat::send_message::composer_reply(&h.w).unwrap();
