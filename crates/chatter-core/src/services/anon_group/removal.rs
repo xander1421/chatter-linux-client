@@ -487,7 +487,13 @@ mod tests {
                         .map(|u| AnonGroupMemberInfo {
                             user_id: u.as_bytes().to_vec(),
                             mailbox_pk: vec![4u8; 32],
-                            role: AnonGroupRole::Member.to_i32(),
+                            // A roster must name exactly the owner as Owner.
+                            role: if *u == f.owner {
+                                AnonGroupRole::Owner
+                            } else {
+                                AnonGroupRole::Member
+                            }
+                            .to_i32(),
                             ..Default::default()
                         })
                         .collect(),

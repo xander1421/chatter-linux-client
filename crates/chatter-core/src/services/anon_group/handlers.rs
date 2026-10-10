@@ -23,9 +23,13 @@ impl AnonGroupService {
         sender_id: UserId,
         timestamp: u64,
     ) -> Result<bool, AnonGroupError> {
-        Ok(self
+        // A non-member's leave still records its removal barrier (it may beat
+        // the roster that adds it), but there is no one to announce as gone.
+        let was_member = self.anon_group_repo.is_member(&group_id, &sender_id)?;
+        let removed = self
             .anon_group_repo
-            .remove_ordered_member(&group_id, &sender_id, timestamp, None, false)?)
+            .remove_ordered_member(&group_id, &sender_id, timestamp, None, false)?;
+        Ok(removed && was_member)
     }
 
     /// Handle an incoming kick message. `Ok(true)` only when the kick was
