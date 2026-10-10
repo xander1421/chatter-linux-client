@@ -891,7 +891,6 @@ impl ConversationHandle {
                     new_text.trim(),
                     crate::util::time::TimestampNanos::now().as_u64(),
                     true,
-                    &[],
                 )
             })?
             .is_none()

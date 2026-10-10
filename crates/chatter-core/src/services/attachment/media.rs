@@ -267,7 +267,7 @@ impl AttachmentService {
                 "attachment is not video".into(),
             ));
         }
-        // Bound the authentication pass as well as decoder reads; never open original local_path.
+        // Bound the authentication pass as well as decoder reads.
         if std::fs::metadata(super::attachment_file_path(attachment_id))
             .map_err(|e| AttachmentError::FileError(e.to_string()))?
             .len()
@@ -392,7 +392,7 @@ mod video_thumbnail_tests {
         assert!(validate_video_thumbnail(&result).is_err());
     }
     #[test]
-    fn video_thumbnail_authenticates_owned_ciphertext_before_decoder_and_ignores_local_path() {
+    fn video_thumbnail_authenticates_owned_ciphertext_before_decoder() {
         use crate::crypto::attachment_crypto::AttachmentCrypto;
         use crate::domain::attachment::{
             Attachment, AttachmentStatus, ContentLocation, FileMetadata,
@@ -408,8 +408,6 @@ mod video_thumbnail_tests {
         let service = AttachmentService::new_local(repo.clone());
         let plaintext = b"generated-owned-video-range-fixture";
         let encrypted = AttachmentCrypto::encrypt(plaintext).unwrap();
-        let original_path = dir.path().join("original-must-not-be-read.mp4");
-        std::fs::write(&original_path, b"not an attachment source").unwrap();
         let source = Attachment {
             id: AttachmentId::new(),
             metadata: FileMetadata::new(
@@ -419,7 +417,6 @@ mod video_thumbnail_tests {
             ),
             status: AttachmentStatus::Ready,
             content_location: ContentLocation::OnFilesystem,
-            local_path: Some(original_path.to_string_lossy().into_owned()),
             remote_url: Some("owned-encrypted-fixture".into()),
             encryption_key: Some(encrypted.key.to_vec()),
             encryption_iv: Some(encrypted.digest.to_vec()),
@@ -455,10 +452,6 @@ mod video_thumbnail_tests {
                 ))
                 .is_err()
         );
-        assert_eq!(
-            std::fs::read(&original_path).unwrap(),
-            b"not an attachment source"
-        );
         std::fs::remove_file(path).unwrap();
     }
     #[test]
@@ -479,7 +472,6 @@ mod video_thumbnail_tests {
             metadata: FileMetadata::new("fixture.mp4".into(), "video/mp4".into(), 128),
             status: AttachmentStatus::Ready,
             content_location: ContentLocation::OnFilesystem,
-            local_path: None,
             remote_url: Some("owned-encrypted-fixture".into()),
             encryption_key: Some(vec![1; 64]),
             encryption_iv: Some(vec![2; 32]),

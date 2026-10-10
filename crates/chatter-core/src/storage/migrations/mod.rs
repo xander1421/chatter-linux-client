@@ -103,6 +103,7 @@ mod v103_secret_chat_peer_device;
 mod v104_reaction_send_clocks;
 mod v105_drop_legacy_reaction_evidence;
 mod v106_drop_anon_group_legacy_lock;
+mod v107_drop_attachment_local_path;
 pub(crate) mod reaction_normalization;
 
 use crate::error::StorageError;
@@ -435,4 +436,5 @@ pub fn default_migrations() -> MigrationRunner {
         .register(v104_reaction_send_clocks::V104ReactionSendClocks)
         .register(v105_drop_legacy_reaction_evidence::V105DropLegacyReactionEvidence)
         .register(v106_drop_anon_group_legacy_lock::V106DropAnonGroupLegacyLock)
+        .register(v107_drop_attachment_local_path::V107DropAttachmentLocalPath)
 }

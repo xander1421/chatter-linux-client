@@ -246,10 +246,6 @@ pub struct Attachment {
     /// Where encrypted content is stored (NotDownloaded or OnFilesystem).
     #[serde(default)]
     pub content_location: ContentLocation,
-    /// Local file path (DEPRECATED - kept for migration compatibility).
-    /// New attachments should use content_location + encrypted_content in DB.
-    #[serde(default)]
-    pub local_path: Option<String>,
     /// Remote URL / CDN key for downloading encrypted content.
     pub remote_url: Option<String>,
     /// Encryption key for encrypted attachments (64 bytes: AES key + HMAC key).
@@ -282,7 +278,6 @@ impl Attachment {
             metadata,
             status: AttachmentStatus::Pending,
             content_location: ContentLocation::NotDownloaded,
-            local_path: None,
             remote_url: None,
             encryption_key: None,
             encryption_iv: None,

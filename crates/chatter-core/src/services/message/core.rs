@@ -4,7 +4,6 @@
 
 use std::path::Path;
 
-use crate::domain::attachment::{AttachmentStatus, ContentLocation};
 use crate::domain::ephemeral::MessageTTL;
 use crate::domain::ids::{AttachmentId, ChannelId, IntegrationId, MessageId};
 use crate::domain::message::{Message, MessageContent};
@@ -493,7 +492,7 @@ impl MessageService {
         if let Some(queued) = self.durable_channel_retry(&failed)? {
             return Ok(queued);
         }
-        let pointers = self.pointers_for_resend(&failed.attachments).await?;
+        let pointers = self.pointers_for_resend(&failed.attachments)?;
         let quote = match (failed.reply_to_author_id, failed.reply_to) {
             (Some(author), Some(parent)) => self.message_repo.get(&parent)?.map(|parent| {
                 crate::services::gateway::QuoteIntent {
@@ -582,58 +581,26 @@ impl MessageService {
         }
     }
 
-    /// Pointers for a resend. An attachment whose upload already finished is
-    /// reused (`Attachment::to_pointer`, which keeps the voice-note flag).
-    /// Otherwise the plaintext at `local_path` is uploaded and the CDN fields
-    /// are stamped onto the original row, so the bubble keeps its attachment id.
-    /// The ciphertext from a finished upload is never uploaded again.
-    pub(crate) async fn pointers_for_resend(
+    /// Pointers for a resend: every attachment must already be uploaded
+    /// (`Attachment::to_pointer`, which keeps the voice-note flag), so its
+    /// ciphertext is never uploaded again.
+    pub(crate) fn pointers_for_resend(
         &self,
         attachment_ids: &[AttachmentId],
     ) -> Result<Vec<crate::proto::content_v1::AttachmentPointer>, MessageError> {
-        let mut pointers = Vec::with_capacity(attachment_ids.len());
-        for id in attachment_ids {
-            let mut attachment = self.attachment_repo.get(id)?.ok_or_else(|| {
-                MessageError::InvalidContent(format!("attachment {id} can no longer be sent"))
-            })?;
-            if let Some(pointer) = attachment.to_pointer() {
-                pointers.push(pointer);
-                continue;
-            }
-            let path = attachment
-                .local_path
-                .as_deref()
-                .filter(|p| !p.is_empty() && Path::new(p).is_file());
-            let Some(path) = path else {
-                return Err(MessageError::InvalidContent(format!(
-                    "attachment {id} can no longer be sent"
-                )));
-            };
-            let uploaded =
-                AttachmentService::new(self.attachment_repo.clone(), self.grpc_pool.clone())
-                    .upload_to_cdn_encrypted(Path::new(path))
-                    .await
-                    .map_err(|e| MessageError::AttachmentError(e.to_string()))?;
-            attachment.remote_url = Some(uploaded.cdn_key.clone());
-            attachment.encryption_key = Some(uploaded.encryption_key.to_vec());
-            attachment.encryption_iv = Some(uploaded.digest.to_vec());
-            attachment.status = AttachmentStatus::Ready;
-            attachment.content_location = ContentLocation::OnFilesystem;
-            if attachment.metadata.waveform_samples.is_none() && !uploaded.waveform.is_empty() {
-                attachment.metadata.waveform_samples = Some(uploaded.waveform.clone());
-            }
-            if attachment.metadata.duration_seconds.is_none() && uploaded.duration_ms > 0 {
-                attachment.metadata.duration_seconds = Some(uploaded.duration_ms as f64 / 1000.0);
-            }
-            self.attachment_repo.update(&attachment)?;
-            let pointer = attachment.to_pointer().unwrap_or_else(|| {
-                let mut pointer = uploaded.to_attachment_pointer();
-                pointer.voice_note = !uploaded.waveform.is_empty();
-                pointer
-            });
-            pointers.push(pointer);
-        }
-        Ok(pointers)
+        attachment_ids
+            .iter()
+            .map(|id| {
+                self.attachment_repo
+                    .get(id)?
+                    .and_then(|attachment| attachment.to_pointer())
+                    .ok_or_else(|| {
+                        MessageError::InvalidContent(format!(
+                            "attachment {id} can no longer be sent"
+                        ))
+                    })
+            })
+            .collect()
     }
 
     /// Send a message with file attachments (high-level API).

@@ -307,7 +307,7 @@ pub fn attachment_to_display_data(attachment: &Attachment) -> AttachmentDisplayD
         category: category.to_string(),
         thumbnail_url: String::new(), // Populated by caller if available
         download_url: attachment.remote_url.clone().unwrap_or_default(),
-        local_path: attachment.local_path.clone(),
+        local_path: None,
         is_image: meta.is_image(),
         is_video: chatter_core::domain::attachment::FileCategory::from_mime_and_filename(
             &meta.mime_type,

@@ -35,6 +35,8 @@ const IMAGE_EVERY: usize = 6;
 struct Corpus {
     _tmp: TempDir,
     db: Arc<Database>,
+    /// The one full-resolution JPEG every image attachment stands for.
+    photo: std::path::PathBuf,
     conversation: ChannelId,
     conv_type: ConversationType,
 }
@@ -96,7 +98,6 @@ fn build_corpus() -> Corpus {
                     metadata: meta,
                     status: AttachmentStatus::Ready,
                     content_location: ContentLocation::NotDownloaded,
-                    local_path: Some(photo_path.to_string_lossy().into_owned()),
                     remote_url: None,
                     encryption_key: None,
                     encryption_iv: None,
@@ -119,6 +120,7 @@ fn build_corpus() -> Corpus {
     Corpus {
         _tmp: tmp,
         db,
+        photo: photo_path,
         conversation,
         conv_type,
     }
@@ -334,12 +336,7 @@ fn bench_conversation_open() {
     let mut t_fast = std::time::Duration::ZERO;
     let mut t_placeholder = std::time::Duration::ZERO;
     for att in &resolved {
-        let Some(path) = att.local_path.as_deref() else {
-            continue;
-        };
-        if !std::path::Path::new(path).exists() {
-            continue;
-        }
+        let path = &c.photo;
         let t = Instant::now();
         let Ok(img) = image::open(path) else { continue };
         t_open += t.elapsed();

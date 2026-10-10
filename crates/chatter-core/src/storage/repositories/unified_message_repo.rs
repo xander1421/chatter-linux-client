@@ -2065,8 +2065,7 @@ impl UnifiedMessageRepository {
 
     /// Order Saved body edits against the current row inside the write transaction.
     /// Local clocks advance beyond both creation and the last stored edit.
-    /// Trusted full pointers can repair missing legacy records at matching slots;
-    /// valid references and every other row column remain intact.
+    /// Only the body columns change; every other row column remains intact.
     pub(crate) fn write_saved_body(
         &self,
         scope: &ReactionScope,
@@ -2076,8 +2075,7 @@ impl UnifiedMessageRepository {
         text: &str,
         clock: u64,
         local: bool,
-        full_attachments: &[AttachmentId],
-    ) -> Result<Option<(bool, bool)>, StorageError> {
+    ) -> Result<Option<bool>, StorageError> {
         if scope.kind != ConversationType::SavedMessages
             || scope.id != ChannelId::from(*author)
             || sent_at > i64::MAX as u64
@@ -2130,57 +2128,19 @@ impl UnifiedMessageRepository {
             };
             stored.edited_at = Some(DateTime::from_timestamp_nanos(clock as i64));
         }
-        let mut attachments_changed = false;
-        if !full_attachments.is_empty() && full_attachments.len() == stored.attachments.len() {
-            let mut repaired = stored.attachments.clone();
-            let mut compatible = true;
-            for (current, incoming) in repaired.iter_mut().zip(full_attachments) {
-                let exists: bool = tx.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM attachments WHERE id = ?1)",
-                    params![current.to_string()],
-                    |r| r.get(0),
-                )?;
-                let incoming_exists: bool = tx.query_row(
-                    "SELECT EXISTS(SELECT 1 FROM attachments WHERE id = ?1)",
-                    params![incoming.to_string()],
-                    |r| r.get(0),
-                )?;
-                if !incoming_exists || (exists && current != incoming) {
-                    compatible = false;
-                    break;
-                }
-                if !exists && current != incoming {
-                    *current = *incoming;
-                }
-            }
-            if compatible && repaired != stored.attachments {
-                // A Mixed body must describe the same attachment sequence.
-                if let MessageContent::Mixed(mixed) = &mut stored.content {
-                    if mixed.attachment_ids != stored.attachments {
-                        compatible = false;
-                    } else {
-                        mixed.attachment_ids = repaired.clone();
-                    }
-                }
-                if compatible {
-                    stored.attachments = repaired;
-                    attachments_changed = true;
-                }
-            }
-        }
-        if body_changed || attachments_changed {
+        if body_changed {
             let content_json = serde_json::to_string(&stored.content)
                 .map_err(|e| StorageError::InvalidData(e.to_string()))?;
             tx.execute(
-                "UPDATE messages SET content_type = ?1, content_json = ?2, attachments_blob = ?3, is_edited = CASE WHEN ?4 THEN 1 ELSE is_edited END, edited_at = ?5, updated_at = ?6 WHERE id = ?7",
-                params![content_type_discriminant(&stored.content), content_json, db_serialize(&stored.attachments)?, body_changed, stored.edited_at.map(|t| t.to_rfc3339()), Utc::now().to_rfc3339(), id.to_string()],
+                "UPDATE messages SET content_type = ?1, content_json = ?2, is_edited = 1, edited_at = ?3, updated_at = ?4 WHERE id = ?5",
+                params![content_type_discriminant(&stored.content), content_json, stored.edited_at.map(|t| t.to_rfc3339()), Utc::now().to_rfc3339(), id.to_string()],
             )?;
         }
         if local && body_changed {
             super::saved_sync_repo::SavedSyncRepository::mark_dirty_with(&tx, author, id)?;
         }
         tx.commit()?;
-        Ok(Some((body_changed, attachments_changed)))
+        Ok(Some(body_changed))
     }
 
     /// Replace the body of the one row at this scope's Signal-style key,

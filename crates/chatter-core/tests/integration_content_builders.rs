@@ -420,7 +420,7 @@ fn test_build_saved_message_sync() {
         text: "Important note".into(),
         message_id: "msg-id-123".into(),
         sent_at: 9999,
-        attachment_ids: vec!["att-1".to_string(), "att-2".to_string()],
+        attachments: vec![Default::default(), Default::default()],
         edited_at: 12_000,
         pinned: true,
         pin_changed_at: 15_000,
@@ -433,7 +433,7 @@ fn test_build_saved_message_sync() {
     match content.content {
         Some(content::Content::SavedMessageSync(sync)) => {
             assert_eq!(sync.message_id, "msg-id-123");
-            assert_eq!(sync.attachment_ids.len(), 2);
+            assert_eq!(sync.attachments.len(), 2);
             assert!(sync.pinned);
         }
         other => panic!("expected SavedMessageSync, got {other:?}"),

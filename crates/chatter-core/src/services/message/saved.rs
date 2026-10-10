@@ -147,8 +147,7 @@ pub(crate) fn validate_snapshot(sync: &SavedMessageSync) -> Result<MessageId, Me
             "SavedMessageSync pinned without a pin clock".into(),
         ));
     }
-    if sync.text.trim().is_empty() && sync.attachments.is_empty() && sync.attachment_ids.is_empty()
-    {
+    if sync.text.trim().is_empty() && sync.attachments.is_empty() {
         return Err(MessageError::InvalidContent(
             "SavedMessageSync must have text or attachments".into(),
         ));
@@ -269,7 +268,6 @@ impl MessageService {
         pin_changed_at: u64,
     ) -> Result<SavedMessageSync, MessageError> {
         let mut attachments = Vec::with_capacity(message.attachments.len());
-        let mut attachment_ids = Vec::with_capacity(message.attachments.len());
         for id in &message.attachments {
             let att = self.attachment_repo.get(id)?.ok_or_else(|| {
                 MessageError::InvalidContent(format!(
@@ -283,7 +281,6 @@ impl MessageService {
                     message.id
                 ))
             })?;
-            attachment_ids.push(pointer.cdn_key.clone());
             attachments.push(pointer);
         }
         // The quote is the row's own reply context, as an ordinary message
@@ -333,7 +330,6 @@ impl MessageService {
             text: message.as_text().unwrap_or_default().to_string(),
             message_id: message.id.to_string(),
             sent_at: message.sent_at,
-            attachment_ids,
             attachments,
             quote,
             quoted_message_id,
@@ -727,15 +723,6 @@ impl SavedSnapshotStore {
                 "Saved snapshot changed sent_at".into(),
             ));
         }
-        // Replays also register full pointers: a legacy sender could have
-        // named the CDN key without its crypto record.
-        self.register_saved_attachments(sync)?;
-        let full_attachments: Vec<_> = sync
-            .attachments
-            .iter()
-            .map(|pointer| AttachmentId::from_cdn_key(&pointer.cdn_key))
-            .collect();
-
         // A row stored before its parent's snapshot arrived, or by a sender
         // that sent no quote, takes this snapshot's quote once; a row that
         // has its parent keeps it.
@@ -746,7 +733,7 @@ impl SavedSnapshotStore {
             }
         }
 
-        let Some((body_changed, attachments_changed)) = self.message_repo.write_saved_body(
+        let Some(body_changed) = self.message_repo.write_saved_body(
             &scope,
             &own,
             stored.sent_at,
@@ -754,7 +741,6 @@ impl SavedSnapshotStore {
             sync.text.trim(),
             sync.edited_at,
             false,
-            &full_attachments,
         )?
         else {
             return Ok(SavedSyncOutcome::Unchanged);
@@ -775,7 +761,7 @@ impl SavedSnapshotStore {
             }
         }
 
-        if !body_changed && pin_changed.is_none() && !quote_hydrated && !attachments_changed {
+        if !body_changed && pin_changed.is_none() && !quote_hydrated {
             return Ok(SavedSyncOutcome::Unchanged);
         }
         let message = self
@@ -785,15 +771,13 @@ impl SavedSnapshotStore {
         tracing::info!(
             message_id = %id,
             body_changed,
-            attachments_changed,
             ?pin_changed,
             quote_hydrated,
             "SavedMessages: applied snapshot from another device"
         );
         Ok(SavedSyncOutcome::Updated {
             message,
-            // Attachment repair also changes the bubble's visible body.
-            body_changed: body_changed || attachments_changed,
+            body_changed,
             pin_changed,
             quote_hydrated,
         })
@@ -814,15 +798,8 @@ impl SavedSnapshotStore {
                 "Incomplete Saved attachment pointer".into(),
             ));
         }
-        let mut ids = AttachmentService::new_local(self.attachment_repo.clone())
-            .create_from_pointers(&sync.attachments)?;
-        for key in sync.attachment_ids.iter().filter(|k| !k.is_empty()) {
-            let legacy = AttachmentId::from_cdn_key(key);
-            if !ids.contains(&legacy) {
-                ids.push(legacy);
-            }
-        }
-        Ok(ids)
+        Ok(AttachmentService::new_local(self.attachment_repo.clone())
+            .create_from_pointers(&sync.attachments)?)
     }
 
     /// Store a snapshot of a record we do not hold, whole.
@@ -915,7 +892,7 @@ mod tests {
         let mut bad = snapshot();
         bad.text = "   ".into();
         assert!(validate_snapshot(&bad).is_err(), "no body at all");
-        bad.attachment_ids = vec!["cdn".into()];
+        bad.attachments = vec![AttachmentPointer::default()];
         assert!(validate_snapshot(&bad).is_ok(), "attachment-only record");
         let mut bad = snapshot();
         bad.quote = Some(Quote::default());

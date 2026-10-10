@@ -321,7 +321,7 @@ impl MessageService {
         }
         let peer_id = UserId::from_uuid(*message.conversation_id.as_uuid());
 
-        let pointers = self.pointers_for_resend(&message.attachments).await?;
+        let pointers = self.pointers_for_resend(&message.attachments)?;
         let quote = match (message.reply_to_author_id, message.reply_to) {
             (Some(author), Some(parent_id)) => self.message_repo.get(&parent_id)?.map(|parent| {
                 crate::services::gateway::outgoing::QuoteIntent {

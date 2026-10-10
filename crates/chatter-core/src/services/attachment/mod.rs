@@ -596,7 +596,6 @@ impl AttachmentService {
                 },
                 status: AttachmentStatus::Pending,
                 content_location: ContentLocation::NotDownloaded,
-                local_path: None,
                 remote_url: Some(pointer.cdn_key.clone()),
                 encryption_key: Some(pointer.encryption_key.clone()),
                 encryption_iv: Some(pointer.digest.clone()),

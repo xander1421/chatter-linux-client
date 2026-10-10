@@ -378,7 +378,6 @@ mod tests {
             metadata: meta,
             status: AttachmentStatus::Ready,
             content_location: ContentLocation::NotDownloaded,
-            local_path: None,
             remote_url: None,
             encryption_key: None,
             encryption_iv: None,

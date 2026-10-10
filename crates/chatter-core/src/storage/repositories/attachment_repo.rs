@@ -65,15 +65,14 @@ impl AttachmentRepository {
 
         conn.execute(
             "INSERT INTO attachments (
-                id, metadata_blob, status, local_path, remote_url,
+                id, metadata_blob, status, remote_url,
                 encryption_key, encryption_iv, thumbnail_bytes, content_location, created_at,
                 secret_chat
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
             params![
                 attachment.id.to_string(),
                 metadata_blob,
                 status_to_int(attachment.status),
-                attachment.local_path,
                 attachment.remote_url,
                 attachment.encryption_key,
                 attachment.encryption_iv,
@@ -92,7 +91,7 @@ impl AttachmentRepository {
     pub fn get(&self, id: &AttachmentId) -> Result<Option<Attachment>, StorageError> {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
-            "SELECT id, metadata_blob, status, local_path, remote_url,
+            "SELECT id, metadata_blob, status, remote_url,
                     encryption_key, encryption_iv, thumbnail_bytes, content_location, created_at,
                     secret_chat
              FROM attachments WHERE id = ?1",
@@ -152,15 +151,14 @@ impl AttachmentRepository {
 
         conn.execute(
             "INSERT INTO attachments (
-                id, metadata_blob, status, local_path, remote_url,
+                id, metadata_blob, status, remote_url,
                 encryption_key, encryption_iv, thumbnail_bytes,
                 file_path, content_location, created_at, secret_chat
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 attachment.id.to_string(),
                 metadata_blob,
                 status_to_int(attachment.status),
-                attachment.local_path,
                 attachment.remote_url,
                 attachment.encryption_key,
                 attachment.encryption_iv,
@@ -261,16 +259,15 @@ impl AttachmentRepository {
         let secret = attachment.secret_chat.unwrap_or(true);
         let inserted = tx.execute(
             "INSERT INTO attachments (
-                id, metadata_blob, status, local_path, remote_url,
+                id, metadata_blob, status, remote_url,
                 encryption_key, encryption_iv, thumbnail_bytes, content_location, created_at,
                 secret_chat
-            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)
+            ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
             ON CONFLICT(id) DO NOTHING",
             params![
                 attachment.id.to_string(),
                 metadata_blob,
                 status_to_int(attachment.status),
-                attachment.local_path,
                 attachment.remote_url,
                 attachment.encryption_key,
                 attachment.encryption_iv,
@@ -307,14 +304,13 @@ impl AttachmentRepository {
 
         let rows = conn.execute(
             "UPDATE attachments SET
-                metadata_blob = ?1, status = ?2, local_path = ?3, remote_url = ?4,
-                encryption_key = ?5, encryption_iv = ?6, thumbnail_bytes = ?7,
-                content_location = ?8
-             WHERE id = ?9",
+                metadata_blob = ?1, status = ?2, remote_url = ?3,
+                encryption_key = ?4, encryption_iv = ?5, thumbnail_bytes = ?6,
+                content_location = ?7
+             WHERE id = ?8",
             params![
                 metadata_blob,
                 status_to_int(attachment.status),
-                attachment.local_path,
                 attachment.remote_url,
                 attachment.encryption_key,
                 attachment.encryption_iv,
@@ -501,14 +497,13 @@ fn row_to_attachment(
     // Read from BLOB column (bincode serialized)
     let metadata_blob: Vec<u8> = row.get(1)?;
     let status_int: i32 = row.get(2)?;
-    let local_path: Option<String> = row.get(3)?;
-    let remote_url: Option<String> = row.get(4)?;
-    let encryption_key: Option<Vec<u8>> = row.get(5)?;
-    let encryption_iv: Option<Vec<u8>> = row.get(6)?;
-    let thumbnail_bytes: Option<Vec<u8>> = row.get(7)?;
-    let content_location_int: i32 = row.get(8).unwrap_or(0); // Default to NotDownloaded for old rows
-    let created_at_str: String = row.get(9)?;
-    let secret_chat: Option<bool> = row.get(10)?;
+    let remote_url: Option<String> = row.get(3)?;
+    let encryption_key: Option<Vec<u8>> = row.get(4)?;
+    let encryption_iv: Option<Vec<u8>> = row.get(5)?;
+    let thumbnail_bytes: Option<Vec<u8>> = row.get(6)?;
+    let content_location_int: i32 = row.get(7).unwrap_or(0); // Default to NotDownloaded for old rows
+    let created_at_str: String = row.get(8)?;
+    let secret_chat: Option<bool> = row.get(9)?;
 
     let id: AttachmentId = match id_str.parse() {
         Ok(id) => id,
@@ -534,7 +529,6 @@ fn row_to_attachment(
         metadata,
         status: int_to_status(status_int),
         content_location: int_to_content_location(content_location_int),
-        local_path,
         remote_url,
         encryption_key,
         encryption_iv,
