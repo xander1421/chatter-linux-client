@@ -8,7 +8,6 @@
 
 use std::sync::Mutex;
 
-use jni::JNIEnv;
 use jni::objects::{JObject, JString};
 use tokio::sync::oneshot;
 
@@ -43,34 +42,40 @@ pub async fn scan() -> ScanOutcome {
 }
 
 fn launch() -> Result<(), String> {
-    let mut env = activity::jni_env()?;
-    let act = activity::activity()?;
-    let res = env.call_method(act, "scanQrCode", "()V", &[]);
-    if res.is_err() {
-        activity::clear_exception(&mut env);
-    }
-    res.map_err(|e| e.to_string()).map(|_| ())
+    activity::with_jni_env(|env| {
+        let act = activity::activity()?;
+        let res = env.call_method(act, jni::jni_str!("scanQrCode"), jni::jni_sig!("()V"), &[]);
+        if res.is_err() {
+            activity::clear_exception(env);
+        }
+        res.map_err(|e| e.to_string()).map(|_| ())
+    })
 }
 
 /// JNI callback from `QrScanner.nativeOnQrScanned(String?)`.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_chatter_client_QrScanner_nativeOnQrScanned(
-    mut env: JNIEnv,
+    mut env: jni::EnvUnowned<'_>,
     _this: JObject,
     text: JString,
 ) {
-    let text = if text.is_null() {
-        None
-    } else {
-        match env.get_string(&text) {
-            Ok(s) => Some(String::from(s)),
-            Err(e) => {
-                tracing::error!("QR scanner: bad callback payload: {e}");
+    env.with_env(|env| -> jni::errors::Result<_> {
+        Ok((|| {
+            let text = if text.is_null() {
                 None
+            } else {
+                match (text).try_to_string(&env) {
+                    Ok(s) => Some(String::from(s)),
+                    Err(e) => {
+                        tracing::error!("QR scanner: bad callback payload: {e}");
+                        None
+                    }
+                }
+            };
+            if let Some(tx) = PENDING.lock().unwrap_or_else(|e| e.into_inner()).take() {
+                let _ = tx.send(text);
             }
-        }
-    };
-    if let Some(tx) = PENDING.lock().unwrap_or_else(|e| e.into_inner()).take() {
-        let _ = tx.send(text);
-    }
+        })())
+    })
+    .resolve::<jni::errors::LogErrorAndDefault>()
 }

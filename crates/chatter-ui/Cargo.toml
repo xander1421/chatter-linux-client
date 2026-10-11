@@ -126,7 +126,9 @@ android-activity = { version = "0.6", features = ["game-activity"], optional = t
 i-slint-backend-selector = { version = "1.17.1", default-features = false, optional = true }
 # JNI bindings for Android system APIs (notifications, window insets).
 # These live in chatter-ui (platform layer), not chatter-core (platform-neutral).
-jni = "0.21"
+jni = "0.22.4"
+# Pinned libwebrtc exposes this JavaVM type at its one initialization boundary.
+jni_021 = { package = "jni", version = "=0.21.1" }
 ndk-context = "0.1"
 
 [dev-dependencies]

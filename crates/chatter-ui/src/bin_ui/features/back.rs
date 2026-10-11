@@ -281,18 +281,22 @@ pub fn handle_back(window: &MainWindow) -> bool {
 fn background_app() {
     use crate::platform::android::activity;
 
-    let result = (|| -> Result<(), String> {
-        let mut env = activity::jni_env()?;
+    let result = activity::with_jni_env(|env| {
         // The Activity registered itself in `onCreate`; reuse that GlobalRef
         // rather than ndk-context's Application, which has no Activity methods.
         let act = activity::activity()?;
-        let call = env.call_method(act, "moveAppToBack", "()V", &[]);
+        let call = env.call_method(
+            act,
+            jni::jni_str!("moveAppToBack"),
+            jni::jni_sig!("()V"),
+            &[],
+        );
         if call.is_err() {
-            activity::clear_exception(&mut env);
+            activity::clear_exception(env);
         }
         call.map_err(|e| e.to_string())?;
         Ok(())
-    })();
+    });
 
     if let Err(e) = result {
         tracing::warn!(error = %e, "back: moveTaskToBack failed; app stays foreground");

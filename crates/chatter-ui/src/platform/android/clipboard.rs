@@ -21,58 +21,60 @@ use super::activity;
 
 /// Put `text` on the system clipboard under `label`.
 pub fn set_text(label: &str, text: &str) -> Result<(), String> {
-    let mut env = activity::jni_env()?;
+    activity::with_jni_env(|env| {
+        let ctx = ndk_context::android_context();
+        let context = unsafe { JObject::from_raw(&env, ctx.context().cast()) };
 
-    let ctx = ndk_context::android_context();
-    let context = unsafe { JObject::from_raw(ctx.context().cast()) };
+        let service: JString = env
+            .new_string("clipboard")
+            .map_err(|e| format!("service name: {e}"))?;
 
-    let service: JString = env
-        .new_string("clipboard")
-        .map_err(|e| format!("service name: {e}"))?;
+        let manager = env
+            .call_method(
+                &context,
+                jni::jni_str!("getSystemService"),
+                jni::jni_sig!("(Ljava/lang/String;)Ljava/lang/Object;"),
+                &[JValue::Object(&service)],
+            )
+            .map_err(|e| {
+                activity::clear_exception(env);
+                format!("getSystemService(clipboard): {e}")
+            })?
+            .l()
+            .map_err(|e| format!("manager cast: {e}"))?;
 
-    let manager = env
-        .call_method(
-            &context,
-            "getSystemService",
-            "(Ljava/lang/String;)Ljava/lang/Object;",
-            &[JValue::Object(&service)],
+        let jlabel: JString = env.new_string(label).map_err(|e| format!("label: {e}"))?;
+        let jtext: JString = env.new_string(text).map_err(|e| format!("text: {e}"))?;
+
+        let clip = env
+            .call_static_method(
+                jni::jni_str!("android/content/ClipData"),
+                jni::jni_str!("newPlainText"),
+                jni::jni_sig!(
+                    "(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Landroid/content/ClipData;"
+                ),
+                &[JValue::Object(&jlabel), JValue::Object(&jtext)],
+            )
+            .map_err(|e| {
+                activity::clear_exception(env);
+                format!("ClipData.newPlainText: {e}")
+            })?
+            .l()
+            .map_err(|e| format!("clip cast: {e}"))?;
+
+        env.call_method(
+            &manager,
+            jni::jni_str!("setPrimaryClip"),
+            jni::jni_sig!("(Landroid/content/ClipData;)V"),
+            &[JValue::Object(&clip)],
         )
         .map_err(|e| {
-            activity::clear_exception(&mut env);
-            format!("getSystemService(clipboard): {e}")
-        })?
-        .l()
-        .map_err(|e| format!("manager cast: {e}"))?;
+            activity::clear_exception(env);
+            format!("setPrimaryClip: {e}")
+        })?;
 
-    let jlabel: JString = env.new_string(label).map_err(|e| format!("label: {e}"))?;
-    let jtext: JString = env.new_string(text).map_err(|e| format!("text: {e}"))?;
-
-    let clip = env
-        .call_static_method(
-            "android/content/ClipData",
-            "newPlainText",
-            "(Ljava/lang/CharSequence;Ljava/lang/CharSequence;)Landroid/content/ClipData;",
-            &[JValue::Object(&jlabel), JValue::Object(&jtext)],
-        )
-        .map_err(|e| {
-            activity::clear_exception(&mut env);
-            format!("ClipData.newPlainText: {e}")
-        })?
-        .l()
-        .map_err(|e| format!("clip cast: {e}"))?;
-
-    env.call_method(
-        &manager,
-        "setPrimaryClip",
-        "(Landroid/content/ClipData;)V",
-        &[JValue::Object(&clip)],
-    )
-    .map_err(|e| {
-        activity::clear_exception(&mut env);
-        format!("setPrimaryClip: {e}")
-    })?;
-
-    Ok(())
+        Ok(())
+    })
 }
 
 /// Read the system clipboard's primary text item, if any.
@@ -82,105 +84,115 @@ pub fn set_text(label: &str, text: &str) -> Result<(), String> {
 /// wl-paste / xclip / arboard, none of which exist on Android — so Paste logged
 /// "no clipboard tool succeeded" and did nothing (OPEN-ITEMS §112f).
 pub fn get_text() -> Result<Option<String>, String> {
-    let mut env = activity::jni_env()?;
+    activity::with_jni_env(|env| {
+        let ctx = ndk_context::android_context();
+        let context = unsafe { JObject::from_raw(&env, ctx.context().cast()) };
 
-    let ctx = ndk_context::android_context();
-    let context = unsafe { JObject::from_raw(ctx.context().cast()) };
+        let service: JString = env
+            .new_string("clipboard")
+            .map_err(|e| format!("service name: {e}"))?;
 
-    let service: JString = env
-        .new_string("clipboard")
-        .map_err(|e| format!("service name: {e}"))?;
+        let manager = env
+            .call_method(
+                &context,
+                jni::jni_str!("getSystemService"),
+                jni::jni_sig!("(Ljava/lang/String;)Ljava/lang/Object;"),
+                &[JValue::Object(&service)],
+            )
+            .map_err(|e| {
+                activity::clear_exception(env);
+                format!("getSystemService(clipboard): {e}")
+            })?
+            .l()
+            .map_err(|e| format!("manager cast: {e}"))?;
 
-    let manager = env
-        .call_method(
-            &context,
-            "getSystemService",
-            "(Ljava/lang/String;)Ljava/lang/Object;",
-            &[JValue::Object(&service)],
-        )
-        .map_err(|e| {
-            activity::clear_exception(&mut env);
-            format!("getSystemService(clipboard): {e}")
-        })?
-        .l()
-        .map_err(|e| format!("manager cast: {e}"))?;
+        let clip = env
+            .call_method(
+                &manager,
+                jni::jni_str!("getPrimaryClip"),
+                jni::jni_sig!("()Landroid/content/ClipData;"),
+                &[],
+            )
+            .map_err(|e| {
+                activity::clear_exception(env);
+                format!("getPrimaryClip: {e}")
+            })?
+            .l()
+            .map_err(|e| format!("clip cast: {e}"))?;
 
-    let clip = env
-        .call_method(
-            &manager,
-            "getPrimaryClip",
-            "()Landroid/content/ClipData;",
-            &[],
-        )
-        .map_err(|e| {
-            activity::clear_exception(&mut env);
-            format!("getPrimaryClip: {e}")
-        })?
-        .l()
-        .map_err(|e| format!("clip cast: {e}"))?;
+        if clip.is_null() {
+            return Ok(None);
+        }
 
-    if clip.is_null() {
-        return Ok(None);
-    }
+        let count = env
+            .call_method(
+                &clip,
+                jni::jni_str!("getItemCount"),
+                jni::jni_sig!("()I"),
+                &[],
+            )
+            .map_err(|e| {
+                activity::clear_exception(env);
+                format!("getItemCount: {e}")
+            })?
+            .i()
+            .map_err(|e| format!("count cast: {e}"))?;
+        if count <= 0 {
+            return Ok(None);
+        }
 
-    let count = env
-        .call_method(&clip, "getItemCount", "()I", &[])
-        .map_err(|e| {
-            activity::clear_exception(&mut env);
-            format!("getItemCount: {e}")
-        })?
-        .i()
-        .map_err(|e| format!("count cast: {e}"))?;
-    if count <= 0 {
-        return Ok(None);
-    }
+        let item = env
+            .call_method(
+                &clip,
+                jni::jni_str!("getItemAt"),
+                jni::jni_sig!("(I)Landroid/content/ClipData$Item;"),
+                &[JValue::Int(0)],
+            )
+            .map_err(|e| {
+                activity::clear_exception(env);
+                format!("getItemAt: {e}")
+            })?
+            .l()
+            .map_err(|e| format!("item cast: {e}"))?;
 
-    let item = env
-        .call_method(
-            &clip,
-            "getItemAt",
-            "(I)Landroid/content/ClipData$Item;",
-            &[JValue::Int(0)],
-        )
-        .map_err(|e| {
-            activity::clear_exception(&mut env);
-            format!("getItemAt: {e}")
-        })?
-        .l()
-        .map_err(|e| format!("item cast: {e}"))?;
+        // coerceToText rather than getText: it also renders a URI/intent item as
+        // text, which is what a code pasted from another app may arrive as.
+        let text = env
+            .call_method(
+                &item,
+                jni::jni_str!("coerceToText"),
+                jni::jni_sig!("(Landroid/content/Context;)Ljava/lang/CharSequence;"),
+                &[JValue::Object(&context)],
+            )
+            .map_err(|e| {
+                activity::clear_exception(env);
+                format!("coerceToText: {e}")
+            })?
+            .l()
+            .map_err(|e| format!("text cast: {e}"))?;
 
-    // coerceToText rather than getText: it also renders a URI/intent item as
-    // text, which is what a code pasted from another app may arrive as.
-    let text = env
-        .call_method(
-            &item,
-            "coerceToText",
-            "(Landroid/content/Context;)Ljava/lang/CharSequence;",
-            &[JValue::Object(&context)],
-        )
-        .map_err(|e| {
-            activity::clear_exception(&mut env);
-            format!("coerceToText: {e}")
-        })?
-        .l()
-        .map_err(|e| format!("text cast: {e}"))?;
+        if text.is_null() {
+            return Ok(None);
+        }
 
-    if text.is_null() {
-        return Ok(None);
-    }
+        let s = env
+            .call_method(
+                &text,
+                jni::jni_str!("toString"),
+                jni::jni_sig!("()Ljava/lang/String;"),
+                &[],
+            )
+            .map_err(|e| {
+                activity::clear_exception(env);
+                format!("toString: {e}")
+            })?
+            .l()
+            .map_err(|e| format!("string cast: {e}"))?;
 
-    let s = env
-        .call_method(&text, "toString", "()Ljava/lang/String;", &[])
-        .map_err(|e| {
-            activity::clear_exception(&mut env);
-            format!("toString: {e}")
-        })?
-        .l()
-        .map_err(|e| format!("string cast: {e}"))?;
-
-    let out: String = env
-        .get_string(&JString::from(s))
-        .map_err(|e| format!("get_string: {e}"))?
-        .into();
-    Ok(Some(out))
+        let out: String = (env.cast_local::<JString>(s).map_err(|e| e.to_string())?)
+            .try_to_string(&env)
+            .map_err(|e| format!("get_string: {e}"))?
+            .into();
+        Ok(Some(out))
+    })
 }

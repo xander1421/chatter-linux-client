@@ -10,7 +10,7 @@
 //! Constants are inlined rather than read back over JNI — they are frozen ABI
 //! in `android.view.HapticFeedbackConstants` and have been since API 3.
 
-use super::activity::{activity, clear_exception, jni_env};
+use super::activity::{activity, clear_exception, with_jni_env};
 
 /// `HapticFeedbackConstants.LONG_PRESS` — the tick Android itself uses when a
 /// long-press arms. Matching it means our hold feels like every other hold on
@@ -36,36 +36,44 @@ fn perform(effect: i32) {
             return;
         }
     };
-    let mut env = match jni_env() {
-        Ok(env) => env,
-        Err(e) => {
-            tracing::warn!("haptics: no JNI env ({e})");
-            return;
+    let attached = with_jni_env(|env| {
+        let result = (|| -> Result<(), jni::errors::Error> {
+            let window = env
+                .call_method(
+                    activity,
+                    jni::jni_str!("getWindow"),
+                    jni::jni_sig!("()Landroid/view/Window;"),
+                    &[],
+                )?
+                .l()?;
+            let view = env
+                .call_method(
+                    &window,
+                    jni::jni_str!("getDecorView"),
+                    jni::jni_sig!("()Landroid/view/View;"),
+                    &[],
+                )?
+                .l()?;
+            // The Z return is "was a haptic actually played" — false when the user
+            // has feedback disabled or the view opted out. That is a legitimate
+            // outcome, not an error, so it is discarded.
+            env.call_method(
+                &view,
+                jni::jni_str!("performHapticFeedback"),
+                jni::jni_sig!("(I)Z"),
+                &[jni::objects::JValue::Int(effect)],
+            )?;
+            Ok(())
+        })();
+
+        if let Err(e) = result {
+            clear_exception(env);
+            tracing::warn!("haptics: performHapticFeedback failed ({e})");
         }
-    };
-
-    let result = (|| -> Result<(), jni::errors::Error> {
-        let window = env
-            .call_method(activity, "getWindow", "()Landroid/view/Window;", &[])?
-            .l()?;
-        let view = env
-            .call_method(&window, "getDecorView", "()Landroid/view/View;", &[])?
-            .l()?;
-        // The Z return is "was a haptic actually played" — false when the user
-        // has feedback disabled or the view opted out. That is a legitimate
-        // outcome, not an error, so it is discarded.
-        env.call_method(
-            &view,
-            "performHapticFeedback",
-            "(I)Z",
-            &[jni::objects::JValue::Int(effect)],
-        )?;
         Ok(())
-    })();
-
-    if let Err(e) = result {
-        clear_exception(&mut env);
-        tracing::warn!("haptics: performHapticFeedback failed ({e})");
+    });
+    if let Err(e) = attached {
+        tracing::warn!("haptics: no JNI env ({e})");
     }
 }
 

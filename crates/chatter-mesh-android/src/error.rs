@@ -30,7 +30,7 @@
 use std::ffi::{CString, c_char, c_int};
 
 use chatter_mesh_link::{LinkError, LinkId};
-use jni::JNIEnv;
+use jni::Env;
 
 use crate::BRIDGE_CLASS;
 
@@ -126,8 +126,8 @@ pub fn log_error(message: &str) {
 /// likely to go wrong. `ExceptionDescribe` already writes the full stack trace
 /// to logcat, which is strictly more information, and then `ExceptionClear`
 /// restores the environment to a state where the next call can succeed.
-pub fn drain_exception(env: &JNIEnv<'_>, during: &str) -> Option<String> {
-    if !env.exception_check().unwrap_or(false) {
+pub fn drain_exception(env: &Env<'_>, during: &str) -> Option<String> {
+    if !env.exception_check() {
         return None;
     }
     // Order matters: describe first (it does not clear), then clear.
@@ -140,7 +140,7 @@ pub fn drain_exception(env: &JNIEnv<'_>, during: &str) -> Option<String> {
 
 /// Turn a failed JNI call into a [`Failure`], draining any exception it left
 /// pending on the way.
-pub fn jni_failure(env: &JNIEnv<'_>, during: &str, err: &jni::errors::Error) -> Failure {
+pub fn jni_failure(env: &Env<'_>, during: &str, err: &jni::errors::Error) -> Failure {
     match drain_exception(env, during) {
         Some(description) => Failure::Jni(format!("{during}: {err} ({description})")),
         None => Failure::Jni(format!("{during}: {err}")),

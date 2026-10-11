@@ -8,11 +8,10 @@
 //! reports it here. See the backend's `TextInputBridge`.
 
 use i_slint_backend_android_activity::{InboundTextInput, TextInputBridge, TextInputPush};
-use jni::JNIEnv;
 use jni::objects::{JClass, JString, JValue};
 use jni::sys::{jint, jlong};
 
-use super::activity::{activity, clear_exception, jni_env};
+use super::activity::{activity, clear_exception, with_jni_env};
 
 /// `MainActivity` as the backend's bridge.
 pub struct Bridge;
@@ -21,30 +20,31 @@ impl TextInputBridge for Bridge {
     fn push(&self, push: &TextInputPush) -> bool {
         let result = (|| -> Result<(), String> {
             let act = activity()?;
-            let mut env = jni_env()?;
-            let text = env.new_string(&push.text).map_err(|e| e.to_string())?;
-            let (comp_start, comp_end) = push
-                .compose
-                .map(|(s, e)| (s as jint, e as jint))
-                .unwrap_or((-1, -1));
-            let res = env.call_method(
-                act,
-                "textInputPush",
-                "(Ljava/lang/String;IIIIJJ)V",
-                &[
-                    JValue::Object(&text),
-                    JValue::Int(push.selection.0 as jint),
-                    JValue::Int(push.selection.1 as jint),
-                    JValue::Int(comp_start),
-                    JValue::Int(comp_end),
-                    JValue::Long(push.owner as jlong),
-                    JValue::Long(push.generation as jlong),
-                ],
-            );
-            if res.is_err() {
-                clear_exception(&mut env);
-            }
-            res.map(|_| ()).map_err(|e| e.to_string())
+            with_jni_env(|env| {
+                let text = env.new_string(&push.text).map_err(|e| e.to_string())?;
+                let (comp_start, comp_end) = push
+                    .compose
+                    .map(|(s, e)| (s as jint, e as jint))
+                    .unwrap_or((-1, -1));
+                let res = env.call_method(
+                    act,
+                    jni::jni_str!("textInputPush"),
+                    jni::jni_sig!("(Ljava/lang/String;IIIIJJ)V"),
+                    &[
+                        JValue::Object(&text),
+                        JValue::Int(push.selection.0 as jint),
+                        JValue::Int(push.selection.1 as jint),
+                        JValue::Int(comp_start),
+                        JValue::Int(comp_end),
+                        JValue::Long(push.owner as jlong),
+                        JValue::Long(push.generation as jlong),
+                    ],
+                );
+                if res.is_err() {
+                    clear_exception(env);
+                }
+                res.map(|_| ()).map_err(|e| e.to_string())
+            })
         })();
         match result {
             Ok(()) => true,
@@ -58,20 +58,21 @@ impl TextInputBridge for Bridge {
     fn consume(&self, owner: u64, generation: u64) -> bool {
         let result = (|| -> Result<(), String> {
             let act = activity()?;
-            let mut env = jni_env()?;
-            let res = env.call_method(
-                act,
-                "textInputConsume",
-                "(JJ)V",
-                &[
-                    JValue::Long(owner as jlong),
-                    JValue::Long(generation as jlong),
-                ],
-            );
-            if res.is_err() {
-                clear_exception(&mut env);
-            }
-            res.map(|_| ()).map_err(|e| e.to_string())
+            with_jni_env(|env| {
+                let res = env.call_method(
+                    act,
+                    jni::jni_str!("textInputConsume"),
+                    jni::jni_sig!("(JJ)V"),
+                    &[
+                        JValue::Long(owner as jlong),
+                        JValue::Long(generation as jlong),
+                    ],
+                );
+                if res.is_err() {
+                    clear_exception(env);
+                }
+                res.map(|_| ()).map_err(|e| e.to_string())
+            })
         })();
         match result {
             Ok(()) => true,
@@ -104,7 +105,7 @@ pub fn restore() {
 /// Offsets are UTF-16; the backend converts them.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_google_androidgamesdk_ChatterTextInputGate_nativeTextInputState(
-    mut env: JNIEnv,
+    mut env: jni::EnvUnowned<'_>,
     _class: JClass,
     text: JString,
     sel_start: jint,
@@ -114,22 +115,27 @@ pub extern "system" fn Java_com_google_androidgamesdk_ChatterTextInputGate_nativ
     owner: jlong,
     generation: jlong,
 ) {
-    let text: String = match env.get_string(&text) {
-        Ok(s) => s.into(),
-        Err(e) => {
-            tracing::error!("Android: text input snapshot unreadable: {e}");
-            return;
-        }
-    };
-    let compose = (comp_start >= 0 && comp_end > comp_start)
-        .then(|| (comp_start as usize, comp_end as usize));
-    i_slint_backend_android_activity::deliver_text_input_state(InboundTextInput {
-        text,
-        selection: (sel_start.max(0) as usize, sel_end.max(0) as usize),
-        compose,
-        owner: owner as u64,
-        generation: generation as u64,
-    });
+    env.with_env(|env| -> jni::errors::Result<_> {
+        Ok((|| {
+            let text: String = match (text).try_to_string(&env) {
+                Ok(s) => s.into(),
+                Err(e) => {
+                    tracing::error!("Android: text input snapshot unreadable: {e}");
+                    return;
+                }
+            };
+            let compose = (comp_start >= 0 && comp_end > comp_start)
+                .then(|| (comp_start as usize, comp_end as usize));
+            i_slint_backend_android_activity::deliver_text_input_state(InboundTextInput {
+                text,
+                selection: (sel_start.max(0) as usize, sel_end.max(0) as usize),
+                compose,
+                owner: owner as u64,
+                generation: generation as u64,
+            });
+        })())
+    })
+    .resolve::<jni::errors::LogErrorAndDefault>()
 }
 
 /// JNI: `ChatterTextInputGate.applyReset` (UI thread). A reset was applied
@@ -137,10 +143,18 @@ pub extern "system" fn Java_com_google_androidgamesdk_ChatterTextInputGate_nativ
 /// IME's copy now reflects that generation.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_google_androidgamesdk_ChatterTextInputGate_nativeTextInputAck(
-    _env: JNIEnv,
+    mut _env: jni::EnvUnowned<'_>,
     _class: JClass,
     owner: jlong,
     generation: jlong,
 ) {
-    i_slint_backend_android_activity::deliver_text_input_ack(owner as u64, generation as u64);
+    _env.with_env(|_env| -> jni::errors::Result<_> {
+        Ok((|| {
+            i_slint_backend_android_activity::deliver_text_input_ack(
+                owner as u64,
+                generation as u64,
+            );
+        })())
+    })
+    .resolve::<jni::errors::LogErrorAndDefault>()
 }

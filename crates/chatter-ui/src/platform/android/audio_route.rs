@@ -13,12 +13,11 @@
 use std::sync::{Mutex, OnceLock};
 
 use chatter_core::calls::audio_route::{AudioOutputs, AudioRoute, CallAudioRouting};
-use jni::JNIEnv;
 use jni::objects::{JObject, JValue};
-use jni::sys::jboolean;
+// JNI input is an unsigned byte; normalize nonzero values before Rust bool.
 use slint::ComponentHandle;
 
-use super::activity::{activity, clear_exception, jni_env};
+use super::activity::{activity, clear_exception, with_jni_env};
 use crate::MainWindow;
 
 /// The live call's routing state; `None` between calls.
@@ -83,12 +82,20 @@ fn publish(speaker_on: bool) {
 fn call_activity(method: &str, sig: &str, args: &[JValue]) {
     let result = (|| -> Result<(), String> {
         let act = activity()?;
-        let mut env = jni_env()?;
-        let res = env.call_method(act, method, sig, args);
-        if res.is_err() {
-            clear_exception(&mut env);
-        }
-        res.map(|_| ()).map_err(|e| e.to_string())
+        with_jni_env(|env| {
+            let res = env.call_method(
+                act,
+                jni::strings::JNIString::from(method),
+                jni::signature::RuntimeMethodSignature::from_str(sig)
+                    .map_err(|e| e.to_string())?
+                    .method_signature(),
+                args,
+            );
+            if res.is_err() {
+                clear_exception(env);
+            }
+            res.map(|_| ()).map_err(|e| e.to_string())
+        })
     })();
     if let Err(e) = result {
         tracing::error!("call audio: {method} failed: {e}");
@@ -99,17 +106,22 @@ fn call_activity(method: &str, sig: &str, args: &[JValue]) {
 /// and whenever a device is added or removed).
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_chatter_client_CallAudioRouter_nativeOnAudioOutputsChanged(
-    _env: JNIEnv,
+    mut _env: jni::EnvUnowned<'_>,
     _this: JObject,
-    earpiece: jboolean,
-    wired: jboolean,
-    bluetooth: jboolean,
+    earpiece: u8,
+    wired: u8,
+    bluetooth: u8,
 ) {
-    let outputs = AudioOutputs {
-        earpiece: earpiece != 0,
-        wired_headset: wired != 0,
-        bluetooth: bluetooth != 0,
-    };
-    tracing::info!("call audio outputs: {outputs:?}");
-    update(|r| r.set_outputs(outputs));
+    _env.with_env(|_env| -> jni::errors::Result<_> {
+        Ok((|| {
+            let outputs = AudioOutputs {
+                earpiece: earpiece != 0,
+                wired_headset: wired != 0,
+                bluetooth: bluetooth != 0,
+            };
+            tracing::info!("call audio outputs: {outputs:?}");
+            update(|r| r.set_outputs(outputs));
+        })())
+    })
+    .resolve::<jni::errors::LogErrorAndDefault>()
 }

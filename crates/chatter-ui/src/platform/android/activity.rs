@@ -4,28 +4,25 @@
 //! Activity — fine for framework calls (NotificationManager etc.) but it has no
 //! `MainActivity` methods (`launchFilePicker`, `requestPermissions`). So the
 //! Activity registers itself with us in `onCreate` via `nativeRegisterActivity`,
-//! and we keep a process-lifetime `GlobalRef` to call back into it.
+//! and we keep a process-lifetime `Global<JObject<'static>>` to call back into it.
 
 use std::sync::OnceLock;
 
-use jni::objects::{GlobalRef, JObject};
-use jni::{JNIEnv, JavaVM};
+use jni::objects::{Global, JObject};
+use jni::{Env, JavaVM};
 
-static ACTIVITY: OnceLock<GlobalRef> = OnceLock::new();
+static ACTIVITY: OnceLock<Global<JObject<'static>>> = OnceLock::new();
 
-/// Attach the current thread and get a `'static` JNIEnv. The JavaVM lives for
-/// the whole process, so leaking it is safe (mirrors notifications.rs).
-pub fn jni_env() -> Result<JNIEnv<'static>, String> {
+/// Run a JNI operation inside a managed thread attachment and local frame.
+pub fn with_jni_env<T>(body: impl FnOnce(&mut Env<'_>) -> Result<T, String>) -> Result<T, String> {
     let ctx = ndk_context::android_context();
-    let vm = unsafe { JavaVM::from_raw(ctx.vm().cast()) }.map_err(|e| e.to_string())?;
-    let vm = Box::leak(Box::new(vm));
-    vm.get_env()
-        .or_else(|_| vm.attach_current_thread_permanently())
-        .map_err(|e| e.to_string())
+    let vm = unsafe { JavaVM::from_raw(ctx.vm().cast()) };
+    vm.attach_current_thread_for_scope(|env| Ok::<_, jni::errors::Error>(body(env)))
+        .map_err(|e| e.to_string())?
 }
 
 /// The registered `MainActivity`, or an error if `onCreate` hasn't run yet.
-pub fn activity() -> Result<&'static GlobalRef, String> {
+pub fn activity() -> Result<&'static Global<JObject<'static>>, String> {
     ACTIVITY
         .get()
         .ok_or_else(|| "MainActivity not registered yet".to_string())
@@ -33,8 +30,8 @@ pub fn activity() -> Result<&'static GlobalRef, String> {
 
 /// Clear any pending JNI exception so a failed call can't abort the next one
 /// (ART's CheckJNI SIGABRTs if a JNI call is made with an exception pending).
-pub fn clear_exception(env: &mut JNIEnv) {
-    if env.exception_check().unwrap_or(false) {
+pub fn clear_exception(env: &mut Env) {
+    if env.exception_check() {
         let _ = env.exception_describe();
         let _ = env.exception_clear();
     }
@@ -43,17 +40,22 @@ pub fn clear_exception(env: &mut JNIEnv) {
 /// JNI: `MainActivity.onCreate` calls this so Rust can hold the Activity.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_chatter_client_MainActivity_nativeRegisterActivity(
-    env: JNIEnv,
+    mut env: jni::EnvUnowned<'_>,
     this: JObject,
 ) {
-    match env.new_global_ref(&this) {
-        Ok(gref) => {
-            let _ = ACTIVITY.set(gref);
-            chatter_core::system::messaging_background::register_platform(set_messaging_signed_in);
-            tracing::info!("Android: MainActivity registered for JNI callbacks");
-        }
-        Err(e) => tracing::error!("Android: failed to hold MainActivity ref: {e}"),
-    }
+    env.with_env(|env| -> jni::errors::Result<_> {
+        Ok((|| match env.new_global_ref(&this) {
+            Ok(gref) => {
+                let _ = ACTIVITY.set(gref);
+                chatter_core::system::messaging_background::register_platform(
+                    set_messaging_signed_in,
+                );
+                tracing::info!("Android: MainActivity registered for JNI callbacks");
+            }
+            Err(e) => tracing::error!("Android: failed to hold MainActivity ref: {e}"),
+        })())
+    })
+    .resolve::<jni::errors::LogErrorAndDefault>()
 }
 
 /// JNI: `MainActivity.onCreate` calls this to wire the JavaVM into libwebrtc.
@@ -66,16 +68,21 @@ pub extern "system" fn Java_com_chatter_client_MainActivity_nativeRegisterActivi
 #[cfg(feature = "call-ui")]
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_chatter_client_MainActivity_nativeInitWebrtc(
-    env: JNIEnv,
+    mut env: jni::EnvUnowned<'_>,
     _this: JObject,
 ) {
-    match env.get_java_vm() {
-        Ok(vm) => {
-            livekit::webrtc::android::initialize_android(&vm);
-            tracing::info!("LiveKit webrtc android runtime initialized");
-        }
-        Err(e) => tracing::error!("webrtc init: get_java_vm failed: {e}"),
-    }
+    env.with_env(|env| -> jni::errors::Result<_> {
+        Ok((|| match env.get_java_vm() {
+            Ok(vm) => {
+                let legacy_vm = unsafe { jni_021::JavaVM::from_raw(vm.get_raw().cast()) }
+                    .expect("the initialized JavaVM is non-null");
+                livekit::webrtc::android::initialize_android(&legacy_vm);
+                tracing::info!("LiveKit webrtc android runtime initialized");
+            }
+            Err(e) => tracing::error!("webrtc init: get_java_vm failed: {e}"),
+        })())
+    })
+    .resolve::<jni::errors::LogErrorAndDefault>()
 }
 
 /// Set or clear `FLAG_SECURE` on the Activity window (`MainActivity.setSecure`).
@@ -86,17 +93,18 @@ pub extern "system" fn Java_com_chatter_client_MainActivity_nativeInitWebrtc(
 pub fn set_secure(secure: bool) {
     let result = (|| -> Result<(), String> {
         let act = activity()?;
-        let mut env = jni_env()?;
-        let res = env.call_method(
-            act,
-            "setSecure",
-            "(Z)V",
-            &[jni::objects::JValue::Bool(secure.into())],
-        );
-        if res.is_err() {
-            clear_exception(&mut env);
-        }
-        res.map(|_| ()).map_err(|e| e.to_string())
+        with_jni_env(|env| {
+            let res = env.call_method(
+                act,
+                jni::jni_str!("setSecure"),
+                jni::jni_sig!("(Z)V"),
+                &[jni::objects::JValue::Bool(secure.into())],
+            );
+            if res.is_err() {
+                clear_exception(env);
+            }
+            res.map(|_| ()).map_err(|e| e.to_string())
+        })
     })();
     if let Err(e) = result {
         tracing::error!("Android: setSecure({secure}) failed: {e}");
@@ -110,17 +118,18 @@ pub fn set_secure(secure: bool) {
 pub fn set_ui_moving(moving: bool) -> Option<f32> {
     let result = (|| -> Result<f32, String> {
         let act = activity()?;
-        let mut env = jni_env()?;
-        let res = env.call_method(
-            act,
-            "setUiMoving",
-            "(Z)F",
-            &[jni::objects::JValue::Bool(moving.into())],
-        );
-        if res.is_err() {
-            clear_exception(&mut env);
-        }
-        res.and_then(|v| v.f()).map_err(|e| e.to_string())
+        with_jni_env(|env| {
+            let res = env.call_method(
+                act,
+                jni::jni_str!("setUiMoving"),
+                jni::jni_sig!("(Z)F"),
+                &[jni::objects::JValue::Bool(moving.into())],
+            );
+            if res.is_err() {
+                clear_exception(env);
+            }
+            res.and_then(|v| v.f()).map_err(|e| e.to_string())
+        })
     })();
     result
         .inspect_err(|e| tracing::warn!("Android: setUiMoving({moving}) failed: {e}"))
@@ -133,18 +142,19 @@ pub fn set_ui_moving(moving: bool) -> Option<f32> {
 pub fn set_theme_mode(mode: &str) {
     let result = (|| -> Result<(), String> {
         let act = activity()?;
-        let mut env = jni_env()?;
-        let jmode = env.new_string(mode).map_err(|e| e.to_string())?;
-        let res = env.call_method(
-            act,
-            "setThemeMode",
-            "(Ljava/lang/String;)V",
-            &[jni::objects::JValue::Object(&jmode)],
-        );
-        if res.is_err() {
-            clear_exception(&mut env);
-        }
-        res.map(|_| ()).map_err(|e| e.to_string())
+        with_jni_env(|env| {
+            let jmode = env.new_string(mode).map_err(|e| e.to_string())?;
+            let res = env.call_method(
+                act,
+                jni::jni_str!("setThemeMode"),
+                jni::jni_sig!("(Ljava/lang/String;)V"),
+                &[jni::objects::JValue::Object(&jmode)],
+            );
+            if res.is_err() {
+                clear_exception(env);
+            }
+            res.map(|_| ()).map_err(|e| e.to_string())
+        })
     })();
     if let Err(e) = result {
         tracing::error!("Android: setThemeMode({mode}) failed: {e}");
@@ -157,17 +167,18 @@ pub fn set_theme_mode(mode: &str) {
 pub fn set_light_system_bars(light: bool) {
     let result = (|| -> Result<(), String> {
         let act = activity()?;
-        let mut env = jni_env()?;
-        let res = env.call_method(
-            act,
-            "setLightSystemBars",
-            "(Z)V",
-            &[jni::objects::JValue::Bool(light.into())],
-        );
-        if res.is_err() {
-            clear_exception(&mut env);
-        }
-        res.map(|_| ()).map_err(|e| e.to_string())
+        with_jni_env(|env| {
+            let res = env.call_method(
+                act,
+                jni::jni_str!("setLightSystemBars"),
+                jni::jni_sig!("(Z)V"),
+                &[jni::objects::JValue::Bool(light.into())],
+            );
+            if res.is_err() {
+                clear_exception(env);
+            }
+            res.map(|_| ()).map_err(|e| e.to_string())
+        })
     })();
     if let Err(e) = result {
         tracing::error!("Android: setLightSystemBars({light}) failed: {e}");
@@ -188,12 +199,18 @@ pub fn clear_launch_cover_after_first_frame(window: &slint::Window) {
         done = true;
         let result = (|| -> Result<(), String> {
             let act = activity()?;
-            let mut env = jni_env()?;
-            let res = env.call_method(act, "firstFrameDrawn", "()V", &[]);
-            if res.is_err() {
-                clear_exception(&mut env);
-            }
-            res.map(|_| ()).map_err(|e| e.to_string())
+            with_jni_env(|env| {
+                let res = env.call_method(
+                    act,
+                    jni::jni_str!("firstFrameDrawn"),
+                    jni::jni_sig!("()V"),
+                    &[],
+                );
+                if res.is_err() {
+                    clear_exception(env);
+                }
+                res.map(|_| ()).map_err(|e| e.to_string())
+            })
         })();
         if let Err(e) = result {
             tracing::error!("Android: firstFrameDrawn failed: {e}");
@@ -213,17 +230,22 @@ pub fn clear_launch_cover_after_first_frame(window: &slint::Window) {
 /// Slint's state matches what is on screen.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_chatter_client_MainActivity_nativeImeHiddenByBack(
-    _env: JNIEnv,
+    mut _env: jni::EnvUnowned<'_>,
     _class: jni::objects::JClass,
 ) {
-    let Some(weak) = super::call_actions::main_window() else {
-        return;
-    };
-    let _ = slint::invoke_from_event_loop(move || {
-        if let Some(w) = weak.upgrade() {
-            w.invoke_release_text_focus();
-        }
-    });
+    _env.with_env(|_env| -> jni::errors::Result<_> {
+        Ok((|| {
+            let Some(weak) = super::call_actions::main_window() else {
+                return;
+            };
+            let _ = slint::invoke_from_event_loop(move || {
+                if let Some(w) = weak.upgrade() {
+                    w.invoke_release_text_focus();
+                }
+            });
+        })())
+    })
+    .resolve::<jni::errors::LogErrorAndDefault>()
 }
 
 /// JNI entry point: the soft keyboard's action key (Done) — see
@@ -232,40 +254,46 @@ pub extern "system" fn Java_com_chatter_client_MainActivity_nativeImeHiddenByBac
 /// as it does for Enter on desktop.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_chatter_client_MainActivity_nativeImeEditorAction(
-    _env: JNIEnv,
+    mut _env: jni::EnvUnowned<'_>,
     _class: jni::objects::JClass,
 ) {
-    let Some(weak) = super::call_actions::main_window() else {
-        return;
-    };
-    let _ = slint::invoke_from_event_loop(move || {
-        use slint::ComponentHandle;
-        let Some(w) = weak.upgrade() else { return };
-        let enter: slint::SharedString = slint::platform::Key::Return.into();
-        w.window()
-            .dispatch_event(slint::platform::WindowEvent::KeyPressed {
-                text: enter.clone(),
+    _env.with_env(|_env| -> jni::errors::Result<_> {
+        Ok((|| {
+            let Some(weak) = super::call_actions::main_window() else {
+                return;
+            };
+            let _ = slint::invoke_from_event_loop(move || {
+                use slint::ComponentHandle;
+                let Some(w) = weak.upgrade() else { return };
+                let enter: slint::SharedString = slint::platform::Key::Return.into();
+                w.window()
+                    .dispatch_event(slint::platform::WindowEvent::KeyPressed {
+                        text: enter.clone(),
+                    });
+                w.window()
+                    .dispatch_event(slint::platform::WindowEvent::KeyReleased { text: enter });
             });
-        w.window()
-            .dispatch_event(slint::platform::WindowEvent::KeyReleased { text: enter });
-    });
+        })())
+    })
+    .resolve::<jni::errors::LogErrorAndDefault>()
 }
 
 /// Thin platform hook: account policy is owned by chatter-core.
 fn set_messaging_signed_in(signed_in: bool) {
     let result = (|| -> Result<(), String> {
         let act = activity()?;
-        let mut env = jni_env()?;
-        let result = env.call_method(
-            act,
-            "setMessagingSignedIn",
-            "(Z)V",
-            &[jni::objects::JValue::Bool(signed_in.into())],
-        );
-        if result.is_err() {
-            clear_exception(&mut env);
-        }
-        result.map(|_| ()).map_err(|e| e.to_string())
+        with_jni_env(|env| {
+            let result = env.call_method(
+                act,
+                jni::jni_str!("setMessagingSignedIn"),
+                jni::jni_sig!("(Z)V"),
+                &[jni::objects::JValue::Bool(signed_in.into())],
+            );
+            if result.is_err() {
+                clear_exception(env);
+            }
+            result.map(|_| ()).map_err(|e| e.to_string())
+        })
     })();
     if result.is_err() {
         tracing::warn!("Android messaging service lifecycle unavailable");

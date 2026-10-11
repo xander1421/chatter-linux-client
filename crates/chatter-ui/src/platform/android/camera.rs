@@ -7,7 +7,6 @@
 //! I420 bytes CameraX produced into `chatter_core::calls::android_camera`.
 
 use chatter_core::calls::android_camera::{self, PlatformCamera};
-use jni::JNIEnv;
 use jni::objects::{JByteArray, JObject, JValue};
 use jni::sys::{jint, jlong};
 
@@ -24,7 +23,7 @@ impl PlatformCamera for CameraX {
                 JValue::Int(width as jint),
                 JValue::Int(height as jint),
                 JValue::Int(fps as jint),
-                JValue::Bool(front as u8),
+                JValue::Bool(front),
             ],
         ) {
             tracing::error!("Android camera: startCamera failed: {e}");
@@ -44,19 +43,27 @@ pub fn init() {
 }
 
 fn call_void(method: &str, sig: &str, args: &[JValue]) -> Result<(), String> {
-    let mut env = activity::jni_env()?;
-    let act = activity::activity()?;
-    let res = env.call_method(act, method, sig, args);
-    if res.is_err() {
-        activity::clear_exception(&mut env);
-    }
-    res.map_err(|e| e.to_string()).map(|_| ())
+    activity::with_jni_env(|env| {
+        let act = activity::activity()?;
+        let res = env.call_method(
+            act,
+            jni::strings::JNIString::from(method),
+            jni::signature::RuntimeMethodSignature::from_str(sig)
+                .map_err(|e| e.to_string())?
+                .method_signature(),
+            args,
+        );
+        if res.is_err() {
+            activity::clear_exception(env);
+        }
+        res.map_err(|e| e.to_string()).map(|_| ())
+    })
 }
 
 /// JNI callback from `MainActivity` — one CameraX frame as tightly-packed I420.
 #[unsafe(no_mangle)]
 pub extern "system" fn Java_com_chatter_client_MainActivity_nativeOnCameraFrame(
-    env: JNIEnv,
+    mut env: jni::EnvUnowned<'_>,
     _this: JObject,
     data: JByteArray,
     width: jint,
@@ -64,12 +71,23 @@ pub extern "system" fn Java_com_chatter_client_MainActivity_nativeOnCameraFrame(
     rotation: jint,
     timestamp_us: jlong,
 ) {
-    let bytes = match env.convert_byte_array(&data) {
-        Ok(b) => b,
-        Err(e) => {
-            tracing::error!("Android camera: bad frame array: {e}");
-            return;
-        }
-    };
-    android_camera::push_frame_i420(&bytes, width as u32, height as u32, rotation, timestamp_us);
+    env.with_env(|env| -> jni::errors::Result<_> {
+        Ok((|| {
+            let bytes = match env.convert_byte_array(&data) {
+                Ok(b) => b,
+                Err(e) => {
+                    tracing::error!("Android camera: bad frame array: {e}");
+                    return;
+                }
+            };
+            android_camera::push_frame_i420(
+                &bytes,
+                width as u32,
+                height as u32,
+                rotation,
+                timestamp_us,
+            );
+        })())
+    })
+    .resolve::<jni::errors::LogErrorAndDefault>()
 }

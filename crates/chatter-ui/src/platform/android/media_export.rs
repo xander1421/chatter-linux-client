@@ -16,49 +16,52 @@ impl ExportSession {
     }
 
     fn begin_kind(name: &str, mime: &str, copy: bool, pdf: bool) -> Result<Self, String> {
-        let mut env = activity::jni_env()?;
-        let activity = activity::activity()?;
-        let name = env
-            .new_string(name)
-            .map_err(|_| "Filename conversion failed")?;
-        let mime = env.new_string(mime).map_err(|_| "Type conversion failed")?;
-        let result = env.call_method(
-            activity.as_obj(),
-            if pdf {
-                "beginViewerPdfExport"
-            } else {
-                "beginViewerMediaExport"
-            },
-            "(Ljava/lang/String;Ljava/lang/String;Z)[J",
-            &[
-                JValue::Object(&name),
-                JValue::Object(&mime),
-                JValue::Bool(u8::from(copy)),
-            ],
-        );
-        let object = match result.and_then(|v| v.l()) {
-            Ok(v) if !v.is_null() => v,
-            _ => {
+        activity::with_jni_env(|env| {
+            let activity = activity::activity()?;
+            let name = env
+                .new_string(name)
+                .map_err(|_| "Filename conversion failed")?;
+            let mime = env.new_string(mime).map_err(|_| "Type conversion failed")?;
+            let result = env.call_method(
+                activity.as_obj(),
+                jni::strings::JNIString::from(if pdf {
+                    "beginViewerPdfExport"
+                } else {
+                    "beginViewerMediaExport"
+                }),
+                jni::jni_sig!("(Ljava/lang/String;Ljava/lang/String;Z)[J"),
+                &[
+                    JValue::Object(&name),
+                    JValue::Object(&mime),
+                    JValue::Bool(copy),
+                ],
+            );
+            let object = match result.and_then(|v| v.l()) {
+                Ok(v) if !v.is_null() => v,
+                _ => {
+                    let _ = env.exception_clear();
+                    return Err("Media export unavailable".into());
+                }
+            };
+            let array = env
+                .cast_local::<JLongArray>(object)
+                .map_err(|e| e.to_string())?;
+            let mut values = [0i64; 2];
+            if array.get_region(env, 0, &mut values).is_err() {
                 let _ = env.exception_clear();
-                return Err("Media export unavailable".into());
+                return Err("Invalid export descriptor".into());
             }
-        };
-        let array = JLongArray::from(object);
-        let mut values = [0i64; 2];
-        if env.get_long_array_region(&array, 0, &mut values).is_err() {
-            let _ = env.exception_clear();
-            return Err("Invalid export descriptor".into());
-        }
-        let fd = i32::try_from(values[1]).map_err(|_| "Invalid file descriptor")?;
-        if values[0] <= 0 || fd < 0 {
-            return Err("Invalid export descriptor".into());
-        }
-        // Kotlin detached this descriptor, transferring its sole ownership to Rust.
-        let file = unsafe { File::from_raw_fd(fd) };
-        Ok(Self {
-            token: values[0],
-            file: Some(file),
-            completed: false,
+            let fd = i32::try_from(values[1]).map_err(|_| "Invalid file descriptor")?;
+            if values[0] <= 0 || fd < 0 {
+                return Err("Invalid export descriptor".into());
+            }
+            // Kotlin detached this descriptor, transferring its sole ownership to Rust.
+            let file = unsafe { File::from_raw_fd(fd) };
+            Ok(Self {
+                token: values[0],
+                file: Some(file),
+                completed: false,
+            })
         })
     }
 
@@ -80,35 +83,42 @@ impl Drop for ExportSession {
 }
 
 fn finish(token: i64, success: bool) -> Result<(), String> {
-    let mut env = activity::jni_env()?;
-    let activity = activity::activity()?;
-    let result = env.call_method(
-        activity.as_obj(),
-        "finishViewerMediaExport",
-        "(JZ)Z",
-        &[JValue::Long(token), JValue::Bool(u8::from(success))],
-    );
-    let success = result.and_then(|v| v.z()).unwrap_or(false);
-    let exception = env.exception_check().unwrap_or(true);
-    let _ = env.exception_clear();
-    if success && !exception {
-        Ok(())
-    } else {
-        Err("Media export failed".into())
-    }
+    activity::with_jni_env(|env| {
+        let activity = activity::activity()?;
+        let result = env.call_method(
+            activity.as_obj(),
+            jni::jni_str!("finishViewerMediaExport"),
+            jni::jni_sig!("(JZ)Z"),
+            &[JValue::Long(token), JValue::Bool(success)],
+        );
+        let success = result.and_then(|v| v.z()).unwrap_or(false);
+        let exception = env.exception_check();
+        let _ = env.exception_clear();
+        if success && !exception {
+            Ok(())
+        } else {
+            Err("Media export failed".into())
+        }
+    })
 }
 
 pub fn open_downloads() -> Result<(), String> {
-    let mut env = activity::jni_env()?;
-    let activity = activity::activity()?;
-    let result = env.call_method(activity.as_obj(), "openViewerDownloads", "()V", &[]);
-    let failed = result.is_err() || env.exception_check().unwrap_or(true);
-    let _ = env.exception_clear();
-    if failed {
-        Err("Downloads unavailable".into())
-    } else {
-        Ok(())
-    }
+    activity::with_jni_env(|env| {
+        let activity = activity::activity()?;
+        let result = env.call_method(
+            activity.as_obj(),
+            jni::jni_str!("openViewerDownloads"),
+            jni::jni_sig!("()V"),
+            &[],
+        );
+        let failed = result.is_err() || env.exception_check();
+        let _ = env.exception_clear();
+        if failed {
+            Err("Downloads unavailable".into())
+        } else {
+            Ok(())
+        }
+    })
 }
 
 /// Export authenticated attachment ranges without allocating whole plaintext.
@@ -190,21 +200,22 @@ pub fn wire_session(client: &std::sync::Arc<chatter_core::client::ChatterClient>
             if previous != Some(revision) {
                 crate::bin_ui::features::chat_actions::media_viewer::invalidate();
                 let result = (|| -> Result<(), String> {
-                    let mut env = activity::jni_env()?;
-                    let activity = activity::activity()?;
-                    let result = env.call_method(
-                        activity.as_obj(),
-                        "clearViewerSession",
-                        "(J)Z",
-                        &[JValue::Long(revision as i64)],
-                    );
-                    let success = result.and_then(|v| v.z()).unwrap_or(false);
-                    let _ = env.exception_clear();
-                    if success {
-                        Ok(())
-                    } else {
-                        Err("Private viewer cache cleanup failed".into())
-                    }
+                    activity::with_jni_env(|env| {
+                        let activity = activity::activity()?;
+                        let result = env.call_method(
+                            activity.as_obj(),
+                            jni::jni_str!("clearViewerSession"),
+                            jni::jni_sig!("(J)Z"),
+                            &[JValue::Long(revision as i64)],
+                        );
+                        let success = result.and_then(|v| v.z()).unwrap_or(false);
+                        let _ = env.exception_clear();
+                        if success {
+                            Ok(())
+                        } else {
+                            Err("Private viewer cache cleanup failed".into())
+                        }
+                    })
                 })();
                 if let Err(error) = result {
                     tracing::warn!(%error, "Viewer session cleanup");
