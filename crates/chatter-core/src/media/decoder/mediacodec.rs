@@ -1,6 +1,6 @@
 //! Android byte-buffer video decoding through the API-21 NDK media API.
 //!
-//! Linear I420/NV12, BT.601 limited-range output is supported; vendor/tiled,
+//! Linear I420/NV12, BT.601/BT.709 limited/full-range output is supported; vendor/tiled,
 //! HDR and other color layouts fail explicitly instead of guessing memory layout.
 //! Audio playback is not yet implemented (the player never pulls decode_audio).
 
@@ -257,7 +257,7 @@ impl MediaCodecDecoder {
             }
             let standard = format.int(c"color-standard", 0);
             let range = format.int(c"color-range", 0);
-            if ![0, 2, 4].contains(&standard) || ![0, 2].contains(&range) {
+            if ![0, 1, 2, 4].contains(&standard) || ![0, 1, 2].contains(&range) {
                 return Err(error("unsupported video color standard/range"));
             }
             let width = format.int(c"width", 0);
@@ -303,6 +303,8 @@ impl MediaCodecDecoder {
                     left: left as usize,
                     top: top as usize,
                     planar: color == 19,
+                    bt709: standard == 1,
+                    full_range: range == 1,
                 },
             )
             .map_err(error)?;

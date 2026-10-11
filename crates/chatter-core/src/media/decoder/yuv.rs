@@ -8,6 +8,8 @@ pub(super) struct YuvLayout {
     pub left: usize,
     pub top: usize,
     pub planar: bool,
+    pub bt709: bool,
+    pub full_range: bool,
 }
 
 pub(super) fn to_rgb(data: &[u8], layout: YuvLayout) -> Result<Vec<u8>, &'static str> {
@@ -19,6 +21,8 @@ pub(super) fn to_rgb(data: &[u8], layout: YuvLayout) -> Result<Vec<u8>, &'static
         left,
         top,
         planar,
+        bt709,
+        full_range,
     } = layout;
     if width
         .checked_mul(height)
@@ -46,7 +50,7 @@ pub(super) fn to_rgb(data: &[u8], layout: YuvLayout) -> Result<Vec<u8>, &'static
     let mut rgb = Vec::with_capacity(width * height * 3);
     for row in top..top + height {
         for col in left..left + width {
-            let y = i32::from(data[row * stride + col]) - 16;
+            let y = i32::from(data[row * stride + col]) - if full_range { 0 } else { 16 };
             let chroma = (row / 2) * chroma_stride + col / 2;
             let (u, v) = if planar {
                 (data[y_size + chroma], data[y_size + chroma_size + chroma])
@@ -56,11 +60,16 @@ pub(super) fn to_rgb(data: &[u8], layout: YuvLayout) -> Result<Vec<u8>, &'static
             };
             let u = i32::from(u) - 128;
             let v = i32::from(v) - 128;
-            // BT.601 limited range. Other color standards are rejected by caller.
+            let (y_scale, rv, gu, gv, bu) = match (bt709, full_range) {
+                (false, false) => (298, 409, 100, 208, 516),
+                (true, false) => (298, 459, 55, 136, 541),
+                (false, true) => (256, 359, 88, 183, 454),
+                (true, true) => (256, 403, 48, 120, 475),
+            };
             for value in [
-                298 * y + 409 * v,
-                298 * y - 100 * u - 208 * v,
-                298 * y + 516 * u,
+                y_scale * y + rv * v,
+                y_scale * y - gu * u - gv * v,
+                y_scale * y + bu * u,
             ] {
                 rgb.push(((value + 128) >> 8).clamp(0, 255) as u8);
             }
@@ -81,6 +90,8 @@ mod tests {
             left: 0,
             top: 0,
             planar,
+            bt709: false,
+            full_range: false,
         }
     }
     #[test]
@@ -111,6 +122,25 @@ mod tests {
             [255, 0, 0]
         );
     }
+    #[test]
+    fn hd_matrix_and_full_range_are_not_treated_as_sd_limited_range() {
+        let mut hd = layout(true);
+        hd.bt709 = true;
+        assert_eq!(
+            &to_rgb(&[63, 63, 63, 63, 102, 240], hd).unwrap()[..3],
+            &[255, 1, 0]
+        );
+        for bt709 in [true, false] {
+            let mut full = layout(false);
+            full.bt709 = bt709;
+            full.full_range = true;
+            assert_eq!(
+                to_rgb(&[0, 255, 0, 255, 128, 128], full).unwrap(),
+                [0, 0, 0, 255, 255, 255, 0, 0, 0, 255, 255, 255]
+            );
+        }
+    }
+
     #[test]
     fn invalid_buffers_are_rejected_before_indexing() {
         assert!(to_rgb(&[0; 5], layout(true)).is_err());
