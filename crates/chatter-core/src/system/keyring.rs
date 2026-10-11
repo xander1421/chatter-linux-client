@@ -43,6 +43,43 @@ pub fn keyring_disabled(db_path: &std::path::Path) -> bool {
         .is_some_and(|dir| dir.join(NO_KEYRING_MARKER).exists())
 }
 
+/// Install the native persistent backend before creating an entry.
+/// Unsupported builds fail closed; an in-memory store is never selected implicitly.
+pub(crate) fn ensure_default_store() -> keyring::Result<()> {
+    static INIT: std::sync::Mutex<()> = std::sync::Mutex::new(());
+    let _guard = INIT.lock().expect("keyring initialization mutex poisoned");
+    if keyring::get_default_store().is_some() {
+        return Ok(());
+    }
+    #[cfg(all(target_os = "linux", feature = "desktop-system"))]
+    let store = zbus_secret_service_keyring_store::Store::new()?;
+    #[cfg(all(target_os = "windows", feature = "desktop-system"))]
+    let store = windows_native_keyring_store::Store::new()?;
+    #[cfg(all(target_os = "macos", feature = "desktop-system"))]
+    let store = apple_native_keyring_store::keychain::Store::new()?;
+    #[cfg(all(target_os = "ios", feature = "ios"))]
+    let store = apple_native_keyring_store::protected::Store::new()?;
+    #[cfg(any(
+        all(
+            any(target_os = "linux", target_os = "windows", target_os = "macos"),
+            feature = "desktop-system"
+        ),
+        all(target_os = "ios", feature = "ios")
+    ))]
+    {
+        keyring::set_default_store(store);
+        Ok(())
+    }
+    #[cfg(not(any(
+        all(
+            any(target_os = "linux", target_os = "windows", target_os = "macos"),
+            feature = "desktop-system"
+        ),
+        all(target_os = "ios", feature = "ios")
+    )))]
+    Err(keyring::Error::NoDefaultStore)
+}
+
 /// Secure credential storage using the system keyring.
 ///
 /// Uses the Secret Service API (GNOME Keyring, KWallet) on Linux
@@ -96,6 +133,7 @@ impl Keyring {
 
     /// Creates a new keyring Entry for the database passphrase.
     fn entry(&self) -> Result<keyring::Entry, SystemError> {
+        ensure_default_store().map_err(map_keyring_error)?;
         keyring::Entry::new(SERVICE, &self.username).map_err(map_keyring_error)
     }
 
@@ -318,8 +356,8 @@ fn map_keyring_error(e: keyring::Error) -> SystemError {
 /// and the user is derived from the database path, so tests in distinct temp
 /// directories never see each other's secrets.
 #[cfg(test)]
-pub(crate) fn test_credential_builder() -> Box<keyring::credential::CredentialBuilder> {
-    use keyring::credential::{Credential, CredentialApi, CredentialBuilderApi};
+pub(crate) fn test_credential_store() -> std::sync::Arc<keyring::CredentialStore> {
+    use keyring::api::{CredentialApi, CredentialStoreApi};
     use std::collections::HashMap;
     use std::sync::{LazyLock, Mutex};
 
@@ -329,6 +367,12 @@ pub(crate) fn test_credential_builder() -> Box<keyring::credential::CredentialBu
     #[derive(Debug)]
     struct Cred(String, String);
     impl CredentialApi for Cred {
+        fn get_credential(&self) -> keyring::Result<Option<std::sync::Arc<keyring::Credential>>> {
+            Ok(None)
+        }
+        fn get_specifiers(&self) -> Option<(String, String)> {
+            Some((self.0.clone(), self.1.clone()))
+        }
         fn set_secret(&self, secret: &[u8]) -> keyring::Result<()> {
             let key = (self.0.clone(), self.1.clone());
             STORE.lock().unwrap().insert(key, secret.to_vec());
@@ -336,11 +380,21 @@ pub(crate) fn test_credential_builder() -> Box<keyring::credential::CredentialBu
         }
         fn get_secret(&self) -> keyring::Result<Vec<u8>> {
             let key = (self.0.clone(), self.1.clone());
-            STORE.lock().unwrap().get(&key).cloned().ok_or(keyring::Error::NoEntry)
+            STORE
+                .lock()
+                .unwrap()
+                .get(&key)
+                .cloned()
+                .ok_or(keyring::Error::NoEntry)
         }
         fn delete_credential(&self) -> keyring::Result<()> {
             let key = (self.0.clone(), self.1.clone());
-            STORE.lock().unwrap().remove(&key).map(drop).ok_or(keyring::Error::NoEntry)
+            STORE
+                .lock()
+                .unwrap()
+                .remove(&key)
+                .map(drop)
+                .ok_or(keyring::Error::NoEntry)
         }
         fn as_any(&self) -> &dyn std::any::Any {
             self
@@ -349,21 +403,32 @@ pub(crate) fn test_credential_builder() -> Box<keyring::credential::CredentialBu
 
     #[derive(Debug)]
     struct Builder;
-    impl CredentialBuilderApi for Builder {
+    impl CredentialStoreApi for Builder {
+        fn vendor(&self) -> String {
+            "chatter-test".into()
+        }
+        fn id(&self) -> String {
+            "persistent-process-store".into()
+        }
+        fn persistence(&self) -> keyring::CredentialPersistence {
+            keyring::CredentialPersistence::ProcessOnly
+        }
         fn build(
             &self,
-            _target: Option<&str>,
             service: &str,
             user: &str,
-        ) -> keyring::Result<Box<Credential>> {
-            Ok(Box::new(Cred(service.to_owned(), user.to_owned())))
+            _modifiers: Option<&HashMap<&str, &str>>,
+        ) -> keyring::Result<keyring::Entry> {
+            Ok(keyring::Entry::new_with_credential(std::sync::Arc::new(
+                Cred(service.to_owned(), user.to_owned()),
+            )))
         }
         fn as_any(&self) -> &dyn std::any::Any {
             self
         }
     }
 
-    Box::new(Builder)
+    std::sync::Arc::new(Builder)
 }
 
 #[cfg(test)]
@@ -404,12 +469,12 @@ mod tests {
     }
 
     #[test]
-    fn test_credential_builder_persists_across_entries() {
-        let builder = test_credential_builder();
+    fn test_credential_store_persists_across_entries() {
+        let builder = test_credential_store();
         let user = format!("persist-{}", std::process::id());
-        let write = builder.build(None, SERVICE, &user).unwrap();
+        let write = builder.build(SERVICE, &user, None).unwrap();
         write.set_password("p").unwrap();
-        let reopened = builder.build(None, SERVICE, &user).unwrap();
+        let reopened = builder.build(SERVICE, &user, None).unwrap();
         assert_eq!(reopened.get_password().unwrap(), "p");
         reopened.delete_credential().unwrap();
         assert!(matches!(write.get_password(), Err(keyring::Error::NoEntry)));

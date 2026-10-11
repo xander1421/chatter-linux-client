@@ -5096,7 +5096,7 @@ mod transport_switch_tests {
         // tests exercise transport-switch bookkeeping, not credential storage.
         static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
         MOCK_KEYRING.call_once(|| {
-            keyring::set_default_credential_builder(crate::system::keyring::test_credential_builder());
+            keyring::set_default_store(crate::system::keyring::test_credential_store());
         });
 
         let dir = tempfile::tempdir().unwrap();
@@ -5701,7 +5701,7 @@ mod transport_switch_tests {
 
         static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
         MOCK_KEYRING.call_once(|| {
-            keyring::set_default_credential_builder(crate::system::keyring::test_credential_builder());
+            keyring::set_default_store(crate::system::keyring::test_credential_store());
         });
 
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -5839,7 +5839,7 @@ mod unread_badge_tests {
     fn build_test_client() -> (Arc<ChatterClient>, tempfile::TempDir) {
         static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
         MOCK_KEYRING.call_once(|| {
-            keyring::set_default_credential_builder(crate::system::keyring::test_credential_builder());
+            keyring::set_default_store(crate::system::keyring::test_credential_store());
         });
         let dir = tempfile::tempdir().unwrap();
         let client = ChatterClient::builder()

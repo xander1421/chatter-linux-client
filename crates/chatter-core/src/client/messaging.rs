@@ -1886,7 +1886,7 @@ mod shield_mode_tests {
         // keyring at the in-memory mock (see `transport_switch_tests`).
         static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
         MOCK_KEYRING.call_once(|| {
-            keyring::set_default_credential_builder(crate::system::keyring::test_credential_builder());
+            keyring::set_default_store(crate::system::keyring::test_credential_store());
         });
         let dir = tempfile::tempdir().unwrap();
         let client = ChatterClient::builder()
@@ -2132,7 +2132,7 @@ mod local_friends_tests {
     fn build_test_client() -> Arc<ChatterClient> {
         static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
         MOCK_KEYRING.call_once(|| {
-            keyring::set_default_credential_builder(crate::system::keyring::test_credential_builder());
+            keyring::set_default_store(crate::system::keyring::test_credential_store());
         });
         let dir = tempfile::tempdir().unwrap();
         ChatterClient::builder()
@@ -2209,7 +2209,7 @@ mod search_hit_tests {
     async fn dm_and_saved_hits_open_their_own_conversation() {
         static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
         MOCK_KEYRING.call_once(|| {
-            keyring::set_default_credential_builder(crate::system::keyring::test_credential_builder());
+            keyring::set_default_store(crate::system::keyring::test_credential_store());
         });
         let dir = tempfile::tempdir().unwrap();
         let client = ChatterClient::builder()
@@ -2264,7 +2264,7 @@ mod new_channel_row_tests {
     async fn a_new_channel_with_no_messages_leads_by_creation_time() {
         static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
         MOCK_KEYRING.call_once(|| {
-            keyring::set_default_credential_builder(crate::system::keyring::test_credential_builder());
+            keyring::set_default_store(crate::system::keyring::test_credential_store());
         });
         let dir = tempfile::tempdir().unwrap();
         let client = ChatterClient::builder()
@@ -2323,7 +2323,7 @@ mod older_messages_tests {
     fn conversation() -> (std::sync::Arc<ChatterClient>, ChannelId, Vec<MessageId>) {
         static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
         MOCK_KEYRING.call_once(|| {
-            keyring::set_default_credential_builder(crate::system::keyring::test_credential_builder());
+            keyring::set_default_store(crate::system::keyring::test_credential_store());
         });
         let dir = tempfile::tempdir().unwrap();
         let client = ChatterClient::builder()
@@ -2417,7 +2417,7 @@ mod section_row_tests {
     fn client() -> (std::sync::Arc<ChatterClient>, tempfile::TempDir) {
         static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
         MOCK_KEYRING.call_once(|| {
-            keyring::set_default_credential_builder(crate::system::keyring::test_credential_builder());
+            keyring::set_default_store(crate::system::keyring::test_credential_store());
         });
         let dir = tempfile::tempdir().unwrap();
         let client = ChatterClient::builder()

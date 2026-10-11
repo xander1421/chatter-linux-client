@@ -332,7 +332,7 @@ mod tests {
         use crate::proto::content_v1::content;
         use crate::services::gateway::MessageGateway;
 
-        keyring::set_default_credential_builder(crate::system::keyring::test_credential_builder());
+        keyring::set_default_store(crate::system::keyring::test_credential_store());
         let phone_dir = tempfile::tempdir().unwrap();
         let tablet_dir = tempfile::tempdir().unwrap();
         let build = |path: &std::path::Path| {

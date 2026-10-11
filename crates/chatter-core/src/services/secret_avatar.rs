@@ -344,7 +344,7 @@ mod tests {
     async fn request_avatar_is_cached_pointer_or_none_without_waiting() {
         static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
         MOCK_KEYRING.call_once(|| {
-            keyring::set_default_credential_builder(crate::system::keyring::test_credential_builder());
+            keyring::set_default_store(crate::system::keyring::test_credential_store());
         });
         let dir = tempfile::tempdir().unwrap();
         let client = crate::client::ChatterClient::builder()

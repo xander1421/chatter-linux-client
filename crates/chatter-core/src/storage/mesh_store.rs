@@ -410,6 +410,8 @@ impl MeshSealer {
             return Self::from_local_key_file(db_path);
         }
 
+        crate::system::keyring::ensure_default_store()
+            .map_err(|e| format!("the OS keyring could not be initialized: {e}"))?;
         let entry = keyring::Entry::new(APP_ID, &Self::entry_username(db_path))
             .map_err(|e| format!("the OS keyring could not be opened: {e}"))?;
 
@@ -417,8 +419,8 @@ impl MeshSealer {
         // without a native backend) is refused outright. Sealing under a key it
         // would forget is exactly how the Android build lost its own pins.
         if entry
-            .get_credential()
-            .downcast_ref::<keyring::mock::MockCredential>()
+            .as_any()
+            .downcast_ref::<keyring::mock::Cred>()
             .is_some()
         {
             return Err(
@@ -562,6 +564,8 @@ impl MeshSealer {
     }
 
     pub fn delete_from_keyring(db_path: &Path) -> Result<(), StoreError> {
+        crate::system::keyring::ensure_default_store()
+            .map_err(|e| storage_error("keyring initialize", SEAL_KEY_LABEL, e))?;
         let entry = keyring::Entry::new(APP_ID, &Self::entry_username(db_path))
             .map_err(|e| storage_error("keyring open", SEAL_KEY_LABEL, e))?;
         match entry.delete_credential() {
@@ -690,7 +694,7 @@ mod tests {
     fn use_the_platformless_keyring() {
         static MOCK: std::sync::Once = std::sync::Once::new();
         MOCK.call_once(|| {
-            keyring::set_default_credential_builder(crate::system::keyring::test_credential_builder());
+            keyring::set_default_store(crate::system::keyring::test_credential_store());
         });
     }
 

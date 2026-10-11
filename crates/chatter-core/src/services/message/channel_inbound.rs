@@ -854,7 +854,7 @@ mod tests {
     async fn reingesting_a_read_message_keeps_it_read() {
         static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
         MOCK_KEYRING.call_once(|| {
-            keyring::set_default_credential_builder(crate::system::keyring::test_credential_builder());
+            keyring::set_default_store(crate::system::keyring::test_credential_store());
         });
         let dir = tempfile::tempdir().unwrap();
         let client = ChatterClient::builder()
@@ -909,7 +909,7 @@ mod tests {
     async fn reingesting_an_original_keeps_its_applied_edit() {
         static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
         MOCK_KEYRING.call_once(|| {
-            keyring::set_default_credential_builder(crate::system::keyring::test_credential_builder());
+            keyring::set_default_store(crate::system::keyring::test_credential_store());
         });
         let dir = tempfile::tempdir().unwrap();
         let client = ChatterClient::builder()
@@ -968,7 +968,7 @@ mod tests {
         use crate::services::message::conversion::proto_to_domain_message_with_sender;
         static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
         MOCK_KEYRING.call_once(|| {
-            keyring::set_default_credential_builder(crate::system::keyring::test_credential_builder());
+            keyring::set_default_store(crate::system::keyring::test_credential_store());
         });
         let dir = tempfile::tempdir().unwrap();
         let client = ChatterClient::builder()
@@ -1032,7 +1032,7 @@ mod tests {
     async fn reingesting_a_deleted_message_keeps_it_deleted() {
         static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
         MOCK_KEYRING.call_once(|| {
-            keyring::set_default_credential_builder(crate::system::keyring::test_credential_builder());
+            keyring::set_default_store(crate::system::keyring::test_credential_store());
         });
         let dir = tempfile::tempdir().unwrap();
         let client = ChatterClient::builder()
@@ -1090,7 +1090,7 @@ mod tests {
 
     #[tokio::test]
     async fn resync_clock_conflict_keeps_local_history_and_allows_later_rows() {
-        keyring::set_default_credential_builder(crate::system::keyring::test_credential_builder());
+        keyring::set_default_store(crate::system::keyring::test_credential_store());
         let dir = tempfile::tempdir().unwrap();
         let client = ChatterClient::builder()
             .server_url("https://localhost:1")
@@ -1163,7 +1163,7 @@ mod tests {
     async fn server_channel_edits_follow_the_edit_rules() {
         static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
         MOCK_KEYRING.call_once(|| {
-            keyring::set_default_credential_builder(crate::system::keyring::test_credential_builder());
+            keyring::set_default_store(crate::system::keyring::test_credential_store());
         });
         let dir = tempfile::tempdir().unwrap();
         let client = ChatterClient::builder()
@@ -1697,7 +1697,7 @@ mod resync_acknowledgement_tests {
         use crate::domain::reaction::ReactionScope;
         static MOCK: std::sync::Once = std::sync::Once::new();
         MOCK.call_once(|| {
-            keyring::set_default_credential_builder(crate::system::keyring::test_credential_builder())
+            keyring::set_default_store(crate::system::keyring::test_credential_store())
         });
         let dir = tempfile::tempdir().unwrap();
         let client = ChatterClient::builder()

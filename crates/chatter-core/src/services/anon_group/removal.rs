@@ -389,7 +389,7 @@ mod tests {
     fn fixture(my_role: AnonGroupRole) -> Fixture {
         static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
         MOCK_KEYRING.call_once(|| {
-            keyring::set_default_credential_builder(crate::system::keyring::test_credential_builder());
+            keyring::set_default_store(crate::system::keyring::test_credential_store());
         });
         let dir = tempfile::tempdir().unwrap();
         let client = ChatterClient::builder()

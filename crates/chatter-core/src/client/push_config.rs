@@ -101,8 +101,8 @@ mod tests {
         // Push lifecycle fixtures exercise no OS credential-store behavior.
         static TEST_KEYRING: std::sync::Once = std::sync::Once::new();
         TEST_KEYRING.call_once(|| {
-            keyring::set_default_credential_builder(
-                crate::system::keyring::test_credential_builder(),
+            keyring::set_default_store(
+                crate::system::keyring::test_credential_store(),
             );
         });
         let dir = tempfile::tempdir().unwrap();
