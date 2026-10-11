@@ -324,6 +324,38 @@ pub fn spawn_notification_listener(
                         NotificationPriority::Normal,
                     );
                 }
+                DomainEvent::AnonDmRequestReceived {
+                    conversation_id,
+                    sender_id,
+                    ..
+                } => {
+                    if me.is_none() || Some(*sender_id) == me {
+                        continue;
+                    }
+                    let Some(client) = client.upgrade() else {
+                        break;
+                    };
+                    let id = (*conversation_id).into();
+                    let on_screen =
+                        client.chat_state().is_app_visible() && client.is_showing_conversation(id);
+                    let muted = client
+                        .is_conversation_muted(crate::state::ActiveConversation::AnonDm(
+                            *conversation_id,
+                        ))
+                        .unwrap_or(false);
+                    if on_screen || muted {
+                        continue;
+                    }
+                    // Requests reveal no more than an incoming secret message,
+                    // including when the user allows normal message previews.
+                    let _ = notification_service.show_message_notification(
+                        &id,
+                        None,
+                        None,
+                        true,
+                        NotificationPriority::Normal,
+                    );
+                }
                 DomainEvent::ReactionAdded {
                     scope,
                     sender_id,
@@ -654,6 +686,141 @@ mod tests {
         }
         assert!(!is_private_notification(&msg(ConversationType::ServerDm)));
         assert!(!is_private_notification(&msg(ConversationType::Channel)));
+    }
+
+    #[tokio::test]
+    async fn secret_request_and_message_events_reach_generic_notification_sink() {
+        use crate::domain::anon_dm::AnonDmId;
+        use crate::domain::ids::{ChannelId, UserId};
+        use crate::domain::message::{ConversationType, Message};
+        use crate::inbox::handlers::DomainEvent;
+
+        struct Capture(tokio::sync::mpsc::UnboundedSender<(String, String)>);
+        impl NotificationSink for Capture {
+            fn show(
+                &self,
+                title: &str,
+                body: &str,
+                _: NotificationPriority,
+            ) -> Result<(), SystemError> {
+                self.0.send((title.into(), body.into())).unwrap();
+                Ok(())
+            }
+        }
+        static KEYRING: std::sync::Once = std::sync::Once::new();
+        KEYRING.call_once(|| {
+            keyring::set_default_store(crate::system::keyring::test_credential_store());
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let client = crate::client::ChatterClient::builder()
+            .server_url("https://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .unwrap();
+        let me = UserId::new();
+        client
+            .messages()
+            .settings_repo
+            .set_string(
+                crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID,
+                &me.to_string(),
+            )
+            .unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let service = Arc::new(NotificationService::new(Arc::new(Capture(tx))));
+        let bus = crate::events::EventBus::new();
+        let task = spawn_notification_listener(
+            bus.clone(),
+            Arc::downgrade(&client),
+            client.users().clone(),
+            service.clone(),
+        );
+        let id = AnonDmId::new();
+        let peer = UserId::new();
+        client
+            .chat_state()
+            .set_active_conversation(crate::state::ActiveConversation::AnonDm(id));
+        // An open conversation in a backgrounded app must still notify.
+        client.chat_state().set_app_visible(false);
+        for level in [
+            NotificationDetailLevel::None,
+            NotificationDetailLevel::NameOnly,
+            NotificationDetailLevel::NameAndMessage,
+        ] {
+            service.set_detail_level(level);
+            for event in [
+                DomainEvent::AnonDmRequestReceived {
+                    conversation_id: id,
+                    sender_id: peer,
+                    sender_mailbox_pk: [1; 32],
+                    intro_message: Some("private introduction".into()),
+                    profile_key: None,
+                    sender_display_name: Some("private name".into()),
+                    sender_avatar: None,
+                },
+                DomainEvent::MessageReceived {
+                    message: Message::new_text(
+                        ChannelId::from(id),
+                        ConversationType::AnonDm,
+                        Some(peer),
+                        "private message".into(),
+                        1,
+                    ),
+                },
+                DomainEvent::MessageReceived {
+                    message: Message::new_text(
+                        ChannelId::new(),
+                        ConversationType::AnonGroup,
+                        Some(peer),
+                        "private group message".into(),
+                        1,
+                    ),
+                },
+            ] {
+                bus.emit_domain(event);
+                let shown = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+                    .await
+                    .unwrap()
+                    .unwrap();
+                assert_eq!(shown, ("Chatter".into(), "New message".into()));
+            }
+        }
+        for suppression in ["foreground", "muted", "self"] {
+            client
+                .chat_state()
+                .set_app_visible(suppression == "foreground");
+            client
+                .mute_conversation(
+                    crate::state::ActiveConversation::AnonDm(id),
+                    suppression == "muted",
+                )
+                .unwrap();
+            bus.emit_domain(DomainEvent::AnonDmRequestReceived {
+                conversation_id: id,
+                sender_id: if suppression == "self" { me } else { peer },
+                sender_mailbox_pk: [1; 32],
+                intro_message: Some("private introduction".into()),
+                profile_key: None,
+                sender_display_name: Some("private name".into()),
+                sender_avatar: None,
+            });
+            // A following event is a barrier: a request notification would
+            // reach the sink before this device notification.
+            bus.emit_domain(DomainEvent::DeviceLinked {
+                device_id: 2,
+                device_name: None,
+                device_info: None,
+                approved_by_self: false,
+            });
+            let shown = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+                .await
+                .unwrap()
+                .unwrap();
+            assert_eq!(shown.0, "New device linked", "{suppression}");
+            assert!(rx.try_recv().is_err());
+        }
+        task.abort();
+        task.await.unwrap_err();
     }
 
     /// A panicking sink is one failed notification, not a dead caller loop.
