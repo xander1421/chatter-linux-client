@@ -176,8 +176,8 @@ pub fn derive_link_sync_kek(
 /// two backups are independently addressable.
 pub fn derive_message_backup_id(svr_secret: &[u8; 32]) -> [u8; 32] {
     type HmacSha256 = Hmac<Sha256>;
-    let mut mac =
-        <HmacSha256 as Mac>::new_from_slice(svr_secret).expect("HMAC accepts any key size");
+    let mut mac = <HmacSha256 as hmac::KeyInit>::new_from_slice(svr_secret)
+        .expect("HMAC accepts any key size");
     mac.update(b"MessageBackupId");
     let mut id = [0u8; 32];
     id.copy_from_slice(&mac.finalize().into_bytes());

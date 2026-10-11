@@ -44,7 +44,8 @@ pub const MAX_ENCODED_DEVICE_NAME_LEN: usize = 225;
 const SYNTHETIC_IV_LEN: usize = 16;
 
 fn hmac_sha256(key: &[u8], data: &[u8]) -> Zeroizing<[u8; 32]> {
-    let mut mac = <Hmac<Sha256> as Mac>::new_from_slice(key).expect("HMAC accepts any key length");
+    let mut mac =
+        <Hmac<Sha256> as hmac::KeyInit>::new_from_slice(key).expect("HMAC accepts any key length");
     mac.update(data);
     Zeroizing::new(mac.finalize().into_bytes().into())
 }

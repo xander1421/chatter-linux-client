@@ -148,8 +148,8 @@ fn hmac_candidate(
     msg: &[u8],
     iteration: u32,
 ) -> Result<[u8; 32], NostrError> {
-    let mut mac =
-        Hmac::<Sha256>::new_from_slice(device_seed).map_err(|_| NostrError::InvalidPrivateKey)?;
+    let mut mac = <Hmac<Sha256> as hmac::KeyInit>::new_from_slice(device_seed)
+        .map_err(|_| NostrError::InvalidPrivateKey)?;
     mac.update(msg);
     mac.update(&iteration.to_be_bytes());
     Ok(mac.finalize().into_bytes().into())

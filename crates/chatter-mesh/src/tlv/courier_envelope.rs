@@ -230,7 +230,7 @@ pub fn recipient_tag(noise_static_key: &[u8], epoch_day: u32) -> [u8; TAG_LEN] {
     // HMAC accepts a key of any length, so this cannot fail; the closure keeps
     // the error path away from `unwrap`.
     let mut tag = [0u8; TAG_LEN];
-    if let Ok(mut mac) = Hmac::<Sha256>::new_from_slice(noise_static_key) {
+    if let Ok(mut mac) = <Hmac<Sha256> as hmac::KeyInit>::new_from_slice(noise_static_key) {
         mac.update(&message);
         let digest = mac.finalize().into_bytes();
         if let Some(prefix) = digest.get(..TAG_LEN) {

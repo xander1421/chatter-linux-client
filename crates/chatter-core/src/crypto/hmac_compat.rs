@@ -64,6 +64,7 @@ impl HmacStream {
 /// preserves the `Result` shape so call sites can use `?` / `.expect()`
 /// the same way as the old OpenSSL path.
 pub fn hmac_init(key: &[u8]) -> Result<HmacStream, Infallible> {
-    let mac = <HmacSha256 as Mac>::new_from_slice(key).expect("HMAC-SHA256 accepts any key length");
+    let mac = <HmacSha256 as hmac::KeyInit>::new_from_slice(key)
+        .expect("HMAC-SHA256 accepts any key length");
     Ok(HmacStream(mac))
 }

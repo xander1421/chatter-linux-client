@@ -84,7 +84,7 @@ pub struct ChatterSuite;
 
 impl CipherSuite for ChatterSuite {
     type OprfCs = Ristretto255;
-    type KeyExchange = TripleDh<Ristretto255, sha2::Sha512>;
+    type KeyExchange = TripleDh<Ristretto255, sha2_10::Sha512>;
     type Ksf = ChatterKsf;
 }
 
@@ -320,7 +320,7 @@ mod tests {
     struct VectorSuite;
     impl CipherSuite for VectorSuite {
         type OprfCs = Ristretto255;
-        type KeyExchange = TripleDh<Ristretto255, sha2::Sha512>;
+        type KeyExchange = TripleDh<Ristretto255, sha2_10::Sha512>;
         type Ksf = Identity;
     }
 

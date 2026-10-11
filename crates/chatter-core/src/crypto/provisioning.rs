@@ -149,7 +149,7 @@ pub fn encrypt_envelope(
     let ct =
         Aes256CbcEnc::new((&*aes_key).into(), (&iv).into()).encrypt_padded_vec::<Pkcs7>(&plaintext);
 
-    let mut mac = HmacSha256::new_from_slice(mac_key.as_ref())
+    let mut mac = <HmacSha256 as hmac::KeyInit>::new_from_slice(mac_key.as_ref())
         .map_err(|e| CryptoError::EncryptionFailed(format!("HMAC init: {e}")))?;
     mac.update(&[VERSION]);
     mac.update(&iv);
@@ -234,7 +234,7 @@ pub fn decrypt_envelope(
     let ct = &envelope.body[VERSION_LEN + IV_LEN..VERSION_LEN + IV_LEN + ct_len];
     let received_mac = &envelope.body[VERSION_LEN + IV_LEN + ct_len..];
 
-    let mut mac = HmacSha256::new_from_slice(mac_key.as_ref())
+    let mut mac = <HmacSha256 as hmac::KeyInit>::new_from_slice(mac_key.as_ref())
         .map_err(|e| CryptoError::DecryptionFailed(format!("HMAC init: {e}")))?;
     mac.update(version);
     mac.update(iv);

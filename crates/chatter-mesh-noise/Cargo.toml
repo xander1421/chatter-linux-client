@@ -52,7 +52,7 @@ snow = { version = "0.10", default-features = false, features = [
 
 ed25519-dalek = { version = "2", features = ["rand_core"] }
 x25519-dalek = { version = "2", features = ["static_secrets"] }
-sha2 = "0.10"
+sha2 = "0.11.0"
 rand_core = "0.6"
 thiserror = "2"
 

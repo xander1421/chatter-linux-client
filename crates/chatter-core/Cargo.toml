@@ -80,10 +80,12 @@ rand = { version = "0.9", features = ["os_rng"] }
 rand_core_06 = { package = "rand_core", version = "0.6", features = ["getrandom"] }
 blind-rsa-signatures = "0.14"
 rsa = "0.7"
-sha2 = "0.10"
-hmac = "0.12"
+sha2 = "0.11.0"
+# opaque-ke 4.0.1 exposes digest 0.10 in its TripleDh cipher-suite bound.
+sha2_10 = { package = "sha2", version = "0.10" }
+hmac = "0.13.0"
 rayon = "1.10"
-hkdf = "0.12"
+hkdf = "0.13.0"
 aes-gcm = "0.10"
 aes = { version = "0.9.3", features = ["zeroize"] }
 # AES-256-CTR for Signal encrypted device names (crypto/device_name.rs).
@@ -281,13 +283,8 @@ chatter-mesh-android = { path = "../chatter-mesh-android", optional = true }
 # follows the call route (earpiece / speaker / headset) AudioManager selects.
 oboe = { version = "0.6", features = ["java-interface"] }
 
-# Android aarch64: SHA-256 on the ARMv8 SHA2 instructions for the
-# proof-of-work gate (crypto/pow.rs), which rises to 2^23 SHA-256 under a
-# flood. sha2 0.10 uses them only with `asm` (runtime `cpufeatures` hwcap
-# check, software fallback). Measured on a Galaxy S9, server OPEN-ITEMS §130:
-# 8.3 vs 2.3 M hash/s/thread. x86_64 keeps its own SHA-NI path without it.
-[target.'cfg(all(target_os = "android", target_arch = "aarch64"))'.dependencies]
-sha2 = { version = "0.10", features = ["asm"] }
+# SHA-2 0.11 selects ARMv8 SHA2 / x86 SHA-NI at runtime by default,
+# with a software fallback; Android needs no separate `asm` dependency.
 
 [dev-dependencies]
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }

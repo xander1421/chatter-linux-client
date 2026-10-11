@@ -52,7 +52,7 @@ fn generate_test_data(size: usize) -> (Vec<u8>, [u8; KEY_SET_LENGTH], [u8; 32], 
         .unwrap();
 
     // Compute HMAC
-    let mut mac = HmacSha256::new_from_slice(mac_key).unwrap();
+    let mut mac = <HmacSha256 as hmac::KeyInit>::new_from_slice(mac_key).unwrap();
     mac.update(&iv);
     mac.update(&encrypted);
     let hmac_result = mac.finalize().into_bytes();
@@ -111,7 +111,7 @@ fn bench_hmac_verify(c: &mut Criterion) {
             &(iv, encrypted, mac_key),
             |b, (iv, encrypted, mac_key)| {
                 b.iter(|| {
-                    let mut mac = HmacSha256::new_from_slice(mac_key).unwrap();
+                    let mut mac = <HmacSha256 as hmac::KeyInit>::new_from_slice(mac_key).unwrap();
                     mac.update(black_box(*iv));
                     mac.update(black_box(*encrypted));
                     let _result = mac.finalize();
@@ -180,7 +180,7 @@ fn bench_full_decrypt(c: &mut Criterion) {
                     let expected_hmac = &ciphertext[ciphertext.len() - HMAC_LENGTH..];
 
                     // Step 3: Verify HMAC
-                    let mut mac = HmacSha256::new_from_slice(mac_key).unwrap();
+                    let mut mac = <HmacSha256 as hmac::KeyInit>::new_from_slice(mac_key).unwrap();
                     mac.update(iv);
                     mac.update(encrypted);
                     let computed_hmac = mac.finalize().into_bytes();
@@ -270,7 +270,7 @@ fn bench_single_pass_decrypt(c: &mut Criterion) {
 
                     // Combined pass over data
                     let mut digest_hasher = Sha256::new();
-                    let mut mac = HmacSha256::new_from_slice(mac_key).unwrap();
+                    let mut mac = <HmacSha256 as hmac::KeyInit>::new_from_slice(mac_key).unwrap();
 
                     digest_hasher.update(black_box(iv));
                     mac.update(black_box(iv));

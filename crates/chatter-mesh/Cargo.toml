@@ -14,9 +14,9 @@ path = "src/lib.rs"
 
 [dependencies]
 # Packet IDs, dedup digests, GCS bucket hashing, courier recipient tags.
-sha2 = "0.10"
+sha2 = "0.11.0"
 # Courier recipient tag: HMAC-SHA256(recipient static key, ctx || utc_day).
-hmac = "0.12"
+hmac = "0.13.0"
 # Payload compression. NOTE: bitchat uses Apple's COMPRESSION_ZLIB, which emits
 # RAW DEFLATE (RFC 1951) — no zlib header, no adler32. Use DeflateEncoder /
 # DeflateDecoder here, never ZlibEncoder. See the design doc, trap #1.
