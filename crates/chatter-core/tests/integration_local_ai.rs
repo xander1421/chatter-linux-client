@@ -24,8 +24,11 @@ mod local_ai_tests {
         let model = match TextModelBuilder::new(&model_id)
             .with_isq(IsqType::Q4K)
             .with_logging()
-            .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())
-            .expect("PagedAttention config")
+            .with_paged_attn(
+                PagedAttentionMetaBuilder::default()
+                    .build()
+                    .expect("PagedAttention config"),
+            )
             .build()
             .await
         {

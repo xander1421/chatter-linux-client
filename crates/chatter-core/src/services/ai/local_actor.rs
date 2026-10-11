@@ -321,7 +321,7 @@ async fn load_model_impl(model_id: &str) -> anyhow::Result<Arc<Model>> {
     let model = TextModelBuilder::new(model_id)
         .with_isq(IsqType::Q4K)
         .with_logging()
-        .with_paged_attn(|| PagedAttentionMetaBuilder::default().build())?
+        .with_paged_attn(PagedAttentionMetaBuilder::default().build()?)
         .build()
         .await?;
 

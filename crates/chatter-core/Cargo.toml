@@ -184,7 +184,7 @@ livekit = { version = "0.7.52", default-features = false, features = ["tokio", "
 # ============================================================================
 # Local AI (optional; CPU by default, CUDA is an explicit opt-in)
 # ============================================================================
-mistralrs = { version = "0.7", optional = true, default-features = false }
+mistralrs = { version = "0.8.1", optional = true, default-features = false }
 
 # ============================================================================
 # Tor onion transport (optional — gated behind `onion` feature, Stage 2)
@@ -285,8 +285,8 @@ muda = "0.21.2"
 [target.'cfg(target_os = "android")'.dependencies]
 # JNI radio for the mesh (Android only).
 chatter-mesh-android = { path = "../chatter-mesh-android", optional = true }
-# Call playback opens its stream through oboe directly (cpal now uses AAudio; the
-# same crate) so it can declare USAGE_VOICE_COMMUNICATION: only that usage
+# Call playback uses Oboe directly while CPAL uses AAudio. Oboe declares
+# USAGE_VOICE_COMMUNICATION: only that usage
 # follows the call route (earpiece / speaker / headset) AudioManager selects.
 oboe = { version = "0.6", features = ["java-interface"] }
 
