@@ -3,6 +3,9 @@
 //! Cross-platform client for Chatter secure messaging.
 //! Supports Linux, Windows, macOS, and Android.
 
+// Check the recursive client Send graph on mobile/mesh without unsafe impls.
+#![recursion_limit = "256"]
+
 use chatter_core::system::{antidebug_check, init_antidebug};
 use tokio_util::sync::CancellationToken;
 
