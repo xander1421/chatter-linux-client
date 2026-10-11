@@ -1,6 +1,5 @@
 plugins {
     id("com.android.application")
-    id("org.jetbrains.kotlin.android")
 }
 
 // Shared with build-android.sh; direct Gradle release tasks also need metadata.
@@ -90,7 +89,7 @@ android {
     // The prebuilt libchatter_ui.so is produced by cargo-ndk into
     // src/main/jniLibs/arm64-v8a/ (see ../build-android.sh). It statically
     // links GStreamer/OpenSSL/Slint, so no other native libs are bundled.
-    sourceSets["main"].jniLibs.srcDirs("src/main/jniLibs")
+    sourceSets["main"].jniLibs.directories += "src/main/jniLibs"
 
     packaging {
         jniLibs {
@@ -103,26 +102,23 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions {
-        jvmTarget = "17"
-    }
 }
 
 dependencies {
     // Java GameActivity class — its native glue is compiled INTO libchatter_ui.so
     // by the android-activity `game-activity` feature. Do NOT enable prefab.
-    implementation("androidx.games:games-activity:4.4.0")
+    implementation("androidx.games:games-activity:4.4.2")
     // GameActivity extends AppCompatActivity → needs an AppCompat theme + runtime.
-    implementation("androidx.appcompat:appcompat:1.7.0")
+    implementation("androidx.appcompat:appcompat:1.8.0")
     // CameraX (modern Camera2 stack) for call video capture — feeds I420 frames
     // to Rust/LiveKit. Not the deprecated android.hardware.Camera.
-    implementation("androidx.camera:camera-core:1.4.1")
-    implementation("androidx.camera:camera-camera2:1.4.1")
-    implementation("androidx.camera:camera-lifecycle:1.4.1")
+    implementation("androidx.camera:camera-core:1.6.2")
+    implementation("androidx.camera:camera-camera2:1.6.2")
+    implementation("androidx.camera:camera-lifecycle:1.6.2")
     // In-app QR scanner (QrScanner.kt): the preview view, and ZXing core to
     // decode — Apache-2.0, pure Java, no Google Play services.
-    implementation("androidx.camera:camera-view:1.4.1")
-    implementation("com.google.zxing:core:3.5.3")
+    implementation("androidx.camera:camera-view:1.6.2")
+    implementation("com.google.zxing:core:3.5.4")
     // LiveKit webrtc Java classes (livekit.org.webrtc / jni_zero). Sourced
     // in-place from the webrtc-sys download under target/ (version-locked to the
     // native side compiled into libchatter_ui.so), so the jar always matches the
