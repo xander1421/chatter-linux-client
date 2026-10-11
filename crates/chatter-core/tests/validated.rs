@@ -12382,9 +12382,17 @@ async fn channel_restart_receive(inject_retained_failure: bool) {
                 rusqlite::params![retained_clock as i64, baseline.id.to_string()],
             )
             .unwrap();
-        chatter_core::storage::repositories::settings_repo::SettingsRepository::new(db)
-            .set(&sync_key, &0_u64)
-            .unwrap();
+        let settings =
+            chatter_core::storage::repositories::settings_repo::SettingsRepository::new(db);
+        settings.set(&sync_key, &0_u64).unwrap();
+        // Without this the restarted stream resumes from B's persisted global
+        // checkpoint (services/channel_stream.rs CURSOR_KEY) and, once the
+        // connect-time catch-up returns, replays every row A sent while B was
+        // down. A backfill that starved its later pages would then still pass
+        // the later-page assertion below on replayed rows. With no cursor the
+        // server positions the stream at the tail (event_log.go), so every
+        // offline row must come through backfill pages.
+        settings.delete("stream:global_events:cursor:v1").unwrap();
     }
     drop(client_b);
     drop(events_b);
