@@ -67,6 +67,9 @@ impl AudioCapture {
 
     /// List available audio input devices (microphones).
     pub fn list_devices() -> Result<Vec<AudioDevice>, CallError> {
+        if crate::system::null_audio() {
+            return Ok(Vec::new());
+        }
         let host = cpal::default_host();
         let default_device = host.default_input_device();
         let default_name = default_device.as_ref().and_then(|d| d.name().ok());
@@ -91,6 +94,9 @@ impl AudioCapture {
 
     /// List available audio output devices (speakers/headphones).
     pub fn list_output_devices() -> Result<Vec<AudioDevice>, CallError> {
+        if crate::system::null_audio() {
+            return Ok(Vec::new());
+        }
         let host = cpal::default_host();
         let default_device = host.default_output_device();
         let default_name = default_device.as_ref().and_then(|d| d.name().ok());
@@ -115,6 +121,11 @@ impl AudioCapture {
 
     /// Get the default audio input device.
     pub fn default_device() -> Result<AudioDevice, CallError> {
+        if crate::system::null_audio() {
+            return Err(CallError::TrackPublishFailed(
+                "audio devices disabled (CHATTER_NULL_AUDIO)".to_string(),
+            ));
+        }
         let host = cpal::default_host();
         let device = host.default_input_device().ok_or_else(|| {
             CallError::TrackPublishFailed("No default audio input device".to_string())
@@ -139,6 +150,26 @@ impl AudioCapture {
             return Err(CallError::TrackPublishFailed(
                 "Audio capture already running".to_string(),
             ));
+        }
+
+        if crate::system::null_audio() {
+            // A source LiveKit can publish, never fed by a microphone.
+            self.sample_rate = 48_000;
+            self.num_channels = 1;
+            self.device_name = "null".to_string();
+            let source = NativeAudioSource::new(
+                AudioSourceOptions {
+                    echo_cancellation: false,
+                    noise_suppression: false,
+                    auto_gain_control: false,
+                },
+                self.sample_rate,
+                self.num_channels,
+                50,
+            );
+            self.audio_source = Some(source.clone());
+            self.running.store(true, Ordering::SeqCst);
+            return Ok(source);
         }
 
         let host = cpal::default_host();

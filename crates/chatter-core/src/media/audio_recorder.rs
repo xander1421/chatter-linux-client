@@ -59,6 +59,11 @@ impl AudioRecorder {
     ///
     /// Returns an error if no input device is available.
     pub fn new() -> Result<Self, MediaError> {
+        if crate::system::null_audio() {
+            return Err(MediaError::RecordingError(
+                "audio devices disabled (CHATTER_NULL_AUDIO)".to_string(),
+            ));
+        }
         let host = cpal::default_host();
 
         let device = host.default_input_device().ok_or_else(|| {

@@ -277,6 +277,11 @@ impl AudioPlayer {
             .ok_or_else(|| MediaError::PlaybackError("no audio loaded".to_string()))?
             .clone();
 
+        if self.stream.is_none() && crate::system::null_audio() {
+            return Err(MediaError::PlaybackError(
+                "audio devices disabled (CHATTER_NULL_AUDIO)".to_string(),
+            ));
+        }
         if self.stream.is_none() {
             // Each output owns its flag, so an old callback cannot invalidate
             // a replacement stream. Never close/reopen on the audio thread.

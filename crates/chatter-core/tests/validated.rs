@@ -249,6 +249,9 @@ fn no_keyring_prompts() {
         // happens before any client (and therefore any keyring read) exists.
         unsafe {
             std::env::set_var("CHATTER_DB_PASSPHRASE", "validated-harness-passphrase");
+            // Call proofs drive the real call stack: without this they open the
+            // developer's microphone and speakers (system/mod.rs null_audio).
+            std::env::set_var(chatter_core::system::NULL_AUDIO_ENV, "1");
         }
     });
 }

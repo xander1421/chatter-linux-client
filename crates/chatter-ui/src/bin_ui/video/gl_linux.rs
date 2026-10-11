@@ -699,10 +699,15 @@ fn start_gl_video_source(source: VideoSource) -> Option<f64> {
                                     .map_err(|e| format!("volume: {}", e))?;
 
                                 // Use autoaudiosink - more robust than pulsesink for dynamic pipelines
-                                let audiosink = gst::ElementFactory::make("autoaudiosink")
+                                let sink = if chatter_core::system::null_audio() {
+                                    "fakesink"
+                                } else {
+                                    "autoaudiosink"
+                                };
+                                let audiosink = gst::ElementFactory::make(sink)
                                     .name("audio-sink")
                                     .build()
-                                    .map_err(|e| format!("autoaudiosink: {}", e))?;
+                                    .map_err(|e| format!("{sink}: {e}"))?;
 
                                 let elements: &[&gst::Element] = &[&queue, &convert, &resample, &volume, &audiosink];
                                 pipeline.add_many(elements)

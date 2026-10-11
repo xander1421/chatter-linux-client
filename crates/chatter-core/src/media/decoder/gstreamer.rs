@@ -106,6 +106,12 @@ impl GStreamerDecoder {
         // which outputs to PulseAudio/PipeWire (simpler and more reliable)
         playbin.set_property("video-sink", &video_bin);
         // Note: We don't set audio-sink, so playbin3 uses autoaudiosink
+        if crate::system::null_audio() {
+            let fakesink = gst::ElementFactory::make("fakesink")
+                .build()
+                .map_err(|e| MediaError::PlaybackError(format!("Failed to create fakesink: {e}")))?;
+            playbin.set_property("audio-sink", &fakesink);
+        }
 
         pipeline.add(&playbin).map_err(|e| {
             MediaError::PlaybackError(format!("Failed to add playbin to pipeline: {}", e))
@@ -397,9 +403,14 @@ impl GStreamerDecoder {
                         .build()
                         .map_err(|e| format!("Failed to create audioresample: {}", e))?;
                     // Use autoaudiosink - outputs to PulseAudio/PipeWire automatically
-                    let audiosink = gst::ElementFactory::make("autoaudiosink")
+                    let sink = if crate::system::null_audio() {
+                        "fakesink"
+                    } else {
+                        "autoaudiosink"
+                    };
+                    let audiosink = gst::ElementFactory::make(sink)
                         .build()
-                        .map_err(|e| format!("Failed to create autoaudiosink: {}", e))?;
+                        .map_err(|e| format!("Failed to create {sink}: {e}"))?;
 
                     // Add all elements to pipeline
                     let elements: &[&gst::Element] = &[&queue, &convert, &resample, &audiosink];

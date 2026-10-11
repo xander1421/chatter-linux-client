@@ -269,6 +269,11 @@ impl AudioPlayback {
     /// The output device called `name`, or the host default for `None`.
     #[cfg(not(target_os = "android"))]
     fn find_output_device(name: Option<&str>) -> Result<Device, CallError> {
+        if crate::system::null_audio() {
+            return Err(CallError::DeviceError(
+                "audio devices disabled (CHATTER_NULL_AUDIO)".to_string(),
+            ));
+        }
         let host = cpal::default_host();
         match name {
             None => host
@@ -366,6 +371,10 @@ impl AudioPlayback {
     /// Initialize the CPAL output stream (called lazily on first track).
     #[cfg(not(target_os = "android"))]
     fn ensure_stream_initialized(&self) -> Result<(), CallError> {
+        // Tracks are mixed but never rendered to a speaker.
+        if crate::system::null_audio() {
+            return Ok(());
+        }
         // Check if already initialized
         {
             let stream_guard = self.output_stream.read();
