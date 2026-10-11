@@ -1,6 +1,6 @@
 //! Database serialization helpers.
 //!
-//! Provides bincode serialization for efficient database storage.
+//! Provides bincode 2 standard encoding (little-endian variable integers) for database storage.
 //! Bincode offers ~10x faster serialization and ~50% smaller storage compared to JSON.
 
 use serde::{Deserialize, Serialize};
@@ -20,7 +20,7 @@ use crate::error::StorageError;
 /// ```
 #[inline]
 pub fn db_serialize<T: Serialize>(value: &T) -> Result<Vec<u8>, StorageError> {
-    bincode::serialize(value)
+    bincode::serde::encode_to_vec(value, bincode::config::standard())
         .map_err(|e| StorageError::InvalidData(format!("bincode serialize: {}", e)))
 }
 
@@ -33,7 +33,14 @@ pub fn db_serialize<T: Serialize>(value: &T) -> Result<Vec<u8>, StorageError> {
 /// ```
 #[inline]
 pub fn db_deserialize<T: for<'de> Deserialize<'de>>(data: &[u8]) -> Result<T, StorageError> {
-    bincode::deserialize(data)
+    bincode::serde::decode_from_slice(data, bincode::config::standard())
+        .and_then(|(value, consumed)| {
+            if consumed == data.len() {
+                Ok(value)
+            } else {
+                Err(bincode::error::DecodeError::Other("trailing bytes"))
+            }
+        })
         .map_err(|e| StorageError::InvalidData(format!("bincode deserialize: {}", e)))
 }
 

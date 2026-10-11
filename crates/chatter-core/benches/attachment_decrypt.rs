@@ -6,9 +6,10 @@
 
 use aes::Aes256;
 use cbc::cipher::{BlockModeDecrypt, BlockModeEncrypt, KeyIvInit};
-use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
+use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
+use std::hint::black_box;
 
 type Aes256CbcEnc = cbc::Encryptor<Aes256>;
 type Aes256CbcDec = cbc::Decryptor<Aes256>;

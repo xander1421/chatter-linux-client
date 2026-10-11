@@ -318,8 +318,8 @@ fn load_dedup(storage: &dyn Storage, sealer: &dyn Sealer) -> Result<DedupSnapsho
         });
     };
     let plaintext = sealer.open(&sealed)?;
-    let blob: DedupBlob =
-        bincode::deserialize(&plaintext).map_err(|_| StoreError::Malformed("bridge drop dedup"))?;
+    let blob: DedupBlob = crate::storage::serialization::db_deserialize(&plaintext)
+        .map_err(|_| StoreError::Malformed("bridge drop dedup"))?;
     Ok(DedupSnapshot {
         published_drop_keys: blob.published,
         seen_drop_event_ids: blob.seen,
@@ -337,8 +337,8 @@ fn save_dedup(
         published: snapshot.published_drop_keys.clone(),
         seen: snapshot.seen_drop_event_ids.clone(),
     };
-    let plaintext =
-        bincode::serialize(&blob).map_err(|_| StoreError::Malformed("bridge drop dedup"))?;
+    let plaintext = crate::storage::serialization::db_serialize(&blob)
+        .map_err(|_| StoreError::Malformed("bridge drop dedup"))?;
     let sealed = sealer.seal(&plaintext)?;
     storage.save(StorageKey::BridgeDropDedup, &sealed)
 }

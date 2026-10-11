@@ -43,8 +43,7 @@ impl PendingDmRepository {
         attachment_ids: Vec<AttachmentId>,
         channel_id: Option<ChannelId>,
     ) -> Result<(), StorageError> {
-        let attachment_ids_blob = bincode::serialize(&attachment_ids)
-            .map_err(|e| StorageError::InvalidData(format!("bincode: {}", e)))?;
+        let attachment_ids_blob = crate::storage::serialization::db_serialize(&attachment_ids)?;
         self.db.connection()?.execute(
             "INSERT INTO pending_dm_messages (peer_id, content, attachment_ids_blob, channel_id)
              VALUES (?1, ?2, ?3, ?4)",
@@ -80,7 +79,7 @@ impl PendingDmRepository {
                 Ok(PendingDm {
                     content: row.get(0)?,
                     attachment_ids: attachment_ids_blob
-                        .and_then(|blob| bincode::deserialize(&blob).ok())
+                        .and_then(|blob| crate::storage::serialization::db_deserialize(&blob).ok())
                         .unwrap_or_default(),
                     channel_id: channel_id.and_then(|s| s.parse().ok()),
                 })

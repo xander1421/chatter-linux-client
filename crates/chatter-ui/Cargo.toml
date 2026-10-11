@@ -59,7 +59,7 @@ chatter-core = { path = "../chatter-core", default-features = false }
 # ============================================================================
 # UI Framework - Slint
 # ============================================================================
-slint = { version = "1.17.1", default-features = false, features = ["compat-1-2", "accessibility", "raw-window-handle-06"] }
+slint = { version = "=1.17.1", default-features = false, features = ["compat-1-2", "accessibility", "raw-window-handle-06"] }
 i-slint-backend-winit = { version = "1.17.1", optional = true }
 # Named directly only for `StyledText::from_paragraphs` and its paragraph types,
 # a patch in vendor/i-slint-core (see its PATCHES.md): message bodies are built
