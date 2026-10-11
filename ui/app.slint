@@ -278,6 +278,7 @@ export component MainWindow inherits Window {
     in property <int> register-pin-strength: 0;
     callback register-select-avatar();
     callback register-select-default-avatar(int);
+    pure callback register-username-validation(string) -> string;
     callback register-password-changed(string);
     callback register-pin-changed(string);
 
@@ -1698,6 +1699,7 @@ export component MainWindow inherits Window {
                 register(u, p, d, pin, s) => {
                     root.register(u, p, d, pin, s);
                 }
+                username-validation(u) => { root.register-username-validation(u) }
                 password-changed(p) => {
                     root.register-password-changed(p);
                 }

@@ -12385,9 +12385,13 @@ async fn channel_restart_receive(inject_retained_failure: bool) {
                 rusqlite::params![retained_clock as i64, baseline.id.to_string()],
             )
             .unwrap();
-        chatter_core::storage::repositories::settings_repo::SettingsRepository::new(db)
-            .set(&sync_key, &0_u64)
-            .unwrap();
+        let settings =
+            chatter_core::storage::repositories::settings_repo::SettingsRepository::new(db);
+        settings.set(&sync_key, &0_u64).unwrap();
+        // No stored cursor means subscribe starts at the current server tail.
+        // Offline rows below must therefore arrive through GetMessages backfill,
+        // never replay; ResyncRequired must also survive the retained conflict.
+        settings.delete("stream:global_events:cursor:v1").unwrap();
     }
     drop(client_b);
     drop(events_b);

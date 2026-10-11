@@ -148,6 +148,13 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         }
     });
 
+    window.on_register_username_validation(|username| {
+        chatter_core::services::validation::validate_registration_username(username.as_str())
+            .err()
+            .unwrap_or_default()
+            .into()
+    });
+
     window.on_register_password_changed({
         let weak = weak_window.clone();
         let ui_ctx = ui_ctx.clone();

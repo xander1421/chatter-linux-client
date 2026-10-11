@@ -48,6 +48,33 @@ use crate::services::message::channel_inbound::{ChannelInbound, Ingested};
 use crate::services::sync_service::SyncService;
 use crate::storage::repositories::settings_repo::SettingsRepository;
 
+// Process-wide diagnostic counter; also emitted as a structured metric in logs.
+static RESYNC_REJECTED_ROWS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+pub(crate) fn resync_row_complete(
+    result: Result<(), crate::services::message::MessageError>,
+    channel: &str,
+    message: &str,
+) -> Result<bool, crate::error::NetworkError> {
+    use crate::services::message::MessageError;
+    match result {
+        Ok(()) => Ok(true),
+        Err(MessageError::ResyncPending | MessageError::Storage(_)) => Ok(false),
+        Err(MessageError::InvalidContent(error)) => {
+            let total = RESYNC_REJECTED_ROWS.fetch_add(1, std::sync::atomic::Ordering::Relaxed) + 1;
+            tracing::warn!(
+                channel_id = channel,
+                message_id = message,
+                error,
+                resync_rejected_rows_total = total,
+                "Skipping rejected resync row; retained local history wins identity conflicts"
+            );
+            Ok(true)
+        }
+        Err(error) => Err(crate::error::NetworkError::Unknown(error.to_string())),
+    }
+}
+
 /// Settings key holding the last successfully applied global checkpoint.
 const CURSOR_KEY: &str = "stream:global_events:cursor:v1";
 
@@ -587,36 +614,14 @@ impl ChannelStreamService {
                     "resync channel mismatch".into(),
                 ));
             }
-            if message.deleted_at != 0 {
-                match self.apply_delete(&message.id, channel_id) {
-                    Ok(()) => {}
-                    Err(crate::services::message::MessageError::Storage(_)) => {
-                        progress.incomplete = true
-                    }
-                    Err(crate::services::message::MessageError::InvalidContent(error)) => {
-                        return Err(crate::error::NetworkError::DataLoss(error));
-                    }
-                    Err(error) => {
-                        return Err(crate::error::NetworkError::Unknown(error.to_string()));
-                    }
-                }
+            let result = if message.deleted_at != 0 {
+                self.apply_delete(&message.id, channel_id)
             } else {
-                match self.inbound.ingest_resynced(message, channel_id).await {
-                    Ok(()) => {}
-                    Err(
-                        crate::services::message::MessageError::ResyncPending
-                        | crate::services::message::MessageError::Storage(_),
-                    ) => {
-                        progress.incomplete = true;
-                    }
-                    Err(crate::services::message::MessageError::InvalidContent(error)) => {
-                        return Err(crate::error::NetworkError::DataLoss(error));
-                    }
-                    Err(error) => {
-                        return Err(crate::error::NetworkError::Unknown(error.to_string()));
-                    }
-                }
-            }
+                self.inbound.ingest_resynced(message, channel_id).await
+            };
+            // Rejected content is terminal for this row, not for the stream.
+            // Storage and missing-key failures still hold the checkpoint.
+            progress.incomplete |= !resync_row_complete(result, channel, &message.id)?;
         }
         // Advance pagination only after every row in this page was considered.
         // Cancellation retries this page; complete pages survive bounded ticks.
@@ -847,6 +852,28 @@ impl ChannelStreamService {
 #[cfg(test)]
 mod backoff_tests {
     use super::*;
+
+    #[test]
+    fn rejected_resync_rows_do_not_hold_recovery_or_hide_later_pages() {
+        let mut progress = RecoveryProgress::default();
+        progress.incomplete |= !resync_row_complete(
+            Err(crate::services::message::MessageError::InvalidContent(
+                "resync message identity mismatch".into(),
+            )),
+            "channel",
+            "bad-row",
+        )
+        .unwrap();
+        assert_eq!(
+            progress.finish_page("next-page".into()).unwrap(),
+            Applied::Pending
+        );
+        progress.incomplete |= !resync_row_complete(Ok(()), "channel", "good-row").unwrap();
+        assert_eq!(
+            progress.finish_page(String::new()).unwrap(),
+            Applied::Complete
+        );
+    }
 
     #[test]
     fn an_unprompted_no_channels_answer_waits_the_full_backoff() {

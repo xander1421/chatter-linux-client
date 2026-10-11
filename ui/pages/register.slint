@@ -48,6 +48,8 @@ export component RegisterPage inherits Rectangle {
     
 
     callback register(string, string, string, string, string);
+    pure callback username-validation(string) -> string;
+    property <string> username-error: root.username-validation(root.username);
     callback password-changed(string);
     callback pin-changed(string);
     callback select-avatar();
@@ -255,10 +257,16 @@ export component RegisterPage inherits Rectangle {
                                 disabled: root.loading;
                             }
 
+                            if root.username != "" && root.username-error != "": Text {
+                                text: root.username-error;
+                                color: Colors.error;
+                                wrap: word-wrap;
+                            }
+
                             Button {
                                 text: "Continue";
                                 variant: "primary";
-                                disabled: display-name == "" || username == "";
+                                disabled: display-name == "" || username == "" || root.username-error != "";
                                 clicked => { current-step = 2; }
                             }
                         }
