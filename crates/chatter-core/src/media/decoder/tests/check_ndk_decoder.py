@@ -112,6 +112,9 @@ fn actual_decoder_drains_eos_seeks_and_releases_all_handles() {
     assert_send::<mediacodec::MediaCodecDecoder>();
     let mut dec = mediacodec::MediaCodecDecoder::new().unwrap();
     assert!(dec.decode_video_frame().is_err());
+    assert!(dec.play().is_err());
+    assert!(dec.pause().is_err());
+    assert!(dec.query_actual_position_ms().is_err());
     assert!(dec.open_memory(vec![]).is_err());
     assert_eq!(unsafe { fake_live_handles() }, 0, "failed open leaked resources");
     unsafe { fake_mode(3); }

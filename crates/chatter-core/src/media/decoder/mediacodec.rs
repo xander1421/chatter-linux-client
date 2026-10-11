@@ -454,6 +454,9 @@ impl VideoDecoder for MediaCodecDecoder {
         self.position
     }
     fn query_actual_position_ms(&self) -> Result<u64, MediaError> {
+        if !self.started {
+            return Err(error("video is not open"));
+        }
         Ok(self.position)
     }
     fn duration_ms(&self) -> u64 {
@@ -472,10 +475,16 @@ impl VideoDecoder for MediaCodecDecoder {
         self.started
     }
     fn play(&mut self) -> Result<(), MediaError> {
+        if !self.started {
+            return Err(error("video is not open"));
+        }
         self.clock = Some((Instant::now(), self.position));
         Ok(())
     }
     fn pause(&mut self) -> Result<(), MediaError> {
+        if !self.started {
+            return Err(error("video is not open"));
+        }
         self.clock = None;
         Ok(())
     }
