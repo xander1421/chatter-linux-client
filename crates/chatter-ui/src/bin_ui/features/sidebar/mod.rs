@@ -432,13 +432,17 @@ pub(crate) fn conversation_removed(
     rebuild_chat_list(weak, ui_ctx);
 }
 
-/// [`rebuild_chat_list`] from the UI thread. Friends are synced from the
-/// server first — `list_friends_with_profiles` persists each accepted friend
-/// locally — so a friendship accepted on another device shows up too.
+/// [`rebuild_chat_list`] from the UI thread. Rows are rebuilt from local
+/// state at once, then again after friends are synced from the server —
+/// `list_friends_with_profiles` persists each accepted friend locally — so a
+/// friendship accepted on another device shows up too. The first rebuild must
+/// not wait on that sync: after entering Shield it runs over a cold Tor link,
+/// and the channel rows Shield hides stayed listed until Tor connected.
 pub fn refresh_chat_list(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak = slint::ComponentHandle::as_weak(window);
     let ui_ctx = ui_ctx.clone();
     tokio::spawn(async move {
+        rebuild_chat_list(&weak, &ui_ctx);
         let _ = ui_ctx.list_friends_with_profiles().await;
         rebuild_chat_list(&weak, &ui_ctx);
     });

@@ -5170,6 +5170,50 @@ mod transport_switch_tests {
         );
     }
 
+    /// Entering Shield hides channel rows straight from local state: the UI
+    /// rebuilds from `sidebar_rows` before any network call, so the filter
+    /// must not wait on the Tor link the flip just started (RC112: the
+    /// channel row stayed listed until Tor connected).
+    #[tokio::test]
+    async fn shield_hides_channel_rows_without_network() {
+        use crate::domain::channel::{Channel, ChannelType, MemberRole, Membership};
+        use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
+        let (client, _dir) = build_test_client();
+        let me = crate::domain::ids::UserId::new();
+        SettingsRepository::new(client.services.database.clone())
+            .set_string(keys::CURRENT_USER_ID, &me.to_string())
+            .unwrap();
+        let channel = Channel::new(
+            crate::domain::ids::ChannelId::new(),
+            "z2-channel".into(),
+            ChannelType::Private,
+            me,
+        );
+        let repo = crate::storage::repositories::channel_repo::ChannelRepository::new(
+            client.services.database.clone(),
+        );
+        repo.insert(&channel).unwrap();
+        repo.insert_membership(&Membership {
+            channel_id: channel.id,
+            user_id: me,
+            role: MemberRole::Owner,
+            joined_at: chrono::Utc::now(),
+            last_read_message_id: None,
+            is_muted: false,
+            muted_until: None,
+            notification_preference: Default::default(),
+        })
+        .unwrap();
+        let id = channel.id.to_string();
+        let listed = |c: &Arc<ChatterClient>| c.sidebar_rows().iter().any(|r| r.id == id);
+
+        assert!(listed(&client), "a stored channel is listed outside Shield");
+        client.set_anon_mode_enabled(true);
+        assert!(!listed(&client), "Shield hides it at once, from local state");
+        client.set_anon_mode_enabled(false);
+        assert!(listed(&client), "leaving Shield lists it again");
+    }
+
     /// The public toggle must remain race-safe when hammered: the sync flag
     /// tracks the last value and the spawned rebuild tasks (no provider yet)
     /// converge without panicking or hanging the caller.
