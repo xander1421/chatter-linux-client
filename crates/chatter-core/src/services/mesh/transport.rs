@@ -439,8 +439,8 @@ impl RouterTransport for NostrTransport {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crypto::os_rng;
     use chatter_mesh_link::{LinkId, LinkRole};
-    use rand_core_06::OsRng;
     use tokio::sync::mpsc;
 
     fn peer(s: &str) -> PeerId {
@@ -452,7 +452,7 @@ mod tests {
         Arc<MeshState>,
         mpsc::UnboundedReceiver<BleCommand>,
     ) {
-        let identity = Arc::new(MeshIdentity::generate(&mut OsRng));
+        let identity = Arc::new(MeshIdentity::generate(&mut os_rng()));
         let state = Arc::new(MeshState::new(identity.peer_id()));
         let (bus, rx) = crate::services::mesh::CommandBus::new();
         (
@@ -656,7 +656,7 @@ mod tests {
 
     #[test]
     fn the_directory_reads_a_key_straight_out_of_a_full_key_peer_id() {
-        let identity = Arc::new(MeshIdentity::generate(&mut OsRng));
+        let identity = Arc::new(MeshIdentity::generate(&mut os_rng()));
         let state = Arc::new(MeshState::new(identity.peer_id()));
         let directory = MeshDirectory::new(state);
 
@@ -667,7 +667,7 @@ mod tests {
 
     #[test]
     fn the_directory_has_no_key_for_a_nostr_only_peer() {
-        let identity = MeshIdentity::generate(&mut OsRng);
+        let identity = MeshIdentity::generate(&mut os_rng());
         let directory = MeshDirectory::new(Arc::new(MeshState::new(identity.peer_id())));
         // A secp256k1 pubkey is not a Noise static key; sealing to it would
         // produce envelopes nobody can open.

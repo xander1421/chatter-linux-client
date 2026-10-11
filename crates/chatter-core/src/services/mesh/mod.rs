@@ -1073,7 +1073,7 @@ mod tests {
         radio_factory: Option<Arc<dyn Fn() -> Arc<dyn MeshLink> + Send + Sync>>,
         connector: Option<Arc<dyn RelayConnector>>,
     ) -> MeshService {
-        let identity = Arc::new(MeshIdentity::generate(&mut rand_core_06::OsRng));
+        let identity = Arc::new(MeshIdentity::generate(&mut crate::crypto::os_rng()));
         let config = Arc::new(MeshConfig::default());
         let state = Arc::new(MeshState::new(identity.peer_id()));
         let nostr_state = Arc::new(NostrState::new());

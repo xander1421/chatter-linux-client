@@ -17,6 +17,7 @@
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
+use crate::crypto::os_rng;
 use chatter_mesh::ids::PeerId;
 use chatter_mesh::packet::{MessageType, NoisePayloadType, decode_noise_payload};
 use chatter_mesh::tlv::private_message::PrivateMessagePacket;
@@ -26,7 +27,6 @@ use chatter_mesh_nostr::types::{EventKind, NostrEvent};
 use chatter_mesh_nostr::{NostrError, builders, embed, geohash, wrap};
 use chatter_mesh_store::bridge_drop::DropOperationId;
 use chatter_mesh_store::outbox::AckKind;
-use rand_core_06::OsRng;
 use tokio::sync::mpsc::UnboundedReceiver;
 
 use super::config::MeshConfig;
@@ -365,7 +365,13 @@ impl NostrRuntime {
             }
         };
 
-        let wrapped = wrap::gift_wrap(&rumor, &recipient, &identity, now_secs() as i64, &mut OsRng);
+        let wrapped = wrap::gift_wrap(
+            &rumor,
+            &recipient,
+            &identity,
+            now_secs() as i64,
+            &mut os_rng(),
+        );
         match wrapped {
             Ok(event) => {
                 if let Err(error) = self.pool.publish(&event, &self.relays).await {
@@ -400,9 +406,13 @@ impl NostrRuntime {
         else {
             return;
         };
-        if let Ok(event) =
-            wrap::gift_wrap(&rumor, &recipient, &identity, now_secs() as i64, &mut OsRng)
-        {
+        if let Ok(event) = wrap::gift_wrap(
+            &rumor,
+            &recipient,
+            &identity,
+            now_secs() as i64,
+            &mut os_rng(),
+        ) {
             let _ = self.pool.publish(&event, &self.relays).await;
         }
     }
@@ -834,9 +844,9 @@ mod tests {
 
     #[test]
     fn a_gift_wrap_survives_the_round_trip_between_two_cell_identities() {
-        let mesh = MeshIdentity::generate(&mut OsRng);
+        let mesh = MeshIdentity::generate(&mut os_rng());
         let mut alice = NostrIdentities::from_mesh(&mesh);
-        let other = MeshIdentity::generate(&mut OsRng);
+        let other = MeshIdentity::generate(&mut os_rng());
         let mut bob = NostrIdentities::from_mesh(&other);
 
         let alice_id = alice.for_geohash("u4pruy").expect("alice identity");
@@ -854,7 +864,7 @@ mod tests {
             1_700_000_000_000,
         )
         .expect("embedded");
-        let wrapped = wrap::gift_wrap(&rumor, &bob_pubkey, alice_id, 1_700_000_000, &mut OsRng)
+        let wrapped = wrap::gift_wrap(&rumor, &bob_pubkey, alice_id, 1_700_000_000, &mut os_rng())
             .expect("wrapped");
 
         let bob_id = bob.for_geohash("u4pruy").expect("bob identity");

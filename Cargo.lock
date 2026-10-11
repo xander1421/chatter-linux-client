@@ -1998,8 +1998,9 @@ dependencies = [
  "criterion",
  "ctr",
  "directories",
- "ed25519-dalek 2.2.0",
+ "ed25519-dalek 3.0.0",
  "futures",
+ "getrandom 0.4.3",
  "gstreamer",
  "gstreamer-app",
  "gstreamer-pbutils",
@@ -2041,6 +2042,7 @@ dependencies = [
  "qrcode",
  "quinn",
  "rand 0.9.5",
+ "rand_core 0.10.1",
  "rand_core 0.6.4",
  "rayon",
  "reqwest 0.12.28",
@@ -2077,7 +2079,7 @@ dependencies = [
  "v4l",
  "webpki-roots 1.0.9",
  "windows 0.58.0",
- "x25519-dalek 2.0.1",
+ "x25519-dalek 3.0.0",
  "zbus",
  "zeroize",
 ]
@@ -2143,15 +2145,16 @@ version = "0.1.0"
 dependencies = [
  "chatter-mesh",
  "chatter-mesh-noise",
- "ed25519-dalek 2.2.0",
+ "ed25519-dalek 3.0.0",
+ "getrandom 0.4.3",
  "hex",
- "rand_core 0.6.4",
+ "rand_core 0.10.1",
  "serde",
  "serde_json",
  "sha2 0.11.0",
  "snow",
  "thiserror 2.0.21",
- "x25519-dalek 2.0.1",
+ "x25519-dalek 3.0.0",
 ]
 
 [[package]]
@@ -2165,7 +2168,7 @@ dependencies = [
  "hex",
  "hkdf 0.13.0",
  "hmac 0.13.0",
- "rand_core 0.6.4",
+ "rand_core 0.10.1",
  "secp256k1",
  "serde",
  "serde_json",
@@ -3115,6 +3118,7 @@ dependencies = [
  "curve25519-dalek-derive",
  "digest 0.11.3",
  "fiat-crypto 0.3.0",
+ "rand_core 0.10.1",
  "rustc_version",
  "subtle",
  "zeroize",
@@ -3460,7 +3464,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "c54e03a951783e8b327515db3f2a2fd0e3bed362a96b066f341ce66ed49b4ead"
 dependencies = [
  "data-encoding",
- "syn 3.0.7",
+ "syn 1.0.109",
 ]
 
 [[package]]
@@ -4088,6 +4092,7 @@ version = "3.0.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "29fcf32e6c73d1079f83ab4d782de2d81620346a5f38c6237a86a22f8368980a"
 dependencies = [
+ "pkcs8 0.11.0",
  "signature 3.0.0",
 ]
 
@@ -4115,7 +4120,10 @@ checksum = "6ebaa1a2bf1290ab3bfe5a7b771d050ebffab2711c19a81691c683a5144a25de"
 dependencies = [
  "curve25519-dalek 5.0.0",
  "ed25519 3.0.0",
+ "rand_core 0.10.1",
+ "serde",
  "sha2 0.11.0",
+ "signature 3.0.0",
  "subtle",
  "zeroize",
 ]

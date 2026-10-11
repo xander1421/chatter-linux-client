@@ -75,33 +75,30 @@ fn unhex_n<const N: usize>(s: &str) -> [u8; N] {
 /// to be *some* value so a round trip can run.
 struct TestRng(u64);
 
-impl rand_core::RngCore for TestRng {
-    fn next_u32(&mut self) -> u32 {
-        self.next_u64() as u32
+impl rand_core::TryRng for TestRng {
+    type Error = core::convert::Infallible;
+    fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+        Ok({ self.next_u64() as u32 })
     }
-
-    fn next_u64(&mut self) -> u64 {
-        self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
-        let mut z = self.0;
-        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
-        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
-        z ^ (z >> 31)
+    fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+        Ok({
+            self.0 = self.0.wrapping_add(0x9e37_79b9_7f4a_7c15);
+            let mut z = self.0;
+            z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+            z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+            z ^ (z >> 31)
+        })
     }
-
-    fn fill_bytes(&mut self, dest: &mut [u8]) {
+    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
         for chunk in dest.chunks_mut(8) {
             let word = self.next_u64().to_le_bytes();
             chunk.copy_from_slice(&word[..chunk.len()]);
         }
-    }
-
-    fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand_core::Error> {
-        self.fill_bytes(dest);
         Ok(())
     }
 }
 
-impl rand_core::CryptoRng for TestRng {}
+impl rand_core::TryCryptoRng for TestRng {}
 
 // ---------------------------------------------------------------------------
 // XChaCha20-Poly1305
@@ -1469,3 +1466,6 @@ mod relay_frames {
         }
     }
 }
+
+#[cfg(test)]
+use rand_core::Rng;

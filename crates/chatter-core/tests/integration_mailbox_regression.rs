@@ -718,7 +718,9 @@ async fn test_server_rejects_wrong_credentials() {
             );
 
             // Sign with a random key instead of our real private key
-            let wrong_signing_key = ed25519_dalek::SigningKey::generate(&mut rand_core_06::OsRng);
+            let wrong_signing_key = ed25519_dalek::SigningKey::generate(
+                &mut rand_core_10::UnwrapErr(getrandom::SysRng),
+            );
             let wrong_signature = wrong_signing_key.sign(&challenge_resp.challenge);
 
             let poll_wrong_sig = mailbox_client

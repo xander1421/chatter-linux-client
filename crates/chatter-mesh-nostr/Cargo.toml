@@ -43,7 +43,7 @@ base64 = "0.23.1"
 bech32 = "0.11"
 hex = "0.4"
 thiserror = "2"
-rand_core = "0.6"
+rand_core = "0.10.1"
 
 # No WebSocket or TLS stack lives here on purpose. `RelayConnector` is injected,
 # so the integration layer supplies a connection backed by the arti Tor client

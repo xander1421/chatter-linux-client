@@ -21,8 +21,7 @@ path = "src/lib.rs"
 # ============================================================================
 # Noise sessions and the mesh identity type. The crate holds no key custody by
 # design — `storage/mesh_identity_store.rs` provides it, over SQLCipher.
-# Its `rand_core` is 0.6, which is why the mesh identity is generated with the
-# `rand_core_06` alias below rather than the crate's main `rand` 0.9.
+# Mesh and dalek 3 use rand_core 0.10; Signal still requires rand 0.9.
 chatter-mesh-noise = { path = "../chatter-mesh-noise", optional = true }
 # Store-and-forward (P5). Leaves `Storage` and `Sealer` open on purpose so the
 # sealing key never enters that crate — `storage/mesh_store.rs` implements both.
@@ -77,7 +76,10 @@ usernames = { git = "https://github.com/signalapp/libsignal", rev = "4beb029d8a9
 # used as-is via its public `VrfPublicKey`. Also AGPL-3.0, same as `usernames`.
 libsignal-keytrans = { git = "https://github.com/signalapp/libsignal", rev = "4beb029d8a941f81e7d9c6d8af1ed25a677569a8" }
 rand = { version = "0.9", features = ["os_rng"] }
+# OPAQUE 4's public RNG traits still require rand_core 0.6.
 rand_core_06 = { package = "rand_core", version = "0.6", features = ["getrandom"] }
+rand_core_10 = { package = "rand_core", version = "0.10.1" }
+getrandom = { version = "0.4.3", features = ["sys_rng"] }
 blind-rsa-signatures = "0.18.0"
 rsa = "0.9.10"
 sha2 = "0.11.0"
@@ -97,8 +99,8 @@ ctr = "0.10.1"
 cbc = { version = "0.2.1", features = ["alloc", "zeroize"] }
 block-padding = "0.4.2"
 chacha20poly1305 = { version = "0.11.0", features = ["zeroize"] }
-x25519-dalek = { version = "2", features = ["static_secrets", "zeroize"] }
-ed25519-dalek = { version = "2", features = ["rand_core", "pem"] }
+x25519-dalek = { version = "3.0.0", features = ["static_secrets", "zeroize"] }
+ed25519-dalek = { version = "3.0.0", features = ["rand_core", "pem"] }
 subtle = "2.5"
 base64 = "0.23.1"
 base32 = "0.5"

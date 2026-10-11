@@ -50,10 +50,10 @@ snow = { version = "0.10", default-features = false, features = [
     "use-getrandom",
 ] }
 
-ed25519-dalek = { version = "2", features = ["rand_core"] }
-x25519-dalek = { version = "2", features = ["static_secrets"] }
+ed25519-dalek = { version = "3.0.0", features = ["rand_core"] }
+x25519-dalek = { version = "3.0.0", features = ["static_secrets"] }
 sha2 = "0.11.0"
-rand_core = "0.6"
+rand_core = "0.10.1"
 thiserror = "2"
 
 [dev-dependencies]
@@ -66,4 +66,4 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 hex = "0.4"
 # OsRng for the prekey generation test.
-rand_core = { version = "0.6", features = ["getrandom"] }
+getrandom = { version = "0.4.3", features = ["sys_rng"] }

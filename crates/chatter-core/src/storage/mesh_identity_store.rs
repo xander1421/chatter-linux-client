@@ -29,9 +29,9 @@
 
 use std::sync::Arc;
 
+use crate::crypto::os_rng;
 use chatter_mesh_noise::MeshIdentity;
 use chrono::Utc;
-use rand_core_06::OsRng;
 use rusqlite::{Connection, params};
 use zeroize::Zeroize;
 
@@ -84,7 +84,7 @@ impl MeshIdentityStore {
 
         // Fresh key material straight from the OS CSPRNG. NOT derived from, and
         // NOT shared with, the Signal identity key — see the module docs.
-        let identity = MeshIdentity::generate(&mut OsRng);
+        let identity = MeshIdentity::generate(&mut os_rng());
         let now = Utc::now().to_rfc3339();
 
         conn.execute(

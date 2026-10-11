@@ -54,12 +54,12 @@
 //! [`NostrError::InvalidPublicKey`] for the same reason: its validity is independent
 //! of our secret.
 
-use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine as _;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use chacha20poly1305::aead::Aead as _;
 use chacha20poly1305::{Key, KeyInit as _, XChaCha20Poly1305, XNonce};
 use hkdf::Hkdf;
-use rand_core::CryptoRngCore;
+use rand_core::CryptoRng;
 use secp256k1::ecdh::shared_secret_point;
 use secp256k1::{PublicKey, SecretKey};
 use sha2::Sha256;
@@ -131,7 +131,7 @@ pub fn encrypt(
     plaintext: &str,
     recipient_pubkey_hex: &str,
     sender_secret: &[u8; 32],
-    rng: &mut impl CryptoRngCore,
+    rng: &mut impl CryptoRng,
 ) -> Result<String, NostrError> {
     let shared = shared_secret(sender_secret, recipient_pubkey_hex)?;
     let conversation_key = derive_conversation_key(&shared);
@@ -385,33 +385,32 @@ mod tests {
         }
     }
 
-    impl rand_core::RngCore for FixedRng {
-        fn next_u32(&mut self) -> u32 {
-            let mut b = [0u8; 4];
-            self.fill_bytes(&mut b);
-            u32::from_le_bytes(b)
+    impl rand_core::TryRng for FixedRng {
+        type Error = core::convert::Infallible;
+        fn try_next_u32(&mut self) -> Result<u32, Self::Error> {
+            Ok({
+                let mut b = [0u8; 4];
+                self.fill_bytes(&mut b);
+                u32::from_le_bytes(b)
+            })
         }
-
-        fn next_u64(&mut self) -> u64 {
-            let mut b = [0u8; 8];
-            self.fill_bytes(&mut b);
-            u64::from_le_bytes(b)
+        fn try_next_u64(&mut self) -> Result<u64, Self::Error> {
+            Ok({
+                let mut b = [0u8; 8];
+                self.fill_bytes(&mut b);
+                u64::from_le_bytes(b)
+            })
         }
-
-        fn fill_bytes(&mut self, dest: &mut [u8]) {
+        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), Self::Error> {
             for slot in dest.iter_mut() {
                 *slot = self.bytes[self.cursor % self.bytes.len()];
                 self.cursor += 1;
             }
-        }
-
-        fn try_fill_bytes(&mut self, dest: &mut [u8]) -> Result<(), rand_core::Error> {
-            self.fill_bytes(dest);
             Ok(())
         }
     }
 
-    impl rand_core::CryptoRng for FixedRng {}
+    impl rand_core::TryCryptoRng for FixedRng {}
 
     fn nonce_rng(nonce: [u8; NONCE_LEN]) -> FixedRng {
         FixedRng::new(nonce.to_vec())
@@ -1082,3 +1081,6 @@ only one tip for the future, sunscreen would be it.";
         }
     }
 }
+
+#[cfg(test)]
+use rand_core::Rng;

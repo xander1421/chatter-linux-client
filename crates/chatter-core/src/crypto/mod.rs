@@ -63,3 +63,8 @@ pub use signal::{
     IdentityKeyManager, PreKeyManager, SealedSenderManager, SenderKeyManager, SessionManager,
     SignalStore,
 };
+
+/// Draw directly from the OS CSPRNG for Curve25519 and mesh key material.
+pub(crate) fn os_rng() -> rand_core_10::UnwrapErr<getrandom::SysRng> {
+    rand_core_10::UnwrapErr(getrandom::SysRng)
+}

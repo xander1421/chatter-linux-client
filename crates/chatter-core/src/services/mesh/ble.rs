@@ -258,7 +258,7 @@ impl BleRuntime {
                 .prekeys
                 .local
                 .as_mut()
-                .is_some_and(|local| local.refresh(now_ms, &mut rand_core_06::OsRng))
+                .is_some_and(|local| local.refresh(now_ms, &mut crate::crypto::os_rng()))
         });
         if !changed {
             return;
@@ -3769,11 +3769,11 @@ async fn transmit_forwarded(state: &Arc<MeshState>, packet: &BitchatPacket, ingr
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crypto::os_rng;
     use crate::services::mesh::events::MeshDelivery;
     use crate::services::mesh::mock::MockLink;
     use chatter_mesh_store::MemoryStorage;
     use chatter_mesh_store::storage::Storage;
-    use rand_core_06::OsRng;
 
     fn runtime() -> (BleRuntime, Arc<MockLink>, Arc<MeshState>) {
         let (runtime, radio, state, _timeline) = runtime_parts();
@@ -3792,7 +3792,7 @@ mod tests {
         Arc<crate::services::mesh::timeline::MeshTimeline>,
     ) {
         let radio = MockLink::shared();
-        let identity = Arc::new(MeshIdentity::generate(&mut OsRng));
+        let identity = Arc::new(MeshIdentity::generate(&mut os_rng()));
         let state = Arc::new(MeshState::new(identity.peer_id()));
         let nostr_state = Arc::new(NostrState::new());
         let timeline = crate::services::mesh::timeline::temp_timeline();
@@ -3826,7 +3826,7 @@ mod tests {
     /// A peer in the registry with a known signing key, as a verified announce
     /// would have left it. Returns the identity that has to sign for it.
     fn register_verified_peer(state: &MeshState, peer: &PeerId, nickname: &str) -> MeshIdentity {
-        let identity = MeshIdentity::generate(&mut OsRng);
+        let identity = MeshIdentity::generate(&mut os_rng());
         let announcement = AnnouncementPacket::new(
             nickname.to_string(),
             identity.static_public().to_vec(),
@@ -3848,7 +3848,7 @@ mod tests {
         let (mut runtime, _radio, state) = runtime();
         let peer = PeerId::from_str("bbbbbbbbbbbbbbbb");
         let identity = register_verified_peer(&state, &peer, "Alice");
-        let attacker = MeshIdentity::generate(&mut OsRng);
+        let attacker = MeshIdentity::generate(&mut os_rng());
         let link = LinkId::new("/mock/leave");
         let mut packet = BitchatPacket::new(
             MessageType::Leave,
@@ -3934,7 +3934,7 @@ mod tests {
         // A signed announce authored by the distant peer, arriving on that link.
         // Its ID has to be the one its own Noise key derives, as a real device's
         // is — an announce that claims any other ID is now refused outright.
-        let identity = MeshIdentity::generate(&mut OsRng);
+        let identity = MeshIdentity::generate(&mut os_rng());
         let distant = identity.peer_id();
         let announcement = AnnouncementPacket::new(
             "distant".to_string(),
@@ -3984,7 +3984,7 @@ mod tests {
     async fn a_replayed_noise_key_under_a_new_signing_key_cannot_take_over_a_known_peer() {
         let (mut runtime, _radio, state) = runtime();
 
-        let victim_identity = MeshIdentity::generate(&mut OsRng);
+        let victim_identity = MeshIdentity::generate(&mut os_rng());
         let victim = victim_identity.peer_id();
 
         // First contact: the victim announces itself, honestly.
@@ -4030,7 +4030,7 @@ mod tests {
 
         // The attacker replays the victim's Noise key — so the peer ID still
         // derives correctly — under its own signing key, and self-signs.
-        let attacker = MeshIdentity::generate(&mut OsRng);
+        let attacker = MeshIdentity::generate(&mut os_rng());
         let forged = AnnouncementPacket::new(
             "victim".to_string(),
             victim_identity.static_public().to_vec(), // heard off the air
@@ -4110,12 +4110,12 @@ mod tests {
         let (mut runtime, _radio, state) = runtime();
 
         // A real peer, whose ID genuinely derives from its own Noise key.
-        let victim_identity = MeshIdentity::generate(&mut OsRng);
+        let victim_identity = MeshIdentity::generate(&mut os_rng());
         let victim = victim_identity.peer_id();
 
         // The attacker claims the victim's ID and supplies its own two keys,
         // then signs with the matching signing secret.
-        let attacker = MeshIdentity::generate(&mut OsRng);
+        let attacker = MeshIdentity::generate(&mut os_rng());
         let announcement = AnnouncementPacket::new(
             "victim".to_string(),
             attacker.static_public().to_vec(),
@@ -4176,7 +4176,7 @@ mod tests {
         let (mut runtime, radio, state) = runtime();
 
         // Something identity-bearing in the store: one real peer's announce.
-        let subject = MeshIdentity::generate(&mut OsRng);
+        let subject = MeshIdentity::generate(&mut os_rng());
         let subject_peer = subject.peer_id();
         let announcement = AnnouncementPacket::new(
             "subject".to_string(),
@@ -4248,7 +4248,7 @@ mod tests {
         // devices in a room never exchange history at all.
         let (mut runtime, radio, state) = runtime();
 
-        let subject = MeshIdentity::generate(&mut OsRng);
+        let subject = MeshIdentity::generate(&mut os_rng());
         let subject_peer = subject.peer_id();
         let announcement = AnnouncementPacket::new(
             "subject".to_string(),
@@ -4308,9 +4308,9 @@ mod tests {
         // old forged announce a remote wipe of a real peer's gossip state.
         let (mut runtime, _radio, state) = runtime();
 
-        let victim_identity = MeshIdentity::generate(&mut OsRng);
+        let victim_identity = MeshIdentity::generate(&mut os_rng());
         let victim = victim_identity.peer_id();
-        let attacker = MeshIdentity::generate(&mut OsRng);
+        let attacker = MeshIdentity::generate(&mut os_rng());
         let announcement = AnnouncementPacket::new(
             "victim".to_string(),
             attacker.static_public().to_vec(),
@@ -4355,7 +4355,7 @@ mod tests {
         // attack looks like (`BLEAnnounceTrustPolicy`, `MessageHandler.kt:252`).
         let (mut runtime, _radio, state) = runtime();
 
-        let honest = MeshIdentity::generate(&mut OsRng);
+        let honest = MeshIdentity::generate(&mut os_rng());
         let peer = honest.peer_id();
         let first = AnnouncementPacket::new(
             "honest".to_string(),
@@ -4372,7 +4372,7 @@ mod tests {
         });
 
         // Same peer ID, attacker's keys, signed by the attacker.
-        let attacker = MeshIdentity::generate(&mut OsRng);
+        let attacker = MeshIdentity::generate(&mut os_rng());
         let swapped = AnnouncementPacket::new(
             "honest".to_string(),
             attacker.static_public().to_vec(),
@@ -4609,7 +4609,7 @@ mod tests {
 
         // The peer heard both live, as a real neighbour does.
         let now = now_secs();
-        let peer = MeshIdentity::generate(&mut OsRng).peer_id();
+        let peer = MeshIdentity::generate(&mut os_rng()).peer_id();
         let mut theirs = GossipSyncManager::new(&peer, SyncConfig::default(), None, now);
         for packet in &sent {
             theirs.on_public_packet_seen(packet, now);
@@ -4645,7 +4645,7 @@ mod tests {
 
         // A peer that announced on its own link, so the link is bound to it and
         // a response arriving there can be attributed to our request.
-        let subject = MeshIdentity::generate(&mut OsRng);
+        let subject = MeshIdentity::generate(&mut os_rng());
         let subject_peer = subject.peer_id();
         let announcement = AnnouncementPacket::new(
             "subject".to_string(),
@@ -4710,7 +4710,7 @@ mod tests {
         runtime: &mut BleRuntime,
         state: &MeshState,
     ) -> (MeshIdentity, LinkId) {
-        let peer = MeshIdentity::generate(&mut OsRng);
+        let peer = MeshIdentity::generate(&mut os_rng());
         let announcement = AnnouncementPacket::new(
             "android".to_string(),
             peer.static_public().to_vec(),
@@ -4841,7 +4841,7 @@ mod tests {
 
         // A link bound to a peer with no pinned announce, even with a request
         // of ours out to it.
-        let unpinned = MeshIdentity::generate(&mut OsRng).peer_id();
+        let unpinned = MeshIdentity::generate(&mut os_rng()).peer_id();
         let bound = writable_link(&state, "/mock/unpinned", 512);
         state.with(|inner| inner.links.bind_if_unbound(&bound, &unpinned));
         runtime
@@ -4861,7 +4861,7 @@ mod tests {
         let mut events = runtime.events.subscribe();
 
         let mut forged = android_sync_answer(&android, b"old", now_millis() - 600_000);
-        let other = MeshIdentity::generate(&mut OsRng);
+        let other = MeshIdentity::generate(&mut os_rng());
         forged.signature = Some(sign_packet(&other, &forged).expect("signs"));
         runtime.on_packet(&link, forged.clone()).await;
 
@@ -5161,7 +5161,7 @@ mod tests {
 
         let (mut runtime, radio, state) = runtime();
         let local_peer = runtime.identity.peer_id();
-        let peer_identity = MeshIdentity::generate(&mut OsRng);
+        let peer_identity = MeshIdentity::generate(&mut os_rng());
         let peer = peer_identity.peer_id();
         let link = LinkId::new("/mock/rekey");
         state.with(|inner| {
@@ -5245,7 +5245,7 @@ mod tests {
 
         let (mut runtime, radio, state) = runtime();
         let local_peer = runtime.identity.peer_id();
-        let peer_identity = MeshIdentity::generate(&mut OsRng);
+        let peer_identity = MeshIdentity::generate(&mut os_rng());
         let peer = peer_identity.peer_id();
         let link = LinkId::new("/mock/courier");
         state.with(|inner| {
@@ -5422,7 +5422,7 @@ mod tests {
     #[tokio::test]
     async fn a_peer_bundle_is_kept_only_when_its_pinned_key_signed_it() {
         let (mut runtime, _radio, state) = runtime();
-        let owner = MeshIdentity::generate(&mut OsRng);
+        let owner = MeshIdentity::generate(&mut os_rng());
         let announcement = AnnouncementPacket::new(
             "owner".to_string(),
             owner.static_public().to_vec(),
@@ -5441,7 +5441,7 @@ mod tests {
         });
 
         let mut theirs = super::super::prekeys::LocalPrekeys::default();
-        theirs.refresh(now_millis(), &mut OsRng);
+        theirs.refresh(now_millis(), &mut os_rng());
         let genuine = theirs.bundle(&owner).expect("bundle");
         let bundle_packet = |bundle: &PrekeyBundle| {
             BitchatPacket::new(
@@ -5455,7 +5455,7 @@ mod tests {
         };
 
         // Signed by someone else over the owner's static key: refused.
-        let forger = MeshIdentity::generate(&mut OsRng);
+        let forger = MeshIdentity::generate(&mut os_rng());
         let forged = PrekeyBundle::sign(
             owner.static_public(),
             genuine.prekeys.clone(),
@@ -5491,7 +5491,7 @@ mod tests {
         let mut events = runtime.events.subscribe();
         state.with(|inner| {
             let mut local = super::super::prekeys::LocalPrekeys::default();
-            local.refresh(now_millis(), &mut OsRng);
+            local.refresh(now_millis(), &mut os_rng());
             inner.prekeys.local = Some(local);
         });
         let bundle = state
@@ -5505,7 +5505,7 @@ mod tests {
             })
             .expect("bundle");
 
-        let sender = MeshIdentity::generate(&mut OsRng);
+        let sender = MeshIdentity::generate(&mut os_rng());
         let peer_state = MeshState::new(sender.peer_id());
         peer_state.with(|inner| inner.prekeys.peers.ingest(bundle.clone(), now_millis()));
         let inner = PrivateMessagePacket::new("PK-1".to_string(), "forward secret".to_string())
@@ -5557,7 +5557,7 @@ mod tests {
                 .local
                 .as_mut()
                 .unwrap()
-                .refresh(now_millis() + 1, &mut OsRng)
+                .refresh(now_millis() + 1, &mut os_rng())
         }));
         let refreshed = state
             .with(|inner| {
@@ -5705,7 +5705,7 @@ mod tests {
         // a self-signed packet would otherwise authenticate itself.
         let (mut runtime, _radio, _state, timeline) = runtime_parts();
         let stranger = PeerId::from_str("cccccccccccccccc");
-        let identity = MeshIdentity::generate(&mut OsRng);
+        let identity = MeshIdentity::generate(&mut os_rng());
 
         let packet = file_packet(&stranger, &identity, &sample_file(), None, true);
         let mut events = runtime.events.subscribe();
@@ -6385,7 +6385,7 @@ mod tests {
         // Nor does a validly signed manifest from a peer that never announced:
         // there is no key to check it against, so it authenticates itself.
         let stranger = PeerId::from_str("cccccccccccccccc");
-        let own = MeshIdentity::generate(&mut OsRng);
+        let own = MeshIdentity::generate(&mut os_rng());
         runtime.on_file_manifest(
             &manifest_packet(&stranger, &own, &manifest, true),
             &stranger,

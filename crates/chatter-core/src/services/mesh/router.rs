@@ -716,8 +716,8 @@ fn seal_for_drop(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crypto::os_rng;
     use chatter_mesh_store::MemoryStorage;
-    use rand_core_06::OsRng;
 
     /// Not encryption — just enough to prove the dedup blob round trips through
     /// the seal seam without pulling the real keyring in.
@@ -766,8 +766,8 @@ mod tests {
 
     #[test]
     fn a_drop_envelope_carries_only_ciphertext_and_opens_for_its_recipient() {
-        let identity = MeshIdentity::generate(&mut OsRng);
-        let recipient = MeshIdentity::generate(&mut OsRng);
+        let identity = MeshIdentity::generate(&mut os_rng());
+        let recipient = MeshIdentity::generate(&mut os_rng());
         let envelope = seal_for_drop(
             &MeshState::new(identity.peer_id()),
             &identity,
@@ -797,9 +797,9 @@ mod tests {
 
     #[test]
     fn a_stranger_cannot_open_a_drop() {
-        let identity = MeshIdentity::generate(&mut OsRng);
-        let recipient = MeshIdentity::generate(&mut OsRng);
-        let stranger = MeshIdentity::generate(&mut OsRng);
+        let identity = MeshIdentity::generate(&mut os_rng());
+        let recipient = MeshIdentity::generate(&mut os_rng());
+        let stranger = MeshIdentity::generate(&mut os_rng());
         let envelope = seal_for_drop(
             &MeshState::new(identity.peer_id()),
             &identity,

@@ -38,11 +38,11 @@
 //!   QR payload, builds a [`ProvisionMessage`] from local identity/profile
 //!   state, and calls [`encrypt_envelope`] before uploading.
 
+use crate::crypto::os_rng;
 use aes::cipher::{BlockModeDecrypt, BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7};
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use prost::Message;
-use rand_core_06::OsRng;
 use sha2::Sha256;
 use subtle::ConstantTimeEq;
 use x25519_dalek::{PublicKey, StaticSecret};
@@ -81,7 +81,7 @@ pub struct ProvisioningKeypair {
 impl ProvisioningKeypair {
     /// Generate a fresh ephemeral keypair.
     pub fn generate() -> Self {
-        let secret = StaticSecret::random_from_rng(OsRng);
+        let secret = StaticSecret::random_from_rng(&mut os_rng());
         let public = PublicKey::from(&secret).to_bytes();
         Self { secret, public }
     }
@@ -117,7 +117,7 @@ pub fn encrypt_envelope(
     recipient_pub: &[u8; PUB_LEN],
     message: &ProvisionMessage,
 ) -> Result<ProvisionEnvelope, CryptoError> {
-    let ephemeral = StaticSecret::random_from_rng(OsRng);
+    let ephemeral = StaticSecret::random_from_rng(&mut os_rng());
     let ephemeral_pub = PublicKey::from(&ephemeral).to_bytes();
 
     let peer = PublicKey::from(*recipient_pub);

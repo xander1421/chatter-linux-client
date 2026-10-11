@@ -154,10 +154,7 @@ pub fn next_generated_at(previous_ms: u64, now_ms: u64) -> u64 {
 ///
 /// The secret is returned as raw bytes because its custody (sealed storage,
 /// consumption, expiry) belongs to the caller; this crate holds no store.
-pub fn generate_prekey(
-    id: u32,
-    rng: &mut impl rand_core::CryptoRngCore,
-) -> (Prekey, [u8; KEY_LEN]) {
+pub fn generate_prekey(id: u32, rng: &mut impl rand_core::CryptoRng) -> (Prekey, [u8; KEY_LEN]) {
     let secret = x25519_dalek::StaticSecret::random_from_rng(rng);
     let public_key = x25519_dalek::PublicKey::from(&secret).to_bytes();
     (Prekey { id, public_key }, secret.to_bytes())
@@ -475,7 +472,7 @@ mod tests {
     #[test]
     fn a_generated_prekey_opens_what_is_sealed_to_its_public_half() {
         use crate::seal::{open_prekey, seal_prekey};
-        let mut rng = rand_core::OsRng;
+        let mut rng = rand_core::UnwrapErr(getrandom::SysRng);
         let (prekey, secret) = generate_prekey(9, &mut rng);
         assert_eq!(prekey.id, 9);
         assert_eq!(prekey_public(&secret), prekey.public_key);

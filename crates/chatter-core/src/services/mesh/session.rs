@@ -316,10 +316,10 @@ impl SessionManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use rand_core_06::OsRng;
+    use crate::crypto::os_rng;
 
     fn identity() -> MeshIdentity {
-        MeshIdentity::generate(&mut OsRng)
+        MeshIdentity::generate(&mut os_rng())
     }
 
     /// Drive a full XX exchange between two managers.

@@ -426,19 +426,11 @@ pub fn registration_lock_from_secret(svr_secret: &[u8; 32]) -> [u8; 32] {
 ///
 /// # Security: Zeroize on Drop
 ///
-/// The `secret` field (`StaticSecret` from x25519-dalek) implements `Zeroize` but does NOT
-/// implement `ZeroizeOnDrop`. We explicitly implement `Drop` to ensure the private key material
-/// is zeroized when the keypair goes out of scope, preventing key leakage through memory.
-/// The `zeroize` feature is enabled on `x25519-dalek` in Cargo.toml to support this.
+/// Dalek 3's `StaticSecret` implements `Drop` and `ZeroizeOnDrop` with the
+/// explicitly enabled `zeroize` feature, clearing the private key on release.
 pub struct SvrKeypair {
     secret: StaticSecret,
     public: PublicKey,
-}
-
-impl Drop for SvrKeypair {
-    fn drop(&mut self) {
-        self.secret.zeroize();
-    }
 }
 
 impl SvrKeypair {

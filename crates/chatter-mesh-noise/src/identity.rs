@@ -45,7 +45,7 @@ impl MeshIdentity {
     }
 
     /// Generates a fresh identity.
-    pub fn generate(rng: &mut impl rand_core::CryptoRngCore) -> Self {
+    pub fn generate(rng: &mut impl rand_core::CryptoRng) -> Self {
         let mut static_secret = [0u8; 32];
         let mut signing_secret = [0u8; 32];
         rng.fill_bytes(&mut static_secret);

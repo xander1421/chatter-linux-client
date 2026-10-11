@@ -60,7 +60,7 @@ impl LocalPrekeys {
     /// Returns whether the set changed and must be persisted, then republished
     /// — in that order, because a published prekey whose secret was never saved
     /// is mail that can never be opened.
-    pub fn refresh(&mut self, now_ms: u64, rng: &mut impl rand_core_06::CryptoRngCore) -> bool {
+    pub fn refresh(&mut self, now_ms: u64, rng: &mut impl rand_core_10::CryptoRng) -> bool {
         let before = self.keys.len();
         self.keys
             .retain(|key| !prekey_is_expired(key.created_at_ms, key.consumed_at_ms, now_ms));
@@ -326,20 +326,20 @@ pub fn open_envelope(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::crypto::os_rng;
     use chatter_mesh_noise::prekey::{
         CONSUMED_GRACE_MS, MAX_BUNDLE_AGE_FOR_SEALING_MS, REPLENISH_THRESHOLD,
     };
-    use rand_core_06::OsRng;
 
     const NOW: u64 = 1_800_000_000_000;
 
     fn identity() -> MeshIdentity {
-        MeshIdentity::generate(&mut OsRng)
+        MeshIdentity::generate(&mut os_rng())
     }
 
     fn fresh() -> LocalPrekeys {
         let mut local = LocalPrekeys::default();
-        assert!(local.refresh(NOW, &mut OsRng));
+        assert!(local.refresh(NOW, &mut os_rng()));
         local
     }
 
@@ -380,7 +380,7 @@ mod tests {
         );
 
         // The consumed prekey leaves the next bundle, under a newer stamp.
-        assert!(local.refresh(NOW + 1, &mut OsRng));
+        assert!(local.refresh(NOW + 1, &mut os_rng()));
         let next = local.bundle(&me).unwrap();
         assert!(next.prekeys.iter().all(|p| p.id != prekey.id));
         assert!(next.generated_at > NOW);
@@ -397,11 +397,11 @@ mod tests {
             let sealed = seal_prekey(b"x", prekey.id, &prekey.public_key, &sender).unwrap();
             assert!(local.open(prekey.id, &sealed, &me, NOW).is_some());
         }
-        assert!(local.refresh(NOW + 1, &mut OsRng));
+        assert!(local.refresh(NOW + 1, &mut os_rng()));
         assert_eq!(local.bundle(&me).unwrap().prekeys.len(), MAX_PREKEYS);
         // Nothing changed since: no stamp bump, no republish.
         local.mark_saved();
-        assert!(!local.refresh(NOW + 2, &mut OsRng));
+        assert!(!local.refresh(NOW + 2, &mut os_rng()));
     }
 
     #[test]
@@ -445,7 +445,7 @@ mod tests {
             "a stale bundle is not sealed to"
         );
         local.dirty = true;
-        assert!(local.refresh(NOW + 5, &mut OsRng));
+        assert!(local.refresh(NOW + 5, &mut os_rng()));
         assert!(peers.ingest(local.bundle(&me).unwrap(), NOW + 5));
     }
 }
