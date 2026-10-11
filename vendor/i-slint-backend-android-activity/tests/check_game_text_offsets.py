@@ -15,9 +15,9 @@ import tempfile
 backend = Path(__file__).resolve().parents[1]
 source = (backend / "androidwindowadapter.rs").read_text()
 outbound = source[source.index("    fn set_game_text_input_state("):
-                  source.index("    fn try_dispatch_key_event(")]
+                  source.index("    pub(crate) fn set_text_input_bridge(")]
 incoming_start = source.index("                    let mut state = state.clone();")
-incoming = source[incoming_start:source.index("                    // No live field", incoming_start)]
+incoming = source[incoming_start:source.index("                    self.deliver_ime_state(state);", incoming_start)]
 unicode_path = os.environ.get("SLINT_UNICODE_UTILS")
 if unicode_path is None:
     candidates = sorted((Path.home() / ".cargo/registry/src").glob(
@@ -50,7 +50,22 @@ struct RecordingApp(std::cell::RefCell<Option<TextInputState>>);
 impl RecordingApp {
     fn set_text_input_state(&self, state: TextInputState) { *self.0.borrow_mut() = Some(state); }
 }
-struct AndroidWindowAdapter { app: RecordingApp }
+#[derive(Clone, Debug, PartialEq)]
+struct TextInputPush {
+    text: String, selection: (usize,usize), compose: Option<(usize,usize)>, owner: u64, generation: u64,
+}
+trait TextInputBridge { fn push(&self, state: &TextInputPush) -> bool; }
+#[derive(Default)]
+struct Publication;
+impl Publication { fn pushed(&self, _: bool) {} }
+#[derive(Default)]
+struct AndroidWindowAdapter {
+    app: RecordingApp,
+    text_bridge: std::cell::RefCell<Option<std::rc::Rc<dyn TextInputBridge>>>,
+    ime_owner: std::cell::Cell<u64>,
+    ime_generation: std::cell::Cell<u64>,
+    publication: Publication,
+}
 impl AndroidWindowAdapter {
 OUTBOUND
 }
@@ -60,7 +75,7 @@ INCOMING
 }
 #[test]
 fn real_boundary_preserves_text_selection_and_native_composition() {
-    let adapter = AndroidWindowAdapter { app: RecordingApp::default() };
+    let adapter = AndroidWindowAdapter::default();
     for (text, selection, compose, byte_selection, byte_compose) in [
         ("а", (1,1), Some((0,1)), (2,2), Some((0,2))),
         ("ап", (2,2), Some((0,2)), (4,4), Some((0,4))),

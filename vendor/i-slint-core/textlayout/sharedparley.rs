@@ -1414,11 +1414,10 @@ pub fn draw_text_input(
         return;
     };
 
-    let selection_range = if !visual_representation.preedit_range.is_empty() {
-        visual_representation.preedit_range.start..visual_representation.preedit_range.end
-    } else {
-        visual_representation.selection_range.start..visual_representation.selection_range.end
-    };
+    // Composition is not selection. The visual representation already carries
+    // the IME's actual selected subrange (or a collapsed caret); highlighting
+    // the entire preedit makes every composing word look selected on Android.
+    let selection_range = visual_representation.selection_range.clone();
 
     let scale_factor = ScaleFactor::new(item_renderer.scale_factor());
 

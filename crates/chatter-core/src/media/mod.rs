@@ -1,10 +1,8 @@
 //! Media handling layer.
 //!
 //! Image, audio, video processing and playback.
-//! Uses GStreamer for cross-platform video:
-//! - Desktop: Linux, Windows, macOS
-//! - Mobile: Android, iOS (via GStreamer SDK)
-//! - Hardware acceleration on all platforms
+//! GStreamer provides desktop decoding and audio playback. Android uses the
+//! NDK MediaCodec video decoder; Android video audio output is still pending.
 
 pub mod audio_player;
 pub mod audio_recorder;

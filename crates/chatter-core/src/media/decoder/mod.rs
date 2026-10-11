@@ -2,11 +2,8 @@
 //!
 //! GStreamer, with hardware acceleration, on Linux, Windows and macOS.
 //!
-//! ANDROID HAS NO VIDEO DECODER. The cfg below selects `mediacodec` there, whose
-//! constructor always fails — the MediaCodec binding was never written
-//! (FEAT-11, OPEN-ITEMS §91). This doc comment used to say GStreamer "works on
-//! Desktop and Mobile (Android/iOS)", which the cfg immediately below it
-//! contradicts.
+//! Android uses the NDK MediaCodec byte-buffer decoder (linear 8-bit YUV420).
+//! Audio output and vendor-specific/HDR layouts remain unsupported there.
 
 use std::path::Path;
 
@@ -24,7 +21,10 @@ mod gstreamer;
 ))]
 pub use self::gstreamer::GStreamerDecoder as PlatformDecoder;
 
-// Future platform implementations
+#[cfg(any(target_os = "android", test))]
+mod yuv;
+
+// Android NDK implementation
 #[cfg(target_os = "android")]
 mod mediacodec;
 #[cfg(target_os = "android")]
@@ -141,17 +141,23 @@ pub trait VideoDecoder: Send {
 
 /// Create a new platform-specific decoder.
 pub fn create_decoder() -> Result<Box<dyn VideoDecoder>, MediaError> {
-    #[cfg(all(
-        feature = "desktop-gstreamer",
-        any(target_os = "linux", target_os = "windows")
+    #[cfg(any(
+        target_os = "android",
+        all(
+            feature = "desktop-gstreamer",
+            any(target_os = "linux", target_os = "windows", target_os = "macos")
+        )
     ))]
     {
         Ok(Box::new(PlatformDecoder::new()?))
     }
 
-    #[cfg(not(all(
-        feature = "desktop-gstreamer",
-        any(target_os = "linux", target_os = "windows")
+    #[cfg(not(any(
+        target_os = "android",
+        all(
+            feature = "desktop-gstreamer",
+            any(target_os = "linux", target_os = "windows", target_os = "macos")
+        )
     )))]
     {
         Err(MediaError::InvalidFormat(

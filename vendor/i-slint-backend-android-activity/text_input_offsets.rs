@@ -23,9 +23,27 @@ pub(crate) fn utf8_span_to_utf16(text: &str, span: (usize, usize)) -> (usize, us
     )
 }
 
+/// NativeActivity supplies the selection in the merged text. Core needs offsets
+/// relative to the preedit, preserving a collapsed caret and selection direction.
+pub(crate) fn preedit_selection(
+    compose: core::ops::Range<usize>, anchor: usize, cursor: usize,
+) -> core::ops::Range<i32> {
+    let relative = |offset: usize| offset.clamp(compose.start, compose.end) - compose.start;
+    relative(anchor) as i32..relative(cursor) as i32
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn composing_word_keeps_caret_and_actual_subselection() {
+        // Merged UTF-8 text "hi а😀z", with composition bytes 3..10.
+        // Typing with a caret must not select the whole composing word.
+        assert_eq!(preedit_selection(3..10, 9, 9), 6..6);
+        assert_eq!(preedit_selection(3..10, 9, 5), 6..2);
+        assert_eq!(preedit_selection(3..10, 0, 99), 0..7);
+    }
 
     #[test]
     fn cyrillic_native_typing_and_backspace_keep_the_caret_at_the_end() {

@@ -209,3 +209,12 @@ are GL on a SurfaceView, so `dumpsys gfxinfo` does not see them).
   `reset_pending`, since it stands in for the reset the gate never got).
   A change of IME client retires it. No timer, no redraw request, no
   content rule.
+
+- C4 (2026-10-11), `javahelper.rs` / `text_input_offsets.rs`: NativeActivity
+  preserves the real preedit-relative anchor/caret instead of selecting the
+  whole composition. Paired with sharedparley's selection-only rendering.
+  Reversed composing spans are treated as committed text, avoiding invalid
+  slicing. Host coverage lives in `check_game_text_offsets.py`, whose extraction
+  boundary and recording seam now match the bridge-aware production method.
+  `check_picker_focus_lifecycle.py` now extracts the relocated inbound guard and
+  models owner epochs; its focus-loss and field-switch regressions pass again.

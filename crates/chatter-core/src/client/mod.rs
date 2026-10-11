@@ -438,6 +438,15 @@ impl ChatterClient {
         ClientBuilder::new()
     }
 
+    /// Warm Tor directory/guard state during interactive app startup. This
+    /// contacts Tor relays only, never the Chatter service; secret and Shield
+    /// clients still derive their isolated circuits at first use. Explicit
+    /// startup keeps SDK construction and offline tests free of network work.
+    pub fn prewarm_tor(&self) {
+        #[cfg(feature = "onion")]
+        crate::network::grpc::onion_transport::prewarm(self.services.grpc_pool.onion_tor());
+    }
+
     /// Server-backed account inbox / channel management presentation.
     pub async fn server_records_page(
         &self,

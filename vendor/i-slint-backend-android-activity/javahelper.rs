@@ -603,7 +603,7 @@ fn callback_update_text<'local>(
         if let Some(adaptor) = CURRENT_WINDOW.with_borrow(|x| x.upgrade()) {
             adaptor.show_cursor_handles.set(false);
             let runtime_window = i_slint_core::window::WindowInner::from_pub(&adaptor.window);
-            let event = if preedit_start != preedit_end {
+            let event = if preedit_start < preedit_end {
                 let adjust = |pos| {
                     if pos <= preedit_start {
                         pos
@@ -620,7 +620,9 @@ fn callback_update_text<'local>(
                 InternalKeyEvent {
                     event_type: KeyEventType::UpdateComposition,
                     preedit_text: text[preedit_start..preedit_end].into(),
-                    preedit_selection: Some(0..(preedit_end - preedit_start) as i32),
+                    preedit_selection: Some(crate::text_input_offsets::preedit_selection(
+                        preedit_start..preedit_end, anchor_position, cursor_position,
+                    )),
                     replacement_range: Some(i32::MIN..i32::MAX),
                     cursor_position: Some(adjust(cursor_position)),
                     anchor_position: Some(adjust(anchor_position)),

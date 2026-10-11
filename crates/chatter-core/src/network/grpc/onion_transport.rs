@@ -6,7 +6,7 @@
 //! Each dial hands tonic a [`DataStream`] tunnelled through Tor to the pinned
 //! `.onion`, which hides both the client's and the server's IP.
 //!
-//! The [`arti_client::TorClient`] bootstraps **lazily** on the first dial
+//! The [`arti_client::TorClient`] is prewarmed at app launch, with first-dial retry
 //! (bootstrap walks the Tor directory and is slow) and is then cached in a
 //! shared [`OnceCell`] so every reconnect reuses the same warm client.
 //!
@@ -168,6 +168,40 @@ pub(crate) fn tor_runtime() -> &'static tokio::runtime::Handle {
 /// The bootstrapped Tor client, shared across the pool so bootstrap happens once.
 pub type SharedTorClient = Arc<OnceCell<TorClient<PreferredRuntime>>>;
 
+/// Start directory/guard bootstrap while the app is initializing. No service
+/// connection is opened here, and secret/unidentified isolation is still derived
+/// only at dial time. A failed warmup is retryable through the same OnceCell.
+pub fn prewarm(tor: SharedTorClient) {
+    tor_runtime().spawn(async move {
+        if shared_bootstrap(&tor).await.is_err() {
+            tracing::warn!("Tor startup warmup failed; next request will retry");
+        }
+    });
+}
+
+async fn shared_bootstrap(
+    tor: &SharedTorClient,
+) -> Result<&TorClient<PreferredRuntime>, std::io::Error> {
+    let base_result = tokio::time::timeout(
+        BOOTSTRAP_TIMEOUT,
+        tor.get_or_try_init(|| async {
+            let config =
+                tor_client_config().map_err(|e| io_err(format!("onion transport: {e}")))?;
+            let jh = tor_runtime().spawn(async {
+                // Arti's rustls runtime needs a process-wide default rustls
+                // CryptoProvider. Without it, guard/HS-descriptor/rendezvous
+                // TLS silently fails ("no CryptoProvider is installed").
+                // Idempotent — Err means another init already installed one.
+                let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
+                TorClient::create_bootstrapped(config).await
+            });
+            await_tor_task(jh, BOOTSTRAP_TIMEOUT, "bootstrap").await
+        }),
+    )
+    .await;
+    base_result.map_err(|_| io_err("onion transport: shared Tor bootstrap timed out after 120s"))?
+}
+
 /// A `tower::Service<Uri>` that dials the pinned `.onion` over Tor.
 ///
 /// Cheaply cloneable — tonic clones the connector internally. All clones share
@@ -241,45 +275,16 @@ impl Service<Uri> for OnionConnector {
                 }
                 let port = uri.port_u16().unwrap_or(443);
 
-                // Lazily bootstrap the Tor client on the first dial, then reuse it.
-                // The bootstrap is SPAWNED onto the dedicated Tor runtime (not awaited
-                // inline) so Arti binds to that runtime's threads — see [`tor_runtime`].
-                // The app runtime only awaits the JoinHandle. A 120s ceiling turns a
-                // stalled bootstrap (censored/blocked directory) into a retryable error
-                // instead of a permanent wedge — `get_or_try_init` caches only Ok, so a
-                // failed attempt is re-tried on the next dial.
-                tracing::info!(
-                    initialized = tor.initialized(),
-                    "onion bootstrap cache state"
-                );
+                // Reuse launch warmup, or initialize here if it failed/was not run.
                 let mut bootstrap_trace = PhaseTrace::new("bootstrap_wait");
-                let base_result = tokio::time::timeout(
-                    BOOTSTRAP_TIMEOUT,
-                    tor.get_or_try_init(|| async {
-                        let config = tor_client_config()
-                            .map_err(|e| io_err(format!("onion transport: {e}")))?;
-                        let jh = tor_runtime().spawn(async {
-                            // Arti's rustls runtime needs a process-wide default rustls
-                            // CryptoProvider. Without it, guard/HS-descriptor/rendezvous
-                            // TLS silently fails ("no CryptoProvider is installed").
-                            // Idempotent — Err means another init already installed one.
-                            let _ = tokio_rustls::rustls::crypto::ring::default_provider()
-                                .install_default();
-                            TorClient::create_bootstrapped(config).await
-                        });
-                        await_tor_task(jh, BOOTSTRAP_TIMEOUT, "bootstrap").await
-                    }),
-                )
-                .await;
-                bootstrap_trace.outcome = match &base_result {
-                    Err(_) => "timeout",
-                    Ok(Err(_)) => "failed",
-                    Ok(Ok(_)) => "completed",
+                let result = shared_bootstrap(&tor).await;
+                bootstrap_trace.outcome = if result.is_ok() {
+                    "completed"
+                } else {
+                    "failed"
                 };
                 drop(bootstrap_trace);
-                let base = base_result.map_err(|_| {
-                    io_err("onion transport: shared Tor bootstrap timed out after 120s")
-                })??;
+                let base = result?;
                 // get_or_try_init publishes only success. Cancellation drops the
                 // initializer and releases its permit, so the next waiter retries;
                 // await_tor_task's guard aborts the initializer's spawned work.
@@ -402,8 +407,8 @@ mod tests {
     #[tokio::test]
     async fn failed_initializer_is_retryable_and_success_is_cached() {
         let cell = OnceCell::new();
-        assert!(cell
-            .get_or_try_init(|| async {
+        assert!(
+            cell.get_or_try_init(|| async {
                 await_tor_task(
                     tor_runtime().spawn(async { Err::<(), _>("synthetic bootstrap failure") }),
                     BOOTSTRAP_TIMEOUT,
@@ -412,7 +417,8 @@ mod tests {
                 .await
             })
             .await
-            .is_err());
+            .is_err()
+        );
         assert!(!cell.initialized());
         cell.get_or_try_init(|| async { Ok::<(), std::io::Error>(()) })
             .await

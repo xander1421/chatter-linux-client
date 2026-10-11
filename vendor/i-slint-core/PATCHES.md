@@ -54,3 +54,9 @@ message's existing Cancel callback, so returning before release cannot revive
 the URL or its hold timer. The rich-text movement/exit regressions wait for
 Flickable's 100 ms delayed Down delivery before exercising the link grab;
 the drag and item-exit cases explicitly move back before release.
+
+Android composition (C4, 2026-10-11): `textlayout/sharedparley.rs` paints only
+`selection_range`, not the entire `preedit_range`. The native Android callback
+now supplies the actual anchor/caret relative to preedit; a composing word with
+a collapsed caret keeps ordinary text colors. GameActivity already delivers
+composition as committed text while preserving its native composing region.

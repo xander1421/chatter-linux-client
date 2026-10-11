@@ -12,8 +12,8 @@ source = (backend / "androidwindowadapter.rs").read_text()
 start = source.index("            InputMethodRequest::Disable => {", source.index('#[cfg(not(feature = "native-activity"))]'))
 end = source.index("            _ => return,", start)
 disable = source[start:end]
-start = source.index("                    // No live field")
-end = source.index("                    // Drop GameTextInput", start)
+start = source.index("        // No live field", source.index("    fn deliver_ime_state("))
+end = source.index("        // Drop GameTextInput", start)
 inbound_guard = source[start:end]
 start = source.index("            InputMethodRequest::Update(props) => {", source.index('#[cfg(not(feature = "native-activity"))]'))
 end = source.index("            InputMethodRequest::Disable => {", start)
@@ -45,6 +45,7 @@ impl RecordingApp {
 struct AndroidWindowAdapter {
     app: RecordingApp,
     ime_client: RefCell<Option<usize>>,
+    ime_owner: Cell<u64>,
     deferred_ime_update: RefCell<Option<()>>,
     had_compose: Cell<bool>,
     last_ime_epoch: RefCell<Option<()>>,
@@ -80,10 +81,9 @@ UPDATE
     fn set_game_text_input_state(&self, state: TextInputState) { self.app.set_text_input_state(state); }
     fn ime_client_vanished(&self) -> bool { false }
     fn release_vanished_ime_client(&self, _: bool) {}
-    fn incoming(&self, state: TextInputState) -> InputStatus {
+    fn incoming(&self, state: TextInputState) {
 GUARD
         self.delivered.borrow_mut().push(state);
-        InputStatus::Handled
     }
 }
 #[test]

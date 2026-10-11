@@ -316,6 +316,9 @@ pub async fn app_init() -> AppState {
             std::process::exit(1);
         }
     };
+    // Overlap Tor directory/guard work with UI/login. This never contacts the
+    // Chatter service, including when signed out on the Shield sign-in screen.
+    client.prewarm_tor();
     let ui_ctx = client.clone();
 
     // Let incoming-call notification actions (Accept/Decline) reach the client.
