@@ -940,6 +940,7 @@ pub mod auth_service_client {
                 .insert(GrpcMethod::new("chat.v1.AuthService", "GetPreKeyBundle"));
             self.inner.unary(req, path, codec).await
         }
+        ///
         pub async fn refresh_pre_keys(
             &mut self,
             request: impl tonic::IntoRequest<super::RefreshPreKeysRequest>,
@@ -3101,7 +3102,6 @@ pub mod integration_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
-        ///
         pub async fn get_channel_integrations(
             &mut self,
             request: impl tonic::IntoRequest<super::GetChannelIntegrationsRequest>,
@@ -3131,8 +3131,6 @@ pub mod integration_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
-        /** Event streaming
-*/
         pub async fn stream_integration_events(
             &mut self,
             request: impl tonic::IntoRequest<super::StreamIntegrationEventsRequest>,
@@ -3164,8 +3162,6 @@ pub mod integration_service_client {
                 );
             self.inner.server_streaming(req, path, codec).await
         }
-        /** Get model limits
-*/
         pub async fn get_model_limits(
             &mut self,
             request: impl tonic::IntoRequest<super::GetModelLimitsRequest>,
