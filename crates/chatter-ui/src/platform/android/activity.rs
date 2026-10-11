@@ -16,7 +16,12 @@ static ACTIVITY: OnceLock<Global<JObject<'static>>> = OnceLock::new();
 /// Run a JNI operation inside a managed thread attachment and local frame.
 pub fn with_jni_env<T>(body: impl FnOnce(&mut Env<'_>) -> Result<T, String>) -> Result<T, String> {
     let ctx = ndk_context::android_context();
-    let vm = unsafe { JavaVM::from_raw(ctx.vm().cast()) };
+    let raw_vm = ctx.vm();
+    if raw_vm.is_null() {
+        return Err("Android runtime has no JavaVM".to_owned());
+    }
+    // SAFETY: ndk-context supplies the process VM; null is rejected above.
+    let vm = unsafe { JavaVM::from_raw(raw_vm.cast()) };
     vm.attach_current_thread_for_scope(|env| Ok::<_, jni::errors::Error>(body(env)))
         .map_err(|e| e.to_string())?
 }

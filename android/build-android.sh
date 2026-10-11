@@ -80,9 +80,9 @@ export PKG_CONFIG_PATH="$GSTREAMER_ROOT_ANDROID/arm64/lib/pkgconfig"
 # separate OpenSSL — so the whole cdylib has exactly ONE libcrypto (BoringSSL).
 # A separate OpenSSL would collide with webrtc's BoringSSL on the same symbol
 # names (different ABI) and corrupt the heap in webrtc's network thread on calls.
-# SQLCipher 4.5.7 is BoringSSL-compatible (uses EVP_CIPHER_nid + OBJ_nid2sn, not
-# the BoringSSL-removed EVP_CIPHER_name). libwebrtc.a exports every symbol it
-# needs (EVP_*, HMAC, PKCS5_PBKDF2_HMAC, RAND_bytes — verified).
+# SQLCipher 4.6.1 (rusqlite 0.37) is BoringSSL-compatible. Newer SQLCipher
+# requires OpenSSL 3 EVP_MAC APIs, absent in the pinned libwebrtc BoringSSL.
+# Keep the compatible rusqlite pin until the native SDK supports those APIs.
 setup_boringssl_for_sqlcipher() {
     local webrtc_a webrtc_inc stage
     # Bootstrap before any Cargo step: SQLCipher needs these headers/archive
@@ -255,8 +255,8 @@ if [ "${MULTI_INSTANCE:-0}" = "1" ]; then
         rm -f "app/build/outputs/apk/$variant/debug/app-$variant-debug.apk"
     done
 fi
-# Gradle 8.10 needs a supported JDK; Android Studio may bundle a newer one.
-JAVA_HOME="${JAVA_HOME:-/usr/lib/jvm/java-17-openjdk}" ./gradlew :app:$GRADLE_TASK "${GRADLE_ARGS[@]}" --no-daemon
+# AGP 9 needs JDK 21+; Gradle 9.8.1 supports the installed stable JDK 27.
+JAVA_HOME="${JAVA_HOME:-/usr/lib/jvm/java-27-openjdk}" ./gradlew :app:$GRADLE_TASK "${GRADLE_ARGS[@]}" --no-daemon
 [ -f "$APK" ] || { echo "FATAL: $APK missing (unsigned release?)"; exit 1; }
 if [ "${RELEASE:-0}" = "1" ]; then
     # Prove the shipped APK carries the release signer, never the debug key.
@@ -272,7 +272,7 @@ if [ "${RELEASE:-0}" = "1" ]; then
     # same certificate as the APK, which the digest comparison proves.
     [ -f "$AAB" ] || { echo "FATAL: $AAB missing"; exit 1; }
     APK_DIGEST="$(grep -m1 'certificate SHA-256 digest:' <<<"$SIGNER" | awk '{print $NF}')"
-    AAB_DIGEST="$("${JAVA_HOME:-/usr/lib/jvm/java-17-openjdk}/bin/keytool" -printcert -jarfile "$AAB" \
+    AAB_DIGEST="$("${JAVA_HOME:-/usr/lib/jvm/java-27-openjdk}/bin/keytool" -printcert -jarfile "$AAB" \
         | awk '/SHA256:/ {print tolower($2); exit}' | tr -d ':')"
     [ -n "$APK_DIGEST" ] && [ "$AAB_DIGEST" = "$APK_DIGEST" ] \
         || { rm -f "$AAB"; echo "FATAL: $AAB is unsigned or not signed by the APK's release certificate; removed"; exit 1; }
