@@ -490,6 +490,15 @@ where
                     continue;
                 }
                 tracing::warn!("Frame decode error: {}", e);
+                // Android's unsupported layouts/codec errors are terminal;
+                // retrying them would spin forever instead of surfacing the
+                // decoder's explicit limitation through PlayerState::error.
+                #[cfg(target_os = "android")]
+                {
+                    dec.close();
+                    return Err(e);
+                }
+                #[cfg(not(target_os = "android"))]
                 continue;
             }
         }
