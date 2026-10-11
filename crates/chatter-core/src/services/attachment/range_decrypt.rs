@@ -18,8 +18,7 @@
 //! before constructing this — see `AttachmentService::open_range_decryptor`.
 
 use aes::Aes256;
-use aes::cipher::generic_array::GenericArray;
-use aes::cipher::{BlockDecrypt, KeyInit};
+use aes::cipher::{BlockCipherDecrypt, KeyInit};
 use memmap2::Mmap;
 
 const IV_LEN: usize = 16;
@@ -54,7 +53,7 @@ impl CbcRangeDecryptor {
                 "plaintext_size {plaintext_size} exceeds ciphertext {encrypted_len}"
             ));
         }
-        let cipher = Aes256::new(GenericArray::from_slice(aes_key));
+        let cipher = Aes256::new(aes_key.into());
         Ok(Self {
             mmap,
             cipher,
@@ -101,8 +100,7 @@ impl CbcRangeDecryptor {
         for b in start_block..=end_block {
             let mut blk = [0u8; AES_BLOCK];
             blk.copy_from_slice(self.cipher_block(b));
-            self.cipher
-                .decrypt_block(GenericArray::from_mut_slice(&mut blk));
+            self.cipher.decrypt_block((&mut blk).into());
             let chain = self.chain_block(b);
             for i in 0..AES_BLOCK {
                 blk[i] ^= chain[i];

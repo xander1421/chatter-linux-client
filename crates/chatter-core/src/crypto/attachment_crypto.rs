@@ -27,8 +27,7 @@
 //! - Full pipeline: ~1 GB/s
 
 use aes::cipher::block_padding::NoPadding;
-use aes::cipher::generic_array::GenericArray;
-use aes::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit};
+use aes::cipher::{BlockModeDecrypt, BlockModeEncrypt, KeyIvInit};
 use sha2::{Digest, Sha256};
 
 use crate::crypto::hmac_compat::Sha256Stream;
@@ -221,7 +220,7 @@ impl AttachmentCrypto {
         let len = buf.len();
         Aes256CbcEnc::new_from_slices(key, iv)
             .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("AES init: {e}")))?
-            .encrypt_padded_mut::<NoPadding>(&mut buf, len)
+            .encrypt_padded::<NoPadding>(&mut buf, len)
             .map_err(|e| CryptoError::AttachmentEncryptionFailed(format!("AES encrypt: {e}")))?;
         Ok(buf)
     }
@@ -234,13 +233,11 @@ impl AttachmentCrypto {
         iv: &[u8],
         ciphertext: &[u8],
     ) -> Result<Vec<u8>, CryptoError> {
-        // Raw AES-256-CBC, no block padding. Block-aligned input → decrypt in place.
-        let mut buf = ciphertext.to_vec();
+        // Cipher 0.5 decrypts directly from authenticated ciphertext into the output.
         Aes256CbcDec::new_from_slices(key, iv)
             .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("AES init: {e}")))?
-            .decrypt_padded_mut::<NoPadding>(&mut buf)
-            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("AES decrypt: {e}")))?;
-        Ok(buf)
+            .decrypt_padded_vec::<NoPadding>(ciphertext)
+            .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("AES decrypt: {e}")))
     }
 
     /// Compute HMAC-SHA256 over data using OpenSSL (hardware accelerated).
@@ -538,7 +535,7 @@ impl AttachmentCrypto {
                 let full = carry.len() - (carry.len() % AES_BLOCK_SIZE);
                 if full > 0 {
                     for blk in carry[..full].chunks_exact_mut(AES_BLOCK_SIZE) {
-                        encryptor.encrypt_block_mut(GenericArray::from_mut_slice(blk));
+                        encryptor.encrypt_block(blk.try_into().expect("AES block length"));
                     }
                     output.write_all(&carry[..full]).map_err(|e| {
                         CryptoError::AttachmentEncryptionFailed(format!("write: {}", e))

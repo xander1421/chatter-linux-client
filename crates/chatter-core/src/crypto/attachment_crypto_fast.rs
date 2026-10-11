@@ -14,7 +14,7 @@
 //! buffer held real plaintext even when the tags then failed.
 
 use aes::cipher::block_padding::NoPadding;
-use aes::cipher::{BlockDecryptMut, KeyIvInit};
+use aes::cipher::{BlockModeDecrypt, KeyIvInit};
 use subtle::ConstantTimeEq;
 
 use crate::crypto::hmac_compat::Sha256Stream;
@@ -152,7 +152,7 @@ pub fn decrypt_zero_copy(
     iv.copy_from_slice(&ciphertext[..IV_LENGTH]);
     Aes256CbcDec::new_from_slices(aes_key, &iv)
         .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("AES init: {e}")))?
-        .decrypt_padded_mut::<NoPadding>(&mut ciphertext[iv_end..hmac_start])
+        .decrypt_padded::<NoPadding>(&mut ciphertext[iv_end..hmac_start])
         .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("AES decrypt: {e}")))?;
 
     // Drop the padding and HMAC from the tail, then the IV from the head.

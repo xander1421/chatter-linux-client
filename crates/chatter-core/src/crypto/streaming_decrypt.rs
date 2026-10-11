@@ -21,8 +21,7 @@
 
 use std::io::{Read, Seek, SeekFrom};
 
-use aes::cipher::generic_array::GenericArray;
-use aes::cipher::{BlockDecryptMut, KeyIvInit};
+use aes::cipher::{BlockModeDecrypt, KeyIvInit};
 use subtle::ConstantTimeEq;
 use zeroize::Zeroizing;
 
@@ -285,7 +284,7 @@ impl<R: Read + Seek> StreamingDecryptor<R> {
             .read_exact(&mut output[..to_read])
             .map_err(|e| CryptoError::AttachmentDecryptionFailed(format!("read: {}", e)))?;
         for blk in output[..to_read].chunks_exact_mut(AES_BLOCK) {
-            decryptor.decrypt_block_mut(GenericArray::from_mut_slice(blk));
+            decryptor.decrypt_block(blk.try_into().expect("AES block length"));
         }
         self.decryption_position += to_read;
 

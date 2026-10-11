@@ -5,7 +5,7 @@
 //! Run with: cargo bench --bench attachment_decrypt
 
 use aes::Aes256;
-use cbc::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit};
+use cbc::cipher::{BlockModeDecrypt, BlockModeEncrypt, KeyIvInit};
 use criterion::{BenchmarkId, Criterion, Throughput, black_box, criterion_group, criterion_main};
 use hmac::{Hmac, Mac};
 use sha2::{Digest, Sha256};
@@ -48,7 +48,7 @@ fn generate_test_data(size: usize) -> (Vec<u8>, [u8; KEY_SET_LENGTH], [u8; 32], 
     let cipher = Aes256CbcEnc::new_from_slices(aes_key, &iv).unwrap();
     let mut encrypted = padded.clone();
     cipher
-        .encrypt_padded_mut::<block_padding::NoPadding>(&mut encrypted, padded_size)
+        .encrypt_padded::<block_padding::NoPadding>(&mut encrypted, padded_size)
         .unwrap();
 
     // Compute HMAC
@@ -142,7 +142,7 @@ fn bench_aes_decrypt(c: &mut Criterion) {
                     let cipher = Aes256CbcDec::new_from_slices(aes_key, iv).unwrap();
                     let mut decrypted = (*encrypted).to_vec();
                     cipher
-                        .decrypt_padded_mut::<block_padding::NoPadding>(&mut decrypted)
+                        .decrypt_padded::<block_padding::NoPadding>(&mut decrypted)
                         .unwrap();
                     black_box(decrypted)
                 });
@@ -190,7 +190,7 @@ fn bench_full_decrypt(c: &mut Criterion) {
                     let cipher = Aes256CbcDec::new_from_slices(aes_key, iv).unwrap();
                     let mut decrypted = encrypted.to_vec();
                     cipher
-                        .decrypt_padded_mut::<block_padding::NoPadding>(&mut decrypted)
+                        .decrypt_padded::<block_padding::NoPadding>(&mut decrypted)
                         .unwrap();
 
                     // Step 5: Truncate
@@ -291,7 +291,7 @@ fn bench_single_pass_decrypt(c: &mut Criterion) {
                     let cipher = Aes256CbcDec::new_from_slices(aes_key, iv).unwrap();
                     let mut decrypted = encrypted.to_vec();
                     cipher
-                        .decrypt_padded_mut::<block_padding::NoPadding>(&mut decrypted)
+                        .decrypt_padded::<block_padding::NoPadding>(&mut decrypted)
                         .unwrap();
                     decrypted.truncate(*plaintext_size);
                     black_box(decrypted)

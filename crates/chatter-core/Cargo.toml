@@ -85,15 +85,15 @@ hmac = "0.12"
 rayon = "1.10"
 hkdf = "0.12"
 aes-gcm = "0.10"
-aes = { version = "0.8", features = ["zeroize"] }
+aes = { version = "0.9.3", features = ["zeroize"] }
 # AES-256-CTR for Signal encrypted device names (crypto/device_name.rs).
-ctr = "0.9"
-# `alloc` gives cipher's encrypt_padded_vec_mut / decrypt_padded_vec_mut, which
+ctr = "0.10.1"
+# `alloc` gives cipher's encrypt_padded_vec / decrypt_padded_vec, which
 # crypto/provisioning.rs uses. It used to arrive transitively; a dependency
 # update stopped some other crate from enabling it, so it is named here rather
 # than left to feature unification.
-cbc = { version = "0.1", features = ["alloc", "zeroize"] }
-block-padding = "0.3"
+cbc = { version = "0.2.1", features = ["alloc", "zeroize"] }
+block-padding = "0.4.2"
 chacha20poly1305 = "0.10"
 x25519-dalek = { version = "2", features = ["static_secrets", "zeroize"] }
 ed25519-dalek = { version = "2", features = ["rand_core", "pem"] }

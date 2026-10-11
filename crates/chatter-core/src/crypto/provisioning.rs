@@ -38,7 +38,7 @@
 //!   QR payload, builds a [`ProvisionMessage`] from local identity/profile
 //!   state, and calls [`encrypt_envelope`] before uploading.
 
-use aes::cipher::{BlockDecryptMut, BlockEncryptMut, KeyIvInit, block_padding::Pkcs7};
+use aes::cipher::{BlockModeDecrypt, BlockModeEncrypt, KeyIvInit, block_padding::Pkcs7};
 use hkdf::Hkdf;
 use hmac::{Hmac, Mac};
 use prost::Message;
@@ -146,8 +146,8 @@ pub fn encrypt_envelope(
 
     // Carries the identity private key.
     let plaintext = Zeroizing::new(message.encode_to_vec());
-    let ct = Aes256CbcEnc::new(aes_key.as_ref().into(), (&iv).into())
-        .encrypt_padded_vec_mut::<Pkcs7>(&plaintext);
+    let ct =
+        Aes256CbcEnc::new((&*aes_key).into(), (&iv).into()).encrypt_padded_vec::<Pkcs7>(&plaintext);
 
     let mut mac = HmacSha256::new_from_slice(mac_key.as_ref())
         .map_err(|e| CryptoError::EncryptionFailed(format!("HMAC init: {e}")))?;
@@ -247,9 +247,12 @@ pub fn decrypt_envelope(
 
     // Decrypted in place: ends up holding the identity private key.
     let mut buf = Zeroizing::new(ct.to_vec());
-    let plaintext = Aes256CbcDec::new(aes_key.as_ref().into(), iv.into())
-        .decrypt_padded_mut::<Pkcs7>(&mut buf)
-        .map_err(|_| CryptoError::DecryptionFailed("AES-CBC unpad".into()))?;
+    let plaintext = Aes256CbcDec::new(
+        (&*aes_key).into(),
+        iv.try_into().expect("validated IV length"),
+    )
+    .decrypt_padded::<Pkcs7>(&mut buf)
+    .map_err(|_| CryptoError::DecryptionFailed("AES-CBC unpad".into()))?;
 
     ProvisionMessage::decode(plaintext)
         .map_err(|e| CryptoError::DecryptionFailed(format!("proto decode: {e}")))
