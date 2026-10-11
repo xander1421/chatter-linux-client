@@ -1394,7 +1394,7 @@ impl UserService {
                 return username;
             }
         }
-        if let Ok(Some(anon_dm)) = self.anon_dm_repo.get_conversation_by_peer(user_id) {
+        if let Ok(Some(anon_dm)) = self.anon_dm_repo.get_live_conversation_by_peer(user_id) {
             if let Some(name) = anon_dm.peer_display_name {
                 if !name.is_empty() {
                     return name;

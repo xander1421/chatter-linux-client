@@ -498,6 +498,11 @@ pub async fn handle_domain_event(
             );
         }
 
+        // The peer declined our request; core marked it Declined.
+        DomainEvent::AnonDmDeclined { conversation_id } => {
+            crate::bin_ui::features::sidebar::dm::refresh_open_anon_dm(window, ui_ctx, conversation_id);
+        }
+
         DomainEvent::AnonDmInitReceived { .. } => {
             anon::handle_dm_init_received(window, ui_ctx);
         }

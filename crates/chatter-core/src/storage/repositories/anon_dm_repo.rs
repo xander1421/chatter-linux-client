@@ -110,8 +110,13 @@ impl AnonDmRepository {
         }
     }
 
-    /// Get an anonymous DM conversation by peer ID.
-    pub fn get_conversation_by_peer(
+    /// The live secret chat with `peer_id`: Active first, then Blocked, then
+    /// a pending request, newest first within each. A Declined chat is never
+    /// it. One peer can hold several rows (a declined request next to a new
+    /// one, a chat per peer device, requests crossing), so this is a
+    /// deterministic pick for peer-level questions ("is there a chat with
+    /// them?"). Anything acting on one specific chat goes by its id.
+    pub fn get_live_conversation_by_peer(
         &self,
         peer_id: &UserId,
     ) -> Result<Option<AnonDm>, StorageError> {
@@ -120,16 +125,42 @@ impl AnonDmRepository {
             "SELECT id, peer_id, initiated_by_us, status, peer_mailbox_pk, peer_profile_key, peer_display_name, peer_avatar, created_at, updated_at, \
              (SELECT MAX(created_at) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_deleted = 0) as last_message_at, \
              (SELECT COUNT(*) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_read = 0 AND is_deleted = 0) as unread_count, peer_device_id, request_state \
-             FROM anon_dm_conversations WHERE peer_id = ?1",
+             FROM anon_dm_conversations WHERE peer_id = ?1 AND status IN (?2, ?3, ?4) \
+             ORDER BY CASE status WHEN ?2 THEN 0 WHEN ?3 THEN 1 ELSE 2 END, created_at DESC, id DESC LIMIT 1",
         )?;
+        stmt.query_row(
+            params![
+                peer_id.to_string(),
+                AnonDmStatus::Active.to_i32(),
+                AnonDmStatus::Blocked.to_i32(),
+                AnonDmStatus::Pending.to_i32(),
+            ],
+            row_to_conversation,
+        )
+        .optional()
+        .map_err(StorageError::Database)
+    }
 
-        let result = stmt.query_row(params![peer_id.to_string()], row_to_conversation);
-
-        match result {
-            Ok(dm) => Ok(Some(dm)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(StorageError::Database(e)),
-        }
+    /// Ids of the Declined chats with `peer_id`.
+    pub fn declined_conversation_ids_by_peer(
+        &self,
+        peer_id: &UserId,
+    ) -> Result<Vec<AnonDmId>, StorageError> {
+        let conn = self.db.connection()?;
+        let mut stmt = conn.prepare(
+            "SELECT id FROM anon_dm_conversations WHERE peer_id = ?1 AND status = ?2",
+        )?;
+        let ids = stmt
+            .query_map(
+                params![peer_id.to_string(), AnonDmStatus::Declined.to_i32()],
+                |row| {
+                    row.get::<_, String>(0)?
+                        .parse()
+                        .map_err(|_| rusqlite::Error::InvalidQuery)
+                },
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(ids)
     }
 
     /// Update an anonymous DM conversation.

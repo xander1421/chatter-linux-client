@@ -1,5 +1,5 @@
 use crate::domain::UserId;
-use crate::domain::anon_dm::AnonDmId;
+use crate::domain::anon_dm::{AnonDm, AnonDmId};
 use crate::domain::ids::{ChannelId, MessageId};
 use crate::domain::message::{ConversationType, Message, MessageContent};
 use crate::proto::content_v1::{
@@ -280,11 +280,10 @@ impl AnonDmService {
             padding: Self::generate_padding(256),
         };
 
-        let peer_id = dm.peer_id;
         let peer_mailbox_pk = dm.peer_mailbox_pk.unwrap();
 
         match self
-            .send_to_anon_mailbox(&peer_id, &peer_mailbox_pk, content)
+            .send_to_anon_mailbox(&dm, &peer_mailbox_pk, content)
             .await
         {
             Ok(()) => {
@@ -375,11 +374,10 @@ impl AnonDmService {
             )),
         };
 
-        let peer_id = dm.peer_id;
 
         // Send via mailbox
         let message = self
-            .send_to_anon_mailbox(&peer_id, &peer_mailbox_pk, content)
+            .send_to_anon_mailbox(&dm, &peer_mailbox_pk, content)
             .await;
 
         match message {
@@ -433,7 +431,7 @@ impl AnonDmService {
 
         let peer_mailbox_pk = dm.peer_mailbox_pk.unwrap();
         let content = build_typing_content(started);
-        self.send_ephemeral_message(&dm.peer_id, &peer_mailbox_pk, conversation_id, content)
+        self.send_ephemeral_message(&dm, &peer_mailbox_pk, content)
             .await
     }
 
@@ -489,7 +487,7 @@ impl AnonDmService {
                 let mailbox = dm
                     .peer_mailbox_pk
                     .ok_or(AnonDmError::ConversationNotReady(*conversation_id))?;
-                self.send_ephemeral_message(&dm.peer_id, &mailbox, conversation_id, content)
+                self.send_ephemeral_message(&dm, &mailbox, content)
                     .await
             },
         )
@@ -499,11 +497,11 @@ impl AnonDmService {
     /// Send an ephemeral message (typing, reaction, receipt) - no rate limiting, no queueing.
     pub(crate) async fn send_ephemeral_message(
         &self,
-        peer_id: &UserId,
+        dm: &AnonDm,
         peer_mailbox_pk: &[u8; 32],
-        conversation_id: &AnonDmId,
         inner_content: Content,
     ) -> Result<(), AnonDmError> {
+        let conversation_id = &dm.id;
         // Log what type of ephemeral message we're sending
         let content_type = match &inner_content.content {
             Some(content_v1::content::Content::Receipt(_)) => "Receipt",
@@ -533,7 +531,7 @@ impl AnonDmService {
         };
 
         match self
-            .send_to_anon_mailbox(peer_id, peer_mailbox_pk, content)
+            .send_to_anon_mailbox(dm, peer_mailbox_pk, content)
             .await
         {
             Ok(()) => {
@@ -608,7 +606,7 @@ impl AnonDmService {
             "[ANON_DM_SEND_RECEIPT] Sending read receipt to peer"
         );
 
-        self.send_ephemeral_message(&dm.peer_id, &peer_mailbox_pk, conversation_id, content)
+        self.send_ephemeral_message(&dm, &peer_mailbox_pk, content)
             .await
     }
 
@@ -637,7 +635,7 @@ impl AnonDmService {
         let peer_mailbox_pk = dm.peer_mailbox_pk.unwrap();
         let content = build_delivery_receipt_content(message_timestamps);
 
-        self.send_ephemeral_message(&dm.peer_id, &peer_mailbox_pk, conversation_id, content)
+        self.send_ephemeral_message(&dm, &peer_mailbox_pk, content)
             .await
     }
 
@@ -761,7 +759,7 @@ impl AnonDmService {
         };
 
         // Send to peer's anonymous mailbox
-        self.send_to_anon_mailbox(&dm.peer_id, &peer_mailbox_pk, content)
+        self.send_to_anon_mailbox(&dm, &peer_mailbox_pk, content)
             .await?;
 
         tracing::info!(

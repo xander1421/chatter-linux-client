@@ -122,7 +122,7 @@ pub(crate) fn wire_decline_private_request(window: &MainWindow, ui_ctx: &Arc<Cha
             };
 
             // Decline the request
-            match ui_ctx.decline_anon_dm(&conv_id) {
+            match ui_ctx.decline_anon_dm(&conv_id).await {
                 Ok(_) => {
                     tracing::info!("Declined private message request {}", conv_id_str);
 

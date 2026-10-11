@@ -119,8 +119,8 @@ impl ChatterClient {
             && self.secret_chat_peer_check(peer).is_ok()
     }
 
-    /// Start a secret chat with `peer`, or return the one that already exists
-    /// (the anon DM service keeps one per peer). A declined one is restarted,
+    /// Start a secret chat with `peer`, or return the live one that already
+    /// exists (`find_anon_dm_by_peer`). A declined one is replaced,
     /// and so is our own request that provably never left this device; one
     /// whose send outcome is unknown is resent under its original request id
     /// (the server queues it at most once); one the server queued is returned
@@ -161,6 +161,7 @@ impl ChatterClient {
 mod tests {
     use super::*;
     use crate::domain::message::ConversationType;
+    use crate::services::anon_dm::PeerEnd;
     use std::sync::Arc;
     use std::sync::atomic::Ordering;
 
@@ -445,13 +446,110 @@ mod tests {
         insert_mailbox(&client, &dm);
         let svc = client.anon_dms();
 
-        assert!(!svc.handle_peer_end(&dm.id, &UserId::new()).await.unwrap());
+        assert_eq!(
+            svc.handle_peer_end(&dm.id, &UserId::new()).await.unwrap(),
+            PeerEnd::NotPeer
+        );
         assert!(client.get_anon_dm_conversation(&dm.id).is_some());
 
-        assert!(svc.handle_peer_end(&dm.id, &peer).await.unwrap());
+        assert_eq!(svc.handle_peer_end(&dm.id, &peer).await.unwrap(), PeerEnd::Ended);
         assert!(client.get_anon_dm_conversation(&dm.id).is_none());
         assert!(svc.anon_dm_repo().get_mailbox(&dm.id).unwrap().is_none());
         // Already gone: nothing to do.
-        assert!(!svc.handle_peer_end(&dm.id, &peer).await.unwrap());
+        assert_eq!(svc.handle_peer_end(&dm.id, &peer).await.unwrap(), PeerEnd::NotPeer);
+    }
+
+    /// An end signal on our own unanswered request is the peer declining it:
+    /// the chat stays, Declined (its composer says so), and its mailbox goes.
+    #[tokio::test]
+    async fn peer_end_on_our_request_marks_it_declined() {
+        let (_dir, client) = build_test_client();
+        sign_in(&client);
+        let peer = UserId::new();
+        let dm = AnonDm::new_initiated(peer);
+        insert(&client, &dm);
+        insert_mailbox(&client, &dm);
+        let svc = client.anon_dms();
+
+        assert_eq!(svc.handle_peer_end(&dm.id, &peer).await.unwrap(), PeerEnd::Declined);
+        let after = client.get_anon_dm_conversation(&dm.id).unwrap();
+        assert_eq!(after.status, AnonDmStatus::Declined);
+        assert_eq!(client.secret_chat_gate(&dm.id), Some(SecretChatGate::Declined));
+        assert!(svc.anon_dm_repo().get_mailbox(&dm.id).unwrap().is_none());
+        // A Declined chat is no longer "the chat with this peer".
+        assert!(client.find_anon_dm_by_peer(&peer).is_none());
+    }
+
+    /// Declining tells the initiator over Tor first and fails closed: with no
+    /// Tor route nothing is deleted, so the user can retry.
+    #[tokio::test]
+    async fn decline_fails_closed_without_tor() {
+        let (_dir, client) = build_test_client();
+        sign_in(&client);
+        if client.secret_chats_available() {
+            return;
+        }
+        let peer = UserId::new();
+        let mut dm = AnonDm::from_request(crate::domain::anon_dm::AnonDmId::new(), peer, [3; 32]);
+        dm.peer_device_id = Some(1);
+        insert(&client, &dm);
+
+        assert!(client.decline_anon_dm(&dm.id).await.is_err());
+        assert_eq!(
+            client.get_anon_dm_conversation(&dm.id).unwrap().status,
+            AnonDmStatus::Pending
+        );
+    }
+
+    /// Several rows for one peer (RC110 retest: a stale Declined chat next to
+    /// the live one): the peer lookup is deterministic and never the
+    /// Declined one — Active first, then Blocked, then Pending, newest first.
+    #[tokio::test]
+    async fn peer_lookup_with_several_chats_picks_the_live_one() {
+        let (_dir, client) = build_test_client();
+        sign_in(&client);
+        let peer = UserId::new();
+        let at = |secs: i64| chrono::Utc::now() + chrono::Duration::seconds(secs);
+        let row = |status, secs| {
+            let mut dm = AnonDm::new_initiated(peer);
+            dm.status = status;
+            dm.created_at = at(secs);
+            dm
+        };
+
+        let declined = row(AnonDmStatus::Declined, 30);
+        insert(&client, &declined);
+        assert!(client.find_anon_dm_by_peer(&peer).is_none());
+
+        let pending = row(AnonDmStatus::Pending, 20);
+        insert(&client, &pending);
+        assert_eq!(client.find_anon_dm_by_peer(&peer), Some(pending.id));
+
+        let blocked = row(AnonDmStatus::Blocked, 0);
+        insert(&client, &blocked);
+        assert_eq!(client.find_anon_dm_by_peer(&peer), Some(blocked.id));
+
+        let old_active = row(AnonDmStatus::Active, -20);
+        let new_active = row(AnonDmStatus::Active, -10);
+        insert(&client, &old_active);
+        insert(&client, &new_active);
+        for _ in 0..5 {
+            assert_eq!(client.find_anon_dm_by_peer(&peer), Some(new_active.id));
+        }
+    }
+
+    /// Starting a secret chat clears the peer's Declined ones, whatever then
+    /// happens to the new request (here it fails: no Tor route).
+    #[tokio::test]
+    async fn restart_drops_declined_chats() {
+        let (_dir, client) = build_test_client();
+        sign_in(&client);
+        let peer = UserId::new();
+        let mut declined = AnonDm::new_initiated(peer);
+        declined.status = AnonDmStatus::Declined;
+        insert(&client, &declined);
+
+        let _ = client.anon_dms().start_conversation(peer, None).await;
+        assert!(client.get_anon_dm_conversation(&declined.id).is_none());
     }
 }

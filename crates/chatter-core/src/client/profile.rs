@@ -630,7 +630,7 @@ impl ChatterClient {
         user_id: &crate::domain::ids::UserId,
     ) -> Option<crate::domain::anon_dm::AnonDmId> {
         self.anon_dms()
-            .get_conversation_by_peer(user_id)
+            .get_live_conversation_by_peer(user_id)
             .ok()
             .flatten()
             .map(|dm| dm.id)
@@ -661,7 +661,7 @@ impl ChatterClient {
     /// source the sidebar uses).
     pub fn anon_dm_peer_avatar(&self, user_id: &crate::domain::ids::UserId) -> Option<Vec<u8>> {
         self.anon_dms()
-            .get_conversation_by_peer(user_id)
+            .get_live_conversation_by_peer(user_id)
             .ok()
             .flatten()
             .and_then(|dm| dm.peer_avatar)

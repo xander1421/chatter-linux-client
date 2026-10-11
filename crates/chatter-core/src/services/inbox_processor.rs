@@ -2097,7 +2097,8 @@ impl InboxEventProcessor {
             }
         };
 
-        // The peer ended the chat: our copy and mailbox go. Only the chat's
+        // The peer ended the chat (or declined our request to it): our copy
+        // and mailbox go. Only the chat's
         // own peer can (checked in `handle_peer_end`), and only for the chat
         // whose mailbox this arrived in.
         if let Some(crate::proto::content_v1::content::Content::AnonDmEnd(end)) =
@@ -2110,13 +2111,19 @@ impl InboxEventProcessor {
             let service = self.anon_dm_service.clone();
             let event_bus = self.event_bus.clone();
             tokio::spawn(async move {
+                use crate::services::anon_dm::PeerEnd;
                 match service.handle_peer_end(&anon_dm_id, &peer_id).await {
-                    Ok(true) => {
+                    Ok(PeerEnd::Ended) => {
                         event_bus.emit_domain(DomainEvent::AnonDmEnded {
                             conversation_id: anon_dm_id,
                         });
                     }
-                    Ok(false) => {
+                    Ok(PeerEnd::Declined) => {
+                        event_bus.emit_domain(DomainEvent::AnonDmDeclined {
+                            conversation_id: anon_dm_id,
+                        });
+                    }
+                    Ok(PeerEnd::NotPeer) => {
                         tracing::info!("[ANON_DM] Dropped an end signal from a non-peer");
                     }
                     Err(e) => tracing::warn!(error = %e, "[ANON_DM] Failed to end secret chat"),

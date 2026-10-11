@@ -14,12 +14,15 @@ impl AnonDmService {
         Ok(self.anon_dm_repo.get_conversation(conversation_id)?)
     }
 
-    /// Get a conversation by peer ID.
-    pub fn get_conversation_by_peer(
+    /// The live secret chat with `peer_id`
+    /// ([`AnonDmRepository::get_live_conversation_by_peer`]).
+    ///
+    /// [`AnonDmRepository::get_live_conversation_by_peer`]: crate::storage::repositories::AnonDmRepository::get_live_conversation_by_peer
+    pub fn get_live_conversation_by_peer(
         &self,
         peer_id: &UserId,
     ) -> Result<Option<AnonDm>, AnonDmError> {
-        Ok(self.anon_dm_repo.get_conversation_by_peer(peer_id)?)
+        Ok(self.anon_dm_repo.get_live_conversation_by_peer(peer_id)?)
     }
 
     /// List all active conversations.

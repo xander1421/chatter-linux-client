@@ -24,8 +24,9 @@ impl AnonDmService {
             return Err(AnonDmError::CannotMessageSelf);
         }
 
-        // Check if conversation already exists
-        if let Some(existing) = self.anon_dm_repo.get_conversation_by_peer(&peer_id)? {
+        // A declined request is over: it gives way to the new one.
+        self.drop_declined(&peer_id)?;
+        if let Some(existing) = self.anon_dm_repo.get_live_conversation_by_peer(&peer_id)? {
             // Our request with an unknown outcome is resent as is (same chat,
             // same request id), never replaced by a second request.
             if existing.is_uncertain_request() {
@@ -41,11 +42,9 @@ impl AnonDmService {
                 .await?;
                 return self.reload(existing.id);
             }
-            // Allow retry if:
-            // - Previous request was declined by them
-            // - Our outgoing request is still pending (never got response, retrying with new code)
-            let can_retry = existing.status == AnonDmStatus::Declined
-                || (existing.status == AnonDmStatus::Pending && existing.initiated_by_us);
+            // Our outgoing request is still pending (never got a response):
+            // retry it with a new one.
+            let can_retry = existing.status == AnonDmStatus::Pending && existing.initiated_by_us;
 
             if can_retry {
                 tracing::info!(
@@ -90,6 +89,14 @@ impl AnonDmService {
 
         // Reload: sealing the request bound it to the peer's device.
         self.reload(dm.id)
+    }
+
+    /// Delete every Declined chat with `peer`, messages and all.
+    fn drop_declined(&self, peer: &UserId) -> Result<(), AnonDmError> {
+        for id in self.anon_dm_repo.declined_conversation_ids_by_peer(peer)? {
+            self.delete_conversation(&id)?;
+        }
+        Ok(())
     }
 
     fn reload(&self, id: AnonDmId) -> Result<AnonDm, AnonDmError> {
@@ -165,8 +172,9 @@ impl AnonDmService {
             return Err(AnonDmError::CannotMessageSelf);
         }
 
-        // Check if conversation already exists
-        if let Some(existing) = self.anon_dm_repo.get_conversation_by_peer(&peer_id)? {
+        // A declined request is over: it gives way to the new one.
+        self.drop_declined(&peer_id)?;
+        if let Some(existing) = self.anon_dm_repo.get_live_conversation_by_peer(&peer_id)? {
             // As in `start_conversation`: resend an uncertain request as is.
             if existing.is_uncertain_request() {
                 let mailbox = self.request_mailbox(&existing.id)?;
@@ -182,11 +190,9 @@ impl AnonDmService {
                 .await?;
                 return self.reload(existing.id);
             }
-            // Allow retry if:
-            // - Previous request was declined by them
-            // - Our outgoing request is still pending (never got response, retrying with new code)
-            let can_retry = existing.status == AnonDmStatus::Declined
-                || (existing.status == AnonDmStatus::Pending && existing.initiated_by_us);
+            // Our outgoing request is still pending (never got a response):
+            // retry it with a new one.
+            let can_retry = existing.status == AnonDmStatus::Pending && existing.initiated_by_us;
 
             if can_retry {
                 tracing::info!(
@@ -477,7 +483,7 @@ mod tests {
         assert!(svc.start_conversation(peer, None).await.is_err());
         assert!(
             svc.anon_dm_repo
-                .get_conversation_by_peer(&peer)
+                .get_live_conversation_by_peer(&peer)
                 .unwrap()
                 .is_none()
         );
@@ -504,7 +510,7 @@ mod tests {
         svc.discard_if_unsent(&dm.id).await;
         assert!(
             svc.anon_dm_repo
-                .get_conversation_by_peer(&peer)
+                .get_live_conversation_by_peer(&peer)
                 .unwrap()
                 .is_none()
         );

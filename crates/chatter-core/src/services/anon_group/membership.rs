@@ -337,7 +337,7 @@ impl AnonGroupService {
 
         let tunnel = self
             .anon_dm_repo
-            .get_conversation_by_peer(&invitee)?
+            .get_live_conversation_by_peer(&invitee)?
             .filter(|dm| dm.is_ready())
             .and_then(|dm| dm.peer_mailbox_pk.map(|pk| (dm.id, dm.peer_device_id, pk)));
         if let Some((conversation_id, peer_device, peer_mailbox_pk)) = tunnel {

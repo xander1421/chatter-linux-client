@@ -52,8 +52,7 @@ impl AnonDmService {
         // Send acceptance to initiator's anonymous mailbox
         let avatar_owed = self
             .send_acceptance(
-                &dm.peer_id,
-                &conversation_id,
+                &dm,
                 &peer_mailbox_pk,
                 &mailbox.public_key,
                 profile_key.as_ref(),
@@ -92,8 +91,7 @@ impl AnonDmService {
     /// it and a profile update must follow.
     pub(crate) async fn send_acceptance(
         &self,
-        peer_id: &UserId,
-        conversation_id: &AnonDmId,
+        dm: &AnonDm,
         peer_mailbox_pk: &[u8; 32],
         our_mailbox_pk: &[u8; 32],
         profile_key: Option<&[u8; 32]>,
@@ -116,6 +114,7 @@ impl AnonDmService {
             (None, None)
         };
 
+        let conversation_id = &dm.id;
         let accept = AnonDmAccept {
             conversation_id: conversation_id.to_vec(),
             responder_mailbox_pk: our_mailbox_pk.to_vec(),
@@ -133,15 +132,21 @@ impl AnonDmService {
         };
 
         // Send to initiator's anonymous mailbox
-        self.send_to_anon_mailbox(peer_id, peer_mailbox_pk, content)
+        self.send_to_anon_mailbox(dm, peer_mailbox_pk, content)
             .await?;
 
         tracing::debug!(%conversation_id, "Sent secret chat acceptance");
         Ok(avatar_owed)
     }
 
-    /// Decline an incoming message request.
-    pub fn decline_request(&self, conversation_id: &AnonDmId) -> Result<(), AnonDmError> {
+    /// Decline an incoming message request: tell the initiator over Tor
+    /// (an end signal into the mailbox their request announced, so their
+    /// side shows it declined), then delete the request. Fails closed like
+    /// "Delete chat": if that send fails nothing is deleted and the error is
+    /// returned. A request whose mailbox is already gone has nobody left to
+    /// tell and goes locally. We hold no mailbox of our own yet (one is
+    /// created on accept), so the row is all there is.
+    pub async fn decline_request(&self, conversation_id: &AnonDmId) -> Result<(), AnonDmError> {
         let dm = self
             .anon_dm_repo
             .get_conversation(conversation_id)?
@@ -154,9 +159,20 @@ impl AnonDmService {
             ));
         }
 
-        // Update status to declined
-        self.anon_dm_repo
-            .update_status(conversation_id, AnonDmStatus::Declined)?;
+        if let Some(peer_mailbox_pk) = dm.peer_mailbox_pk {
+            match self
+                .send_to_anon_mailbox(
+                    &dm,
+                    &peer_mailbox_pk,
+                    super::blocking::end_content(conversation_id),
+                )
+                .await
+            {
+                Ok(()) | Err(AnonDmError::PeerMailboxGone) => {}
+                Err(e) => return Err(e),
+            }
+        }
+        self.delete_conversation(conversation_id)?;
 
         tracing::info!(%conversation_id, "Declined secret chat");
 

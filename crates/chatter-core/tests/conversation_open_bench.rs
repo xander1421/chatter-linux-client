@@ -259,7 +259,7 @@ fn bench_conversation_open() {
             continue;
         }
         q2 += 1;
-        if anon_dm.get_conversation_by_peer(&id).unwrap().is_some() {
+        if anon_dm.get_live_conversation_by_peer(&id).unwrap().is_some() {
             continue;
         }
         q2 += 1;

@@ -168,7 +168,7 @@ impl AnonDmService {
             (dm.peer_mailbox_pk, dm.status)
         {
             match self
-                .send_to_anon_mailbox(&dm.peer_id, &peer_mailbox_pk, end_content(conversation_id))
+                .send_to_anon_mailbox(&dm, &peer_mailbox_pk, end_content(conversation_id))
                 .await
             {
                 Ok(()) | Err(AnonDmError::PeerMailboxGone) => {}
@@ -178,19 +178,33 @@ impl AnonDmService {
         self.delete_with_server_mailbox(conversation_id).await
     }
 
-    /// The peer ended the secret chat: delete our copy and our mailbox.
-    /// `false` when `sender` is not this chat's peer (nothing is touched).
+    /// The peer ended the secret chat: delete our copy and our mailbox. An
+    /// end on our own unanswered request is the peer declining it: the chat
+    /// stays, marked Declined so the user sees it, and only its mailbox goes
+    /// (nothing will arrive there any more).
     pub async fn handle_peer_end(
         &self,
         conversation_id: &AnonDmId,
         sender: &UserId,
-    ) -> Result<bool, AnonDmError> {
-        match self.anon_dm_repo.get_conversation(conversation_id)? {
-            Some(dm) if dm.peer_id == *sender => {}
-            _ => return Ok(false),
+    ) -> Result<PeerEnd, AnonDmError> {
+        let dm = match self.anon_dm_repo.get_conversation(conversation_id)? {
+            Some(dm) if dm.peer_id == *sender => dm,
+            _ => return Ok(PeerEnd::NotPeer),
+        };
+        if dm.initiated_by_us && dm.status == AnonDmStatus::Pending {
+            let mailbox = self.anon_dm_repo.get_mailbox(conversation_id)?;
+            self.anon_dm_repo
+                .update_status(conversation_id, AnonDmStatus::Declined)?;
+            self.anon_dm_repo.delete_mailbox(conversation_id)?;
+            if let Some(mailbox) = mailbox
+                && let Err(e) = self.delete_server_mailbox(&mailbox).await
+            {
+                tracing::warn!(error = %e, "could not delete a declined request's mailbox");
+            }
+            return Ok(PeerEnd::Declined);
         }
         self.delete_with_server_mailbox(conversation_id).await?;
-        Ok(true)
+        Ok(PeerEnd::Ended)
     }
 
     async fn delete_with_server_mailbox(&self, conversation_id: &AnonDmId) -> Result<(), AnonDmError> {
@@ -205,9 +219,20 @@ impl AnonDmService {
     }
 }
 
+/// What a peer's end signal did ([`AnonDmService::handle_peer_end`]).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PeerEnd {
+    /// The sender is not this chat's peer: nothing was touched.
+    NotPeer,
+    /// The chat ended: our copy and mailbox are gone.
+    Ended,
+    /// Our unanswered request was declined: the chat is kept as Declined.
+    Declined,
+}
+
 /// The end signal, wrapped like every in-chat control so the receiver's
 /// mailbox and sender checks apply to it.
-fn end_content(conversation_id: &AnonDmId) -> crate::proto::content_v1::Content {
+pub(super) fn end_content(conversation_id: &AnonDmId) -> crate::proto::content_v1::Content {
     use crate::proto::content_v1::{AnonDmEnd, AnonDmMessage, Content, content};
     let now = crate::util::time::TimestampNanos::now().as_u64();
     let inner = Content {

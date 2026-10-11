@@ -21,6 +21,8 @@ mod messaging;
 mod processing;
 mod queries;
 
+pub use blocking::PeerEnd;
+
 use std::sync::Arc;
 
 use crate::domain::UserId;

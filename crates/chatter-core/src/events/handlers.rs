@@ -702,6 +702,10 @@ impl EventHandlers {
                 trace!(?conversation_id, "AnonDmEnded: handled by UI thread");
             }
 
+            DomainEvent::AnonDmDeclined { conversation_id } => {
+                trace!(?conversation_id, "AnonDmDeclined: handled by UI thread");
+            }
+
 
             DomainEvent::AnonDmInitReceived {
                 conversation_id,

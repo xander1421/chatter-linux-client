@@ -139,13 +139,16 @@ impl AnonDmService {
             .map_err(|e| AnonDmError::CryptoError(e.to_string()))
     }
 
-    /// Send content to a peer's anonymous mailbox.
+    /// Send content in secret chat `dm` to the peer's anonymous mailbox,
+    /// encrypted to the peer device that chat is bound to. The chat is
+    /// passed, never looked up by peer: one peer can hold several chats.
     pub(crate) async fn send_to_anon_mailbox(
         &self,
-        peer_id: &UserId,
+        dm: &AnonDm,
         mailbox_pk: &[u8; 32],
         content: Content,
     ) -> Result<(), AnonDmError> {
+        let peer_id = &dm.peer_id;
         // Secret-chat traffic goes over Tor or not at all; refuse before any
         // submission is recorded or token spent.
         self.grpc_pool
@@ -187,16 +190,11 @@ impl AnonDmService {
             }
             e
         };
-        let device = self
-            .anon_dm_repo
-            .get_conversation_by_peer(peer_id)
-            .map_err(|e| discard(e.into()))?
-            .and_then(|dm| dm.peer_device_id)
-            .ok_or_else(|| {
-                discard(AnonDmError::InvalidData(
-                    "secret chat is not bound to a peer device".into(),
-                ))
-            })?;
+        let device = dm.peer_device_id.ok_or_else(|| {
+            discard(AnonDmError::InvalidData(
+                "secret chat is not bound to a peer device".into(),
+            ))
+        })?;
         let has_session = self
             .pairwise_service
             .has_session(peer_id, device)

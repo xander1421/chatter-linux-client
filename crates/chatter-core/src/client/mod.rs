@@ -3931,12 +3931,12 @@ impl ChatterClient {
         self.anon_dms().accept_request(*conversation_id).await
     }
 
-    /// Decline an incoming anon DM request.
-    pub fn decline_anon_dm(
+    /// Decline an incoming anon DM request (tells the initiator over Tor).
+    pub async fn decline_anon_dm(
         &self,
         conversation_id: &crate::domain::anon_dm::AnonDmId,
     ) -> Result<(), crate::services::anon_dm::AnonDmError> {
-        self.anon_dms().decline_request(conversation_id)
+        self.anon_dms().decline_request(conversation_id).await
     }
 
     // ── Anon group management ───────────────────────────────────────

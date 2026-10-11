@@ -374,6 +374,11 @@ pub enum DomainEvent {
         conversation_id: AnonDmId,
     },
 
+    /// The peer declined our secret-chat request; core marked it Declined.
+    AnonDmDeclined {
+        conversation_id: AnonDmId,
+    },
+
     UserPresenceChanged {
         user_id: UserId,
         presence: crate::domain::user::PresenceStatus,
@@ -680,6 +685,7 @@ impl DomainEvent {
             DomainEvent::AnonDmRequestReceived { .. } => None,
             DomainEvent::AnonDmRequestAccepted { .. } => None,
             DomainEvent::AnonDmEnded { conversation_id } => Some((*conversation_id).into()),
+            DomainEvent::AnonDmDeclined { conversation_id } => Some((*conversation_id).into()),
             DomainEvent::AnonDmInitReceived { .. } => None,
             DomainEvent::CallKeyOfferReceived { .. } => None,
             DomainEvent::DmBootstrapCompleted { .. } => None,
