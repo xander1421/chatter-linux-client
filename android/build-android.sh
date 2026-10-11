@@ -221,6 +221,10 @@ if [ "${RELEASE:-0}" = "1" ]; then
     # Inputs were refused above; this only selects the release profile.
     RUST_PROFILE=release; CARGO_PROFILE_FLAG="--release"; GRADLE_TASK=assembleRelease
     APK="app/build/outputs/apk/release/app-release.apk"
+    # Google Play accepts only an App Bundle for a new app; same signer.
+    GRADLE_ARGS+=(:app:bundleRelease)
+    AAB="app/build/outputs/bundle/release/app-release.aab"
+    rm -f "$AAB"
     echo ">> RELEASE build: production keys, signed"
 fi
 
@@ -264,6 +268,16 @@ if [ "${RELEASE:-0}" = "1" ]; then
     fi
     echo "$SIGNER" | grep -E 'certificate (DN|SHA-256 digest):'
     (cd "$(dirname "$APK")" && sha256sum "$(basename "$APK")" > "$(basename "$APK").sha256")
+    # The bundle is jar-signed (apksigner cannot read it); it must carry the
+    # same certificate as the APK, which the digest comparison proves.
+    [ -f "$AAB" ] || { echo "FATAL: $AAB missing"; exit 1; }
+    APK_DIGEST="$(grep -m1 'certificate SHA-256 digest:' <<<"$SIGNER" | awk '{print $NF}')"
+    AAB_DIGEST="$("${JAVA_HOME:-/usr/lib/jvm/java-17-openjdk}/bin/keytool" -printcert -jarfile "$AAB" \
+        | awk '/SHA256:/ {print tolower($2); exit}' | tr -d ':')"
+    [ -n "$APK_DIGEST" ] && [ "$AAB_DIGEST" = "$APK_DIGEST" ] \
+        || { rm -f "$AAB"; echo "FATAL: $AAB is unsigned or not signed by the APK's release certificate; removed"; exit 1; }
+    (cd "$(dirname "$AAB")" && sha256sum "$(basename "$AAB")" > "$(basename "$AAB").sha256")
+    echo "Bundle: $AAB (upload this one to Google Play)"
 fi
 echo "------------------------------------------------------------"
 echo "Build complete: $APK"

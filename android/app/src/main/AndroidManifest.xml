@@ -44,7 +44,13 @@
         android:roundIcon="@mipmap/ic_launcher_round"
         android:allowBackup="false"
         android:supportsRtl="true"
+        android:enableOnBackInvokedCallback="false"
         android:theme="@style/Theme.Chatter">
+        <!-- enableOnBackInvokedCallback=false: targetSdk 36 otherwise turns on
+             predictive back, which stops dispatching KEYCODE_BACK. Slint's
+             in-app navigation consumes that key (GameActivity -> Key::Back,
+             features/back.rs) and MainActivity.onKeyPreIme uses it to close
+             the IME/selection; without it Back would just finish the app. -->
 
         <!-- Older Android Beam stacks may advertise the foreground app's URI
              even without app NFC code. Chatter does not offer NFC sharing. -->

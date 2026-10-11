@@ -23,12 +23,15 @@ require(clientVersionName.matches(Regex("[0-9][A-Za-z0-9._+-]{0,63}"))) {
 
 android {
     namespace = "com.chatter.client"
-    compileSdk = 35
+    compileSdk = 36
 
     defaultConfig {
         applicationId = "com.chatter.client"
         minSdk = 26
-        targetSdk = 35
+        // Google Play has required API 36 for new apps and updates since
+        // 2026-08-31. Android 16 behaviour this forces is handled in the
+        // manifest (enableOnBackInvokedCallback="false").
+        targetSdk = 36
         versionCode = clientVersionCode.toInt()
         versionName = clientVersionName
         // We only ship the Rust cdylib for arm64 today.
