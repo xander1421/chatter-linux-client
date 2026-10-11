@@ -60,7 +60,7 @@ chatter-core = { path = "../chatter-core", default-features = false }
 # UI Framework - Slint
 # ============================================================================
 slint = { version = "=1.17.1", default-features = false, features = ["compat-1-2", "accessibility", "raw-window-handle-06"] }
-i-slint-backend-winit = { version = "1.17.1", optional = true }
+i-slint-backend-winit = { version = "=1.17.1", optional = true }
 # Named directly only for `StyledText::from_paragraphs` and its paragraph types,
 # a patch in vendor/i-slint-core (see its PATCHES.md): message bodies are built
 # from our own markdown spans, never through Slint's markdown parser.
@@ -74,10 +74,10 @@ tokio = { version = "1", features = ["rt-multi-thread", "sync", "time", "macros"
 tokio-util = { version = "0.7", features = ["io"] }
 tracing = "0.1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
-gstreamer = { version = "0.23", optional = true }
-gstreamer-app = { version = "0.23", optional = true }
-gstreamer-video = { version = "0.23", optional = true }
-gstreamer-gl = { version = "0.23", optional = true }
+gstreamer = { version = "0.25", optional = true }
+gstreamer-app = { version = "0.25", optional = true }
+gstreamer-video = { version = "0.25", optional = true }
+gstreamer-gl = { version = "0.25", optional = true }
 livekit = { version = "0.7.52", default-features = false, features = ["tokio", "rustls-tls-webpki-roots"], optional = true }
 rand = "0.10.3"
 image = { version = "0.25.9", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
@@ -95,7 +95,7 @@ arboard = { version = "3", features = ["wayland-data-control"], optional = true 
 # Platform-specific: Linux (GL video rendering)
 # ============================================================================
 [target.'cfg(target_os = "linux")'.dependencies]
-gstreamer-gl-egl = { version = "0.23", optional = true }
+gstreamer-gl-egl = { version = "0.25", optional = true }
 glutin_egl_sys = { version = "0.7", optional = true }
 
 # ============================================================================
@@ -115,7 +115,7 @@ raw-window-handle = { version = "0.6", optional = true }
 # Platform-specific: Android
 # ============================================================================
 [target.'cfg(target_os = "android")'.dependencies]
-i-slint-backend-android-activity = { version = "1.17.1", default-features = false, features = ["aa-06", "game-activity"], optional = true }
+i-slint-backend-android-activity = { version = "=1.17.1", default-features = false, features = ["aa-06", "game-activity"], optional = true }
 android-activity = { version = "0.6", features = ["game-activity"], optional = true }
 # Slint's backend-selector unconditionally references i_slint_backend_android_activity
 # on android (api.rs uses `cfg!(...)`, which still compiles the reference). The only
@@ -123,7 +123,7 @@ android-activity = { version = "0.6", features = ["game-activity"], optional = t
 # `native-activity`, conflicting with game-activity. So we enable the selector's
 # `backend-android-activity` feature directly here — it pulls the backend crate with
 # default-features=false, letting our game-activity selection above stand alone.
-i-slint-backend-selector = { version = "1.17.1", default-features = false, optional = true }
+i-slint-backend-selector = { version = "=1.17.1", default-features = false, optional = true }
 # JNI bindings for Android system APIs (notifications, window insets).
 # These live in chatter-ui (platform layer), not chatter-core (platform-neutral).
 jni = "0.22.4"
