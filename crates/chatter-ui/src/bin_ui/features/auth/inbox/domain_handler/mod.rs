@@ -499,12 +499,14 @@ pub async fn handle_domain_event(
         }
 
         // The peer declined our request; core marked it Declined.
+        // The list row too, or it keeps "(pending) Waiting for response".
         DomainEvent::AnonDmDeclined { conversation_id } => {
             crate::bin_ui::features::sidebar::dm::refresh_open_anon_dm(window, ui_ctx, conversation_id);
+            anon::refresh_chat_list(window, ui_ctx);
         }
 
         DomainEvent::AnonDmInitReceived { .. } => {
-            anon::handle_dm_init_received(window, ui_ctx);
+            anon::refresh_chat_list(window, ui_ctx);
         }
 
         // =========================================================================

@@ -50,7 +50,7 @@ pub(super) fn handle_dm_request_accepted(
     });
 }
 
-pub(super) fn handle_dm_init_received(window: &Weak<MainWindow>, ui_ctx: &Arc<ChatterClient>) {
+pub(super) fn refresh_chat_list(window: &Weak<MainWindow>, ui_ctx: &Arc<ChatterClient>) {
     let weak = window.clone();
     let ui_ctx = ui_ctx.clone();
     let _ = slint::invoke_from_event_loop(move || {
