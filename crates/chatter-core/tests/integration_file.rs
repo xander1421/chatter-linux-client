@@ -18,9 +18,26 @@ use common::*;
 // Exercise signed multipart HTTP directly without trusting public CA roots.
 fn storage_http_client() -> reqwest::Client {
     let pem = chatter_core::config::TLS_ROOT_CA_PEM.expect("test storage CA must be pinned");
-    let ca = reqwest::Certificate::from_pem(pem.as_bytes()).expect("valid test storage CA");
+    use rustls::pki_types::{CertificateDer, pem::PemObject};
+    let mut roots = rustls::RootCertStore::empty();
+    for certificate in CertificateDer::pem_slice_iter(pem.as_bytes()) {
+        roots
+            .add(certificate.expect("valid test storage CA PEM"))
+            .expect("valid test storage CA");
+    }
+    assert!(
+        !roots.is_empty(),
+        "test storage CA must contain certificates"
+    );
+    let tls = rustls::ClientConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .expect("ring default protocols")
+    .with_root_certificates(roots)
+    .with_no_client_auth();
     reqwest::Client::builder()
-        .tls_certs_only([ca])
+        .tls_backend_preconfigured(tls)
         .https_only(true)
         .redirect(reqwest::redirect::Policy::none())
         .timeout(std::time::Duration::from_secs(30))

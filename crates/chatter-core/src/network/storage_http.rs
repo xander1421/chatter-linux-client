@@ -42,10 +42,28 @@ pub(crate) fn storage_client() -> CachedClient {
 fn build_client() -> CachedClient {
     let pem =
         crate::config::TLS_ROOT_CA_PEM.ok_or_else(|| "no pinned TLS CA for storage".to_string())?;
-    let ca = reqwest::Certificate::from_pem(pem.as_bytes())
-        .map_err(|e| format!("invalid storage TLS CA: {}", e.without_url()))?;
+    use rustls::pki_types::{CertificateDer, pem::PemObject};
+    let mut roots = rustls::RootCertStore::empty();
+    for certificate in CertificateDer::pem_slice_iter(pem.as_bytes()) {
+        roots
+            .add(certificate.map_err(|e| format!("invalid storage TLS CA: {e}"))?)
+            .map_err(|e| format!("invalid storage TLS CA: {e}"))?;
+    }
+    if roots.is_empty() {
+        return Err("no certificates in storage TLS CA".to_string());
+    }
+    // reqwest's no-provider backend no longer selects ring automatically.
+    // Configure this client explicitly, without a process-global provider or
+    // any platform/WebPKI roots beside the pinned Chatter CA.
+    let tls = rustls::ClientConfig::builder_with_provider(Arc::new(
+        rustls::crypto::ring::default_provider(),
+    ))
+    .with_safe_default_protocol_versions()
+    .map_err(|e| format!("invalid storage TLS protocols: {e}"))?
+    .with_root_certificates(roots)
+    .with_no_client_auth();
     reqwest::Client::builder()
-        .tls_certs_only([ca])
+        .tls_backend_preconfigured(tls)
         .https_only(true)
         // Presigned URLs are already final destinations. Never forward their
         // capability query or upload body to a redirect target.
