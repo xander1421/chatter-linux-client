@@ -182,7 +182,10 @@ fn refresh_reaction_snapshot(
     author: &UserId,
     sent_at: u64,
 ) {
-    if client.chat_state().active_conversation() != conversation {
+    // No chat open (the reaction is stored; nothing on screen to refresh).
+    if conversation == chatter_core::state::ActiveConversation::None
+        || client.chat_state().active_conversation() != conversation
+    {
         return;
     }
     let handle = client.conversation(conversation);

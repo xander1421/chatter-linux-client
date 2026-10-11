@@ -31,7 +31,7 @@ pub(crate) use saved::spawn_saved_sync_recovery;
 mod server_dm;
 pub use call_event::ChannelCallPhase;
 mod receipts;
-pub use receipts::advance_delivery_status;
+pub use receipts::{advance_delivery_status, display_delivery_status};
 
 use std::sync::Arc;
 

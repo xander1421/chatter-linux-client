@@ -15,6 +15,18 @@ pub fn advance_delivery_status<'a>(current: &'a str, incoming: &'a str) -> &'a s
     }
 }
 
+/// The bubble status for an own row: a `"sending"` row whose submission
+/// could not be confirmed (`DELIVERY_UNCONFIRMED`; the transport died
+/// mid-request, the message may well have arrived) is `"unconfirmed"`, not
+/// "sending" forever and not "failed": nothing offers a retry for it.
+pub fn display_delivery_status<'a>(status: &'a str, failure_reason: Option<&str>) -> &'a str {
+    if status == "sending" && failure_reason == Some(super::core::DELIVERY_UNCONFIRMED) {
+        "unconfirmed"
+    } else {
+        status
+    }
+}
+
 impl MessageService {
     /// Snapshot the actual peer devices targeted by a send, before transport.
     /// Exclude our linked devices: their read state travels via ReadSync.
@@ -297,6 +309,22 @@ fn receipt_stage(
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    /// RC109: an unconfirmed send leaves "sending" for its own state; a
+    /// receipt still upgrades it.
+    #[test]
+    fn unconfirmed_send_shows_its_own_state() {
+        use crate::services::message::core::DELIVERY_UNCONFIRMED;
+        let shown = |status, reason| display_delivery_status(status, reason);
+        assert_eq!(shown("sending", Some(DELIVERY_UNCONFIRMED)), "unconfirmed");
+        assert_eq!(shown("sending", Some("Waiting for connection")), "sending");
+        assert_eq!(shown("sending", None), "sending");
+        assert_eq!(shown("failed", Some(DELIVERY_UNCONFIRMED)), "failed");
+        assert_eq!(
+            advance_delivery_status("unconfirmed", "delivered"),
+            "delivered"
+        );
+    }
 
     #[tokio::test]
     async fn sync_sent_ingestion_preserves_phone_targets_and_applies_tablet_receipts() {

@@ -275,6 +275,8 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             // The resolved conversation, not the row id: a peer's row can
             // resolve to the anon DM we share with them.
             if let chatter_core::state::ActiveConversation::AnonDm(anon_dm_id) = active {
+                // A peer avatar whose fetch never came through gets another try.
+                ui_ctx.retry_secret_chat_avatar(anon_dm_id);
 
                 let ui_ctx_for_sel = ui_ctx.clone();
                 crate::run_history_ui!(weak, owner, |w| {

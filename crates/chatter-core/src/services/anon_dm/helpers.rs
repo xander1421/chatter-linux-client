@@ -72,6 +72,21 @@ impl AnonDmService {
         cached
     }
 
+    /// Our avatar's pointer for a secret-chat acceptance, without uploading:
+    /// the cached pointer of an earlier upload, and whether an avatar is
+    /// owed (we have one that was never uploaded), so the profile update
+    /// after acceptance must carry it (RC108 O3, responder side).
+    pub(crate) fn my_uploaded_avatar_pointer(
+        &self,
+    ) -> (Option<crate::proto::content_v1::AttachmentPointer>, bool) {
+        let Some(avatar) = self.get_user_avatar() else {
+            return (None, false);
+        };
+        let cached = crate::services::secret_avatar::cached_pointer(&self.settings_repo, &avatar);
+        let owed = cached.is_none();
+        (cached, owed)
+    }
+
     /// The avatar a peer's pointer names; `current` is what we hold for them.
     /// `Err` when the fetch failed (worth retrying, see
     /// [`Self::refresh_peer_avatar`]).
@@ -86,7 +101,9 @@ impl AnonDmService {
     /// Fetch the avatar a peer's pointer names, after each of `delays` until
     /// a fetch goes through, and store it when it differs from the one we
     /// hold. Returns the new avatar, or `None` when nothing changed (no
-    /// conversation with this peer, same avatar, every fetch failed).
+    /// conversation with this peer, same avatar, every fetch failed). The
+    /// pointer stays pending until a fetch goes through, so opening the chat
+    /// retries it ([`Self::retry_pending_peer_avatar`]).
     pub(crate) async fn refresh_peer_avatar(
         &self,
         conversation_id: &crate::domain::anon_dm::AnonDmId,
@@ -100,14 +117,49 @@ impl AnonDmService {
             }
             _ => return Ok(None),
         };
+        let key = conversation_id.to_string();
+        crate::services::secret_avatar::set_pending_peer(&self.settings_repo, &key, pointer);
         let avatar = crate::services::secret_avatar::retrying(delays, || {
             self.resolve_peer_avatar(Some(pointer), held.clone())
         })
         .await;
+        let Ok(avatar) = avatar else {
+            return Ok(None);
+        };
+        crate::services::secret_avatar::clear_pending_peer(
+            &self.settings_repo,
+            &key,
+            Some(pointer),
+        );
         match avatar {
-            Ok(Some(avatar)) => self.store_peer_avatar(conversation_id, peer_id, avatar),
-            _ => Ok(None),
+            Some(avatar) => self.store_peer_avatar(conversation_id, peer_id, avatar),
+            None => Ok(None),
         }
+    }
+
+    /// One more fetch of a peer avatar that has not come through yet (the
+    /// chat was opened). The new avatar, or `None` when nothing was pending
+    /// or this fetch failed too (it stays pending).
+    pub(crate) async fn retry_pending_peer_avatar(
+        &self,
+        conversation_id: &crate::domain::anon_dm::AnonDmId,
+    ) -> Result<Option<Vec<u8>>, AnonDmError> {
+        let Some(pointer) = crate::services::secret_avatar::pending_peer(
+            &self.settings_repo,
+            &conversation_id.to_string(),
+        ) else {
+            return Ok(None);
+        };
+        let Some(dm) = self.anon_dm_repo.get_conversation(conversation_id)? else {
+            return Ok(None);
+        };
+        self.refresh_peer_avatar(
+            conversation_id,
+            &dm.peer_id,
+            &pointer,
+            &[std::time::Duration::ZERO],
+        )
+        .await
     }
 
     /// Store `avatar` as the peer's when it is new. Re-reads the row (a fetch

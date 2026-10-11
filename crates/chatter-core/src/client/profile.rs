@@ -779,8 +779,9 @@ impl ChatterClient {
     /// (a stranger we blocked) is not an error.
     ///
     /// An anon-DM peer has no friendship to end. With a chat still stored the
-    /// row reads "Delete chat" and does what Signal's Delete on a blocked chat
-    /// does: the conversation and its history go, the block stays.
+    /// row reads "Delete chat" and does what "Delete chat" does from the chat
+    /// itself: the secret chat ends for both sides (`end_conversation`, which
+    /// fails closed while the peer is reachable). The block stays.
     pub async fn remove_blocked_contact(
         &self,
         id: &crate::domain::ids::UserId,
@@ -790,7 +791,8 @@ impl ChatterClient {
         if let Some(conv_id) = self.find_anon_dm_by_peer(id) {
             return self
                 .anon_dms()
-                .delete_conversation(&conv_id)
+                .end_conversation(&conv_id)
+                .await
                 .map_err(|e| super::ClientError::Inbox(e.to_string()));
         }
         if !self.anon_dms().is_user_blocked(id).unwrap_or(false) {
@@ -1693,6 +1695,29 @@ mod tests {
 
         client.unblock_profile_user(&peer).await.unwrap();
         assert!(!client.is_profile_user_blocked(&peer));
+    }
+
+    /// Friends › Blocked › Delete chat on an accepted secret chat ends it for
+    /// both sides like the chat's own "Delete chat": the peer is told first,
+    /// failing closed, so with the peer unreachable nothing is deleted.
+    #[tokio::test]
+    async fn delete_blocked_accepted_secret_chat_ends_it_for_both() {
+        use crate::domain::anon_dm::AnonDmStatus;
+        let (client, _dir) = test_client();
+        let peer = UserId::from_uuid(uuid::Uuid::from_u128(9));
+        let mut dm = AnonDm::new_initiated(peer);
+        dm.status = AnonDmStatus::Active;
+        dm.peer_mailbox_pk = Some([2; 32]);
+        client
+            .anon_dms()
+            .anon_dm_repo()
+            .insert_conversation(&dm)
+            .unwrap();
+        client.block_profile_user(&peer).await.unwrap();
+
+        assert!(client.remove_blocked_contact(&peer).await.is_err());
+        assert_eq!(client.find_anon_dm_by_peer(&peer), Some(dm.id));
+        assert!(client.is_profile_user_blocked(&peer));
     }
 
     /// A secret DM's profile shows what the chat carried, not the global

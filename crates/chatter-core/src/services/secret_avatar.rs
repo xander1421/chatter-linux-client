@@ -26,6 +26,51 @@ use crate::storage::repositories::SettingsRepository;
 /// pointer of that avatar's upload.
 const POINTER_CACHE_PREFIX: &str = "secret_chat.avatar_pointer.";
 
+/// Settings key prefix: `<prefix><conversation id>` holds the encoded
+/// pointer of a peer avatar whose fetch has not gone through yet, so it is
+/// retried when the chat is next opened, after the backoff gave up or the
+/// app restarted (RC109: a device that never got the peer's avatar).
+const PENDING_PEER_PREFIX: &str = "secret_chat.peer_avatar_pending.";
+
+/// Remember `pointer` as the peer avatar still to fetch for `conversation`.
+pub(crate) fn set_pending_peer(
+    settings: &SettingsRepository,
+    conversation: &str,
+    pointer: &AttachmentPointer,
+) {
+    use prost::Message;
+    let key = format!("{PENDING_PEER_PREFIX}{conversation}");
+    if let Err(e) = settings.set_bytes(&key, &pointer.encode_to_vec()) {
+        tracing::warn!(error = %e, "could not remember a pending secret-chat avatar");
+    }
+}
+
+/// The peer avatar still to fetch for `conversation`, if any.
+pub(crate) fn pending_peer(
+    settings: &SettingsRepository,
+    conversation: &str,
+) -> Option<AttachmentPointer> {
+    use prost::Message;
+    settings
+        .get_bytes(&format!("{PENDING_PEER_PREFIX}{conversation}"))
+        .ok()
+        .flatten()
+        .and_then(|b| AttachmentPointer::decode(b.as_slice()).ok())
+}
+
+/// Forget the pending peer avatar of `conversation`; with `only`, only when
+/// it is still that pointer (a newer one stays pending).
+pub(crate) fn clear_pending_peer(
+    settings: &SettingsRepository,
+    conversation: &str,
+    only: Option<&AttachmentPointer>,
+) {
+    if only.is_some() && pending_peer(settings, conversation).as_ref() != only {
+        return;
+    }
+    let _ = settings.delete(&format!("{PENDING_PEER_PREFIX}{conversation}"));
+}
+
 /// A fetch slower than this gives up; the profile simply has no avatar yet.
 const FETCH_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(60);
 
@@ -314,6 +359,8 @@ mod tests {
         // Not uploaded yet: no pointer, at once (no Tor round trip here).
         let started = std::time::Instant::now();
         assert_eq!(svc.my_avatar_pointer_without_upload(), None);
+        // The acceptance likewise goes without it, and owes it.
+        assert_eq!(svc.my_uploaded_avatar_pointer(), (None, true));
         assert!(started.elapsed() < std::time::Duration::from_secs(1));
 
         let (cached, _) = uploaded(&avatar);
@@ -324,6 +371,7 @@ mod tests {
             )
             .unwrap();
         assert_eq!(svc.my_avatar_pointer_without_upload(), Some(cached.clone()));
+        assert_eq!(svc.my_uploaded_avatar_pointer(), (Some(cached.clone()), false));
         assert_eq!(cached_pointer(&svc.settings_repo, &avatar), Some(cached));
         assert_eq!(cached_pointer(&svc.settings_repo, &[]), None);
     }

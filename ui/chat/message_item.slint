@@ -16,6 +16,7 @@ import { Avatar } from "../components/avatar.slint";
 import { Haptics } from "../components/haptics.slint";
 import { MessageAttachmentData, ReactionEntry, RichTextBlock } from "types.slint";
 import { Icons } from "../theme/icons.slint";
+import { TooltipArea } from "../components/tooltip.slint";
 import { AudioPlayer } from "audio_player.slint";
 import { HoldArea } from "../components/hold_area.slint";
 
@@ -52,7 +53,7 @@ export component MessageItem inherits Rectangle {
     in property <bool> is-dm: false;  // When true, hide avatar/name - just bubbles
     in property <bool> can-thread: true;  // Threads are a channel feature
     in property <string> failure-reason: "";
-    in property <string> delivery-status: "";  // "sending", "sent", "failed", "delivered", "read" for own messages
+    in property <string> delivery-status: "";  // "sending", "unconfirmed", "sent", "failed", "delivered", "read" for own messages
     /// Whether this message went over the mesh. Set by the caller rather than
     /// inferred from the status string: "sent" is a mesh state too — in fact the
     /// most common one, since every room and cell message is a broadcast — so a
@@ -1433,7 +1434,36 @@ export component MessageItem inherits Rectangle {
                                         }
                                     }
 
-                                    if root.is-own && !root.mesh-delivery && root.delivery-status != "sending" && root.delivery-status != "failed": ticks := Rectangle {
+                                    // Submitted, but the transport died before the
+                                    // server answered: it may well have arrived.
+                                    // One tick with a warning, never "failed" and
+                                    // never a retry (a resend could duplicate it).
+                                    if root.is-own && !root.mesh-delivery && root.delivery-status == "unconfirmed": TooltipArea {
+                                        tooltip-text: "Delivery could not be confirmed";
+                                        placement: "top";
+                                        width: 26px;
+                                        height: 12px;
+                                        accessible-role: text;
+                                        accessible-label: "Delivery could not be confirmed";
+
+                                        Image {
+                                            source: Icons.check;
+                                            width: 12px;
+                                            height: 12px;
+                                            x: 0px;
+                                            colorize: Colors.text-muted;
+                                        }
+
+                                        Image {
+                                            source: Icons.alert-triangle;
+                                            width: 12px;
+                                            height: 12px;
+                                            x: parent.width - self.width;
+                                            colorize: Colors.warning;
+                                        }
+                                    }
+
+                                    if root.is-own && !root.mesh-delivery && root.delivery-status != "sending" && root.delivery-status != "failed" && root.delivery-status != "unconfirmed": ticks := Rectangle {
                                         property <bool> double-tick: root.delivery-status != "sent";
                                         property <color> tick-color: root.delivery-status == "read" ? Colors.bubble-accent : Colors.text-muted;
                                         width: self.double-tick ? 17px : 12px;

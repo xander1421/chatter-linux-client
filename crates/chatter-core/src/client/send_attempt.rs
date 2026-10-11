@@ -165,6 +165,13 @@ pub(super) fn settle_failure(
         let conn = db.connection().map_err(storage_error)?;
         conn.execute("UPDATE settings SET value=json_set(value,'$.message_id',?2) WHERE key=?1 AND json_extract(value,'$.attempt_id')=?3", params![key, id, attempt.to_string()])
             .map_err(|e| storage_error(StorageError::Database(e)))?;
+        // The row stays "sending" (retry stays locked) but says why, so its
+        // bubble reads "not confirmed" rather than "sending" for good.
+        conn.execute(
+            "UPDATE messages SET failure_reason=?2 WHERE id=?1 AND delivery_status='sending'",
+            params![id, crate::services::message::core::DELIVERY_UNCONFIRMED],
+        )
+        .map_err(|e| storage_error(StorageError::Database(e)))?;
     }
     Ok(SendError::DeliveryUnconfirmed)
 }

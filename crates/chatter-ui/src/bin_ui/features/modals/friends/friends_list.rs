@@ -119,7 +119,18 @@ fn run_blocked_action(
                         );
                         super::refresh_blocked_users(weak.clone(), &ui_ctx);
                     }
-                    Err(e) => tracing::error!("Blocked-user action failed: {}", e),
+                    Err(e) => {
+                        tracing::error!("Blocked-user action failed: {}", e);
+                        // E.g. Delete chat on a secret chat stays when its
+                        // peer could not be told, as from the chat itself.
+                        if remove {
+                            crate::run_ui!(weak, |w| {
+                                w.set_toast_message("That did not go through. Check your connection and try again.".into());
+                                w.set_toast_variant("error".into());
+                                w.set_toast_visible(true);
+                            });
+                        }
+                    }
                 }
             }
             Err(_) => tracing::error!("Invalid user ID: {}", user_id_str),

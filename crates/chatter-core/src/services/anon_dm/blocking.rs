@@ -142,6 +142,11 @@ impl AnonDmService {
         }
 
         self.anon_dm_repo.delete_conversation(conversation_id)?;
+        crate::services::secret_avatar::clear_pending_peer(
+            &self.settings_repo,
+            &conversation_id.to_string(),
+            None,
+        );
         Ok(())
     }
 

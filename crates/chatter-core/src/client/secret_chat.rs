@@ -11,6 +11,38 @@ use crate::domain::anon_dm::{AnonDm, AnonDmStatus};
 use crate::domain::ids::UserId;
 use crate::services::anon_dm::AnonDmError;
 
+impl ChatterClient {
+    /// The secret chat was opened: fetch a peer avatar that never came
+    /// through (Tor failures outlasted the backoff, or the app restarted
+    /// meanwhile). Runs in the background; a new avatar is announced like
+    /// any profile update.
+    pub fn retry_secret_chat_avatar(&self, conversation_id: crate::domain::anon_dm::AnonDmId) {
+        if tokio::runtime::Handle::try_current().is_err() {
+            return;
+        }
+        let (service, bus) = (self.anon_dms().clone(), self.event_bus().clone());
+        tokio::spawn(async move {
+            match service.retry_pending_peer_avatar(&conversation_id).await {
+                Ok(Some(avatar)) => {
+                    if let Ok(Some(dm)) = service.get_conversation(&conversation_id) {
+                        bus.emit_domain(crate::inbox::DomainEvent::AnonDmProfileUpdated {
+                            conversation_id,
+                            user_id: dm.peer_id,
+                            display_name: None,
+                            avatar: Some(avatar),
+                            avatar_url: None,
+                            bio: None,
+                            timestamp: crate::util::time::TimestampNanos::now().as_u64(),
+                        });
+                    }
+                }
+                Ok(None) => {}
+                Err(e) => tracing::warn!(error = %e, "Failed to store secret chat avatar"),
+            }
+        });
+    }
+}
+
 /// Why a secret chat could not be started.
 #[derive(Debug, thiserror::Error)]
 pub enum SecretChatError {

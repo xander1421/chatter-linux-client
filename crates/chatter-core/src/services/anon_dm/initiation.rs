@@ -602,6 +602,13 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(none, None);
+        // Every fetch failed: the pointer stays pending for the next open,
+        // which tries again (and fails again here, so it stays).
+        let pending =
+            || crate::services::secret_avatar::pending_peer(&svc.settings_repo, &dm.id.to_string());
+        assert_eq!(pending(), Some(pointer.clone()));
+        assert_eq!(svc.retry_pending_peer_avatar(&dm.id).await.unwrap(), None);
+        assert_eq!(pending(), Some(pointer.clone()));
 
         let avatar = vec![0x89, b'P', b'N', b'G'];
         assert_eq!(
@@ -631,6 +638,10 @@ mod tests {
         let (name, header_avatar) = client.anon_dm_peer_card(&dm.id).unwrap();
         assert_eq!(name, "Peer");
         assert_eq!(header_avatar.as_deref(), Some(avatar.as_slice()));
+
+        // Deleting the chat forgets its pending avatar.
+        svc.delete_conversation(&dm.id).unwrap();
+        assert_eq!(pending(), None);
     }
 
     /// A secret chat is bound to one peer device: the first binding wins, an

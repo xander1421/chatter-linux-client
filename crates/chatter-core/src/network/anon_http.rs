@@ -216,10 +216,15 @@ mod tor {
     /// never binds to the app's DB-starved runtime, whichever path wins the init
     /// race) and install the ring crypto provider before bootstrap. See
     /// [`crate::network::grpc::onion_transport::tor_runtime`].
+    /// `isolated`: dial on a fresh isolation group. arti keeps onion-service
+    /// state (descriptor, intro/rendezvous circuits) per (service, isolation)
+    /// and reuses any circuit that is not closing, so a stalled one keeps
+    /// being handed back on the shared group; a new group builds its own.
     async fn connect_tor(
         tor: &SharedTorClient,
         host: &str,
         port: u16,
+        isolated: bool,
     ) -> Result<arti_client::DataStream, String> {
         use crate::network::grpc::onion_transport::tor_runtime;
         let base = tor
@@ -238,7 +243,11 @@ mod tor {
                 }
             })
             .await?;
-        let client = base.clone();
+        let client = if isolated {
+            base.isolated_client()
+        } else {
+            base.clone()
+        };
         let (dial_host, dial_port) = (host.to_string(), port);
         let mut task = TorTask(
             tor_runtime()
@@ -293,7 +302,7 @@ mod tor {
         p: &ParsedUrl,
         req: hyper::Request<Full<Bytes>>,
     ) -> Result<(u16, hyper::HeaderMap, Vec<u8>), String> {
-        let stream = connect_tor(tor, &p.host, p.port).await?;
+        let stream = connect_tor(tor, &p.host, p.port, false).await?;
         if p.https {
             let server_name = ServerName::try_from(p.host.clone())
                 .map_err(|e| format!("invalid SNI host {}: {e}", p.host))?;
@@ -339,9 +348,19 @@ mod tor {
             .header(hyper::header::HOST, host_header(&p))
             .body(Full::new(Bytes::new()))
             .map_err(|_| "storage request construction failed".to_string())?;
-        let stream = connect_tor(tor, &p.host, p.port)
-            .await
-            .map_err(|_| "storage Tor connection failed".to_string())?;
+        // A failed dial is retried once on fresh circuits (RC109: one device
+        // failed every storage fetch on the shared ones while another device
+        // fetched the same object fine).
+        let stream = match connect_tor(tor, &p.host, p.port, false).await {
+            Ok(stream) => stream,
+            Err(e) => {
+                tracing::warn!(error = %e, "storage Tor connect failed; retrying on fresh circuits");
+                connect_tor(tor, &p.host, p.port, true).await.map_err(|e| {
+                    tracing::warn!(error = %e, "storage Tor connect failed on fresh circuits");
+                    "storage Tor connection failed".to_string()
+                })?
+            }
+        };
         if p.https {
             let name = ServerName::try_from(p.host.clone())
                 .map_err(|_| "storage TLS hostname invalid".to_string())?;

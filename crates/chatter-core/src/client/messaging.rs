@@ -1819,7 +1819,8 @@ pub struct SendMessageUiResult {
     pub timestamp_display: String,
     /// Sidebar preview with "You: " prefix, truncated to sidebar width.
     pub sidebar_preview: String,
-    /// `"sent"` (delivered), `"sending"` (DM bootstrap in flight), or
+    /// `"sent"` (delivered), `"sending"` (DM bootstrap in flight),
+    /// `"unconfirmed"` (submitted, outcome unknown, no retry), or
     /// `"failed"` (stored, not delivered — see `failure_notice`).
     pub delivery_status: &'static str,
     /// True when a DM bootstrap was kicked off — UI should show the

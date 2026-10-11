@@ -3108,7 +3108,14 @@ impl ChatterClient {
                 .as_ref()
                 .is_some_and(|m| matches!(m.delivery_status.as_str(), "failed" | "sending"))
         {
-            (real_message_id, "sending")
+            let reason = result
+                .message
+                .as_ref()
+                .and_then(|m| m.failure_reason.as_deref());
+            (
+                real_message_id,
+                crate::services::message::display_delivery_status("sending", reason),
+            )
         } else {
             (real_message_id, "sent")
         };

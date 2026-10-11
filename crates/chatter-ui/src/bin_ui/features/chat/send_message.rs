@@ -180,6 +180,21 @@ pub(crate) fn remove_pending_bubble(w: &MainWindow, send: &ComposerSend) {
     super::helpers::remove_messages_where(w, |m| m.message_id.as_str() == pending_id);
 }
 
+/// The pending row of a send core took but could not confirm.
+fn mark_pending_unconfirmed(w: &MainWindow, send: &ComposerSend) {
+    use slint::Model;
+    let pending_id = pending_message_id(send);
+    let messages = w.get_messages();
+    for i in 0..messages.row_count() {
+        if let Some(mut m) = messages.row_data(i)
+            && m.message_id.as_str() == pending_id
+        {
+            m.delivery_status = "unconfirmed".into();
+            messages.set_row_data(i, m);
+        }
+    }
+}
+
 /// A staged file as the pending row shows it: the local file stands in for
 /// the stored attachment until the send returns one.
 fn pending_attachment_to_display_data(
@@ -783,11 +798,19 @@ async fn deliver_inner(
                 gateway::SendError::DeliveryUnconfirmed
                     | gateway::SendError::AttemptAlreadyConfirmed
             ) {
-                // Taken by core, outcome unresolved: the pending row stays
-                // "sending", which is the truth. In particular GIF/voice
-                // wrappers must not restore it as a new composer send. The
-                // retained attempt never re-reads the files, so the sheltered
-                // copies are done here too.
+                // Taken by core, outcome unresolved: the pending row reads
+                // "not confirmed" (no retry), which is the truth. In
+                // particular GIF/voice wrappers must not restore it as a new
+                // composer send. The retained attempt never re-reads the
+                // files, so the sheltered copies are done here too.
+                if matches!(&e, gateway::SendError::DeliveryUnconfirmed) {
+                    let (weak, frozen) = (weak.clone(), send_for_delivery.clone());
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            mark_pending_unconfirmed(&w, &frozen);
+                        }
+                    });
+                }
                 notice(&weak, &ui_ctx, session_revision, &e.to_string());
                 ui_ctx.release_staged_files(&pending_attachments);
                 return true;

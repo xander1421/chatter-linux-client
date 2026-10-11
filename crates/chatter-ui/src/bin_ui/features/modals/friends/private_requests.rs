@@ -129,9 +129,13 @@ pub(crate) fn wire_decline_private_request(window: &MainWindow, ui_ctx: &Arc<Cha
                     // Refresh private requests list
                     refresh_private_requests(weak.clone(), &ui_ctx).await;
 
-                    // The request's row leaves the chat list with it.
-                    crate::bin_ui::features::sidebar::rebuild_chat_list(&weak, &ui_ctx);
-                    crate::bin_ui::features::sidebar::dm::refresh_open_anon_dm(&weak, &ui_ctx, conv_id);
+                    // The request's row leaves the chat list with it, and a
+                    // chat view it was declined from closes (RC108 O2).
+                    crate::bin_ui::features::sidebar::conversation_removed(
+                        &weak,
+                        &ui_ctx,
+                        chatter_core::state::ActiveConversation::AnonDm(conv_id),
+                    );
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             w.set_friends_loading(false);

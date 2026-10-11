@@ -423,7 +423,11 @@ pub fn message_to_display_data_with_replies(
         reply_to_waveform: Vec::new(),    // Resolved by batch via parent lookup
         reply_to_thumbnail_bytes: msg.reply_to_thumbnail.clone(),
         reply_to_thumbnail_decoded: None,
-        delivery_status: msg.delivery_status.clone(),
+        delivery_status: chatter_core::services::message::display_delivery_status(
+            &msg.delivery_status,
+            msg.failure_reason.as_deref(),
+        )
+        .to_owned(),
         failure_reason: msg.failure_reason.clone().unwrap_or_default(),
         is_pinned: msg.is_pinned,
         is_call,

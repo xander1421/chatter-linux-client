@@ -12,7 +12,13 @@ impl AnonDmService {
     /// Accept an incoming message request.
     ///
     /// Creates our mailbox and sends acceptance to initiator's anonymous mailbox.
-    pub async fn accept_request(&self, conversation_id: AnonDmId) -> Result<AnonDm, AnonDmError> {
+    /// The acceptance never waits on a first avatar upload over Tor (RC108
+    /// O3, as the request): an avatar not uploaded yet follows in a profile
+    /// update sent in the background once the chat is active.
+    pub async fn accept_request(
+        self: &std::sync::Arc<Self>,
+        conversation_id: AnonDmId,
+    ) -> Result<AnonDm, AnonDmError> {
         let _current_user = self.current_user_id()?;
 
         // Get the conversation
@@ -44,15 +50,16 @@ impl AnonDmService {
         let my_display_name = self.get_my_display_name().unwrap_or_default();
 
         // Send acceptance to initiator's anonymous mailbox
-        self.send_acceptance(
-            &dm.peer_id,
-            &conversation_id,
-            &peer_mailbox_pk,
-            &mailbox.public_key,
-            profile_key.as_ref(),
-            &my_display_name,
-        )
-        .await?;
+        let avatar_owed = self
+            .send_acceptance(
+                &dm.peer_id,
+                &conversation_id,
+                &peer_mailbox_pk,
+                &mailbox.public_key,
+                profile_key.as_ref(),
+                &my_display_name,
+            )
+            .await?;
 
         // Status alone: `dm` is a snapshot from before the sends above, and a
         // peer avatar fetched meanwhile must not be overwritten with it.
@@ -66,10 +73,23 @@ impl AnonDmService {
         // Secret chat: no peer identity in the log.
         tracing::info!(%conversation_id, "Accepted secret chat");
 
+        if avatar_owed && tokio::runtime::Handle::try_current().is_ok() {
+            let service = std::sync::Arc::clone(self);
+            let name = Some(my_display_name).filter(|n| !n.is_empty());
+            tokio::spawn(async move {
+                // Ephemeral: logs and returns Ok on a failed send.
+                let _ = service
+                    .send_profile_update(&conversation_id, name, None, None)
+                    .await;
+            });
+        }
+
         Ok(dm)
     }
 
-    /// Send acceptance to initiator's anonymous mailbox.
+    /// Send acceptance to initiator's anonymous mailbox. `Ok(true)` when our
+    /// avatar is owed: it was never uploaded, so the acceptance went without
+    /// it and a profile update must follow.
     pub(crate) async fn send_acceptance(
         &self,
         peer_id: &UserId,
@@ -78,8 +98,10 @@ impl AnonDmService {
         our_mailbox_pk: &[u8; 32],
         profile_key: Option<&[u8; 32]>,
         display_name: &str,
-    ) -> Result<(), AnonDmError> {
-        // Name under the profile key, avatar as a pointer (as in AnonDmRequest).
+    ) -> Result<bool, AnonDmError> {
+        // Name under the profile key, avatar as a pointer (as in AnonDmRequest),
+        // only an already-uploaded one: no upload over Tor here.
+        let mut avatar_owed = false;
         let (encrypted_display_name, avatar) = if let Some(pk) = profile_key {
             // Encrypt display name
             let enc_name = if !display_name.is_empty() {
@@ -87,7 +109,9 @@ impl AnonDmService {
             } else {
                 None
             };
-            (enc_name, self.my_avatar_pointer().await)
+            let (cached, owed) = self.my_uploaded_avatar_pointer();
+            avatar_owed = owed;
+            (enc_name, cached)
         } else {
             (None, None)
         };
@@ -113,7 +137,7 @@ impl AnonDmService {
             .await?;
 
         tracing::debug!(%conversation_id, "Sent secret chat acceptance");
-        Ok(())
+        Ok(avatar_owed)
     }
 
     /// Decline an incoming message request.
