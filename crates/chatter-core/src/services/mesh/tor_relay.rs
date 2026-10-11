@@ -59,7 +59,7 @@ pub struct TorRelayConnector {
     /// This connector's isolated circuit group, derived from `shared` on first
     /// use so every relay dial reuses one isolation group distinct from the
     /// authenticated RPC traffic.
-    isolated: OnceCell<TorClient<PreferredRuntime>>,
+    isolated: OnceCell<Arc<TorClient<PreferredRuntime>>>,
 }
 
 impl TorRelayConnector {
@@ -72,7 +72,7 @@ impl TorRelayConnector {
     }
 
     /// Bootstrap (once) and hand back the isolated client.
-    async fn client(&self) -> Result<TorClient<PreferredRuntime>, NostrError> {
+    async fn client(&self) -> Result<Arc<TorClient<PreferredRuntime>>, NostrError> {
         let base = self
             .shared
             .get_or_try_init(|| async {

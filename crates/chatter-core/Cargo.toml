@@ -106,7 +106,9 @@ qrcode = "0.14"
 # ============================================================================
 # Database (SQLite + SQLCipher)
 # ============================================================================
-rusqlite = { version = "0.36", features = ["bundled-sqlcipher", "unlock_notify"] }
+# 0.38+ bundles SQLCipher requiring OpenSSL3 EVP_MAC; the owner-pinned
+# WebRTC BoringSSL has HMAC_CTX instead. Keep one crypto provider on Android.
+rusqlite = { version = "=0.37.0", features = ["bundled-sqlcipher", "unlock_notify"] }
 memmap2 = "0.9"
 
 # ============================================================================
@@ -186,11 +188,11 @@ mistralrs = { version = "0.7", optional = true, default-features = false }
 # arti-client: pure-Rust Tor client. `tokio` gives DataStream the tokio
 # AsyncRead/AsyncWrite impls hyper-util's TokioIo needs; `rustls` avoids an
 # OpenSSL system dep. `onion-service-client` is REQUIRED for TorClient::connect
-# to a .onion (it's in arti's default set, which default-features=false drops —
-# without it the onion dial fails at runtime with a generic "unavailable").
+# to a .onion; without it the onion dial fails at runtime with a generic
+# "unavailable". Enable it explicitly alongside default-features=false.
 # tor-rtcompat provides PreferredRuntime.
-arti-client = { version = "0.32", default-features = false, features = ["tokio", "rustls", "onion-service-client"], optional = true }
-tor-rtcompat = { version = "0.32", default-features = false, features = ["tokio", "rustls"], optional = true }
+arti-client = { version = "0.47.0", default-features = false, features = ["tokio", "rustls", "onion-service-client"], optional = true }
+tor-rtcompat = { version = "0.47.0", default-features = false, features = ["tokio", "rustls"], optional = true }
 hyper-util = { version = "0.1", features = ["tokio"], optional = true }
 # HTTP-over-Tor client (anon_http): a hyper HTTP/1.1 client run over a rustls TLS
 # session tunnelled through the Arti DataStream. All already transitive deps of
@@ -304,7 +306,7 @@ libsignal-protocol = { git = "https://github.com/signalapp/libsignal", rev = "4b
 # Needed by tests/validated.rs V50/V51 to open the SQLCipher stores directly
 # and compare backup-restored rows byte-for-byte. Same version as the normal
 # dep so Cargo unifies the build.
-rusqlite = { version = "0.36", features = ["bundled-sqlcipher", "unlock_notify"] }
+rusqlite = { version = "=0.37.0", features = ["bundled-sqlcipher", "unlock_notify"] }
 
 [[bench]]
 name = "attachment_decrypt"

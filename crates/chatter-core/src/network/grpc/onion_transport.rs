@@ -166,7 +166,7 @@ pub(crate) fn tor_runtime() -> &'static tokio::runtime::Handle {
 }
 
 /// The bootstrapped Tor client, shared across the pool so bootstrap happens once.
-pub type SharedTorClient = Arc<OnceCell<TorClient<PreferredRuntime>>>;
+pub type SharedTorClient = Arc<OnceCell<Arc<TorClient<PreferredRuntime>>>>;
 
 /// Start directory/guard bootstrap while the app is initializing. No service
 /// connection is opened here, and secret/unidentified isolation is still derived
@@ -181,7 +181,7 @@ pub fn prewarm(tor: SharedTorClient) {
 
 async fn shared_bootstrap(
     tor: &SharedTorClient,
-) -> Result<&TorClient<PreferredRuntime>, std::io::Error> {
+) -> Result<&Arc<TorClient<PreferredRuntime>>, std::io::Error> {
     let base_result = tokio::time::timeout(
         BOOTSTRAP_TIMEOUT,
         tor.get_or_try_init(|| async {
