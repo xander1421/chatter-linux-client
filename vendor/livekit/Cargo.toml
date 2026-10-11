@@ -126,23 +126,27 @@ version = "1.4"
 [dependencies.libloading]
 version = "0.8.6"
 
+# Native bindings must match libwebrtc 0.3.41; newer 0.3 releases change its CXX API.
+[dependencies.webrtc-sys]
+version = "=0.3.38"
+
 [dependencies.libwebrtc]
-version = "0.3.41"
+version = "=0.3.41"
 
 [dependencies.livekit-api]
 version = "0.5.5"
 
 [dependencies.livekit-common]
-version = "0.1.0"
+version = "=0.1.0"
 
 [dependencies.livekit-data-stream]
-version = "0.1.0"
+version = "=0.1.0"
 
 [dependencies.livekit-datatrack]
-version = "0.1.11"
+version = "=0.1.11"
 
 [dependencies.livekit-protocol]
-version = "0.7.10"
+version = "=0.7.10"
 
 [dependencies.livekit-runtime]
 version = "0.4.0"

@@ -45,3 +45,13 @@ cargo test --manifest-path <copy>/Cargo.toml --lib --no-default-features \
 Use private XDG/DBUS paths, CHATTER_NO_KEYRING=1, and empty HTTP(S)/ALL_PROXY
 variables for these loopback fixture tests. The archive's original Cargo.lock
 is retained as upstream provenance; the application's lock controls shipping.
+
+## Dependency constraints (2026-10-11)
+
+Cargo.toml now uses exact versions for the LiveKit protocol family used by
+this patched SDK. The 0.7.13 protocol release adds required request fields that
+break livekit-api 0.5.5; newer livekit-common/data-stream/datatrack releases also
+pull protocol 0.8 types into the 0.7.52 SDK. Keep protocol 0.7.10,
+livekit-common 0.1.0, livekit-data-stream 0.1.0, livekit-datatrack 0.1.11, and
+libwebrtc 0.3.41 with webrtc-sys 0.3.38 and webrtc-sys-build 0.3.18 together until the deferred SDK upgrade has a live-call proof.
+These are dependency constraints only; no media implementation changed.

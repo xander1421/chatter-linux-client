@@ -9,7 +9,7 @@ manifest, source, tests, build script, license or metadata. Archive SHA-256:
 This matches the previously locked crates.io checksum. Workspace
 `[patch.crates-io] livekit = { path = "vendor/livekit" }` selects this copy;
 Cargo.lock's LiveKit source/checksum lines are removed because a local path
-package has no registry checksum. All dependency versions remain unchanged.
+package has no registry checksum. The original patch left dependency versions unchanged; see the later dependency constraints below.
 The RC64 upstream files modified are `src/room/e2ee/manager.rs` and
 `src/room/e2ee/key_provider.rs`. Runtime configuration additionally modifies
 `src/room/mod.rs` to forward an explicit private CA through RoomOptions to
@@ -92,3 +92,13 @@ the same shared provider accepts next. If a future SDK changes that contract to
 allow a second install to fail independently, the manager will report failure
 but the native current key/index may already be selected; do not treat staged
 application state as rollback of native key material in that hypothetical case.
+
+## Dependency constraints (2026-10-11)
+
+Cargo.toml now uses exact versions for the LiveKit protocol family used by
+this patched SDK. The 0.7.13 protocol release adds required request fields that
+break livekit-api 0.5.5; newer livekit-common/data-stream/datatrack releases also
+pull protocol 0.8 types into the 0.7.52 SDK. Keep protocol 0.7.10,
+livekit-common 0.1.0, livekit-data-stream 0.1.0, livekit-datatrack 0.1.11, and
+libwebrtc 0.3.41 with webrtc-sys 0.3.38 and webrtc-sys-build 0.3.18 together until the deferred SDK upgrade has a live-call proof.
+These are dependency constraints only; no media implementation changed.

@@ -143,7 +143,7 @@ i-slint-backend-testing = { version = "=1.17.1", default-features = false }
 # bundled livekit.org.webrtc Java classes resolve their native methods (else the
 # linker dead-strips them and calls abort with UnsatisfiedLinkError on join).
 # Version must match the webrtc-sys that livekit pulls (see Cargo.lock).
-webrtc-sys-build = "0.3.16"
+webrtc-sys-build = "=0.3.18"
 
 [features]
 # `onion` is default: secret chats (anonymous DMs/groups) ride Tor only, and a
