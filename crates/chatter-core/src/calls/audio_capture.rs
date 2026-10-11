@@ -72,14 +72,21 @@ impl AudioCapture {
         }
         let host = cpal::default_host();
         let default_device = host.default_input_device();
-        let default_name = default_device.as_ref().and_then(|d| d.name().ok());
+        let default_name = default_device.as_ref().and_then(|d| {
+            d.description()
+                .map(|description| description.name().to_owned())
+                .ok()
+        });
 
         let mut devices = Vec::new();
 
         for device in host.input_devices().map_err(|e| {
             CallError::TrackPublishFailed(format!("Failed to enumerate audio devices: {}", e))
         })? {
-            if let Ok(name) = device.name() {
+            if let Ok(name) = device
+                .description()
+                .map(|description| description.name().to_owned())
+            {
                 let is_default = default_name.as_ref() == Some(&name);
                 devices.push(AudioDevice {
                     id: name.clone(),
@@ -99,14 +106,21 @@ impl AudioCapture {
         }
         let host = cpal::default_host();
         let default_device = host.default_output_device();
-        let default_name = default_device.as_ref().and_then(|d| d.name().ok());
+        let default_name = default_device.as_ref().and_then(|d| {
+            d.description()
+                .map(|description| description.name().to_owned())
+                .ok()
+        });
 
         let mut devices = Vec::new();
 
         for device in host.output_devices().map_err(|e| {
             CallError::TrackPublishFailed(format!("Failed to enumerate output devices: {}", e))
         })? {
-            if let Ok(name) = device.name() {
+            if let Ok(name) = device
+                .description()
+                .map(|description| description.name().to_owned())
+            {
                 let is_default = default_name.as_ref() == Some(&name);
                 devices.push(AudioDevice {
                     id: name.clone(),
@@ -131,9 +145,12 @@ impl AudioCapture {
             CallError::TrackPublishFailed("No default audio input device".to_string())
         })?;
 
-        let name = device.name().map_err(|e| {
-            CallError::TrackPublishFailed(format!("Failed to get device name: {}", e))
-        })?;
+        let name = device
+            .description()
+            .map(|description| description.name().to_owned())
+            .map_err(|e| {
+                CallError::TrackPublishFailed(format!("Failed to get device name: {}", e))
+            })?;
 
         Ok(AudioDevice {
             id: name.clone(),
@@ -180,7 +197,13 @@ impl AudioCapture {
                 .map_err(|e| {
                     CallError::TrackPublishFailed(format!("Failed to enumerate devices: {}", e))
                 })?
-                .find(|d| d.name().ok().as_deref() == Some(id))
+                .find(|d| {
+                    d.description()
+                        .map(|description| description.name().to_owned())
+                        .ok()
+                        .as_deref()
+                        == Some(id)
+                })
                 .ok_or_else(|| {
                     CallError::TrackPublishFailed(format!("Audio device not found: {}", id))
                 })?
@@ -190,7 +213,10 @@ impl AudioCapture {
             })?
         };
 
-        self.device_name = device.name().unwrap_or_default();
+        self.device_name = device
+            .description()
+            .map(|description| description.name().to_owned())
+            .unwrap_or_default();
         tracing::info!("Starting audio capture from device: {}", self.device_name);
 
         // Get supported config
@@ -198,7 +224,7 @@ impl AudioCapture {
             CallError::TrackPublishFailed(format!("No supported audio config: {}", e))
         })?;
 
-        self.sample_rate = supported_config.sample_rate().0;
+        self.sample_rate = supported_config.sample_rate();
         self.num_channels = supported_config.channels() as u32;
 
         tracing::info!(
@@ -273,7 +299,7 @@ impl AudioCapture {
             SampleFormat::F32 => {
                 let tx = frame_tx.clone();
                 device.build_input_stream(
-                    &stream_config,
+                    stream_config,
                     move |data: &[f32], _: &cpal::InputCallbackInfo| {
                         if running.load(Ordering::SeqCst) {
                             let samples: Vec<i16> = data
@@ -294,7 +320,7 @@ impl AudioCapture {
             SampleFormat::I16 => {
                 let tx = frame_tx.clone();
                 device.build_input_stream(
-                    &stream_config,
+                    stream_config,
                     move |data: &[i16], _: &cpal::InputCallbackInfo| {
                         if running.load(Ordering::SeqCst) {
                             let samples = data.to_vec();

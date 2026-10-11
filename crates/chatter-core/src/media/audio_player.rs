@@ -3,7 +3,7 @@
 //! Audio playback using rodio for voice messages and audio files.
 //! Uses streaming playback with native seeking support.
 
-use rodio::{Decoder, OutputStream, OutputStreamBuilder, Sink, Source, source::SeekError};
+use rodio::{Decoder, DeviceSinkBuilder, MixerDeviceSink, Player, Source, source::SeekError};
 use std::fs::File;
 use std::io::{BufReader, Cursor, Read, Seek};
 use std::path::{Path, PathBuf};
@@ -57,11 +57,11 @@ enum AudioSource {
 /// Can load audio from files or from memory for secure playback.
 pub struct AudioPlayer {
     /// Output stream (must be kept alive for playback).
-    stream: Option<OutputStream>,
+    stream: Option<MixerDeviceSink>,
     /// Output errors are reported on the audio thread; retire it on the caller.
     output_failed: Arc<AtomicBool>,
     /// Current playback sink.
-    sink: Option<Sink>,
+    sink: Option<Player>,
     /// Currently loaded audio source.
     current_source: Option<AudioSource>,
     /// Duration of the current audio file.
@@ -69,7 +69,7 @@ pub struct AudioPlayer {
 }
 
 // cpal's CoreAudio backend holds a `Box<dyn FnMut()>` property-listener callback
-// without a Send bound, so `OutputStream` is !Send on macOS. All access to
+// without a Send bound, so `MixerDeviceSink` is !Send on macOS. All access to
 // AudioPlayer goes through the global Mutex in audio_state.rs, which already
 // serializes it, so moving it across threads is sound.
 unsafe impl Send for AudioPlayer {}
@@ -287,7 +287,7 @@ impl AudioPlayer {
             // a replacement stream. Never close/reopen on the audio thread.
             let failed = Arc::new(AtomicBool::new(false));
             let callback_failed = failed.clone();
-            let stream = OutputStreamBuilder::from_default_device()
+            let stream = DeviceSinkBuilder::from_default_device()
                 .map_err(|e| {
                     MediaError::PlaybackError(format!("failed to select audio output: {e}"))
                 })?
@@ -295,14 +295,14 @@ impl AudioPlayer {
                     callback_failed.store(true, Ordering::Release);
                     tracing::error!(%error, "Attachment audio output stream failed");
                 })
-                .open_stream_or_fallback()
+                .open_sink_or_fallback()
                 .map_err(|e| {
                     MediaError::PlaybackError(format!("failed to create audio output: {e}"))
                 })?;
             self.output_failed = failed;
             self.stream = Some(stream);
         }
-        let sink = Sink::connect_new(
+        let sink = Player::connect_new(
             self.stream
                 .as_ref()
                 .ok_or_else(|| MediaError::PlaybackError("no audio output".to_string()))?

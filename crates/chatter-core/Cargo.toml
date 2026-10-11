@@ -147,8 +147,8 @@ http-body = "1"
 mime_guess = "2"
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider", "json", "blocking", "stream", "charset", "http2", "system-proxy"] }
 url = "2"
-rodio = "0.21.1"
-cpal = "0.15"
+rodio = "0.22.2"
+cpal = "0.18.2"
 hound = "3.5"
 image = { version = "0.25.9", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
 # smol removed — was unused
@@ -285,7 +285,7 @@ muda = "0.21.2"
 [target.'cfg(target_os = "android")'.dependencies]
 # JNI radio for the mesh (Android only).
 chatter-mesh-android = { path = "../chatter-mesh-android", optional = true }
-# Call playback opens its stream through oboe directly (cpal already links the
+# Call playback opens its stream through oboe directly (cpal now uses AAudio; the
 # same crate) so it can declare USAGE_VOICE_COMMUNICATION: only that usage
 # follows the call route (earpiece / speaker / headset) AudioManager selects.
 oboe = { version = "0.6", features = ["java-interface"] }

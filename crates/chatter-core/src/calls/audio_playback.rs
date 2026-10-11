@@ -10,11 +10,11 @@ use std::sync::atomic::{AtomicBool, AtomicU8, AtomicU32, Ordering};
 #[cfg(not(target_os = "android"))]
 use cpal::Device;
 #[cfg(not(target_os = "android"))]
+use cpal::StreamConfig;
+#[cfg(not(target_os = "android"))]
 use cpal::traits::StreamTrait;
 #[cfg(not(target_os = "android"))]
 use cpal::traits::{DeviceTrait, HostTrait};
-#[cfg(not(target_os = "android"))]
-use cpal::{SampleRate, StreamConfig};
 use futures::StreamExt;
 use livekit::track::RemoteAudioTrack;
 use livekit::webrtc::audio_stream::native::NativeAudioStream;
@@ -284,7 +284,11 @@ impl AudioPlayback {
                 .map_err(|e| {
                     CallError::DeviceError(format!("Failed to list output devices: {}", e))
                 })?
-                .find(|d| d.name().is_ok_and(|n| n == name))
+                .find(|d| {
+                    d.description()
+                        .map(|description| description.name().to_owned())
+                        .is_ok_and(|n| n == name)
+                })
                 .ok_or_else(|| {
                     CallError::DeviceError(format!("Output device '{}' not found", name))
                 }),
@@ -399,7 +403,7 @@ impl AudioPlayback {
             .default_output_config()
             .map_err(|e| CallError::DeviceError(format!("Failed to get output config: {}", e)))?;
 
-        let sample_rate = supported_config.sample_rate().0;
+        let sample_rate = supported_config.sample_rate();
         let channels = supported_config.channels();
 
         // Store actual sample rate and channels
@@ -422,7 +426,10 @@ impl AudioPlayback {
     ) -> Result<OutputStream, CallError> {
         tracing::info!(
             "Audio playback: using device '{}' at {}Hz, {} channels",
-            device.name().unwrap_or_else(|_| "unknown".to_string()),
+            device
+                .description()
+                .map(|description| description.name().to_owned())
+                .unwrap_or_else(|_| "unknown".to_string()),
             sample_rate,
             channels
         );
@@ -435,13 +442,13 @@ impl AudioPlayback {
         // Build output stream
         let config = StreamConfig {
             channels,
-            sample_rate: SampleRate(sample_rate),
+            sample_rate,
             buffer_size: cpal::BufferSize::Default,
         };
 
         let output_stream = device
             .build_output_stream(
-                &config,
+                config,
                 move |data: &mut [f32], _: &cpal::OutputCallbackInfo| {
                     drain_mix(data, &mixer, &is_active_clone, &volume_clone);
                     record_rendered_samples(data, &rendered_evidence);

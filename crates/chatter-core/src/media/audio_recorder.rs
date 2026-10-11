@@ -75,7 +75,7 @@ impl AudioRecorder {
         })?;
 
         let config: StreamConfig = supported_config.config();
-        let sample_rate = config.sample_rate.0;
+        let sample_rate = config.sample_rate;
         let channels = config.channels;
 
         Ok(Self {
@@ -153,7 +153,7 @@ impl AudioRecorder {
     fn build_input_stream<T>(
         &self,
         samples: Arc<Mutex<Vec<f32>>>,
-        err_fn: impl Fn(cpal::StreamError) + Send + 'static,
+        err_fn: impl Fn(cpal::Error) + Send + 'static,
     ) -> Result<Stream, MediaError>
     where
         T: cpal::SizedSample,
@@ -165,7 +165,7 @@ impl AudioRecorder {
             * crate::services::voice_recording::MAX_RECORDING_SECONDS as usize;
         self.device
             .build_input_stream(
-                &self.config,
+                self.config,
                 move |data: &[T], _: &cpal::InputCallbackInfo| {
                     let mut samples = samples.lock().unwrap();
                     let remaining = max_samples.saturating_sub(samples.len());
