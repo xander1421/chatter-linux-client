@@ -4,7 +4,8 @@
 
 use super::platform::{APP_DISPLAY_NAME, APP_ID};
 use crate::error::SystemError;
-use ksni::{self, Handle, Icon, MenuItem, Tray, TrayService, menu::StandardItem};
+use ksni::blocking::{Handle, TrayMethods};
+use ksni::{self, Icon, MenuItem, Tray, menu::StandardItem};
 use std::sync::{
     Arc,
     atomic::{AtomicU8, AtomicU32, Ordering},
@@ -92,24 +93,15 @@ impl SystemTray {
         let state = Arc::new(TrayState::default());
         let tray_service = TrayServiceImpl::new(event_tx, state.clone());
 
-        // Build the service on this thread so we can grab `Handle` before
-        // moving `service` into the blocking worker.
-        let service = TrayService::new(tray_service);
-        let handle = service.handle();
-
-        let thread_handle = std::thread::spawn(move || {
-            // Run the service (blocks until shutdown)
-            let _ = service.run();
-        });
+        let handle = tray_service
+            .spawn()
+            .map_err(|e| SystemError::TrayInit(e.to_string()))?;
 
         let controller = Self {
             state,
             handle: handle.clone(),
         };
-        let tray_handle = TrayHandle {
-            thread_handle: Some(thread_handle),
-            handle,
-        };
+        let tray_handle = TrayHandle { handle };
 
         Ok((controller, tray_handle, event_rx))
     }
@@ -135,17 +127,13 @@ impl SystemTray {
 
 /// Handle to the system tray service for cleanup.
 pub struct TrayHandle {
-    thread_handle: Option<std::thread::JoinHandle<()>>,
     handle: Handle<TrayServiceImpl>,
 }
 
 impl TrayHandle {
     /// Shutdown the tray service and wait for cleanup.
-    pub fn shutdown(mut self) {
-        self.handle.shutdown();
-        if let Some(handle) = self.thread_handle.take() {
-            let _ = handle.join();
-        }
+    pub fn shutdown(self) {
+        self.handle.shutdown().wait();
     }
 }
 
