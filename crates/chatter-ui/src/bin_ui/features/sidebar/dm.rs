@@ -147,6 +147,11 @@ fn open_dm_peer(ui_ctx: &ChatterClient) -> Option<UserId> {
 }
 
 fn start_secret_chat(weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<ChatterClient>, peer: UserId) {
+    if let Some(w) = weak.upgrade() {
+        w.set_toast_message("Starting secret chat over Tor…".into());
+        w.set_toast_variant("info".into());
+        w.set_toast_visible(true);
+    }
     let (weak, ui_ctx) = (weak.clone(), ui_ctx.clone());
     tokio::spawn(async move {
         match ui_ctx.start_secret_chat(peer).await {

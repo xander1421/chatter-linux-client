@@ -435,7 +435,7 @@ export component SettingsScreen inherits Rectangle {
                                             }
 
                                             Text {
-                                                text: "Update your password regularly to keep your account secure.";
+                                                text: "Choose a strong, unique password for your account.";
                                                 color: Colors.text-muted;
                                                 font-size: Typography.xs;
                                                 wrap: word-wrap;
@@ -1191,7 +1191,8 @@ export component SettingsScreen inherits Rectangle {
                                                     font-weight: Typography.medium;
                                                 }
 
-                                                // Count badge
+                                                // Zero is also the initial value before sessions load.
+                                                // Display an unknown count until a signed-in session is known.
                                                 Rectangle {
                                                     width: 24px;
                                                     height: 20px;
@@ -1199,7 +1200,7 @@ export component SettingsScreen inherits Rectangle {
                                                     background: Colors.action-fill;
 
                                                     Text {
-                                                        text: root.session-count;
+                                                        text: root.session-count > 0 ? "\{root.session-count}" : "—";
                                                         color: Colors.on-action;
                                                         font-size: Typography.xs;
                                                         horizontal-alignment: center;
