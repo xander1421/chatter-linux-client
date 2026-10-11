@@ -2,8 +2,8 @@
 //!
 //! GStreamer, with hardware acceleration, on Linux, Windows and macOS.
 //!
-//! Android uses the NDK MediaCodec byte-buffer decoder (linear 8-bit YUV420).
-//! Audio output and vendor-specific/HDR layouts remain unsupported there.
+//! Android playback and thumbnails use the platform player and thumbnail extractor
+//! in chatter-ui; they do not use this desktop frame-decoding interface.
 
 use std::path::Path;
 
@@ -20,15 +20,6 @@ mod gstreamer;
     any(target_os = "linux", target_os = "windows", target_os = "macos")
 ))]
 pub use self::gstreamer::GStreamerDecoder as PlatformDecoder;
-
-#[cfg(any(target_os = "android", test))]
-mod yuv;
-
-// Android NDK implementation
-#[cfg(target_os = "android")]
-mod mediacodec;
-#[cfg(target_os = "android")]
-pub use self::mediacodec::MediaCodecDecoder as PlatformDecoder;
 
 /// Information about an opened video.
 #[derive(Debug, Clone)]
@@ -141,23 +132,17 @@ pub trait VideoDecoder: Send {
 
 /// Create a new platform-specific decoder.
 pub fn create_decoder() -> Result<Box<dyn VideoDecoder>, MediaError> {
-    #[cfg(any(
-        target_os = "android",
-        all(
-            feature = "desktop-gstreamer",
-            any(target_os = "linux", target_os = "windows", target_os = "macos")
-        )
+    #[cfg(all(
+        feature = "desktop-gstreamer",
+        any(target_os = "linux", target_os = "windows", target_os = "macos")
     ))]
     {
         Ok(Box::new(PlatformDecoder::new()?))
     }
 
-    #[cfg(not(any(
-        target_os = "android",
-        all(
-            feature = "desktop-gstreamer",
-            any(target_os = "linux", target_os = "windows", target_os = "macos")
-        )
+    #[cfg(not(all(
+        feature = "desktop-gstreamer",
+        any(target_os = "linux", target_os = "windows", target_os = "macos")
     )))]
     {
         Err(MediaError::InvalidFormat(
