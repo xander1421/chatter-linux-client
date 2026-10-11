@@ -19,7 +19,9 @@ jobs:
       - uses: actions/checkout@v4
 
       - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: nightly-2026-10-11
 
       - name: Import MSVC environment
         uses: ilammy/msvc-dev-cmd@v1

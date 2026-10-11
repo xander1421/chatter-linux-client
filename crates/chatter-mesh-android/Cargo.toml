@@ -6,7 +6,7 @@ authors = ["xander1421"]
 description = "Android (JNI) implementation of MeshLink for the bitchat mesh"
 license = "GPL-3.0"
 repository = "https://github.com/xander1421/chatter"
-rust-version = "1.92"
+rust-version = "1.99"
 
 [lib]
 name = "chatter_mesh_android"

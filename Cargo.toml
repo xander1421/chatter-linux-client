@@ -41,8 +41,8 @@ codegen-units = 256    # More parallelism
 #   opt-level = 1                   285 s, 11.1 GB             (much worse)
 #   incremental (no sccache)        58-123 s, 7.0-13.2 GB      (erratic; sccache forbids it)
 #   -Zthreads=8 (nightly rustc)     75 s, 9.2 GB               (-36% wall)
-# Only -Zthreads helps, and it is nightly-only, so it cannot live here (CI
-# builds this workspace on stable). Opt in per machine, see §101.
+# Only -Zthreads helps. Keep this machine-specific experimental tuning opt-in
+# even with the dated nightly pin; see §101.
 
 # Keep the generated UI non-incremental to bound memory and allow sccache reuse.
 # Other workspace crates inherit incremental = true above.
@@ -69,6 +69,9 @@ incremental = false
 # developer's ~/.cargo/config.toml, which means dev-build crypto speed here was a
 # property of one machine's global cargo config. This line removes that
 # dependency: chatter-core is now fast because of this file.
+#
+# Core and libsignal now both use aes 0.9 / cbc 0.2 (§110); keep the explicit
+# optimization so throughput never depends on cross-crate generic sharing.
 #
 # Dev profile only; release is unaffected and measured (§109). Costs ~30s on a
 # clean chatter-core build.

@@ -2,6 +2,10 @@
 //!
 //! Start with [`client::ChatterClient`] and the [`prelude`] module.
 
+// The onion + mesh client graph needs this depth to prove auto traits on
+// current nightly; retain checked Send derivation rather than a manual impl.
+#![recursion_limit = "256"]
+
 // ── Internal macros ────────────────────────────────────────────────────────
 //
 // `service_accessor!(name, Ty, field)` expands to a single getter on

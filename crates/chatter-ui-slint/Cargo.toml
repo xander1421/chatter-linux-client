@@ -5,7 +5,7 @@ edition = "2024"
 authors = ["xander1421"]
 description = "Generated Slint components for the Chatter client"
 license = "GPL-3.0"
-rust-version = "1.92"
+rust-version = "1.99"
 
 # No handwritten logic lives here. Test the components through chatter-ui's
 # headless integration suites, without compiling the generated tree again.
