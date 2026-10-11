@@ -309,6 +309,63 @@ fn map_keyring_error(e: keyring::Error) -> SystemError {
     SystemError::Keyring(e.to_string())
 }
 
+/// Test-only keyring backend that persists for the whole test process.
+///
+/// `keyring::mock` builds a fresh, empty credential for every `Entry::new`, so a
+/// store written through one entry is invisible to the next: first-run passphrase
+/// verification logs "FAILED to verify passphrase storage" and any fixture that
+/// reopens its database gets `NoEntry`. Entries are keyed by service and user,
+/// and the user is derived from the database path, so tests in distinct temp
+/// directories never see each other's secrets.
+#[cfg(test)]
+pub(crate) fn test_credential_builder() -> Box<keyring::credential::CredentialBuilder> {
+    use keyring::credential::{Credential, CredentialApi, CredentialBuilderApi};
+    use std::collections::HashMap;
+    use std::sync::{LazyLock, Mutex};
+
+    type Store = Mutex<HashMap<(String, String), Vec<u8>>>;
+    static STORE: LazyLock<Store> = LazyLock::new(Store::default);
+
+    #[derive(Debug)]
+    struct Cred(String, String);
+    impl CredentialApi for Cred {
+        fn set_secret(&self, secret: &[u8]) -> keyring::Result<()> {
+            let key = (self.0.clone(), self.1.clone());
+            STORE.lock().unwrap().insert(key, secret.to_vec());
+            Ok(())
+        }
+        fn get_secret(&self) -> keyring::Result<Vec<u8>> {
+            let key = (self.0.clone(), self.1.clone());
+            STORE.lock().unwrap().get(&key).cloned().ok_or(keyring::Error::NoEntry)
+        }
+        fn delete_credential(&self) -> keyring::Result<()> {
+            let key = (self.0.clone(), self.1.clone());
+            STORE.lock().unwrap().remove(&key).map(drop).ok_or(keyring::Error::NoEntry)
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    #[derive(Debug)]
+    struct Builder;
+    impl CredentialBuilderApi for Builder {
+        fn build(
+            &self,
+            _target: Option<&str>,
+            service: &str,
+            user: &str,
+        ) -> keyring::Result<Box<Credential>> {
+            Ok(Box::new(Cred(service.to_owned(), user.to_owned())))
+        }
+        fn as_any(&self) -> &dyn std::any::Any {
+            self
+        }
+    }
+
+    Box::new(Builder)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -344,5 +401,17 @@ mod tests {
 
         assert_ne!(keyring1.username, keyring2.username);
         assert_ne!(keyring1.local_path, keyring2.local_path);
+    }
+
+    #[test]
+    fn test_credential_builder_persists_across_entries() {
+        let builder = test_credential_builder();
+        let user = format!("persist-{}", std::process::id());
+        let write = builder.build(None, SERVICE, &user).unwrap();
+        write.set_password("p").unwrap();
+        let reopened = builder.build(None, SERVICE, &user).unwrap();
+        assert_eq!(reopened.get_password().unwrap(), "p");
+        reopened.delete_credential().unwrap();
+        assert!(matches!(write.get_password(), Err(keyring::Error::NoEntry)));
     }
 }

@@ -755,7 +755,7 @@ mod tests {
     async fn anon_group_edits_follow_the_edit_rules() {
         static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
         MOCK_KEYRING.call_once(|| {
-            keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+            keyring::set_default_credential_builder(crate::system::keyring::test_credential_builder());
         });
         let dir = tempfile::tempdir().unwrap();
         let client = crate::client::ChatterClient::builder()
@@ -832,7 +832,7 @@ mod reaction_receive_tests {
     async fn actual_anonymous_handlers_hold_early_reactions_and_surface_storage_failure() {
         static MOCK: std::sync::Once = std::sync::Once::new();
         MOCK.call_once(|| {
-            keyring::set_default_credential_builder(keyring::mock::default_credential_builder())
+            keyring::set_default_credential_builder(crate::system::keyring::test_credential_builder())
         });
         let dir = tempfile::tempdir().unwrap();
         let client = crate::client::ChatterClient::builder()

@@ -294,7 +294,7 @@ mod server_url_tests {
     async fn an_explicit_server_url_is_not_written_into_the_environment() {
         static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
         MOCK_KEYRING.call_once(|| {
-            keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+            keyring::set_default_credential_builder(crate::system::keyring::test_credential_builder());
         });
         let dir = tempfile::tempdir().unwrap();
         let url = "https://explicit.invalid:1";
