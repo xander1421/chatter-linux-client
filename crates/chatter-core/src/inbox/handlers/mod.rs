@@ -368,6 +368,12 @@ pub enum DomainEvent {
         peer_avatar: Option<Vec<u8>>,
     },
 
+    /// The peer ended a secret chat ("Delete chat" on their side); core
+    /// already deleted our copy.
+    AnonDmEnded {
+        conversation_id: AnonDmId,
+    },
+
     UserPresenceChanged {
         user_id: UserId,
         presence: crate::domain::user::PresenceStatus,
@@ -673,6 +679,7 @@ impl DomainEvent {
             DomainEvent::AnonGroupMemberListReceived { .. } => None,
             DomainEvent::AnonDmRequestReceived { .. } => None,
             DomainEvent::AnonDmRequestAccepted { .. } => None,
+            DomainEvent::AnonDmEnded { conversation_id } => Some((*conversation_id).into()),
             DomainEvent::AnonDmInitReceived { .. } => None,
             DomainEvent::CallKeyOfferReceived { .. } => None,
             DomainEvent::DmBootstrapCompleted { .. } => None,

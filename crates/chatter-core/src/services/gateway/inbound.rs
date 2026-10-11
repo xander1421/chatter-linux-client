@@ -83,6 +83,7 @@ pub fn content_type_name(content: &Option<content::Content>) -> &'static str {
         Some(content::Content::AnonGroupProfileShare(_)) => "AnonGroupProfileShare",
         Some(content::Content::AnonDmPresence(_)) => "AnonDmPresence",
         Some(content::Content::AnonDmProfileUpdate(_)) => "AnonDmProfileUpdate",
+        Some(content::Content::AnonDmEnd(_)) => "AnonDmEnd",
         Some(content::Content::SavedMessageSync(_)) => "SavedMessageSync",
         Some(content::Content::DmMailboxRotation(_)) => "DmMailboxRotation",
         Some(content::Content::SyncSent(_)) => "SyncSent",

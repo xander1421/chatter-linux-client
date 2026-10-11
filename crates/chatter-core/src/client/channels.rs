@@ -206,6 +206,11 @@ impl ChatterClient {
     /// channel, or "" when we may. Read from our stored membership, which a
     /// removal event deletes and a member fetch refreshes.
     pub fn channel_send_notice(&self, channel_id: &crate::domain::ids::ChannelId) -> String {
+        if let Some(gate) = self.secret_chat_gate(&crate::domain::anon_dm::AnonDmId::from_uuid(
+            *channel_id.as_uuid(),
+        )) {
+            return gate.notice().to_string();
+        }
         if !self.is_moderated_channel(channel_id) {
             return String::new();
         }
@@ -288,7 +293,8 @@ impl ChatterClient {
         channel_id: &crate::domain::ids::ChannelId,
     ) -> String {
         if !self.is_moderated_channel(channel_id) {
-            return String::new();
+            // A secret chat's notice is local state; nothing to refresh.
+            return self.channel_send_notice(channel_id);
         }
         if let Err(e) = self.channels().get_all_channel_members(channel_id).await {
             tracing::debug!(%channel_id, error = %e, "Roster refresh for send notice failed");

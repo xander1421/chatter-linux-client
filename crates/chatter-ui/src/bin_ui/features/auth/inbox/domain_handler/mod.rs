@@ -481,10 +481,20 @@ pub async fn handle_domain_event(
             ..
         } => {
             anon::handle_dm_request_accepted(window, ui_ctx, conversation_id, peer_id);
+            crate::bin_ui::features::sidebar::dm::refresh_open_anon_dm(window, ui_ctx, conversation_id);
             // Accepted → anon peer becomes a Friends-tab contact.
             crate::bin_ui::features::auth::initial_data::refresh_friends_list(
                 window.clone(),
                 ui_ctx.clone(),
+            );
+        }
+
+        // The peer ended the secret chat; core deleted it.
+        DomainEvent::AnonDmEnded { conversation_id } => {
+            crate::bin_ui::features::sidebar::conversation_removed(
+                window,
+                ui_ctx,
+                chatter_core::state::ActiveConversation::AnonDm(conversation_id),
             );
         }
 
@@ -601,6 +611,7 @@ pub async fn handle_domain_event(
             bio,
             timestamp,
         } => {
+            crate::bin_ui::features::sidebar::dm::refresh_open_anon_dm(window, ui_ctx, conversation_id);
             social::handle_anon_dm_profile_updated(
                 window,
                 ui_ctx,

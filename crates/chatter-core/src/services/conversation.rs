@@ -2070,9 +2070,10 @@ impl ConversationHandle {
     /// refused: a membership outlives a local delete — the next sync or group
     /// message brings it back — so those are left (Channel Settings › Leave),
     /// never deleted here.
-    pub fn delete_conversation(&self) -> ConversationResult {
+    pub async fn delete_conversation(&self) -> ConversationResult {
         match &self.conversation {
-            ActiveConversation::AnonDm(id) => Ok(self.client.anon_dms().delete_conversation(id)?),
+            // A secret chat ends for both sides (Telegram-style).
+            ActiveConversation::AnonDm(id) => Ok(self.client.anon_dms().end_conversation(id).await?),
             ActiveConversation::ServerDm { peer_id } => {
                 // Channel-free DM: no channel/membership row to cascade —
                 // delete the local message history directly, then the
@@ -2882,6 +2883,7 @@ mod tests {
 
         client
             .delete_conversation(ActiveConversation::AnonDm(dm.id))
+            .await
             .unwrap();
 
         assert!(
@@ -2969,6 +2971,7 @@ mod tests {
 
         client
             .delete_conversation(ActiveConversation::ServerDm { peer_id: peer })
+            .await
             .unwrap();
 
         assert!(

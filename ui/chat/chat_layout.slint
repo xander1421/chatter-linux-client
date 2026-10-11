@@ -2,6 +2,7 @@ import { EmojiPicker, EmojiData } from "../components/emoji_picker.slint";
 import { GifPicker, GifData } from "../components/gif_picker.slint";
 import { Icons } from "../theme/icons.slint";
 import { GlassSurface } from "../components/glass_surface.slint";
+import { Button } from "../components/button.slint";
 // Main chat layout component
 //
 // Integrates ChatHeader, MessageList, and MessageComposer into a complete chat view.
@@ -156,6 +157,11 @@ export component ChatLayout inherits Rectangle {
     // composer is replaced by this text, worded by chatter-core.
     in property <string> composer-notice: "";
     in property <bool> conversation-read-only: false;
+    // A secret-chat request we have not answered (core's
+    // `SecretChatGate::offers_answer`): the notice offers Accept / Decline.
+    in property <bool> secret-request-actions: false;
+    callback secret-request-accept-clicked();
+    callback secret-request-decline-clicked();
     in property <[PendingAttachmentData]> pending-attachments: [];
     in-out property <bool> composer-is-editing: false;
     in-out property <string> composer-edit-message-id: "";
@@ -481,7 +487,7 @@ export component ChatLayout inherits Rectangle {
         // region to 0 even though the composer renders via overflow.
         if root.composer-notice != "": GlassSurface {
             vertical-stretch: 0;
-            height: notice-text.preferred-height + 2 * Spacing.md;
+            height: notice-column.preferred-height;
             elevation: 0;
             backdrop-paused: message-list.scrolling;
 
@@ -492,13 +498,31 @@ export component ChatLayout inherits Rectangle {
                 background: Colors.divider;
             }
 
-            notice-text := Text {
-                width: parent.width - 2 * Spacing.md;
-                text: root.composer-notice;
-                color: Colors.text-secondary;
-                font-size: Typography.sm;
-                horizontal-alignment: center;
-                wrap: word-wrap;
+            notice-column := VerticalLayout {
+                padding: Spacing.md;
+                spacing: Spacing.sm;
+
+                Text {
+                    text: root.composer-notice;
+                    color: Colors.text-secondary;
+                    font-size: Typography.sm;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
+
+                if root.secret-request-actions: HorizontalLayout {
+                    alignment: center;
+                    spacing: Spacing.sm;
+                    Button {
+                        text: "Decline";
+                        variant: "secondary";
+                        clicked => { root.secret-request-decline-clicked(); }
+                    }
+                    Button {
+                        text: "Accept";
+                        clicked => { root.secret-request-accept-clicked(); }
+                    }
+                }
             }
         }
 

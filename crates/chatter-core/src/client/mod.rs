@@ -40,7 +40,7 @@ pub use send_attempt::await_send_with_notice;
 mod receipts;
 pub use anon_group::AnonGroupInviteCandidate;
 pub use messaging::{ForwardDestination, InviteCandidate, ReplyParentMedia};
-pub use secret_chat::SecretChatError;
+pub use secret_chat::{SecretChatError, SecretChatGate};
 
 /// A user-search hit surfaced to the UI (friends modal search).
 ///
@@ -3350,12 +3350,13 @@ impl ChatterClient {
         self.conversation(conv).set_member_blocked(user, blocked)
     }
 
-    /// Delete a conversation from local storage.
-    pub fn delete_conversation(
+    /// Delete a conversation from local storage. A secret chat is ended for
+    /// both sides first (fails closed when the peer cannot be told).
+    pub async fn delete_conversation(
         self: &Arc<Self>,
         conv: ActiveConversation,
     ) -> Result<(), crate::services::conversation::ConversationError> {
-        self.conversation(conv).delete_conversation()
+        self.conversation(conv).delete_conversation().await
     }
 
     /// Set the disappearing message timer for a conversation.

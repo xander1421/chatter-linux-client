@@ -365,6 +365,8 @@ impl AnonDmService {
     ) -> Result<(), AnonDmError> {
         // Name under the profile key; the avatar as a pointer to its upload,
         // never inline: this request is sealed to a device inbox (8 KiB cap).
+        // Only an already-uploaded avatar: the request never waits on an
+        // upload, and the profile update after acceptance carries it.
         let (encrypted_display_name, avatar) = if let Some(pk) = profile_key {
             // Encrypt display name
             let enc_name = {
@@ -375,7 +377,7 @@ impl AnonDmService {
                     None
                 }
             };
-            (enc_name, self.my_avatar_pointer().await)
+            (enc_name, self.my_avatar_pointer_without_upload())
         } else {
             (None, None)
         };

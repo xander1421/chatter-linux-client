@@ -412,7 +412,9 @@ export component SectionContextMenu inherits Rectangle {
                 icon: Icons.trash;
                 // Short enough for the phone menu's width: "Delete all
                 // messages here?" was clipped to "Delete all messages ...".
-                label: "Yes, delete chat";
+                // A secret chat ends for both sides (Telegram-style).
+                label: root.conversation-type == ConversationKind.anon-dm
+                    ? "Yes, delete for both" : "Yes, delete chat";
                 destructive: true;
                 mobile-mode: root.mobile-mode;
                 clicked => {

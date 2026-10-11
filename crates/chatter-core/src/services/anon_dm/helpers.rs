@@ -52,6 +52,26 @@ impl AnonDmService {
         .await
     }
 
+    /// Our avatar's pointer for a secret-chat request, which must not wait on
+    /// an upload: a first upload over Tor can take a new hidden-service
+    /// circuit and fail after ~10 s (RC108 O3). The cached pointer when this
+    /// avatar was uploaded before; otherwise `None`, and the upload runs in
+    /// the background so the profile update sent once the peer accepts
+    /// (`send_profile_update`) finds it cached.
+    pub(crate) fn my_avatar_pointer_without_upload(
+        &self,
+    ) -> Option<crate::proto::content_v1::AttachmentPointer> {
+        let avatar = self.get_user_avatar()?;
+        let cached = crate::services::secret_avatar::cached_pointer(&self.settings_repo, &avatar);
+        if cached.is_none() && tokio::runtime::Handle::try_current().is_ok() {
+            let (settings, attachments) = (self.settings_repo.clone(), self.secret_attachments());
+            tokio::spawn(async move {
+                crate::services::secret_avatar::pointer_for(&settings, &attachments, &avatar).await;
+            });
+        }
+        cached
+    }
+
     /// The avatar a peer's pointer names; `current` is what we hold for them.
     /// `Err` when the fetch failed (worth retrying, see
     /// [`Self::refresh_peer_avatar`]).

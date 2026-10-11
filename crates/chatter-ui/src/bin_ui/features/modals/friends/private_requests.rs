@@ -66,6 +66,8 @@ pub(crate) fn wire_accept_private_request(window: &MainWindow, ui_ctx: &Arc<Chat
                     // Refresh private requests; the accepted DM's row is core's.
                     refresh_private_requests(weak.clone(), &ui_ctx).await;
                     crate::bin_ui::features::sidebar::rebuild_chat_list(&weak, &ui_ctx);
+                    // Open in the chat view: its Accept bar gives way to the composer.
+                    crate::bin_ui::features::sidebar::dm::refresh_open_anon_dm(&weak, &ui_ctx, dm_id);
 
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
@@ -129,6 +131,7 @@ pub(crate) fn wire_decline_private_request(window: &MainWindow, ui_ctx: &Arc<Cha
 
                     // The request's row leaves the chat list with it.
                     crate::bin_ui::features::sidebar::rebuild_chat_list(&weak, &ui_ctx);
+                    crate::bin_ui::features::sidebar::dm::refresh_open_anon_dm(&weak, &ui_ctx, conv_id);
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             w.set_friends_loading(false);

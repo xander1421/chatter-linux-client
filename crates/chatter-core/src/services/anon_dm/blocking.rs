@@ -144,4 +144,76 @@ impl AnonDmService {
         self.anon_dm_repo.delete_conversation(conversation_id)?;
         Ok(())
     }
+
+    /// "Delete chat" on a secret chat: end it for both sides (Telegram-style).
+    /// A chat the peer can be reached in (accepted; blocked or not) first
+    /// tells the peer over Tor, failing closed: if that send fails nothing is
+    /// deleted and the error is returned, so the user can retry rather than
+    /// leave the peer's copy behind. A request nobody accepted yet has no
+    /// peer mailbox and goes locally. Our server mailbox goes last, best
+    /// effort (its TTL removes it anyway).
+    pub async fn end_conversation(&self, conversation_id: &AnonDmId) -> Result<(), AnonDmError> {
+        let dm = self
+            .anon_dm_repo
+            .get_conversation(conversation_id)?
+            .ok_or(AnonDmError::ConversationNotFound(*conversation_id))?;
+        if let (Some(peer_mailbox_pk), AnonDmStatus::Active | AnonDmStatus::Blocked) =
+            (dm.peer_mailbox_pk, dm.status)
+        {
+            self.send_to_anon_mailbox(&dm.peer_id, &peer_mailbox_pk, end_content(conversation_id))
+                .await?;
+        }
+        self.delete_with_server_mailbox(conversation_id).await
+    }
+
+    /// The peer ended the secret chat: delete our copy and our mailbox.
+    /// `false` when `sender` is not this chat's peer (nothing is touched).
+    pub async fn handle_peer_end(
+        &self,
+        conversation_id: &AnonDmId,
+        sender: &UserId,
+    ) -> Result<bool, AnonDmError> {
+        match self.anon_dm_repo.get_conversation(conversation_id)? {
+            Some(dm) if dm.peer_id == *sender => {}
+            _ => return Ok(false),
+        }
+        self.delete_with_server_mailbox(conversation_id).await?;
+        Ok(true)
+    }
+
+    async fn delete_with_server_mailbox(&self, conversation_id: &AnonDmId) -> Result<(), AnonDmError> {
+        let mailbox = self.anon_dm_repo.get_mailbox(conversation_id)?;
+        self.delete_conversation(conversation_id)?;
+        if let Some(mailbox) = mailbox
+            && let Err(e) = self.delete_server_mailbox(&mailbox).await
+        {
+            tracing::warn!(error = %e, "could not delete an ended secret chat's mailbox");
+        }
+        Ok(())
+    }
+}
+
+/// The end signal, wrapped like every in-chat control so the receiver's
+/// mailbox and sender checks apply to it.
+fn end_content(conversation_id: &AnonDmId) -> crate::proto::content_v1::Content {
+    use crate::proto::content_v1::{AnonDmEnd, AnonDmMessage, Content, content};
+    let now = crate::util::time::TimestampNanos::now().as_u64();
+    let inner = Content {
+        content: Some(content::Content::AnonDmEnd(AnonDmEnd {
+            conversation_id: conversation_id.to_vec(),
+            timestamp: now,
+        })),
+        ephemeral_reply_to: None,
+        timestamp: now,
+        padding: AnonDmService::generate_padding(256),
+    };
+    Content {
+        content: Some(content::Content::AnonDmMessage(Box::new(AnonDmMessage {
+            conversation_id: conversation_id.to_vec(),
+            inner_content: Some(Box::new(inner)),
+        }))),
+        ephemeral_reply_to: None,
+        timestamp: now,
+        padding: AnonDmService::generate_padding(256),
+    }
 }

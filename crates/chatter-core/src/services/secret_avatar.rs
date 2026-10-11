@@ -63,15 +63,10 @@ pub(crate) async fn pointer_for(
     if avatar.is_empty() || avatar.len() > MAX_AVATAR_SIZE {
         return None;
     }
-    let cache_key = format!("{POINTER_CACHE_PREFIX}{}", plaintext_hash(avatar));
-    if let Some(cached) = settings
-        .get_bytes(&cache_key)
-        .ok()
-        .flatten()
-        .and_then(|b| AttachmentPointer::decode(b.as_slice()).ok())
-    {
+    if let Some(cached) = cached_pointer(settings, avatar) {
         return Some(cached);
     }
+    let cache_key = format!("{POINTER_CACHE_PREFIX}{}", plaintext_hash(avatar));
     match upload(&attachments.for_secret_chat(), avatar).await {
         Ok(pointer) => {
             if let Err(e) = settings.set_bytes(&cache_key, &pointer.encode_to_vec()) {
@@ -84,6 +79,25 @@ pub(crate) async fn pointer_for(
             None
         }
     }
+}
+
+/// The pointer of `avatar`'s earlier upload, without uploading: `None` when
+/// it was never uploaded (or is unusable).
+pub(crate) fn cached_pointer(
+    settings: &SettingsRepository,
+    avatar: &[u8],
+) -> Option<AttachmentPointer> {
+    use prost::Message;
+
+    if avatar.is_empty() || avatar.len() > MAX_AVATAR_SIZE {
+        return None;
+    }
+    let cache_key = format!("{POINTER_CACHE_PREFIX}{}", plaintext_hash(avatar));
+    settings
+        .get_bytes(&cache_key)
+        .ok()
+        .flatten()
+        .and_then(|b| AttachmentPointer::decode(b.as_slice()).ok())
 }
 
 async fn upload(
@@ -275,6 +289,43 @@ mod tests {
             pointer("k".repeat(64), &encrypted.key, &encrypted.digest, avatar),
             encrypted.ciphertext.clone(),
         )
+    }
+
+    /// RC108 O3: a secret-chat request never waits on an avatar upload. It
+    /// carries the pointer of an earlier upload, or none: the first upload
+    /// runs in the background and the profile update after acceptance
+    /// (`pointer_for`) finds it cached.
+    #[tokio::test]
+    async fn request_avatar_is_cached_pointer_or_none_without_waiting() {
+        static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
+        MOCK_KEYRING.call_once(|| {
+            keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let client = crate::client::ChatterClient::builder()
+            .server_url("https://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .expect("build client");
+        let svc = client.anon_dms();
+        let avatar = vec![0x89, b'P', b'N', b'G', 1, 2, 3];
+        svc.set_my_avatar_bytes(&avatar).unwrap();
+
+        // Not uploaded yet: no pointer, at once (no Tor round trip here).
+        let started = std::time::Instant::now();
+        assert_eq!(svc.my_avatar_pointer_without_upload(), None);
+        assert!(started.elapsed() < std::time::Duration::from_secs(1));
+
+        let (cached, _) = uploaded(&avatar);
+        svc.settings_repo
+            .set_bytes(
+                &format!("{POINTER_CACHE_PREFIX}{}", plaintext_hash(&avatar)),
+                &cached.encode_to_vec(),
+            )
+            .unwrap();
+        assert_eq!(svc.my_avatar_pointer_without_upload(), Some(cached.clone()));
+        assert_eq!(cached_pointer(&svc.settings_repo, &avatar), Some(cached));
+        assert_eq!(cached_pointer(&svc.settings_repo, &[]), None);
     }
 
     #[test]

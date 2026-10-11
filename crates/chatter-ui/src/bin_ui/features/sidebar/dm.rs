@@ -30,12 +30,82 @@ pub fn wire_delete_conversation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
                 tracing::warn!(row_id = %row_id, "delete chat: row resolves to no conversation");
                 return;
             };
-            if let Err(e) = ui_ctx.delete_conversation(conv) {
+            if let Err(e) = ui_ctx.delete_conversation(conv).await {
                 tracing::error!(error = %e, row_id = %row_id, "delete chat failed");
+                // A secret chat stays when its peer could not be told.
+                crate::run_ui!(weak, |w| {
+                    w.set_toast_message("Could not delete the chat. Check your connection and try again.".into());
+                    w.set_toast_variant("error".into());
+                    w.set_toast_visible(true);
+                });
                 return;
             }
             super::conversation_removed(&weak, &ui_ctx, conv);
         });
+    });
+}
+
+/// A secret chat's header: the peer as the chat presents them (core's
+/// `anon_dm_peer_card`). UI thread.
+fn apply_anon_dm_header(
+    w: &MainWindow,
+    ui_ctx: &ChatterClient,
+    id: &chatter_core::domain::anon_dm::AnonDmId,
+) {
+    let (name, avatar) = ui_ctx
+        .anon_dm_peer_card(id)
+        .unwrap_or_else(|| ("Private Chat".to_string(), None));
+    let image = avatar
+        .as_deref()
+        .and_then(crate::bin_ui::converters::avatar_bytes_to_image);
+    w.set_channel_name(name.into());
+    w.set_topic("Private Chat".into());
+    w.set_channel_has_avatar(image.is_some());
+    w.set_channel_avatar_source(image.unwrap_or_default());
+}
+
+/// Repaint the open secret chat's header and composer after its peer's name,
+/// avatar or acceptance changed (RC108 O1: the initiator's header kept
+/// "Private Chat" after the peer accepted until the chat was reopened).
+pub(crate) fn refresh_open_anon_dm(
+    weak: &slint::Weak<MainWindow>,
+    ui_ctx: &Arc<ChatterClient>,
+    id: chatter_core::domain::anon_dm::AnonDmId,
+) {
+    let open = chatter_core::state::ActiveConversation::AnonDm(id);
+    if ui_ctx.active_conversation() != open {
+        return;
+    }
+    let ctx = ui_ctx.clone();
+    crate::run_ui!(weak, |w| {
+        if ctx.active_conversation() == open {
+            apply_anon_dm_header(&w, &ctx, &id);
+        }
+    });
+    crate::bin_ui::features::chat::send_message::show_send_notice(weak, ui_ctx, id.into());
+}
+
+/// Accept / Decline under an unanswered secret-chat request opened from the
+/// chat list (RC108 O2): the same handlers as Contacts › Requests › Private,
+/// for the secret chat that is open.
+pub fn wire_secret_request_answer(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    fn open_secret_chat(ctx: &ChatterClient) -> Option<SharedString> {
+        match ctx.active_conversation() {
+            chatter_core::state::ActiveConversation::AnonDm(id) => Some(id.to_string().into()),
+            _ => None,
+        }
+    }
+    let (weak, ctx) = (window.as_weak(), ui_ctx.clone());
+    window.on_secret_request_accept_clicked(move || {
+        if let (Some(w), Some(id)) = (weak.upgrade(), open_secret_chat(&ctx)) {
+            w.invoke_friends_accept_private_request(id);
+        }
+    });
+    let (weak, ctx) = (window.as_weak(), ui_ctx.clone());
+    window.on_secret_request_decline_clicked(move || {
+        if let (Some(w), Some(id)) = (weak.upgrade(), open_secret_chat(&ctx)) {
+            w.invoke_friends_decline_private_request(id);
+        }
     });
 }
 
@@ -249,18 +319,6 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     |m| ui_ctx.reply_parent_media(m),
                 );
 
-                // Get conversation info for the header
-                let (title, subtitle) = match ui_ctx.get_anon_dm_conversation(&anon_dm_id) {
-                    Some(conv) => (
-                        conv.peer_display_name.clone().unwrap_or_else(|| "Private Chat".to_string()),
-                        "Private Chat".to_string()
-                    ),
-                    None => ("Private Chat".to_string(), "Private Chat".to_string()),
-                };
-
-                let anon_header_avatar = ui_ctx.get_anon_dm_conversation(&anon_dm_id)
-                    .and_then(|conversation| conversation.peer_avatar);
-
                 let initial_count = display_messages.len();
                 tracing::info!(dm_id = %anon_dm_id, count = initial_count, "[UI_OPEN_DM] anon DM spawn run_ui firing");
                 let anchor_page = messages.clone();
@@ -280,11 +338,8 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         &w, &ui_ctx, &chatter_core::domain::message::ConversationType::AnonDm, false,
                     );
                     w.set_is_dm(true);
-                    w.set_channel_name(title.into());
-                    w.set_topic(subtitle.into());
+                    apply_anon_dm_header(&w, &ui_ctx, &anon_dm_id);
                     w.set_header_presence_status("online".into());
-                    w.set_channel_has_avatar(anon_header_avatar.is_some());
-                    w.set_channel_avatar_source(anon_header_avatar.as_deref().and_then(crate::bin_ui::converters::avatar_bytes_to_image).unwrap_or_default());
                     crate::bin_ui::gif_state::auto_register_gifs_from_messages(w.as_weak(), ui_ctx.clone());
                 });
                 return;

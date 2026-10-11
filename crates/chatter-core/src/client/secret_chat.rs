@@ -26,7 +26,52 @@ pub enum SecretChatError {
     AnonDm(#[from] AnonDmError),
 }
 
+/// Why a secret chat's composer is closed. A chat that is not one of these
+/// (accepted, not blocked) takes messages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SecretChatGate {
+    /// The peer asked; we have not answered. The chat view offers Accept /
+    /// Decline, like Contacts › Requests › Private.
+    AwaitingOurAnswer,
+    /// We asked; the peer has not accepted yet.
+    AwaitingPeer,
+    Declined,
+    Blocked,
+}
+
+impl SecretChatGate {
+    /// The line that replaces the composer.
+    pub fn notice(&self) -> &'static str {
+        match self {
+            Self::AwaitingOurAnswer => "Secret chat request. Accept it to reply.",
+            Self::AwaitingPeer => "Waiting for them to accept your secret chat request.",
+            Self::Declined => "This secret chat request was declined.",
+            Self::Blocked => "You blocked this secret chat.",
+        }
+    }
+
+    /// Whether the chat view shows Accept / Decline.
+    pub fn offers_answer(&self) -> bool {
+        matches!(self, Self::AwaitingOurAnswer)
+    }
+}
+
 impl ChatterClient {
+    /// What keeps the composer of secret chat `id` closed, or `None` when it
+    /// is open (or `id` is no secret chat). Sending is refused for the same
+    /// states (`AnonDmService::send_message` requires `is_ready`).
+    pub fn secret_chat_gate(&self, id: &crate::domain::anon_dm::AnonDmId) -> Option<SecretChatGate> {
+        let dm = self.get_anon_dm_conversation(id)?;
+        match dm.status {
+            AnonDmStatus::Active if dm.is_ready() => None,
+            AnonDmStatus::Active => Some(SecretChatGate::AwaitingPeer),
+            AnonDmStatus::Pending if dm.initiated_by_us => Some(SecretChatGate::AwaitingPeer),
+            AnonDmStatus::Pending => Some(SecretChatGate::AwaitingOurAnswer),
+            AnonDmStatus::Declined => Some(SecretChatGate::Declined),
+            AnonDmStatus::Blocked => Some(SecretChatGate::Blocked),
+        }
+    }
+
     /// Whether this build can carry secret chats: the onion channel exists
     /// (same check as Shield's availability).
     pub fn secret_chats_available(&self) -> bool {
@@ -187,5 +232,194 @@ mod tests {
         // Shield never offers it: its entry point is the private friend code.
         client.anon_mode.store(true, Ordering::Release);
         assert!(!client.can_start_secret_chat(&peer));
+    }
+
+    fn insert(client: &ChatterClient, dm: &AnonDm) {
+        client
+            .anon_dms()
+            .anon_dm_repo()
+            .insert_conversation(dm)
+            .unwrap();
+    }
+
+    fn insert_mailbox(client: &ChatterClient, dm: &AnonDm) {
+        client
+            .anon_dms()
+            .anon_dm_repo()
+            .insert_mailbox(&crate::domain::anon_dm::AnonDmMailbox {
+                id: dm.id.to_string(),
+                conversation_id: dm.id,
+                public_key: [4; 32],
+                private_key: [5; 64],
+                token_id: "t".into(),
+                created_at: chrono::Utc::now(),
+                expires_at: chrono::Utc::now() + chrono::Duration::days(1),
+            })
+            .unwrap();
+    }
+
+    /// RC108 O2: an unanswered request opened from the chat list shows its
+    /// state with Accept / Decline instead of a composer; our own request
+    /// waits for the peer; an accepted chat takes messages.
+    #[tokio::test]
+    async fn composer_gate_follows_request_state() {
+        use crate::domain::ids::ChannelId;
+        let (_dir, client) = build_test_client();
+        sign_in(&client);
+
+        let incoming = AnonDm::from_request(
+            crate::domain::anon_dm::AnonDmId::new(),
+            UserId::new(),
+            [1; 32],
+        );
+        insert(&client, &incoming);
+        let gate = client.secret_chat_gate(&incoming.id).unwrap();
+        assert_eq!(gate, SecretChatGate::AwaitingOurAnswer);
+        assert!(gate.offers_answer());
+        let as_channel: ChannelId = incoming.id.into();
+        assert_eq!(client.channel_send_notice(&as_channel), gate.notice());
+        assert_eq!(
+            client.refresh_channel_send_notice(&as_channel).await,
+            gate.notice()
+        );
+
+        let outgoing = AnonDm::new_initiated(UserId::new());
+        insert(&client, &outgoing);
+        let gate = client.secret_chat_gate(&outgoing.id).unwrap();
+        assert_eq!(gate, SecretChatGate::AwaitingPeer);
+        assert!(!gate.offers_answer());
+
+        let mut active = AnonDm::new_initiated(UserId::new());
+        active.status = AnonDmStatus::Active;
+        active.peer_mailbox_pk = Some([2; 32]);
+        insert(&client, &active);
+        assert_eq!(client.secret_chat_gate(&active.id), None);
+        assert_eq!(client.channel_send_notice(&active.id.into()), "");
+
+        client
+            .anon_dms()
+            .block_conversation(&active.id)
+            .unwrap();
+        assert_eq!(
+            client.secret_chat_gate(&active.id),
+            Some(SecretChatGate::Blocked)
+        );
+        // Not a secret chat at all: no gate.
+        assert_eq!(
+            client.secret_chat_gate(&crate::domain::anon_dm::AnonDmId::new()),
+            None
+        );
+    }
+
+    /// RC108 O5: our own last message in a secret-chat row reads "You: …",
+    /// like every other row.
+    #[tokio::test]
+    async fn own_last_message_in_secret_chat_row_has_you_prefix() {
+        use crate::domain::message::Message;
+        let (_dir, client) = build_test_client();
+        let me = sign_in(&client);
+        client.auth_state().set_logged_in(me, 1, "me".into());
+        let mut dm = AnonDm::new_initiated(UserId::new());
+        dm.status = AnonDmStatus::Active;
+        dm.peer_mailbox_pk = Some([2; 32]);
+        insert(&client, &dm);
+        let msg = Message::new_text(
+            dm.id.into(),
+            ConversationType::AnonDm,
+            Some(me),
+            "new s25-to-s9".into(),
+            1,
+        );
+        client.messages().message_repo.insert(&msg).unwrap();
+        let row = client
+            .list_dm_sidebar()
+            .into_iter()
+            .find(|r| r.id == dm.id.to_string())
+            .unwrap();
+        assert_eq!(row.last_message, "You: new s25-to-s9");
+    }
+
+    /// RC108 O4: deleting a secret chat ends it for both sides. An accepted
+    /// chat must tell the peer first, over Tor: with no route (this build)
+    /// nothing is deleted. A request nobody accepted has no peer to tell and
+    /// goes locally, mailbox included.
+    #[tokio::test]
+    async fn delete_ends_secret_chat_for_both_or_keeps_it() {
+        use crate::state::ActiveConversation;
+        let (_dir, client) = build_test_client();
+        sign_in(&client);
+        client
+            .messages()
+            .settings_repo
+            .set(
+                crate::storage::repositories::settings_repo::keys::CURRENT_DEVICE_ID,
+                &1u32,
+            )
+            .unwrap();
+
+        let mut active = AnonDm::new_initiated(UserId::new());
+        active.status = AnonDmStatus::Active;
+        active.peer_mailbox_pk = Some([2; 32]);
+        active.peer_device_id = Some(1);
+        insert(&client, &active);
+        insert_mailbox(&client, &active);
+        if !client.secret_chats_available() {
+            assert!(
+                client
+                    .delete_conversation(ActiveConversation::AnonDm(active.id))
+                    .await
+                    .is_err()
+            );
+            assert!(client.get_anon_dm_conversation(&active.id).is_some());
+            assert!(
+                client
+                    .anon_dms()
+                    .anon_dm_repo()
+                    .get_mailbox(&active.id)
+                    .unwrap()
+                    .is_some()
+            );
+        }
+
+        let pending = AnonDm::new_initiated(UserId::new());
+        insert(&client, &pending);
+        insert_mailbox(&client, &pending);
+        client
+            .delete_conversation(ActiveConversation::AnonDm(pending.id))
+            .await
+            .unwrap();
+        assert!(client.get_anon_dm_conversation(&pending.id).is_none());
+        assert!(
+            client
+                .anon_dms()
+                .anon_dm_repo()
+                .get_mailbox(&pending.id)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    /// The peer's end signal deletes our copy; one from anyone else touches
+    /// nothing.
+    #[tokio::test]
+    async fn only_the_peer_ends_a_secret_chat() {
+        let (_dir, client) = build_test_client();
+        sign_in(&client);
+        let peer = UserId::new();
+        let mut dm = AnonDm::new_initiated(peer);
+        dm.status = AnonDmStatus::Active;
+        dm.peer_mailbox_pk = Some([2; 32]);
+        insert(&client, &dm);
+        insert_mailbox(&client, &dm);
+        let svc = client.anon_dms();
+
+        assert!(!svc.handle_peer_end(&dm.id, &UserId::new()).await.unwrap());
+        assert!(client.get_anon_dm_conversation(&dm.id).is_some());
+
+        assert!(svc.handle_peer_end(&dm.id, &peer).await.unwrap());
+        assert!(client.get_anon_dm_conversation(&dm.id).is_none());
+        assert!(svc.anon_dm_repo().get_mailbox(&dm.id).unwrap().is_none());
+        // Already gone: nothing to do.
+        assert!(!svc.handle_peer_end(&dm.id, &peer).await.unwrap());
     }
 }

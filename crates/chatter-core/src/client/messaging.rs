@@ -690,14 +690,13 @@ impl ChatterClient {
                 .clone()
                 .unwrap_or_else(|| self.fallback_display_name(&dm.peer_id));
             let latest = self.get_latest_anon_dm_message(&dm.id);
+            // The preview every other row uses: "You: " on our own messages
+            // (RC108 O5), typed attachment labels.
             let (last_message, timestamp) = match &latest {
-                Some(msg) => {
-                    let preview = msg
-                        .as_text()
-                        .map(|t| truncate_preview_text(t, 50))
-                        .unwrap_or_else(|| "[Attachment]".to_string());
-                    (preview, self.sidebar_time(msg.created_at))
-                }
+                Some(msg) => (
+                    self.message_sidebar_preview(msg),
+                    self.sidebar_time(msg.created_at),
+                ),
                 None => (String::new(), String::new()),
             };
             out.push(ChatRowSendData {

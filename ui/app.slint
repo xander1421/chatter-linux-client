@@ -412,6 +412,9 @@ export component MainWindow inherits Window {
     in property <string> composer-notice: "";
     // A channel we are no longer in (core's `is_former_channel`): read-only.
     in property <bool> conversation-read-only: false;
+    in property <bool> secret-request-actions: false;
+    callback secret-request-accept-clicked();
+    callback secret-request-decline-clicked();
     in property <[PendingAttachmentData]> pending-attachments: [];
     in-out property <bool> composer-is-editing: false;
     in-out property <string> composer-edit-message-id: "";
@@ -2143,6 +2146,9 @@ export component MainWindow inherits Window {
                         composer-placeholder: root.composer-placeholder;
                         composer-notice: root.composer-notice;
                         conversation-read-only: root.conversation-read-only;
+                        secret-request-actions: root.secret-request-actions;
+                        secret-request-accept-clicked => { root.secret-request-accept-clicked(); }
+                        secret-request-decline-clicked => { root.secret-request-decline-clicked(); }
                         pending-attachments: root.pending-attachments;
                         composer-is-editing <=> root.composer-is-editing;
                         composer-edit-message-id <=> root.composer-edit-message-id;
