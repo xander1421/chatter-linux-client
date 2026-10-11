@@ -13,6 +13,7 @@ mod androidwindowadapter;
 mod javahelper;
 mod inset_dispatch;
 mod text_input_offsets;
+mod text_input_publication;
 
 #[cfg(all(not(feature = "aa-06"), feature = "aa-05"))]
 pub use android_activity_05 as android_activity;

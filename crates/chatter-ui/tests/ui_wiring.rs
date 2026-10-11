@@ -7008,3 +7008,7 @@ fn reaction_converter_callback_preserves_author_and_nanosecond_clock() {
         _ => panic!("reaction did not reach channel dispatcher"),
     }
 }
+
+// Compile the production JNI-independent publication bookkeeping on the host.
+#[path = "../../../vendor/i-slint-backend-android-activity/text_input_publication.rs"]
+mod text_input_publication;

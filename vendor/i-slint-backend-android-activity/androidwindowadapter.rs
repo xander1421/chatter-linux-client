@@ -146,21 +146,11 @@ pub struct AndroidWindowAdapter {
     /// generation was produced before that consumption was applied on the
     /// UI thread and is dropped: it can only show text the app has taken.
     ime_generation: Cell<u64>,
-    /// Set by `consume_text_input`, cleared by the gate's acknowledgement
-    /// of that generation. While set, the IME's copy may still hold the
-    /// consumed text; nothing cached about it is replayed (`finish_composing`).
-    reset_pending: Cell<bool>,
-    /// Chatter patch: the last state handed to the gate did not reach it
-    /// (`set_game_text_input_state` returned false). The generation it was
-    /// computed under stays advanced, so every snapshot the IME produced of
-    /// the field as it was is still dropped by provenance; the echo guards,
-    /// set as if the state had been applied, are bypassed by the next
-    /// outbound Update, and the next frame or input wake re-publishes the
-    /// field's state under that generation regardless. Cleared by
-    /// a push that reached the gate (that push is then the one the gate
-    /// knows; a consumption it stood in for is acknowledged by it) and by a
-    /// change of IME client, whose first push establishes its own owner.
-    publish_pending: Cell<bool>,
+    /// Reset acknowledgement and failed-publication recovery bookkeeping.
+    /// A failed push leaves the current generation owed to the gate, bypassing
+    /// echo guards until a retry lands. While a reset is pending, cached text
+    /// must not be replayed by `finish_composing`.
+    publication: crate::text_input_publication::Publication,
 }
 
 /// Chatter patch: a Slint text state for the IME's copy of the field, as
@@ -445,7 +435,7 @@ impl i_slint_core::window::WindowAdapterInternal for AndroidWindowAdapter {
         // Chatter patch: a state that never reached the gate is owed: the
         // guards below describe a state the IME does not hold, so none of
         // them applies until a push lands (`publish_pending`).
-        if !self.publish_pending.get() {
+        if !self.publication.publish_pending() {
         // Chatter patch: skip pushing an unchanged state back to GameTextInput.
         // Echoing the IME's own change triggers restartInput, which Slint then
         // sees as a change and echoes again — a feedback loop that restarts the
@@ -607,8 +597,7 @@ impl AndroidWindowAdapter {
         // owner; its acknowledgement will not match the new one
         // (`handle_text_input_ack`), so the flag would otherwise keep
         // `finish_composing` inert for the next field.
-        self.reset_pending.set(false);
-        self.publish_pending.set(false);
+        self.publication.forget();
         self.had_compose.set(false);
         *self.last_ime_text.borrow_mut() = None;
         self.last_ime_selection.set((0, 0));
@@ -694,8 +683,7 @@ impl AndroidWindowAdapter {
             text_bridge: RefCell::default(),
             ime_owner: Cell::new(0),
             ime_generation: Cell::new(0),
-            reset_pending: Cell::new(false),
-            publish_pending: Cell::new(false),
+            publication: Default::default(),
         })
     }
 
@@ -803,7 +791,7 @@ impl AndroidWindowAdapter {
         // Chatter patch: between an accepted send and the gate's
         // acknowledgement there is no composition of this field to finish;
         // what the cache held was consumed.
-        if self.reset_pending.get() {
+        if self.publication.reset_pending() {
             return;
         }
         // Use the last state the INPUT METHOD reported, not `last_pushed_text`:
@@ -879,16 +867,7 @@ impl AndroidWindowAdapter {
                 true
             }
         };
-        if reached {
-            // A push standing in for a consumption or restore the gate never
-            // received: the gate now holds this generation's state, and no
-            // reset of it will be acknowledged (none reached the gate).
-            if self.publish_pending.replace(false) {
-                self.reset_pending.set(false);
-            }
-        } else {
-            self.publish_pending.set(true);
-        }
+        self.publication.pushed(reached);
         reached
     }
 
@@ -927,7 +906,7 @@ impl AndroidWindowAdapter {
         }
         let generation = self.ime_generation.get() + 1;
         self.ime_generation.set(generation);
-        self.reset_pending.set(true);
+        self.publication.begin_reset();
         self.had_compose.set(false);
         *self.pending_self_echo.borrow_mut() = None;
         self.stale_commit_cursor.set(None);
@@ -948,7 +927,7 @@ impl AndroidWindowAdapter {
                     // typing. The render's Update("") re-publishes it as a
                     // push under this generation (`publish_pending`), which
                     // the gate applies in place of the reset it never got.
-                    self.publish_pending.set(true);
+                    self.publication.failed_consume();
                 }
             }
             None => {
@@ -969,7 +948,7 @@ impl AndroidWindowAdapter {
     /// nothing visible.
     pub(crate) fn handle_text_input_ack(&self, owner: u64, generation: u64) {
         if owner == self.ime_owner.get() && generation == self.ime_generation.get() {
-            self.reset_pending.set(false);
+            self.publication.clear_reset();
         }
     }
 
@@ -1038,7 +1017,7 @@ impl AndroidWindowAdapter {
         );
         let generation = self.ime_generation.get() + 1;
         self.ime_generation.set(generation);
-        self.reset_pending.set(false);
+        self.publication.clear_reset();
         self.had_compose.set(false);
         *self.pending_self_echo.borrow_mut() = None;
         self.stale_commit_cursor.set(None);
@@ -1081,7 +1060,7 @@ impl AndroidWindowAdapter {
     /// push that lands clears the flag.
     fn republish_owed_text_input(&self) {
         use android_activity::input::{TextInputState, TextSpan};
-        if !self.publish_pending.get() {
+        if !self.publication.publish_pending() {
             return;
         }
         let Some(client) = self.ime_client.borrow().as_ref().and_then(|c| c.upgrade()) else {

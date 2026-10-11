@@ -218,3 +218,9 @@ are GL on a SurfaceView, so `dumpsys gfxinfo` does not see them).
   boundary and recording seam now match the bridge-aware production method.
   `check_picker_focus_lifecycle.py` now extracts the relocated inbound guard and
   models owner epochs; its focus-loss and field-switch regressions pass again.
+
+- C3 (2026-10-11), `text_input_publication.rs` / `androidwindowadapter.rs`:
+  failed-publication and reset flags now live in a JNI-independent module,
+  included directly by the host UI wiring tests. The existing consume, push,
+  acknowledgement, restore and field-retirement transitions are unchanged;
+  failure/retry recovery can be injected on the host without an Android window.
