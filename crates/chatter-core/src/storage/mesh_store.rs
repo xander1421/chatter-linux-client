@@ -690,7 +690,7 @@ mod tests {
     fn use_the_platformless_keyring() {
         static MOCK: std::sync::Once = std::sync::Once::new();
         MOCK.call_once(|| {
-            keyring::set_default_credential_builder(keyring::mock::default_credential_builder());
+            keyring::set_default_credential_builder(crate::system::keyring::test_credential_builder());
         });
     }
 
