@@ -30,6 +30,9 @@ pub struct PushListenerConfig {
     /// explicit loopback HTTP on port 8095.
     pub ntfy_url: String,
 
+    /// Anonymous mailbox subscriptions always use isolated Tor, including HTTPS.
+    pub force_tor: bool,
+
     /// Opaque server-issued subscription capability. Never log it.
     pub topic: String,
 
@@ -182,6 +185,7 @@ impl PushListenerConfig {
         let reconnect = ReconnectConfig::const_default();
         Self {
             ntfy_url,
+            force_tor: false,
             topic,
             auth_token: None,
             reconnect_delay: reconnect.initial_delay,
@@ -244,6 +248,8 @@ impl PushEvent {
 /// is the primary notification channel.
 pub struct PushListener {
     config: PushListenerConfig,
+    #[cfg(feature = "onion")]
+    tor: Option<crate::network::grpc::onion_transport::SharedTorClient>,
     /// Channel to notify when a push event arrives (wakes up stream manager).
     wake_tx: broadcast::Sender<PushEvent>,
 }
@@ -255,7 +261,23 @@ impl PushListener {
     /// Create a new push listener.
     pub fn new(config: PushListenerConfig) -> Self {
         let (wake_tx, _) = broadcast::channel(Self::WAKE_CAPACITY);
-        Self { config, wake_tx }
+        Self {
+            config,
+            wake_tx,
+            #[cfg(feature = "onion")]
+            tor: None,
+        }
+    }
+
+    /// Reuse the mailbox pool's bootstrapped substrate while isolating each
+    /// subscription circuit. Avoid a second Tor bootstrap on mobile.
+    #[cfg(feature = "onion")]
+    pub(crate) fn with_tor(
+        mut self,
+        tor: crate::network::grpc::onion_transport::SharedTorClient,
+    ) -> Self {
+        self.tor = Some(tor);
+        self
     }
 
     /// Subscribe to push wake-up events.
@@ -355,7 +377,7 @@ impl PushListener {
     /// Connect to ntfy SSE endpoint and process events.
     async fn connect_sse(&self) -> PushResult {
         let (url, transport) = endpoint(&self.config)?;
-        if transport == PushTransport::Onion {
+        if transport == PushTransport::Onion || self.config.force_tor {
             #[cfg(feature = "onion")]
             {
                 return self.connect_onion(&url).await;
@@ -382,8 +404,8 @@ impl PushListener {
         self.dispatch_from_stream(stream).await
     }
 
-    /// Onion requests go through Arti, never the direct HTTP client or a Tor
-    /// exit. HTTPS onion services use the same private CA as storage/gRPC.
+    /// Anonymous subscriptions go through isolated Arti clients, never direct HTTP.
+    /// Onion services use no exit; HTTPS endpoints keep the storage/gRPC private CA.
     #[cfg(feature = "onion")]
     async fn connect_onion(&self, url: &url::Url) -> PushResult {
         use crate::network::grpc::onion_transport::{
@@ -391,7 +413,10 @@ impl PushListener {
         };
         use std::sync::{Arc, OnceLock};
         static TOR: OnceLock<SharedTorClient> = OnceLock::new();
-        let tor = TOR.get_or_init(|| Arc::new(tokio::sync::OnceCell::new()));
+        let tor = self
+            .tor
+            .as_ref()
+            .unwrap_or_else(|| TOR.get_or_init(|| Arc::new(tokio::sync::OnceCell::new())));
         let base = tor
             .get_or_try_init(|| async {
                 let config = tor_client_config().map_err(|_| PushError::Transport)?;
@@ -409,7 +434,7 @@ impl PushListener {
             .await?;
         let host = url.host_str().ok_or(PushError::Endpoint)?.to_owned();
         let port = url.port_or_known_default().ok_or(PushError::Endpoint)?;
-        let client = base.clone();
+        let client = base.isolated_client();
         let dial_host = host.clone();
         let mut dial = AbortTask(
             tor_runtime().spawn(async move { client.connect((dial_host.as_str(), port)).await }),
@@ -1106,7 +1131,30 @@ mod shutdown_admission_tests {
         let listener = super::PushListener::new(config);
         let (shutdown, rx) = tokio::sync::broadcast::channel(1);
         shutdown.send(()).unwrap();
-        tokio::time::timeout(std::time::Duration::from_secs(1), listener.listen(rx)).await.unwrap();
-        assert!(tokio::time::timeout(std::time::Duration::from_millis(30), server.accept()).await.is_err());
+        tokio::time::timeout(std::time::Duration::from_secs(1), listener.listen(rx))
+            .await
+            .unwrap();
+        assert!(
+            tokio::time::timeout(std::time::Duration::from_millis(30), server.accept())
+                .await
+                .is_err()
+        );
+    }
+}
+
+#[cfg(all(test, not(feature = "onion")))]
+mod mailbox_transport_tests {
+    #[tokio::test]
+    async fn anonymous_subscription_never_falls_back_to_direct() {
+        let mut config = super::PushListenerConfig::new(
+            "http://127.0.0.1:8095".into(),
+            "chatter_0123456789abcdef0123456789abcdef".into(),
+        );
+        config.force_tor = true;
+        let listener = super::PushListener::new(config);
+        assert_eq!(
+            listener.connect_sse().await.unwrap_err().to_string(),
+            "ntfy endpoint rejected by transport policy"
+        );
     }
 }

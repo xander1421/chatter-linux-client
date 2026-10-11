@@ -26,6 +26,7 @@ pub mod keys {
     /// Opaque ntfy push topic issued by the server in AuthResponse. The client
     /// subscribes to this instead of deriving `chatter_{user_id}` locally
     /// (which leaked the user_id and didn't match the server's publish topic).
+    pub const DEVICE_WAKE_TOPIC: &str = "push.device_wake_topic";
     pub const PUSH_TOPIC: &str = "push.topic";
 
     // Privacy settings

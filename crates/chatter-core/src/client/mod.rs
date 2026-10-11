@@ -193,6 +193,7 @@ impl ClientBuilder {
             #[cfg(feature = "media")]
             call_notification_bridge: Mutex::new(None),
             notif_stream_handle: Mutex::new(None),
+            mailbox_wake_task: Mutex::new(None),
             push_url: Mutex::new(push_config::configured_push_url()),
             transport_switch_lock: tokio::sync::Mutex::new(()),
             server_monitor_started: AtomicBool::new(false),
@@ -390,6 +391,8 @@ pub struct ChatterClient {
     /// transport instead of riding the pre-switch channel until it naturally
     /// reconnects. See `respawn_notification_stream`.
     notif_stream_handle: Mutex<Option<JoinHandle<()>>>,
+    /// Owns the dynamic device/mailbox subscription supervisor.
+    mailbox_wake_task: Mutex<Option<tokio::task::AbortHandle>>,
     /// Last non-empty ntfy push URL configured via `configure_push`, remembered
     /// so anon mode can suspend push (poll-only) on enter and restore it on
     /// exit. `None` means push was never configured / explicitly disabled.
@@ -2161,10 +2164,9 @@ impl ChatterClient {
         //    the old channel) and re-spawn so it connects over the new one.
         self.respawn_notification_stream();
 
-        // 2. ntfy push SSE listener — uses a direct private-CA HTTPS
-        //    connection (no Tor). PRODUCT DECISION: push is OFF while anon mode is on;
-        //    delivery falls back to mailbox polling (the primary path anyway).
-        //    Restore the previously-configured push on exit.
+        // 2. Account/device push uses direct private-CA HTTPS and remains off
+        //    in Shield. Anonymous mailbox subscriptions stay on isolated Tor.
+        //    Restore the previously-configured account push on exit.
         let remembered_push_url = self.push_url.lock().clone();
         if anon {
             if let Some(tx) = self.push_shutdown.lock().take() {
@@ -2602,6 +2604,12 @@ impl ChatterClient {
                 self.auth_state().set_logged_in(user_id, device_id, name);
             }
         }
+
+        // Arm the Android background lifecycle before any network/bootstrap
+        // awaits: leaving the Activity during startup must retain the poller.
+        crate::system::messaging_background::set_signed_in(
+            self.auth_state().get().current_user_id.is_some(),
+        );
 
         // ── Infrastructure init ─────────────────────────────────────
         self.ctx.init_device_inbox_provider();
@@ -4463,6 +4471,11 @@ impl ChatterClient {
         if self.auth_state().get().session_revision != revision {
             return;
         }
+        crate::system::messaging_background::set_signed_in(false);
+        if let Some(task) = self.mailbox_wake_task.lock().take() {
+            task.abort();
+        }
+
         let handles = std::mem::take(&mut *self.tasks.lock());
         for handle in handles {
             handle.abort();
@@ -4514,6 +4527,8 @@ impl ChatterClient {
                 tracing::warn!("Error stopping inbox provider: {}", e);
             }
         }
+
+        crate::network::streaming::mailbox_wakes::clear();
 
         // Ask the sync engine to exit at its next select point; the abort
         // below is the backstop if it's mid-cycle.
@@ -4605,9 +4620,10 @@ impl ChatterClient {
 
     // ── Ntfy push wake-ups ──────────────────────────────────────────────
     //
-    // On Android/iOS the OS kills the long-lived gRPC stream when the app is
-    // backgrounded. The self-hosted ntfy server still emits a (content-free
-    // by default) wake-up SSE event. `configure_push` starts a background
+    // Android's messaging foreground service retains the existing inbox loop
+    // and in-process SSE listeners while backgrounded. Inbox ntfy wakes are
+    // always content-free; account notifications retain their configured mode.
+    // `configure_push` starts a background
     // task that subscribes to that SSE feed and, for each event, (1) emits
     // a `DomainEvent::PushWakeup` on the event bus so the UI + listeners can
     // react, and (2) pokes the inbox poller so any freshly delivered mailbox
@@ -4621,9 +4637,8 @@ impl ChatterClient {
     ///   previously-configured listener (graceful no-op if none was
     ///   running).
     ///
-    /// The caller must be logged in — the current user's id is used to
-    /// derive the topic (`chatter_{user_id}`) matching the server-side
-    /// topic-obfuscation scheme.
+    /// The caller must be logged in. Server-issued account/device capabilities
+    /// and independent random anonymous-mailbox capabilities select topics.
     ///
     /// Idempotent: calling twice with the same URL cancels the first task
     /// and starts a fresh one (the wake broadcast channel itself is recreated
@@ -4637,6 +4652,9 @@ impl ChatterClient {
             let _ = tx.send(());
         }
 
+        if let Some(task) = self.mailbox_wake_task.lock().take() {
+            task.abort();
+        }
         let ntfy_url = ntfy_url.trim();
         if ntfy_url.is_empty() {
             // Explicit disable — forget the remembered URL so anon-mode exit
@@ -4649,6 +4667,9 @@ impl ChatterClient {
         // and restore this exact config on exit.
         *self.push_url.lock() = Some(ntfy_url.to_string());
 
+        if self.auth_state().get().current_user_id.is_some() {
+            self.start_mailbox_wakes(ntfy_url.to_string());
+        }
         // ntfy SSE is direct private-CA HTTPS. In Shield — including a
         // session that signed in with Shield on — only remember the URL;
         // `rebuild_transport_loops` starts the listener when Shield goes off.
@@ -4694,9 +4715,10 @@ impl ChatterClient {
         let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel::<()>(1);
         *push_slot = Some(shutdown_tx);
 
-        let listener = std::sync::Arc::new(
-            crate::network::streaming::push_listener::PushListener::new(config),
-        );
+        let listener = crate::network::streaming::push_listener::PushListener::new(config);
+        #[cfg(feature = "onion")]
+        let listener = listener.with_tor(self.services.grpc_pool.onion_tor());
+        let listener = std::sync::Arc::new(listener);
         let wake_rx = listener.subscribe();
         let client = Arc::downgrade(self);
 
@@ -4763,6 +4785,8 @@ impl ChatterClient {
 
 impl Drop for ChatterClient {
     fn drop(&mut self) {
+        crate::system::messaging_background::set_signed_in(false);
+        crate::network::streaming::mailbox_wakes::clear();
         let tasks = self.tasks.lock();
         for handle in tasks.iter() {
             handle.abort();

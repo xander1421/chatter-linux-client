@@ -12,6 +12,8 @@
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
     <!-- Screen share (Phase 2): MediaProjection runs inside a typed FGS. -->
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
+    <!-- Continuous private messaging is not a bounded cloud dataSync job. -->
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_CAMERA" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MICROPHONE" />
@@ -100,5 +102,10 @@
             android:name=".MeshService"
             android:exported="false"
             android:foregroundServiceType="connectedDevice" />
+        <service android:name=".MessagingService" android:exported="false"
+            android:foregroundServiceType="specialUse">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Continuous end-to-end encrypted message reception using self-hosted push and anonymous Tor mailboxes without third-party push infrastructure" />
+        </service>
     </application>
 </manifest>

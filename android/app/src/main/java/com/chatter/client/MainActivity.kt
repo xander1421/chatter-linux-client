@@ -304,6 +304,35 @@ class MainActivity : GameActivity() {
         }
     }
 
+    /** Called by core after login/start and before sign-out teardown. */
+    fun setMessagingSignedIn(signedIn: Boolean) {
+        runOnUiThread {
+            messagingSignedIn = signedIn
+            updateMessagingService()
+        }
+    }
+
+    private fun updateMessagingService() {
+        if (messagingSignedIn && messagingBackground) {
+            MessagingService.start(this)
+        } else {
+            MessagingService.stop(this)
+        }
+    }
+
+    override fun onPause() {
+        // Start while the Activity still has foreground-start eligibility.
+        messagingBackground = true
+        updateMessagingService()
+        super.onPause()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        messagingBackground = false
+        updateMessagingService()
+    }
+
     /** Implemented in Rust. Stores a GlobalRef to this Activity. */
     private external fun nativeRegisterActivity()
 
@@ -734,6 +763,9 @@ class MainActivity : GameActivity() {
     )
 
     private companion object {
+        // Account/process state survives Activity recreation.
+        @Volatile private var messagingSignedIn = false
+        private var messagingBackground = false
         const val TAG = "ChatterFilePicker"
         const val THEME_PREFS = "chatter_theme"
         const val THEME_MODE = "mode"

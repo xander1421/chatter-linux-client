@@ -49,6 +49,7 @@ pub extern "system" fn Java_com_chatter_client_MainActivity_nativeRegisterActivi
     match env.new_global_ref(&this) {
         Ok(gref) => {
             let _ = ACTIVITY.set(gref);
+            chatter_core::system::messaging_background::register_platform(set_messaging_signed_in);
             tracing::info!("Android: MainActivity registered for JNI callbacks");
         }
         Err(e) => tracing::error!("Android: failed to hold MainActivity ref: {e}"),
@@ -248,4 +249,25 @@ pub extern "system" fn Java_com_chatter_client_MainActivity_nativeImeEditorActio
         w.window()
             .dispatch_event(slint::platform::WindowEvent::KeyReleased { text: enter });
     });
+}
+
+/// Thin platform hook: account policy is owned by chatter-core.
+fn set_messaging_signed_in(signed_in: bool) {
+    let result = (|| -> Result<(), String> {
+        let act = activity()?;
+        let mut env = jni_env()?;
+        let result = env.call_method(
+            act,
+            "setMessagingSignedIn",
+            "(Z)V",
+            &[jni::objects::JValue::Bool(signed_in.into())],
+        );
+        if result.is_err() {
+            clear_exception(&mut env);
+        }
+        result.map(|_| ()).map_err(|e| e.to_string())
+    })();
+    if result.is_err() {
+        tracing::warn!("Android messaging service lifecycle unavailable");
+    }
 }

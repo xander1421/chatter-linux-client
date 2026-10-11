@@ -917,6 +917,7 @@ impl ChatterClient {
         if self.auth_state().get().session_revision != expected {
             return Ok(());
         }
+        crate::system::messaging_background::set_signed_in(false);
         // Invalidate queued UI work immediately, then retire the old call owner
         // using its captured revision, before new credentials can be installed.
         self.clear_composer_session();

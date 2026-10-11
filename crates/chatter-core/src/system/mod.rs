@@ -58,3 +58,5 @@ pub const NULL_AUDIO_ENV: &str = "CHATTER_NULL_AUDIO";
 pub fn null_audio() -> bool {
     std::env::var_os(NULL_AUDIO_ENV).is_some()
 }
+
+pub mod messaging_background;

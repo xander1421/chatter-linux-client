@@ -129,6 +129,7 @@ impl MailboxClient {
         ttl_seconds: u64,
     ) -> Result<CreateEphemeralMailboxResponse, NetworkError> {
         let request = CreateEphemeralMailboxRequest {
+            wake_topic: String::new(),
             public_key,
             signature,
             ttl_seconds,
@@ -161,6 +162,7 @@ impl MailboxClient {
         limit: i32,
     ) -> Result<PollEphemeralMailboxResponse, NetworkError> {
         let request = PollEphemeralMailboxRequest {
+            wake_topic: String::new(),
             public_key,
             challenge_signature,
             challenge,
@@ -274,9 +276,10 @@ mod tests {
     fn test_create_ephemeral_mailbox_request_construction() {
         // Verify CreateEphemeralMailboxRequest can be constructed
         let request = CreateEphemeralMailboxRequest {
-            public_key: vec![0u8; 32],         // Ed25519 public key
-            signature: vec![0u8; 256],         // RSA-2048 unblinded signature
-            ttl_seconds: 86400,                // 1 day
+            wake_topic: String::new(),
+            public_key: vec![0u8; 32], // Ed25519 public key
+            signature: vec![0u8; 256], // RSA-2048 unblinded signature
+            ttl_seconds: 86400,        // 1 day
         };
 
         assert_eq!(request.public_key.len(), 32);
@@ -288,6 +291,7 @@ mod tests {
     fn test_poll_ephemeral_mailbox_request_construction() {
         // Verify PollEphemeralMailboxRequest can be constructed
         let request = PollEphemeralMailboxRequest {
+            wake_topic: String::new(),
             public_key: vec![0u8; 32],
             challenge_signature: vec![0u8; 64], // Ed25519 signature
             challenge: vec![0u8; 32],

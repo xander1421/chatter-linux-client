@@ -28,9 +28,9 @@ use crate::network::grpc::transport::GrpcTransport;
 use crate::error::NetworkError;
 use crate::proto::mailbox_v1::{
     AcknowledgeMessagesRequest, AcknowledgeMessagesResponse, CreateEphemeralMailboxRequest,
-    CreateEphemeralMailboxResponse, DeleteEphemeralMailboxRequest, GetBlindSignaturePublicKeyRequest,
-    GetBlindSignaturePublicKeyResponse, GetMailboxChallengeRequest, GetMailboxChallengeResponse,
-    PollEphemeralMailboxRequest,
+    CreateEphemeralMailboxResponse, DeleteEphemeralMailboxRequest,
+    GetBlindSignaturePublicKeyRequest, GetBlindSignaturePublicKeyResponse,
+    GetMailboxChallengeRequest, GetMailboxChallengeResponse, PollEphemeralMailboxRequest,
     PollEphemeralMailboxResponse, SendToEphemeralMailboxRequest, SendToEphemeralMailboxResponse,
     ephemeral_mailbox_service_client::EphemeralMailboxServiceClient,
 };
@@ -106,6 +106,7 @@ impl AnonymousMailboxClient {
         ttl_seconds: u64,
     ) -> Result<CreateEphemeralMailboxResponse, NetworkError> {
         let request = CreateEphemeralMailboxRequest {
+            wake_topic: crate::network::streaming::mailbox_wakes::topic(&public_key),
             public_key,
             signature,
             ttl_seconds,
@@ -168,6 +169,7 @@ impl AnonymousMailboxClient {
         limit: i32,
     ) -> Result<PollEphemeralMailboxResponse, NetworkError> {
         let request = PollEphemeralMailboxRequest {
+            wake_topic: crate::network::streaming::mailbox_wakes::topic(&public_key),
             public_key,
             challenge_signature,
             challenge,

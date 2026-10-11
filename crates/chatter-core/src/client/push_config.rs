@@ -2,10 +2,21 @@
 use super::*;
 
 pub(super) fn configured_push_url() -> Option<String> {
-    select_push_url(
-        std::env::var("CHATTER_NTFY_URL").ok(),
-        option_env!("CHATTER_NTFY_URL"),
-    )
+    let runtime = std::env::var("CHATTER_NTFY_URL").ok();
+    let baked = option_env!("CHATTER_NTFY_URL");
+    if runtime.is_some() || baked.is_some() {
+        return select_push_url(runtime, baked);
+    }
+    // Android must have wake delivery without depending on a process environment.
+    // Reuse the shipped server pin; an explicit empty URL still disables push.
+    #[cfg(target_os = "android")]
+    {
+        crate::config::PINNED_ONION_ADDR.map(|_| secret_push_url(""))
+    }
+    #[cfg(not(target_os = "android"))]
+    {
+        None
+    }
 }
 
 fn select_push_url(runtime: Option<String>, baked: Option<&str>) -> Option<String> {
@@ -211,5 +222,186 @@ mod tests {
         result
             .recv_timeout(std::time::Duration::from_secs(3))
             .expect("Shield exit held the remembered URL mutex during reconfiguration");
+    }
+}
+
+impl ChatterClient {
+    /// Listener tasks are children of the authenticated session. Mailbox subscriptions
+    /// use Tor independently of Shield; no mailbox capability enters UI events.
+    pub(super) fn start_mailbox_wakes(self: &Arc<Self>, url: String) {
+        let client = Arc::downgrade(self);
+        let revision = self.auth_state().get().session_revision;
+        #[cfg(feature = "onion")]
+        let tor = self.services.grpc_pool.onion_tor();
+        let handle = tokio::spawn(async move {
+            let mut listeners =
+                std::collections::HashMap::<String, tokio::task::AbortHandle>::new();
+            let mut tasks = tokio::task::JoinSet::new();
+            let mut refresh_at = std::time::Instant::now();
+            loop {
+                let Some(owner) = client.upgrade() else { break };
+                if !owner.auth_state().session_is_current(revision) {
+                    break;
+                }
+                drop(owner);
+                let mut active: Vec<(String, bool)> =
+                    crate::network::streaming::mailbox_wakes::active()
+                        .into_iter()
+                        .map(|topic| (topic, true))
+                        .collect();
+                let Some(owner) = client.upgrade() else { break };
+                if owner.push_wakeup_allowed(revision) {
+                    use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
+                    let settings = SettingsRepository::new(owner.services.database.clone());
+                    if settings
+                        .get_string(keys::DEVICE_WAKE_TOPIC)
+                        .ok()
+                        .flatten()
+                        .unwrap_or_default()
+                        .is_empty()
+                        && std::time::Instant::now() >= refresh_at
+                    {
+                        // Linked devices receive no AuthResponse. Fetch their own
+                        // capabilities through authenticated identity, with session fencing.
+                        refresh_at = std::time::Instant::now() + std::time::Duration::from_secs(60);
+                        let _guard = owner.auth_lifecycle_lock.lock().await;
+                        if !owner.auth_state().session_is_current(revision) {
+                            break;
+                        }
+                        let mut auth = owner.services.grpc_pool.auth_client();
+                        if let Ok(Ok(identity)) = tokio::time::timeout(
+                            std::time::Duration::from_secs(15),
+                            auth.get_my_identity(),
+                        )
+                        .await
+                        {
+                            let _ = settings
+                                .set_string(keys::DEVICE_WAKE_TOPIC, &identity.device_wake_topic);
+                            let _ = settings.set_string(keys::PUSH_TOPIC, &identity.push_topic);
+                        }
+                    }
+                    if let Ok(Some(topic)) = settings.get_string(keys::DEVICE_WAKE_TOPIC) {
+                        if !topic.is_empty() {
+                            active.push((topic, false));
+                        }
+                    }
+                    // A linked device may learn both capabilities after the
+                    // initial account listener configuration already returned.
+                    if owner.push_shutdown.lock().is_none() {
+                        if let Ok(Some(topic)) = settings.get_string(keys::PUSH_TOPIC) {
+                            if !topic.is_empty() {
+                                active.push((topic, false));
+                            }
+                        }
+                    }
+                }
+                drop(owner);
+                listeners.retain(|topic, task| {
+                    if active.iter().any(|(active, _)| active == topic) && !task.is_finished() {
+                        true
+                    } else {
+                        task.abort();
+                        false
+                    }
+                });
+                for (topic, secret) in active {
+                    if listeners.contains_key(&topic) {
+                        continue;
+                    }
+                    let endpoint = if secret {
+                        secret_push_url(&url)
+                    } else {
+                        url.clone()
+                    };
+                    let mut config =
+                        crate::network::streaming::PushListenerConfig::new(endpoint, topic.clone());
+                    config.force_tor = secret;
+                    let listener = crate::network::streaming::PushListener::new(config);
+                    #[cfg(feature = "onion")]
+                    let listener = listener.with_tor(tor.clone());
+                    let listener = Arc::new(listener);
+                    let mut wakes = listener.subscribe();
+                    let owner = client.clone();
+                    let route_topic = topic.clone();
+                    let task=tasks.spawn(async move {
+                        let (_stop,shutdown)=tokio::sync::broadcast::channel(1);
+                        // Cancellation drops this future and its Tor stream together.
+                        let listen=listener.listen(shutdown);
+                        tokio::pin!(listen);
+                        loop { tokio::select! {
+                            _=&mut listen => break,
+                            event=wakes.recv() => {
+                                let Ok(event)=event else { continue };
+                                if !secret {
+                                    let Some(owner)=owner.upgrade() else { break };
+                                    if !owner.route_push_wakeup(revision,&route_topic,event.kind()).await { break }
+                                    continue;
+                                }
+                                let Some(owner)=owner.upgrade() else { break };
+                                let _guard=owner.auth_lifecycle_lock.lock().await;
+                                if !owner.auth_state().session_is_current(revision) { break }
+                                if let Some(provider)=owner.services.device_inbox_provider.get() { provider.wake(); }
+                            }
+                        } }
+                    });
+                    listeners.insert(topic, task);
+                }
+                tokio::select! {
+                    _=tokio::time::sleep(std::time::Duration::from_secs(2)) => {},
+                    _=tasks.join_next(), if !tasks.is_empty() => {},
+                }
+            }
+            // JoinSet aborts every child on session teardown.
+        });
+        *self.mailbox_wake_task.lock() = Some(handle.abort_handle());
+        self.tasks.lock().push(handle);
+    }
+}
+
+fn secret_push_url(fallback: &str) -> String {
+    secret_push_url_with_pin(fallback, crate::config::PINNED_ONION_ADDR)
+}
+
+fn secret_push_url_with_pin(fallback: &str, pin: Option<&str>) -> String {
+    let Some(onion) = pin else {
+        return fallback.to_owned();
+    };
+    let base = if onion.contains("://") {
+        onion.to_owned()
+    } else {
+        format!("http://{onion}")
+    };
+    let Ok(mut url) = url::Url::parse(&base) else {
+        return fallback.to_owned();
+    };
+    let _ = url.set_scheme("http");
+    let _ = url.set_port(Some(8095));
+    url.set_path("");
+    url.set_query(None);
+    url.set_fragment(None);
+    url.to_string()
+}
+
+#[cfg(test)]
+mod mailbox_subscription_tests {
+    #[test]
+    fn mailbox_endpoint_uses_pinned_onion_virtual_port() {
+        let host = format!("{}.onion", "a".repeat(56));
+        let expected = format!("http://{host}:8095/");
+        assert_eq!(
+            super::secret_push_url_with_pin("http://127.0.0.1:8095", Some(&host)),
+            expected
+        );
+        assert_eq!(
+            super::secret_push_url_with_pin(
+                "https://push.invalid",
+                Some(&format!("http://{host}:443"))
+            ),
+            expected
+        );
+        assert_eq!(
+            super::secret_push_url_with_pin("https://push.invalid", None),
+            "https://push.invalid"
+        );
     }
 }

@@ -808,6 +808,8 @@ impl AuthService {
         // configure_push subscribes to this instead of deriving it locally.
         self.settings_repo
             .set_string(keys::PUSH_TOPIC, &response.push_topic)?;
+        self.settings_repo
+            .set_string(keys::DEVICE_WAKE_TOPIC, &response.device_wake_topic)?;
 
         // SECURITY: store auth token. profile_key is NOT touched on login -
         // it is set at registration (random) and on a fresh device is loaded
@@ -1333,6 +1335,11 @@ impl AuthService {
         self.settings_repo
             .set_string(keys::SVR_SALT_USERNAME, username)?;
 
+        self.settings_repo
+            .set_string(keys::PUSH_TOPIC, &result.push_topic)?;
+        self.settings_repo
+            .set_string(keys::DEVICE_WAKE_TOPIC, &result.device_wake_topic)?;
+
         // SECURITY: Store auth token in encrypted settings
         self.settings_repo
             .set_bytes(keys::DEVICE_AUTH_TOKEN, credentials.auth_token().as_bytes())?;
@@ -1437,6 +1444,8 @@ impl AuthService {
     pub(crate) fn end_session(&self) -> Result<(), AuthError> {
         self.auth_interceptor.clear();
         self.settings_repo.delete(keys::DEVICE_AUTH_TOKEN)?;
+        self.settings_repo.delete(keys::PUSH_TOPIC)?;
+        self.settings_repo.delete(keys::DEVICE_WAKE_TOPIC)?;
         // PIN authorization must be re-derived from user input as well.
         self.settings_repo.delete(keys::PIN_FINGERPRINT)?;
         Ok(())
@@ -1470,6 +1479,8 @@ impl AuthService {
         self.settings_repo.delete(keys::CURRENT_USER_ID)?;
         self.settings_repo.delete(keys::CURRENT_DEVICE_ID)?;
         self.settings_repo.delete(keys::DEVICE_AUTH_TOKEN)?;
+        self.settings_repo.delete(keys::PUSH_TOPIC)?;
+        self.settings_repo.delete(keys::DEVICE_WAKE_TOPIC)?;
 
         // Clear the local PIN fingerprint — re-derived on next login from
         // user-supplied PIN. Leaving stale fingerprints behind would let a
@@ -1588,6 +1599,8 @@ impl AuthService {
         let _ = self.settings_repo.delete(keys::CURRENT_USER_ID);
         let _ = self.settings_repo.delete(keys::CURRENT_DEVICE_ID);
         let _ = self.settings_repo.delete(keys::DEVICE_AUTH_TOKEN);
+        let _ = self.settings_repo.delete(keys::PUSH_TOPIC);
+        let _ = self.settings_repo.delete(keys::DEVICE_WAKE_TOPIC);
 
         // Remove sender certificate if any
         let _ = self.settings_repo.delete(keys::SENDER_CERTIFICATE);
