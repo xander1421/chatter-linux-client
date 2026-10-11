@@ -60,11 +60,11 @@ tower = "0.5"
 # ============================================================================
 # Crypto - Signal Protocol (Official libsignal)
 # ============================================================================
-libsignal-protocol = { git = "https://github.com/signalapp/libsignal", rev = "8fc2113bda042fc972a166a24b974b0d34155c6c" }
-libsignal-core = { git = "https://github.com/signalapp/libsignal", rev = "8fc2113bda042fc972a166a24b974b0d34155c6c" }
-signal-media = { git = "https://github.com/signalapp/libsignal", rev = "8fc2113bda042fc972a166a24b974b0d34155c6c" }
+libsignal-protocol = { git = "https://github.com/signalapp/libsignal", rev = "4beb029d8a941f81e7d9c6d8af1ed25a677569a8" }
+libsignal-core = { git = "https://github.com/signalapp/libsignal", rev = "4beb029d8a941f81e7d9c6d8af1ed25a677569a8" }
+signal-media = { git = "https://github.com/signalapp/libsignal", rev = "4beb029d8a941f81e7d9c6d8af1ed25a677569a8" }
 # RFC 9180 HPKE (base, X25519/HKDF-SHA256/AES-256-GCM) for the mailbox envelope.
-signal-crypto = { git = "https://github.com/signalapp/libsignal", rev = "8fc2113bda042fc972a166a24b974b0d34155c6c" }
+signal-crypto = { git = "https://github.com/signalapp/libsignal", rev = "4beb029d8a941f81e7d9c6d8af1ed25a677569a8" }
 # Same version signal-media pins; used directly for the sync (file-streaming)
 # sanitize path, which signal-media's async-only wrapper doesn't expose. WebP
 # goes through signal_media::sanitize::webp, so webpsan is not a direct dep.
@@ -72,10 +72,10 @@ mp4san = "0.5.3"
 # Signal usernames crate (Ristretto255 + ZK proof of ownership for the
 # discovery hash). NOTE: licensed AGPL-3.0; combining with the rest of
 # chatter (GPL-3.0) means the combined work is effectively AGPL.
-usernames = { git = "https://github.com/signalapp/libsignal", rev = "8fc2113bda042fc972a166a24b974b0d34155c6c" }
+usernames = { git = "https://github.com/signalapp/libsignal", rev = "4beb029d8a941f81e7d9c6d8af1ed25a677569a8" }
 # KT query-privacy VRF verifier (ECVRF-EDWARDS25519-SHA512-TAI, RFC 9381):
 # used as-is via its public `VrfPublicKey`. Also AGPL-3.0, same as `usernames`.
-libsignal-keytrans = { git = "https://github.com/signalapp/libsignal", rev = "8fc2113bda042fc972a166a24b974b0d34155c6c" }
+libsignal-keytrans = { git = "https://github.com/signalapp/libsignal", rev = "4beb029d8a941f81e7d9c6d8af1ed25a677569a8" }
 rand = { version = "0.9", features = ["os_rng"] }
 rand_core_06 = { package = "rand_core", version = "0.6", features = ["getrandom"] }
 blind-rsa-signatures = "0.14"
@@ -300,7 +300,7 @@ proptest = "1"
 # directly, mirroring the crate's own pinned libsignal + rand. Same source/rev
 # and version so Cargo unifies with the normal deps (no duplicate build).
 rand = { version = "0.9", features = ["os_rng"] }
-libsignal-protocol = { git = "https://github.com/signalapp/libsignal", rev = "8fc2113bda042fc972a166a24b974b0d34155c6c" }
+libsignal-protocol = { git = "https://github.com/signalapp/libsignal", rev = "4beb029d8a941f81e7d9c6d8af1ed25a677569a8" }
 # Needed by tests/validated.rs V50/V51 to open the SQLCipher stores directly
 # and compare backup-restored rows byte-for-byte. Same version as the normal
 # dep so Cargo unifies the build.

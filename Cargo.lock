@@ -3088,7 +3088,6 @@ dependencies = [
  "curve25519-dalek-derive",
  "digest 0.11.3",
  "fiat-crypto 0.3.0",
- "rand_core 0.10.1",
  "rustc_version",
  "subtle",
  "zeroize",
@@ -7708,7 +7707,7 @@ dependencies = [
 [[package]]
 name = "libsignal-core"
 version = "0.1.0"
-source = "git+https://github.com/signalapp/libsignal?rev=8fc2113bda042fc972a166a24b974b0d34155c6c#8fc2113bda042fc972a166a24b974b0d34155c6c"
+source = "git+https://github.com/signalapp/libsignal?rev=4beb029d8a941f81e7d9c6d8af1ed25a677569a8#4beb029d8a941f81e7d9c6d8af1ed25a677569a8"
 dependencies = [
  "curve25519-dalek 5.0.0",
  "derive_more 2.1.1",
@@ -7726,8 +7725,8 @@ dependencies = [
 
 [[package]]
 name = "libsignal-debug"
-version = "0.102.2"
-source = "git+https://github.com/signalapp/libsignal?rev=8fc2113bda042fc972a166a24b974b0d34155c6c#8fc2113bda042fc972a166a24b974b0d34155c6c"
+version = "0.105.0"
+source = "git+https://github.com/signalapp/libsignal?rev=4beb029d8a941f81e7d9c6d8af1ed25a677569a8#4beb029d8a941f81e7d9c6d8af1ed25a677569a8"
 dependencies = [
  "cfg-if",
 ]
@@ -7735,7 +7734,7 @@ dependencies = [
 [[package]]
 name = "libsignal-keytrans"
 version = "0.0.1"
-source = "git+https://github.com/signalapp/libsignal?rev=8fc2113bda042fc972a166a24b974b0d34155c6c#8fc2113bda042fc972a166a24b974b0d34155c6c"
+source = "git+https://github.com/signalapp/libsignal?rev=4beb029d8a941f81e7d9c6d8af1ed25a677569a8#4beb029d8a941f81e7d9c6d8af1ed25a677569a8"
 dependencies = [
  "curve25519-dalek 5.0.0",
  "displaydoc",
@@ -7752,7 +7751,7 @@ dependencies = [
 [[package]]
 name = "libsignal-protocol"
 version = "0.1.0"
-source = "git+https://github.com/signalapp/libsignal?rev=8fc2113bda042fc972a166a24b974b0d34155c6c#8fc2113bda042fc972a166a24b974b0d34155c6c"
+source = "git+https://github.com/signalapp/libsignal?rev=4beb029d8a941f81e7d9c6d8af1ed25a677569a8#4beb029d8a941f81e7d9c6d8af1ed25a677569a8"
 dependencies = [
  "aes 0.9.3",
  "aes-gcm-siv",
@@ -10348,7 +10347,7 @@ dependencies = [
 [[package]]
 name = "poksho"
 version = "0.7.0"
-source = "git+https://github.com/signalapp/libsignal?rev=8fc2113bda042fc972a166a24b974b0d34155c6c#8fc2113bda042fc972a166a24b974b0d34155c6c"
+source = "git+https://github.com/signalapp/libsignal?rev=4beb029d8a941f81e7d9c6d8af1ed25a677569a8#4beb029d8a941f81e7d9c6d8af1ed25a677569a8"
 dependencies = [
  "curve25519-dalek 5.0.0",
  "hmac 0.13.0",
@@ -12456,7 +12455,7 @@ checksum = "f8fadd59c855ef2080decdef8ff161eb6661b86933c9d82e5ba29dc602a55aba"
 [[package]]
 name = "signal-crypto"
 version = "0.1.0"
-source = "git+https://github.com/signalapp/libsignal?rev=8fc2113bda042fc972a166a24b974b0d34155c6c#8fc2113bda042fc972a166a24b974b0d34155c6c"
+source = "git+https://github.com/signalapp/libsignal?rev=4beb029d8a941f81e7d9c6d8af1ed25a677569a8#4beb029d8a941f81e7d9c6d8af1ed25a677569a8"
 dependencies = [
  "aes 0.9.3",
  "cbc",
@@ -12513,7 +12512,7 @@ dependencies = [
 [[package]]
 name = "signal-media"
 version = "0.1.0"
-source = "git+https://github.com/signalapp/libsignal?rev=8fc2113bda042fc972a166a24b974b0d34155c6c#8fc2113bda042fc972a166a24b974b0d34155c6c"
+source = "git+https://github.com/signalapp/libsignal?rev=4beb029d8a941f81e7d9c6d8af1ed25a677569a8#4beb029d8a941f81e7d9c6d8af1ed25a677569a8"
 dependencies = [
  "futures-util",
  "mediasan-common",
@@ -12979,12 +12978,10 @@ dependencies = [
 
 [[package]]
 name = "spqr"
-version = "1.5.3"
-source = "git+https://github.com/signalapp/SparsePostQuantumRatchet.git?tag=v1.5.3#fd320484dcec89004021e6fdc7481825f5f261fa"
+version = "1.6.0"
+source = "git+https://github.com/signalapp/SparsePostQuantumRatchet.git?tag=v1.6.0#06959b4708f9b7b1e94d0f8cc835f3958c077e94"
 dependencies = [
  "cpufeatures 0.3.1",
- "curve25519-dalek 5.0.0",
- "displaydoc",
  "hax-lib",
  "hkdf 0.13.0",
  "libcrux-hmac",
@@ -15630,7 +15627,7 @@ checksum = "daf8dba3b7eb870caf1ddeed7bc9d2a049f3cfdfae7cb521b087cc33ae4c49da"
 [[package]]
 name = "usernames"
 version = "0.1.0"
-source = "git+https://github.com/signalapp/libsignal?rev=8fc2113bda042fc972a166a24b974b0d34155c6c#8fc2113bda042fc972a166a24b974b0d34155c6c"
+source = "git+https://github.com/signalapp/libsignal?rev=4beb029d8a941f81e7d9c6d8af1ed25a677569a8#4beb029d8a941f81e7d9c6d8af1ed25a677569a8"
 dependencies = [
  "curve25519-dalek 5.0.0",
  "displaydoc",
