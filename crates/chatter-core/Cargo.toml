@@ -210,7 +210,7 @@ webpki-roots = { version = "1", optional = true }
 # hand-rolled RFC 6455 implementation: this code parses frames from relays we
 # neither control nor authenticate, which is not a place for bespoke framing.
 tokio-tungstenite = { version = "0.28", default-features = false, features = ["handshake"], optional = true }
-argon2 = "0.5.3"
+argon2 = "0.6.0"
 # OPAQUE (RFC 9807) password authentication, client side (crypto/opaque.rs).
 # 4.0.x is the release synced to the final RFC; the server is
 # github.com/bytemare/opaque v0.18.0 and interop is pinned by tests on both
