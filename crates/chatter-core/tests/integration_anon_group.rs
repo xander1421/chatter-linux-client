@@ -601,3 +601,140 @@ async fn test_anon_group_id_uniqueness() {
 
     eprintln!("Generated 100 unique group IDs");
 }
+
+/// Real Tor send -> anonymous device inbox -> receiver decrypt/dispatch.
+/// No friend DM or ready secret-DM tunnel exists, so neither can deliver this.
+/// Removing the AnonGroupInvite receive arm makes the event deadline fail.
+#[tokio::test]
+#[ignore = "requires live stack and pinned Tor; set CHATTER_SECRET_GROUP_LIVE=1 and run --ignored"]
+async fn secret_group_invite_arrives_via_anonymous_device_inbox() {
+    assert_eq!(
+        std::env::var("CHATTER_SECRET_GROUP_LIVE").as_deref(),
+        Ok("1"),
+        "explicit live-stack opt-in required"
+    );
+    use chatter_core::client::ChatterClient;
+    use std::time::Duration;
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter(tracing_subscriber::EnvFilter::from_default_env())
+        .try_init();
+    let mut clients = Vec::new();
+    let mut dirs = Vec::new();
+    let mut users = Vec::new();
+    let mut devices = Vec::new();
+    for label in ["inviter", "receiver"] {
+        let dir = tempfile::tempdir().unwrap();
+        common::headless(dir.path());
+        let client = ChatterClient::builder()
+            .server_url(
+                std::env::var("CHATTER_SERVER_URL")
+                    .unwrap_or_else(|_| "https://localhost:50051".into()),
+            )
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .unwrap();
+        assert!(
+            client.shield_available(),
+            "live proof requires pinned onion transport"
+        );
+        client.connect().await.unwrap();
+        let password = common::random_password();
+        let pin = common::random_password();
+        let result = client
+            .register(
+                &common::unique_username(),
+                &password,
+                label,
+                "secret-group-invite-proof",
+                None,
+                Some(&pin),
+            )
+            .await
+            .unwrap();
+        client
+            .prefetch_tokens(8)
+            .await
+            .expect("preload fixture blind tokens");
+        // start() asynchronously warms the certificate needed for anonymous send.
+        tokio::time::timeout(Duration::from_secs(30), async {
+            while client
+                .signal()
+                .get_cached_sender_certificate()
+                .unwrap()
+                .is_none()
+            {
+                tokio::time::sleep(Duration::from_millis(100)).await;
+            }
+        })
+        .await
+        .expect("sender certificate warmup");
+        devices.push(result.device_id);
+        users.push(result.user_id);
+        clients.push(client);
+        dirs.push(dir);
+    }
+    let mut invites = clients[1].subscribe_anon_group_invites();
+    let name = format!("secret-invite-{}", uuid::Uuid::new_v4());
+    let group = tokio::time::timeout(
+        Duration::from_secs(180),
+        clients[0]
+            .anon_groups()
+            .create_group(name.clone(), vec![users[1]]),
+    )
+    .await
+    .expect("Tor group creation deadline")
+    .unwrap();
+    let invite = tokio::time::timeout(Duration::from_secs(90), invites.recv())
+        .await
+        .expect("receiver must dispatch invite")
+        .unwrap();
+    assert_eq!(invite.group_id, group.id);
+    assert_eq!(invite.group_name, name);
+    assert_eq!(invite.inviter_id, users[0]);
+    assert_eq!(invite.inviter_device_id, devices[0]);
+    let owner = clients[0]
+        .anon_groups()
+        .get_member(&group.id, &users[0])
+        .unwrap()
+        .unwrap();
+    assert_eq!(Some(invite.inviter_mailbox_pk), owner.mailbox_pk);
+    let accepted = tokio::time::timeout(
+        Duration::from_secs(180),
+        clients[1].anon_groups().accept_invite(
+            invite.group_id,
+            invite.group_name,
+            invite.inviter_id,
+            invite.inviter_id,
+            invite.inviter_device_id,
+            invite.inviter_mailbox_pk,
+            invite.profile_key,
+            invite.inviter_display_name,
+            invite.inviter_avatar,
+        ),
+    )
+    .await
+    .expect("Tor invite acceptance deadline")
+    .expect("receiver accepts decoded invite");
+    assert_eq!(accepted.id, group.id);
+    // The JoinAck must return through the owner's group mailbox and bind the
+    // receiver's actual device; merely decoding an invite cannot satisfy this.
+    tokio::time::timeout(Duration::from_secs(90), async {
+        loop {
+            let member = clients[0]
+                .anon_groups()
+                .get_member(&group.id, &users[1])
+                .unwrap()
+                .unwrap();
+            if member.mailbox_pk.is_some() {
+                assert_eq!(member.device_id, Some(devices[1]));
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(100)).await;
+        }
+    })
+    .await
+    .expect("owner processes receiver JoinAck");
+    for client in clients {
+        client.shutdown().await;
+    }
+}
