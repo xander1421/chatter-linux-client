@@ -150,8 +150,10 @@ impl AnonDmService {
     /// tells the peer over Tor, failing closed: if that send fails nothing is
     /// deleted and the error is returned, so the user can retry rather than
     /// leave the peer's copy behind. A request nobody accepted yet has no
-    /// peer mailbox and goes locally. Our server mailbox goes last, best
-    /// effort (its TTL removes it anyway).
+    /// peer mailbox and goes locally, as does a chat whose peer mailbox is
+    /// already gone (expired, or the peer ended it first): nothing is left
+    /// to tell. Our server mailbox goes last, best effort (its TTL removes
+    /// it anyway).
     pub async fn end_conversation(&self, conversation_id: &AnonDmId) -> Result<(), AnonDmError> {
         let dm = self
             .anon_dm_repo
@@ -160,8 +162,13 @@ impl AnonDmService {
         if let (Some(peer_mailbox_pk), AnonDmStatus::Active | AnonDmStatus::Blocked) =
             (dm.peer_mailbox_pk, dm.status)
         {
-            self.send_to_anon_mailbox(&dm.peer_id, &peer_mailbox_pk, end_content(conversation_id))
-                .await?;
+            match self
+                .send_to_anon_mailbox(&dm.peer_id, &peer_mailbox_pk, end_content(conversation_id))
+                .await
+            {
+                Ok(()) | Err(AnonDmError::PeerMailboxGone) => {}
+                Err(e) => return Err(e),
+            }
         }
         self.delete_with_server_mailbox(conversation_id).await
     }

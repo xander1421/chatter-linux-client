@@ -240,6 +240,13 @@ impl AnonDmService {
                 tracing::warn!(error = %e, "[ANON_DM_MAILBOX] Failed to send to mailbox");
                 if retained.is_some() {
                     AnonDmError::DeliveryUnconfirmed
+                } else if matches!(
+                    e,
+                    crate::services::mailbox_manager::MailboxError::Network(
+                        crate::error::NetworkError::NotFound(_)
+                    )
+                ) {
+                    AnonDmError::PeerMailboxGone
                 } else {
                     AnonDmError::MessageError(e.to_string())
                 }

@@ -79,6 +79,11 @@ pub enum AnonDmError {
     #[error("message error: {0}")]
     MessageError(String),
 
+    /// The peer's secret-chat mailbox no longer exists on the server (it
+    /// expired, or the peer ended the chat and deleted it).
+    #[error("peer mailbox is gone")]
+    PeerMailboxGone,
+
     /// Crypto error.
     #[error("crypto error: {0}")]
     CryptoError(String),
