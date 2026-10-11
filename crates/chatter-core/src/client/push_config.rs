@@ -98,6 +98,13 @@ mod tests {
     }
 
     fn client() -> (Arc<ChatterClient>, tempfile::TempDir) {
+        // Push lifecycle fixtures exercise no OS credential-store behavior.
+        static TEST_KEYRING: std::sync::Once = std::sync::Once::new();
+        TEST_KEYRING.call_once(|| {
+            keyring::set_default_credential_builder(
+                crate::system::keyring::test_credential_builder(),
+            );
+        });
         let dir = tempfile::tempdir().unwrap();
         let client = ChatterClient::builder()
             .server_url("https://localhost:1")
