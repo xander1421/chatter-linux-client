@@ -145,7 +145,7 @@ bytes = "1"
 http = "1"
 http-body = "1"
 mime_guess = "2"
-reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json", "blocking", "stream", "charset", "http2", "macos-system-configuration"] }
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls-no-provider", "json", "blocking", "stream", "charset", "http2", "system-proxy"] }
 url = "2"
 rodio = "0.21.1"
 cpal = "0.15"
@@ -204,12 +204,12 @@ hyper-util = { version = "0.1", features = ["tokio"], optional = true }
 hyper = { version = "1", features = ["client", "http1"], optional = true }
 http-body-util = { version = "0.1", optional = true }
 tokio-rustls = { version = "0.26", default-features = false, features = ["ring", "tls12", "logging"], optional = true }
-webpki-roots = { version = "1", optional = true }
+webpki-roots = "1"
 # WebSocket framing for Nostr relays, over the Tor DataStream. Under `onion`
 # because that is the only build with a relay connector at all. Replaces a
 # hand-rolled RFC 6455 implementation: this code parses frames from relays we
 # neither control nor authenticate, which is not a place for bespoke framing.
-tokio-tungstenite = { version = "0.28", default-features = false, features = ["handshake"], optional = true }
+tokio-tungstenite = { version = "0.30.0", default-features = false, features = ["handshake"], optional = true }
 argon2 = "0.6.0"
 # OPAQUE (RFC 9807) password authentication, client side (crypto/opaque.rs).
 # 4.0.x is the release synced to the final RFC; the server is
@@ -231,7 +231,7 @@ tempfile = "3"
 # the SAME crate instances, never a second mismatched copy.
 tonic-h3 = { version = "0.0.6", default-features = false, features = ["quinn"], optional = true }
 quinn = { version = "0.11", default-features = false, features = ["rustls-ring", "runtime-tokio"], optional = true }
-rustls = { version = "0.23", default-features = false, features = ["ring", "std"], optional = true }
+rustls = { version = "0.23", default-features = false, features = ["ring", "std"] }
 
 # ============================================================================
 # Desktop-only system deps (not available on Android or iOS)
@@ -330,13 +330,13 @@ dev-trust-root = []
 # transport returns an error and anon mode stays UI-filter-only.
 onion = [
     "dep:arti-client", "dep:tor-rtcompat", "dep:hyper-util",
-    "dep:hyper", "dep:http-body-util", "dep:tokio-rustls", "dep:webpki-roots",
+    "dep:hyper", "dep:http-body-util", "dep:tokio-rustls",
     "dep:tokio-tungstenite",
 ]
 desktop-system = ["dep:zbus-secret-service-keyring-store", "dep:windows-native-keyring-store", "dep:apple-native-keyring-store"]
 # HTTP/3 (QUIC) gRPC transport. Off by default — pulls quinn/h3 via tonic-h3.
 # Without it, GrpcClientPool is TCP/HTTP2-only (today's behavior, unchanged).
-quic = ["dep:tonic-h3", "dep:quinn", "dep:rustls"]
+quic = ["dep:tonic-h3", "dep:quinn"]
 # Shared media stack (LiveKit + WebRTC) — works on every target the `livekit`
 # crate supports. Mobile bridges opt in via `--features media`; desktop pulls
 # it in transitively through `desktop-media`.

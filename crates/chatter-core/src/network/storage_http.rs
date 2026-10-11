@@ -45,8 +45,7 @@ fn build_client() -> CachedClient {
     let ca = reqwest::Certificate::from_pem(pem.as_bytes())
         .map_err(|e| format!("invalid storage TLS CA: {}", e.without_url()))?;
     reqwest::Client::builder()
-        .tls_built_in_root_certs(false)
-        .add_root_certificate(ca)
+        .tls_certs_only([ca])
         .https_only(true)
         // Presigned URLs are already final destinations. Never forward their
         // capability query or upload body to a redirect target.

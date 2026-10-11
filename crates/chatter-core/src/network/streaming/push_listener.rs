@@ -164,7 +164,7 @@ fn direct_client(transport: PushTransport) -> Result<reqwest::Client, PushError>
         PushTransport::PrivateHttps => {
             crate::network::storage_http::storage_client().map_err(|_| PushError::Trust)
         }
-        PushTransport::DevLoopback => reqwest::Client::builder()
+        PushTransport::DevLoopback => crate::network::public_http_client_builder()
             .no_proxy()
             .redirect(reqwest::redirect::Policy::none())
             .connect_timeout(Duration::from_secs(15))

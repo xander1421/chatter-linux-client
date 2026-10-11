@@ -20,8 +20,7 @@ fn storage_http_client() -> reqwest::Client {
     let pem = chatter_core::config::TLS_ROOT_CA_PEM.expect("test storage CA must be pinned");
     let ca = reqwest::Certificate::from_pem(pem.as_bytes()).expect("valid test storage CA");
     reqwest::Client::builder()
-        .tls_built_in_root_certs(false)
-        .add_root_certificate(ca)
+        .tls_certs_only([ca])
         .https_only(true)
         .redirect(reqwest::redirect::Policy::none())
         .timeout(std::time::Duration::from_secs(30))

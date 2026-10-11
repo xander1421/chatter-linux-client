@@ -127,7 +127,7 @@ struct OllamaDeleteRequest<'a> {
 impl OllamaBackend {
     /// Create a new OllamaBackend with the given base URL and timeout.
     pub fn new(base_url: &str, timeout: Duration) -> Self {
-        let client = Client::builder()
+        let client = crate::network::public_http_client_builder()
             .timeout(timeout)
             .connect_timeout(Duration::from_secs(5))
             .build()

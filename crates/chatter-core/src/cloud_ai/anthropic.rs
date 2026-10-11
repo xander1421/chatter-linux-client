@@ -102,7 +102,7 @@ struct ModelEntry {
 
 impl AnthropicBackend {
     pub fn new(api_key: impl Into<String>, timeout: Duration) -> Self {
-        let client = Client::builder()
+        let client = crate::network::public_http_client_builder()
             .timeout(timeout)
             .connect_timeout(Duration::from_secs(5))
             // Redirects are how a pinned host becomes an unpinned one.
