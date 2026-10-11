@@ -3,7 +3,7 @@
 //! Encrypts profile fields (display_name, status) with profile key per Signal spec.
 //! Uses AES-256-GCM with random nonce, padded to fixed lengths to prevent length inference.
 
-use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
+use aes_gcm::{aead::Aead, Aes256Gcm, KeyInit, Nonce};
 
 use crate::error::CryptoError;
 
@@ -66,7 +66,7 @@ pub fn encrypt_profile_item(
             .try_fill_bytes(&mut nonce_bytes)
             .expect("OS CSPRNG must not fail");
     }
-    let nonce = Nonce::from_slice(&nonce_bytes);
+    let nonce = <&Nonce<_>>::try_from(&nonce_bytes[..]).expect("fixed cryptographic input length");
 
     // Encrypt
     let cipher =
@@ -97,7 +97,7 @@ pub fn decrypt_profile_item(
         return Err(CryptoError::Validation("ciphertext too short".to_string()));
     }
 
-    let nonce = Nonce::from_slice(&encrypted[..12]);
+    let nonce = <&Nonce<_>>::try_from(&encrypted[..12]).expect("fixed cryptographic input length");
     let ciphertext = &encrypted[12..];
 
     let cipher =
@@ -205,7 +205,7 @@ pub fn encrypt_avatar(profile_key: &[u8; 32], avatar: &[u8]) -> Result<Vec<u8>, 
             .try_fill_bytes(&mut nonce_bytes)
             .expect("OS CSPRNG must not fail");
     }
-    let nonce = Nonce::from_slice(&nonce_bytes);
+    let nonce = <&Nonce<_>>::try_from(&nonce_bytes[..]).expect("fixed cryptographic input length");
 
     // Encrypt
     let cipher =
@@ -234,7 +234,7 @@ pub fn decrypt_avatar(profile_key: &[u8; 32], encrypted: &[u8]) -> Result<Vec<u8
         ));
     }
 
-    let nonce = Nonce::from_slice(&encrypted[..12]);
+    let nonce = <&Nonce<_>>::try_from(&encrypted[..12]).expect("fixed cryptographic input length");
     let ciphertext = &encrypted[12..];
 
     let cipher =

@@ -86,7 +86,7 @@ sha2_10 = { package = "sha2", version = "0.10" }
 hmac = "0.13.0"
 rayon = "1.10"
 hkdf = "0.13.0"
-aes-gcm = "0.10"
+aes-gcm = { version = "0.11.1", features = ["zeroize"] }
 aes = { version = "0.9.3", features = ["zeroize"] }
 # AES-256-CTR for Signal encrypted device names (crypto/device_name.rs).
 ctr = "0.10.1"
@@ -96,7 +96,7 @@ ctr = "0.10.1"
 # than left to feature unification.
 cbc = { version = "0.2.1", features = ["alloc", "zeroize"] }
 block-padding = "0.4.2"
-chacha20poly1305 = "0.10"
+chacha20poly1305 = { version = "0.11.0", features = ["zeroize"] }
 x25519-dalek = { version = "2", features = ["static_secrets", "zeroize"] }
 ed25519-dalek = { version = "2", features = ["rand_core", "pem"] }
 subtle = "2.5"

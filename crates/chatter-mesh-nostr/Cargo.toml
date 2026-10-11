@@ -30,7 +30,7 @@ secp256k1 = { version = "0.30", features = ["rand", "std", "global-context"] }
 # spec on every axis (see the P4 design doc §2). This is deliberate: matching
 # the spec would mean not interoperating with bitchat, which is the entire
 # point. Do not "correct" this.
-chacha20poly1305 = { version = "0.10", features = ["alloc"] }
+chacha20poly1305 = { version = "0.11.0", features = ["alloc", "zeroize"] }
 hkdf = "0.13.0"
 # Direct dependency on purpose. Derived geohash identities are HMAC-SHA256 over a
 # device seed, and reaching it through `hkdf::hmac` would silently break the day

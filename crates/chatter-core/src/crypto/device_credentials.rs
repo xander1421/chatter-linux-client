@@ -5,8 +5,8 @@
 
 use std::fmt;
 
-use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
-use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
+use aes_gcm::{aead::Aead, Aes256Gcm, KeyInit, Nonce};
+use base64::{engine::general_purpose::STANDARD as BASE64, Engine};
 use subtle::ConstantTimeEq;
 use zeroize::Zeroize;
 
@@ -225,7 +225,7 @@ pub fn derive_uak(profile_key: &[u8; 32]) -> [u8; 16] {
     let cipher = Aes256Gcm::new_from_slice(profile_key).expect("Profile key is always 32 bytes");
 
     // Use 12-byte zero nonce (Signal's standard for UAK derivation)
-    let nonce = Nonce::from_slice(&[0u8; 12]);
+    let nonce = <&Nonce<_>>::try_from(&[0u8; 12][..]).expect("fixed cryptographic input length");
 
     // Encrypt 16 zero bytes to derive UAK
     let plaintext = [0u8; 16];

@@ -54,8 +54,8 @@
 //! [`NostrError::InvalidPublicKey`] for the same reason: its validity is independent
 //! of our secret.
 
-use base64::Engine as _;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
+use base64::Engine as _;
 use chacha20poly1305::aead::Aead as _;
 use chacha20poly1305::{Key, KeyInit as _, XChaCha20Poly1305, XNonce};
 use hkdf::Hkdf;
@@ -443,10 +443,12 @@ mod tests {
         let plaintext = b"Ladies and Gentlemen of the class of '99: If I could offer you \
 only one tip for the future, sunscreen would be it.";
 
-        let cipher = XChaCha20Poly1305::new(Key::from_slice(&key));
+        let cipher = XChaCha20Poly1305::new(
+            <&Key>::try_from(&key[..]).expect("fixed cryptographic input length"),
+        );
         let sealed = cipher
             .encrypt(
-                XNonce::from_slice(&nonce),
+                <&XNonce>::try_from(&nonce[..]).expect("fixed cryptographic input length"),
                 Payload {
                     msg: &plaintext[..],
                     aad: &aad[..],

@@ -223,7 +223,10 @@ pub fn encrypt_backup_file(
     let wrap_nonce = random_bytes::<NONCE_LEN>();
     let kek_cipher = Aes256Gcm::new_from_slice(kek).map_err(|_| CryptoError::InvalidKeyFormat)?;
     let wrapped_ct = kek_cipher
-        .encrypt(Nonce::from_slice(&wrap_nonce), file_key.as_ref())
+        .encrypt(
+            <&Nonce<_>>::try_from(&wrap_nonce[..]).expect("fixed cryptographic input length"),
+            file_key.as_ref(),
+        )
         .map_err(|e| CryptoError::EncryptionFailed(format!("file-key wrap failed: {e}")))?;
     let mut wrapped_file_key = Vec::with_capacity(WRAPPED_FILE_KEY_LEN);
     wrapped_file_key.extend_from_slice(&wrap_nonce);
@@ -244,7 +247,7 @@ pub fn encrypt_backup_file(
     file_key.zeroize();
     let ciphertext = file_cipher
         .encrypt(
-            Nonce::from_slice(&payload_nonce),
+            <&Nonce<_>>::try_from(&payload_nonce[..]).expect("fixed cryptographic input length"),
             Payload {
                 msg: payload,
                 aad: &header_bytes,
@@ -317,7 +320,10 @@ pub fn decrypt_backup_file(
     let (wrap_nonce, wrapped_ct) = parsed.header.wrapped_file_key.split_at(NONCE_LEN);
     let kek_cipher = Aes256Gcm::new_from_slice(kek).map_err(|_| CryptoError::InvalidKeyFormat)?;
     let mut file_key_vec = kek_cipher
-        .decrypt(Nonce::from_slice(wrap_nonce), wrapped_ct)
+        .decrypt(
+            <&Nonce<_>>::try_from(&wrap_nonce[..]).expect("fixed cryptographic input length"),
+            wrapped_ct,
+        )
         .map_err(|_| {
             CryptoError::DecryptionFailed("file-key unwrap failed (wrong passphrase/PIN?)".into())
         })?;
@@ -333,7 +339,8 @@ pub fn decrypt_backup_file(
     file_key_vec.zeroize();
     file_cipher
         .decrypt(
-            Nonce::from_slice(&parsed.header.payload_nonce),
+            <&Nonce<_>>::try_from(&parsed.header.payload_nonce[..])
+                .expect("fixed cryptographic input length"),
             Payload {
                 msg: parsed.ciphertext,
                 aad: parsed.header_bytes,
@@ -446,11 +453,9 @@ mod tests {
         // Header tamper (flip a byte in the header) breaks the AAD bind.
         let mut tampered = file.clone();
         tampered[MAGIC.len() + 4] ^= 0x01;
-        assert!(
-            parse_backup_file(&tampered)
-                .and_then(|p| decrypt_backup_file(&p, &kek))
-                .is_err()
-        );
+        assert!(parse_backup_file(&tampered)
+            .and_then(|p| decrypt_backup_file(&p, &kek))
+            .is_err());
     }
 
     /// Passphrase KEK: deterministic for same (passphrase, salt), distinct

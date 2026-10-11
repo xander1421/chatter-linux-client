@@ -4,8 +4,8 @@
 //! derived from X25519 key exchange.
 
 use chacha20poly1305::{
-    XChaCha20Poly1305, XNonce,
     aead::{Aead, KeyInit},
+    XChaCha20Poly1305, XNonce,
 };
 
 use crate::error::CryptoError;
@@ -42,7 +42,7 @@ pub fn encrypt_dm_message(
             .try_fill_bytes(&mut nonce_bytes)
             .expect("OS CSPRNG must not fail");
     }
-    let nonce = XNonce::from_slice(&nonce_bytes);
+    let nonce = <&XNonce>::try_from(&nonce_bytes[..]).expect("fixed cryptographic input length");
 
     // Encrypt
     let ciphertext = cipher
@@ -86,7 +86,7 @@ pub fn encrypt_dm_bytes(
             .try_fill_bytes(&mut nonce_bytes)
             .expect("OS CSPRNG must not fail");
     }
-    let nonce = XNonce::from_slice(&nonce_bytes);
+    let nonce = <&XNonce>::try_from(&nonce_bytes[..]).expect("fixed cryptographic input length");
 
     // Encrypt
     let ciphertext = cipher
@@ -125,7 +125,8 @@ pub fn decrypt_dm_bytes(
     }
 
     // Extract nonce and ciphertext
-    let nonce = XNonce::from_slice(&encrypted[..NONCE_SIZE]);
+    let nonce = <&XNonce>::try_from(&encrypted[..NONCE_SIZE][..])
+        .expect("fixed cryptographic input length");
     let ciphertext = &encrypted[NONCE_SIZE..];
 
     // Create cipher and decrypt
@@ -161,7 +162,8 @@ pub fn decrypt_dm_message(
     }
 
     // Extract nonce and ciphertext
-    let nonce = XNonce::from_slice(&encrypted[..NONCE_SIZE]);
+    let nonce = <&XNonce>::try_from(&encrypted[..NONCE_SIZE][..])
+        .expect("fixed cryptographic input length");
     let ciphertext = &encrypted[NONCE_SIZE..];
 
     // Create cipher and decrypt

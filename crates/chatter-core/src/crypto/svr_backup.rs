@@ -15,7 +15,7 @@
 //! Wire format for encrypted backup:
 //!   nonce(12) || ciphertext || tag(16)
 
-use aes_gcm::{Aes256Gcm, KeyInit, Nonce, aead::Aead};
+use aes_gcm::{aead::Aead, Aes256Gcm, KeyInit, Nonce};
 use zeroize::Zeroize;
 
 use crate::crypto::svr::svr_subkey;
@@ -224,7 +224,7 @@ pub fn encrypt_backup(
             .try_fill_bytes(&mut nonce_bytes)
             .expect("OS CSPRNG must not fail");
     }
-    let nonce = Nonce::from_slice(&nonce_bytes);
+    let nonce = <&Nonce<_>>::try_from(&nonce_bytes[..]).expect("fixed cryptographic input length");
 
     // Serialize then encrypt
     let mut plaintext = payload.serialize()?;
@@ -258,7 +258,7 @@ pub fn decrypt_backup(
     }
 
     let (nonce_bytes, ciphertext) = encrypted.split_at(NONCE_SIZE);
-    let nonce = Nonce::from_slice(nonce_bytes);
+    let nonce = <&Nonce<_>>::try_from(&nonce_bytes[..]).expect("fixed cryptographic input length");
 
     let mut aes_key = svr_subkey(svr_secret, SVR_INFO_BACKUP_AES);
     let cipher = Aes256Gcm::new_from_slice(&aes_key).map_err(|_| CryptoError::InvalidKeyFormat)?;
