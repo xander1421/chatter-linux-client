@@ -2956,6 +2956,8 @@ pub mod integration_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        /** Webhook operations
+*/
         pub async fn register_webhook(
             &mut self,
             request: impl tonic::IntoRequest<super::RegisterWebhookRequest>,
@@ -2982,6 +2984,7 @@ pub mod integration_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        ///
         pub async fn unregister_webhook(
             &mut self,
             request: impl tonic::IntoRequest<super::UnregisterWebhookRequest>,
@@ -3008,6 +3011,7 @@ pub mod integration_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        ///
         pub async fn handle_webhook_callback(
             &mut self,
             request: impl tonic::IntoRequest<super::HandleWebhookCallbackRequest>,
@@ -3037,6 +3041,8 @@ pub mod integration_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        /** Channel association operations
+*/
         pub async fn add_integration_to_channel(
             &mut self,
             request: impl tonic::IntoRequest<super::AddIntegrationToChannelRequest>,
@@ -3066,6 +3072,7 @@ pub mod integration_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        ///
         pub async fn remove_integration_from_channel(
             &mut self,
             request: impl tonic::IntoRequest<super::RemoveIntegrationFromChannelRequest>,
@@ -3095,6 +3102,7 @@ pub mod integration_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        ///
         pub async fn get_channel_integrations(
             &mut self,
             request: impl tonic::IntoRequest<super::GetChannelIntegrationsRequest>,
@@ -3124,6 +3132,8 @@ pub mod integration_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        /** Event streaming
+*/
         pub async fn stream_integration_events(
             &mut self,
             request: impl tonic::IntoRequest<super::StreamIntegrationEventsRequest>,
@@ -4780,6 +4790,7 @@ pub mod user_service_client {
                 .insert(GrpcMethod::new("chat.v1.UserService", "GetUserProfile"));
             self.inner.unary(req, path, codec).await
         }
+        ///
         pub async fn update_user_profile(
             &mut self,
             request: impl tonic::IntoRequest<super::UpdateUserProfileRequest>,
@@ -4804,6 +4815,11 @@ pub mod user_service_client {
                 .insert(GrpcMethod::new("chat.v1.UserService", "UpdateUserProfile"));
             self.inner.server_streaming(req, path, codec).await
         }
+        /** Signal-style exact lookup by the client-computed libsignal username hash.
+ Substring / display-name search is intentionally absent: display names
+ are profile-key-encrypted on the server, so the old ILIKE-based
+ SearchUsers could never produce meaningful matches anyway.
+*/
         pub async fn lookup_username(
             &mut self,
             request: impl tonic::IntoRequest<super::LookupUsernameRequest>,
@@ -4828,6 +4844,9 @@ pub mod user_service_client {
                 .insert(GrpcMethod::new("chat.v1.UserService", "LookupUsername"));
             self.inner.unary(req, path, codec).await
         }
+        /** Username discoverability ("Who can find me by my username"). Both act on
+ the authenticated caller only.
+*/
         pub async fn get_username_discoverability(
             &mut self,
             request: impl tonic::IntoRequest<super::GetUsernameDiscoverabilityRequest>,
@@ -4854,6 +4873,7 @@ pub mod user_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        ///
         pub async fn set_username_discoverability(
             &mut self,
             request: impl tonic::IntoRequest<super::SetUsernameDiscoverabilityRequest>,
@@ -4880,6 +4900,11 @@ pub mod user_service_client {
                 );
             self.inner.unary(req, path, codec).await
         }
+        /** Username links (see the Username Links section above). All authenticated.
+ SetUsernameLink upserts the caller's single active link (rotation);
+ GetUsernameLink resolves anyone's link id to its ciphertext blob;
+ DeleteUsernameLink removes the caller's link.
+*/
         pub async fn set_username_link(
             &mut self,
             request: impl tonic::IntoRequest<super::SetUsernameLinkRequest>,
@@ -4904,6 +4929,7 @@ pub mod user_service_client {
                 .insert(GrpcMethod::new("chat.v1.UserService", "SetUsernameLink"));
             self.inner.unary(req, path, codec).await
         }
+        ///
         pub async fn get_username_link(
             &mut self,
             request: impl tonic::IntoRequest<super::GetUsernameLinkRequest>,
@@ -4928,6 +4954,7 @@ pub mod user_service_client {
                 .insert(GrpcMethod::new("chat.v1.UserService", "GetUsernameLink"));
             self.inner.unary(req, path, codec).await
         }
+        ///
         pub async fn delete_username_link(
             &mut self,
             request: impl tonic::IntoRequest<super::DeleteUsernameLinkRequest>,
@@ -4949,6 +4976,10 @@ pub mod user_service_client {
                 .insert(GrpcMethod::new("chat.v1.UserService", "DeleteUsernameLink"));
             self.inner.unary(req, path, codec).await
         }
+        /** User Presence. Delivery to friends rides on StreamUserEvents
+ (EventTypeUserPresenceUpdated), friend-scoped — there is no global
+ presence stream by design (privacy).
+*/
         pub async fn update_presence(
             &mut self,
             request: impl tonic::IntoRequest<super::UpdatePresenceRequest>,
@@ -4970,6 +5001,8 @@ pub mod user_service_client {
                 .insert(GrpcMethod::new("chat.v1.UserService", "UpdatePresence"));
             self.inner.unary(req, path, codec).await
         }
+        /** Friendship Management
+*/
         pub async fn send_friend_request(
             &mut self,
             request: impl tonic::IntoRequest<super::FriendRequest>,
@@ -4994,6 +5027,7 @@ pub mod user_service_client {
                 .insert(GrpcMethod::new("chat.v1.UserService", "SendFriendRequest"));
             self.inner.server_streaming(req, path, codec).await
         }
+        ///
         pub async fn respond_friend_request(
             &mut self,
             request: impl tonic::IntoRequest<super::FriendResponse>,
@@ -5018,6 +5052,7 @@ pub mod user_service_client {
                 .insert(GrpcMethod::new("chat.v1.UserService", "RespondFriendRequest"));
             self.inner.server_streaming(req, path, codec).await
         }
+        ///
         pub async fn remove_friend(
             &mut self,
             request: impl tonic::IntoRequest<super::RemoveFriendRequest>,
@@ -5039,6 +5074,7 @@ pub mod user_service_client {
                 .insert(GrpcMethod::new("chat.v1.UserService", "RemoveFriend"));
             self.inner.unary(req, path, codec).await
         }
+        ///
         pub async fn list_friends(
             &mut self,
             request: impl tonic::IntoRequest<super::ListFriendsRequest>,
@@ -5063,6 +5099,7 @@ pub mod user_service_client {
                 .insert(GrpcMethod::new("chat.v1.UserService", "ListFriends"));
             self.inner.unary(req, path, codec).await
         }
+        ///
         pub async fn list_friend_requests(
             &mut self,
             request: impl tonic::IntoRequest<super::ListFriendRequestsRequest>,
@@ -5087,6 +5124,8 @@ pub mod user_service_client {
                 .insert(GrpcMethod::new("chat.v1.UserService", "ListFriendRequests"));
             self.inner.unary(req, path, codec).await
         }
+        /** Blocking
+*/
         pub async fn block_user(
             &mut self,
             request: impl tonic::IntoRequest<super::BlockUserRequest>,
@@ -5111,6 +5150,7 @@ pub mod user_service_client {
                 .insert(GrpcMethod::new("chat.v1.UserService", "BlockUser"));
             self.inner.server_streaming(req, path, codec).await
         }
+        ///
         pub async fn unblock_user(
             &mut self,
             request: impl tonic::IntoRequest<super::UnblockUserRequest>,
@@ -5135,6 +5175,7 @@ pub mod user_service_client {
                 .insert(GrpcMethod::new("chat.v1.UserService", "UnblockUser"));
             self.inner.server_streaming(req, path, codec).await
         }
+        ///
         pub async fn list_blocked_users(
             &mut self,
             request: impl tonic::IntoRequest<super::ListBlockedUsersRequest>,
@@ -5159,6 +5200,8 @@ pub mod user_service_client {
                 .insert(GrpcMethod::new("chat.v1.UserService", "ListBlockedUsers"));
             self.inner.unary(req, path, codec).await
         }
+        /** Event streaming
+*/
         pub async fn stream_user_events(
             &mut self,
             request: impl tonic::IntoRequest<super::UserEventRequest>,

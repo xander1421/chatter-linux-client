@@ -38,7 +38,9 @@ async fn test_get_nonexistent_user_profile() {
 
     let mut user_client = UserClient::new(pool.channel(), pool.auth_clone());
 
-    let result = user_client.get_user_profile("nonexistent-user-id").await;
+    // A well-formed id nobody has; a malformed one is refused by validation.
+    let missing = uuid::Uuid::new_v4().to_string();
+    let result = user_client.get_user_profile(&missing).await;
     assert_not_found(result);
 }
 
