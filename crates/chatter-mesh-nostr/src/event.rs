@@ -85,8 +85,8 @@ pub fn event_id_hex(event: &NostrEvent) -> Result<String, NostrError> {
 /// values and both verify. Never assert on signature bytes.
 pub fn sign_event(event: NostrEvent, secret_key: &[u8; 32]) -> Result<NostrEvent, NostrError> {
     let secret =
-        SecretKey::from_byte_array(secret_key).map_err(|_| NostrError::InvalidPrivateKey)?;
-    let keypair = Keypair::from_secret_key(SECP256K1, &secret);
+        SecretKey::from_byte_array(*secret_key).map_err(|_| NostrError::InvalidPrivateKey)?;
+    let keypair = Keypair::from_secret_key(&secret);
     let (xonly, _parity) = keypair.x_only_public_key();
     let pubkey_hex = hex::encode(xonly.serialize());
 
@@ -132,7 +132,7 @@ pub fn verify_event(event: &NostrEvent) -> bool {
     let Ok(pubkey_bytes) = <[u8; 32]>::try_from(pubkey_bytes.as_slice()) else {
         return false;
     };
-    let Ok(xonly) = XOnlyPublicKey::from_byte_array(&pubkey_bytes) else {
+    let Ok(xonly) = XOnlyPublicKey::from_byte_array(pubkey_bytes) else {
         return false;
     };
     let Ok(id) = event_id(event) else {
@@ -240,8 +240,8 @@ pub fn from_value(value: &Value) -> Result<NostrEvent, NostrError> {
 /// `pubkey` is never the 33-byte compressed form.
 pub fn public_key_hex(secret_key: &[u8; 32]) -> Result<String, NostrError> {
     let secret =
-        SecretKey::from_byte_array(secret_key).map_err(|_| NostrError::InvalidPrivateKey)?;
-    let keypair = Keypair::from_secret_key(SECP256K1, &secret);
+        SecretKey::from_byte_array(*secret_key).map_err(|_| NostrError::InvalidPrivateKey)?;
+    let keypair = Keypair::from_secret_key(&secret);
     let (xonly, _parity) = keypair.x_only_public_key();
     Ok(hex::encode(xonly.serialize()))
 }

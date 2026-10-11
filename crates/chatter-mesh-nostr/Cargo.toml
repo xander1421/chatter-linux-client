@@ -23,7 +23,7 @@ chatter-mesh = { path = "../chatter-mesh" }
 
 # secp256k1 Schnorr (BIP-340) for event signing, and ECDH for the DM key
 # agreement. bitchat uses P256K, which is the same libsecp256k1 underneath.
-secp256k1 = { version = "0.30", features = ["rand", "std", "global-context"] }
+secp256k1 = { version = "0.33.1", features = ["rand", "std", "global-context"] }
 
 # NOTE: XChaCha20-Poly1305, NOT the ChaCha20+HMAC construction the published
 # NIP-44 v2 specification defines. bitchat's DM encryption diverges from that
@@ -40,7 +40,7 @@ sha2 = "0.11.0"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 base64 = "0.23.1"
-bech32 = "0.11"
+bech32 = "0.12.0"
 hex = "0.4"
 thiserror = "2"
 rand_core = "0.10.1"

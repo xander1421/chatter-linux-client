@@ -168,7 +168,7 @@ pub fn decrypt(
             // peers — the common case — succeed on the first attempt.
             for prefix in [0x02u8, 0x03u8] {
                 compressed[0] = prefix;
-                let Ok(peer) = PublicKey::from_byte_array_compressed(&compressed) else {
+                let Ok(peer) = PublicKey::from_byte_array_compressed(compressed) else {
                     continue;
                 };
                 parsed_any = true;
@@ -235,7 +235,7 @@ pub fn encrypt_with_nonce(
 // ---------------------------------------------------------------------------
 
 fn parse_secret(secret_key: &[u8; 32]) -> Result<SecretKey, NostrError> {
-    SecretKey::from_byte_array(secret_key).map_err(|_| NostrError::InvalidPrivateKey)
+    SecretKey::from_byte_array(*secret_key).map_err(|_| NostrError::InvalidPrivateKey)
 }
 
 /// Mirrors `deriveSharedSecret`'s public-key handling: x-only keys get a `0x02`
@@ -247,14 +247,21 @@ fn parse_peer_pubkey(public_key_hex: &str) -> Result<PublicKey, NostrError> {
             let mut compressed = [0u8; SHARED_SECRET_LEN];
             compressed[0] = 0x02;
             compressed[1..].copy_from_slice(&bytes);
-            if let Ok(key) = PublicKey::from_byte_array_compressed(&compressed) {
+            if let Ok(key) = PublicKey::from_byte_array_compressed(compressed) {
                 return Ok(key);
             }
             compressed[0] = 0x03;
-            PublicKey::from_byte_array_compressed(&compressed)
+            PublicKey::from_byte_array_compressed(compressed)
                 .map_err(|_| NostrError::InvalidPublicKey)
         }
-        33 | 65 => PublicKey::from_slice(&bytes).map_err(|_| NostrError::InvalidPublicKey),
+        33 => PublicKey::from_byte_array_compressed(
+            bytes.try_into().map_err(|_| NostrError::InvalidPublicKey)?,
+        )
+        .map_err(|_| NostrError::InvalidPublicKey),
+        65 => PublicKey::from_byte_array_uncompressed(
+            bytes.try_into().map_err(|_| NostrError::InvalidPublicKey)?,
+        )
+        .map_err(|_| NostrError::InvalidPublicKey),
         _ => Err(NostrError::InvalidPublicKey),
     }
 }
