@@ -433,6 +433,29 @@ pub(crate) fn test_credential_store() -> std::sync::Arc<keyring::CredentialStore
 
 #[cfg(test)]
 mod tests {
+    /// A desktop dependency must not switch shared blocking zbus to Tokio:
+    /// keyring/notification calls from async app code would nest runtimes.
+    #[cfg(target_os = "linux")]
+    #[tokio::test]
+    async fn blocking_dbus_inside_async_runtime_reports_connection_error() {
+        // A unique absent socket avoids the user's bus, keyring and prompts.
+        let directory = tempfile::tempdir().unwrap();
+        let address = format!("unix:path={}/absent-bus", directory.path().display());
+        let connection = std::panic::catch_unwind(|| {
+            zbus::blocking::connection::Builder::address(address.as_str())
+                .unwrap()
+                .build()
+        });
+        assert!(
+            connection.is_ok(),
+            "blocking D-Bus must not nest Tokio runtimes"
+        );
+        assert!(
+            connection.unwrap().is_err(),
+            "absent socket must fail closed"
+        );
+    }
+
     use super::*;
 
     // Note: These tests require a running Secret Service (GNOME Keyring/KWallet).

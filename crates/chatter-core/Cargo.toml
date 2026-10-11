@@ -259,7 +259,9 @@ zbus-secret-service-keyring-store = { version = "1.0.1", features = ["rt-async-i
 zbus = { version = "5", default-features = false, features = ["async-io"] }
 # BlueZ radio for the mesh (Linux only, by construction).
 chatter-mesh-ble = { path = "../chatter-mesh-ble", optional = true }
-ksni = { version = "0.3.6", features = ["blocking"] }
+# Preserve the shared zbus blocking backend inside Chatter's Tokio tasks.
+# KSNI's default Tokio feature makes keyring/notification calls nest runtimes.
+ksni = { version = "0.3.6", default-features = false, features = ["async-io", "blocking"] }
 v4l = "0.14"
 
 # ============================================================================
