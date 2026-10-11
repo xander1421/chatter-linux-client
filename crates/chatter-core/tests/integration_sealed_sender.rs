@@ -8,12 +8,12 @@
 
 use crate::{common, skip_if_no_server};
 
-use chatter_core::mailbox::blind_signature::{ServerPublicKey, blind_key, unblind};
+use chatter_core::mailbox::blind_signature::{blind_key, unblind, ServerPublicKey};
 use chatter_core::network::grpc::{AuthClient, MailboxClient, MessageClient};
 use chatter_core::proto::mailbox_v1::EnvelopeType;
 use chatter_core::proto::{
-    GetPreKeyBundleResponse, SealedDelivery, SealedDeviceMessage, SealedSenderMessage,
-    signal_pre_key_bundle::PreKeyRecord,
+    signal_pre_key_bundle::PreKeyRecord, GetPreKeyBundleResponse, SealedDelivery,
+    SealedDeviceMessage, SealedSenderMessage,
 };
 use common::*;
 use ed25519_dalek::{Signer, SigningKey};
@@ -414,7 +414,7 @@ async fn test_blind_signature_flow() {
     let unblinded_sig = assert_ok(unblind(
         &server_pk,
         &response.blinded_signatures[0],
-        &blinding_op.secret,
+        &blinding_op,
         &public_key_bytes,
     ));
 
@@ -508,17 +508,13 @@ async fn test_create_ephemeral_mailbox_with_real_signature() {
     let signature = assert_ok(unblind(
         &server_pk,
         &tokens_response.blinded_signatures[0],
-        &blinding_op.secret,
+        &blinding_op,
         &public_key_bytes,
     ));
 
     // Step 5: Create ephemeral mailbox with real signature
     let create_result = mailbox_client
-        .create_ephemeral_mailbox(
-            public_key_bytes.clone(),
-            signature,
-            86400,
-        )
+        .create_ephemeral_mailbox(public_key_bytes.clone(), signature, 86400)
         .await;
 
     assert!(
@@ -574,18 +570,14 @@ async fn test_ephemeral_mailbox_poll_with_real_signature() {
     let signature = assert_ok(unblind(
         &server_pk,
         &tokens_response.blinded_signatures[0],
-        &blinding_op.secret,
+        &blinding_op,
         &public_key_bytes,
     ));
 
     // Create mailbox
     let create_response = assert_ok(
         mailbox_client
-            .create_ephemeral_mailbox(
-                public_key_bytes.clone(),
-                signature,
-                86400,
-            )
+            .create_ephemeral_mailbox(public_key_bytes.clone(), signature, 86400)
             .await,
     );
     assert!(
@@ -657,17 +649,13 @@ async fn test_send_to_ephemeral_mailbox() {
     let signature = assert_ok(unblind(
         &server_pk,
         &tokens_response.blinded_signatures[0],
-        &blinding_op.secret,
+        &blinding_op,
         &public_key_bytes,
     ));
 
     let create_response = assert_ok(
         mailbox_client
-            .create_ephemeral_mailbox(
-                public_key_bytes.clone(),
-                signature,
-                86400,
-            )
+            .create_ephemeral_mailbox(public_key_bytes.clone(), signature, 86400)
             .await,
     );
     assert!(

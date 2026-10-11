@@ -22,12 +22,10 @@ use rusqlite::OptionalExtension;
 use uuid::Uuid;
 
 use crate::error::MailboxError;
-use crate::mailbox::blind_signature::{
-    BlindingSecret, ServerPublicKey, blind_key, unblind,
-};
+use crate::mailbox::blind_signature::{blind_key, unblind, BlindingSecret, ServerPublicKey};
 use crate::network::grpc::{AnonymousKtClient, MailboxClient};
-use crate::storage::Database;
 use crate::storage::repositories::SettingsRepository;
+use crate::storage::Database;
 
 /// Default number of mailbox tokens to request at once.
 pub const DEFAULT_TOKEN_REQUEST_COUNT: u32 = 5;
@@ -319,12 +317,7 @@ impl TokenManager {
         for (i, blinded_sig) in response.blinded_signatures.iter().enumerate() {
             if let Some((id, pub_key, priv_key, op)) = pending_ops.get(i) {
                 // Unblind the signature
-                match unblind(
-                    &server_key,
-                    blinded_sig,
-                    &op.secret,
-                    pub_key,
-                ) {
+                match unblind(&server_key, blinded_sig, op, pub_key) {
                     Ok(signature) => {
                         // Store ready token
                         if self

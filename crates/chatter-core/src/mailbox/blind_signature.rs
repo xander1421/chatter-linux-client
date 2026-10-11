@@ -12,10 +12,13 @@
 //! 5. Result: signature on original key that server cannot link to blinding request
 
 use crate::proto::mailbox_v1::GetBlindSignaturePublicKeyResponse;
-use blind_rsa_signatures::{BlindSignature, BlindingResult, Options, PublicKey, Secret};
+use blind_rsa_signatures::{
+    BlindSignature, BlindingResult, DefaultRng, PublicKeySha384PSSZeroDeterministic as PublicKey,
+    Secret,
+};
 use ed25519_dalek::{Signature, VerifyingKey};
-use rsa::PublicKeyParts;
 use rsa::pkcs8::DecodePublicKey;
+use rsa::traits::PublicKeyParts;
 
 use std::future::Future;
 
@@ -62,9 +65,10 @@ impl ServerPublicKey {
                 "expected RSA-2048 with exponent 65537".into(),
             ));
         }
-        // Convert to blind-rsa-signatures PublicKey
-        // PublicKey::new in 0.14 returns the key directly (not Result)
-        let inner = PublicKey::new(rsa_key);
+        // Bind the protocol to SHA-384, zero salt, and no message randomizer,
+        // matching the server verifier. Keep strict SPKI parameter validation above.
+        let inner = PublicKey::from_der(der_bytes)
+            .map_err(|e| MailboxError::InvalidServerKey(format!("invalid blind RSA key: {e}")))?;
 
         Ok(Self {
             inner,
@@ -330,23 +334,18 @@ pub fn blind_key(
             "blind-signature key expired".into(),
         ));
     }
-    // Use deterministic options (no randomizer) for server-side verification compatibility
-    // The server can verify without needing to know the randomizer
-    // using salt_len=48 (standard for SHA-384-PSS)
-    let options = Options::new(blind_rsa_signatures::Hash::Sha384, true, 48);
-
-    // Perform blinding - the API takes (msg, include_randomizer, options).
-    // Deterministic mode (false): no message randomizer exists, so none is
-    // kept, sent or stored.
+    // RSABSSA-SHA384-PSSZERO-Deterministic: no salt or message randomizer.
     let BlindingResult {
-        blind_msg, secret, ..
+        blind_message,
+        secret,
+        ..
     } = server_pk
         .inner()
-        .blind(ephemeral_pk, false, &options)
+        .blind(&mut DefaultRng, ephemeral_pk)
         .map_err(|e| MailboxError::BlindSignature(format!("blinding failed: {}", e)))?;
 
     Ok(BlindingOperation {
-        blinded_message: blind_msg.as_slice().to_vec(),
+        blinded_message: blind_message.as_slice().to_vec(),
         secret: BlindingSecret::from_inner(&secret),
     })
 }
@@ -357,7 +356,7 @@ pub fn blind_key(
 ///
 /// * `server_pk` - The server's RSA public key (must be same as used for blinding)
 /// * `blinded_sig` - The blind signature from the server
-/// * `secret` - The blinding secret from the original blinding operation
+/// * `operation` - The complete original blinding operation
 /// * `original_message` - The original message (Ed25519 public key) that was blinded
 ///
 /// # Returns
@@ -370,7 +369,7 @@ pub fn blind_key(
 pub fn unblind(
     server_pk: &ServerPublicKey,
     blinded_sig: &[u8],
-    secret: &BlindingSecret,
+    operation: &BlindingOperation,
     original_message: &[u8],
 ) -> Result<Vec<u8>, MailboxError> {
     if !server_pk.is_valid() {
@@ -378,24 +377,15 @@ pub fn unblind(
             "blind-signature key expired".into(),
         ));
     }
-    // Use deterministic options matching blind_key
-    let options = Options::new(blind_rsa_signatures::Hash::Sha384, true, 48);
-
-    // Parse blinded signature
     let blind_sig = BlindSignature::from(blinded_sig.to_vec());
-
-    let blinding_secret = secret.to_inner();
-
-    // Finalize (unblind) the signature
+    let result = BlindingResult {
+        blind_message: operation.blinded_message.clone().into(),
+        secret: operation.secret.to_inner(),
+        msg_randomizer: None,
+    };
     let signature = server_pk
         .inner()
-        .finalize(
-            &blind_sig,
-            &blinding_secret,
-            None,
-            original_message,
-            &options,
-        )
+        .finalize(&blind_sig, &result, original_message)
         .map_err(|e| MailboxError::BlindSignature(format!("unblinding failed: {}", e)))?;
 
     Ok(signature.as_slice().to_vec())
@@ -414,23 +404,12 @@ pub fn unblind(
 /// # Returns
 ///
 /// `true` if the signature is valid, `false` otherwise.
-pub fn verify(
-    server_pk: &ServerPublicKey,
-    message: &[u8],
-    signature: &[u8],
-) -> bool {
+pub fn verify(server_pk: &ServerPublicKey, message: &[u8], signature: &[u8]) -> bool {
     if !server_pk.is_valid() {
         return false;
     }
-    // Use deterministic options (no randomizer) for server-side verification compatibility
-    // The server can verify without needing to know the randomizer
-    // using salt_len=48 (standard for SHA-384-PSS)
-    let options = Options::new(blind_rsa_signatures::Hash::Sha384, true, 48);
     let sig = blind_rsa_signatures::Signature::from(signature.to_vec());
-    server_pk
-        .inner()
-        .verify(&sig, None, message, &options)
-        .is_ok()
+    server_pk.inner().verify(&sig, None, message).is_ok()
 }
 
 #[cfg(test)]
@@ -444,20 +423,26 @@ pub(crate) mod tests {
         let signer = ed25519_dalek::SigningKey::from_bytes(&[42; 32]);
         let pin = signer.verifying_key().to_bytes();
         let mut m = GetBlindSignaturePublicKeyResponse {
-            public_key: blind_rsa_signatures::KeyPair::generate(2048)
-                .unwrap()
-                .pk
-                .to_der()
-                .unwrap(),
+            public_key: blind_rsa_signatures::KeyPairSha384PSSZeroDeterministic::generate(
+                &mut DefaultRng,
+                2048,
+            )
+            .unwrap()
+            .pk
+            .to_der()
+            .unwrap(),
             key_id: "current".into(),
             valid_from: 100,
             valid_until: 300,
             next_key: Some(BlindSignatureNextKey {
-                public_key: blind_rsa_signatures::KeyPair::generate(2048)
-                    .unwrap()
-                    .pk
-                    .to_der()
-                    .unwrap(),
+                public_key: blind_rsa_signatures::KeyPairSha384PSSZeroDeterministic::generate(
+                    &mut DefaultRng,
+                    2048,
+                )
+                .unwrap()
+                .pk
+                .to_der()
+                .unwrap(),
                 key_id: "next".into(),
                 valid_from: 200,
                 valid_until: 400,
@@ -598,20 +583,18 @@ pub(crate) mod tests {
         // A valid proof for a different label (a user's, or another key's) does
         // not cover this manifest.
         assert_ne!(manifest_label(&m.key_id), "vector-current");
-        assert!(
-            crate::crypto::verify_kt_proof(
-                "vector-current",
-                &m.kt_proof
-                    .as_ref()
-                    .unwrap()
-                    .inclusion_proof
-                    .as_ref()
-                    .unwrap()
-                    .value,
-                m.kt_proof.as_ref().unwrap(),
-            )
-            .is_err()
-        );
+        assert!(crate::crypto::verify_kt_proof(
+            "vector-current",
+            &m.kt_proof
+                .as_ref()
+                .unwrap()
+                .inclusion_proof
+                .as_ref()
+                .unwrap()
+                .value,
+            m.kt_proof.as_ref().unwrap(),
+        )
+        .is_err());
     }
 
     /// The manifest is fetched only once the pin lock is held, so its head
@@ -688,7 +671,6 @@ pub(crate) mod tests {
         assert_eq!(secret.as_bytes(), &fake_bytes);
     }
 
-
     #[test]
     fn test_server_public_key_validity() {
         // Test expired key (all timestamps in nanoseconds per proto spec)
@@ -745,13 +727,13 @@ pub(crate) mod tests {
     ///    blinded outputs? (They must not, since blinding uses fresh randomness.)
     #[test]
     fn test_blind_signature_no_correlation() {
-        use blind_rsa_signatures::KeyPair;
+        use blind_rsa_signatures::KeyPairSha384PSSZeroDeterministic as KeyPair;
         use rand::Rng;
 
         const N: usize = 1_000;
 
         // Generate server keypair (the "malicious server" has the secret key)
-        let kp = KeyPair::generate(2048).expect("RSA keygen");
+        let kp = KeyPair::generate(&mut DefaultRng, 2048).expect("RSA keygen");
         let server_pk = ServerPublicKey {
             inner: kp.pk,
             key_id: "test-key".to_string(),
