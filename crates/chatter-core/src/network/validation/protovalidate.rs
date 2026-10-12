@@ -1227,8 +1227,42 @@ mod tests {
         webhook.set_field_by_name("timeout_seconds", Value::U32(1));
         assert!(rules.check_message(&webhook, &mut Vec::new()).is_ok());
     }
-    /// Every rule content.proto declares compiles into a check. A rule kind the
-    /// evaluator does not understand would otherwise go silently unenforced.
+    #[test]
+    fn invite_response_optional_request_id() {
+        use crate::proto::chat_v1::{ChannelEvent, ChannelInviteResponse, channel_event};
+        let path = "/chat.v1.ChannelService/RespondToInvite";
+        for (request_id, valid) in [
+            ("", true),
+            ("12345678-1234-1234-1234-123456789abc", true),
+            ("not-a-uuid", false),
+        ] {
+            let event = ChannelEvent {
+                channel_id: "12345678-1234-1234-1234-123456789abc".into(),
+                timestamp: 1,
+                event: Some(channel_event::Event::InvitationResponse(
+                    ChannelInviteResponse {
+                        accepted: true,
+                        request_id: request_id.into(),
+                        ..Default::default()
+                    },
+                )),
+                ..Default::default()
+            };
+            let result = validate_rpc_response(path, &event.encode_to_vec());
+            assert_eq!(result.is_ok(), valid, "{result:?}");
+            if !valid {
+                assert!(matches!(
+                    result,
+                    Err(ContentValidationError::Violation {
+                        rule: "string.uuid",
+                        ..
+                    })
+                ));
+            }
+        }
+    }
+
+    /// Every response rule must compile; unsupported declarations fail closed.
     #[test]
     fn every_rpc_response_rule_is_supported() {
         if let Err(e) = compile_rpc() {
