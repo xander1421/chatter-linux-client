@@ -107,13 +107,10 @@ impl UnifiedConversationRepository {
         "#;
 
         let mut stmt = conn.prepare(sql)?;
-        let rows = stmt.query_map([], row_to_unified)?;
-
-        let mut results = Vec::new();
-        for row in rows {
-            results.push(row?);
-        }
-        Ok(results)
+        let mut rows = stmt.query([])?;
+        super::repo_utils::collect_decoded_rows(&mut rows, "conversation", |row| {
+            row_to_unified(row).map_err(StorageError::Database)
+        })
     }
 
     /// Get a single conversation by ID and type.
@@ -347,6 +344,24 @@ mod tests {
             )
             .unwrap();
         (UnifiedConversationRepository::new(Arc::new(db)), dir)
+    }
+
+    #[test]
+    fn corrupt_conversation_row_does_not_hide_chat_list() {
+        let dir = tempdir().unwrap();
+        let db = Arc::new(Database::open(&dir.path().join("list.db"), "fixture").unwrap());
+        db.run_migrations().unwrap();
+        let conn = db.connection().unwrap();
+        conn.execute_batch("INSERT INTO channels (id,channel_type,name,owner_id,created_at,updated_at) VALUES ('good',0,'Good','owner','2026-01-01','2026-01-01'), ('bad',0,X'FF','owner','2026-01-01','2026-01-01')").unwrap();
+        drop(conn);
+        let repo = UnifiedConversationRepository::new(db);
+        let list = repo.list_all().unwrap();
+        assert_eq!(list.len(), 1);
+        assert_eq!(list[0].id, "good");
+        assert!(
+            repo.get_conversation("bad", &ConversationType::Channel)
+                .is_err()
+        );
     }
 
     #[test]

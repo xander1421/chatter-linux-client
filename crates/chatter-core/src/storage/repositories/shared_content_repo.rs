@@ -315,7 +315,13 @@ fn load_metadata(
     };
     // A corrupt blob is not worth failing a message insert over — the item
     // just stays out of the drawer.
-    Ok(blob.and_then(|b| db_deserialize::<FileMetadata>(&b).ok()))
+    Ok(blob.and_then(|b| match db_deserialize::<FileMetadata>(&b) {
+        Ok(metadata) => Some(metadata),
+        Err(_) => {
+            tracing::warn!(entity = "attachment", row_id = %id, error_class = "invalid_data", "Skipping undecodable stored row");
+            None
+        }
+    }))
 }
 
 #[allow(clippy::too_many_arguments)]

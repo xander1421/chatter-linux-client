@@ -640,13 +640,9 @@ impl AnonGroupRepository {
         )?;
 
         let mut rows = stmt.query([])?;
-        let mut groups = Vec::new();
-
-        while let Some(row) = rows.next()? {
-            groups.push(row_to_group(row)?);
-        }
-
-        Ok(groups)
+        super::repo_utils::collect_decoded_rows(&mut rows, "anonymous_group", |row| {
+            row_to_group(row).map_err(StorageError::Database)
+        })
     }
 
     // ========================================================================
@@ -1166,13 +1162,9 @@ impl AnonGroupRepository {
         )?;
 
         let mut rows = stmt.query([])?;
-        let mut groups = Vec::new();
-
-        while let Some(row) = rows.next()? {
-            groups.push(row_to_group(row)?);
-        }
-
-        Ok(groups)
+        super::repo_utils::collect_decoded_rows(&mut rows, "anonymous_group", |row| {
+            row_to_group(row).map_err(StorageError::Database)
+        })
     }
 
     // ========================================================================

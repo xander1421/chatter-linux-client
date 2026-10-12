@@ -288,13 +288,9 @@ impl ChannelRepository {
         ))?;
 
         let mut rows = stmt.query(params![user_id.to_string(), limit, offset])?;
-        let mut channels = Vec::new();
-
-        while let Some(row) = rows.next()? {
-            channels.push(row_to_channel(row)?);
-        }
-
-        Ok(channels)
+        super::repo_utils::collect_decoded_rows(&mut rows, "channel", |row| {
+            row_to_channel(row).map_err(StorageError::Database)
+        })
     }
 
     /// Channels `user_id` used to be in: left, removed, banned or deleted
@@ -309,11 +305,9 @@ impl ChannelRepository {
              ORDER BY last_message_at DESC NULLS LAST"
         ))?;
         let mut rows = stmt.query(params![user_id.to_string()])?;
-        let mut channels = Vec::new();
-        while let Some(row) = rows.next()? {
-            channels.push(row_to_channel(row)?);
-        }
-        Ok(channels)
+        super::repo_utils::collect_decoded_rows(&mut rows, "channel", |row| {
+            row_to_channel(row).map_err(StorageError::Database)
+        })
     }
 
     /// Remember that we are no longer in `channel_id`. Once deleted it stays
@@ -357,13 +351,9 @@ impl ChannelRepository {
         )?;
 
         let mut rows = stmt.query(params![channel_type_to_i32(channel_type)])?;
-        let mut channels = Vec::new();
-
-        while let Some(row) = rows.next()? {
-            channels.push(row_to_channel(row)?);
-        }
-
-        Ok(channels)
+        super::repo_utils::collect_decoded_rows(&mut rows, "channel", |row| {
+            row_to_channel(row).map_err(StorageError::Database)
+        })
     }
 
     // ========================================================================

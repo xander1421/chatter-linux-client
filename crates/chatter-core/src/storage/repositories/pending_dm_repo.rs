@@ -69,23 +69,29 @@ impl PendingDmRepository {
             .map_err(StorageError::Database)?;
 
         let mut stmt = tx.prepare(
-            "SELECT content, attachment_ids_blob, channel_id FROM pending_dm_messages
+            "SELECT id, content, attachment_ids_blob, channel_id FROM pending_dm_messages
              WHERE peer_id = ?1 ORDER BY id ASC",
         )?;
-        let messages: Vec<PendingDm> = stmt
-            .query_map(params![peer], |row| {
-                let attachment_ids_blob: Option<Vec<u8>> = row.get(1)?;
-                let channel_id: Option<String> = row.get(2)?;
+        let messages = {
+            let mut rows = stmt.query(params![peer])?;
+            super::repo_utils::collect_decoded_rows(&mut rows, "pending_dm", |row| {
+                let blob: Option<Vec<u8>> = row.get(2)?;
+                let channel_id: Option<String> = row.get(3)?;
                 Ok(PendingDm {
-                    content: row.get(0)?,
-                    attachment_ids: attachment_ids_blob
-                        .and_then(|blob| crate::storage::serialization::db_deserialize(&blob).ok())
+                    content: row.get(1)?,
+                    attachment_ids: blob
+                        .map(|blob| crate::storage::serialization::db_deserialize(&blob))
+                        .transpose()?
                         .unwrap_or_default(),
-                    channel_id: channel_id.and_then(|s| s.parse().ok()),
+                    channel_id: channel_id
+                        .map(|id| {
+                            id.parse()
+                                .map_err(|_| StorageError::InvalidData("Invalid channel ID".into()))
+                        })
+                        .transpose()?,
                 })
             })?
-            .filter_map(|r| r.ok())
-            .collect();
+        };
         drop(stmt);
 
         tx.execute(

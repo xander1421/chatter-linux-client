@@ -147,9 +147,8 @@ impl AnonDmRepository {
         peer_id: &UserId,
     ) -> Result<Vec<AnonDmId>, StorageError> {
         let conn = self.db.connection()?;
-        let mut stmt = conn.prepare(
-            "SELECT id FROM anon_dm_conversations WHERE peer_id = ?1 AND status = ?2",
-        )?;
+        let mut stmt = conn
+            .prepare("SELECT id FROM anon_dm_conversations WHERE peer_id = ?1 AND status = ?2")?;
         let ids = stmt
             .query_map(
                 params![peer_id.to_string(), AnonDmStatus::Declined.to_i32()],
@@ -236,13 +235,9 @@ impl AnonDmRepository {
         )?;
 
         let mut rows = stmt.query([])?;
-        let mut dms = Vec::new();
-
-        while let Some(row) = rows.next()? {
-            dms.push(row_to_conversation(row)?);
-        }
-
-        Ok(dms)
+        super::repo_utils::collect_decoded_rows(&mut rows, "anonymous_dm", |row| {
+            row_to_conversation(row).map_err(StorageError::Database)
+        })
     }
 
     /// List active conversations only.
@@ -256,13 +251,9 @@ impl AnonDmRepository {
         )?;
 
         let mut rows = stmt.query(params![AnonDmStatus::Active.to_i32()])?;
-        let mut dms = Vec::new();
-
-        while let Some(row) = rows.next()? {
-            dms.push(row_to_conversation(row)?);
-        }
-
-        Ok(dms)
+        super::repo_utils::collect_decoded_rows(&mut rows, "anonymous_dm", |row| {
+            row_to_conversation(row).map_err(StorageError::Database)
+        })
     }
 
     /// List pending message requests (incoming only).
@@ -284,13 +275,9 @@ impl AnonDmRepository {
         )?;
 
         let mut rows = stmt.query(params![AnonDmStatus::Pending.to_i32()])?;
-        let mut dms = Vec::new();
-
-        while let Some(row) = rows.next()? {
-            dms.push(row_to_conversation(row)?);
-        }
-
-        Ok(dms)
+        super::repo_utils::collect_decoded_rows(&mut rows, "anonymous_dm", |row| {
+            row_to_conversation(row).map_err(StorageError::Database)
+        })
     }
 
     /// List outgoing pending requests (initiated by the local user, awaiting
@@ -309,13 +296,9 @@ impl AnonDmRepository {
         )?;
 
         let mut rows = stmt.query(params![AnonDmStatus::Pending.to_i32()])?;
-        let mut dms = Vec::new();
-
-        while let Some(row) = rows.next()? {
-            dms.push(row_to_conversation(row)?);
-        }
-
-        Ok(dms)
+        super::repo_utils::collect_decoded_rows(&mut rows, "anonymous_dm", |row| {
+            row_to_conversation(row).map_err(StorageError::Database)
+        })
     }
 
     /// Get total unread count across all conversations.
@@ -404,13 +387,9 @@ impl AnonDmRepository {
         )?;
 
         let mut rows = stmt.query(params![now])?;
-        let mut mailboxes = Vec::new();
-
-        while let Some(row) = rows.next()? {
-            mailboxes.push(row_to_mailbox(row)?);
-        }
-
-        Ok(mailboxes)
+        super::repo_utils::collect_decoded_rows(&mut rows, "anonymous_dm_mailbox", |row| {
+            row_to_mailbox(row).map_err(StorageError::Database)
+        })
     }
 
     /// Get mailbox keys for all active conversations (for polling).
@@ -622,3 +601,42 @@ fn row_to_mailbox(row: &rusqlite::Row) -> Result<AnonDmMailbox, rusqlite::Error>
 }
 
 use super::repo_utils::{require_array_32, require_array_64, vec_to_array_32};
+
+#[cfg(test)]
+mod corrupt_mailbox_tests {
+    use super::*;
+    #[test]
+    fn corrupt_mailbox_key_does_not_hide_other_polling_mailboxes() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(Database::open(&dir.path().join("mailboxes.db"), "fixture").unwrap());
+        db.run_migrations().unwrap();
+        let repo = AnonDmRepository::new(db.clone());
+        let mut conversations = Vec::new();
+        for id in ["good", "bad"] {
+            let conversation = AnonDm::new_initiated(UserId::new());
+            repo.insert_conversation(&conversation).unwrap();
+            repo.insert_mailbox(&AnonDmMailbox {
+                id: id.into(),
+                conversation_id: conversation.id,
+                public_key: [1; 32],
+                private_key: [2; 64],
+                token_id: "fixture".into(),
+                created_at: Utc::now(),
+                expires_at: Utc::now() + chrono::Duration::days(1),
+            })
+            .unwrap();
+            conversations.push(conversation.id);
+        }
+        db.connection()
+            .unwrap()
+            .execute(
+                "UPDATE anon_dm_mailboxes SET private_key=X'00' WHERE id='bad'",
+                [],
+            )
+            .unwrap();
+        let mailboxes = repo.get_active_mailboxes().unwrap();
+        assert_eq!(mailboxes.len(), 1);
+        assert_eq!(mailboxes[0].id, "good");
+        assert!(repo.get_mailbox(&conversations[1]).is_err());
+    }
+}

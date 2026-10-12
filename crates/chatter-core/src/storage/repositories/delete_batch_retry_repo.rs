@@ -126,16 +126,49 @@ impl DeleteBatchRetryRepository {
     // caps automatic attempts at twelve, and denied authorization pauses at once.
     pub fn due(&self, account: &UserId) -> Result<Vec<(String, PreparedBatch)>, StorageError> {
         let conn = self.db.connection()?;
-        let mut stmt = conn.prepare("SELECT scope,prepared_json FROM delete_batch_retry WHERE account_id=?1 AND paused=0 AND next_attempt<=unixepoch() ORDER BY next_attempt,batch_id LIMIT 4")?;
-        let rows = stmt.query_map([account.to_string()], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
-        })?;
-        rows.map(|row| {
-            let (scope, json) = row?;
+        let mut stmt = conn.prepare("SELECT batch_id,scope,prepared_json FROM delete_batch_retry WHERE account_id=?1 AND paused=0 AND next_attempt<=unixepoch() ORDER BY next_attempt,batch_id LIMIT 4")?;
+        let mut rows = stmt.query([account.to_string()])?;
+        super::repo_utils::collect_decoded_rows(&mut rows, "delete_batch_retry", |row| {
+            let scope: String = row.get(1)?;
+            let json: String = row.get(2)?;
             let batch = serde_json::from_str(&json)
-                .map_err(|e| StorageError::InvalidData(e.to_string()))?;
+                .map_err(|_| StorageError::InvalidData("Invalid deletion batch JSON".into()))?;
             Ok((scope, batch))
         })
-        .collect()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    #[test]
+    fn corrupt_retry_batch_does_not_block_valid_batch() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(Database::open(&dir.path().join("retry.db"), "fixture").unwrap());
+        db.run_migrations().unwrap();
+        let repo = DeleteBatchRetryRepository::new(db.clone());
+        let account = UserId::new();
+        let batch = PreparedBatch {
+            id: "good".into(),
+            targets: vec![],
+            server_committed: false,
+        };
+        repo.insert(&account, "scope", "good", &batch).unwrap();
+        let bad = PreparedBatch {
+            id: "bad".into(),
+            ..batch.clone()
+        };
+        repo.insert(&account, "scope", "bad", &bad).unwrap();
+        db.connection()
+            .unwrap()
+            .execute(
+                "UPDATE delete_batch_retry SET prepared_json='broken' WHERE batch_id='bad'",
+                [],
+            )
+            .unwrap();
+        let due = repo.due(&account).unwrap();
+        assert_eq!(due.len(), 1);
+        assert_eq!(due[0].1.id, "good");
+        assert!(repo.get(&account, "scope", "bad").is_err());
     }
 }

@@ -144,3 +144,72 @@ pub fn increment_rate_limit(
         Ok(1)
     }
 }
+
+/// Decode each row independently. Query/iteration errors still fail the query;
+/// a malformed stored entity only removes that entity from the result. Never
+/// format a decoder error here: JSON errors can contain stored message text.
+pub(crate) fn collect_decoded_rows<T>(
+    rows: &mut rusqlite::Rows<'_>,
+    entity: &'static str,
+    decode: impl Fn(&rusqlite::Row<'_>) -> Result<T, StorageError>,
+) -> Result<Vec<T>, StorageError> {
+    let mut decoded = Vec::new();
+    while let Some(row) = rows.next()? {
+        match decode(row) {
+            Ok(value) => decoded.push(value),
+            Err(error) => log_invalid_row(row, entity, &error),
+        }
+    }
+    Ok(decoded)
+}
+
+pub(super) fn log_invalid_row(row: &rusqlite::Row<'_>, entity: &'static str, error: &StorageError) {
+    let row_id = row
+        .get::<_, String>(0)
+        .or_else(|_| row.get::<_, i64>(0).map(|id| id.to_string()))
+        .unwrap_or_else(|_| "<unreadable>".into());
+    let error_class = match error {
+        StorageError::InvalidData(_) => "invalid_data",
+        StorageError::Database(_) => "row_decode",
+        StorageError::ConnectionPool(_) => "connection_pool",
+        StorageError::Migration(_) => "migration",
+        StorageError::NotFound(_) => "not_found",
+        StorageError::Encryption(_) => "encryption",
+    };
+    tracing::warn!(
+        entity,
+        row_id,
+        error_class,
+        "Skipping undecodable stored row"
+    );
+}
+
+#[cfg(test)]
+mod corrupt_row_tests {
+    use super::*;
+
+    #[test]
+    fn corrupt_blob_is_skipped_without_hiding_later_rows() {
+        use crate::storage::serialization::{db_deserialize, db_serialize};
+        let conn = rusqlite::Connection::open_in_memory().unwrap();
+        conn.execute_batch("CREATE TABLE fixture(id TEXT, blob BLOB)")
+            .unwrap();
+        for (id, blob) in [
+            ("before", db_serialize(&vec![1u32]).unwrap()),
+            ("bad", vec![0, 1]),
+            ("after", db_serialize(&vec![2u32]).unwrap()),
+        ] {
+            conn.execute("INSERT INTO fixture VALUES (?1, ?2)", params![id, blob])
+                .unwrap();
+        }
+        let mut stmt = conn
+            .prepare("SELECT id, blob FROM fixture ORDER BY rowid")
+            .unwrap();
+        let result = collect_decoded_rows(&mut stmt.query([]).unwrap(), "fixture", |row| {
+            let blob: Vec<u8> = row.get(1)?;
+            db_deserialize::<Vec<u32>>(&blob)
+        })
+        .unwrap();
+        assert_eq!(result, vec![vec![1], vec![2]]);
+    }
+}

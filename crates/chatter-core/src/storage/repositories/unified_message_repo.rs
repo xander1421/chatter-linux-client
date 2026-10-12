@@ -570,17 +570,25 @@ impl UnifiedMessageRepository {
         let mut stmt = conn.prepare(&format!(
             "SELECT {} FROM messages \
              WHERE conversation_id = ?1 AND conversation_type = ?2 AND is_deleted = 0 \
-             ORDER BY sent_at DESC LIMIT 1",
+             ORDER BY sent_at DESC",
             message_columns("messages")
         ))?;
-        match stmt.query_row(
-            params![conversation_id.to_string(), conversation_type.as_str()],
-            row_to_message,
-        ) {
-            Ok(msg) => Ok(Some(msg?)),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(StorageError::Database(e)),
+        let mut rows = stmt.query(params![
+            conversation_id.to_string(),
+            conversation_type.as_str()
+        ])?;
+        // A preview is a list query, not a lookup of a particular row. Walk
+        // past malformed newest rows so a sidebar entry still has a preview.
+        while let Some(row) = rows.next()? {
+            match row_to_message(row)
+                .map_err(StorageError::Database)
+                .and_then(|message| message)
+            {
+                Ok(message) => return Ok(Some(message)),
+                Err(error) => super::repo_utils::log_invalid_row(row, "message", &error),
+            }
         }
+        Ok(None)
     }
 
     /// Update an existing message (full replace of mutable fields).
@@ -686,13 +694,8 @@ impl UnifiedMessageRepository {
             "SELECT {} FROM messages WHERE conversation_type = ?1",
             message_columns("messages")
         ))?;
-        let rows = stmt.query_map(params![conversation_type.as_str()], row_to_message)?;
-
-        let mut out = Vec::new();
-        for row in rows {
-            out.push(row??);
-        }
-        Ok(out)
+        let mut rows = stmt.query(params![conversation_type.as_str()])?;
+        collect_messages(&mut rows)
     }
 
     pub fn delete_by_conversation_type(
@@ -3009,18 +3012,96 @@ fn row_to_thread(row: &rusqlite::Row<'_>) -> rusqlite::Result<Result<Thread, Sto
 
 /// Collect messages from a Rows iterator.
 fn collect_messages(rows: &mut rusqlite::Rows<'_>) -> Result<Vec<Message>, StorageError> {
-    let mut messages = Vec::new();
-    while let Some(row) = rows.next()? {
-        let msg = row_to_message(row)?;
-        messages.push(msg?);
-    }
-    Ok(messages)
+    super::repo_utils::collect_decoded_rows(rows, "message", |row| row_to_message(row)?)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::domain::message::{EncryptedContent, EncryptedMessageType};
+
+    #[test]
+    fn corrupt_message_row_does_not_hide_good_rows() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(Database::open(&dir.path().join("rows.db"), "fixture-only").unwrap());
+        db.run_migrations().unwrap();
+        let repo = UnifiedMessageRepository::new(db.clone());
+        for kind in [
+            ConversationType::Channel,
+            ConversationType::ServerDm,
+            ConversationType::AnonDm,
+            ConversationType::AnonGroup,
+            ConversationType::SavedMessages,
+        ] {
+            let conversation = ChannelId::new();
+            let good = Message::new_text(
+                conversation,
+                kind.clone(),
+                Some(UserId::new()),
+                "good".into(),
+                100,
+            );
+            let bad = Message::new_text(
+                conversation,
+                kind.clone(),
+                Some(UserId::new()),
+                "bad".into(),
+                200,
+            );
+            repo.insert(&good).unwrap();
+            repo.insert(&bad).unwrap();
+            for column in [
+                "attachments_blob",
+                "reaction_counts_blob",
+                "current_user_reactions_blob",
+                "mentioned_integrations_blob",
+                "content_json",
+            ] {
+                let conn = db.connection().unwrap();
+                if column == "content_json" {
+                    conn.execute(
+                        "UPDATE messages SET content_json = '{\"Unknown\":null}' WHERE id = ?1",
+                        [bad.id.to_string()],
+                    )
+                    .unwrap();
+                } else {
+                    // Trailing bytes reproduce RC114 without decoding any old format.
+                    conn.execute(
+                        &format!("UPDATE messages SET {column} = X'0001' WHERE id = ?1"),
+                        [bad.id.to_string()],
+                    )
+                    .unwrap();
+                }
+                drop(conn);
+                assert!(repo.get(&bad.id).is_err());
+                assert_eq!(
+                    repo.get_latest(&conversation, &kind).unwrap().unwrap().id,
+                    good.id
+                );
+                assert_eq!(
+                    repo.list(&conversation, &kind, None, 50)
+                        .unwrap()
+                        .iter()
+                        .map(|m| m.id)
+                        .collect::<Vec<_>>(),
+                    vec![good.id]
+                );
+                assert_eq!(
+                    repo.list_by_conversation_type(&kind)
+                        .unwrap()
+                        .iter()
+                        .map(|m| m.id)
+                        .collect::<Vec<_>>(),
+                    vec![good.id]
+                );
+                db.connection()
+                    .unwrap()
+                    .execute("DELETE FROM messages WHERE id = ?1", [bad.id.to_string()])
+                    .unwrap();
+                repo.insert(&bad).unwrap();
+            }
+        }
+    }
 
     #[test]
     fn pin_added_order_survives_duplicate_pin_and_message_edits() {
