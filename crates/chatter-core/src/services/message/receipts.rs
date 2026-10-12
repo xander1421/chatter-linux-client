@@ -20,7 +20,9 @@ pub fn advance_delivery_status<'a>(current: &'a str, incoming: &'a str) -> &'a s
 /// mid-request, the message may well have arrived) is `"unconfirmed"`, not
 /// "sending" forever and not "failed": nothing offers a retry for it.
 pub fn display_delivery_status<'a>(status: &'a str, failure_reason: Option<&str>) -> &'a str {
-    if status == "sending" && failure_reason == Some(super::core::DELIVERY_UNCONFIRMED) {
+    if status == "failed" && failure_reason == Some(super::core::SHIELD_WAITING_FOR_TOKENS) {
+        "parked"
+    } else if status == "sending" && failure_reason == Some(super::core::DELIVERY_UNCONFIRMED) {
         "unconfirmed"
     } else {
         status

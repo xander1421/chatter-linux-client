@@ -38,6 +38,25 @@ impl MessageService {
             return Err(MessageError::BootstrapInitiated);
         }
 
+        // A first-contact user post can wait for the independent refill and
+        // retry schedules. Do this before any submission claim, key lookup or
+        // bootstrap side effect: retries of this row have not reached a peer.
+        if grpc_pool.is_some()
+            && self
+                .token_manager
+                .available_token_count()
+                .map_err(|e| MessageError::DmError(e.to_string()))?
+                == 0
+        {
+            // Preserve the stronger first-contact privacy refusal when no
+            // device is cached. In Shield this is strictly local, never an
+            // identified device fetch, regardless of the token pool state.
+            if self.shield_mode.load(std::sync::atomic::Ordering::Acquire) {
+                self.bootstrap_devices(auth_client, peer_id).await?;
+            }
+            return Err(MessageError::ShieldNotReady);
+        }
+
         // Get our user ID for Sesame deterministic initiator selection
         let our_user_id = self.settings_repo.current_user_id()?;
 
@@ -841,6 +860,7 @@ mod tests {
                 .unwrap(),
             vec![1]
         );
+        seed_tokens(client.messages(), 2);
         // A later public send now reaches actual mailbox bootstrap. The offline
         // endpoint fails after its boundary, so admission must stay uncertain.
         let later = client.send_text(conversation, "second").await.unwrap();
@@ -1378,9 +1398,7 @@ mod tests {
             .send_friend_dm_content(&friend, crate::services::build_text_content("hi", 1))
             .await;
         match sent {
-            Err(MessageError::DmError(msg)) => {
-                assert!(msg.contains("no tokens available"), "got {msg}")
-            }
+            Err(MessageError::ShieldNotReady) => {}
             other => panic!("expected the empty-batch refusal, got {other:?}"),
         }
         assert_eq!(ms.token_manager.available_token_count().unwrap(), 0);
@@ -1401,14 +1419,18 @@ mod tests {
             .send_server_dm(&friend, "keep this", vec![], 12345, None)
             .await
             .expect("local echo persists even when delivery fails");
-        assert!(
-            matches!(result.send_error, Some(MessageError::DmError(ref error))
-            if error.contains("no tokens available"))
-        );
+        assert!(matches!(
+            result.send_error,
+            Some(MessageError::ShieldNotReady)
+        ));
         assert!(!result.bootstrap_initiated);
         let row = result.message.expect("outgoing bubble");
         let stored = ms.message_repo.get(&row.id).unwrap().unwrap();
         assert_eq!(stored.delivery_status, "failed");
+        assert_eq!(
+            stored.failure_reason.as_deref(),
+            Some(super::super::core::SHIELD_WAITING_FOR_TOKENS)
+        );
         assert_eq!(stored.as_text(), Some("keep this"));
         assert_eq!(ms.token_manager.available_token_count().unwrap(), 0);
 
@@ -1419,6 +1441,105 @@ mod tests {
         assert_eq!(retried.delivery_status, "failed");
         assert_eq!(retried.sent_at, stored.sent_at);
         assert_eq!(retried.as_text(), Some("keep this"));
+    }
+
+    /// Deterministic retry boundary: the real composing path parks locally;
+    /// a simulated scheduled refill does not wake a send, and the independent
+    /// retry tick submits the original row once. The callback stands for the
+    /// transport owner (production uses the client's durable retry journal).
+    #[tokio::test(start_paused = true)]
+    async fn shield_parked_post_waits_for_independent_retry_after_refill() {
+        let me = UserId::from_uuid(uuid::Uuid::from_u128(1));
+        let friend = UserId::from_uuid(uuid::Uuid::max());
+        let (client, _dir) = shield_client(me);
+        client.auth_state().set_logged_in(me, 1, "me".into());
+        let conversation = crate::state::ActiveConversation::ServerDm { peer_id: friend };
+        let ms = client.messages();
+        cache_device(ms, &friend, 2, &mut StdRng::seed_from_u64(97)).await;
+        let result = client
+            .send_text(conversation, "park exactly once")
+            .await
+            .unwrap();
+        client.ensure_send_available(conversation).unwrap();
+        assert!(matches!(
+            result.send_error,
+            Some(MessageError::ShieldNotReady)
+        ));
+        let row = result.message.unwrap();
+        assert_eq!(
+            super::super::display_delivery_status(
+                &row.delivery_status,
+                row.failure_reason.as_deref()
+            ),
+            "parked"
+        );
+        assert!(ms.pending_dms.drain(&friend).unwrap().is_empty());
+        assert_eq!(
+            super::super::shield_retry::retry_parked_with(ms, me, |_| async {
+                panic!("empty pool must not dispatch")
+            })
+            .await
+            .unwrap(),
+            0
+        );
+        assert!(matches!(
+            client.retry_failed_message(&row.id.to_string()).await,
+            Err(crate::services::gateway::outgoing::SendError::Message(
+                MessageError::ShieldNotReady
+            ))
+        ));
+
+        client.ensure_send_available(conversation).unwrap();
+        // Start the independent retry timer before simulating a refill.
+        let mut retry_tick = Box::pin(crate::app::core_services::jittered_sleep());
+        assert!(futures::poll!(&mut retry_tick).is_pending());
+        seed_tokens(ms, 2);
+        assert_eq!(
+            ms.message_repo
+                .get(&row.id)
+                .unwrap()
+                .unwrap()
+                .delivery_status,
+            "failed"
+        );
+        tokio::time::advance(std::time::Duration::from_secs(299)).await;
+        assert!(
+            futures::poll!(&mut retry_tick).is_pending(),
+            "refill cannot wake the retry timer"
+        );
+        tokio::time::advance(std::time::Duration::from_secs(601)).await;
+        retry_tick.await;
+        let delivered = std::sync::atomic::AtomicUsize::new(0);
+        let attempt = |id| {
+            assert_eq!(id, row.id);
+            assert_eq!(
+                ms.message_repo.get(&id).unwrap().unwrap().as_text(),
+                Some("park exactly once")
+            );
+            delivered.fetch_add(1, Ordering::SeqCst);
+            ms.finish_retry_row(&id, "sent", None).unwrap();
+            std::future::ready(())
+        };
+        assert_eq!(
+            super::super::shield_retry::retry_parked_with(ms, me, attempt)
+                .await
+                .unwrap(),
+            1
+        );
+        assert_eq!(
+            super::super::shield_retry::retry_parked_with(ms, me, |_| async {
+                panic!("confirmed row must not repeat")
+            })
+            .await
+            .unwrap(),
+            0
+        );
+        assert_eq!(delivered.load(Ordering::SeqCst), 1);
+        assert_eq!(
+            ms.token_manager.available_token_count().unwrap(),
+            2,
+            "tick does not request or claim tokens; the transport owner spends them"
+        );
     }
 
     /// Our side of a conversation whose peer mailbox is gone (expired, or
@@ -1463,11 +1584,11 @@ mod tests {
 
     /// F51: with neither side holding the other's mailbox, the higher-UUID
     /// side must ask (send a REQUEST) rather than queue and wait for a peer
-    /// that has nothing to send. Here the REQUEST gets as far as the empty
-    /// token batch — before, the send queued silently and returned
-    /// `BootstrapInitiated`.
+    /// that has nothing to send. With an empty token pool, park before any
+    /// REQUEST submission; the independent retry can ask once tokens exist.
+    /// Never queue silently behind a bootstrap that has not been requested.
     #[tokio::test]
-    async fn higher_uuid_without_a_peer_mailbox_sends_a_request() {
+    async fn higher_uuid_without_a_peer_mailbox_waits_for_prefetched_tokens() {
         let me = UserId::from_uuid(uuid::Uuid::max());
         let friend = UserId::from_uuid(uuid::Uuid::from_u128(1));
         let (client, _dir) = shield_client(me);
@@ -1488,13 +1609,11 @@ mod tests {
         let sent = ms
             .send_friend_dm_content(&friend, crate::services::build_text_content("hi", 1))
             .await;
-        match sent {
-            Err(MessageError::DmError(msg)) => assert!(
-                msg.contains("No anonymous token for the DM bootstrap"),
-                "got {msg}"
-            ),
-            other => panic!("expected the REQUEST to be attempted, got {other:?}"),
-        }
+        assert!(
+            matches!(sent, Err(MessageError::ShieldNotReady)),
+            "got {sent:?}"
+        );
+        assert!(ms.pending_dms.drain(&friend).unwrap().is_empty());
     }
 
     /// F51 recovery: the lower-UUID side re-announces its live mailbox and

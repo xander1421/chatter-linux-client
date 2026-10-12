@@ -1417,6 +1417,21 @@ export component MessageItem inherits Rectangle {
                                         accessible-label: "Sending";
                                     }
 
+                                    if root.is-own && !root.mesh-delivery && root.delivery-status == "parked": Text {
+                                        text: root.failure-reason;
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                        font-italic: true;
+                                        wrap: word-wrap;
+                                        accessible-role: button;
+                                        accessible-label: root.failure-reason + ". Tap to retry now";
+                                        accessible-action-default => { root.message-clicked(root.message-id); }
+                                        TouchArea {
+                                            mouse-cursor: pointer;
+                                            clicked => { root.message-clicked(root.message-id); }
+                                        }
+                                    }
+
                                     // "not sent" is the retry control (Signal's "tap
                                     // to retry"): `message-clicked` resends it, reason or not.
                                     if root.is-own && !root.mesh-delivery && root.delivery-status == "failed": Text {
@@ -1463,7 +1478,7 @@ export component MessageItem inherits Rectangle {
                                         }
                                     }
 
-                                    if root.is-own && !root.mesh-delivery && root.delivery-status != "sending" && root.delivery-status != "failed" && root.delivery-status != "unconfirmed": ticks := Rectangle {
+                                    if root.is-own && !root.mesh-delivery && root.delivery-status != "sending" && root.delivery-status != "failed" && root.delivery-status != "unconfirmed" && root.delivery-status != "parked": ticks := Rectangle {
                                         property <bool> double-tick: root.delivery-status != "sent";
                                         property <color> tick-color: root.delivery-status == "read" ? Colors.bubble-accent : Colors.text-muted;
                                         width: self.double-tick ? 17px : 12px;

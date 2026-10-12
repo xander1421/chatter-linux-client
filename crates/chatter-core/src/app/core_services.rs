@@ -380,18 +380,22 @@ impl CoreServices {
         let token_manager = self.token_manager.clone();
         let grpc_pool = self.grpc_pool.clone();
         let refill = async move {
+            // Session startup, never Shield entry or a send, schedules the
+            // first refill. Avoid a 5–15 minute empty pool after sign-in.
+            initial_token_refill_sleep().await;
             loop {
-                jittered_sleep().await;
                 let mut client = grpc_pool.mailbox_client();
                 let mut kt = grpc_pool.anonymous_kt_client();
                 match token_manager.available_token_count() {
                     Ok(current) if current < LOW_WATER => {
-                        let now = top_up(&token_manager, &mut client, &mut kt, current, BATCH).await;
+                        let now =
+                            top_up(&token_manager, &mut client, &mut kt, current, BATCH).await;
                         tracing::info!(had = current, now, "Token refill: pool topped up");
                     }
                     Ok(_) => {}
                     Err(e) => tracing::warn!("Token refill: could not count tokens: {}", e),
                 }
+                jittered_sleep().await;
             }
         };
 
@@ -908,12 +912,20 @@ async fn announce_rotated_group_mailbox(
 }
 
 /// Wait `BASE` plus up to `JITTER`, uniformly random.
-async fn jittered_sleep() {
+pub(crate) async fn jittered_sleep() {
     use rand::Rng;
     const BASE_SECS: u64 = 5 * 60;
     const JITTER_SECS: u64 = 10 * 60;
     let wait = BASE_SECS + rand::rng().random_range(0..=JITTER_SECS);
     tokio::time::sleep(std::time::Duration::from_secs(wait)).await;
+}
+
+/// Startup is independent of Shield and sends. The shorter initial jitter
+/// prepares normal sessions early; subsequent refills retain their own cadence.
+async fn initial_token_refill_sleep() {
+    use rand::Rng;
+    let seconds = rand::rng().random_range(10..=30);
+    tokio::time::sleep(std::time::Duration::from_secs(seconds)).await;
 }
 
 /// Top the mailbox token pool up from `have` to `target` in rounds (the
@@ -936,4 +948,17 @@ async fn top_up(
         }
     }
     have
+}
+
+#[cfg(test)]
+mod initial_token_refill_tests {
+    #[tokio::test(start_paused = true)]
+    async fn initial_refill_is_early_but_jittered() {
+        let mut wait = Box::pin(super::initial_token_refill_sleep());
+        assert!(futures::poll!(&mut wait).is_pending());
+        tokio::time::advance(std::time::Duration::from_secs(9)).await;
+        assert!(futures::poll!(&mut wait).is_pending());
+        tokio::time::advance(std::time::Duration::from_secs(21)).await;
+        wait.await;
+    }
 }

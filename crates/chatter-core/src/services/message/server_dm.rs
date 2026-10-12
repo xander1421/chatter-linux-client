@@ -367,6 +367,38 @@ impl MessageService {
             dm.disappearing_enabled_until = 0;
             dm.disappearing_activation_seconds = 0;
         }
+        if message.failure_reason.as_deref() == Some(super::core::SHIELD_WAITING_FOR_TOKENS) {
+            // This row was parked before any submission or device snapshot.
+            // It is still a Shield intent, even if the user left Shield while
+            // it waited. Never auto-fall through to the direct sealed outbox.
+            if !self.shield_mode.load(std::sync::atomic::Ordering::Acquire)
+                || self
+                    .token_manager
+                    .available_token_count()
+                    .map_err(|e| MessageError::DmError(e.to_string()))?
+                    == 0
+            {
+                return Err(MessageError::ShieldNotReady);
+            }
+            // Remove the automatic-retry marker before the first submission.
+            // Cancellation/partial delivery is then owned by the send journal,
+            // never picked up as a fresh automatic post.
+            self.finish_retry_row(&message.id, "failed", None)?;
+            let status = match self.send_dm(&peer_id, content, &self.mailbox_manager).await {
+                Ok(()) => "sent",
+                Err(MessageError::BootstrapInitiated) => "sending",
+                Err(error) => {
+                    self.finish_retry_row(
+                        &message.id,
+                        "failed",
+                        error.permanent_send_failure_reason(),
+                    )?;
+                    return Err(error);
+                }
+            };
+            self.finish_retry_row(&message.id, status, None)?;
+            return Ok(status);
+        }
         // The devices this message was encrypted for, not the peer's devices
         // now. A device linked after the send is not in that set. No fallback
         // when the set is empty: we do not know who the original was for.

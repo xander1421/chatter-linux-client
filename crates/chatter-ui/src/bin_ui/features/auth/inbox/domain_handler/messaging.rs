@@ -641,6 +641,23 @@ pub(super) fn handle_persisted_delivery_status(
         .parse()
         .ok()
         .and_then(|id| client.message_receipt_info(id).ok());
+    let stored = message_id
+        .parse()
+        .ok()
+        .and_then(|id| client.get_message_local(&id));
+    let status = stored
+        .as_ref()
+        .map(|message| {
+            chatter_core::services::message::display_delivery_status(
+                &message.delivery_status,
+                message.failure_reason.as_deref(),
+            )
+            .to_owned()
+        })
+        .unwrap_or(status);
+    let failure_reason = stored
+        .and_then(|message| message.failure_reason)
+        .unwrap_or_default();
     let weak = window.clone();
     let _ = slint::invoke_from_event_loop(move || {
         let Some(w) = weak.upgrade() else { return };
@@ -669,6 +686,7 @@ pub(super) fn handle_persisted_delivery_status(
                     &status,
                 )
                 .into();
+                message.failure_reason = failure_reason.clone().into();
                 model.set_row_data(i, message);
             }
         }

@@ -6,8 +6,8 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, SharedString};
 
-use crate::bin_ui::features::chat::emoji_loader;
 use crate::MainWindow;
+use crate::bin_ui::features::chat::emoji_loader;
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::MessageId;
 
@@ -111,7 +111,7 @@ fn own_failed_timestamp(w: &MainWindow, message_id: &str) -> Option<u64> {
     messages
         .iter()
         .find(|m| m.message_id.as_str() == message_id)
-        .filter(|m| m.is_own && m.delivery_status == "failed")
+        .filter(|m| m.is_own && matches!(m.delivery_status.as_str(), "failed" | "parked"))
         .and_then(|m| m.timestamp_ns.parse().ok())
 }
 

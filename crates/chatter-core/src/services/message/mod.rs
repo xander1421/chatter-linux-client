@@ -29,7 +29,9 @@ pub use saved::SavedSyncOutcome;
 pub(crate) use saved::persist_saved_device_snapshot;
 pub(crate) use saved::spawn_saved_sync_recovery;
 mod server_dm;
+mod shield_retry;
 pub use call_event::ChannelCallPhase;
+pub(crate) use shield_retry::spawn_shield_send_recovery;
 mod receipts;
 pub use receipts::{advance_delivery_status, display_delivery_status};
 
@@ -127,6 +129,11 @@ pub enum MessageError {
     /// DM conversation error.
     #[error("dm error: {0}")]
     DmError(String),
+
+    /// No prefetched token for a Shield bootstrap. User posts are parked for
+    /// the independent retry schedule; this error never triggers a refill.
+    #[error("Shield is getting ready — will send automatically")]
+    ShieldNotReady,
 
     /// DM bootstrap was initiated - message will be sent after key exchange completes.
     #[error("DM bootstrap initiated - secure channel being established")]

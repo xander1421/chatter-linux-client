@@ -20,6 +20,8 @@ use super::{MessageError, MessageService};
 /// A send that may or may not have landed and is not resent on its own: the
 /// user's retry decides. Carried by `MessageError::DmError`.
 pub(crate) const DELIVERY_UNCONFIRMED: &str = "Delivery unconfirmed";
+pub(crate) const SHIELD_WAITING_FOR_TOKENS: &str =
+    "Shield is getting ready — will send automatically";
 
 impl MessageError {
     /// User-facing label for a send that did not land.
@@ -36,6 +38,7 @@ impl MessageError {
             // SpiceDB down answers PermissionDenied. That is a delivery miss,
             // not a rule the user broke.
             Self::Network(NetworkError::PermissionDenied) => Some("Not delivered"),
+            Self::ShieldNotReady => Some(SHIELD_WAITING_FOR_TOKENS),
             Self::NotAuthor => Some("Not allowed"),
             Self::Network(NetworkError::InvalidRequest(_))
             | Self::InvalidContent(_)

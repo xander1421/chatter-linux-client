@@ -2738,6 +2738,7 @@ impl ChatterClient {
 
         // ── Mailbox-token refill (jittered, decoupled from sends) ────
         let h_token_refill = self.services.spawn_token_refill();
+        let h_shield_retry = crate::services::message::spawn_shield_send_recovery(self);
 
         // ── Disappearing-messages local reaper ───────────────────────
         // Hard-deletes every message whose timer has run out, with the
@@ -2808,6 +2809,7 @@ impl ChatterClient {
             h_prekey,
             h_key_rolling,
             h_token_refill,
+            h_shield_retry,
             h_ephemeral_reaper,
         ]);
         #[cfg(feature = "jarvis")]
@@ -3109,14 +3111,29 @@ impl ChatterClient {
                     .is_some_and(|m| matches!(m.delivery_status.as_str(), "failed" | "sending")));
         result.send_error.take();
         let failure_notice = if known_failed {
-            Some("Message was not submitted. Tap to retry.".to_owned())
+            Some(
+                result
+                    .message
+                    .as_ref()
+                    .and_then(|m| m.failure_reason.clone())
+                    .unwrap_or_else(|| "Message was not submitted. Tap to retry.".to_owned()),
+            )
         } else {
             unresolved.then(|| SendError::DeliveryUnconfirmed.to_string())
         };
 
         let real_message_id = result.message_id_string();
         let (message_id_effective, delivery_status) = if known_failed {
-            (real_message_id, "failed")
+            (
+                real_message_id,
+                crate::services::message::display_delivery_status(
+                    "failed",
+                    result
+                        .message
+                        .as_ref()
+                        .and_then(|m| m.failure_reason.as_deref()),
+                ),
+            )
         } else if result.bootstrap_initiated {
             (queued_bubble_id(real_message_id, result.sent_at), "sending")
         } else if failure_notice.is_some()

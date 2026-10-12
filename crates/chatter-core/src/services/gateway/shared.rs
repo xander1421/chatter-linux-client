@@ -221,6 +221,12 @@ pub const EMPTY_ATTACHMENTS_BLOB: [u8; 8] = [8, 0, 0, 0, 0, 0, 0, 0];
 pub fn handle_send_error(error: &super::outgoing::SendError, context: &str) -> String {
     use super::outgoing::SendError;
 
+    if matches!(
+        error,
+        SendError::Message(crate::services::message::MessageError::ShieldNotReady)
+    ) {
+        return crate::services::message::core::SHIELD_WAITING_FOR_TOKENS.to_owned();
+    }
     let detail = error.to_string();
 
     tracing::error!(
