@@ -385,6 +385,19 @@ impl DeviceInboxProvider {
             }
         }
 
+        // This provider survives logout. Pagination must not carry the old
+        // device's high-water mark into the new device's independent queue.
+        let settings = SettingsRepository::new(self.database.clone());
+        let user_id = settings
+            .get::<String>(crate::storage::settings_keys::CURRENT_USER_ID)
+            .map_err(|e| InboxError::AuthFailed(e.to_string()))?
+            .ok_or_else(|| InboxError::AuthFailed("No current user id".into()))?;
+        let device_id = settings
+            .get::<u32>(crate::storage::settings_keys::CURRENT_DEVICE_ID)
+            .map_err(|e| InboxError::AuthFailed(e.to_string()))?
+            .ok_or_else(|| InboxError::AuthFailed("No current device id".into()))?;
+        self.poller.bind_device(user_id, device_id);
+
         let poll_hints = self.poll_hints.clone();
         let poller = self.poller.clone();
         let pipeline = self.pipeline.clone();
