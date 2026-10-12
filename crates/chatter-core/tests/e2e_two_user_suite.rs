@@ -957,3 +957,248 @@ async fn t7_inner() {
     client_a.shutdown().await;
     client_b.shutdown().await;
 }
+
+// Wait for Temporal friendship writes rather than racing an immediate accept.
+async fn p9_befriend(a: &Arc<ChatterClient>, b: &Arc<ChatterClient>, author: UserId, peer: UserId) {
+    a.send_friend_request(&peer, None).await.unwrap();
+    let deadline = Instant::now() + Duration::from_secs(90);
+    while !b
+        .list_pending_friend_requests()
+        .await
+        .unwrap()
+        .iter()
+        .any(|r| r.addressee_id == author)
+    {
+        assert!(Instant::now() < deadline, "friend request did not arrive");
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+    b.respond_friend_request(&author, true).await.unwrap();
+    loop {
+        let a_ready = a
+            .list_friends_with_profiles()
+            .await
+            .unwrap()
+            .iter()
+            .any(|(f, _)| f.addressee_id == peer);
+        let b_ready = b
+            .list_friends_with_profiles()
+            .await
+            .unwrap()
+            .iter()
+            .any(|(f, _)| f.addressee_id == author);
+        if a_ready && b_ready {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "accepted friendship did not become mutual"
+        );
+        tokio::time::sleep(Duration::from_millis(500)).await;
+    }
+}
+
+// P9: exercise the public conversation API and the UI-facing domain bus.
+async fn p9_assert_remote_delete(
+    sender: &Arc<ChatterClient>,
+    receiver: &Arc<ChatterClient>,
+    outgoing: ActiveConversation,
+    incoming: ChannelId,
+    kind: chatter_core::domain::message::ConversationType,
+    author: UserId,
+    batch: bool,
+) {
+    eprintln!("P9 start {kind:?} batch={batch}");
+    let marker = unique_user("p9_message");
+    let mut events = receiver.subscribe_events();
+    sender
+        .send_text(outgoing, &marker)
+        .await
+        .expect("send target");
+    let event = wait_for_event(&mut events, EVENT_TIMEOUT, |e| {
+        matches!(e, DomainEvent::MessageReceived {message} if message.conversation_id == incoming && message.as_text() == Some(marker.as_str()))
+    }).await.expect("receiver must announce the stored target before deletion");
+    let DomainEvent::MessageReceived { message } = event else {
+        unreachable!()
+    };
+    assert!(
+        receiver
+            .get_messages_local(&incoming, &kind, None, 100)
+            .unwrap()
+            .iter()
+            .any(|m| m.id == message.id)
+    );
+    eprintln!("P9 received target and MessageReceived");
+    let handle = sender.conversation(outgoing);
+    assert!(
+        handle
+            .can_delete_for_everyone(&author, message.sent_at)
+            .unwrap()
+    );
+    if batch {
+        handle
+            .send_delete_batch(&[(author, message.sent_at)])
+            .await
+            .expect("batch remote delete");
+    } else {
+        handle
+            .send_delete(&author, message.sent_at)
+            .await
+            .expect("single remote delete");
+    }
+    eprintln!("P9 delete submission succeeded");
+    wait_for_event(&mut events, EVENT_TIMEOUT, |e| {
+        matches!(e, DomainEvent::MessageDeleted {author_id, target_sent_timestamp, channel_id, ..}
+            if *author_id == author && *target_sent_timestamp == message.sent_at && *channel_id == Some(incoming))
+    }).await.expect("receiver must emit UI-facing MessageDeleted");
+    assert!(
+        !receiver
+            .get_messages_local(&incoming, &kind, None, 100)
+            .unwrap()
+            .iter()
+            .any(|m| m.id == message.id),
+        "receiver still lists deleted target"
+    );
+    let (sender_kind, sender_id) = outgoing.routing_key().unwrap();
+    let sender_id: ChannelId = sender_id.parse().unwrap();
+    assert!(
+        !sender
+            .get_messages_local(&sender_id, &sender_kind, None, 100)
+            .unwrap()
+            .iter()
+            .any(|m| m.sender_id == Some(author) && m.sent_at == message.sent_at),
+        "sender still lists deleted target"
+    );
+}
+
+#[tokio::test]
+async fn p9_channel_delete_for_everyone() {
+    skip_if_no_server!();
+    let da = tempfile::tempdir().unwrap();
+    let db = tempfile::tempdir().unwrap();
+    let a = build_client(&da);
+    let b = build_client(&db);
+    let author = register_and_start(&a, &unique_user("p9ca"), "P9 A").await;
+    let peer = register_and_start(&b, &unique_user("p9cb"), "P9 B").await;
+    p9_befriend(&a, &b, author, peer).await;
+    for channel_type in [ChannelType::Public, ChannelType::Private] {
+        let channel = common::create_group_with_members(
+            &a,
+            &unique_user("p9channel"),
+            channel_type,
+            None,
+            None,
+            &[(&b, &peer)],
+        )
+        .await;
+        for batch in [false, true] {
+            p9_assert_remote_delete(
+                &a,
+                &b,
+                ActiveConversation::Channel(channel.id),
+                channel.id,
+                chatter_core::domain::message::ConversationType::Channel,
+                author,
+                batch,
+            )
+            .await;
+        }
+    }
+    a.shutdown().await;
+    b.shutdown().await;
+}
+
+#[tokio::test]
+async fn p9_server_dm_delete_for_everyone() {
+    skip_if_no_server!();
+    let da = tempfile::tempdir().unwrap();
+    let db = tempfile::tempdir().unwrap();
+    let a = build_client(&da);
+    let b = build_client(&db);
+    let author = register_and_start(&a, &unique_user("p9da"), "P9 A").await;
+    let peer = register_and_start(&b, &unique_user("p9db"), "P9 B").await;
+    p9_befriend(&a, &b, author, peer).await;
+    for batch in [false, true] {
+        p9_assert_remote_delete(
+            &a,
+            &b,
+            ActiveConversation::ServerDm { peer_id: peer },
+            ChannelId::from(author),
+            chatter_core::domain::message::ConversationType::ServerDm,
+            author,
+            batch,
+        )
+        .await;
+    }
+    a.shutdown().await;
+    b.shutdown().await;
+}
+
+#[tokio::test]
+async fn p9_secret_dm_delete_for_both() {
+    skip_if_no_server!();
+    assert!(
+        cfg!(feature = "onion"),
+        "secret regression requires onion feature"
+    );
+    assert!(
+        chatter_core::config::PINNED_ONION_ADDR.is_some(),
+        "pin the live server onion at build time"
+    );
+    let da = tempfile::tempdir().unwrap();
+    let db = tempfile::tempdir().unwrap();
+    let a = build_client(&da);
+    let b = build_client(&db);
+    let author = register_and_start(&a, &unique_user("p9sa"), "P9 A").await;
+    let peer = register_and_start(&b, &unique_user("p9sb"), "P9 B").await;
+    a.prefetch_tokens(10)
+        .await
+        .expect("A onboarding token prefetch");
+    b.prefetch_tokens(10)
+        .await
+        .expect("B onboarding token prefetch");
+    let dm = a.start_anon_dm(peer, None).await.unwrap();
+    let deadline = Instant::now() + Duration::from_secs(120);
+    while b.anon_dms().get_conversation(&dm.id).unwrap().is_none() {
+        assert!(Instant::now() < deadline, "secret request did not arrive");
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    b.accept_anon_dm(&dm.id).await.unwrap();
+    while !a
+        .anon_dms()
+        .get_conversation(&dm.id)
+        .unwrap()
+        .unwrap()
+        .is_ready()
+    {
+        assert!(
+            Instant::now() < deadline,
+            "secret acceptance did not arrive"
+        );
+        tokio::time::sleep(Duration::from_millis(250)).await;
+    }
+    for batch in [false, true] {
+        p9_assert_remote_delete(
+            &a,
+            &b,
+            ActiveConversation::AnonDm(dm.id),
+            ChannelId::from(dm.id),
+            chatter_core::domain::message::ConversationType::AnonDm,
+            author,
+            batch,
+        )
+        .await;
+        // Either participant may delete the other's message for both.
+        p9_assert_remote_delete(
+            &b,
+            &a,
+            ActiveConversation::AnonDm(dm.id),
+            ChannelId::from(dm.id),
+            chatter_core::domain::message::ConversationType::AnonDm,
+            peer,
+            batch,
+        )
+        .await;
+    }
+    a.shutdown().await;
+    b.shutdown().await;
+}
