@@ -10,6 +10,10 @@ use chatter_core::{
 };
 use std::{sync::Arc, time::Duration};
 
+// A cold Tor connection may spend 120s bootstrapping and 90s dialing;
+// allow 30s more for inbox polling and the mailbox handshake.
+const DELIVERY_BUDGET: Duration = Duration::from_secs(120 + 90 + 30);
+
 fn client(dir: &tempfile::TempDir) -> Arc<ChatterClient> {
     crate::common::headless(dir.path());
     ChatterClient::builder()
@@ -20,7 +24,7 @@ fn client(dir: &tempfile::TempDir) -> Arc<ChatterClient> {
 }
 
 async fn receive(rx: &mut tokio::sync::broadcast::Receiver<DomainEvent>, text: &str) {
-    tokio::time::timeout(Duration::from_secs(90), async {
+    tokio::time::timeout(DELIVERY_BUDGET, async {
         loop {
             if let Ok(DomainEvent::MessageReceived { message }) = rx.recv().await {
                 if message.as_text() == Some(text) {
@@ -30,12 +34,18 @@ async fn receive(rx: &mut tokio::sync::broadcast::Receiver<DomainEvent>, text: &
         }
     })
     .await
-    .expect("receiver must obtain the plaintext");
+    .unwrap_or_else(|_| panic!("receiver must obtain plaintext for phase {text}"));
 }
 
 #[tokio::test]
 async fn shield_dm_after_fresh_signin_delivers_exactly_once() {
     crate::skip_if_no_server!();
+    // Phase timings and pagination only: keep cryptographic payloads/keys out
+    // of this isolated regression's diagnostics.
+    let _ = tracing_subscriber::fmt()
+        .with_env_filter("off,chatter_core::network::grpc::onion_transport=info,chatter_core::inbox::poller=info,chatter_core::inbox::streaming::dm_bootstrap_handler=info,chatter_core::services::message::dm_bootstrap=info")
+        .with_test_writer()
+        .try_init();
     let dirs = [tempfile::tempdir().unwrap(), tempfile::tempdir().unwrap()];
     let clients = [client(&dirs[0]), client(&dirs[1])];
     // Random test-only credentials; never log them.
@@ -121,7 +131,7 @@ async fn shield_dm_after_fresh_signin_delivers_exactly_once() {
         .await
         .unwrap();
     receive(&mut receiver, text).await;
-    tokio::time::timeout(Duration::from_secs(90), async {
+    tokio::time::timeout(DELIVERY_BUDGET, async {
         loop {
             let rows = clients[0]
                 .get_messages_local_asc(
