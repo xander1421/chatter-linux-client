@@ -73,6 +73,46 @@ pub enum LinkDeviceError {
     Invalid(String),
 }
 
+/// PIN gate outcomes contain categories only, never submitted or stored secrets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PinVerification {
+    Match,
+    Mismatch,
+    NotSetUpOnThisDevice,
+    Error(PinVerificationError),
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PinVerificationError {
+    InvalidInput,
+    Storage,
+    InvalidFingerprint,
+    Crypto,
+    Network,
+    RateLimited,
+    BackupDestroyed,
+}
+
+impl PinVerification {
+    pub fn message(self) -> &'static str {
+        match self {
+            Self::Match => "",
+            Self::Mismatch => "Incorrect PIN. Online checks have limited attempts.",
+            Self::NotSetUpOnThisDevice => "Shield isn't set up on this device yet",
+            Self::Error(PinVerificationError::InvalidInput) => {
+                "Enter a PIN with 8–64 printable ASCII characters"
+            }
+            Self::Error(PinVerificationError::RateLimited) => {
+                "Too many PIN attempts. Wait before trying again"
+            }
+            Self::Error(PinVerificationError::BackupDestroyed) => {
+                "Your key backup was deleted after too many PIN attempts. Set up your PIN again"
+            }
+            Self::Error(_) => "Couldn't check your PIN, try again",
+        }
+    }
+}
+
 /// Persistent state for a new-device provisioning session.
 ///
 /// Owns the ephemeral keypair until the envelope arrives — losing this
@@ -337,45 +377,37 @@ impl LinkDeviceService {
         rx
     }
 
-    /// Re-auth gate using the user's PIN. Validates against the local
-    /// `PIN_FINGERPRINT` setting (HMAC-derived from the SVR Argon2id
-    /// secret). Local-only check — does not contact the server.
-    /// Constant-time comparison.
-    ///
-    /// Returns `Err(Invalid)` if no PIN fingerprint is stored locally
-    /// (legacy account that registered before PIN persistence landed —
-    /// caller should prompt for re-login to populate it).
-    pub fn verify_pin(&self, pin: &str) -> Result<bool, LinkDeviceError> {
+    /// Local constant-time PIN check. An absent fingerprint permits the
+    /// caller to use the metered SVR oracle; corrupt state does not.
+    pub fn verify_pin(&self, pin: &str) -> PinVerification {
+        use PinVerification::{Error, Match, Mismatch, NotSetUpOnThisDevice};
+        use PinVerificationError::*;
         use subtle::ConstantTimeEq;
-
-        crate::crypto::svr::validate_pin_shape(pin)
-            .map_err(|e| LinkDeviceError::Invalid(e.to_string()))?;
-
-        // The salt every fingerprint writer derived with (login, register,
-        // PIN change, the SVR check on a linked device) — not the user row,
-        // which a linked device need not have.
-        let salt = self
-            .settings_repo
-            .get_string(keys::SVR_SALT_USERNAME)?
-            .filter(|s| !s.is_empty())
-            .ok_or(LinkDeviceError::NotLoggedIn)?;
-
-        let stored = self
-            .settings_repo
-            .get_bytes(keys::PIN_FINGERPRINT)?
-            .ok_or_else(|| {
-                LinkDeviceError::Invalid(
-                    "no local PIN fingerprint — sign out and back in to populate".into(),
-                )
-            })?;
-        if stored.len() != 32 {
-            return Err(LinkDeviceError::Invalid(
-                "stored PIN fingerprint has wrong length".into(),
-            ));
+        if crate::crypto::svr::validate_pin_shape(pin).is_err() {
+            return Error(InvalidInput);
         }
-
-        let derived = crate::crypto::svr::derive_pin_fingerprint(pin, &salt)?;
-        Ok(derived.ct_eq(stored.as_slice()).unwrap_u8() == 1)
+        let salt = match self.settings_repo.get_string(keys::SVR_SALT_USERNAME) {
+            Ok(Some(s)) if !s.trim().is_empty() => s,
+            Ok(_) => return NotSetUpOnThisDevice,
+            Err(_) => return Error(Storage),
+        };
+        let stored = match self.settings_repo.get_bytes(keys::PIN_FINGERPRINT) {
+            Ok(Some(fp)) => fp,
+            Ok(None) => return NotSetUpOnThisDevice,
+            Err(_) => return Error(Storage),
+        };
+        if stored.len() != 32 {
+            return Error(InvalidFingerprint);
+        }
+        let derived = match crate::crypto::svr::derive_pin_fingerprint(pin, &salt) {
+            Ok(fp) => Zeroizing::new(fp),
+            Err(_) => return Error(Crypto),
+        };
+        if derived.ct_eq(stored.as_slice()).unwrap_u8() == 1 {
+            Match
+        } else {
+            Mismatch
+        }
     }
 
     /// Convenience: verify EITHER a password OR a PIN. Tries the local PIN
@@ -389,7 +421,7 @@ impl LinkDeviceService {
         // we attempt PIN, and fall through to password if PIN validation
         // rejects the input or the fingerprint doesn't match.
         if crate::crypto::svr::validate_pin_shape(secret).is_ok() {
-            if let Ok(true) = self.verify_pin(secret) {
+            if self.verify_pin(secret) == PinVerification::Match {
                 return Ok(true);
             }
         }
@@ -1795,13 +1827,13 @@ mod tests {
     #[test]
     fn verify_pin_accepts_correct_pin() {
         let (svc, _db) = setup_service("alice", Some("devpin123"));
-        assert_eq!(svc.verify_pin("devpin123").unwrap(), true);
+        assert_eq!(svc.verify_pin("devpin123"), PinVerification::Match);
     }
 
     #[test]
     fn verify_pin_rejects_wrong_pin() {
         let (svc, _db) = setup_service("alice", Some("devpin123"));
-        assert_eq!(svc.verify_pin("wrongpin1").unwrap(), false);
+        assert_eq!(svc.verify_pin("wrongpin1"), PinVerification::Mismatch);
     }
 
     #[test]
@@ -1809,13 +1841,13 @@ mod tests {
         let (svc, _db) = setup_service("alice", Some("devpin123"));
         // Too short (< MIN_PIN_LENGTH).
         assert!(matches!(
-            svc.verify_pin("1234567").unwrap_err(),
-            LinkDeviceError::Invalid(_)
+            svc.verify_pin("1234567"),
+            PinVerification::Error(PinVerificationError::InvalidInput)
         ));
         // Non-printable ASCII rejected even at the right length.
         assert!(matches!(
-            svc.verify_pin("1234\t678").unwrap_err(),
-            LinkDeviceError::Invalid(_)
+            svc.verify_pin("1234\t678"),
+            PinVerification::Error(PinVerificationError::InvalidInput)
         ));
     }
 
@@ -1824,9 +1856,31 @@ mod tests {
         // Password-only account, no PIN persisted.
         let (svc, _db) = setup_service("alice", None);
         assert!(matches!(
-            svc.verify_pin("devpin123").unwrap_err(),
-            LinkDeviceError::Invalid(_)
+            svc.verify_pin("devpin123"),
+            PinVerification::NotSetUpOnThisDevice
         ));
+    }
+
+    #[test]
+    fn verify_pin_storage_and_corrupt_state_are_distinct() {
+        let (svc, _file) = setup_service("alice", None);
+        svc.settings_repo
+            .set_bytes(keys::PIN_FINGERPRINT, &[0; 3])
+            .unwrap();
+        assert_eq!(
+            svc.verify_pin("test-pin-only"),
+            PinVerification::Error(PinVerificationError::InvalidFingerprint)
+        );
+        svc.settings_repo
+            .database()
+            .connection()
+            .unwrap()
+            .execute_batch("DROP TABLE settings")
+            .unwrap();
+        assert_eq!(
+            svc.verify_pin("test-pin-only"),
+            PinVerification::Error(PinVerificationError::Storage)
+        );
     }
 
     #[tokio::test]

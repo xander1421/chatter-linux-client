@@ -67,28 +67,42 @@ fn wire_submit_pin(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
         let _ = slint::invoke_from_event_loop(move || {
             let Some(w) = weak.upgrade() else { return };
+            if w.get_anon_mode_verifying() {
+                return;
+            }
             w.set_anon_mode_verifying(true);
             w.set_anon_mode_pin_error("".into());
 
-            // verify_pin is sync (local Argon2 fingerprint check) — run
-            // inline. Wrapping in spawn_blocking would just add overhead
-            // for a single HKDF / HMAC.
-            let ok = ui_ctx.verify_pin_for_anon_mode(&pin);
-            w.set_anon_mode_verifying(false);
+            tokio::spawn(async move {
+                let pin = zeroize::Zeroizing::new(pin);
+                let result = ui_ctx.verify_pin_for_anon_mode(&pin).await;
+                if let chatter_core::services::link_device_service::PinVerification::Error(
+                    category,
+                ) = result
+                {
+                    tracing::warn!(?category, "Shield PIN verification failed");
+                }
+                let _ = slint::invoke_from_event_loop(move || {
+                    let Some(w) = weak.upgrade() else { return };
+                    w.set_anon_mode_verifying(false);
+                    if w.get_active_modal() != "anon-mode-pin" {
+                        return;
+                    }
 
-            if ok {
-                ui_ctx.set_anon_mode_enabled(true);
-                w.global::<AnonMode>().set_enabled(true);
-                w.set_composer_gifs_available(ui_ctx.gif_picker_available());
-                crate::bin_ui::features::back::close(&w, "anon-mode-pin");
-                w.set_anon_mode_pin("".into());
-                refresh_sidebar(&w, &ui_ctx);
-                tracing::info!("Anon Mode enabled");
-            } else {
-                w.set_anon_mode_pin_error(
-                    "Incorrect PIN. Try again or sign in fresh if you've never set one.".into(),
-                );
-            }
+                    if result == chatter_core::services::link_device_service::PinVerification::Match
+                    {
+                        ui_ctx.set_anon_mode_enabled(true);
+                        w.global::<AnonMode>().set_enabled(true);
+                        w.set_composer_gifs_available(ui_ctx.gif_picker_available());
+                        crate::bin_ui::features::back::close(&w, "anon-mode-pin");
+                        w.set_anon_mode_pin("".into());
+                        refresh_sidebar(&w, &ui_ctx);
+                        tracing::info!("Anon Mode enabled");
+                    } else {
+                        w.set_anon_mode_pin_error(result.message().into());
+                    }
+                });
+            });
         });
     });
 }

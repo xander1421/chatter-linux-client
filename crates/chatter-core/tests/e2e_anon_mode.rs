@@ -24,6 +24,9 @@ use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::{ChannelId, UserId};
 use chatter_core::domain::message::ConversationType;
 use chatter_core::events::DomainEvent;
+use chatter_core::services::link_device_service::{
+    PinVerification as V, PinVerificationError as E,
+};
 use chatter_core::state::ActiveConversation;
 
 const SERVER_URL: &str = "https://localhost:50051";
@@ -37,7 +40,7 @@ const EVENT_TIMEOUT: Duration = Duration::from_secs(30);
 // use an 8-char PIN here and document the divergence. The semantic
 // behaviour under test is identical: a known-correct PIN registered with
 // the user, plus a set of mismatching/empty/short PINs that must squash
-// to `false` through `verify_pin_for_anon_mode`.
+// to distinct typed failures through `verify_pin_for_anon_mode`.
 const PIN: &str = "Kf8mq2xpZ"; // non-blocklisted, clears validate_pin
 const PASSWORD: &str = "TestPass123!";
 
@@ -215,7 +218,7 @@ async fn t15_set_anon_mode_on_then_off() {
 //
 // `verify_pin_for_anon_mode` wraps `LinkDeviceService::verify_pin` and is
 // the gate the UI uses before flipping anon mode ON. With the registration
-// PIN, it must return true.
+// PIN, it must return Match.
 
 #[tokio::test]
 async fn t16_verify_pin_correct_succeeds() {
@@ -225,11 +228,10 @@ async fn t16_verify_pin_correct_succeeds() {
     let client = build_client(&dir);
 
     let _uid = register_and_start(&client, &unique_user("t16"), "Alice").await;
-    println!("  registered with PIN={PIN}");
 
     assert!(
-        client.verify_pin_for_anon_mode(PIN),
-        "verify_pin_for_anon_mode(\"{PIN}\") must succeed for the registration PIN"
+        client.verify_pin_for_anon_mode(PIN).await == V::Match,
+        "PIN verification must succeed for the registration PIN"
     );
     println!("T16 PASS — correct PIN verifies");
 
@@ -240,9 +242,7 @@ async fn t16_verify_pin_correct_succeeds() {
 // T17: Verify PIN with wrong / empty / short PIN fails
 // ============================================================================
 //
-// All non-matching PIN inputs must squash to `false` — the SDK collapses
-// "wrong PIN", "no PIN set", "too-short PIN", "storage error" into a single
-// negative result so the UI doesn't leak distinctions it shouldn't surface.
+// Real mismatches and invalid input retain distinct typed outcomes.
 
 #[tokio::test]
 async fn t17_verify_pin_wrong_fails() {
@@ -254,24 +254,24 @@ async fn t17_verify_pin_wrong_fails() {
     let _uid = register_and_start(&client, &unique_user("t17"), "Alice").await;
 
     assert!(
-        !client.verify_pin_for_anon_mode("000000"),
-        "wrong PIN must return false"
+        client.verify_pin_for_anon_mode("wrong-pin-only").await == V::Mismatch,
+        "wrong PIN must return Mismatch"
     );
-    println!("  wrong PIN '000000' -> false");
+    println!("  wrong PIN -> Mismatch");
 
     assert!(
-        !client.verify_pin_for_anon_mode(""),
-        "empty PIN must return false"
+        client.verify_pin_for_anon_mode("").await == V::Error(E::InvalidInput),
+        "empty PIN must return InvalidInput"
     );
-    println!("  empty PIN -> false");
+    println!("  empty PIN -> InvalidInput");
 
     assert!(
-        !client.verify_pin_for_anon_mode("123"),
-        "too-short PIN must return false (squashes validate_pin error)"
+        client.verify_pin_for_anon_mode("123").await == V::Error(E::InvalidInput),
+        "short PIN must return InvalidInput"
     );
-    println!("  short PIN '123' -> false");
+    println!("  short PIN -> InvalidInput");
 
-    println!("T17 PASS — all non-matching PIN inputs squash to false");
+    println!("T17 PASS — PIN failures are typed");
 
     client.shutdown().await;
 }
@@ -463,12 +463,9 @@ async fn t20_wrong_pin_does_not_silently_flip_flag() {
 
     assert!(!client.anon_mode_enabled(), "baseline: anon_mode off");
 
-    let ok = client.verify_pin_for_anon_mode("999999");
-    assert!(
-        !ok,
-        "verify_pin_for_anon_mode(\"999999\") must return false"
-    );
-    println!("  wrong PIN -> false (as expected)");
+    let result = client.verify_pin_for_anon_mode("wrong-pin-only").await;
+    assert!(result == V::Mismatch, "wrong PIN must return Mismatch");
+    println!("  wrong PIN -> Mismatch (as expected)");
 
     // The crux: a failed verify MUST NOT have side effects on the flag.
     assert!(
@@ -510,7 +507,7 @@ async fn t21_repeated_correct_pin_check_allowed() {
 
     for i in 1..=4 {
         assert!(
-            client.verify_pin_for_anon_mode(PIN),
+            client.verify_pin_for_anon_mode(PIN).await == V::Match,
             "iteration {i}: correct PIN must verify successfully"
         );
         println!("  iteration {i}/4: PIN verified");

@@ -12823,8 +12823,20 @@ async fn v56_linked_device_restricts_profile_visibility_with_pin() {
         before.starts_with("1|"),
         "POSITIVE CONTROL FAILED: registration left no v1 backup: {before:?}"
     );
-    // True only against a stored fingerprint (`LinkDeviceService::verify_pin`).
-    let local_pin_ok = |c: &Arc<ChatterClient>| c.verify_pin_for_anon_mode(PIN);
+    // Inspect local state without invoking Shield's new online SVR fallback.
+    let local_pin_ok = |_c: &Arc<ChatterClient>| {
+        let path = dir_s.path().join("data/chatter.db");
+        let passphrase = zeroize::Zeroizing::new(
+            chatter_core::system::keyring::Keyring::new(path.clone())
+                .get_passphrase()
+                .expect("linked DB passphrase unavailable"),
+        );
+        let db = Arc::new(chatter_core::storage::Database::open(&path, &passphrase).unwrap());
+        chatter_core::storage::repositories::settings_repo::SettingsRepository::new(db)
+            .get_bytes(chatter_core::storage::repositories::settings_repo::keys::PIN_FINGERPRINT)
+            .unwrap()
+            .is_some()
+    };
     assert!(
         !local_pin_ok(&client_s),
         "POSITIVE CONTROL FAILED: the linked device already has a fingerprint"

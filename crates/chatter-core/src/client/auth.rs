@@ -540,8 +540,9 @@ impl ChatterClient {
     /// anyone holding the unlocked device could re-key the backup to a PIN of
     /// their choosing.
     pub async fn retry_svr_backup(&self, pin: &str) -> Result<(), ClientError> {
-        if !self.link_device().verify_pin(pin).unwrap_or(false) {
-            return Err(ClientError::Validation("Incorrect PIN".into()));
+        let verification = self.link_device().verify_pin(pin);
+        if verification != crate::services::link_device_service::PinVerification::Match {
+            return Err(ClientError::Validation(verification.message().into()));
         }
         if self.has_key_backup().await? {
             return Ok(());

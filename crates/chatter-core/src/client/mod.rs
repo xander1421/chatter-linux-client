@@ -2221,12 +2221,13 @@ impl ChatterClient {
         }
     }
 
-    /// PIN-gate for enabling anon mode. Wraps `LinkDeviceService::verify_pin`
-    /// and squashes any error into `false` so the UI can render a single
-    /// "wrong PIN / no PIN set / storage error" message without leaking
-    /// distinctions a UI shouldn't surface differently.
-    pub fn verify_pin_for_anon_mode(&self, pin: &str) -> bool {
-        self.link_device().verify_pin(pin).unwrap_or(false)
+    /// Verify locally, or use the existing metered SVR proof on a device
+    /// without a fingerprint. The PIN never enters diagnostic output.
+    pub async fn verify_pin_for_anon_mode(
+        &self,
+        pin: &str,
+    ) -> crate::services::link_device_service::PinVerification {
+        self.verify_pin_with_backup(pin).await
     }
 
     /// Whether Shield can hide this device's network location in this build:

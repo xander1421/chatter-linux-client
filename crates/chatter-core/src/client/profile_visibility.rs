@@ -107,7 +107,7 @@ impl ChatterClient {
             let username = self.svr_salt_username()?;
             // A wrong PIN must never reach the upload: the backup would be
             // replaced by one the real PIN cannot open.
-            self.check_pin_before_backup_write(pin, &username).await?;
+            self.check_pin_before_backup_write(pin).await?;
             self.svr_backup()
                 .backup_with_profile_key(pin, &username, &next)
                 .await
@@ -128,58 +128,56 @@ impl ChatterClient {
     /// read; it does not report attempts left on a miss, so the user is told
     /// the tries are limited rather than a count. On success the fingerprint
     /// is stored, so the next check is local.
-    async fn check_pin_before_backup_write(
+    async fn check_pin_before_backup_write(&self, pin: &str) -> Result<(), ClientError> {
+        let result = self.verify_pin_with_backup(pin).await;
+        if result == crate::services::link_device_service::PinVerification::Match {
+            Ok(())
+        } else {
+            let message = if result
+                == crate::services::link_device_service::PinVerification::NotSetUpOnThisDevice
+            {
+                "This account has no key backup to check the PIN against. Set up your PIN again."
+            } else {
+                result.message()
+            };
+            Err(ClientError::Validation(message.into()))
+        }
+    }
+
+    pub(super) async fn verify_pin_with_backup(
         &self,
         pin: &str,
-        username: &str,
-    ) -> Result<(), ClientError> {
-        use crate::services::link_device_service::LinkDeviceError;
-        use crate::services::svr_backup_service::SvrBackupError;
+    ) -> crate::services::link_device_service::PinVerification {
+        use crate::services::link_device_service::{
+            PinVerification as V, PinVerificationError as E,
+        };
         use crate::storage::repositories::settings_repo::keys;
 
-        match self.link_device().verify_pin(pin) {
-            Ok(true) => return Ok(()),
-            Ok(false) => return Err(ClientError::Validation("Wrong PIN".into())),
-            // No fingerprint here: ask the backup.
-            Err(LinkDeviceError::Invalid(_))
-                if crate::crypto::svr::validate_pin_shape(pin).is_ok() => {}
-            Err(e) => {
-                return Err(ClientError::Validation(format!(
-                    "Can't check your PIN: {e}"
-                )));
-            }
-        }
-
-        let mut fingerprint = match self.svr_backup().verify_pin_against_backup(pin, username).await {
-            Ok(fp) => fp,
-            Err(SvrBackupError::WrongPin | SvrBackupError::Crypto(_)) => {
-                return Err(ClientError::Validation(
-                    "Wrong PIN. Your key backup allows only a few wrong tries before it locks.".into(),
-                ))
-            }
-            Err(SvrBackupError::BackupNotFound) => {
-                return Err(ClientError::Validation(
-                    "This account has no key backup to check the PIN against. Set up your PIN again.".into(),
-                ))
-            }
-            Err(SvrBackupError::RateLimited) => {
-                return Err(ClientError::Validation(
-                    "Too many wrong PIN tries. Wait before trying again — your key backup is intact.".into(),
-                ))
-            }
-            Err(SvrBackupError::BackupDestroyed) => {
-                return Err(ClientError::Validation(
-                    "Your key backup was deleted after too many wrong PIN tries. Set up your PIN again.".into(),
-                ))
-            }
-            Err(e) => return Err(ClientError::Validation(format!("couldn't check your PIN: {e}"))),
+        // Argon2 is expensive: keep the local check off the async executor.
+        let service = self.link_device().clone();
+        let secret = zeroize::Zeroizing::new(pin.to_owned());
+        let local = match tokio::task::spawn_blocking(move || service.verify_pin(&secret)).await {
+            Ok(v) => v,
+            Err(_) => return V::Error(E::Crypto),
         };
-        let stored = self
+        if local != V::NotSetUpOnThisDevice {
+            return local;
+        }
+        let username = match self
             .messages()
             .settings_repo
-            .set_bytes(keys::PIN_FINGERPRINT, &fingerprint);
-        zeroize::Zeroize::zeroize(&mut fingerprint);
-        stored.map_err(storage)
+            .get_string(keys::SVR_SALT_USERNAME)
+        {
+            Ok(Some(s)) if !s.trim().is_empty() => s,
+            Ok(_) => return V::NotSetUpOnThisDevice,
+            Err(_) => return V::Error(E::Storage),
+        };
+        finish_pin_backup_check(
+            &self.messages().settings_repo,
+            self.svr_backup()
+                .verify_pin_against_backup(pin, &username)
+                .await,
+        )
     }
 
     /// Finish a committed rotation (steps 4-6 above); a no-op when none is
@@ -259,5 +257,100 @@ impl ChatterClient {
             .await
             .map_err(|e| ClientError::Validation(format!("profile re-upload failed: {e}")))?;
         Ok(())
+    }
+}
+
+/// Persist only a proven SVR fingerprint, using the same setting as login.
+fn finish_pin_backup_check(
+    settings: &crate::storage::repositories::settings_repo::SettingsRepository,
+    result: Result<[u8; 32], crate::services::svr_backup_service::SvrBackupError>,
+) -> crate::services::link_device_service::PinVerification {
+    use crate::services::link_device_service::{PinVerification as V, PinVerificationError as E};
+    use crate::services::svr_backup_service::SvrBackupError;
+    use crate::storage::repositories::settings_repo::keys;
+    let fingerprint = match result {
+        Ok(fp) => zeroize::Zeroizing::new(fp),
+        Err(SvrBackupError::WrongPin) => return V::Mismatch,
+        Err(SvrBackupError::BackupNotFound) => return V::NotSetUpOnThisDevice,
+        Err(SvrBackupError::RateLimited) => return V::Error(E::RateLimited),
+        Err(SvrBackupError::BackupDestroyed) => return V::Error(E::BackupDestroyed),
+        Err(SvrBackupError::Storage(_)) => return V::Error(E::Storage),
+        Err(SvrBackupError::Network(_)) => return V::Error(E::Network),
+        Err(_) => return V::Error(E::Crypto),
+    };
+    match settings.set_bytes(keys::PIN_FINGERPRINT, &*fingerprint) {
+        Ok(()) => V::Match,
+        Err(_) => V::Error(E::Storage),
+    }
+}
+
+#[cfg(test)]
+mod pin_tests {
+    use super::finish_pin_backup_check;
+    use crate::services::link_device_service::{PinVerification as V, PinVerificationError as E};
+    use crate::services::svr_backup_service::SvrBackupError;
+    use crate::storage::{
+        Database,
+        repositories::settings_repo::{SettingsRepository, keys},
+    };
+    use std::sync::Arc;
+
+    #[test]
+    fn shield_pin_svr_success_populates_linked_device_fingerprint() {
+        let file = tempfile::NamedTempFile::new().unwrap();
+        let db = Arc::new(Database::open(file.path(), "test_passphrase").unwrap());
+        db.run_migrations().unwrap();
+        let settings = SettingsRepository::new(db);
+        settings
+            .set_string(keys::SVR_SALT_USERNAME, "test-user")
+            .unwrap();
+        assert_eq!(settings.get_bytes(keys::PIN_FINGERPRINT).unwrap(), None);
+        let fp = crate::crypto::svr::derive_pin_fingerprint("test-pin-only", "test-user").unwrap();
+        assert_eq!(finish_pin_backup_check(&settings, Ok(fp)), V::Match);
+        assert_eq!(
+            settings.get_bytes(keys::PIN_FINGERPRINT).unwrap(),
+            Some(fp.to_vec())
+        );
+        assert_eq!(
+            finish_pin_backup_check(&settings, Err(SvrBackupError::WrongPin)),
+            V::Mismatch
+        );
+        assert_eq!(
+            finish_pin_backup_check(&settings, Err(SvrBackupError::BackupNotFound)),
+            V::NotSetUpOnThisDevice
+        );
+        assert_eq!(
+            finish_pin_backup_check(&settings, Err(SvrBackupError::RateLimited)),
+            V::Error(E::RateLimited)
+        );
+        assert_eq!(
+            settings.get_bytes(keys::PIN_FINGERPRINT).unwrap(),
+            Some(fp.to_vec())
+        );
+        assert_eq!(
+            finish_pin_backup_check(&settings, Err(SvrBackupError::BackupDestroyed)),
+            V::Error(E::BackupDestroyed)
+        );
+        let crypto = crate::error::CryptoError::KeyDerivationFailed("synthetic failure".into());
+        assert_eq!(
+            finish_pin_backup_check(&settings, Err(SvrBackupError::Crypto(crypto))),
+            V::Error(E::Crypto)
+        );
+        assert_ne!(V::Mismatch.message(), V::NotSetUpOnThisDevice.message());
+        assert_ne!(V::Mismatch.message(), V::Error(E::Storage).message());
+        assert_ne!(
+            V::NotSetUpOnThisDevice.message(),
+            V::Error(E::Storage).message()
+        );
+        settings
+            .database()
+            .connection()
+            .unwrap()
+            .execute_batch("DROP TABLE settings")
+            .unwrap();
+        assert_eq!(
+            finish_pin_backup_check(&settings, Ok(fp)),
+            V::Error(E::Storage)
+        );
     }
 }
