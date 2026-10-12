@@ -21,6 +21,32 @@ pub struct RepublishOutcome {
 }
 
 impl SignalService {
+    /// An explicit sign-in replaces our device address, even when the account
+    /// identity is retained. Old ratchets belong to the old local address:
+    /// sealing them with the new device certificate makes the receiver select
+    /// a different session. Archive first, then warm the known peers during
+    /// onboarding so Shield can use the cache without an identified fetch.
+    /// A failed warm-up leaves no usable old sender chain (fail closed).
+    pub async fn rebind_device_sessions(
+        &self,
+        auth_client: &mut AuthClient,
+    ) -> Result<(), ServiceError> {
+        let peers = self
+            .key_store
+            .session_peer_ids()
+            .map_err(ServiceError::Storage)?;
+        // Invalidate ALL peers before any network operation can fail.
+        for peer in &peers {
+            self.actor.invalidate_peer_sessions(peer.clone()).await?;
+        }
+        for peer in peers {
+            if let Err(error) = self.ensure_sessions_all_devices(auth_client, &peer).await {
+                tracing::warn!(peer_id = %peer, %error, "new device session warm-up failed; old ratchets remain archived");
+            }
+        }
+        Ok(())
+    }
+
     /// Get the local identity key fingerprint.
     pub async fn get_identity_fingerprint(&self) -> Result<String, ServiceError> {
         self.actor.get_identity_fingerprint().await
@@ -219,6 +245,7 @@ impl SignalService {
             .await
             .map_err(ServiceError::Network)?;
         tracing::info!(device_id, "published this device's Signal bundle");
+        self.rebind_device_sessions(auth_client).await?;
         Ok(())
     }
 
@@ -270,6 +297,8 @@ impl SignalService {
             devices_reset = response.devices_reset,
             "republished this device's Signal key material"
         );
+
+        self.rebind_device_sessions(auth_client).await?;
 
         Ok(RepublishOutcome {
             identity_key_changed: response.identity_key_changed,

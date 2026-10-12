@@ -575,6 +575,18 @@ impl KeyStore {
     // `SessionRecord::archive_current_state`. If bulk deletion seems needed
     // again, it almost certainly wants to be an archive.
 
+    /// Peers whose ratchets must be rebound when our local device is replaced.
+    pub fn session_peer_ids(&self) -> Result<Vec<String>, StorageError> {
+        let conn = self.db.connection()?;
+        let mut stmt = conn.prepare(
+            "SELECT DISTINCT substr(address, 1, instr(address, ':') - 1)
+             FROM sessions WHERE instr(address, ':') > 1 ORDER BY 1",
+        )?;
+        let rows = stmt.query_map([], |row| row.get(0))?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StorageError::Database)
+    }
+
     /// List all sessions for a user (all devices) as `(address, record)` pairs.
     ///
     /// Address format is "user_id:device_id", so we match on "user_id:%". Used

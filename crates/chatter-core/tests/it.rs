@@ -13,6 +13,7 @@ mod crypto_attachment_test;
 mod crypto_properties;
 mod dm_bootstrap_wiring_test;
 mod e2e_anon_mode;
+mod e2e_shield_fresh_signin;
 mod e2e_flows;
 mod e2e_multi_device;
 mod e2e_username_lookup;

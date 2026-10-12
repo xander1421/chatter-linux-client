@@ -370,6 +370,49 @@ fn unreachable_auth_client() -> chatter_core::network::grpc::AuthClient {
     )
 }
 
+#[tokio::test]
+async fn new_local_device_archives_every_peer_even_when_warmup_is_offline() {
+    let (service, key_store, settings, _db_file) = setup_test_service().await;
+    let mut expected_archives = Vec::new();
+    for peer in ["peer-a", "peer-b"] {
+        let address = ProtocolAddress::new(peer.into(), DeviceId::new(1).unwrap());
+        key_store
+            .store_session(&format!("{peer}:1"), &usable_session_bytes(&address).await)
+            .unwrap();
+        assert!(service.has_session(peer, 1).await.unwrap());
+        let mut record = libsignal_protocol::SessionRecord::deserialize(
+            &key_store
+                .load_session(&format!("{peer}:1"))
+                .unwrap()
+                .unwrap(),
+        )
+        .unwrap();
+        record.archive_current_state().unwrap();
+        expected_archives.push(record.serialize().unwrap());
+    }
+    settings
+        .set(settings_keys::CURRENT_DEVICE_ID, &2u32)
+        .unwrap();
+    service
+        .rebind_device_sessions(&mut unreachable_auth_client())
+        .await
+        .unwrap();
+    for (peer, expected) in ["peer-a", "peer-b"].into_iter().zip(expected_archives) {
+        assert!(
+            !service.has_session(peer, 1).await.unwrap(),
+            "old-address ratchet must never be reused"
+        );
+        let bytes = key_store
+            .load_session(&format!("{peer}:1"))
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            bytes, expected,
+            "retain the archived in-flight receive state"
+        );
+    }
+}
+
 /// Test that actor operations are serialized through the message channel.
 /// This verifies the actor pattern is being used correctly.
 #[tokio::test]
