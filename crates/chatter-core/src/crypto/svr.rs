@@ -719,6 +719,22 @@ mod tests {
         assert_eq!(p.output_len(), Some(32));
     }
 
+    /// Recorded with the RC112 Argon2 0.5.3 / HKDF 0.12.4 dependencies.
+    /// Pin the full Shield derivation, including username normalization and
+    /// domain separation, so dependency upgrades cannot silently re-key it.
+    #[test]
+    fn shield_pin_fingerprint_matches_rc112_vector() {
+        let secret = derive_svr_secret("p5-test-only-pin", "  KAT-USER  ").unwrap();
+        assert_eq!(
+            hex::encode(secret),
+            "2fe1bd622c2de214dce93f772755a0f4fb6f3de4e309c5990d3e9911a0b0d722",
+        );
+        assert_eq!(
+            hex::encode(pin_fingerprint_from_secret(&secret)),
+            "e45ea2d83712c174b511a2bdfd3961d452203142da70990e4e32a3f16b601a0f",
+        );
+    }
+
     /// CRYPTO-3: the Argon2id SVR secret used to be handed unmodified to an
     /// AES-256-GCM key, an HMAC key whose output the server sees as a lookup
     /// index, an X25519 static scalar and two more HMAC keys — one secret, five
