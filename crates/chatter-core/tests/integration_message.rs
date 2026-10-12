@@ -164,9 +164,7 @@ async fn test_delete_message() {
     );
 
     // Delete it
-    let result = msg_client
-        .delete_message(&message.id, &channel_id)
-        .await;
+    let result = msg_client.delete_message(&message.id, &channel_id).await;
     assert!(result.is_ok(), "Delete should succeed");
 
     // Verify it's gone (might still show as deleted or not appear)
@@ -298,7 +296,7 @@ async fn test_send_to_nonexistent_channel() {
 
     let result = msg_client
         .send_message(
-            "nonexistent-channel-id",
+            &uuid::Uuid::new_v4().to_string(),
             text_content("This should fail"),
             None,
             false,

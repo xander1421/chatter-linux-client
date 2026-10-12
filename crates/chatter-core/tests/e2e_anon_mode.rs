@@ -1,19 +1,9 @@
 //! E2E regression tests for the app-wide "Anon Mode" toggle.
 //!
-//! Anon Mode is a pure UI/presentation flag stored in an in-memory
-//! `AtomicBool` on `ChatterClient`. When enabled, the UI hides server-friend
-//! DMs, public/private channels, and the Friends/Saved entry points; only
-//! anon DMs and anon groups remain visible. The flag is NOT persisted —
-//! every fresh client starts with `anon_mode = false` so privacy properties
-//! auto-revert on restart.
-//!
-//! These tests pin the SDK contract:
-//!   - default state is off
-//!   - toggle is read-write, side-effect free at the SDK layer
-//!   - `verify_pin_for_anon_mode` is read-only (does NOT flip the flag)
-//!   - PIN gate behaves correctly for right/wrong/empty/short inputs
-//!   - enabling anon mode does NOT affect message storage or transport on
-//!     server-managed DMs (it's a UI filter, nothing more)
+//! Shield is an in-memory toggle: friend DMs keep one persisted conversation,
+//! but enabling it routes their traffic through the Tor mailbox transport.
+//! It resets on restart. These tests cover the toggle/PIN and delivery with
+//! the anonymous token pool prepared during normal onboarding.
 //!
 //! Mirrors the conventions in `e2e_server_dm_flow.rs`: gated on
 //! `INTEGRATION_TESTS=1` + a server on `localhost:50051`; `skip_if_no_server!()`
@@ -290,11 +280,9 @@ async fn t17_verify_pin_wrong_fails() {
 // T18: Anon mode does NOT affect message delivery
 // ============================================================================
 //
-// The crucial integration test: anon mode is purely visual; enabling it on
-// the sender side must NOT change storage layout or stream transport for
-// server-managed DMs. Mirrors `t9_server_friend_accept_spawns_stream_listener`
-// for the wire-up; layers `set_anon_mode_enabled(true)` on top of A before
-// the send.
+// Shield changes transport, while the friend conversation and its storage
+// remain the same. Prepare anonymous tokens before entering Shield, just as
+// initial UI sync does; spending must never trigger an authenticated refill.
 
 #[tokio::test]
 async fn t18_anon_mode_does_not_affect_message_delivery() {
@@ -308,6 +296,14 @@ async fn t18_anon_mode_does_not_affect_message_delivery() {
     let uid_a = register_and_start(&client_a, &unique_user("t18a"), "Alice").await;
     let uid_b = register_and_start(&client_b, &unique_user("t18b"), "Bob").await;
 
+    client_a
+        .prefetch_tokens(10)
+        .await
+        .expect("A: initial token prefetch");
+    client_b
+        .prefetch_tokens(10)
+        .await
+        .expect("B: initial token prefetch");
     server_friend(&client_a, &uid_b, &client_b, &uid_a).await;
     tokio::time::sleep(Duration::from_secs(3)).await;
 
@@ -341,8 +337,8 @@ async fn t18_anon_mode_does_not_affect_message_delivery() {
         .expect("A: send_text failed (anon mode must NOT block sends)");
     println!("  A sent: {:?}", test_message);
 
-    // B must still receive — anon mode is a UI filter, not a transport
-    // concern. B buckets by the sender's user_id (A).
+    // B must receive the Tor/mailbox send in its ordinary friend bucket,
+    // keyed by A. The recipient need not enable Shield.
     let received = wait_for_event(&mut events_b, EVENT_TIMEOUT, |event| {
         matches!(
             event,
@@ -356,13 +352,13 @@ async fn t18_anon_mode_does_not_affect_message_delivery() {
         assert_eq!(
             message.as_text().unwrap_or("<not text>"),
             test_message,
-            "delivered text must round-trip through the stream regardless of A's anon mode"
+            "delivered text must round-trip through the Shield mailbox"
         );
-        println!("  B received text via stream listener");
+        println!("  B received text via mailbox polling");
     }
 
     // ── Sender storage: the message MUST be in the local store. Anon
-    //    mode does NOT drop persistence; it's UI-side only. ─────────────
+    //    mode keeps the same persisted friend conversation. ───────────
     let a_stored = client_a
         .get_messages_local_asc(&a_conv_id, &ConversationType::ServerDm, None, 50)
         .expect("A: query ServerDm bucket");
@@ -403,7 +399,7 @@ async fn t18_anon_mode_does_not_affect_message_delivery() {
         "A: anon_mode flag must remain true after the send"
     );
 
-    println!("T18 PASS — anon mode is presentation-only; transport + storage unaffected");
+    println!("T18 PASS — Shield mailbox delivery preserves friend DM storage");
 
     client_a.shutdown().await;
     client_b.shutdown().await;

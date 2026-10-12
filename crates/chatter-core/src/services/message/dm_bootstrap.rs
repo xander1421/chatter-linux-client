@@ -1387,6 +1387,40 @@ mod tests {
         assert!(ms.pending_dms.drain(&friend).unwrap().is_empty());
     }
 
+    /// The composing path must retain an empty-batch refusal as a failed,
+    /// retryable bubble, rather than reporting it sent or losing the content.
+    #[tokio::test]
+    async fn shield_empty_token_send_keeps_a_failed_bubble_for_retry() {
+        let me = UserId::from_uuid(uuid::Uuid::from_u128(1));
+        let friend = UserId::from_uuid(uuid::Uuid::max());
+        let (client, _dir) = shield_client(me);
+        let ms = client.messages();
+        cache_device(ms, &friend, 2, &mut StdRng::seed_from_u64(9)).await;
+
+        let result = ms
+            .send_server_dm(&friend, "keep this", vec![], 12345, None)
+            .await
+            .expect("local echo persists even when delivery fails");
+        assert!(
+            matches!(result.send_error, Some(MessageError::DmError(ref error))
+            if error.contains("no tokens available"))
+        );
+        assert!(!result.bootstrap_initiated);
+        let row = result.message.expect("outgoing bubble");
+        let stored = ms.message_repo.get(&row.id).unwrap().unwrap();
+        assert_eq!(stored.delivery_status, "failed");
+        assert_eq!(stored.as_text(), Some("keep this"));
+        assert_eq!(ms.token_manager.available_token_count().unwrap(), 0);
+
+        // Retry must keep the original row and its failed status if the pool
+        // is still empty. No token request may be coupled to either attempt.
+        assert!(ms.retry_server_dm(&row.id).await.is_err());
+        let retried = ms.message_repo.get(&row.id).unwrap().unwrap();
+        assert_eq!(retried.delivery_status, "failed");
+        assert_eq!(retried.sent_at, stored.sent_at);
+        assert_eq!(retried.as_text(), Some("keep this"));
+    }
+
     /// Our side of a conversation whose peer mailbox is gone (expired, or
     /// dropped as by v069): a live mailbox of ours and an established key,
     /// nothing to send to. Returns our mailbox public key.

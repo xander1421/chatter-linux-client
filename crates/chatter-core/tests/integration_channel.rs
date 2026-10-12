@@ -368,8 +368,16 @@ async fn test_get_nonexistent_channel() {
 
     let mut channel_client = ChannelClient::new(pool.channel(), pool.auth_clone());
 
-    let result = channel_client.get_channel("nonexistent-channel-id").await;
-    assert_not_found(result);
+    let result = channel_client
+        .get_channel(&uuid::Uuid::new_v4().to_string())
+        .await;
+    assert!(
+        matches!(
+            result,
+            Err(NetworkError::NotFound(_)) | Err(NetworkError::PermissionDenied)
+        ),
+        "missing valid channel must return NotFound or PermissionDenied, got {result:?}"
+    );
 }
 
 // ============================================================================

@@ -7,8 +7,7 @@ use crate::{common, skip_if_no_server};
 use base64::Engine;
 use chatter_core::network::grpc::{ChannelClient, MessageClient};
 use chatter_core::proto::chat_v1::{
-    Channel as ChannelProto, ChannelType, MessageSortDirection, message::Content,
-    message::content::Type as ContentType,
+    ChannelType, MessageSortDirection, message::Content, message::content::Type as ContentType,
 };
 use tokio_stream::StreamExt;
 
@@ -386,13 +385,15 @@ async fn test_update_group_settings() {
 
     // Update channel using proper ChannelProto structure
     let new_name = format!("renamed_{}", unique_username());
-    let updated_channel = ChannelProto {
-        id: channel_id.clone(),
-        name: new_name.clone(),
-        description: "Updated description".to_string(),
-        r#type: ChannelType::ChannelPrivate as i32,
-        ..Default::default()
-    };
+    // UpdateChannelRequest embeds a validated Channel, including its owner.
+    // Fetch the complete value instead of constructing an invalid partial one;
+    // update_mask still decides which fields the server writes.
+    let mut updated_channel = channel_client
+        .get_channel(&channel_id)
+        .await
+        .expect("get complete channel before update");
+    updated_channel.name = new_name.clone();
+    updated_channel.description = "Updated description".to_string();
 
     // INFRA-30: update_mask is REQUIRED and authoritative. This call used to
     // pass `None`, which the server now rejects with InvalidArgument
@@ -468,12 +469,12 @@ async fn test_update_group_settings_rejects_empty_update_mask() {
         .expect("Failed to create group");
     let channel_id = consume_create_stream_get_id(stream).await;
 
-    let updated_channel = ChannelProto {
-        id: channel_id.clone(),
-        name: format!("renamed_{}", unique_username()),
-        r#type: ChannelType::ChannelPrivate as i32,
-        ..Default::default()
-    };
+    // Keep the payload valid so rejection proves the missing-mask rule.
+    let mut updated_channel = channel_client
+        .get_channel(&channel_id)
+        .await
+        .expect("get complete channel before update");
+    updated_channel.name = format!("renamed_{}", unique_username());
 
     // No mask. The failure may surface either at the RPC call or as an
     // OperationFailed event on the stream; both are a rejection, and neither

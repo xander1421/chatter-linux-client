@@ -157,7 +157,11 @@ async fn test_complete_provisioning_flow() {
 
         assert_ok(
             primary_client
-                .provision_device(&provisioning_uuid, envelope.clone(), "test-code-1234567890")
+                .provision_device(
+                    &provisioning_uuid,
+                    envelope.clone(),
+                    "test-code-1234567890-123456789012",
+                )
                 .await,
         );
         println!("Primary device sent encrypted envelope");
@@ -193,7 +197,7 @@ async fn test_complete_provisioning_flow() {
         let complete_response = assert_ok(
             new_device_client
                 .complete_device_linking(
-                    "test-code-1234567890",
+                    "test-code-1234567890-123456789012",
                     &device_auth_token,
                     "Linux x86_64",
                     // The server stores the name encrypted to the account identity
@@ -249,7 +253,11 @@ async fn test_cancel_provisioning_session() {
 
     assert_ok(
         primary_client
-            .provision_device(&provisioning_uuid, envelope, "test-code-1234567890")
+            .provision_device(
+                &provisioning_uuid,
+                envelope,
+                "test-code-1234567890-123456789012",
+            )
             .await,
     );
 
@@ -306,7 +314,7 @@ async fn test_list_provisioning_sessions() {
             .provision_device(
                 &start_response.provisioning_uuid,
                 envelope,
-                "test-code-1234567890",
+                "test-code-1234567890-123456789012",
             )
             .await,
     );
@@ -358,7 +366,7 @@ async fn test_provision_device_requires_authentication() {
         .provision_device(
             &start_response.provisioning_uuid,
             envelope,
-            "test-code-1234567890",
+            "test-code-1234567890-123456789012",
         )
         .await;
 
@@ -430,7 +438,7 @@ async fn test_cannot_reprovision_already_provisioned_session() {
             .provision_device(
                 &start_response.provisioning_uuid,
                 envelope.clone(),
-                "test-code-1234567890",
+                "test-code-1234567890-123456789012",
             )
             .await,
     );
@@ -440,7 +448,7 @@ async fn test_cannot_reprovision_already_provisioned_session() {
         .provision_device(
             &start_response.provisioning_uuid,
             envelope,
-            "test-code-1234567890",
+            "test-code-1234567890-123456789012",
         )
         .await;
 
@@ -540,7 +548,7 @@ async fn test_full_link_flow_with_real_envelope_crypto() {
         );
         let mut primary_client = ProvisioningClient::new(pool.channel(), pool.auth_clone());
 
-        let provisioning_code = "TESTCODE12345678".to_string();
+        let provisioning_code = "TESTCODE123456789012345678901234".to_string();
         let primary_identity = IdentityKeyPair::generate(&mut rand::rng());
         let provision_msg = ProvisionMessage {
             aci_identity_key_private: primary_identity.private_key().serialize().to_vec(),
