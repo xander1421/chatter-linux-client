@@ -20,6 +20,7 @@ pub mod notification_client;
 pub mod onion_transport;
 pub mod provisioning_client;
 pub mod retry;
+pub mod response_codec;
 pub mod svr_client;
 pub mod transport;
 pub mod user_client;

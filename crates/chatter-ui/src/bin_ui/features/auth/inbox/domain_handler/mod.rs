@@ -783,11 +783,16 @@ pub async fn handle_domain_event(
                     ("UNBAN", _) => "Your ban was lifted.".to_string(),
                     _ => "A moderation action was applied to your account.".to_string(),
                 };
+                let variant = if matches!(action.as_str(), "UNMUTE" | "UNBAN") {
+                    "success"
+                } else {
+                    "error"
+                };
                 let weak = window.clone();
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
                         w.set_toast_message(text.into());
-                        w.set_toast_variant("error".into());
+                        w.set_toast_variant(variant.into());
                         w.set_toast_visible(true);
                     }
                 });

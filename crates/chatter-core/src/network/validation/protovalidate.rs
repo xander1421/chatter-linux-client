@@ -1,4 +1,4 @@
-//! Declared validation of end-to-end content.
+//! Declared validation of end-to-end content and RPC responses.
 //!
 //! The server enforces the `buf.validate` rules on every RPC request it
 //! receives, but it never sees decrypted content, so the rules declared on
@@ -15,8 +15,13 @@
 //! test in the server repository (`pkg/proto/chat/v1/content`) runs the
 //! official validator over the vectors `conformance_vectors_match_go` replays.
 //!
-//! Only the standard rule kinds `content.proto` declares are understood. A
-//! declared rule outside that set (a CEL expression, `string.pattern`, ...) is a
+//! Content and RPC outputs share the evaluator. RPC plans include only messages
+//! reachable from service outputs, so request-only rules cannot break replies.
+//! The finite response CEL expressions and patterns are matched exactly; a new
+//! declaration fails closed and must gain support plus Go conformance vectors.
+//!
+//! Only explicitly supported declared rule kinds are understood. A
+//! declared rule outside that set is a
 //! compile error: every validation then fails closed, and
 //! `every_declared_rule_is_supported` fails the build's tests.
 
@@ -166,6 +171,11 @@ pub fn test_plaintext(body: &str) -> Vec<u8> {
 /// protovalidate rule id they report (`uint32.gte`, `fixed64.lte`, ...).
 #[derive(Debug, Clone)]
 enum Check {
+    StringLen(u64),
+    StringPattern(String),
+    BytesMinLen(u64),
+    EnumNotIn(Vec<i32>),
+    DurationBound(i128, bool),
     StringMinLen(u64),
     StringMaxLen(u64),
     StringMaxBytes(u64),
@@ -189,6 +199,7 @@ struct ValueRules {
 
 #[derive(Debug, Clone, Default)]
 struct ListRules {
+    min_items: Option<u64>,
     max_items: Option<u64>,
     items: ValueRules,
 }
@@ -205,6 +216,7 @@ struct FieldPlan {
 struct MessagePlan {
     fields: Vec<FieldPlan>,
     required_oneofs: Vec<OneofDescriptor>,
+    expressions: Vec<String>,
 }
 
 struct CompiledRules {
@@ -255,6 +267,81 @@ fn compile() -> Result<CompiledRules, String> {
     })
 }
 
+static RPC_RULES: LazyLock<Result<CompiledRules, String>> = LazyLock::new(compile_rpc);
+
+fn compile_rpc() -> Result<CompiledRules, String> {
+    let mut pool = DescriptorPool::global();
+    pool.decode_file_descriptor_set(BUF_VALIDATE_DESCRIPTOR_SET)
+        .map_err(|e| e.to_string())?;
+    for bytes in [
+        crate::proto::content_v1::FILE_DESCRIPTOR_SET,
+        crate::proto::signal_v1::FILE_DESCRIPTOR_SET,
+        crate::proto::chat_v1::FILE_DESCRIPTOR_SET,
+        crate::proto::mailbox_v1::FILE_DESCRIPTOR_SET,
+        crate::proto::provisioning_v1::FILE_DESCRIPTOR_SET,
+    ] {
+        pool.decode_file_descriptor_set(bytes)
+            .map_err(|e| e.to_string())?;
+    }
+    let mut pending: Vec<_> = pool
+        .services()
+        .flat_map(|s| s.methods().map(|m| m.output()).collect::<Vec<_>>())
+        .collect();
+    let mut compiler = Compiler {
+        unsupported: Vec::new(),
+        declared: Vec::new(),
+    };
+    let mut plans = HashMap::new();
+    while let Some(desc) = pending.pop() {
+        if plans.contains_key(desc.full_name()) {
+            continue;
+        }
+        for field in desc.fields() {
+            if let Kind::Message(nested) = field.kind() {
+                pending.push(nested);
+            }
+        }
+        let plan = compiler.message(
+            &desc,
+            &pool.get_extension_by_name("buf.validate.field").unwrap(),
+            &pool.get_extension_by_name("buf.validate.oneof").unwrap(),
+            &pool.get_extension_by_name("buf.validate.message").unwrap(),
+        );
+        plans.insert(desc.full_name().to_string(), plan);
+    }
+    if !compiler.unsupported.is_empty() {
+        return Err(compiler.unsupported.join(", "));
+    }
+    Ok(CompiledRules {
+        pool,
+        plans,
+        declared: compiler.declared,
+    })
+}
+
+/// Validate the exact wire bytes against the output descriptor of the RPC.
+pub fn validate_rpc_response(path: &str, bytes: &[u8]) -> Result<(), ContentValidationError> {
+    let rules = RPC_RULES
+        .as_ref()
+        .map_err(|e| ContentValidationError::Unavailable(e.clone()))?;
+    let (service, method) = path
+        .strip_prefix('/')
+        .and_then(|s| s.split_once('/'))
+        .ok_or_else(|| ContentValidationError::Unavailable("unknown RPC".into()))?;
+    let output = rules
+        .pool
+        .get_service_by_name(service)
+        .and_then(|s| s.methods().find(|m| m.name() == method))
+        .ok_or_else(|| ContentValidationError::Unavailable("unknown RPC".into()))?
+        .output();
+    let message = DynamicMessage::decode(output, bytes)
+        .map_err(|_| ContentValidationError::Decode("invalid protobuf".into()))?;
+    rules.check_message(
+        &message,
+        &mut vec![message.descriptor().full_name().to_owned()],
+    )
+}
+
 struct Compiler {
     unsupported: Vec<String>,
     declared: Vec<(String, String)>,
@@ -271,9 +358,49 @@ impl Compiler {
         let mut plan = MessagePlan::default();
         let options = desc.options();
         if options.has_extension(message_ext) {
-            // No message-level rule (CEL, message oneof) is understood.
-            self.unsupported
-                .push(format!("{}: buf.validate.message", desc.full_name()));
+            let extension = options.get_extension(message_ext);
+            if let Some(rules) = extension.as_message() {
+                self.reject_unknown(rules, desc.full_name());
+                for (field, value) in rules.fields() {
+                    if field.name() != "cel" {
+                        self.unsupported.push(format!(
+                            "{}: message.{}",
+                            desc.full_name(),
+                            field.name()
+                        ));
+                        continue;
+                    }
+                    for rule in value.as_list().into_iter().flatten() {
+                        let expression = rule
+                            .as_message()
+                            .and_then(|r| r.get_field_by_name("expression"))
+                            .and_then(|v| v.as_str().map(str::to_owned))
+                            .unwrap_or_default();
+                        let expected_message = match expression.as_str() {
+                            "!this.ephemeral || has(this.ephemeral_ttl)" => "chat.v1.Message",
+                            "this.type != 4 || this.members.size() == 1"
+                            | "this.type == 4 || this.name != ''" => "chat.v1.Channel",
+                            "this.persistence != 1 || has(this.ttl)" => "chat.v1.Channel.Config",
+                            "this.user_id != this.moderator_id"
+                            | "!has(this.duration) || this.action == 2 || this.action == 3"
+                            | "this.action == 5 || this.moderator_id != ''" => {
+                                "chat.v1.ChannelModeration"
+                            }
+                            "this.inviter_id != this.invitee_id" => "chat.v1.ChannelInvite",
+                            "int(this.expires_at) > int(now) * 1000000000" => "chat.v1.Session",
+                            _ => "",
+                        };
+                        if SUPPORTED_EXPRESSIONS.contains(&expression.as_str())
+                            && desc.full_name() == expected_message
+                        {
+                            plan.expressions.push(expression);
+                        } else {
+                            self.unsupported
+                                .push(format!("{}: unsupported CEL expression", desc.full_name()));
+                        }
+                    }
+                }
+            }
         }
         for oneof in desc.oneofs() {
             let options = oneof.options();
@@ -372,6 +499,10 @@ impl Compiler {
         let mut list = ListRules::default();
         for (f, v) in rules.fields() {
             match f.name() {
+                "min_items" => {
+                    self.declared.push((at.into(), "repeated.min_items".into()));
+                    list.min_items = v.as_u64();
+                }
                 "max_items" => {
                     self.declared.push((at.into(), "repeated.max_items".into()));
                     list.max_items = v.as_u64();
@@ -420,6 +551,7 @@ impl Compiler {
                 | ("fixed64", Kind::Fixed64)
                 | ("int32", Kind::Int32)
                 | ("enum", Kind::Enum(_))
+                | ("duration", Kind::Message(_))
         );
         if !matches {
             self.unsupported
@@ -432,6 +564,21 @@ impl Compiler {
             let unsigned = v.as_u32().map(u64::from).or_else(|| v.as_u64());
             let signed = v.as_i32().map(i64::from);
             let check = match (id.as_str(), unsigned, signed) {
+                ("string.len", Some(n), _) => Some(Check::StringLen(n)),
+                ("string.pattern", _, _) => v
+                    .as_str()
+                    .filter(|p| SUPPORTED_PATTERNS.contains(p))
+                    .map(|p| Check::StringPattern(p.into())),
+                ("bytes.min_len", Some(n), _) => Some(Check::BytesMinLen(n)),
+                ("enum.not_in", _, _) => v.as_list().map(|items| {
+                    Check::EnumNotIn(items.iter().filter_map(Value::as_i32).collect())
+                }),
+                ("duration.gt", _, _) | ("duration.lt", _, _) => v
+                    .as_message()
+                    .map(|m| Check::DurationBound(duration_nanos(m), id == "duration.gt")),
+                ("uint32.gt", Some(n), _) => Some(Check::UintGt(n, "uint32.gt")),
+                ("uint64.gt", Some(n), _) => Some(Check::UintGt(n, "uint64.gt")),
+                ("fixed64.gte", Some(n), _) => Some(Check::UintGte(n, "fixed64.gte")),
                 ("string.min_len", Some(n), _) => Some(Check::StringMinLen(n)),
                 ("string.max_len", Some(n), _) => Some(Check::StringMaxLen(n)),
                 ("string.max_bytes", Some(n), _) => Some(Check::StringMaxBytes(n)),
@@ -460,6 +607,113 @@ impl Compiler {
             }
         }
         checks
+    }
+}
+
+// These are the complete expressions and patterns reachable from RPC outputs.
+// Match the exact declared text: additions/changes fail closed, never get ignored.
+const SUPPORTED_PATTERNS: &[&str] = &[
+    "^[a-zA-Z0-9_-]+$",
+    "^[^<>]*$",
+    "^https?://.+",
+    "^$|^chatter_[0-9a-f]{32}$",
+];
+fn check_pattern(pattern: &str, s: &str) -> bool {
+    match pattern {
+        "^[a-zA-Z0-9_-]+$" => {
+            !s.is_empty()
+                && s.bytes()
+                    .all(|c| c.is_ascii_alphanumeric() || c == b'_' || c == b'-')
+        }
+        "^[^<>]*$" => !s.contains(['<', '>']),
+        "^https?://.+" => s
+            .strip_prefix("https://")
+            .or_else(|| s.strip_prefix("http://"))
+            .is_some_and(|tail| tail.chars().next().is_some_and(|c| c != '\n')),
+        "^$|^chatter_[0-9a-f]{32}$" => {
+            s.is_empty()
+                || s.strip_prefix("chatter_").is_some_and(|tail| {
+                    tail.len() == 32
+                        && tail
+                            .bytes()
+                            .all(|c| c.is_ascii_digit() || (b'a'..=b'f').contains(&c))
+                })
+        }
+        _ => false,
+    }
+}
+const SUPPORTED_EXPRESSIONS: &[&str] = &[
+    "!this.ephemeral || has(this.ephemeral_ttl)",
+    "this.type != 4 || this.members.size() == 1",
+    "this.type == 4 || this.name != ''",
+    "this.persistence != 1 || has(this.ttl)",
+    "this.user_id != this.moderator_id",
+    "!has(this.duration) || this.action == 2 || this.action == 3",
+    "this.inviter_id != this.invitee_id",
+    "int(this.expires_at) > int(now) * 1000000000",
+    "this.action == 5 || this.moderator_id != ''",
+];
+fn expression_rule_id(expression: &str) -> &'static str {
+    match expression {
+        "!this.ephemeral || has(this.ephemeral_ttl)" => "ephemeral_ttl_required",
+        "this.type != 4 || this.members.size() == 1" => "saved_messages_channel_members",
+        "this.type == 4 || this.name != ''" => "channel_name_required",
+        "this.persistence != 1 || has(this.ttl)" => "ttl_required_for_ephemeral",
+        "this.user_id != this.moderator_id" => "different_moderator_user",
+        "!has(this.duration) || this.action == 2 || this.action == 3" => "duration_for_ban_or_mute",
+        "this.inviter_id != this.invitee_id" => "different_users",
+        "int(this.expires_at) > int(now) * 1000000000" => "session_expiry_in_future",
+        "this.action == 5 || this.moderator_id != ''" => "moderator_required_unless_unmute",
+        _ => "message.cel",
+    }
+}
+fn duration_nanos(m: &DynamicMessage) -> i128 {
+    let seconds = m
+        .get_field_by_name("seconds")
+        .and_then(|v| v.as_i64())
+        .unwrap_or_default();
+    let nanos = m
+        .get_field_by_name("nanos")
+        .and_then(|v| v.as_i32())
+        .unwrap_or_default();
+    i128::from(seconds) * 1_000_000_000 + i128::from(nanos)
+}
+fn check_expression(m: &DynamicMessage, expression: &str) -> bool {
+    let field = |name: &str| m.get_field_by_name(name).unwrap().into_owned();
+    let has = |name: &str| m.has_field_by_name(name);
+    match expression {
+        "!this.ephemeral || has(this.ephemeral_ttl)" => {
+            field("ephemeral").as_bool() == Some(false) || has("ephemeral_ttl")
+        }
+        "this.type != 4 || this.members.size() == 1" => {
+            field("type").as_enum_number() != Some(4)
+                || field("members").as_list().is_some_and(|l| l.len() == 1)
+        }
+        "this.type == 4 || this.name != ''" => {
+            field("type").as_enum_number() == Some(4) || field("name").as_str() != Some("")
+        }
+        "this.persistence != 1 || has(this.ttl)" => {
+            field("persistence").as_enum_number() != Some(1) || has("ttl")
+        }
+        "this.user_id != this.moderator_id" => field("user_id") != field("moderator_id"),
+        "!has(this.duration) || this.action == 2 || this.action == 3" => {
+            !has("duration") || matches!(field("action").as_enum_number(), Some(2 | 3))
+        }
+        "this.action == 5 || this.moderator_id != ''" => {
+            field("action").as_enum_number() == Some(5)
+                || field("moderator_id").as_str() != Some("")
+        }
+        "this.inviter_id != this.invitee_id" => field("inviter_id") != field("invitee_id"),
+        "int(this.expires_at) > int(now) * 1000000000" => {
+            let now = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_secs();
+            field("expires_at").as_u64().is_some_and(|expiry| {
+                expiry <= i64::MAX as u64 && expiry > now.saturating_mul(1_000_000_000)
+            })
+        }
+        _ => false,
     }
 }
 
@@ -497,6 +751,11 @@ impl CompiledRules {
                 desc.full_name()
             )));
         };
+        for expression in &plan.expressions {
+            if !check_expression(message, expression) {
+                return Err(violation(path, expression_rule_id(expression)));
+            }
+        }
         for oneof in &plan.required_oneofs {
             if !oneof.fields().any(|f| message.has_field(&f)) {
                 path.push(oneof.name().to_string());
@@ -528,6 +787,11 @@ impl CompiledRules {
             if let Some(list) = &fp.list
                 && !(fp.value.ignore_if_zero && items.is_empty())
             {
+                if let Some(min) = list.min_items
+                    && (items.len() as u64) < min
+                {
+                    return Err(violation(path, "repeated.min_items"));
+                }
                 if let Some(max) = list.max_items
                     && items.len() as u64 > max
                 {
@@ -588,6 +852,38 @@ fn check_value(
     let signed = value.as_i32().map(i64::from);
     for check in &rules.checks {
         let failed: Option<&'static str> = match check {
+            Check::StringLen(n) => value
+                .as_str()
+                .filter(|s| s.chars().count() as u64 != *n)
+                .map(|_| "string.len"),
+            Check::StringPattern(pattern) => value
+                .as_str()
+                .filter(|s| !check_pattern(pattern, s))
+                .map(|_| "string.pattern"),
+            Check::BytesMinLen(n) => value
+                .as_bytes()
+                .filter(|b| (b.len() as u64) < *n)
+                .map(|_| "bytes.min_len"),
+            Check::EnumNotIn(items) => value
+                .as_enum_number()
+                .filter(|n| items.contains(n))
+                .map(|_| "enum.not_in"),
+            Check::DurationBound(bound, greater) => value
+                .as_message()
+                .filter(|m| {
+                    if *greater {
+                        duration_nanos(m) <= *bound
+                    } else {
+                        duration_nanos(m) >= *bound
+                    }
+                })
+                .map(|_| {
+                    if *greater {
+                        "duration.gt"
+                    } else {
+                        "duration.lt"
+                    }
+                }),
             Check::StringMinLen(n) => value
                 .as_str()
                 .filter(|s| (s.chars().count() as u64) < *n)
@@ -662,8 +958,284 @@ mod tests {
         RULES.as_ref().expect("content rules compile")
     }
 
+    #[test]
+    fn rpc_conformance_vectors_match_official_go_validator() {
+        let rules = RPC_RULES.as_ref().unwrap();
+        let mut count = 0;
+        for line in include_str!("testdata/rpc_validation_vectors.tsv").lines() {
+            if line.starts_with('#') || line.is_empty() {
+                continue;
+            }
+            let columns: Vec<_> = line.split('\t').collect();
+            let bytes = hex::decode(columns[3]).unwrap();
+            let message = DynamicMessage::decode(
+                rules.pool.get_message_by_name(columns[0]).unwrap(),
+                bytes.as_slice(),
+            )
+            .unwrap();
+            let result = rules.check_message(&message, &mut Vec::new());
+            assert_eq!(
+                result.is_ok(),
+                columns[2] == "true",
+                "{}: {:?}",
+                columns[1],
+                result
+            );
+            count += 1;
+        }
+        assert!(count >= 60);
+    }
+
+    #[test]
+    fn rpc_additional_scalar_rules_reject_each_violation_class() {
+        let cases = [
+            (
+                Check::StringLen(3),
+                Value::String("ab".into()),
+                Kind::String,
+                "string.len",
+            ),
+            (
+                Check::StringPattern("^[a-zA-Z0-9_-]+$".into()),
+                Value::String("private value".into()),
+                Kind::String,
+                "string.pattern",
+            ),
+            (
+                Check::BytesMinLen(2),
+                Value::Bytes(vec![1].into()),
+                Kind::Bytes,
+                "bytes.min_len",
+            ),
+            (
+                Check::EnumNotIn(vec![0]),
+                Value::EnumNumber(0),
+                Kind::Enum(
+                    RPC_RULES
+                        .as_ref()
+                        .unwrap()
+                        .pool
+                        .get_enum_by_name("chat.v1.ChannelRole")
+                        .unwrap(),
+                ),
+                "enum.not_in",
+            ),
+            (
+                Check::UintGt(0, "uint32.gt"),
+                Value::U32(0),
+                Kind::Uint32,
+                "uint32.gt",
+            ),
+            (
+                Check::UintGt(0, "uint64.gt"),
+                Value::U64(0),
+                Kind::Uint64,
+                "uint64.gt",
+            ),
+            (
+                Check::UintGte(1, "fixed64.gte"),
+                Value::U64(0),
+                Kind::Fixed64,
+                "fixed64.gte",
+            ),
+        ];
+        for (check, value, kind, expected) in cases {
+            let error = check_value(
+                &value,
+                &ValueRules {
+                    checks: vec![check],
+                    ..Default::default()
+                },
+                &kind,
+                &["schema_field".into()],
+            )
+            .unwrap_err();
+            assert!(
+                matches!(error, ContentValidationError::Violation { rule, .. } if rule == expected)
+            );
+        }
+    }
+
+    #[test]
+    fn rpc_patterns_match_declared_semantics() {
+        for (pattern, valid, invalid) in [
+            ("^[a-zA-Z0-9_-]+$", "Test_123-a", "é"),
+            ("^[^<>]*$", "hello\nworld", "<hello>"),
+            (
+                "^https?://.+",
+                "https://example.test/",
+                "https://\nexample.test",
+            ),
+            (
+                "^$|^chatter_[0-9a-f]{32}$",
+                "chatter_0123456789abcdef0123456789abcdef",
+                "chatter_0123456789ABCDEF0123456789ABCDEF",
+            ),
+        ] {
+            assert!(check_pattern(pattern, valid));
+            assert!(!check_pattern(pattern, invalid));
+        }
+        assert!(check_pattern("^$|^chatter_[0-9a-f]{32}$", ""));
+    }
+
+    #[test]
+    fn rpc_cel_expressions_accept_and_reject() {
+        let pool = &RPC_RULES.as_ref().unwrap().pool;
+        let cases = [
+            (
+                "chat.v1.Message",
+                0,
+                "ephemeral",
+                Value::Bool(true),
+                Value::Bool(false),
+            ),
+            (
+                "chat.v1.Channel",
+                1,
+                "type",
+                Value::EnumNumber(4),
+                Value::EnumNumber(1),
+            ),
+            (
+                "chat.v1.Channel",
+                2,
+                "name",
+                Value::String("".into()),
+                Value::String("valid".into()),
+            ),
+            (
+                "chat.v1.Channel.Config",
+                3,
+                "persistence",
+                Value::EnumNumber(1),
+                Value::EnumNumber(2),
+            ),
+            (
+                "chat.v1.ChannelModeration",
+                4,
+                "user_id",
+                Value::String("".into()),
+                Value::String("different".into()),
+            ),
+            (
+                "chat.v1.ChannelInvite",
+                6,
+                "inviter_id",
+                Value::String("".into()),
+                Value::String("different".into()),
+            ),
+            (
+                "chat.v1.Session",
+                7,
+                "expires_at",
+                Value::U64(1),
+                Value::U64(i64::MAX as u64),
+            ),
+        ];
+        for (name, expression, field, invalid, valid) in cases {
+            let mut message = DynamicMessage::new(pool.get_message_by_name(name).unwrap());
+            message.set_field_by_name(field, invalid);
+            assert!(
+                !check_expression(&message, SUPPORTED_EXPRESSIONS[expression]),
+                "{name}"
+            );
+            message.set_field_by_name(field, valid);
+            assert!(
+                check_expression(&message, SUPPORTED_EXPRESSIONS[expression]),
+                "{name}"
+            );
+        }
+    }
+
+    #[test]
+    fn rpc_optional_moderation_duration_matches_action() {
+        let pool = &RPC_RULES.as_ref().unwrap().pool;
+        let mut message = DynamicMessage::new(
+            pool.get_message_by_name("chat.v1.ChannelModeration")
+                .unwrap(),
+        );
+        for action in 0..=5 {
+            message.set_field_by_name("action", Value::EnumNumber(action));
+            assert!(check_expression(&message, SUPPORTED_EXPRESSIONS[5]));
+        }
+        message.set_field_by_name(
+            "duration",
+            Value::Message(DynamicMessage::new(
+                pool.get_message_by_name("google.protobuf.Duration")
+                    .unwrap(),
+            )),
+        );
+        for action in 0..=5 {
+            message.set_field_by_name("action", Value::EnumNumber(action));
+            assert_eq!(
+                check_expression(&message, SUPPORTED_EXPRESSIONS[5]),
+                matches!(action, 2 | 3)
+            );
+        }
+    }
+
+    #[test]
+    fn rpc_duration_and_repeated_minimum_are_enforced() {
+        let rules = RPC_RULES.as_ref().unwrap();
+        let desc = rules
+            .pool
+            .get_message_by_name("google.protobuf.Duration")
+            .unwrap();
+        let mut duration = DynamicMessage::new(desc.clone());
+        for (greater, seconds, valid) in [
+            (true, 0, false),
+            (true, 1, true),
+            (false, 10, false),
+            (false, 9, true),
+        ] {
+            duration.set_field_by_name("seconds", Value::I64(seconds));
+            duration.set_field_by_name("nanos", Value::I32(0));
+            let bound = if greater { 0 } else { 10_000_000_000 };
+            let result = check_value(
+                &Value::Message(duration.clone()),
+                &ValueRules {
+                    checks: vec![Check::DurationBound(bound, greater)],
+                    ..Default::default()
+                },
+                &Kind::Message(desc.clone()),
+                &[],
+            );
+            assert_eq!(result.is_ok(), valid);
+        }
+        let mut webhook = DynamicMessage::new(
+            rules
+                .pool
+                .get_message_by_name("chat.v1.WebhookConfig")
+                .unwrap(),
+        );
+        webhook.set_field_by_name("url", Value::String("https://example.test".into()));
+        assert!(matches!(
+            rules.check_message(&webhook, &mut Vec::new()),
+            Err(ContentValidationError::Violation {
+                rule: "repeated.min_items",
+                ..
+            })
+        ));
+        let mut event = DynamicMessage::new(
+            rules
+                .pool
+                .get_message_by_name("chat.v1.WebhookEvent")
+                .unwrap(),
+        );
+        event.set_field_by_name("type", Value::EnumNumber(1));
+        webhook.set_field_by_name("events", Value::List(vec![Value::Message(event)]));
+        webhook.set_field_by_name("timeout_seconds", Value::U32(1));
+        assert!(rules.check_message(&webhook, &mut Vec::new()).is_ok());
+    }
     /// Every rule content.proto declares compiles into a check. A rule kind the
     /// evaluator does not understand would otherwise go silently unenforced.
+    #[test]
+    fn every_rpc_response_rule_is_supported() {
+        if let Err(e) = compile_rpc() {
+            panic!("{e}");
+        }
+    }
+
     #[test]
     fn every_declared_rule_is_supported() {
         let compiled = compile();
