@@ -396,7 +396,8 @@ impl DeviceInboxProvider {
             .get::<u32>(crate::storage::settings_keys::CURRENT_DEVICE_ID)
             .map_err(|e| InboxError::AuthFailed(e.to_string()))?
             .ok_or_else(|| InboxError::AuthFailed("No current device id".into()))?;
-        self.poller.bind_device(user_id, device_id);
+        self.poller
+            .bind_device(user_id, device_id, self.grpc_pool.auth().generation());
 
         let poll_hints = self.poll_hints.clone();
         let poller = self.poller.clone();

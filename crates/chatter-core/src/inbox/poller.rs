@@ -19,13 +19,13 @@ use super::state::{InboxState, InboxStats};
 /// Queue IDs belong to one authenticated device, not to this process.
 #[derive(Default)]
 struct DeviceQueueCursor {
-    owner: Option<(String, u32)>,
+    owner: Option<(String, u32, u64)>,
     after_id: i64,
 }
 
 impl DeviceQueueCursor {
-    fn bind(&mut self, user_id: String, device_id: u32) {
-        let owner = (user_id, device_id);
+    fn bind(&mut self, user_id: String, device_id: u32, auth_generation: u64) {
+        let owner = (user_id, device_id, auth_generation);
         if self.owner.as_ref() != Some(&owner) {
             self.owner = Some(owner);
             self.after_id = 0;
@@ -125,8 +125,10 @@ impl InboxPoller {
 
     /// Bind while the provider is stopped; transport switches retain the same
     /// device cursor, while a fresh login starts at the new queue's beginning.
-    pub fn bind_device(&self, user_id: String, device_id: u32) {
-        self.cursor.write().bind(user_id, device_id);
+    pub fn bind_device(&self, user_id: String, device_id: u32, auth_generation: u64) {
+        self.cursor
+            .write()
+            .bind(user_id, device_id, auth_generation);
     }
 
     /// Execute a single poll cycle.
@@ -329,14 +331,17 @@ mod tests {
     #[test]
     fn pagination_follows_device_address_across_relogin_and_transport_switch() {
         let mut cursor = DeviceQueueCursor::default();
-        cursor.bind("alice".into(), 2);
+        cursor.bind("alice".into(), 2, 1);
         cursor.after_id = 3;
-        cursor.bind("alice".into(), 2); // Shield changes transport only.
+        cursor.bind("alice".into(), 2, 1); // Shield changes transport only.
         assert_eq!(cursor.after_id, 3);
-        cursor.bind("alice".into(), 1); // Logout/login replaces the device.
+        cursor.bind("alice".into(), 1, 2); // Logout/login replaces the device.
         assert_eq!(cursor.after_id, 0, "new queue IDs 1..=3 must be fetched");
         cursor.after_id = 7;
-        cursor.bind("bob".into(), 1);
+        cursor.bind("alice".into(), 1, 3); // The server may reuse the same ID.
+        assert_eq!(cursor.after_id, 0, "a new auth session owns a fresh queue");
+        cursor.after_id = 7;
+        cursor.bind("bob".into(), 1, 3);
         assert_eq!(cursor.after_id, 0, "another account owns another queue");
     }
 
