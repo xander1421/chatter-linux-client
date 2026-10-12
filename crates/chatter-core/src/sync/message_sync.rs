@@ -140,8 +140,9 @@ impl MessageSync {
             for proto_msg in &response.messages {
                 // Same decrypt → persist path the live stream uses, so a
                 // message read back from the server is as readable as one that
-                // arrived live. `emit = false`: a catch-up of a hundred old
-                // messages must not fire a hundred UI events.
+                // arrived live. `live = false` retains our own history too;
+                // newly inserted rows announce once, whichever path wins.
+                // Existing rows and later encrypted stream duplicates stay silent.
                 let outcome = self.inbound.ingest(proto_msg, *channel_id, false).await;
                 if outcome == Ingested::Stored {
                     result.inserted += 1;

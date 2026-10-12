@@ -12517,6 +12517,18 @@ async fn channel_restart_receive(inject_retained_failure: bool) {
             if message.conversation_id == cid2 && message.as_text() == Some(m2.as_str()))
     })
     .await;
+    if got_after.is_none() {
+        let stored = client_b2
+            .get_messages(&ActiveConversation::Channel(channel.id), 100)
+            .unwrap_or_default();
+        eprintln!(
+            "V54 delivery diagnostic: marker stored={}, stored_rows={}",
+            stored
+                .iter()
+                .any(|m| m.as_text() == Some(marker_after.as_str())),
+            stored.len()
+        );
+    }
     assert!(
         got_after.is_some(),
         "INFRA-1 REGRESSION: after restarting, B received no live message ({marker_after}) in a \
@@ -12711,6 +12723,16 @@ async fn v55_accepting_an_invite_is_enough_to_get_the_channel() {
             if message.conversation_id == cid && message.as_text() == Some(m.as_str()))
     })
     .await;
+    if got.is_none() {
+        let stored = client_b
+            .get_messages(&ActiveConversation::Channel(channel.id), 100)
+            .unwrap_or_default();
+        eprintln!(
+            "V55 delivery diagnostic: marker stored={}, stored_rows={}",
+            stored.iter().any(|m| m.as_text() == Some(marker.as_str())),
+            stored.len()
+        );
+    }
     assert!(
         got.is_some(),
         "§69 REGRESSION: B accepted the invitation and then received no live message ({marker}) \

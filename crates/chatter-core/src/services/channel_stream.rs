@@ -358,10 +358,14 @@ impl ChannelStreamService {
 
     /// One connect → consume → disconnect cycle. `connected_at` is set once
     /// the subscription is established.
+    #[tracing::instrument(skip_all, fields(
+        user_id = ?self.settings_repo.get_string(crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID).ok().flatten()
+    ))]
     async fn run_once(
         &self,
         connected_at: &mut Option<std::time::Instant>,
     ) -> Result<(), crate::error::NetworkError> {
+        let connect_started = std::time::Instant::now();
         let cursor = self.cursor()?;
         let mut client = self.grpc_pool.message_client();
         // Empty channel_ids => the server subscribes us to every non-archived
@@ -387,6 +391,7 @@ impl ChannelStreamService {
         *connected_at = Some(std::time::Instant::now());
         tracing::info!(
             resume_from = cursor.as_deref().unwrap_or("<none>"),
+            subscribe_ms = connect_started.elapsed().as_millis() as u64,
             "Channel message stream connected"
         );
 
@@ -413,7 +418,12 @@ impl ChannelStreamService {
         // call above would skip precisely the one sync that closes the window.
         // Duplicates are free — the message store inserts with
         // INSERT OR IGNORE on the message id.
+        let catch_up_started = std::time::Instant::now();
         self.catch_up_now().await;
+        tracing::info!(
+            catch_up_ms = catch_up_started.elapsed().as_millis() as u64,
+            "Channel message stream catch-up finished; consuming subscription"
+        );
 
         tokio::pin!(stream);
         let mut recovery = RecoveryState::default();

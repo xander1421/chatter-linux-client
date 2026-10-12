@@ -643,11 +643,9 @@ pub async fn handle_domain_event(
             messaging::handle_message_received(window, ui_ctx, message);
         }
 
-        // The catch-up sync stores channel messages without a MessageReceived
-        // each (a backfill must not fire a toast per message), so a message
-        // missed while the stream was down — app backgrounded — reached the
-        // conversation but never its row. Rebuild the rows from storage, the
-        // way every DM receive already does (`refresh_chat_list`).
+        // Catch-up announces newly inserted messages individually; this cycle
+        // summary also reconciles sidebar rows, friends and block-list changes.
+        // Rebuild rows from storage as every DM receive does (`refresh_chat_list`).
         DomainEvent::SyncComplete {
             messages_synced,
             blocks_changed,

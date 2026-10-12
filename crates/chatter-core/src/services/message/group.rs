@@ -885,22 +885,26 @@ impl MessageService {
                                 dm.quote.as_ref(),
                                 &self.message_repo,
                             );
-                            if !super::channel_inbound::ChannelInbound::persist_message(
-                                self,
-                                &mut message,
-                                channel_id,
-                            ) {
+                            let Some(persisted) =
+                                super::channel_inbound::ChannelInbound::persist_message(
+                                    self,
+                                    &mut message,
+                                    channel_id,
+                                )
+                            else {
                                 continue;
-                            }
+                            };
                             {
                                 let mut gate = self.sender_key_requests.lock();
                                 gate.remove(&(channel_id, sender_id, device_id));
                                 gate.remove(&(channel_id, sender_id, 0));
                             }
-                            let _ = self
-                                .event_bus
-                                .domain_sender()
-                                .send(DomainEvent::MessageReceived { message });
+                            if persisted == super::channel_inbound::Persisted::New {
+                                let _ = self
+                                    .event_bus
+                                    .domain_sender()
+                                    .send(DomainEvent::MessageReceived { message });
+                            }
                         }
                         Err(e) => tracing::warn!(error = %e, "Retry: conversion failed"),
                     }

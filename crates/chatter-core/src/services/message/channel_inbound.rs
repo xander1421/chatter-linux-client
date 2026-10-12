@@ -92,6 +92,13 @@ fn ensure_resync_ingested(outcome: Ingested) -> Result<(), MessageError> {
     }
 }
 
+/// Whether this receive path won the durable insert. Only that winner announces.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Persisted {
+    New,
+    Existing,
+}
+
 /// Shared decrypt → persist → announce path for channel messages.
 pub struct ChannelInbound {
     messages: Arc<MessageService>,
@@ -112,14 +119,14 @@ impl ChannelInbound {
 
     /// Decrypt, persist and announce one channel message.
     ///
-    /// `emit` controls whether a `DomainEvent::MessageReceived` is published:
-    /// the live stream wants it (the UI should react immediately), a bulk
-    /// backfill of a hundred old messages does not.
+    /// `live` skips this device's optimistic sends. Every newly inserted row
+    /// announces once, including catch-up: otherwise a buffered live duplicate
+    /// is discarded after catch-up and an open chat never learns of the row.
     pub async fn ingest(
         &self,
         proto_msg: &chat_v1::Message,
         channel_id: ChannelId,
-        emit: bool,
+        live: bool,
     ) -> Ingested {
         // THIS device's own messages are skipped only on the LIVE path, where
         // they are already on screen from the optimistic send. On a backfill they must
@@ -127,16 +134,16 @@ impl ChannelInbound {
         // conversation. (An own message in an ENCRYPTED channel still drops
         // out below — we cannot decrypt our own sender-key ciphertext — which
         // is what the message-backup path exists for.)
-        let mut message = match self.prepare(proto_msg, channel_id, emit).await {
+        let mut message = match self.prepare(proto_msg, channel_id, live).await {
             Ok(m) => m,
             Err(outcome) => return outcome,
         };
 
-        if !self.persist(&mut message, channel_id) {
+        let Some(persisted) = self.persist(&mut message, channel_id) else {
             return Ingested::RetryableFailure;
-        }
+        };
 
-        if emit {
+        if persisted == Persisted::New {
             let _ = self
                 .event_bus()
                 .domain_sender()
@@ -707,7 +714,7 @@ impl ChannelInbound {
     }
 
     /// Upsert, preserving attachments and reactions already stored locally.
-    fn persist(&self, message: &mut Message, channel_id: ChannelId) -> bool {
+    fn persist(&self, message: &mut Message, channel_id: ChannelId) -> Option<Persisted> {
         Self::persist_message(&self.messages, message, channel_id)
     }
 
@@ -715,12 +722,12 @@ impl ChannelInbound {
         messages: &MessageService,
         message: &mut Message,
         channel_id: ChannelId,
-    ) -> bool {
+    ) -> Option<Persisted> {
         // Channel controls are peer sealed-sender messages. Server projections
         // cannot replace local reaction truth during backfill or live re-ingest.
         message.reaction_counts.clear();
         message.current_user_reactions.clear();
-        match messages.get_message_local(&message.id) {
+        let persisted = match messages.get_message_local(&message.id) {
             Ok(Some(existing)) => {
                 if existing.conversation_id != channel_id
                     || existing.conversation_type != message.conversation_type
@@ -728,14 +735,14 @@ impl ChannelInbound {
                     || existing.thread_id != message.thread_id
                 {
                     tracing::warn!("Channel envelope identity differs from retained row");
-                    return false;
+                    return None;
                 }
                 if message.sent_at != existing.sent_at {
                     tracing::warn!(
                         message_id = %message.id, incoming = message.sent_at, retained = existing.sent_at,
                         "Retained channel clock differs from the authenticated clock"
                     );
-                    return false;
+                    return None;
                 }
                 // SQL update deliberately retains the original row's identity.
                 message.created_at = existing.created_at;
@@ -761,26 +768,33 @@ impl ChannelInbound {
                 if let Err(e) = messages.update_message(message) {
                     tracing::warn!(%channel_id, message_id = %message.id, error = %e,
                         "Failed to update channel message");
-                    return false;
+                    return None;
                 }
+                Persisted::Existing
             }
             Ok(None) => {
-                if let Err(e) = messages.store_message_local(message) {
-                    tracing::warn!(%channel_id, message_id = %message.id, error = %e,
-                        "Failed to insert channel message");
-                    return false;
+                // Atomic insert, not the earlier read, decides who announces
+                // when a stream, catch-up or sender-key retry races another.
+                match messages.store_message_local_once(message) {
+                    Ok(true) => Persisted::New,
+                    Ok(false) => Persisted::Existing,
+                    Err(e) => {
+                        tracing::warn!(%channel_id, message_id = %message.id, error = %e,
+                            "Failed to insert channel message");
+                        return None;
+                    }
                 }
             }
             Err(e) => {
                 tracing::warn!(%channel_id, message_id = %message.id, error = %e,
                     "Failed to read existing message before upsert");
-                return false;
+                return None;
             }
-        }
+        };
         if let Ok(Some(stored)) = messages.get_message_local(&message.id) {
             *message = stored;
         }
-        true
+        Some(persisted)
     }
 }
 
@@ -958,6 +972,80 @@ mod tests {
             matches!(stored.content, crate::domain::message::MessageContent::Text(ref t) if t == "edited")
         );
         assert!(stored.is_edited);
+    }
+
+    /// Catch-up can win while the newly subscribed live copy is buffered.
+    /// Announce its newly inserted row once; neither a repeated backfill nor
+    /// the encrypted stream duplicate may lose it or announce it again.
+    #[tokio::test]
+    async fn first_insert_announces_once_before_encrypted_stream_duplicate() {
+        static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
+        MOCK_KEYRING.call_once(|| {
+            keyring::set_default_store(crate::system::keyring::test_credential_store());
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let client = ChatterClient::builder()
+            .server_url("https://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .unwrap();
+        let inbound = ChannelInbound::new(client.messages().clone(), client.attachments().clone());
+        let channel = ChannelId::new();
+        let mut events = client.subscribe_events();
+        for first_live in [false, true] {
+            let mut row = chat_v1::Message {
+                id: crate::domain::ids::MessageId::new().to_string(),
+                channel_id: channel.to_string(),
+                author_id: UserId::new().to_string(),
+                author_device_id: 1,
+                timestamp: 12345,
+                content: Some(chat_v1::message::Content {
+                    r#type: Some(chat_v1::message::content::Type::Text(
+                        "first live message".into(),
+                    )),
+                }),
+                ..Default::default()
+            };
+            assert_eq!(
+                inbound.ingest(&row, channel, first_live).await,
+                Ingested::Stored
+            );
+            let DomainEvent::MessageReceived { message } = events.try_recv().unwrap() else {
+                panic!("first insert winner must publish the stored message");
+            };
+            assert_eq!(message.id.to_string(), row.id);
+            assert_eq!(message.as_text(), Some("first live message"));
+
+            // An ordinary repeated catch-up also keeps existing history silent.
+            assert_eq!(inbound.ingest(&row, channel, false).await, Ingested::Stored);
+            // The cached decrypted row is sufficient to reject the duplicate
+            // before a second sender-key decrypt (which would consume a key twice).
+            row.content = Some(chat_v1::message::Content {
+                r#type: Some(chat_v1::message::content::Type::Encrypted(
+                    chat_v1::EncryptedData {
+                        ciphertext: GroupEncrypted {
+                            channel_id: channel.to_string(),
+                            timestamp: 12345,
+                            ciphertext: vec![1, 2, 3],
+                        }
+                        .encode_to_vec(),
+                        ..Default::default()
+                    },
+                )),
+            });
+            assert_eq!(inbound.ingest(&row, channel, true).await, Ingested::Dropped);
+            assert!(
+                client
+                    .messages()
+                    .get_message_local(&message.id)
+                    .unwrap()
+                    .is_some()
+            );
+            assert!(matches!(
+                events.try_recv(),
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty)
+            ));
+        }
     }
 
     /// Our own message from another device reaches storage by paths that skip
