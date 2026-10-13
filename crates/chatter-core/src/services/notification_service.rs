@@ -823,6 +823,138 @@ mod tests {
         task.await.unwrap_err();
     }
 
+    #[tokio::test]
+    async fn secret_request_ingestion_notifies_once_and_keeps_catch_up_requests() {
+        use crate::domain::anon_dm::AnonDmId;
+        use crate::domain::ids::UserId;
+        use crate::inbox::events::InboxEvent;
+        use crate::inbox::handlers::DomainEvent;
+
+        struct Capture(tokio::sync::mpsc::UnboundedSender<(String, String)>);
+        impl NotificationSink for Capture {
+            fn show(
+                &self,
+                title: &str,
+                body: &str,
+                _: NotificationPriority,
+            ) -> Result<(), SystemError> {
+                self.0.send((title.into(), body.into())).unwrap();
+                Ok(())
+            }
+        }
+        keyring::set_default_store(crate::system::keyring::test_credential_store());
+        let dir = tempfile::tempdir().unwrap();
+        let client = crate::client::ChatterClient::builder()
+            .server_url("https://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .unwrap();
+        client
+            .messages()
+            .settings_repo
+            .set_string(
+                crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID,
+                &UserId::new().to_string(),
+            )
+            .unwrap();
+        client.chat_state().set_app_visible(false);
+        let bus = client.event_bus().clone();
+        let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel();
+        let listener = spawn_notification_listener(
+            bus.clone(),
+            Arc::downgrade(&client),
+            client.users().clone(),
+            Arc::new(NotificationService::new(Arc::new(Capture(tx)))),
+        );
+        let handler = crate::events::EventHandlers::new(
+            client.message_state().clone(),
+            client.chat_state().clone(),
+        )
+        .with_anon_dm_service(client.anon_dms().clone())
+        .spawn(bus.clone());
+        let processor = crate::services::inbox_processor::InboxEventProcessor::from_client(&client);
+        let peer = UserId::new();
+        let mut arrivals = bus.subscribe_domain();
+        let sealed = InboxEvent::AnonDmRequest {
+            peer_id: peer,
+            sender_device_id: 2,
+            conversation_id: AnonDmId::new().to_vec(),
+            initiator_mailbox_pk: vec![1; 32],
+            intro_message: Some("private introduction".into()),
+            profile_key: None,
+            encrypted_display_name: None,
+            avatar: None,
+            timestamp: 1,
+        };
+        processor.process(&sealed).await;
+        let shown = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(shown, ("Chatter".into(), "New message".into()));
+        // The private friend-code path enters through a decrypted init domain
+        // event, rather than the sealed-request InboxEvent handled above.
+        let init = DomainEvent::AnonDmInitReceived {
+            conversation_id: AnonDmId::new(),
+            sender_id: peer,
+            sender_device_id: 2,
+            sender_display_name: "private name".into(),
+            sender_avatar: None,
+            peer_mailbox_pk: [2; 32],
+            peer_identity_key: [5; 33],
+            peer_delivery_token: [3; 12],
+            intro_message: "private introduction".into(),
+            server_timestamp: 1,
+        };
+        bus.emit_domain(init.clone());
+        let shown = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(shown, ("Chatter".into(), "New message".into()));
+        // Catch-up can replay an existing request immediately before a new
+        // request from the same peer. Only the conversation id deduplicates.
+        bus.emit_domain(init.clone());
+        let mut next = init;
+        let next_id = AnonDmId::new();
+        if let DomainEvent::AnonDmInitReceived {
+            conversation_id, ..
+        } = &mut next
+        {
+            *conversation_id = next_id;
+        }
+        bus.emit_domain(next);
+        let shown = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(shown, ("Chatter".into(), "New message".into()));
+        // Wait for the final derived arrival to prove the handler drained both
+        // init events, then place a barrier on the notification listener.
+        tokio::time::timeout(std::time::Duration::from_secs(2), async {
+            loop {
+                if matches!(arrivals.recv().await.unwrap(), DomainEvent::AnonDmRequestReceived { conversation_id, .. } if conversation_id == next_id) { break; }
+            }
+        }).await.unwrap();
+        bus.emit_domain(DomainEvent::DeviceLinked {
+            device_id: 3,
+            device_name: None,
+            device_info: None,
+            approved_by_self: false,
+        });
+        let shown = tokio::time::timeout(std::time::Duration::from_secs(2), rx.recv())
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(
+            shown.0, "New device linked",
+            "duplicate init must not notify"
+        );
+        assert!(rx.try_recv().is_err());
+        handler.abort();
+        listener.abort();
+    }
+
     /// A panicking sink is one failed notification, not a dead caller loop.
     #[test]
     fn a_panicking_sink_is_an_error_not_a_panic() {

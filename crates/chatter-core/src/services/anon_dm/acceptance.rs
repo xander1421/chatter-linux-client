@@ -316,20 +316,20 @@ impl AnonDmService {
     /// Create an incoming conversation from ECIES init message (NDSS'21 private contact).
     ///
     /// This is called when we receive a Phase 1 HPKE-encrypted initial contact message.
-    /// Stores the conversation and peer's keys for Phase 2 Double Ratchet setup.
+    /// Returns whether this request was newly stored; redelivery must not notify again.
     pub fn create_incoming_conversation(
         &self,
         dm: &AnonDm,
         _peer_identity_key: &[u8; 33],
         _peer_delivery_token: &[u8; 12],
-    ) -> Result<(), AnonDmError> {
+    ) -> Result<bool, AnonDmError> {
         // Check if conversation already exists
         if let Some(_existing) = self.anon_dm_repo.get_conversation(&dm.id)? {
             tracing::warn!(
                 conversation_id = %dm.id,
                 "Conversation already exists from ECIES init"
             );
-            return Ok(());
+            return Ok(false);
         }
 
         // Store the conversation
@@ -340,7 +340,7 @@ impl AnonDmService {
             "Created incoming conversation from ECIES init message"
         );
 
-        Ok(())
+        Ok(true)
     }
 
     /// Handle an incoming message request with encrypted profile data.

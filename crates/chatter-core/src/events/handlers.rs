@@ -64,6 +64,8 @@ use crate::state::{ChatState, MessageState};
 /// but typically only one should be spawned per application.
 #[derive(Clone)]
 pub struct EventHandlers {
+    /// Weak publication channel: emitting derived events must not keep the bus alive.
+    domain_tx: Option<broadcast::WeakSender<DomainEvent>>,
     /// Message cache and draft state.
     message_state: MessageState,
     /// Chat-side state: active conversation + pinned-bar + streaming ephemera.
@@ -90,6 +92,7 @@ impl EventHandlers {
     #[must_use]
     pub fn new(message_state: MessageState, chat_state: ChatState) -> Self {
         Self {
+            domain_tx: None,
             message_state,
             chat_state,
             group_coordinator: None,
@@ -157,7 +160,8 @@ impl EventHandlers {
     ///
     /// A JoinHandle that can be used to await or abort the background task.
     pub fn spawn(&self, event_bus: EventBus) -> JoinHandle<()> {
-        let handlers = self.clone();
+        let mut handlers = self.clone();
+        handlers.domain_tx = Some(event_bus.domain_sender().downgrade());
         let mut rx = event_bus.subscribe_domain();
 
         tokio::spawn(async move {
@@ -729,19 +733,30 @@ impl EventHandlers {
                     // acceptance is sealed to it alone.
                     dm.peer_device_id = Some(sender_device_id);
 
-                    if let Err(e) = svc.create_incoming_conversation(
+                    match svc.create_incoming_conversation(
                         &dm, &peer_identity_key, &peer_delivery_token,
                     ) {
-                        warn!(
+                        Ok(true) => {
+                            // Both sealed requests and private friend-code init
+                            // requests publish the same durable arrival event.
+                            if let Some(bus) = self.domain_tx.as_ref().and_then(|tx| tx.upgrade()) {
+                                let _ = bus.send(DomainEvent::AnonDmRequestReceived {
+                                    conversation_id,
+                                    sender_id,
+                                    sender_mailbox_pk: peer_mailbox_pk,
+                                    intro_message: Some(intro_message.clone()),
+                                    profile_key: None,
+                                    sender_display_name: dm.peer_display_name,
+                                    sender_avatar: dm.peer_avatar,
+                                });
+                            }
+                        }
+                        Ok(false) => {} // Already stored, including catch-up redelivery.
+                        Err(e) => warn!(
                             conversation_id = %conversation_id,
                             error = %e,
                             "Failed to create anon DM conversation from ECIES init"
-                        );
-                    } else {
-                        debug!(
-                            conversation_id = %conversation_id,
-                            "Created anon DM conversation from ECIES init"
-                        );
+                        ),
                     }
                 } else {
                     trace!(?conversation_id, intro_len = intro_message.len(), "AnonDmInitReceived: no anon_dm_service configured");
