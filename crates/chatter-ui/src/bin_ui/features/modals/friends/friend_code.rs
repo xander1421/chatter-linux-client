@@ -457,6 +457,13 @@ pub(crate) fn wire_connect_private(window: &MainWindow, ui_ctx: &Arc<ChatterClie
                 // Get our display name from auth state
                 let my_display_name = auth_state.get().display_name;
 
+                let waiting = weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = waiting.upgrade() {
+                        w.set_friends_code_status("Secret chat is getting ready — will start automatically".into());
+                    }
+                });
+
                 // Start NDSS'21 compliant conversation (NO prekey fetch, full privacy)
                 match ui_ctx
                     .start_anon_dm_conversation_private(&friend_code, Some("Hello!"), my_display_name.as_deref())

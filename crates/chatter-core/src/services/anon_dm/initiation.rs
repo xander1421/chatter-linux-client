@@ -7,12 +7,94 @@ use crate::util::time::TimestampNanos;
 
 use super::{AnonDmError, AnonDmService};
 
+// Mailbox open + anonymous prekey fetch + anonymous request delivery.
+const REQUIRED_TOKENS: u32 = 3;
+
+async fn retry_start<T, F, Fut>(mut attempt: F) -> Result<T, AnonDmError>
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = Result<T, AnonDmError>>,
+{
+    loop {
+        match attempt().await {
+            Err(AnonDmError::TokensPending) => {
+                crate::app::core_services::jittered_sleep().await;
+            }
+            result => return result,
+        }
+    }
+}
+
 impl AnonDmService {
+    // Weak entries retain no operation or plaintext after a start finishes.
+    fn start_lock(&self, peer: UserId) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+        let mut locks = self.start_locks.lock().expect("start locks poisoned");
+        locks.retain(|_, lock| lock.strong_count() > 0);
+        if let Some(lock) = locks.get(&peer).and_then(std::sync::Weak::upgrade) {
+            return lock;
+        }
+        let lock = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+        locks.insert(peer, std::sync::Arc::downgrade(&lock));
+        lock
+    }
+
+    /// Park an empty-pool start in this session, independently of the refill
+    /// loop. No token request or refill notification is reachable here.
+    pub async fn start_conversation(
+        &self,
+        peer_id: UserId,
+        intro_message: Option<&str>,
+    ) -> Result<AnonDm, AnonDmError> {
+        self.check_start(peer_id)?;
+        let owner = self.current_user_id()?;
+        let lock = self.start_lock(peer_id);
+        let _guard = lock.lock().await;
+        retry_start(|| async {
+            if self.current_user_id()? != owner {
+                return Err(AnonDmError::NotLoggedIn);
+            }
+            self.start_conversation_attempt(peer_id, intro_message)
+                .await
+        })
+        .await
+    }
+
+    pub async fn start_conversation_private(
+        &self,
+        friend_code: &PrivateFriendCode,
+        intro_message: Option<&str>,
+        sender_display_name: Option<&str>,
+    ) -> Result<AnonDm, AnonDmError> {
+        self.check_start(friend_code.user_id)?;
+        let owner = self.current_user_id()?;
+        let lock = self.start_lock(friend_code.user_id);
+        let _guard = lock.lock().await;
+        retry_start(|| async {
+            if self.current_user_id()? != owner {
+                return Err(AnonDmError::NotLoggedIn);
+            }
+            self.start_conversation_private_attempt(friend_code, intro_message, sender_display_name)
+                .await
+        })
+        .await
+    }
+
+    fn check_start(&self, peer: UserId) -> Result<(), AnonDmError> {
+        if self.current_user_id()? == peer {
+            return Err(AnonDmError::CannotMessageSelf);
+        }
+        self.drop_declined(&peer)?;
+        self.grpc_pool
+            .secret_channel()
+            .map_err(|e| AnonDmError::MessageError(e.to_string()))?;
+        Ok(())
+    }
+
     /// Start a new anonymous DM conversation with a stranger.
     ///
     /// Creates a local conversation and sends a message request to the peer's
     /// device inbox. The conversation becomes active when they accept.
-    pub async fn start_conversation(
+    async fn start_conversation_attempt(
         &self,
         peer_id: UserId,
         intro_message: Option<&str>,
@@ -42,10 +124,15 @@ impl AnonDmService {
                 .await?;
                 return self.reload(existing.id);
             }
-            // Our outgoing request is still pending (never got a response):
-            // retry it with a new one.
+            // Reuse a submitted request; only a provably unsent one can restart.
             let can_retry = existing.status == AnonDmStatus::Pending && existing.initiated_by_us;
 
+            if existing.status == AnonDmStatus::Pending
+                && existing.initiated_by_us
+                && !existing.is_unsent_request()
+            {
+                return Ok(existing);
+            }
             if can_retry {
                 tracing::info!(
                     old_status = ?existing.status,
@@ -59,6 +146,14 @@ impl AnonDmService {
             }
         }
 
+        if self
+            .token_manager
+            .available_token_count()
+            .map_err(|e| AnonDmError::CryptoError(e.to_string()))?
+            < REQUIRED_TOKENS
+        {
+            return Err(AnonDmError::TokensPending);
+        }
         // Create conversation locally
         let dm = AnonDm::new_initiated(peer_id);
         self.anon_dm_repo.insert_conversation(&dm)?;
@@ -158,7 +253,7 @@ impl AnonDmService {
     /// - No server lookup: Peer ID, identity key, delivery token all embedded
     /// - Anonymous delivery: Uses blind signature token
     /// - Sealed sender: Server can't identify sender
-    pub async fn start_conversation_private(
+    async fn start_conversation_private_attempt(
         &self,
         friend_code: &PrivateFriendCode,
         intro_message: Option<&str>,
@@ -190,10 +285,15 @@ impl AnonDmService {
                 .await?;
                 return self.reload(existing.id);
             }
-            // Our outgoing request is still pending (never got a response):
-            // retry it with a new one.
+            // Reuse a submitted request; only a provably unsent one can restart.
             let can_retry = existing.status == AnonDmStatus::Pending && existing.initiated_by_us;
 
+            if existing.status == AnonDmStatus::Pending
+                && existing.initiated_by_us
+                && !existing.is_unsent_request()
+            {
+                return Ok(existing);
+            }
             if can_retry {
                 tracing::info!(
                     old_status = ?existing.status,
@@ -207,6 +307,14 @@ impl AnonDmService {
             }
         }
 
+        if self
+            .token_manager
+            .available_token_count()
+            .map_err(|e| AnonDmError::CryptoError(e.to_string()))?
+            < 2
+        {
+            return Err(AnonDmError::TokensPending);
+        }
         // Create conversation locally
         let dm = AnonDm::new_initiated(peer_id);
         self.anon_dm_repo.insert_conversation(&dm)?;
@@ -417,6 +525,145 @@ impl AnonDmService {
 mod tests {
     use super::*;
     use crate::storage::repositories::settings_repo::keys;
+
+    #[test]
+    fn only_empty_pool_errors_are_parkable() {
+        use crate::error::MailboxError;
+        use crate::services::pairwise::PairwiseError;
+        assert!(matches!(
+            AnonDmError::from(PairwiseError::Token(MailboxError::NoTokensAvailable)),
+            AnonDmError::TokensPending
+        ));
+        assert!(matches!(
+            AnonDmError::from(PairwiseError::Token(MailboxError::Storage("test".into()))),
+            AnonDmError::CryptoError(_)
+        ));
+    }
+
+    #[tokio::test]
+    async fn empty_private_start_has_no_partial_chat_or_network_request() {
+        let (_dir, client) = client();
+        let svc = client.anon_dms();
+        let peer = UserId::new();
+        let code = PrivateFriendCode::new(peer, [1; 33], [2; 12]);
+        assert!(matches!(
+            svc.start_conversation_private_attempt(&code, None, None)
+                .await,
+            Err(AnonDmError::TokensPending)
+        ));
+        assert!(
+            svc.anon_dm_repo
+                .get_live_conversation_by_peer(&peer)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn empty_pool_real_start_parks_without_token_requests_or_partial_chat() {
+        let (_dir, client) = client();
+        let svc = client.anon_dms();
+        let peer = UserId::new();
+        let mut start = Box::pin(retry_start(|| svc.start_conversation_attempt(peer, None)));
+        assert!(futures::poll!(&mut start).is_pending());
+        // The configured endpoint is unavailable. Any GetMailboxTokens or
+        // mailbox-open RPC would return a network error instead of parking.
+        assert_eq!(svc.token_manager.available_token_count().unwrap(), 0);
+        assert!(
+            svc.anon_dm_repo
+                .get_live_conversation_by_peer(&peer)
+                .unwrap()
+                .is_none()
+        );
+        tokio::time::advance(std::time::Duration::from_secs(900)).await;
+        assert!(futures::poll!(&mut start).is_pending());
+        assert_eq!(svc.token_manager.available_token_count().unwrap(), 0);
+        assert!(
+            svc.anon_dm_repo
+                .get_live_conversation_by_peer(&peer)
+                .unwrap()
+                .is_none()
+        );
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn empty_pool_start_waits_for_independent_jitter_then_starts_once() {
+        use std::cell::Cell;
+        use std::time::Duration;
+        let pool = Cell::new(0);
+        let starts = Cell::new(0);
+        let attempts = Cell::new(0);
+        let mut start = Box::pin(retry_start(|| {
+            attempts.set(attempts.get() + 1);
+            std::future::ready(if pool.get() < REQUIRED_TOKENS {
+                Err(AnonDmError::TokensPending)
+            } else {
+                pool.set(pool.get() - REQUIRED_TOKENS);
+                starts.set(starts.get() + 1);
+                Ok(())
+            })
+        }));
+        assert!(futures::poll!(&mut start).is_pending());
+        assert_eq!(starts.get(), 0);
+        // Refill itself cannot wake the parked operation.
+        tokio::time::advance(Duration::from_secs(30)).await;
+        pool.set(20);
+        assert!(futures::poll!(&mut start).is_pending());
+        tokio::time::advance(Duration::from_secs(269)).await;
+        assert!(futures::poll!(&mut start).is_pending());
+        assert_eq!(attempts.get(), 1);
+        tokio::time::advance(Duration::from_secs(601)).await;
+        start.await.unwrap();
+        assert_eq!(starts.get(), 1);
+        assert_eq!(attempts.get(), 2);
+        assert_eq!(pool.get(), 17);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn parked_start_reparks_and_does_not_retry_other_failures() {
+        use std::cell::Cell;
+        use std::time::Duration;
+        let attempts = Cell::new(0);
+        let mut start = Box::pin(retry_start(|| {
+            attempts.set(attempts.get() + 1);
+            std::future::ready(if attempts.get() <= 2 {
+                Err::<(), _>(AnonDmError::TokensPending)
+            } else {
+                Err(AnonDmError::NotLoggedIn)
+            })
+        }));
+        assert!(futures::poll!(&mut start).is_pending());
+        tokio::time::advance(Duration::from_secs(900)).await;
+        assert!(futures::poll!(&mut start).is_pending());
+        assert_eq!(attempts.get(), 2);
+        tokio::time::advance(Duration::from_secs(900)).await;
+        assert!(matches!(start.await, Err(AnonDmError::NotLoggedIn)));
+        assert_eq!(attempts.get(), 3);
+    }
+
+    #[tokio::test]
+    async fn concurrent_starts_share_a_peer_lock_and_submitted_request() {
+        let (_dir, client) = client();
+        let svc = client.anon_dms();
+        let peer = UserId::new();
+        let first = svc.start_lock(peer);
+        let second = svc.start_lock(peer);
+        assert!(std::sync::Arc::ptr_eq(&first, &second));
+        assert!(!std::sync::Arc::ptr_eq(
+            &first,
+            &svc.start_lock(UserId::new())
+        ));
+        let guard = first.lock().await;
+        assert!(second.try_lock().is_err());
+        drop(guard);
+        let dm = outgoing(&svc, peer);
+        svc.anon_dm_repo
+            .set_request_state(&dm.id, RequestState::Submitted)
+            .unwrap();
+        // No route or tokens are needed to return the already submitted request.
+        let again = svc.start_conversation_attempt(peer, None).await.unwrap();
+        assert_eq!(again.id, dm.id);
+    }
 
     fn client() -> (
         tempfile::TempDir,

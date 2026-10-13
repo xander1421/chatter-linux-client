@@ -148,13 +148,27 @@ fn open_dm_peer(ui_ctx: &ChatterClient) -> Option<UserId> {
 
 fn start_secret_chat(weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<ChatterClient>, peer: UserId) {
     if let Some(w) = weak.upgrade() {
-        w.set_toast_message("Starting secret chat over Tor…".into());
+        w.set_secret_chat_starts_pending(w.get_secret_chat_starts_pending() + 1);
+        w.set_toast_message("Secret chat is getting ready — will start automatically".into());
         w.set_toast_variant("info".into());
         w.set_toast_visible(true);
     }
     let (weak, ui_ctx) = (weak.clone(), ui_ctx.clone());
     tokio::spawn(async move {
-        match ui_ctx.start_secret_chat(peer).await {
+        let result = ui_ctx.start_secret_chat(peer).await;
+        let done = weak.clone();
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(w) = done.upgrade() {
+                w.set_secret_chat_starts_pending((w.get_secret_chat_starts_pending() - 1).max(0));
+                if w.get_secret_chat_starts_pending() == 0
+                    && w.get_toast_message()
+                        == "Secret chat is getting ready — will start automatically"
+                {
+                    w.set_toast_visible(false);
+                }
+            }
+        });
+        match result {
             Ok(dm) => {
                 super::rebuild_chat_list(&weak, &ui_ctx);
                 let dm_id = dm.id.to_string();

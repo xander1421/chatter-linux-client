@@ -46,9 +46,9 @@ pub enum PairwiseError {
     #[error("this contact's device for the secret chat is gone")]
     PeerDeviceGone,
 
-    /// No pre-fetched blind-signature token left for the anonymous request.
-    #[error("no anonymous token available: {0}")]
-    NoToken(String),
+    /// A pre-fetched anonymous token could not be claimed.
+    #[error("anonymous token error: {0}")]
+    Token(#[from] crate::error::MailboxError),
 
     /// Local state the caller records around a send could not be written.
     #[error("storage error: {0}")]
@@ -254,7 +254,7 @@ impl PairwiseService {
         let claim = || {
             tokens
                 .claim_prefetched_token()
-                .map_err(|e| PairwiseError::NoToken(e.to_string()))
+                .map_err(PairwiseError::Token)
         };
         let (sealed_body, device) = self
             .encrypt_anonymous(peer_id, device_id, plaintext, &claim()?)

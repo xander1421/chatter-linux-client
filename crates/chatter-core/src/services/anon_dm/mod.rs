@@ -86,6 +86,9 @@ pub enum AnonDmError {
     #[error("peer mailbox is gone")]
     PeerMailboxGone,
 
+    #[error("Secret chat is getting ready — will start automatically")]
+    TokensPending,
+
     /// Crypto error.
     #[error("crypto error: {0}")]
     CryptoError(String),
@@ -117,6 +120,9 @@ impl From<crate::services::pairwise::PairwiseError> for AnonDmError {
         match e {
             PairwiseError::Network(e) => Self::MessageError(e.to_string()),
             PairwiseError::Storage(e) => Self::Storage(e),
+            PairwiseError::Token(crate::error::MailboxError::NoTokensAvailable) => {
+                Self::TokensPending
+            }
             e => Self::CryptoError(e.to_string()),
         }
     }
@@ -137,6 +143,9 @@ pub struct DecryptedPeerProfile {
 ///
 /// Handles all anonymous DM operations following the NDSS'21 model.
 pub struct AnonDmService {
+    start_locks: std::sync::Mutex<
+        std::collections::HashMap<UserId, std::sync::Weak<tokio::sync::Mutex<()>>>,
+    >,
     pub(crate) settings_repo: Arc<SettingsRepository>,
     pub(crate) anon_dm_repo: Arc<AnonDmRepository>,
     /// Unified message repository for all message CRUD operations.
@@ -164,6 +173,7 @@ impl AnonDmService {
         token_manager: Arc<TokenManager>,
     ) -> Self {
         Self {
+            start_locks: Default::default(),
             settings_repo,
             anon_dm_repo,
             message_repo,

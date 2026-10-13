@@ -1103,6 +1103,7 @@ export component MainWindow inherits Window {
 
     // ========== Toast notification properties ==========
     in-out property <bool> toast-visible: false;
+    in-out property <int> secret-chat-starts-pending: 0;
     in property <string> toast-message: "";
     in property <string> toast-variant: "info";  // "success", "error", "warning", "info"
 
@@ -3878,7 +3879,8 @@ export component MainWindow inherits Window {
         // Auto-dismiss timer for toasts
         toast-timer := Timer {
             interval: 5s;
-            running: root.toast-visible;
+            running: root.toast-visible && (root.secret-chat-starts-pending == 0
+                || root.toast-message != "Secret chat is getting ready — will start automatically");
             triggered => {
                 root.toast-visible = false;
             }

@@ -136,7 +136,10 @@ impl AnonDmService {
     ) -> Result<crate::mailbox::token_manager::MailboxToken, AnonDmError> {
         self.token_manager
             .claim_prefetched_token()
-            .map_err(|e| AnonDmError::CryptoError(e.to_string()))
+            .map_err(|e| match e {
+                crate::error::MailboxError::NoTokensAvailable => AnonDmError::TokensPending,
+                e => AnonDmError::CryptoError(e.to_string()),
+            })
     }
 
     /// Send content in secret chat `dm` to the peer's anonymous mailbox,
