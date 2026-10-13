@@ -24,7 +24,7 @@ use std::task::{Context, Poll};
 
 use std::time::{Duration, Instant};
 
-use arti_client::{DataStream, TorClient, TorClientConfig};
+use arti_client::{DataStream, HasKind, TorClient, TorClientConfig};
 use http::Uri;
 use hyper_util::rt::TokioIo;
 use tokio::sync::OnceCell;
@@ -35,6 +35,7 @@ use tower::Service;
 /// 90s hidden-service dial. The total cap also bounds OnceCell contention.
 pub(crate) const BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(120);
 pub(crate) const DIAL_TIMEOUT: Duration = Duration::from_secs(90);
+const FIRST_DIAL_TIMEOUT: Duration = Duration::from_secs(45);
 pub(crate) const CONNECT_TIMEOUT: Duration = Duration::from_secs(210);
 
 /// Dropping a JoinHandle detaches its task. Keep ownership until completion so
@@ -306,17 +307,43 @@ impl Service<Uri> for OnionConnector {
                 // endpoint budget allows our 120s + 90s phases plus scheduling slack.
                 // The inner 210s cap bounds this connector even for lazy channels.
                 let jh = tor_runtime().spawn(async move {
-                    match client.connect((host.as_str(), port)).await {
-                        Ok(stream) => Ok(stream),
-                        Err(_) => {
-                            // A descriptor lookup can exhaust its circuit attempts
-                            // while the next lookup succeeds. Retry the same pinned
-                            // service once, within the existing 90s dial budget.
-                            tracing::warn!("onion dial failed; retrying same service once");
+                    // Arti keys its hidden-service connection state (including a
+                    // Working task and cached descriptor) by circuit isolation.
+                    // A cancelled caller can leave that task running. Repeating
+                    // connect on the same client then waits on the same stalled
+                    // work, as RC119's three consecutive 90s deadlines did.
+                    // Give the first attempt half the budget. A quick Arti
+                    // error keeps the existing same-client retry; only a stall
+                    // selects independent state for the SAME pinned onion.
+                    let first = tokio::time::timeout(
+                        FIRST_DIAL_TIMEOUT,
+                        client.connect((host.as_str(), port)),
+                    )
+                    .await;
+                    let retry_client = match first {
+                        Ok(Ok(stream)) => return Ok(stream),
+                        Ok(Err(error)) => {
+                            tracing::warn!(
+                                error_kind = ?error.kind(),
+                                "onion dial failed; retrying same service once"
+                            );
                             tokio::time::sleep(Duration::from_millis(500)).await;
-                            client.connect((host.as_str(), port)).await
+                            client
                         }
+                        Err(_) => {
+                            tracing::warn!(
+                                phase = "hidden_service_connect",
+                                elapsed_ms = FIRST_DIAL_TIMEOUT.as_millis() as u64,
+                                "onion dial stalled; retrying with fresh Tor isolation"
+                            );
+                            client.isolated_client()
+                        }
+                    };
+                    let result = retry_client.connect((host.as_str(), port)).await;
+                    if let Err(error) = &result {
+                        tracing::warn!(error_kind = ?error.kind(), "onion dial retry failed");
                     }
+                    result
                 });
                 let stream = await_tor_task(jh, DIAL_TIMEOUT, "dial").await?;
 

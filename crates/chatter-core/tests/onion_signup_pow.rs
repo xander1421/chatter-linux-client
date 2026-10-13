@@ -105,7 +105,7 @@ impl std::io::Write for Tee {
 fn init_logs() {
     let _ = tracing_subscriber::fmt()
         .with_env_filter(
-            "chatter_core::services::auth_service=info,chatter_core::network::grpc=info",
+            "chatter_core::services::auth_service=info,chatter_core::network::grpc=info,tor_hsclient=debug",
         )
         .with_ansi(false)
         .with_writer(|| Tee)
