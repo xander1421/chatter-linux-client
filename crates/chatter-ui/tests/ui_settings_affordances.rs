@@ -356,6 +356,31 @@ fn failed_privacy_writes_restore_effective_values_and_selected_gif_tab_keeps_sea
         notifications.absolute_position().x + notifications.size().width <= 352.0,
         "selected compact tab must fit within the trailing window gutter"
     );
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerScrolled {
+            position: slint::LogicalPosition::new(200.0, 28.0),
+            delta_x: 10000.0,
+            delta_y: 0.0,
+        });
+    pump(&w);
+    let selected = ElementHandle::find_by_accessible_label(&w, "Privacy")
+        .find(|e| e.type_name().is_some_and(|name| name == "Button"))
+        .expect("compact Privacy tab");
+    assert!(selected.absolute_position().x >= back_right);
+    click(&w, &selected);
+    let position = slint::LogicalPosition::new(340.0, 28.0);
+    let button = slint::platform::PointerEventButton::Left;
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerPressed { position, button });
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::PointerReleased { position, button });
+    pump(&w);
+    let left = selected.absolute_position().x;
+    let right = left + selected.size().width;
+    assert!(
+        right <= back_right || left >= back_right,
+        "right arrow must not leave the selected pill partly under Back: left={left}, right={right}, back={back_right}"
+    );
 
     chatter_ui::bin_ui::features::back::close(&w, "settings");
     w.set_is_mobile_platform(true);

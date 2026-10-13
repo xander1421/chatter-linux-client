@@ -138,7 +138,9 @@ export component SettingsScreen inherits Rectangle {
     property <bool> shield-switch: AnonMode.enabled;
     property <bool> shield-on: AnonMode.enabled;
     changed shield-on => { root.shield-switch = root.shield-on; }
-    property <string> active-section: "account";  // "account", "devices", "privacy", "notifications", "encryption", "ai", "appearance"
+    in-out property <string> active-section: "account";  // "account", "devices", "privacy", "notifications", "encryption", "ai", "appearance"
+    property <length> selected-tab-start: 0px;
+    property <length> selected-tab-end: 0px;
     property <bool> show-password-form: false;
     property <bool> show-pin-form: false;
     property <bool> show-backup-retry: false;
@@ -2879,6 +2881,11 @@ export component SettingsScreen inherits Rectangle {
                             variant: root.active-section == item.id ? "secondary" : "ghost";
                             clicked => {
                                 root.active-section = item.id;
+                                // `self.x` is viewport-relative here; store
+                                // content coordinates so later arrow scrolls
+                                // can compare against the new viewport offset.
+                                root.selected-tab-start = self.x - tabs.viewport-x;
+                                root.selected-tab-end = self.x + self.width - tabs.viewport-x;
                                 // Bring the selected pill fully clear of the fixed Back
                                 // button and the scrolling strip's faded edges.
                                 if self.x + tabs.viewport-x < Spacing.sm {
@@ -2894,7 +2901,7 @@ export component SettingsScreen inherits Rectangle {
                     x: 0;
                     width: Spacing.xxxl + Spacing.lg;
                     height: parent.height;
-                    background: Colors.background;
+                    background: @linear-gradient(90deg, Colors.background 0%, Colors.background 75%, Colors.background.with-alpha(0) 100%);
                     Text { text: "‹"; color: Colors.text-primary; font-size: 24px; vertical-alignment: center; }
                     TouchArea { clicked => { tabs.viewport-x = min(0px, tabs.viewport-x + tabs.width / 2); } }
                 }
@@ -2904,7 +2911,19 @@ export component SettingsScreen inherits Rectangle {
                     height: parent.height;
                     background: @linear-gradient(90deg, Colors.background.with-alpha(0) 0%, Colors.background 25%, Colors.background 100%);
                     Text { text: "›"; color: Colors.text-primary; font-size: 24px; horizontal-alignment: right; vertical-alignment: center; }
-                    TouchArea { clicked => { tabs.viewport-x = max(tabs.width - tabs.viewport-width, tabs.viewport-x - tabs.width / 2); } }
+                    TouchArea { clicked => {
+                        tabs.viewport-x = max(tabs.width - tabs.viewport-width, tabs.viewport-x - tabs.width / 2);
+                        // If the selected pill crosses the leading fade, move
+                        // it wholly out of the strip instead of clipping it.
+                        if root.selected-tab-end > root.selected-tab-start
+                            && root.selected-tab-start + tabs.viewport-x < Spacing.xxxl + Spacing.lg
+                            && root.selected-tab-end + tabs.viewport-x > 0px {
+                            let fully-hidden = -root.selected-tab-end - Spacing.sm;
+                            tabs.viewport-x = fully-hidden >= tabs.width - tabs.viewport-width
+                                ? fully-hidden
+                                : Spacing.xxxl + Spacing.lg + Spacing.sm - root.selected-tab-start;
+                        }
+                    } }
                 }
             }
         }

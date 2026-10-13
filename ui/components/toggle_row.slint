@@ -24,6 +24,7 @@ export component ToggleRow inherits Rectangle {
 
     callback toggled(bool);
     min-height: Spacing.button-height;
+    preferred-height: max(Spacing.button-height, row-layout.preferred-height);
 
     TouchArea {
         mouse-cursor: root.disabled ? default : pointer;
@@ -35,7 +36,7 @@ export component ToggleRow inherits Rectangle {
         }
     }
 
-    HorizontalLayout {
+    row-layout := HorizontalLayout {
         padding: root.row-padding;
         spacing: root.row-spacing;
 

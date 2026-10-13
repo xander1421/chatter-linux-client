@@ -171,6 +171,61 @@ async fn shield_dm_after_fresh_signin_delivers_exactly_once() {
         )),
         "fresh device must not produce a decrypt-error placeholder"
     );
+    // Recreate the RC116 journal on the sender: an earlier Shield bubble was
+    // left unconfirmed after the remote response disappeared. It must retain
+    // its exact identity without holding the next composed Shield message.
+    let old = clients[0]
+        .get_messages_local_asc(
+            &ChannelId::from(users[1]),
+            &ConversationType::ServerDm,
+            None,
+            100,
+        )
+        .unwrap()
+        .into_iter()
+        .find(|m| m.as_text() == Some(text))
+        .unwrap();
+    let db = clients[0].messages().database();
+    let key = format!(
+        "send.unresolved.v1:{}:{:?}",
+        users[0],
+        ActiveConversation::ServerDm { peer_id: users[1] }
+    );
+    db.connection().unwrap().execute(
+        "UPDATE messages SET delivery_status='sending',failure_reason='Delivery unconfirmed' WHERE id=?1",
+        rusqlite::params![old.id.to_string()],
+    ).unwrap();
+    db.connection()
+        .unwrap()
+        .execute(
+            "INSERT INTO settings(key,value,updated_at) VALUES (?1,?2,?3)",
+            rusqlite::params![
+                key,
+                serde_json::json!({
+                    "attempt_id": old.id.to_string(), "text": text, "attachments": [],
+                    "quote": null, "options": null, "message_id": old.id.to_string(),
+                    "started": true, "process": "earlier-client"
+                })
+                .to_string(),
+                chrono::Utc::now().to_rfc3339()
+            ],
+        )
+        .unwrap();
+    let next = "p21-shield-after-unconfirmed";
+    clients[0]
+        .send_text(ActiveConversation::ServerDm { peer_id: users[1] }, next)
+        .await
+        .unwrap();
+    receive(&mut receiver, next).await;
+    let rows = clients[1]
+        .get_messages_local_asc(
+            &ChannelId::from(users[0]),
+            &ConversationType::ServerDm,
+            None,
+            100,
+        )
+        .unwrap();
+    assert_eq!(rows.iter().filter(|m| m.as_text() == Some(next)).count(), 1);
     for c in clients {
         c.shutdown().await;
     }

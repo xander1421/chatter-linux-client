@@ -3,8 +3,9 @@
 //! transport, an unresolved attempt must not be replaced or encrypted again.
 //! A claim stops holding its conversation once its row is gone, once the
 //! sealed DM outbox (`dm_outbox`) or the channel queue (`channel_send`) holds
-//! the row's exact request, or when a dead process left it before the
-//! submission boundary.
+//! the row's exact request, when a completed uncertain send leaves a warning
+//! bubble and a tombstone for its identity, or when a dead process left it
+//! before the submission boundary.
 use super::{ChatterClient, SendOptions};
 use crate::domain::ids::MessageId;
 use crate::error::StorageError;
@@ -161,7 +162,7 @@ pub(super) fn settle_failure(
             original => original,
         });
     }
-    if let Some(id) = row {
+    if let Some(id) = row.as_ref() {
         let conn = db.connection().map_err(storage_error)?;
         conn.execute("UPDATE settings SET value=json_set(value,'$.message_id',?2) WHERE key=?1 AND json_extract(value,'$.attempt_id')=?3", params![key, id, attempt.to_string()])
             .map_err(|e| storage_error(StorageError::Database(e)))?;
@@ -172,6 +173,12 @@ pub(super) fn settle_failure(
             params![id, crate::services::message::core::DELIVERY_UNCONFIRMED],
         )
         .map_err(|e| storage_error(StorageError::Database(e)))?;
+    }
+    // The attempt has ended. Keep its exact row unconfirmed and tombstone its
+    // identity, but do not let it hold the conversation's admission slot.
+    // A later composed message has a different identity and may be submitted.
+    if row.is_some() {
+        release(db, key, &attempt.to_string())?;
     }
     Ok(SendError::DeliveryUnconfirmed)
 }
@@ -222,6 +229,16 @@ impl ChatterClient {
                 // Deleted (by the user or the disappearing reaper): no retry
                 // of that row can exist any more, and a new send is not one.
                 if owned || row.as_ref().is_none_or(|m| m.is_deleted) {
+                    release(db, &key, &pending.attempt_id)?;
+                    return Ok(());
+                }
+                // Claims written by older clients remain after a completed
+                // uncertain send. Its bubble already carries the warning and
+                // cannot be retried, so only its own identity remains locked.
+                if row.as_ref().is_some_and(|m| {
+                    m.failure_reason.as_deref()
+                        == Some(crate::services::message::core::DELIVERY_UNCONFIRMED)
+                }) {
                     release(db, &key, &pending.attempt_id)?;
                     return Ok(());
                 }
@@ -450,7 +467,7 @@ impl ChatterClient {
         // Only associate the exact original row, never a timestamp/content guess.
         if let Some(mut pending) = read_pending(&self.services.database, key)? {
             if pending.attempt_id == attempt.to_string() {
-                pending.message_id = message_id;
+                pending.message_id = message_id.clone();
                 let raw = serde_json::to_string(&pending).map_err(|_| {
                     storage_error(StorageError::InvalidData(
                         "Cannot retain pending row identity".into(),
@@ -459,6 +476,11 @@ impl ChatterClient {
                 let conn = self.services.database.connection().map_err(storage_error)?;
                 conn.execute("UPDATE settings SET value=?2 WHERE key=?1 AND json_extract(value,'$.attempt_id')=?3",params![key,raw,attempt.to_string()]).map_err(|e| storage_error(StorageError::Database(e)))?;
             }
+        }
+        // The completed attempt's bubble retains the warning, while the
+        // confirmed-ID tombstone prevents reusing its original identity.
+        if message_id.is_some() {
+            release(&self.services.database, key, &attempt.to_string())?;
         }
         Ok(())
     }
@@ -608,7 +630,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn retry_keeps_exact_original_row_on_lost_response_reopen_and_late_receipt() {
+    async fn completed_uncertain_send_tombstones_original_and_admits_next_message() {
         use crate::services::gateway::submission::{
             bind_original_row, mark_submission_started, track_submission,
         };
@@ -656,22 +678,16 @@ mod tests {
             let db = Database::open(&path, "test-only").unwrap();
             db.run_migrations()
                 .expect("migrate throwaway test database");
-            let retained = read_pending(&db, route).unwrap().unwrap();
-            assert_eq!(retained.message_id, original.message_id);
-            assert_eq!(retained.original_row, original.original_row);
-            assert!(matches!(
-                claim(&db, route, &original),
-                Err(SendError::DeliveryUnconfirmed)
-            ));
-            release(&db, route, "unrelated-receipt").unwrap();
-            assert!(read_pending(&db, route).unwrap().is_some());
-            // The late receipt belongs to the retained operation. Its original
-            // identity is tombstoned even after the pending claim is released.
-            release(&db, route, &original.attempt_id).unwrap();
+            assert!(read_pending(&db, route).unwrap().is_none());
             assert!(matches!(
                 claim(&db, route, &original),
                 Err(SendError::AttemptAlreadyConfirmed)
             ));
+            // A different composed message is admitted despite the previous
+            // bubble still being unconfirmed.
+            let next = pending();
+            claim(&db, route, &next).unwrap();
+            release(&db, route, &next.attempt_id).unwrap();
         }
     }
 
@@ -751,19 +767,12 @@ mod tests {
         drop(db);
         let db = Database::open(&path, "test-only").unwrap();
         db.run_migrations().unwrap();
-        assert_eq!(
-            read_pending(&db, "bounded").unwrap().unwrap().attempt_id,
-            next.attempt_id
-        );
-        assert!(matches!(
-            claim(&db, "bounded", &pending()),
-            Err(SendError::SendInProgress)
-        ));
-        release(&db, "bounded", &next.attempt_id).unwrap();
+        assert!(read_pending(&db, "bounded").unwrap().is_none());
         assert!(matches!(
             claim(&db, "bounded", &next),
             Err(SendError::AttemptAlreadyConfirmed)
         ));
+        claim(&db, "bounded", &pending()).unwrap();
     }
 
     #[test]
