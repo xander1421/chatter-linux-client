@@ -257,6 +257,9 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
         let chat_rows: Vec<ChatRowData> = chat_rows.into_iter().map(|r| r.to_slint()).collect();
         w.set_chat_rows(ModelRc::new(VecModel::from(chat_rows)));
 
+        #[cfg(target_os = "android")]
+        crate::platform::android::notification_route::open_pending(&w);
+
         // Apply selection flags on newly-loaded models.
         crate::bin_ui::features::sidebar::refresh_selection(&w, &ui_ctx_for_refresh);
 

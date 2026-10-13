@@ -1,6 +1,7 @@
 package com.chatter.client
 
 import android.app.UiModeManager
+import android.app.KeyguardManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.content.res.Configuration
@@ -136,6 +137,7 @@ class MainActivity : GameActivity() {
         // has loaded libchatter_ui by now (android.app.lib_name), so the native
         // symbol resolves.
         nativeRegisterActivity()
+        dispatchMessageNotification(intent)
         // Wire the JavaVM into libwebrtc from the Java main thread so its
         // FindClass for the bundled livekit.org.webrtc classes resolves via the
         // app classloader. Doing this from Rust's native thread fails.
@@ -278,6 +280,8 @@ class MainActivity : GameActivity() {
      */
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        setIntent(intent)
+        dispatchMessageNotification(intent)
         // Public launcher intents are untrusted. The action is routing only;
         // the native boundary authenticates and consumes the random capability
         // before notification cancellation or any call/UI effects.
@@ -303,6 +307,24 @@ class MainActivity : GameActivity() {
             // Malformed public extras are neither consent nor a reason to crash.
         }
     }
+
+    private fun dispatchMessageNotification(intent: Intent) {
+        if (intent.action != "com.chatter.client.MESSAGE_OPEN" ||
+            getSystemService(KeyguardManager::class.java)?.isDeviceLocked == true) {
+            nativeNotificationOpened("")
+            return
+        }
+        try {
+            val key = intent.getStringExtra("notification_conversation_key") ?: ""
+            if (key.isEmpty() || (key.length == 32 && key.all { it in '0'..'9' || it in 'a'..'f' })) {
+                nativeNotificationOpened(key)
+            }
+        } catch (_: RuntimeException) {
+            // Public launcher extras are untrusted.
+        }
+    }
+
+    private external fun nativeNotificationOpened(key: String)
 
     /** Called by core after login/start and before sign-out teardown. */
     fun setMessagingSignedIn(signedIn: Boolean) {

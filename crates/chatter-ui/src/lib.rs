@@ -327,6 +327,8 @@ pub async fn app_init() -> AppState {
     // Let incoming-call notification actions (Accept/Decline) reach the client.
     #[cfg(target_os = "android")]
     crate::platform::android::call_actions::register_call_client(client.clone());
+    #[cfg(target_os = "android")]
+    crate::platform::android::notification_route::register_client(client.clone());
 
     // Restore a saved device-auth session before the first RPC runs.
     ui_ctx.restore_session();
@@ -364,6 +366,8 @@ pub async fn app_init() -> AppState {
     // Let the notification "Accept" activity-intent drive the in-app accept flow.
     #[cfg(target_os = "android")]
     crate::platform::android::call_actions::register_main_window(window.as_weak());
+    #[cfg(target_os = "android")]
+    crate::platform::android::notification_route::register_window(window.as_weak());
 
     // Screenshot/recording protection while the recovery codes are shown.
     #[cfg(target_os = "android")]

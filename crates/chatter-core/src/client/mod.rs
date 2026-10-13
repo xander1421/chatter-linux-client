@@ -3626,6 +3626,21 @@ impl ChatterClient {
         rows
     }
 
+    /// Resolve an opaque notification tap only after sign-in, against the
+    /// conversations visible to this account in the current mode.
+    pub fn conversation_for_notification_key(
+        &self,
+        key: &str,
+    ) -> Option<crate::state::ActiveConversation> {
+        if !self.is_logged_in() {
+            return None;
+        }
+        crate::services::notification_service::conversation_for_notification_key(
+            key,
+            self.sidebar_row_keys(),
+        )
+    }
+
     /// Whether `message` belongs in the conversation on screen — the one
     /// predicate for "insert it into the open view", "mark it read", "don't
     /// badge it" and "don't notify for it".

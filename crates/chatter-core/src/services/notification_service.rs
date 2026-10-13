@@ -231,13 +231,38 @@ impl NotificationService {
 /// every notification listener), and a friend DM's id IS the peer's user id —
 /// a contact identifier leaking whatever the detail level. A hash still lets
 /// the same conversation replace and cancel its notification.
-fn notification_key(conversation_id: &crate::domain::ids::ChannelId) -> String {
+pub(crate) fn notification_key(conversation_id: &crate::domain::ids::ChannelId) -> String {
     use sha2::{Digest, Sha256};
     let digest = Sha256::new()
         .chain_update(b"chatter-notification-key:")
         .chain_update(conversation_id.to_string())
         .finalize();
     hex::encode(&digest[..16])
+}
+
+/// Resolve only against rows the current account and mode actually expose.
+/// The OS-provided key is untrusted; it cannot create or reveal a conversation.
+pub(crate) fn conversation_for_notification_key(
+    key: &str,
+    rows: impl IntoIterator<Item = (String, crate::domain::message::ConversationType)>,
+) -> Option<crate::state::ActiveConversation> {
+    if !is_opaque_notification_key(key) {
+        return None;
+    }
+    rows.into_iter().find_map(|(id, kind)| {
+        let channel_id = id.parse().ok()?;
+        (notification_key(&channel_id) == key)
+            .then(|| crate::state::ActiveConversation::from_routing_key(&kind, &id))
+            .flatten()
+    })
+}
+
+/// Intent extras may contain this key, never a raw conversation identifier.
+pub fn is_opaque_notification_key(key: &str) -> bool {
+    key.len() == 32
+        && key
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
 }
 
 impl Default for NotificationService {
@@ -985,6 +1010,78 @@ mod tests {
             notification_key(&crate::domain::ids::ChannelId::new())
         );
         assert!(!notification_key(&id).contains(&id.to_string()));
+        assert!(is_opaque_notification_key(&notification_key(&id)));
+        assert!(!is_opaque_notification_key(&id.to_string()));
+        assert!(!is_opaque_notification_key("Alice: secret text"));
+    }
+
+    #[test]
+    fn notification_key_resolves_only_visible_conversations() {
+        use crate::domain::message::ConversationType;
+        use crate::state::ActiveConversation;
+
+        let channel = crate::domain::ids::ChannelId::new();
+        let secret = crate::domain::anon_dm::AnonDmId::new();
+        let rows = vec![
+            (channel.to_string(), ConversationType::Channel),
+            (secret.to_string(), ConversationType::AnonDm),
+        ];
+        assert_eq!(
+            conversation_for_notification_key(&notification_key(&channel), rows.clone()),
+            Some(ActiveConversation::Channel(channel))
+        );
+        assert_eq!(
+            conversation_for_notification_key(&notification_key(&secret.into()), rows.clone()),
+            Some(ActiveConversation::AnonDm(secret))
+        );
+        assert_eq!(
+            conversation_for_notification_key(&notification_key(&channel), rows[1..].to_vec()),
+            None,
+            "a Shield-hidden channel cannot be opened from a notification"
+        );
+        assert_eq!(
+            conversation_for_notification_key(&channel.to_string(), rows),
+            None
+        );
+    }
+
+    #[test]
+    fn private_notification_passes_only_opaque_key_and_generic_text_to_platform() {
+        struct Capture(std::sync::Mutex<Option<(String, String, String)>>);
+        impl NotificationSink for Capture {
+            fn show(&self, _: &str, _: &str, _: NotificationPriority) -> Result<(), SystemError> {
+                unreachable!()
+            }
+            fn show_conversation(
+                &self,
+                key: &str,
+                title: &str,
+                body: &str,
+                _: NotificationPriority,
+            ) -> Result<(), SystemError> {
+                *self.0.lock().unwrap() = Some((key.into(), title.into(), body.into()));
+                Ok(())
+            }
+        }
+        let sink = Arc::new(Capture(Default::default()));
+        let service = NotificationService::new(sink.clone());
+        service.set_detail_level(NotificationDetailLevel::NameAndMessage);
+        let id = crate::domain::ids::ChannelId::new();
+        service
+            .show_message_notification(
+                &id,
+                Some("Alice"),
+                Some("secret text"),
+                true,
+                NotificationPriority::Normal,
+            )
+            .unwrap();
+        let (key, title, body) = sink.0.lock().unwrap().take().unwrap();
+        assert_eq!(key, notification_key(&id));
+        assert_eq!((title.as_str(), body.as_str()), ("Chatter", "New message"));
+        assert!(!key.contains(&id.to_string()));
+        assert!(!key.contains("Alice"));
+        assert!(!key.contains("secret text"));
     }
 
     #[test]

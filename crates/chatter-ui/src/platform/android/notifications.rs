@@ -311,6 +311,7 @@ impl AndroidNotifications {
                 CHANNEL_CALLS_ID,
                 IC_CALL,
                 "Incoming call",
+                None,
             )?;
             // PRIORITY_MAX (2) for heads-up on pre-26; category=call; ongoing so it
             // can't be swiped away while ringing; auto-timeout if unanswered,
@@ -557,6 +558,16 @@ impl AndroidNotifications {
             )
             .map_err(|e| SystemError::NotificationSend(format!("setAutoCancel: {}", e)))?;
 
+            let open = build_message_activity_intent(env, &context, conversation)?;
+            env.call_method(
+                &builder,
+                jni::jni_str!("setContentIntent"),
+                jni::jni_sig!("(Landroid/app/PendingIntent;)Landroid/app/Notification$Builder;"),
+                &[JValue::Object(&open)],
+            )
+            .map_err(nerr)?;
+
+            let public_open = build_message_activity_intent(env, &context, None)?;
             private_lockscreen_version(
                 env,
                 &context,
@@ -564,6 +575,7 @@ impl AndroidNotifications {
                 CHANNEL_ID,
                 IC_DIALOG_INFO,
                 "New message",
+                Some(&public_open),
             )?;
             // pre-API 26 compat priority
             let android_priority = match priority {
@@ -836,23 +848,7 @@ fn build_activity_intent<'a>(
     capability: &str,
 ) -> Result<JObject<'a>, SystemError> {
     // setClassName (string) instead of find_class — see build_action.
-    let intent = env
-        .new_object(
-            jni::jni_str!("android/content/Intent"),
-            jni::jni_sig!("()V"),
-            &[],
-        )
-        .map_err(nerr)?;
-    let cls_name = env
-        .new_string("com.chatter.client.MainActivity")
-        .map_err(nerr)?;
-    env.call_method(
-        &intent,
-        jni::jni_str!("setClassName"),
-        jni::jni_sig!("(Landroid/content/Context;Ljava/lang/String;)Landroid/content/Intent;"),
-        &[JValue::Object(context), JValue::Object(&cls_name)],
-    )
-    .map_err(nerr)?;
+    let intent = new_activity_intent(env, context)?;
     add_call_intent_identity(env, &intent, call_id, action)?;
     add_call_capability(env, &intent, capability)?;
     let j_action = env.new_string(action).map_err(nerr)?;
@@ -861,14 +857,6 @@ fn build_activity_intent<'a>(
         jni::jni_str!("setAction"),
         jni::jni_sig!("(Ljava/lang/String;)Landroid/content/Intent;"),
         &[JValue::Object(&j_action)],
-    )
-    .map_err(nerr)?;
-    // FLAG_ACTIVITY_NEW_TASK | FLAG_ACTIVITY_SINGLE_TOP
-    env.call_method(
-        &intent,
-        jni::jni_str!("addFlags"),
-        jni::jni_sig!("(I)Landroid/content/Intent;"),
-        &[JValue::Int(0x1000_0000 | 0x2000_0000)],
     )
     .map_err(nerr)?;
     let k = env.new_string("incoming_call_id").map_err(nerr)?;
@@ -891,6 +879,100 @@ fn build_activity_intent<'a>(
         .map_err(nerr)?;
     }
 
+    pending_activity_intent(env, context, &intent, request_code)
+}
+
+/// Message intents contain only the opaque notification key. A per-key
+/// category keeps distinct PendingIntents even if their request-code hashes
+/// collide; generic notifications simply open the app.
+fn build_message_activity_intent<'a>(
+    env: &mut Env<'a>,
+    context: &JObject<'a>,
+    key: Option<&str>,
+) -> Result<JObject<'a>, SystemError> {
+    let key = key.filter(|key| {
+        chatter_core::services::notification_service::is_opaque_notification_key(key)
+    });
+    let intent = new_activity_intent(env, context)?;
+    let action = env
+        .new_string("com.chatter.client.MESSAGE_OPEN")
+        .map_err(nerr)?;
+    env.call_method(
+        &intent,
+        jni::jni_str!("setAction"),
+        jni::jni_sig!("(Ljava/lang/String;)Landroid/content/Intent;"),
+        &[JValue::Object(&action)],
+    )
+    .map_err(nerr)?;
+    let request_code = if let Some(key) = key {
+        let category = env
+            .new_string(format!("com.chatter.client.message.{key}"))
+            .map_err(nerr)?;
+        env.call_method(
+            &intent,
+            jni::jni_str!("addCategory"),
+            jni::jni_sig!("(Ljava/lang/String;)Landroid/content/Intent;"),
+            &[JValue::Object(&category)],
+        )
+        .map_err(nerr)?;
+        let extra_key = env
+            .new_string("notification_conversation_key")
+            .map_err(nerr)?;
+        let extra_value = env.new_string(key).map_err(nerr)?;
+        env.call_method(
+            &intent,
+            jni::jni_str!("putExtra"),
+            jni::jni_sig!("(Ljava/lang/String;Ljava/lang/String;)Landroid/content/Intent;"),
+            &[JValue::Object(&extra_key), JValue::Object(&extra_value)],
+        )
+        .map_err(nerr)?;
+        key.bytes().fold(2166136261u32, |h, b| {
+            (h ^ u32::from(b)).wrapping_mul(16777619)
+        }) as i32
+    } else {
+        0
+    };
+    pending_activity_intent(env, context, &intent, request_code)
+}
+
+fn new_activity_intent<'a>(
+    env: &mut Env<'a>,
+    context: &JObject<'a>,
+) -> Result<JObject<'a>, SystemError> {
+    let intent = env
+        .new_object(
+            jni::jni_str!("android/content/Intent"),
+            jni::jni_sig!("()V"),
+            &[],
+        )
+        .map_err(nerr)?;
+    let cls_name = env
+        .new_string("com.chatter.client.MainActivity")
+        .map_err(nerr)?;
+    env.call_method(
+        &intent,
+        jni::jni_str!("setClassName"),
+        jni::jni_sig!("(Landroid/content/Context;Ljava/lang/String;)Landroid/content/Intent;"),
+        &[JValue::Object(context), JValue::Object(&cls_name)],
+    )
+    .map_err(nerr)?;
+    // FLAG_ACTIVITY_NEW_TASK | FLAG_ACTIVITY_SINGLE_TOP
+    env.call_method(
+        &intent,
+        jni::jni_str!("addFlags"),
+        jni::jni_sig!("(I)Landroid/content/Intent;"),
+        &[JValue::Int(0x1000_0000 | 0x2000_0000)],
+    )
+    .map_err(nerr)?;
+    Ok(intent)
+}
+
+fn pending_activity_intent<'a>(
+    env: &mut Env<'a>,
+    context: &JObject<'a>,
+    intent: &JObject<'a>,
+    request_code: i32,
+) -> Result<JObject<'a>, SystemError> {
     let pi = env
         .call_static_method(
             jni::jni_str!("android/app/PendingIntent"),
@@ -901,7 +983,7 @@ fn build_activity_intent<'a>(
             &[
                 JValue::Object(context),
                 JValue::Int(request_code),
-                JValue::Object(&intent),
+                JValue::Object(intent),
                 JValue::Int(FLAG_IMMUTABLE | FLAG_UPDATE_CURRENT),
             ],
         )
@@ -1008,6 +1090,7 @@ fn private_lockscreen_version(
     channel: &str,
     icon: i32,
     body: &str,
+    open: Option<&JObject<'_>>,
 ) -> Result<(), SystemError> {
     let channel = env.new_string(channel).map_err(nerr)?;
     let public = env
@@ -1040,6 +1123,15 @@ fn private_lockscreen_version(
         &[JValue::Object(&body)],
     )
     .map_err(nerr)?;
+    if let Some(open) = open {
+        env.call_method(
+            &public,
+            jni::jni_str!("setContentIntent"),
+            jni::jni_sig!("(Landroid/app/PendingIntent;)Landroid/app/Notification$Builder;"),
+            &[JValue::Object(open)],
+        )
+        .map_err(nerr)?;
+    }
     let notification = env
         .call_method(
             &public,
