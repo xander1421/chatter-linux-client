@@ -42,6 +42,11 @@ export component HoldArea inherits TouchArea {
 
     // Raised by a completed hold (touch) or a right-click (pointer).
     callback held();
+    // Optional pointer stream for a parent gesture (for example message swipe).
+    // Tap and hold remain owned by HoldArea.
+    callback gesture-down(length, length);
+    callback gesture-moved(length, length);
+    callback gesture-ended(bool);
 
     property <length> press-x: 0px;
     property <length> press-y: 0px;
@@ -72,11 +77,14 @@ export component HoldArea inherits TouchArea {
             if (root.enabled-for-touch) {
                 hold-timer.running = true;
             }
+            root.gesture-down(self.absolute-position.x + self.mouse-x,
+                self.absolute-position.y + self.mouse-y);
         }
         // Release, or a grab stolen by an enclosing Flickable — Slint delivers
         // that as Cancel, and it is what distinguishes a hold from a scroll.
         if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
             hold-timer.running = false;
+            root.gesture-ended(event.kind == PointerEventKind.cancel);
         }
         // Moving past the slop means the finger is scrolling, not holding.
         if (event.kind == PointerEventKind.move && hold-timer.running) {
@@ -84,6 +92,10 @@ export component HoldArea inherits TouchArea {
                 || abs(self.mouse-y - root.press-y) > Spacing.sm) {
                 hold-timer.running = false;
             }
+        }
+        if (event.kind == PointerEventKind.move) {
+            root.gesture-moved(self.absolute-position.x + self.mouse-x,
+                self.absolute-position.y + self.mouse-y);
         }
         // Pointer devices keep their menu, anchored at the cursor.
         if (event.button == PointerEventButton.right && event.kind == PointerEventKind.up) {

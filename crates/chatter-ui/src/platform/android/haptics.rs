@@ -16,6 +16,8 @@ use super::activity::{activity, clear_exception, with_jni_env};
 /// long-press arms. Matching it means our hold feels like every other hold on
 /// the device.
 const LONG_PRESS: i32 = 0;
+/// `HapticFeedbackConstants.CONTEXT_CLICK` — a short tick when reply arms.
+const CONTEXT_CLICK: i32 = 6;
 
 /// `HapticFeedbackConstants.REJECT` (API 30+). A distinctly different pattern
 /// from LONG_PRESS, which is the point: "that did not work" must not feel like
@@ -80,6 +82,10 @@ fn perform(effect: i32) {
 /// A hold gesture just armed and its menu is about to open.
 pub fn long_press() {
     perform(LONG_PRESS);
+}
+
+pub fn reply_ready() {
+    perform(CONTEXT_CLICK);
 }
 
 /// An action failed. Only ever alongside a visible error, never instead of one.

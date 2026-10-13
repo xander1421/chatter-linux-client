@@ -20,6 +20,7 @@ pub fn install(window: &crate::MainWindow) {
     #[cfg(target_os = "android")]
     {
         haptics.on_long_press(crate::platform::android::haptics::long_press);
+        haptics.on_reply_ready(crate::platform::android::haptics::reply_ready);
         haptics.on_error(crate::platform::android::haptics::error);
     }
 

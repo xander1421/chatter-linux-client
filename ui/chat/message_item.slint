@@ -182,6 +182,60 @@ export component MessageItem inherits Rectangle {
     // 0 = nothing fired yet, 1 = menu opened, 2 = selection engaged. Also used
     // to swallow the release-tap, so a hold never doubles as a click.
     property <int> hold-tier: 0;
+    // Touch swipe starts only after horizontal travel wins over scrolling.
+    out property <bool> swipe-tracking: false;
+    property <bool> swipe-active: false;
+    property <bool> swipe-armed: false;
+    property <bool> swipe-haptic-fired: false;
+    property <length> swipe-offset: 0px;
+    property <length> swipe-threshold: 64px;
+
+    function begin-swipe(x: length, y: length) {
+        root.swipe-tracking = root.mobile && !root.selection-mode
+            && !root.is-deleted && !root.is-system && !root.is-call
+            && (!root.is-own || (root.delivery-status != "failed" && root.delivery-status != "sending"));
+        root.swipe-active = false;
+        root.swipe-armed = false;
+        root.swipe-haptic-fired = false;
+        root.swipe-offset = 0px;
+        root.press-x = x;
+        root.press-y = y;
+    }
+
+    function move-swipe(x: length, y: length) {
+        if (!root.swipe-tracking || root.hold-tier != 0) { return; }
+        let dx = x - root.press-x;
+        let dy = y - root.press-y;
+        let toward-center = root.is-own ? -dx : dx;
+        if (!root.swipe-active) {
+            if (abs(dy) > 12px && abs(dy) >= abs(dx)) {
+                root.swipe-tracking = false;
+                return;
+            }
+            if (toward-center < 12px || abs(dx) <= abs(dy) * 1.3) { return; }
+            root.swipe-active = true;
+            root.cancel-hold();
+        }
+        root.swipe-offset = (root.is-own ? -1 : 1) * min(max(toward-center, 0px), 88px);
+        let armed = toward-center >= root.swipe-threshold;
+        if (armed && !root.swipe-haptic-fired) {
+            Haptics.reply-ready();
+            root.swipe-haptic-fired = true;
+        }
+        root.swipe-armed = armed;
+    }
+
+    function end-swipe(cancelled: bool) {
+        let trigger = !cancelled && root.swipe-active && root.swipe-armed;
+        if (root.swipe-active) { root.hold-tier = 3; }
+        root.swipe-tracking = false;
+        root.swipe-active = false;
+        root.swipe-armed = false;
+        root.swipe-offset = 0px;
+        if (trigger) {
+            root.reply-clicked(root.sender-id, root.timestamp-ns);
+        }
+    }
 
     function cancel-hold() {
         root.holding = false;
@@ -192,6 +246,7 @@ export component MessageItem inherits Rectangle {
     // coordinates, so movement and anchoring are identical across inline runs.
     function begin-message-press(x: length, y: length, menu-x: length, menu-y: length) {
         root.cancel-hold();
+        root.begin-swipe(x, y);
         root.press-x = x;
         root.press-y = y;
         root.anchor-x = menu-x;
@@ -205,6 +260,7 @@ export component MessageItem inherits Rectangle {
     }
 
     function move-message-press(x: length, y: length) {
+        root.move-swipe(x, y);
         if (root.holding
             && (abs(x - root.press-x) > root.hold-slop
                 || abs(y - root.press-y) > root.hold-slop)) {
@@ -513,7 +569,19 @@ export component MessageItem inherits Rectangle {
                     width: bubble.width;
                     height: bubble.height;
 
+                if root.swipe-active: Image {
+                    source: Icons.reply;
+                    width: 24px;
+                    height: 24px;
+                    x: root.is-own ? bubble.width + root.swipe-offset / 2 - self.width / 2
+                        : root.swipe-offset / 2 - self.width / 2;
+                    y: (bubble.height - self.height) / 2;
+                    colorize: root.swipe-armed ? Colors.primary : Colors.text-muted;
+                }
+
                 bubble := Rectangle {
+                    x: root.swipe-offset;
+                    animate x { duration: root.swipe-active || Appearance.reduce-motion ? 0ms : 180ms; easing: Materials.settle; }
                     y: 0px;
                     property <bool> bubble-hovered: bubble-touch.has-hover;
                     accessible-role: text;
@@ -626,6 +694,7 @@ export component MessageItem inherits Rectangle {
                             // Flickable (Slint delivers that as Cancel).
                             //
                             if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
+                                root.end-swipe(event.kind == PointerEventKind.cancel);
                                 root.cancel-hold();
                             }
                         }
@@ -636,6 +705,7 @@ export component MessageItem inherits Rectangle {
                         }
 
                         clicked => {
+                            if (root.swipe-active) { return; }
                             if (root.selection-mode) {
                                 root.selection-toggled(root.message-id);
                                 return;
@@ -913,10 +983,12 @@ export component MessageItem inherits Rectangle {
                                                 self.absolute-position.y + self.mouse-y);
                                         }
                                         if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
+                                            root.end-swipe(event.kind == PointerEventKind.cancel);
                                             root.cancel-hold();
                                         }
                                     }
                                     link-clicked(url) => {
+                                        if (root.swipe-active) { return; }
                                         if (root.hold-tier != 0) { return; }
                                         if root.selection-mode { root.selection-toggled(root.message-id); }
                                         else { root.open-message-link(url); }
@@ -938,6 +1010,34 @@ export component MessageItem inherits Rectangle {
                             font-size: Typography.sm;
                             wrap: word-wrap;
                             max-width: root.text-max-width;
+
+                            // Text owns its pointer events. Give touch the same
+                            // swipe/hold stream as the surrounding bubble;
+                            // desktop keeps native text selection.
+                            if root.mobile: TouchArea {
+                                pointer-event(event) => {
+                                    if (event.kind == PointerEventKind.down) {
+                                        root.begin-message-press(self.absolute-position.x + self.mouse-x,
+                                            self.absolute-position.y + self.mouse-y,
+                                            bubble-touch.absolute-position.x,
+                                            bubble-touch.absolute-position.y + bubble-touch.height);
+                                    }
+                                    if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
+                                        root.end-swipe(event.kind == PointerEventKind.cancel);
+                                        root.cancel-hold();
+                                    }
+                                }
+                                moved => {
+                                    root.move-message-press(self.absolute-position.x + self.mouse-x,
+                                        self.absolute-position.y + self.mouse-y);
+                                }
+                                clicked => {
+                                    if (root.swipe-active) { return; }
+                                    if (root.selection-mode) { root.selection-toggled(root.message-id); return; }
+                                    if (root.hold-tier != 0) { root.hold-tier = 0; return; }
+                                    root.message-clicked(root.message-id);
+                                }
+                            }
                         }
 
                         // Attachments
@@ -1033,8 +1133,11 @@ export component MessageItem inherits Rectangle {
                                     img-touch := HoldArea {
                                         enabled-for-touch: root.mobile;
                                         mouse-cursor: pointer;
+                                        gesture-down(x, y) => { root.begin-swipe(x, y); }
+                                        gesture-moved(x, y) => { root.move-swipe(x, y); }
+                                        gesture-ended(cancelled) => { root.end-swipe(cancelled); }
                                         clicked => {
-                                            if (self.hold-fired) { return; }
+                                            if (self.hold-fired || root.swipe-active) { return; }
                                             root.attachment-clicked(attachment.id);
                                         }
                                         held => {
@@ -1155,8 +1258,11 @@ export component MessageItem inherits Rectangle {
                                     video-touch := HoldArea {
                                         enabled-for-touch: root.mobile;
                                         mouse-cursor: pointer;
+                                        gesture-down(x, y) => { root.begin-swipe(x, y); }
+                                        gesture-moved(x, y) => { root.move-swipe(x, y); }
+                                        gesture-ended(cancelled) => { root.end-swipe(cancelled); }
                                         clicked => {
-                                            if (self.hold-fired) { return; }
+                                            if (self.hold-fired || root.swipe-active) { return; }
                                             root.attachment-clicked(attachment.id);
                                         }
                                         held => {
@@ -1250,8 +1356,11 @@ export component MessageItem inherits Rectangle {
                                     file-touch := HoldArea {
                                         enabled-for-touch: root.mobile;
                                         mouse-cursor: pointer;
+                                        gesture-down(x, y) => { root.begin-swipe(x, y); }
+                                        gesture-moved(x, y) => { root.move-swipe(x, y); }
+                                        gesture-ended(cancelled) => { root.end-swipe(cancelled); }
                                         clicked => {
-                                            if (self.hold-fired) { return; }
+                                            if (self.hold-fired || root.swipe-active) { return; }
                                             root.attachment-clicked(attachment.id);
                                         }
                                         held => {
