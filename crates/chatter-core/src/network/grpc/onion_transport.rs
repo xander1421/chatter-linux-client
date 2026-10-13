@@ -305,8 +305,19 @@ impl Service<Uri> for OnionConnector {
                 // tonic DOES wrap custom connectors in connect_timeout. Its
                 // endpoint budget allows our 120s + 90s phases plus scheduling slack.
                 // The inner 210s cap bounds this connector even for lazy channels.
-                let jh =
-                    tor_runtime().spawn(async move { client.connect((host.as_str(), port)).await });
+                let jh = tor_runtime().spawn(async move {
+                    match client.connect((host.as_str(), port)).await {
+                        Ok(stream) => Ok(stream),
+                        Err(_) => {
+                            // A descriptor lookup can exhaust its circuit attempts
+                            // while the next lookup succeeds. Retry the same pinned
+                            // service once, within the existing 90s dial budget.
+                            tracing::warn!("onion dial failed; retrying same service once");
+                            tokio::time::sleep(Duration::from_millis(500)).await;
+                            client.connect((host.as_str(), port)).await
+                        }
+                    }
+                });
                 let stream = await_tor_task(jh, DIAL_TIMEOUT, "dial").await?;
 
                 Ok(TokioIo::new(stream))

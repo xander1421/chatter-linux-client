@@ -195,7 +195,10 @@ mistralrs = { version = "0.8.1", optional = true, default-features = false }
 # to a .onion; without it the onion dial fails at runtime with a generic
 # "unavailable". Enable it explicitly alongside default-features=false.
 # tor-rtcompat provides PreferredRuntime.
-arti-client = { version = "0.47.0", default-features = false, features = ["tokio", "rustls", "onion-service-client"], optional = true }
+# The server advertises onion introduction PoW. Without hs-pow-full Arti's
+# v1 solver is a stub that always sends no proof, even when the descriptor
+# suggests effort or a retry should raise it under load.
+arti-client = { version = "0.47.0", default-features = false, features = ["tokio", "rustls", "onion-service-client", "hs-pow-full"], optional = true }
 tor-rtcompat = { version = "0.47.0", default-features = false, features = ["tokio", "rustls"], optional = true }
 hyper-util = { version = "0.1", features = ["tokio"], optional = true }
 # HTTP-over-Tor client (anon_http): a hyper HTTP/1.1 client run over a rustls TLS
