@@ -12,6 +12,18 @@ import { Spacing } from "../theme/spacing.slint";
 import { DismissButton } from "dismiss_button.slint";
 import { Typography } from "../theme/typography.slint";
 
+export global ImageZoomMath {
+    public pure function focal-offset(pan: length, from: float, to: float, focal: length, viewport: length) -> length {
+        let ratio = to / from;
+        pan * ratio + (focal - viewport / 2) * (1.0 - ratio)
+    }
+    public pure function clamp-offset(pan: length, fit: length, viewport: length, zoom: float) -> length {
+        let bound = max(0px, (fit * zoom - viewport) / 2);
+        min(max(pan, -bound), bound)
+    }
+    public pure function double-tap-scale(zoom: float) -> float { zoom > 1.0 ? 1.0 : 2.5 }
+}
+
 export component ImageViewer inherits Rectangle {
     private property <bool> compact-layout: root.width < 600px;
     // Touch platform: the media actions take the 48px Android minimum.
@@ -22,6 +34,43 @@ export component ImageViewer inherits Rectangle {
     in property <image> source;
     in property <string> filename: "";
     in property <string> size-display: "";
+    property <float> zoom: 1.0;
+    property <length> pan-x: 0px;
+    property <length> pan-y: 0px;
+    property <float> pinch-start-zoom: 1.0;
+    property <length> pinch-center-x: 0px;
+    property <length> pinch-center-y: 0px;
+    property <length> drag-x: 0px;
+    property <length> drag-y: 0px;
+    property <length> drag-start-y: 0px;
+    property <length> drag-start-x: 0px;
+
+    function reset-zoom() {
+        root.zoom = 1.0;
+        root.pan-x = 0px;
+        root.pan-y = 0px;
+    }
+
+    function clamp-pan() {
+        root.pan-x = ImageZoomMath.clamp-offset(root.pan-x, viewer-area.fit-width, viewer-area.width, root.zoom);
+        root.pan-y = ImageZoomMath.clamp-offset(root.pan-y, viewer-area.fit-height, viewer-area.height, root.zoom);
+    }
+
+    function zoom-at(target: float, x: length, y: length) {
+        let next = min(max(target, 1.0), 5.0);
+        root.pan-x = ImageZoomMath.focal-offset(root.pan-x, root.zoom, next, x, viewer-area.width);
+        root.pan-y = ImageZoomMath.focal-offset(root.pan-y, root.zoom, next, y, viewer-area.height);
+        root.zoom = next;
+        root.clamp-pan();
+    }
+
+    function toggle-zoom(x: length, y: length) {
+        if (root.zoom > 1.0) { root.reset-zoom(); }
+        else { root.zoom-at(ImageZoomMath.double-tap-scale(root.zoom), x, y); }
+    }
+
+    changed source => { root.reset-zoom(); }
+    changed show => { if (!root.show) { root.reset-zoom(); } }
 
     // Callbacks
     in property <string> position-label;
@@ -91,19 +140,66 @@ export component ImageViewer inherits Rectangle {
         }
 
         // Image display area
-        Rectangle {
+        viewer-area := Rectangle {
             vertical-stretch: 1;
-
-            // Prevent clicks from closing
-            TouchArea {
-                // Consume click to prevent backdrop close
-            }
+            clip: true;
+            property <length> fit-width: root.source.width <= 0 || root.source.height <= 0
+                ? self.width : min(self.width, self.height * root.source.width / root.source.height);
+            property <length> fit-height: root.source.width <= 0 || root.source.height <= 0
+                ? self.height : min(self.height, self.width * root.source.height / root.source.width);
 
             Image {
                 source: root.source;
                 image-fit: contain;
-                width: 100%;
-                height: 100%;
+                width: viewer-area.fit-width * root.zoom;
+                height: viewer-area.fit-height * root.zoom;
+                x: (viewer-area.width - self.width) / 2 + root.pan-x;
+                y: (viewer-area.height - self.height) / 2 + root.pan-y;
+            }
+
+            gesture := ScaleRotateGestureHandler {
+                started => {
+                    root.pinch-start-zoom = root.zoom;
+                    root.pinch-center-x = self.center.x;
+                    root.pinch-center-y = self.center.y;
+                }
+                updated => {
+                    root.pan-x += self.center.x - root.pinch-center-x;
+                    root.pan-y += self.center.y - root.pinch-center-y;
+                    root.pinch-center-x = self.center.x;
+                    root.pinch-center-y = self.center.y;
+                    root.zoom-at(root.pinch-start-zoom * self.scale, self.center.x, self.center.y);
+                }
+
+                drag := TouchArea {
+                    pointer-event(event) => {
+                        if (event.kind == PointerEventKind.down) {
+                            root.drag-x = self.mouse-x;
+                            root.drag-y = self.mouse-y;
+                            root.drag-start-x = self.mouse-x;
+                            root.drag-start-y = self.mouse-y;
+                        }
+                        if (event.kind == PointerEventKind.up && root.zoom == 1.0
+                            && self.mouse-y - root.drag-start-y > 100px
+                            && abs(self.mouse-y - root.drag-start-y) > abs(self.mouse-x - root.drag-start-x)) {
+                            root.close();
+                        }
+                    }
+                    moved => {
+                        if (root.zoom > 1.0 && !gesture.active) {
+                            root.pan-x += self.mouse-x - root.drag-x;
+                            root.pan-y += self.mouse-y - root.drag-y;
+                            root.clamp-pan();
+                        }
+                        root.drag-x = self.mouse-x;
+                        root.drag-y = self.mouse-y;
+                    }
+                    double-clicked => { root.toggle-zoom(self.mouse-x, self.mouse-y); }
+                    scroll-event(event) => {
+                        root.zoom-at(root.zoom * (event.delta-y < 0px ? 1.12 : 1.0 / 1.12), self.mouse-x, self.mouse-y);
+                        return accept;
+                    }
+                }
             }
         }
 
