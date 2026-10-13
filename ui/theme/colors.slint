@@ -29,11 +29,19 @@ export global Colors {
     out property <color> background: Appearance.dark ? #080d13 : #edf1f5;
     out property <color> surface: Appearance.dark ? #141e29 : #ffffff;
     out property <color> surface-hover: Appearance.dark ? #1c2734 : #e6ecf2;
+    // Shared levels for page sections and inset controls. Keep the older
+    // names below as aliases for existing call sites.
+    out property <color> surface-page: background;
+    out property <color> surface-card: surface;
+    // A grouped Settings card is visibly raised from the dark modal/page.
+    out property <color> surface-section: Appearance.dark ? #1d2b39 : #ffffff;
+    out property <color> surface-control: Appearance.dark ? #263444 : #dfe6ed;
+    out property <color> surface-control-hover: Appearance.dark ? #304050 : #d3dce6;
     // Secondary-button fill. Its own step, not `surface`: a secondary button
     // sits on the page AND on cards (which are `surface`), and with no stroke
     // a surface-filled button on a card was a bare label (RC24 D2).
-    out property <color> fill-secondary: Appearance.dark ? #263444 : #dfe6ed;
-    out property <color> fill-secondary-hover: Appearance.dark ? #304050 : #d3dce6;
+    out property <color> fill-secondary: surface-control;
+    out property <color> fill-secondary-hover: surface-control-hover;
     // Off-state track of a switch: >= 3:1 against a card, so "off" is visible.
     out property <color> control-off: Appearance.dark ? #5f7085 : #8795a5;
 
@@ -77,6 +85,12 @@ export global Colors {
 
     // Borders and dividers
     out property <color> border: Appearance.dark ? #243242 : #d2dae3;
+    // The ring is drawn inside Button. Use the opposite ink tone so it is
+    // visible over every fill, including the teal primary and red danger.
+    out property <color> focus-ring: Appearance.dark ? #eef3f8 : #101a25;
+    // Text/icon danger step on the raised section (5.04:1 in dark mode).
+    // Filled destructive controls continue to use `error`/`error-hover`.
+    out property <color> danger: Appearance.dark ? #ff6666 : error;
 
     // Overlays and tooltips. Content drawn ON an overlay (play buttons, call
     // chips) uses text-primary, so the light overlays are light too.
@@ -145,6 +159,11 @@ export global Colors {
     // colour as a hovered one (hover #e6ecf2 ≈ inset #e6ebf0); text-muted
     // stays 4.6:1 on it.
     out property <color> selected: Appearance.dark ? #060a0f : #dde4ec;
+    // Selection has a brand edge so it remains distinct from hover in both
+    // themes and in Shield mode, which tints the surrounding panel.
+    out property <color> row-selected: Appearance.dark ? #17363b : #d7eeeb;
+    out property <color> row-hover: surface-hover;
+    out property <color> selected-indicator: Appearance.dark ? #64ddcc : #0f766e;
     out property <color> tint-weak: primary.with-alpha(0.10);
     out property <color> tint-strong: primary.with-alpha(0.20);
     // Text drawn straight on Materials.scrim-media (a media viewer's

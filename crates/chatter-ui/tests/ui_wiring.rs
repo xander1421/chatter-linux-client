@@ -5625,8 +5625,10 @@ fn polish_shared_controls_and_rc28_regressions() {
     let button = source("components/button.slint");
     assert!(button.contains("pressed: touch.pressed && !root.disabled && !root.loading"));
     assert!(
-        button.contains("height: Spacing.button-height;")
-            && button.contains("border-radius: self.height / 2;")
+        button.contains("root.touch ? max(Spacing.touch-target-min")
+            && button.contains("root.size == \"small\" ? 36px")
+            && button.contains("Spacing.radius-md")
+            && button.contains("root.variant == \"icon\" ? self.height / 2")
     );
     assert!(button.contains("overflow: elide;") && button.contains("accessible-action-default"));
     let toggle = source("components/toggle.slint");

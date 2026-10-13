@@ -33,6 +33,7 @@ export component HeaderButton inherits Rectangle {
     in property <bool> active: false;
     in property <bool> destructive: false;
     in property <bool> enabled: true;
+    in property <bool> plain: false;
     // Forwarded to the glass shell; see GlassSurface.backdrop-paused.
     in property <bool> backdrop-paused: false;
     // What is drawn, as opposed to what is tappable. The root box is always
@@ -70,6 +71,7 @@ export component HeaderButton inherits Rectangle {
     // Keeping opacity below the root lets childless header controls share
     // generated code; caller-supplied status marks remain inside this box.
     box := GlassSurface {
+        material-enabled: !root.plain;
         opacity: root.enabled ? 1.0 : 0.4;
         material-level: 1;
         elevation: 0;

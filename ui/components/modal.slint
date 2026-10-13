@@ -14,6 +14,7 @@ import { Icons } from "../theme/icons.slint";
 // share the title and conditional controls across all modal bodies.
 component ModalHeader inherits GlassSurface {
     in property <bool> full-screen;
+    in property <bool> plain-header: false;
     in property <bool> root-screen;
     in property <bool> show-more;
     in property <bool> show-close;
@@ -22,8 +23,8 @@ component ModalHeader inherits GlassSurface {
     callback more-clicked();
 
     z: 1;
-    material-enabled: root.full-screen;
-    border-radius: root.full-screen ? self.height / 2 : 0px;
+    material-enabled: root.full-screen && !root.plain-header;
+    border-radius: root.full-screen && !root.plain-header ? self.height / 2 : 0px;
     height: root.full-screen ? Spacing.header-action-box-touch : Spacing.header-action-box;
     HorizontalLayout {
         spacing: Spacing.header-action-gap;
@@ -33,6 +34,7 @@ component ModalHeader inherits GlassSurface {
 
         if root.full-screen && !root.root-screen: DismissButton {
             back: true;
+            plain: root.plain-header;
             clicked => { root.close(); }
         }
 
@@ -68,6 +70,7 @@ export component Modal inherits Rectangle {
     in property <length> max-modal-height: 600px;
     in property <bool> fill-height: false;
     in property <bool> full-screen: false;
+    in property <bool> plain-header: false;
     // Full-screen lists extend behind the header and dock, with scroll insets.
     in property <bool> floating-content: false;
     in property <length> bottom-inset: 0px;
@@ -130,6 +133,7 @@ export component Modal inherits Rectangle {
                 // behind the header. A z on its definition cannot order siblings.
                 z: 1;
                 full-screen: root.full-screen;
+                plain-header: root.plain-header;
                 root-screen: root.root-screen;
                 show-more: root.show-more;
                 show-close: root.show-close;

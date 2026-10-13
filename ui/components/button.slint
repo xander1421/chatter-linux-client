@@ -8,13 +8,16 @@ import { Typography } from "../theme/typography.slint";
 
 export component Button inherits Rectangle {
     in property <string> text: "";
-    in property <string> variant: "primary";  // "primary", "secondary", "ghost", "destructive"
+    in property <string> variant: "primary";  // primary, secondary, ghost/tertiary, danger/destructive, icon
+    in property <string> size: "medium"; // small, medium, large
+    in property <bool> touch: false;
+    in property <string> label: root.text; // accessible name for icon-only buttons
     in property <bool> disabled: false;
     in property <bool> loading: false;
     in property <image> icon;
 
     accessible-role: button;
-    accessible-label: root.text;
+    accessible-label: root.label;
     accessible-enabled: !root.disabled && !root.loading;
     accessible-action-default => { if !root.disabled && !root.loading { root.clicked(); } }
 
@@ -34,32 +37,33 @@ export component Button inherits Rectangle {
         if disabled {
             variant == "primary" ? Colors.action-fill :
             variant == "secondary" ? Colors.fill-secondary :
-            variant == "destructive" ? root.destructive-fill :
+            (variant == "destructive" || variant == "danger") ? root.destructive-fill :
             transparent
         } else if pressed {
             variant == "primary" ? Colors.action-active :
             variant == "secondary" ? Colors.fill-secondary-hover :
-            variant == "destructive" ? root.destructive-fill-active :
+            (variant == "destructive" || variant == "danger") ? root.destructive-fill-active :
             Materials.pressed
         } else if hover {
             variant == "primary" ? Colors.action-hover :
             variant == "secondary" ? Colors.fill-secondary-hover :
-            variant == "destructive" ? root.destructive-fill-active :
+            (variant == "destructive" || variant == "danger") ? root.destructive-fill-active :
             Materials.hover
         } else {
             variant == "primary" ? Colors.action-fill :
             variant == "secondary" ? Colors.fill-secondary :
-            variant == "destructive" ? root.destructive-fill :
+            (variant == "destructive" || variant == "danger") ? root.destructive-fill :
             transparent
         }
     };
 
-    min-width: Spacing.button-min-width;
-    height: Spacing.button-height;
+    min-width: root.variant == "icon" ? root.height : Spacing.button-min-width;
+    height: root.touch ? max(Spacing.touch-target-min, root.size == "large" ? 52px : Spacing.button-height)
+        : root.size == "small" ? 36px : root.size == "large" ? 48px : Spacing.button-height;
     vertical-stretch: 0;
-    border-radius: self.height / 2;
+    border-radius: root.variant == "icon" ? self.height / 2 : Spacing.radius-md;
 
-    property <color> foreground: (root.variant == "primary" || root.variant == "destructive") ? Colors.on-action : Colors.text-primary;
+    property <color> foreground: (root.variant == "primary" || root.variant == "destructive" || root.variant == "danger") ? Colors.on-action : Colors.text-primary;
 
     // Keep opacity on the visual child. A root opacity binding makes Slint
     // inline the whole Button (including its loading animation) at every use.
@@ -80,16 +84,16 @@ export component Button inherits Rectangle {
         border-radius: root.border-radius;
         background: root.bg-color;
         // Keyboard focus ring; nothing at rest.
-        border-width: keys.has-focus ? Spacing.stroke : 0px;
-        border-color: Colors.primary;
+        border-width: keys.has-focus ? 2px : 0px;
+        border-color: Colors.focus-ring;
         // 38%: Material's disabled level, including both fill and content.
         opacity: root.disabled ? 0.38 : 1.0;
 
         // Content layout
         HorizontalLayout {
             alignment: center;
-            padding-left: Spacing.md;
-            padding-right: Spacing.md;
+            padding-left: root.variant == "icon" ? Spacing.none : Spacing.md;
+            padding-right: root.variant == "icon" ? Spacing.none : Spacing.md;
             spacing: Spacing.sm;
 
             // Optional icon
@@ -156,7 +160,7 @@ export component Button inherits Rectangle {
             }
 
             // Button text
-            if !loading: Text {
+            if !loading && root.text != "": Text {
                 text: root.text;
                 color: root.foreground;
                 font-size: Typography.sm;

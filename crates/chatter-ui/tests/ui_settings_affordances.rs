@@ -308,21 +308,22 @@ fn failed_privacy_writes_restore_effective_values_and_selected_gif_tab_keeps_sea
     w.set_is_mobile_platform(false);
     pump(&w);
     scroll_to_label(&w, "Backup passphrase (for file backup)");
-    assert!(
-        ElementHandle::find_by_accessible_label(&w, "Backup passphrase (for file backup)")
+    let passphrase = ElementHandle::find_by_accessible_label(&w, "Backup passphrase (for file backup)")
+        .next()
+        .expect("file backup passphrase input");
+    click(&w, &passphrase);
+    w.window()
+        .dispatch_event(slint::platform::WindowEvent::KeyPressed { text: "x".into() });
+    pump(&w);
+    // Grouped Settings rows move these actions below the initial viewport.
+    // Scroll to each action and verify it can be used once a passphrase exists.
+    for label in ["Export to File…", "Restore from File…"] {
+        scroll_to_label(&w, label);
+        let action = ElementHandle::find_by_accessible_label(&w, label)
             .next()
-            .is_some()
-    );
-    assert!(
-        ElementHandle::find_by_accessible_label(&w, "Export to File…")
-            .next()
-            .is_some()
-    );
-    assert!(
-        ElementHandle::find_by_accessible_label(&w, "Restore from File…")
-            .next()
-            .is_some()
-    );
+            .expect("file backup action reachable after scrolling");
+        assert_eq!(action.accessible_enabled(), Some(true), "{label} must be enabled");
+    }
     // Reproduce a compact navigation pill partly clipped beside fixed Back.
     w.set_is_mobile_platform(true);
     pump(&w);

@@ -7,6 +7,7 @@ import { Elevation } from "../theme/elevation.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Button } from "../components/button.slint";
+import { SettingsRow } from "../components/settings_row.slint";
 import { DismissButton } from "../components/dismiss_button.slint";
 import { Input } from "../components/input.slint";
 import { Avatar } from "../components/avatar.slint";
@@ -237,6 +238,7 @@ export component SettingsScreen inherits Rectangle {
 
                     DismissButton {
                         back: true;
+                        plain: true;
                         touch: false;
                         clicked => { root.close-settings(); }
                     }
@@ -255,27 +257,41 @@ export component SettingsScreen inherits Rectangle {
                 // Navigation items
                 for item[index] in [
                     { id: "account", label: "Account", enabled: true },
-                    { id: "devices", label: "Linked devices", enabled: true },
                     { id: "privacy", label: "Privacy", enabled: true },
                     { id: "notifications", label: "Notifications", enabled: true },
+                    { id: "devices", label: "Linked devices", enabled: true },
+                    { id: "appearance", label: "Appearance", enabled: true },
                     { id: "encryption", label: "Encryption", enabled: true },
-                    { id: "ai", label: "AI Assistant", enabled: true },
-                    { id: "appearance", label: "Appearance", enabled: true }
+                    { id: "ai", label: "AI Assistant", enabled: true }
                 ]: Rectangle {
-                    height: Spacing.button-height;
+                    height: root.mobile-platform ? Spacing.touch-target-min : Spacing.button-height;
                     border-radius: Spacing.radius-md;
-                    background: active-section == item.id ? Colors.action-fill :
-                               (nav-touch.has-hover && item.enabled ? Colors.surface-hover : transparent);
+                    background: active-section == item.id ? (root.compact-mode ? Colors.action-fill : Colors.row-selected) :
+                               (nav-touch.has-hover && item.enabled ? Colors.row-hover : transparent);
                     opacity: item.enabled ? 1.0 : 0.5;
 
                     HorizontalLayout {
                         padding-left: Spacing.md;
                         padding-right: Spacing.md;
+                        spacing: Spacing.sm;
                         alignment: start;
+
+                        if !root.compact-mode: Image {
+                            source: item.id == "account" ? Icons.user
+                                : item.id == "devices" ? Icons.smartphone
+                                : item.id == "privacy" ? Icons.shield
+                                : item.id == "notifications" ? Icons.bell
+                                : item.id == "encryption" ? Icons.lock
+                                : item.id == "ai" ? Icons.sparkles : Icons.moon;
+                            width: Spacing.button-icon;
+                            height: Spacing.button-icon;
+                            colorize: active-section == item.id ? Colors.selected-indicator : Colors.text-secondary;
+                            vertical-alignment: center;
+                        }
 
                         Text {
                             text: item.label;
-                            color: active-section == item.id ? Colors.on-action :
+                            color: active-section == item.id ? (root.compact-mode ? Colors.on-action : Colors.text-primary) :
                                    (item.enabled ? Colors.text-secondary : Colors.text-muted);
                             font-size: Typography.sm;
                             font-weight: active-section == item.id ? Typography.medium : Typography.normal;
@@ -323,7 +339,7 @@ export component SettingsScreen inherits Rectangle {
 
                         // Account section
                         if active-section == "account": VerticalLayout {
-                            spacing: Spacing.lg;
+                            spacing: Spacing.sm;
 
                             // Section header
                             Text {
@@ -335,7 +351,7 @@ export component SettingsScreen inherits Rectangle {
 
                             // Profile info row
                             Rectangle {
-                                background: Colors.surface;
+                                background: Colors.surface-section;
                                 border-radius: Spacing.radius-lg;
                                 drop-shadow-blur: Elevation.card-blur;
                                 drop-shadow-offset-y: Elevation.card-offset;
@@ -381,8 +397,10 @@ export component SettingsScreen inherits Rectangle {
 
                                         // Edit button — beside the name on wide screens
                                         if !root.compact-mode: Button {
+                                            touch: root.mobile-platform;
                                             text: "Edit Profile";
-                                            variant: "ghost";
+                                            variant: "secondary";
+                                            icon: Icons.edit;
                                             clicked => { root.edit-profile-clicked(); }
                                         }
                                     }
@@ -390,14 +408,16 @@ export component SettingsScreen inherits Rectangle {
                                     // Compact: full-width button stacked below
                                     if root.compact-mode: Button {
                                         text: "Edit Profile";
-                                        variant: "ghost";
+                                        variant: "secondary";
+                                        touch: true;
+                                        icon: Icons.edit;
                                         clicked => { root.edit-profile-clicked(); }
                                     }
                                 }
                             }
 
                             // Security subsection
-                            Rectangle { height: Spacing.md; }
+                            Rectangle { height: Spacing.lg; }
 
                             Text {
                                 text: "Security";
@@ -406,53 +426,28 @@ export component SettingsScreen inherits Rectangle {
                                 font-weight: Typography.semibold;
                             }
 
+                            Rectangle {
+                                background: Colors.surface-section;
+                                border-radius: Spacing.radius-lg;
+                                VerticalLayout {
+                                    spacing: Spacing.none;
                             // Change Password group
                             Rectangle {
-                                background: Colors.surface;
-                                border-radius: Spacing.radius-lg;
-                                drop-shadow-blur: Elevation.card-blur;
-                                drop-shadow-offset-y: Elevation.card-offset;
-                                drop-shadow-color: Elevation.card-shadow;
-                                border-width: Elevation.rim-width;
-                                border-color: Elevation.card-rim;
+                                background: transparent;
+                                border-radius: Spacing.none;
 
                                 VerticalLayout {
                                     padding: Spacing.md;
                                     spacing: Spacing.sm;
 
-                                    HorizontalLayout {
-                                        spacing: Spacing.md;
-
-                                        VerticalLayout {
-                                            horizontal-stretch: 1;
-                                            spacing: Spacing.xs;
-
-                                            Text {
-                                                text: "Password";
-                                                color: Colors.text-primary;
-                                                font-size: Typography.sm;
-                                                font-weight: Typography.medium;
-                                            }
-
-                                            Text {
-                                                text: "Choose a strong, unique password for your account.";
-                                                color: Colors.text-muted;
-                                                font-size: Typography.xs;
-                                                wrap: word-wrap;
-                                            }
-                                        }
-
-                                        if !show-password-form && !root.compact-mode: Button {
-                                            text: "Change";
-                                            variant: "secondary";
-                                            clicked => { show-password-form = true; }
-                                        }
-                                    }
-
-                                    // Compact: full-width button stacked below
-                                    if !show-password-form && root.compact-mode: Button {
-                                        text: "Change";
-                                        variant: "secondary";
+                                    SettingsRow {
+                                        touch: root.mobile-platform;
+                                        icon: Icons.lock;
+                                        title: "Password";
+                                        detail: "Choose a strong, unique password for your account.";
+                                        clickable: false;
+                                        show-chevron: false;
+                                        action-label: show-password-form ? "" : "Change";
                                         clicked => { show-password-form = true; }
                                     }
 
@@ -498,6 +493,7 @@ export component SettingsScreen inherits Rectangle {
                                             alignment: end;
 
                                             Button {
+                                                touch: root.mobile-platform;
                                                 text: "Cancel";
                                                 variant: "ghost";
                                                 clicked => {
@@ -509,6 +505,7 @@ export component SettingsScreen inherits Rectangle {
                                             }
 
                                             Button {
+                                                touch: root.mobile-platform;
                                                 text: "Save";
                                                 variant: "primary";
                                                 loading: root.password-changing;
@@ -524,53 +521,25 @@ export component SettingsScreen inherits Rectangle {
                                 }
                             }
 
+                            Rectangle { height: 1px; background: Colors.divider; }
+
                             // Recovery Codes group
                             Rectangle {
-                                background: Colors.surface;
-                                border-radius: Spacing.radius-lg;
-                                drop-shadow-blur: Elevation.card-blur;
-                                drop-shadow-offset-y: Elevation.card-offset;
-                                drop-shadow-color: Elevation.card-shadow;
-                                border-width: Elevation.rim-width;
-                                border-color: Elevation.card-rim;
+                                background: transparent;
+                                border-radius: Spacing.none;
 
                                 VerticalLayout {
                                     padding: Spacing.md;
                                     spacing: Spacing.sm;
 
-                                    HorizontalLayout {
-                                        spacing: Spacing.md;
-
-                                        VerticalLayout {
-                                            horizontal-stretch: 1;
-                                            spacing: Spacing.xs;
-
-                                            Text {
-                                                text: "Recovery Codes";
-                                                color: Colors.text-primary;
-                                                font-size: Typography.sm;
-                                                font-weight: Typography.medium;
-                                            }
-
-                                            Text {
-                                                text: "Lost or used up your codes? Get a new set.";
-                                                color: Colors.text-muted;
-                                                font-size: Typography.xs;
-                                                wrap: word-wrap;
-                                            }
-                                        }
-
-                                        if !show-recovery-regen && !root.compact-mode: Button {
-                                            text: "Regenerate";
-                                            variant: "secondary";
-                                            clicked => { show-recovery-regen = true; }
-                                        }
-                                    }
-
-                                    // Compact: full-width button stacked below
-                                    if !show-recovery-regen && root.compact-mode: Button {
-                                        text: "Regenerate";
-                                        variant: "secondary";
+                                    SettingsRow {
+                                        touch: root.mobile-platform;
+                                        icon: Icons.shield;
+                                        title: "Recovery Codes";
+                                        detail: "Lost or used up your codes? Get a new set.";
+                                        clickable: false;
+                                        show-chevron: false;
+                                        action-label: show-recovery-regen ? "" : "Regenerate";
                                         clicked => { show-recovery-regen = true; }
                                     }
 
@@ -603,6 +572,7 @@ export component SettingsScreen inherits Rectangle {
                                             alignment: end;
 
                                             Button {
+                                                touch: root.mobile-platform;
                                                 text: "Cancel";
                                                 variant: "ghost";
                                                 clicked => {
@@ -612,6 +582,7 @@ export component SettingsScreen inherits Rectangle {
                                             }
 
                                             Button {
+                                                touch: root.mobile-platform;
                                                 text: "Regenerate";
                                                 variant: "primary";
                                                 loading: root.recovery-regen-loading;
@@ -625,53 +596,25 @@ export component SettingsScreen inherits Rectangle {
                                 }
                             }
 
+                            Rectangle { height: 1px; background: Colors.divider; }
+
                             // Change PIN group
                             Rectangle {
-                                background: Colors.surface;
-                                border-radius: Spacing.radius-lg;
-                                drop-shadow-blur: Elevation.card-blur;
-                                drop-shadow-offset-y: Elevation.card-offset;
-                                drop-shadow-color: Elevation.card-shadow;
-                                border-width: Elevation.rim-width;
-                                border-color: Elevation.card-rim;
+                                background: transparent;
+                                border-radius: Spacing.none;
 
                                 VerticalLayout {
                                     padding: Spacing.md;
                                     spacing: Spacing.sm;
 
-                                    HorizontalLayout {
-                                        spacing: Spacing.md;
-
-                                        VerticalLayout {
-                                            horizontal-stretch: 1;
-                                            spacing: Spacing.xs;
-
-                                            Text {
-                                                text: "Backup PIN";
-                                                color: Colors.text-primary;
-                                                font-size: Typography.sm;
-                                                font-weight: Typography.medium;
-                                            }
-
-                                            Text {
-                                                text: "Your PIN secures your encrypted key backup.";
-                                                color: Colors.text-muted;
-                                                font-size: Typography.xs;
-                                                wrap: word-wrap;
-                                            }
-                                        }
-
-                                        if !show-pin-form && !root.compact-mode: Button {
-                                            text: "Change";
-                                            variant: "secondary";
-                                            clicked => { show-pin-form = true; }
-                                        }
-                                    }
-
-                                    // Compact: full-width button stacked below
-                                    if !show-pin-form && root.compact-mode: Button {
-                                        text: "Change";
-                                        variant: "secondary";
+                                    SettingsRow {
+                                        touch: root.mobile-platform;
+                                        icon: Icons.lock;
+                                        title: "Backup PIN";
+                                        detail: "Your PIN secures your encrypted key backup.";
+                                        clickable: false;
+                                        show-chevron: false;
+                                        action-label: show-pin-form ? "" : "Change";
                                         clicked => { show-pin-form = true; }
                                     }
 
@@ -728,6 +671,7 @@ export component SettingsScreen inherits Rectangle {
                                             alignment: end;
 
                                             Button {
+                                                touch: root.mobile-platform;
                                                 text: "Cancel";
                                                 variant: "ghost";
                                                 clicked => {
@@ -739,6 +683,7 @@ export component SettingsScreen inherits Rectangle {
                                             }
 
                                             Button {
+                                                touch: root.mobile-platform;
                                                 text: "Save";
                                                 variant: "primary";
                                                 loading: root.change-pin-loading;
@@ -754,65 +699,26 @@ export component SettingsScreen inherits Rectangle {
                                 }
                             }
 
+                            Rectangle { height: 1px; background: Colors.divider; }
+
                             // Key Backup group
                             Rectangle {
-                                background: Colors.surface;
-                                border-radius: Spacing.radius-lg;
-                                drop-shadow-blur: Elevation.card-blur;
-                                drop-shadow-offset-y: Elevation.card-offset;
-                                drop-shadow-color: Elevation.card-shadow;
-                                border-width: Elevation.rim-width;
-                                border-color: Elevation.card-rim;
+                                background: transparent;
+                                border-radius: Spacing.none;
 
                                 VerticalLayout {
                                     padding: Spacing.md;
                                     spacing: Spacing.sm;
 
-                                    HorizontalLayout {
-                                        spacing: Spacing.md;
-
-                                        VerticalLayout {
-                                            horizontal-stretch: 1;
-                                            spacing: Spacing.xs;
-
-                                            Text {
-                                                text: "Key Backup";
-                                                color: Colors.text-primary;
-                                                font-size: Typography.sm;
-                                                font-weight: Typography.medium;
-                                            }
-
-                                            HorizontalLayout {
-                                                spacing: Spacing.sm;
-
-                                                Text {
-                                                    text: "Status:";
-                                                    color: Colors.text-muted;
-                                                    font-size: Typography.xs;
-                                                }
-
-                                                Text {
-                                                    text: root.backup-status == "backed_up" ? "Backed up" :
-                                                          root.backup-status == "not_backed_up" ? "Not backed up" : "Unknown";
-                                                    color: root.backup-status == "backed_up" ? Colors.success :
-                                                           root.backup-status == "not_backed_up" ? Colors.warning : Colors.text-muted;
-                                                    font-size: Typography.xs;
-                                                    font-weight: Typography.medium;
-                                                }
-                                            }
-                                        }
-
-                                        if !show-backup-retry && root.backup-status != "backed_up" && !root.compact-mode: Button {
-                                            text: "Retry";
-                                            variant: "secondary";
-                                            clicked => { show-backup-retry = true; }
-                                        }
-                                    }
-
-                                    // Compact: full-width button stacked below
-                                    if !show-backup-retry && root.backup-status != "backed_up" && root.compact-mode: Button {
-                                        text: "Retry";
-                                        variant: "secondary";
+                                    SettingsRow {
+                                        touch: root.mobile-platform;
+                                        icon: Icons.download;
+                                        title: "Key Backup";
+                                        detail: "Status: " + (root.backup-status == "backed_up" ? "Backed up" : root.backup-status == "not_backed_up" ? "Not backed up" : "Unknown");
+                                        detail-color: root.backup-status == "backed_up" ? Colors.success : root.backup-status == "not_backed_up" ? Colors.warning : Colors.text-secondary;
+                                        clickable: false;
+                                        show-chevron: false;
+                                        action-label: !show-backup-retry && root.backup-status != "backed_up" ? "Retry" : "";
                                         clicked => { show-backup-retry = true; }
                                     }
 
@@ -843,6 +749,7 @@ export component SettingsScreen inherits Rectangle {
                                             alignment: end;
 
                                             Button {
+                                                touch: root.mobile-platform;
                                                 text: "Cancel";
                                                 variant: "ghost";
                                                 clicked => {
@@ -852,6 +759,7 @@ export component SettingsScreen inherits Rectangle {
                                             }
 
                                             Button {
+                                                touch: root.mobile-platform;
                                                 text: "Retry";
                                                 variant: "primary";
                                                 loading: root.backup-retry-loading;
@@ -865,9 +773,12 @@ export component SettingsScreen inherits Rectangle {
                                 }
                             }
 
+                                }
+                            }
+
                             // Message Backup group (encrypted history export/restore)
                             Rectangle {
-                                background: Colors.surface;
+                                background: Colors.surface-section;
                                 border-radius: Spacing.radius-lg;
                                 drop-shadow-blur: Elevation.card-blur;
                                 drop-shadow-offset-y: Elevation.card-offset;
@@ -911,6 +822,7 @@ export component SettingsScreen inherits Rectangle {
                                         alignment: end;
 
                                         Button {
+                                            touch: root.mobile-platform;
                                             text: "Export to File…";
                                             variant: "secondary";
                                             disabled: root.message-backup-passphrase == "";
@@ -920,6 +832,7 @@ export component SettingsScreen inherits Rectangle {
                                         }
 
                                         Button {
+                                            touch: root.mobile-platform;
                                             text: "Restore from File…";
                                             variant: "secondary";
                                             disabled: root.message-backup-passphrase == "";
@@ -940,6 +853,7 @@ export component SettingsScreen inherits Rectangle {
                                         alignment: end;
 
                                         Button {
+                                            touch: root.mobile-platform;
                                             text: "Back Up to Server";
                                             variant: "secondary";
                                             disabled: root.message-backup-pin == "";
@@ -949,6 +863,7 @@ export component SettingsScreen inherits Rectangle {
                                         }
 
                                         Button {
+                                            touch: root.mobile-platform;
                                             text: "Restore from Server";
                                             variant: "secondary";
                                             disabled: root.message-backup-pin == "";
@@ -1010,6 +925,7 @@ export component SettingsScreen inherits Rectangle {
                                         }
 
                                         if !show-logout-confirm && !root.compact-mode: Button {
+                                            touch: root.mobile-platform;
                                             text: "Log Out";
                                             variant: "destructive";
                                             clicked => { show-logout-confirm = true; }
@@ -1018,6 +934,7 @@ export component SettingsScreen inherits Rectangle {
 
                                     // Compact: full-width button stacked below
                                     if !show-logout-confirm && root.compact-mode: Button {
+                                        touch: root.mobile-platform;
                                         text: "Log Out";
                                         variant: "destructive";
                                         clicked => { show-logout-confirm = true; }
@@ -1028,12 +945,14 @@ export component SettingsScreen inherits Rectangle {
                                         spacing: Spacing.sm;
 
                                         Button {
+                                            touch: root.mobile-platform;
                                             text: "Cancel";
                                             variant: "secondary";
                                             clicked => { show-logout-confirm = false; }
                                         }
 
                                         Button {
+                                            touch: root.mobile-platform;
                                             text: "Log Out of This Device";
                                             variant: "destructive";
                                             clicked => {
@@ -1076,6 +995,7 @@ export component SettingsScreen inherits Rectangle {
                                         // First click reveals a confirmation step
                                         // (with password) — never deletes directly.
                                         if !show-delete-confirm && !root.compact-mode: Button {
+                                            touch: root.mobile-platform;
                                             text: "Delete Account";
                                             variant: "destructive";
                                             clicked => {
@@ -1087,6 +1007,7 @@ export component SettingsScreen inherits Rectangle {
 
                                     // Compact: full-width button stacked below
                                     if !show-delete-confirm && root.compact-mode: Button {
+                                        touch: root.mobile-platform;
                                         text: "Delete Account";
                                         variant: "destructive";
                                         clicked => {
@@ -1124,6 +1045,7 @@ export component SettingsScreen inherits Rectangle {
                                             alignment: end;
 
                                             Button {
+                                                touch: root.mobile-platform;
                                                 text: "Cancel";
                                                 variant: "ghost";
                                                 clicked => {
@@ -1133,6 +1055,7 @@ export component SettingsScreen inherits Rectangle {
                                             }
 
                                             Button {
+                                                touch: root.mobile-platform;
                                                 text: "Delete Forever";
                                                 variant: "destructive";
                                                 loading: root.delete-loading;
@@ -1162,7 +1085,7 @@ export component SettingsScreen inherits Rectangle {
                             }
 
                             Rectangle {
-                                background: Colors.surface;
+                                background: Colors.surface-section;
                                 border-radius: Spacing.radius-lg;
                                 drop-shadow-blur: Elevation.card-blur;
                                 drop-shadow-offset-y: Elevation.card-offset;
@@ -1220,6 +1143,7 @@ export component SettingsScreen inherits Rectangle {
                                         }
 
                                         if !root.compact-mode: Button {
+                                            touch: root.mobile-platform;
                                             text: "Manage devices";
                                             variant: "secondary";
                                             clicked => { root.view-sessions-clicked(); }
@@ -1228,6 +1152,7 @@ export component SettingsScreen inherits Rectangle {
 
                                     // Compact: full-width button stacked below
                                     if root.compact-mode: Button {
+                                        touch: root.mobile-platform;
                                         text: "Manage devices";
                                         variant: "secondary";
                                         clicked => { root.view-sessions-clicked(); }
@@ -1258,7 +1183,7 @@ export component SettingsScreen inherits Rectangle {
                             // receives our profile key (core profile_visibility);
                             // restricting rotates the key, so it may ask for the PIN.
                             Rectangle {
-                                background: Colors.surface;
+                                background: Colors.surface-section;
                                 border-radius: Spacing.radius-lg;
                                 drop-shadow-blur: Elevation.card-blur;
                                 drop-shadow-offset-y: Elevation.card-offset;
@@ -1361,6 +1286,7 @@ export component SettingsScreen inherits Rectangle {
                                             alignment: end;
 
                                             Button {
+                                                touch: root.mobile-platform;
                                                 text: "Cancel";
                                                 variant: "secondary";
                                                 disabled: root.profile-visibility-busy;
@@ -1368,6 +1294,7 @@ export component SettingsScreen inherits Rectangle {
                                             }
 
                                             Button {
+                                                touch: root.mobile-platform;
                                                 text: "Confirm";
                                                 loading: root.profile-visibility-busy;
                                                 disabled: root.profile-visibility-busy || root.profile-visibility-pin == "";
@@ -1395,7 +1322,7 @@ export component SettingsScreen inherits Rectangle {
                             // Offered without Tor too (see the chat-list
                             // header shield); only the Tor promise is gated.
                             Rectangle {
-                                background: Colors.surface;
+                                background: Colors.surface-section;
                                 border-radius: Spacing.radius-lg;
                                 drop-shadow-blur: Elevation.card-blur;
                                 drop-shadow-offset-y: Elevation.card-offset;
@@ -1434,7 +1361,7 @@ export component SettingsScreen inherits Rectangle {
                             // Who can find me by my username. The server
                             // enforces it; the choice shows the persisted value.
                             Rectangle {
-                                background: Colors.surface;
+                                background: Colors.surface-section;
                                 border-radius: Spacing.radius-lg;
                                 drop-shadow-blur: Elevation.card-blur;
                                 drop-shadow-offset-y: Elevation.card-offset;
@@ -1466,6 +1393,7 @@ export component SettingsScreen inherits Rectangle {
                                         alignment: start;
 
                                         Button {
+                                            touch: root.mobile-platform;
                                             text: "Everyone";
                                             variant: root.username-discoverable ? "primary" : "secondary";
                                             clicked => {
@@ -1477,6 +1405,7 @@ export component SettingsScreen inherits Rectangle {
                                         }
 
                                         Button {
+                                            touch: root.mobile-platform;
                                             text: "Nobody";
                                             variant: root.username-discoverable ? "secondary" : "primary";
                                             clicked => {
@@ -1492,7 +1421,7 @@ export component SettingsScreen inherits Rectangle {
 
                             // Read Receipts setting
                             Rectangle {
-                                background: Colors.surface;
+                                background: Colors.surface-section;
                                 border-radius: Spacing.radius-lg;
                                 drop-shadow-blur: Elevation.card-blur;
                                 drop-shadow-offset-y: Elevation.card-offset;
@@ -1528,7 +1457,7 @@ export component SettingsScreen inherits Rectangle {
 
                             // Typing Indicators setting
                             Rectangle {
-                                background: Colors.surface;
+                                background: Colors.surface-section;
                                 border-radius: Spacing.radius-lg;
                                 drop-shadow-blur: Elevation.card-blur;
                                 drop-shadow-offset-y: Elevation.card-offset;
@@ -1565,7 +1494,7 @@ export component SettingsScreen inherits Rectangle {
                             // Search shortcut setting (3-way segmented selector).
                             // Keyboard shortcuts mean nothing on a phone.
                             if !root.mobile-platform: Rectangle {
-                                background: Colors.surface;
+                                background: Colors.surface-section;
                                 border-radius: Spacing.radius-lg;
                                 drop-shadow-blur: Elevation.card-blur;
                                 drop-shadow-offset-y: Elevation.card-offset;
@@ -1685,6 +1614,7 @@ export component SettingsScreen inherits Rectangle {
                                     wrap: word-wrap;
                                 }
                                 if NotificationDelivery.error != "": Button {
+                                    touch: root.mobile-platform;
                                     text: "Retry";
                                     variant: "ghost";
                                     disabled: NotificationDelivery.busy;
@@ -1697,7 +1627,7 @@ export component SettingsScreen inherits Rectangle {
                             // enforced in core (NotificationService::show_message_notification);
                             // sealed-sender messages never show a sender regardless.
                             Rectangle {
-                                background: Colors.surface;
+                                background: Colors.surface-section;
                                 border-radius: Spacing.radius-lg;
                                 drop-shadow-blur: Elevation.card-blur;
                                 drop-shadow-offset-y: Elevation.card-offset;
@@ -1840,7 +1770,7 @@ export component SettingsScreen inherits Rectangle {
                             }
 
                             if NotificationSound.mode == "toggle": Rectangle {
-                                background: Colors.surface;
+                                background: Colors.surface-section;
                                 border-radius: Spacing.radius-lg;
                                 drop-shadow-blur: Elevation.card-blur;
                                 drop-shadow-offset-y: Elevation.card-offset;
@@ -1893,7 +1823,7 @@ export component SettingsScreen inherits Rectangle {
 
                             // Identity Verification group
                             Rectangle {
-                                background: Colors.surface;
+                                background: Colors.surface-section;
                                 border-radius: Spacing.radius-lg;
                                 drop-shadow-blur: Elevation.card-blur;
                                 drop-shadow-offset-y: Elevation.card-offset;
@@ -1945,6 +1875,7 @@ export component SettingsScreen inherits Rectangle {
                                         }
 
                                         if !root.compact-mode: Button {
+                                            touch: root.mobile-platform;
                                             text: "Copy";
                                             variant: "ghost";
                                             clicked => { root.copy-fingerprint-clicked(); }
@@ -1953,6 +1884,7 @@ export component SettingsScreen inherits Rectangle {
 
                                     // Compact: full-width button stacked below
                                     if root.compact-mode: Button {
+                                        touch: root.mobile-platform;
                                         text: "Copy";
                                         variant: "ghost";
                                         clicked => { root.copy-fingerprint-clicked(); }
@@ -1962,7 +1894,7 @@ export component SettingsScreen inherits Rectangle {
 
                             // Sealed Sender setting
                             Rectangle {
-                                background: Colors.surface;
+                                background: Colors.surface-section;
                                 border-radius: Spacing.radius-lg;
                                 drop-shadow-blur: Elevation.card-blur;
                                 drop-shadow-offset-y: Elevation.card-offset;
@@ -2019,7 +1951,7 @@ export component SettingsScreen inherits Rectangle {
 
                             // Enable Local AI toggle
                             Rectangle {
-                                background: Colors.surface;
+                                background: Colors.surface-section;
                                 border-radius: Spacing.radius-lg;
                                 drop-shadow-blur: Elevation.card-blur;
                                 drop-shadow-offset-y: Elevation.card-offset;
@@ -2056,7 +1988,7 @@ export component SettingsScreen inherits Rectangle {
 
                             // ── Cloud AI ───────────────────────────────────
                             Rectangle {
-                                background: Colors.surface;
+                                background: Colors.surface-section;
                                 border-radius: Spacing.radius-lg;
                                 drop-shadow-blur: Elevation.card-blur;
                                 drop-shadow-offset-y: Elevation.card-offset;
@@ -2106,6 +2038,7 @@ export component SettingsScreen inherits Rectangle {
                                             spacing: Spacing.sm;
 
                                             Button {
+                                                touch: root.mobile-platform;
                                                 text: "My API key";
                                                 variant: root.cloud-ai-mode == "direct-anthropic" ? "primary" : "secondary";
                                                 clicked => {
@@ -2115,6 +2048,7 @@ export component SettingsScreen inherits Rectangle {
                                             }
 
                                             Button {
+                                                touch: root.mobile-platform;
                                                 text: "Buy tokens";
                                                 variant: root.cloud-ai-mode == "server-broker" ? "primary" : "secondary";
                                                 clicked => {
@@ -2145,6 +2079,7 @@ export component SettingsScreen inherits Rectangle {
                                             HorizontalLayout {
                                                 alignment: start;
                                                 Button {
+                                                    touch: root.mobile-platform;
                                                     text: "Save key";
                                                     variant: "secondary";
                                                     clicked => {
@@ -2175,6 +2110,7 @@ export component SettingsScreen inherits Rectangle {
                                             HorizontalLayout {
                                                 alignment: start;
                                                 Button {
+                                                    touch: root.mobile-platform;
                                                     text: "Refresh balance";
                                                     variant: "secondary";
                                                     clicked => { root.cloud-ai-refresh-quota(); }
@@ -2196,6 +2132,7 @@ export component SettingsScreen inherits Rectangle {
                             if root.local-ai-enabled: HorizontalLayout {
                                 alignment: start;
                                 Button {
+                                    touch: root.mobile-platform;
                                     text: "View Memory";
                                     variant: "secondary";
                                     clicked => { root.local-ai-open-memory(); }
@@ -2212,7 +2149,7 @@ export component SettingsScreen inherits Rectangle {
 
                             // Detected providers
                             if root.local-ai-enabled: Rectangle {
-                                background: Colors.surface;
+                                background: Colors.surface-section;
                                 border-radius: Spacing.radius-lg;
 
                                 VerticalLayout {
@@ -2229,6 +2166,7 @@ export component SettingsScreen inherits Rectangle {
                                             font-weight: Typography.medium;
                                         }
                                         Button {
+                                            touch: root.mobile-platform;
                                             text: root.local-ai-detecting ? "Scanning..." : "Rescan";
                                             variant: "ghost";
                                             disabled: root.local-ai-detecting;
@@ -2289,7 +2227,7 @@ export component SettingsScreen inherits Rectangle {
 
                             // Chat model of the active provider
                             if root.local-ai-enabled && root.local-ai-models.length > 0: Rectangle {
-                                background: Colors.surface;
+                                background: Colors.surface-section;
                                 border-radius: Spacing.radius-lg;
 
                                 VerticalLayout {
@@ -2333,7 +2271,7 @@ export component SettingsScreen inherits Rectangle {
 
                             // Downloadable model catalog (hardware-fit tagged)
                             if root.local-ai-enabled && root.local-ai-catalog.length > 0: Rectangle {
-                                background: Colors.surface;
+                                background: Colors.surface-section;
                                 border-radius: Spacing.radius-lg;
 
                                 VerticalLayout {
@@ -2392,6 +2330,7 @@ export component SettingsScreen inherits Rectangle {
                                                     vertical-alignment: center;
                                                 }
                                                 if !entry.installed && !entry.downloading: Button {
+                                                    touch: root.mobile-platform;
                                                     text: entry.error != "" ? "Retry" : "Download";
                                                     variant: "secondary";
                                                     disabled: entry.fit == "big";
@@ -2426,7 +2365,7 @@ export component SettingsScreen inherits Rectangle {
 
                             // In-process (mistralrs) model configuration
                             if root.local-ai-enabled && root.local-ai-active-provider == "mistralrs": Rectangle {
-                                background: Colors.surface;
+                                background: Colors.surface-section;
                                 border-radius: Spacing.radius-lg;
                                 drop-shadow-blur: Elevation.card-blur;
                                 drop-shadow-offset-y: Elevation.card-offset;
@@ -2502,6 +2441,7 @@ export component SettingsScreen inherits Rectangle {
                                         alignment: end;
 
                                         Button {
+                                            touch: root.mobile-platform;
                                             text: "Unload";
                                             variant: "ghost";
                                             disabled: root.local-ai-loading || root.local-ai-status == "";
@@ -2509,6 +2449,7 @@ export component SettingsScreen inherits Rectangle {
                                         }
 
                                         Button {
+                                            touch: root.mobile-platform;
                                             text: root.local-ai-loading ? "Loading..." : "Load Model";
                                             variant: "primary";
                                             loading: root.local-ai-loading;
@@ -2536,7 +2477,7 @@ export component SettingsScreen inherits Rectangle {
                             // Theme. Kept on this device (core: `ThemeMode`),
                             // applied live through the `Appearance` global.
                             Rectangle {
-                                background: Colors.surface;
+                                background: Colors.surface-section;
                                 border-radius: Spacing.radius-lg;
                                 drop-shadow-blur: Elevation.card-blur;
                                 drop-shadow-offset-y: Elevation.card-offset;
@@ -2630,7 +2571,7 @@ export component SettingsScreen inherits Rectangle {
                             // Text size. Kept on this device (core: `TextSize`); every
                             // Typography step is drawn at `Appearance.text-scale`.
                             Rectangle {
-                                background: Colors.surface;
+                                background: Colors.surface-section;
                                 border-radius: Spacing.radius-lg;
                                 drop-shadow-blur: Elevation.card-blur;
                                 drop-shadow-offset-y: Elevation.card-offset;
@@ -2723,7 +2664,7 @@ export component SettingsScreen inherits Rectangle {
                             }
 
                             Rectangle {
-                                background: Colors.surface;
+                                background: Colors.surface-section;
                                 border-radius: Spacing.radius-lg;
 
                                 ToggleRow {
@@ -2750,7 +2691,7 @@ export component SettingsScreen inherits Rectangle {
                             }
 
                             Rectangle {
-                                background: Colors.surface;
+                                background: Colors.surface-section;
                                 border-radius: Spacing.radius-lg;
 
                                 ToggleRow {
@@ -2779,7 +2720,7 @@ export component SettingsScreen inherits Rectangle {
                             // Message spacing. Kept on this device (core: `MessageDensity`);
                             // read through the density tokens in `Spacing`.
                             Rectangle {
-                                background: Colors.surface;
+                                background: Colors.surface-section;
                                 border-radius: Spacing.radius-lg;
                                 drop-shadow-blur: Elevation.card-blur;
                                 drop-shadow-offset-y: Elevation.card-offset;
@@ -2884,8 +2825,9 @@ export component SettingsScreen inherits Rectangle {
         x: 0px;
         y: 0px;
         width: root.width;
-        material-level: 2;
-        elevation: 3;
+        material-enabled: false;
+        background: Colors.surface-page;
+        border-radius: Spacing.none;
 
         height: Spacing.touch-target-min + Spacing.sm;
 
@@ -2899,7 +2841,9 @@ export component SettingsScreen inherits Rectangle {
             // text button at the bottom of the desktop rail: three
             // spellings of one action across two breakpoints.
             DismissButton {
+                touch: root.mobile-platform;
                 back: true;
+                plain: true;
                 clicked => { root.close-settings(); }
             }
 
@@ -2920,13 +2864,14 @@ export component SettingsScreen inherits Rectangle {
 
                         for item in [
                             { id: "account", label: "Account" },
-                            { id: "devices", label: "Linked devices" },
                             { id: "privacy", label: "Privacy" },
                             { id: "notifications", label: "Notifications" },
+                            { id: "devices", label: "Linked devices" },
+                            { id: "appearance", label: "Appearance" },
                             { id: "encryption", label: "Encryption" },
-                            { id: "ai", label: "AI" },
-                            { id: "appearance", label: "Appearance" }
+                            { id: "ai", label: "AI" }
                         ]: Button {
+                            touch: root.mobile-platform;
                             text: item.label;
                             height: Spacing.touch-target-min;
                             // Selected tab = the neutral raised pill every other tab bar uses

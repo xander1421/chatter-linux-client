@@ -163,7 +163,7 @@ export component Sidebar inherits Rectangle {
     // do not touch; the row stays the touch target, the slot is what you see.
     property <length> rail-slot-size: root.touch ? 44px : 32px;
     property <length> rail-slot-radius: 12px;
-    property <brush> rail-slot-bg: Colors.surface-hover;
+    property <brush> rail-slot-bg: Colors.surface-control;
     property <bool> rail-has-mesh: MeshGlobal.enabled && MeshGlobal.conversations.length > 0;
     // AI, Mesh (conditional), expand, Settings, anon shield, profile.
     property <int> rail-button-count: root.rail-has-mesh ? 6 : 5;
@@ -584,8 +584,11 @@ export component Sidebar inherits Rectangle {
         if !root.collapsed: GlassSurface {
             // Bound backdrop and shadow painting to this chrome silhouette.
             clip: true;
+            material-enabled: !root.mobile-mode;
             material-level: 2;
             elevation: 3;
+            background: root.mobile-mode ? Colors.surface-section : transparent;
+            border-radius: root.mobile-mode ? Spacing.radius-lg : Spacing.radius-chrome;
 
             // Pinned to the top: without x/y a sized element is centred. On a
             // phone it floats inset from the edges like the chat header.
@@ -615,6 +618,7 @@ export component Sidebar inherits Rectangle {
             // the Shield toggle.
             if !root.mobile-mode: HeaderButton {
                 touch: root.touch;
+                active: true;
                 shell: root.header-control-shell;
                 glyph: root.header-control-glyph;
                 x: parent.width - self.width - Spacing.sm - self.width - Spacing.header-action-gap;
@@ -635,6 +639,7 @@ export component Sidebar inherits Rectangle {
             // AnonMode.onion-built — without Tor it would be a permanent red.
             HeaderButton {
                 touch: root.touch;
+                plain: root.mobile-mode;
                 shell: root.header-control-shell;
                 glyph: root.header-control-glyph;
                 x: parent.width - self.width - Spacing.sm; y: (parent.height - self.height) / 2;
@@ -758,9 +763,9 @@ export component Sidebar inherits Rectangle {
                     tooltip-text: AnonMode.enabled ? "Anon Mode (active) - tap to disable" : "Anon Mode";
                     tooltip-enabled: true; placement: "right";
                     HorizontalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius;
-                        background: AnonMode.enabled ? Colors.primary.with-alpha(0.2) : root.rail-slot-bg;
+                        background: AnonMode.enabled ? Colors.row-selected : root.rail-slot-bg;
                         Image { source: Icons.shield; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
-                            colorize: AnonMode.enabled ? Colors.primary : Colors.text-secondary; }
+                            colorize: AnonMode.enabled ? Colors.selected-indicator : Colors.text-secondary; }
                         // Tor status dot: green=connected, amber=CONNECTING ONLY,
                         // red=error, muted=off. See the expanded shield above.
                         Rectangle {

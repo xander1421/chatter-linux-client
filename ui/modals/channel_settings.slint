@@ -7,6 +7,7 @@ import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
 import { Modal } from "../components/modal.slint";
 import { Button } from "../components/button.slint";
+import { SettingsRow } from "../components/settings_row.slint";
 import { Input } from "../components/input.slint";
 import { ToggleRow } from "../components/toggle_row.slint";
 import { DisappearingGlobal } from "../chat/disappearing_global.slint";
@@ -43,53 +44,6 @@ export struct BannedMemberData {
     user-id: string,
     display-name: string,
     avatar-source: image,
-}
-
-// One navigation shape for the group info page. The whole row is a touch target.
-component InfoRow inherits Rectangle {
-    in property <image> icon;
-    in property <string> title;
-    in property <string> detail: "";
-    in property <bool> destructive: false;
-    callback clicked();
-    min-height: Spacing.list-row-height-touch;
-    background: Colors.inset;
-    border-radius: Spacing.radius-md;
-    border-width: keys.has-focus ? Spacing.stroke : 0px;
-    border-color: Colors.primary;
-    forward-focus: keys;
-    accessible-role: button;
-    accessible-label: root.title;
-    accessible-description: root.detail;
-    accessible-action-default => { root.clicked(); }
-    keys := FocusScope {
-        width: 0px; height: 0px;
-        key-pressed(event) => {
-            if event.text == Key.Space || event.text == Key.Return {
-                root.clicked();
-                return accept;
-            }
-            return reject;
-        }
-    }
-    HorizontalLayout {
-        width: parent.width;
-        height: parent.height;
-        padding-left: Spacing.md;
-        padding-right: Spacing.md;
-        spacing: Spacing.md;
-        alignment: stretch;
-        Image { source: root.icon; width: 20px; height: 20px; colorize: root.destructive ? Colors.error : Colors.text-secondary; }
-        VerticalLayout {
-            horizontal-stretch: 1;
-            min-width: 0px;
-            alignment: center;
-            Text { text: root.title; color: root.destructive ? Colors.error : Colors.text-primary; font-size: Typography.sm; }
-            if root.detail != "": Text { text: root.detail; color: Colors.text-secondary; font-size: Typography.xs; wrap: word-wrap; height: self.preferred-height; }
-        }
-        Image { source: Icons.chevron-right; width: 18px; height: 18px; colorize: Colors.text-secondary; }
-    }
-    TouchArea { clicked => { root.clicked(); } }
 }
 
 export component ChannelSettingsModal inherits Rectangle {
@@ -235,6 +189,7 @@ export component ChannelSettingsModal inherits Rectangle {
         modal-width: 640px;
         max-modal-height: 820px;
         full-screen: root.narrow;
+        plain-header: true;
         // Expand the card to the available height (capped at max-modal-height)
         // instead of hugging content — the right panel scrolls.
         fill-height: true;
@@ -373,46 +328,66 @@ export component ChannelSettingsModal inherits Rectangle {
                                 text: "Unsaved changes to group info";
                                 color: Colors.warning; font-size: Typography.sm;
                             }
-                            if !root.loading: VerticalLayout {
-                                spacing: Spacing.xs;
-                                InfoRow {
-                                    icon: Icons.bell; title: "Notifications";
-                                    detail: root.is-muted ? "Muted" : root.notification-preference == "mentions" ? "Mentions only" : root.notification-preference == "none" ? "Off" : "All messages";
-                                    clicked => { root.active-section = "notifications"; }
-                                }
-                                if !root.is-private-group: HorizontalLayout {
-                                    min-height: Spacing.touch-target-min;
-                                    padding: Spacing.md; spacing: Spacing.md;
-                                    Image { source: Icons.clock; width: 20px; height: 20px; colorize: Colors.text-secondary; }
-                                    Text { text: "Disappearing messages · " + DisappearingGlobal.active-label;
-                                        color: Colors.text-secondary; font-size: Typography.sm; horizontal-stretch: 1; }
-                                }
-                                if root.can-manage-members || root.members.length > 0: InfoRow {
-                                    icon: Icons.users; title: "Members";
-                                    detail: root.member-count + (root.member-count == 1 ? " member" : " members");
-                                    clicked => { root.active-section = "members"; }
-                                }
-                                if root.has-access-pane: InfoRow {
-                                    icon: Icons.link; title: "Access and invite links";
-                                    clicked => { root.active-section = "access"; }
-                                }
-                                if root.is-owner: InfoRow {
-                                    icon: Icons.settings; title: "Integrations";
-                                    clicked => { root.integrations(); }
-                                }
-                                InfoRow {
-                                    icon: Icons.phone; title: "Call history";
-                                    clicked => { root.server-calls(); }
+                            if !root.loading: Rectangle {
+                                background: Colors.surface-section;
+                                border-radius: Spacing.radius-lg;
+                                VerticalLayout {
+                                    padding-left: Spacing.xs;
+                                    padding-right: Spacing.xs;
+                                    if root.can-manage-members || root.members.length > 0: SettingsRow {
+                                        touch: true;
+                                        icon: Icons.users; title: "Members";
+                                        detail: root.member-count + (root.member-count == 1 ? " member" : " members");
+                                        clicked => { root.active-section = "members"; }
+                                    }
+                                    if root.can-manage-members || root.members.length > 0: Rectangle { height: 1px; background: Colors.divider; }
+                                    if root.has-access-pane: SettingsRow {
+                                        touch: true;
+                                        icon: Icons.link; title: "Access and invite links";
+                                        clicked => { root.active-section = "access"; }
+                                    }
+                                    if root.has-access-pane: Rectangle { height: 1px; background: Colors.divider; }
+                                    SettingsRow {
+                                        touch: true;
+                                        icon: Icons.bell; title: "Notifications";
+                                        detail: root.is-muted ? "Muted" : root.notification-preference == "mentions" ? "Mentions only" : root.notification-preference == "none" ? "Off" : "All messages";
+                                        clicked => { root.active-section = "notifications"; }
+                                    }
+                                    if !root.is-private-group: Rectangle { height: 1px; background: Colors.divider; }
+                                    if !root.is-private-group: SettingsRow {
+                                        touch: true;
+                                        icon: Icons.clock; title: "Disappearing messages";
+                                        detail: DisappearingGlobal.active-label;
+                                        clickable: false;
+                                        show-chevron: false;
+                                    }
+                                    Rectangle { height: 1px; background: Colors.divider; }
+                                    SettingsRow {
+                                        touch: true;
+                                        icon: Icons.phone; title: "Call history";
+                                        clicked => { root.server-calls(); }
+                                    }
+                                    if root.is-owner: Rectangle { height: 1px; background: Colors.divider; }
+                                    if root.is-owner: SettingsRow {
+                                        touch: true;
+                                        icon: Icons.settings; title: "Integrations";
+                                        clicked => { root.integrations(); }
+                                    }
                                 }
                             }
                             if root.can-archive || root.can-delete || root.can-leave || root.is-private-group: VerticalLayout {
                                 spacing: Spacing.sm;
                                 Text { text: root.is-private-group ? "Manage group" : "Manage channel"; color: Colors.text-secondary;
                                     font-size: Typography.sm; font-weight: Typography.medium; }
-                                InfoRow {
+                                Rectangle {
+                                    background: Colors.surface-section;
+                                    border-radius: Spacing.radius-lg;
+                                    SettingsRow {
+                                        touch: true;
                                     icon: Icons.alert-triangle; title: "Leave, archive or delete";
                                     destructive: true;
                                     clicked => { root.active-section = "destructive"; }
+                                    }
                                 }
                             }
                         }
