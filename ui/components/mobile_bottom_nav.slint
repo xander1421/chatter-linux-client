@@ -8,6 +8,7 @@ import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
+import { Materials } from "../theme/materials.slint";
 
 component NavTab inherits Rectangle {
     in property <image> icon;
@@ -135,8 +136,12 @@ export component MobileBottomNav inherits Rectangle {
     background: transparent;
 
     dock := GlassSurface {
-        material-level: 2;
-        elevation: 3;
+        // The software renderer paints the backdrop's rectangular layer beyond
+        // the dock's round corners. A solid rounded fill keeps the silhouette.
+        material-enabled: false;
+        background: Materials.opaque;
+        border-width: Spacing.stroke;
+        border-color: Colors.border;
 
         x: root.side-inset;
         y: 0;

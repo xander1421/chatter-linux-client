@@ -2891,15 +2891,20 @@ export component SettingsScreen inherits Rectangle {
                     }
                 }
                 if tabs.viewport-x < 0px: Rectangle {
-                    width: Spacing.lg;
+                    x: 0;
+                    width: Spacing.xxxl + Spacing.lg;
                     height: parent.height;
-                    background: @linear-gradient(90deg, Colors.background 0%, Colors.background.with-alpha(0) 100%);
+                    background: Colors.background;
+                    Text { text: "‹"; color: Colors.text-primary; font-size: 24px; vertical-alignment: center; }
+                    TouchArea { clicked => { tabs.viewport-x = min(0px, tabs.viewport-x + tabs.width / 2); } }
                 }
                 if tabs.viewport-width + tabs.viewport-x > tabs.width: Rectangle {
                     x: parent.width - self.width;
-                    width: Spacing.lg;
+                    width: Spacing.xxxl + Spacing.lg;
                     height: parent.height;
-                    background: @linear-gradient(90deg, Colors.background.with-alpha(0) 0%, Colors.background 100%);
+                    background: @linear-gradient(90deg, Colors.background.with-alpha(0) 0%, Colors.background 25%, Colors.background 100%);
+                    Text { text: "›"; color: Colors.text-primary; font-size: 24px; horizontal-alignment: right; vertical-alignment: center; }
+                    TouchArea { clicked => { tabs.viewport-x = max(tabs.width - tabs.viewport-width, tabs.viewport-x - tabs.width / 2); } }
                 }
             }
         }

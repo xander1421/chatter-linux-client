@@ -3911,7 +3911,8 @@ export component MainWindow inherits Window {
         // dock (-1), under every modal and overlay (0) — the incoming-call screen
         // and toasts are not covered by fab-visible, so they must stay on top.
         if root.fab-visible: GlassSurface {
-            elevation: 3;
+            // Backdrop's rectangular software layer leaks beyond round corners.
+            material-enabled: false;
 
             z: -0.5;
             width: Spacing.fab-size;
@@ -3919,10 +3920,9 @@ export component MainWindow inherits Window {
             x: parent.width - self.width - Spacing.xl;
             y: root.fab-y;
             border-radius: self.width / 2;
-            material-level: 2;
+            background: Colors.action-fill;
             // The compose action is the one filled action in the phone list.
             // Its white glyph stays readable on both theme-specific teal fills.
-            material-tint: Colors.action-fill;
             Rectangle {
                 border-radius: parent.border-radius;
                 background: fab-touch.pressed ? Colors.action-active
