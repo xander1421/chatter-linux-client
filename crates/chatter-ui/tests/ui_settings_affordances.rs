@@ -209,8 +209,8 @@ fn failed_privacy_writes_restore_effective_values_and_selected_gif_tab_keeps_sea
             let icon = ElementHandle::find_by_accessible_label(&w, label)
                 .find(|e| e.type_name().is_some_and(|name| name == "Image"))
                 .expect("theme-aware vector conversation fallback");
-            assert!((icon.size().width - 24.0).abs() < 0.5);
-            assert!((icon.size().height - 24.0).abs() < 0.5);
+            assert!((icon.size().width - 36.0).abs() < 0.5);
+            assert!((icon.size().height - 36.0).abs() < 0.5);
         }
     }
     w.set_channel_settings_type("private-group".into());
@@ -225,7 +225,7 @@ fn failed_privacy_writes_restore_effective_values_and_selected_gif_tab_keeps_sea
         ElementHandle::find_by_accessible_label(&w, "Avatar for Scoped group").any(|e| (e
             .size()
             .width
-            - 40.0)
+            - 80.0)
             .abs()
             < 0.5),
         "configured conversation icon must replace the generic fallback"

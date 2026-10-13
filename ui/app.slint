@@ -871,6 +871,7 @@ export component MainWindow inherits Window {
     in property <string> channel-settings-id: "";
     in property <string> channel-settings-name: "";
     in property <string> channel-settings-description: "";
+    in property <bool> channel-settings-saving: false;
     // Editable drafts, reset by Rust on open (open_channel_settings).
     in-out property <string> channel-settings-name-draft: "";
     in-out property <string> channel-settings-description-draft: "";
@@ -2956,6 +2957,7 @@ export component MainWindow inherits Window {
             banned-members: root.channel-settings-banned-members;
             can-view-bans: root.channel-settings-can-view-bans;
             loading: root.channel-settings-loading;
+            saving: root.channel-settings-saving;
             error-message: root.channel-settings-error;
 
             close => {

@@ -45,6 +45,53 @@ export struct BannedMemberData {
     avatar-source: image,
 }
 
+// One navigation shape for the group info page. The whole row is a touch target.
+component InfoRow inherits Rectangle {
+    in property <image> icon;
+    in property <string> title;
+    in property <string> detail: "";
+    in property <bool> destructive: false;
+    callback clicked();
+    min-height: Spacing.list-row-height-touch;
+    background: Colors.inset;
+    border-radius: Spacing.radius-md;
+    border-width: keys.has-focus ? Spacing.stroke : 0px;
+    border-color: Colors.primary;
+    forward-focus: keys;
+    accessible-role: button;
+    accessible-label: root.title;
+    accessible-description: root.detail;
+    accessible-action-default => { root.clicked(); }
+    keys := FocusScope {
+        width: 0px; height: 0px;
+        key-pressed(event) => {
+            if event.text == Key.Space || event.text == Key.Return {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+    HorizontalLayout {
+        width: parent.width;
+        height: parent.height;
+        padding-left: Spacing.md;
+        padding-right: Spacing.md;
+        spacing: Spacing.md;
+        alignment: stretch;
+        Image { source: root.icon; width: 20px; height: 20px; colorize: root.destructive ? Colors.error : Colors.text-secondary; }
+        VerticalLayout {
+            horizontal-stretch: 1;
+            min-width: 0px;
+            alignment: center;
+            Text { text: root.title; color: root.destructive ? Colors.error : Colors.text-primary; font-size: Typography.sm; }
+            if root.detail != "": Text { text: root.detail; color: Colors.text-secondary; font-size: Typography.xs; wrap: word-wrap; height: self.preferred-height; }
+        }
+        Image { source: Icons.chevron-right; width: 18px; height: 18px; colorize: Colors.text-secondary; }
+    }
+    TouchArea { clicked => { root.clicked(); } }
+}
+
 export component ChannelSettingsModal inherits Rectangle {
     in property <bool> show-modal: false;
     in property <string> channel-id: "";
@@ -103,10 +150,11 @@ export component ChannelSettingsModal inherits Rectangle {
 
     // Loading/error state
     in property <bool> loading: false;
+    in property <bool> saving: false;
     in property <string> error-message: "";
 
     // Active section for navigation
-    in-out property <string> active-section: "general";  // "general", "notifications", "members", "destructive"
+    in-out property <string> active-section: "overview";
 
     callback integrations();
     callback server-calls();
@@ -136,6 +184,7 @@ export component ChannelSettingsModal inherits Rectangle {
     // a DIFFERENT channel) already asking to leave or delete.
     property <bool> show-delete-confirm: false;
     property <bool> show-leave-confirm: false;
+    property <bool> show-discard-confirm: false;
     // user-id whose action row (role picker + Remove) is expanded in the
     // member list ("" = none).
     property <string> role-picker-user: "";
@@ -144,8 +193,10 @@ export component ChannelSettingsModal inherits Rectangle {
     property <string> confirm-action: "";
     changed role-picker-user => { self.confirm-action = ""; }
     changed show-modal => {
+        self.active-section = "overview";
         self.show-delete-confirm = false;
         self.show-leave-confirm = false;
+        self.show-discard-confirm = false;
         self.role-picker-user = "";
     }
 
@@ -174,217 +225,28 @@ export component ChannelSettingsModal inherits Rectangle {
     // Phone-width layout switch. No media queries in Slint; this is the one
     // place the breakpoint is decided (§112z).
     property <bool> narrow: root.width < 560px;
+    property <bool> has-edits: root.channel-name-draft != root.channel-name
+        || root.channel-description-draft != root.channel-description || root.channel-has-icon-preview;
+    property <bool> name-invalid: root.channel-name-draft == "";
 
     Modal {
         show: root.show-modal;
         title: root.is-private-group ? "Group Settings" : "Channel Settings";
-        modal-width: 800px;
+        modal-width: 640px;
         max-modal-height: 820px;
+        full-screen: root.narrow;
         // Expand the card to the available height (capped at max-modal-height)
         // instead of hugging content — the right panel scrolls.
         fill-height: true;
 
         close => {
-            root.close();
+            if root.has-edits { root.show-discard-confirm = true; }
+            else { root.close(); }
         }
 
-        HorizontalLayout {
+        // One content column on every screen; phones use Modal's full-screen page.
+        VerticalLayout {
             spacing: 0;
-
-            // Left sidebar - section navigation — Neo inset panel.
-            // On a phone the card is only ~450px wide, and a fixed 160px of it
-            // left the right pane too narrow: the name/description inputs and
-            // the Save Changes button were CLIPPED off the right edge, so
-            // channel settings could not be saved at all (§112z). Collapse to
-            // icons there — each one a full 48px touch target with a spoken
-            // name, since the visible label is gone.
-            Rectangle {
-                width: root.narrow ? Spacing.touch-target-min : 160px;
-                background: Colors.inset;
-                border-radius: Spacing.radius-md;
-
-                VerticalLayout {
-                    padding: root.narrow ? Spacing.none : Spacing.sm;
-                    spacing: Spacing.xs;
-                    alignment: start;
-
-                    // General section — Neo nav item
-                    Rectangle {
-                        accessible-role: button;
-                        accessible-label: "General";
-                        accessible-action-default => { root.active-section = "general"; }
-                        height: root.narrow ? Spacing.touch-target-min : Spacing.button-height;
-                        background: root.active-section == "general" ? Colors.surface-hover : transparent;
-                        border-radius: Spacing.radius-sm;
-
-                        TouchArea {
-                            clicked => { root.active-section = "general"; }
-
-                            HorizontalLayout {
-                                padding-left: root.narrow ? Spacing.none : Spacing.sm;
-                                padding-right: root.narrow ? Spacing.none : Spacing.sm;
-                                alignment: root.narrow ? LayoutAlignment.center : LayoutAlignment.start;
-
-                                // U+2699 and U+26A0 are tofu boxes on the
-                                // Galaxy S9; the whole nav uses the icon set
-                                // now (§112z).
-                                Image {
-                                    source: Icons.settings;
-                                    width: 14px;
-                                    height: 14px;
-                                    colorize: root.active-section == "general" ? Colors.text-primary : Colors.text-secondary;
-                                }
-                                if !root.narrow: Rectangle { width: Spacing.sm; }
-                                if !root.narrow: Text {
-                                    text: "General";
-                                    color: root.active-section == "general" ? Colors.text-primary : Colors.text-secondary;
-                                    font-size: Typography.sm;
-                                    vertical-alignment: center;
-                                }
-                            }
-                        }
-                    }
-
-                    // Notifications section — Neo nav item
-                    Rectangle {
-                        accessible-role: button;
-                        accessible-label: "Notifications";
-                        accessible-action-default => { root.active-section = "notifications"; }
-                        height: root.narrow ? Spacing.touch-target-min : Spacing.button-height;
-                        background: root.active-section == "notifications" ? Colors.surface-hover : transparent;
-                        border-radius: Spacing.radius-sm;
-
-                        TouchArea {
-                            clicked => { root.active-section = "notifications"; }
-
-                            HorizontalLayout {
-                                padding-left: root.narrow ? Spacing.none : Spacing.sm;
-                                padding-right: root.narrow ? Spacing.none : Spacing.sm;
-                                alignment: root.narrow ? LayoutAlignment.center : LayoutAlignment.start;
-
-                                Image {
-                                    source: Icons.bell;
-                                    width: 14px;
-                                    height: 14px;
-                                    colorize: root.active-section == "notifications" ? Colors.text-primary : Colors.text-secondary;
-                                }
-                                if !root.narrow: Rectangle { width: Spacing.sm; }
-                                if !root.narrow: Text {
-                                    text: "Notifications";
-                                    color: root.active-section == "notifications" ? Colors.text-primary : Colors.text-secondary;
-                                    font-size: Typography.sm;
-                                    vertical-alignment: center;
-                                }
-                            }
-                        }
-                    }
-
-                    // Members section — Neo nav item
-                    if root.can-manage-members || root.members.length > 0: Rectangle {
-                        accessible-role: button;
-                        accessible-label: "Members";
-                        accessible-action-default => { root.active-section = "members"; }
-                        height: root.narrow ? Spacing.touch-target-min : Spacing.button-height;
-                        background: root.active-section == "members" ? Colors.surface-hover : transparent;
-                        border-radius: Spacing.radius-sm;
-
-                        TouchArea {
-                            clicked => { root.active-section = "members"; }
-
-                            HorizontalLayout {
-                                padding-left: root.narrow ? Spacing.none : Spacing.sm;
-                                padding-right: root.narrow ? Spacing.none : Spacing.sm;
-                                alignment: root.narrow ? LayoutAlignment.center : LayoutAlignment.start;
-
-                                // U+1F465 is a tofu box on the Galaxy S9 (§112u).
-                                Image {
-                                    source: Icons.users;
-                                    width: 14px;
-                                    height: 14px;
-                                    colorize: root.active-section == "members" ? Colors.text-primary : Colors.text-secondary;
-                                }
-                                if !root.narrow: Rectangle { width: Spacing.sm; }
-                                if !root.narrow: Text {
-                                    text: "Members";
-                                    color: root.active-section == "members" ? Colors.text-primary : Colors.text-secondary;
-                                    font-size: Typography.sm;
-                                    vertical-alignment: center;
-                                }
-                            }
-                        }
-                    }
-
-                    // Access section — join links, join requests, who can read.
-                    if root.has-access-pane: Rectangle {
-                        accessible-role: button;
-                        accessible-label: "Access";
-                        accessible-action-default => { root.active-section = "access"; }
-                        height: root.narrow ? Spacing.touch-target-min : Spacing.button-height;
-                        background: root.active-section == "access" ? Colors.surface-hover : transparent;
-                        border-radius: Spacing.radius-sm;
-
-                        TouchArea {
-                            clicked => { root.active-section = "access"; }
-
-                            HorizontalLayout {
-                                padding-left: root.narrow ? Spacing.none : Spacing.sm;
-                                padding-right: root.narrow ? Spacing.none : Spacing.sm;
-                                alignment: root.narrow ? LayoutAlignment.center : LayoutAlignment.start;
-
-                                Image {
-                                    source: Icons.link;
-                                    width: 14px;
-                                    height: 14px;
-                                    colorize: root.active-section == "access" ? Colors.text-primary : Colors.text-secondary;
-                                }
-                                if !root.narrow: Rectangle { width: Spacing.sm; }
-                                if !root.narrow: Text {
-                                    text: "Access";
-                                    color: root.active-section == "access" ? Colors.text-primary : Colors.text-secondary;
-                                    font-size: Typography.sm;
-                                    vertical-alignment: center;
-                                }
-                            }
-                        }
-                    }
-
-                    // Danger zone section: every member can at least leave
-                    // (a group's owner can transfer, and block, there).
-                    if root.can-archive || root.can-delete || root.can-leave || root.is-private-group: Rectangle {
-                        accessible-role: button;
-                        accessible-label: "Danger Zone";
-                        accessible-action-default => { root.active-section = "destructive"; }
-                        height: root.narrow ? Spacing.touch-target-min : Spacing.button-height;
-                        background: root.active-section == "destructive" ? Colors.error.with-alpha(0.1) : transparent;
-                        border-radius: Spacing.radius-sm;
-
-                        TouchArea {
-                            clicked => { root.active-section = "destructive"; }
-
-                            HorizontalLayout {
-                                padding-left: root.narrow ? Spacing.none : Spacing.sm;
-                                padding-right: root.narrow ? Spacing.none : Spacing.sm;
-                                alignment: root.narrow ? LayoutAlignment.center : LayoutAlignment.start;
-
-                                Image {
-                                    source: Icons.alert-triangle;
-                                    width: 14px;
-                                    height: 14px;
-                                    colorize: root.active-section == "destructive" ? Colors.error : Colors.text-secondary;
-                                }
-                                if !root.narrow: Rectangle { width: Spacing.sm; }
-                                if !root.narrow: Text {
-                                    text: "Danger Zone";
-                                    color: root.active-section == "destructive" ? Colors.error : Colors.text-secondary;
-                                    font-size: Typography.sm;
-                                    vertical-alignment: center;
-                                    wrap: word-wrap;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
 
             // Right content area
             Rectangle {
@@ -400,17 +262,170 @@ export component ChannelSettingsModal inherits Rectangle {
                         padding: Spacing.md;
                         spacing: Spacing.lg;
 
+                        if root.show-discard-confirm: VerticalLayout {
+                            spacing: Spacing.sm;
+                            Text {
+                                text: "Discard unsaved changes?";
+                                color: Colors.text-primary;
+                                font-size: Typography.sm;
+                                font-weight: Typography.semibold;
+                            }
+                            HorizontalLayout {
+                                spacing: Spacing.sm;
+                                Button {
+                                    text: "Keep editing"; variant: "secondary";
+                                    height: Spacing.touch-target-min;
+                                    clicked => { root.show-discard-confirm = false; root.active-section = "general"; }
+                                }
+                                Button {
+                                    text: "Discard"; variant: "destructive";
+                                    height: Spacing.touch-target-min;
+                                    clicked => { root.show-discard-confirm = false; root.close(); }
+                                }
+                            }
+                        }
+
+                        // Error message
+                        if root.error-message != "": Rectangle {
+                            min-height: 40px;
+                            background: Colors.error.with-alpha(0.1);
+                            border-radius: Spacing.radius-sm;
+
+                            VerticalLayout {
+                                padding: Spacing.sm;
+                                alignment: center;
+
+                                Text {
+                                    text: root.error-message;
+                                    color: Colors.error;
+                                    font-size: Typography.sm;
+                                    horizontal-alignment: center;
+                                    wrap: word-wrap;
+                                }
+                            }
+                        }
+
+                        if root.active-section != "overview": Button {
+                            text: root.has-edits && root.active-section == "general" ? "‹ Info • Unsaved changes" : "‹ Info";
+                            variant: "ghost";
+                            height: Spacing.touch-target-min;
+                            clicked => { root.active-section = "overview"; }
+                        }
+
+                        // Messenger-style info page: identity first, then destinations.
+                        if root.active-section == "overview": VerticalLayout {
+                            spacing: Spacing.lg;
+                            alignment: start;
+                            VerticalLayout {
+                                spacing: Spacing.sm;
+                                Rectangle {
+                                    height: 80px;
+                                    background: transparent;
+                                    if root.channel-has-icon-preview || root.channel-has-avatar: Avatar {
+                                        source: root.channel-has-icon-preview ? root.channel-icon-preview : root.channel-avatar-source;
+                                        name: root.channel-name;
+                                        size: 80px;
+                                        x: (parent.width - self.width) / 2;
+                                    }
+                                    if !root.channel-has-icon-preview && !root.channel-has-avatar: Rectangle {
+                                        width: 80px; height: 80px; border-radius: 40px; background: Colors.inset;
+                                        x: (parent.width - self.width) / 2;
+                                        Image {
+                                            source: root.is-private-group ? Icons.users : root.channel-type == "private" ? Icons.lock : Icons.hash;
+                                            width: 36px; height: 36px;
+                                            accessible-label: root.is-private-group ? "Group icon" : root.channel-type == "private" ? "Private channel icon" : "Channel icon";
+                                            x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                                            colorize: Colors.text-primary;
+                                        }
+                                    }
+                                }
+                                Text {
+                                    text: root.channel-name == "" ? (root.loading ? "Loading…" : "Info unavailable") : root.channel-name;
+                                    color: Colors.text-primary; font-size: Typography.xl;
+                                    font-weight: Typography.semibold; horizontal-alignment: center;
+                                    wrap: word-wrap;
+                                }
+                                Text {
+                                    text: (root.member-count > 0 ? root.member-count + (root.member-count == 1 ? " member" : " members") : "")
+                                        + (root.created-at != "" ? " • Created " + root.created-at : "");
+                                    color: Colors.text-secondary; font-size: Typography.sm;
+                                    horizontal-alignment: center;
+                                }
+                                if root.can-edit: Button {
+                                    text: root.is-private-group ? "Edit group info" : "Edit channel info";
+                                    variant: "secondary";
+                                    icon: Icons.edit;
+                                    height: Spacing.touch-target-min;
+                                    clicked => { root.active-section = "general"; }
+                                }
+                            }
+                            if root.loading: Text { text: "Loading group info…"; color: Colors.text-secondary; font-size: Typography.sm; }
+                            if root.channel-description != "": Text {
+                                text: root.channel-description; color: Colors.text-secondary;
+                                font-size: Typography.sm; wrap: word-wrap;
+                            }
+                            if root.channel-description == "" && root.can-edit && !root.loading: Text {
+                                text: "Add a description so members know what this is for";
+                                color: Colors.text-secondary; font-size: Typography.sm;
+                                horizontal-alignment: center; wrap: word-wrap;
+                            }
+                            if root.has-edits: Text {
+                                text: "Unsaved changes to group info";
+                                color: Colors.warning; font-size: Typography.sm;
+                            }
+                            if !root.loading: VerticalLayout {
+                                spacing: Spacing.xs;
+                                InfoRow {
+                                    icon: Icons.bell; title: "Notifications";
+                                    detail: root.is-muted ? "Muted" : root.notification-preference == "mentions" ? "Mentions only" : root.notification-preference == "none" ? "Off" : "All messages";
+                                    clicked => { root.active-section = "notifications"; }
+                                }
+                                if !root.is-private-group: HorizontalLayout {
+                                    min-height: Spacing.touch-target-min;
+                                    padding: Spacing.md; spacing: Spacing.md;
+                                    Image { source: Icons.clock; width: 20px; height: 20px; colorize: Colors.text-secondary; }
+                                    Text { text: "Disappearing messages · " + DisappearingGlobal.active-label;
+                                        color: Colors.text-secondary; font-size: Typography.sm; horizontal-stretch: 1; }
+                                }
+                                if root.can-manage-members || root.members.length > 0: InfoRow {
+                                    icon: Icons.users; title: "Members";
+                                    detail: root.member-count + (root.member-count == 1 ? " member" : " members");
+                                    clicked => { root.active-section = "members"; }
+                                }
+                                if root.has-access-pane: InfoRow {
+                                    icon: Icons.link; title: "Access and invite links";
+                                    clicked => { root.active-section = "access"; }
+                                }
+                                if root.is-owner: InfoRow {
+                                    icon: Icons.settings; title: "Integrations";
+                                    clicked => { root.integrations(); }
+                                }
+                                InfoRow {
+                                    icon: Icons.phone; title: "Call history";
+                                    clicked => { root.server-calls(); }
+                                }
+                            }
+                            if root.can-archive || root.can-delete || root.can-leave || root.is-private-group: VerticalLayout {
+                                spacing: Spacing.sm;
+                                Text { text: root.is-private-group ? "Manage group" : "Manage channel"; color: Colors.text-secondary;
+                                    font-size: Typography.sm; font-weight: Typography.medium; }
+                                InfoRow {
+                                    icon: Icons.alert-triangle; title: "Leave, archive or delete";
+                                    destructive: true;
+                                    clicked => { root.active-section = "destructive"; }
+                                }
+                            }
+                        }
+
                         // ========== General Section ==========
                         if root.active-section == "general": VerticalLayout {
                             spacing: Spacing.md;
 
-                            if root.is-owner: Button {
-                                text: "Integrations"; variant: "secondary";
-                                clicked => { root.integrations(); }
-                            }
-                            Button {
-                                text: "Channel call history"; variant: "secondary";
-                                clicked => { root.server-calls(); }
+                            Text {
+                                text: root.is-private-group ? "Edit group info" : "Edit channel info";
+                                color: Colors.text-primary;
+                                font-size: Typography.lg;
+                                font-weight: Typography.semibold;
                             }
                             // Channel header info
                             HorizontalLayout {
@@ -497,9 +512,12 @@ export component ChannelSettingsModal inherits Rectangle {
                                 }
 
                                 if root.can-edit: Input {
+                                    control-height: Spacing.touch-target-min;
                                     text: root.channel-name-draft;
-                                    placeholder: "Channel name";
+                                    placeholder: root.is-private-group ? "Group name" : "Channel name";
 
+                                    error: root.name-invalid;
+                                    error-message: root.name-invalid ? "Name is required" : "";
                                     edited(value) => {
                                         root.channel-name-draft = value;
                                     }
@@ -525,6 +543,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                 }
 
                                 if root.can-edit: Input {
+                                    control-height: Spacing.touch-target-min;
                                     text: root.channel-description-draft;
                                     placeholder: "Add a description...";
 
@@ -548,7 +567,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                 spacing: Spacing.xs;
 
                                 Text {
-                                    text: "Channel Icon";
+                                    text: root.is-private-group ? "Group photo" : "Channel icon";
                                     color: Colors.text-secondary;
                                     font-size: Typography.sm;
                                     font-weight: Typography.medium;
@@ -565,7 +584,8 @@ export component ChannelSettingsModal inherits Rectangle {
                                     }
 
                                     Button {
-                                        text: "Change Icon";
+                                        height: Spacing.touch-target-min;
+                                        text: root.is-private-group ? "Change photo" : "Change icon";
                                         variant: "secondary";
                                         clicked => {
                                             root.pick-channel-icon();
@@ -577,14 +597,20 @@ export component ChannelSettingsModal inherits Rectangle {
                             // Save name/description/icon edits. Disabled until a
                             // draft differs or an icon was picked, so an
                             // accidental click is a no-op.
+                            if root.error-message != "": Text {
+                                text: root.error-message;
+                                color: Colors.error;
+                                font-size: Typography.sm;
+                                wrap: word-wrap;
+                            }
                             if root.can-edit: HorizontalLayout {
                                 alignment: end;
                                 Button {
-                                    text: "Save Changes";
+                                    text: "Save changes";
+                                    loading: root.saving;
+                                    height: Spacing.touch-target-min;
                                     variant: "primary";
-                                    disabled: root.channel-name-draft == root.channel-name
-                                        && root.channel-description-draft == root.channel-description
-                                        && !root.channel-has-icon-preview;
+                                    disabled: !root.has-edits || root.name-invalid || root.saving;
                                     clicked => {
                                         root.save-settings(root.channel-name-draft, root.channel-description-draft);
                                     }
@@ -607,6 +633,7 @@ export component ChannelSettingsModal inherits Rectangle {
 
                             // Mute toggle
                             ToggleRow {
+                                height: Spacing.touch-target-min;
                                 checked <=> root.is-muted;
                                 accessible-text: "Mute Channel";
                                 toggled(value) => {
@@ -629,6 +656,7 @@ export component ChannelSettingsModal inherits Rectangle {
 
                             // AI assistant for this channel
                             ToggleRow {
+                                height: Spacing.touch-target-min;
                                 checked <=> root.ai-enabled;
                                 accessible-text: "AI assistant";
                                 toggled(value) => {
@@ -879,6 +907,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                 }
 
                                 ToggleRow {
+                                    height: Spacing.touch-target-min;
                                     checked <=> root.link-needs-approval;
                                     accessible-text: "Require approval";
                                     Text {
@@ -898,6 +927,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                 HorizontalLayout {
                                     alignment: start;
                                     Button {
+                                        height: Spacing.touch-target-min;
                                         text: "Create link";
                                         variant: "primary";
                                         disabled: MembershipGlobal.access-busy;
@@ -922,6 +952,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                         HorizontalLayout {
                                             alignment: start;
                                             Button {
+                                                height: Spacing.touch-target-min;
                                                 text: "Copy link";
                                                 variant: "secondary";
                                                 clicked => { MembershipGlobal.copy-link(MembershipGlobal.new-link); }
@@ -942,6 +973,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                         wrap: word-wrap;
                                     }
                                     Button {
+                                        height: Spacing.touch-target-min;
                                         text: "Revoke";
                                         variant: "destructive";
                                         disabled: MembershipGlobal.access-busy;
@@ -973,12 +1005,14 @@ export component ChannelSettingsModal inherits Rectangle {
                                         spacing: Spacing.sm;
                                         alignment: start;
                                         Button {
+                                            height: Spacing.touch-target-min;
                                             text: "Approve";
                                             variant: "primary";
                                             disabled: MembershipGlobal.access-busy;
                                             clicked => { MembershipGlobal.approve-request(root.channel-id, req.user-id); }
                                         }
                                         Button {
+                                            height: Spacing.touch-target-min;
                                             text: "Reject";
                                             variant: "secondary";
                                             disabled: MembershipGlobal.access-busy;
@@ -1071,6 +1105,12 @@ export component ChannelSettingsModal inherits Rectangle {
                             }
 
                             // Member list
+                            if root.members.length == 0: Text {
+                                text: root.loading ? "Loading members…" : "No members to show yet";
+                                color: Colors.text-secondary;
+                                font-size: Typography.sm;
+                                wrap: word-wrap;
+                            }
                             for member in root.members: Rectangle {
                                 height: member-col.preferred-height;
                                 background: transparent;
@@ -1233,6 +1273,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                             spacing: Spacing.sm;
 
                                             Button {
+                                                height: Spacing.touch-target-min;
                                                 text: "Cancel";
                                                 variant: "secondary";
                                                 horizontal-stretch: 1;
@@ -1240,6 +1281,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                             }
 
                                             Button {
+                                                height: Spacing.touch-target-min;
                                                 text: root.confirm-action == "ban" ? "Ban" : root.confirm-action == "owner" ? "Make owner" : "Remove";
                                                 variant: root.confirm-action == "owner" ? "primary" : "destructive";
                                                 horizontal-stretch: 1;
@@ -1278,6 +1320,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                             }
 
                                             for r in root.role-options: Button {
+                                                height: Spacing.touch-target-min;
                                                 text: r.label;
                                                 variant: r.role == member.role ? "primary" : "secondary";
 
@@ -1291,6 +1334,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                         }
 
                                         if member.can-mute && member.muted: Button {
+                                            height: Spacing.touch-target-min;
                                             text: "Unmute";
                                             variant: "secondary";
 
@@ -1311,6 +1355,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                             }
 
                                             for opt in root.mute-options: Button {
+                                                height: Spacing.touch-target-min;
                                                 text: opt.label;
                                                 variant: "secondary";
 
@@ -1322,6 +1367,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                         }
 
                                         if member.can-make-owner: Button {
+                                            height: Spacing.touch-target-min;
                                             text: "Make owner…";
                                             variant: "secondary";
 
@@ -1329,6 +1375,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                         }
 
                                         if member.can-block: Button {
+                                            height: Spacing.touch-target-min;
                                             text: member.blocked ? "Unblock in group" : "Block in group";
                                             variant: "secondary";
 
@@ -1339,6 +1386,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                         }
 
                                         if root.can-manage-members && member.role != "owner": Button {
+                                            height: Spacing.touch-target-min;
                                             text: root.is-private-group ? "Remove from group" : "Remove from channel";
                                             variant: "destructive";
 
@@ -1346,6 +1394,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                         }
 
                                         if member.can-ban: Button {
+                                            height: Spacing.touch-target-min;
                                             text: "Ban (can't rejoin)";
                                             variant: "destructive";
 
@@ -1364,6 +1413,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                             alignment: end;
 
                                             for r in root.role-options: Button {
+                                                height: Spacing.touch-target-min;
                                                 text: r.label;
                                                 variant: r.role == member.role ? "primary" : "secondary";
 
@@ -1380,6 +1430,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                             alignment: end;
 
                                             Button {
+                                                height: Spacing.touch-target-min;
                                                 text: "Unmute";
                                                 variant: "secondary";
 
@@ -1396,6 +1447,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                             alignment: end;
 
                                             for opt in root.mute-options: Button {
+                                                height: Spacing.touch-target-min;
                                                 text: opt.label;
                                                 variant: "secondary";
 
@@ -1410,6 +1462,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                             alignment: end;
 
                                             Button {
+                                                height: Spacing.touch-target-min;
                                                 text: "Make owner…";
                                                 variant: "secondary";
 
@@ -1421,6 +1474,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                             alignment: end;
 
                                             Button {
+                                                height: Spacing.touch-target-min;
                                                 text: member.blocked ? "Unblock in group" : "Block in group";
                                                 variant: "secondary";
 
@@ -1436,6 +1490,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                             alignment: end;
 
                                             if root.can-manage-members && member.role != "owner": Button {
+                                                height: Spacing.touch-target-min;
                                                 text: "Remove";
                                                 variant: "destructive";
 
@@ -1443,6 +1498,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                             }
 
                                             if member.can-ban: Button {
+                                                height: Spacing.touch-target-min;
                                                 text: "Ban";
                                                 variant: "destructive";
 
@@ -1491,6 +1547,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                     }
 
                                     Button {
+                                        height: Spacing.touch-target-min;
                                         text: "Unban";
                                         variant: "secondary";
                                         clicked => { root.unban-member(banned.user-id); }
@@ -1551,6 +1608,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                 }
 
                                 Button {
+                                    height: Spacing.touch-target-min;
                                     text: "Leave";
                                     variant: "secondary";
 
@@ -1576,6 +1634,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                     spacing: Spacing.sm;
 
                                     Button {
+                                        height: Spacing.touch-target-min;
                                         text: "Cancel";
                                         variant: "secondary";
                                         clicked => {
@@ -1584,6 +1643,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                     }
 
                                     Button {
+                                        height: Spacing.touch-target-min;
                                         text: root.is-private-group ? "Leave group" : "Leave channel";
                                         variant: "destructive";
                                         clicked => {
@@ -1622,6 +1682,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                 }
 
                                 Button {
+                                    height: Spacing.touch-target-min;
                                     text: "Transfer…";
                                     variant: "secondary";
 
@@ -1659,6 +1720,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                 }
 
                                 Button {
+                                    height: Spacing.touch-target-min;
                                     text: root.group-blocked ? "Unblock" : "Block";
                                     variant: root.group-blocked ? "secondary" : "destructive";
 
@@ -1691,6 +1753,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                 }
 
                                 Button {
+                                    height: Spacing.touch-target-min;
                                     text: root.is-archived ? "Unarchive" : "Archive";
                                     variant: "secondary";
 
@@ -1733,6 +1796,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                 }
 
                                 Button {
+                                    height: Spacing.touch-target-min;
                                     text: "Delete";
                                     variant: "destructive";
 
@@ -1759,6 +1823,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                     // variant: the safe answer is the one the
                                     // eye and the thumb land on.
                                     Button {
+                                        height: Spacing.touch-target-min;
                                         text: "Cancel";
                                         variant: "secondary";
                                         clicked => {
@@ -1767,6 +1832,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                     }
 
                                     Button {
+                                        height: Spacing.touch-target-min;
                                         text: "Delete channel";
                                         variant: "destructive";
                                         clicked => {
@@ -1778,25 +1844,7 @@ export component ChannelSettingsModal inherits Rectangle {
                             }
                         }
 
-                        // Error message
-                        if root.error-message != "": Rectangle {
-                            min-height: 40px;
-                            background: Colors.error.with-alpha(0.1);
-                            border-radius: Spacing.radius-sm;
 
-                            VerticalLayout {
-                                padding: Spacing.sm;
-                                alignment: center;
-
-                                Text {
-                                    text: root.error-message;
-                                    color: Colors.error;
-                                    font-size: Typography.sm;
-                                    horizontal-alignment: center;
-                                    wrap: word-wrap;
-                                }
-                            }
-                        }
                     }
                 }
             }

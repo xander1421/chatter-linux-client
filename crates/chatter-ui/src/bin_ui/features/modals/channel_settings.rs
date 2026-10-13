@@ -177,6 +177,7 @@ pub(crate) fn show_channel_settings_shell(w: &MainWindow, id: &str, kind: &str) 
     w.set_channel_settings_description("".into());
     w.set_channel_settings_name_draft("".into());
     w.set_channel_settings_description_draft("".into());
+    w.set_channel_settings_saving(false);
     w.set_channel_settings_created_at("".into());
     w.set_channel_settings_archived(false);
     w.set_channel_settings_ai_enabled(false);
@@ -235,6 +236,7 @@ fn present_local_channel_settings(w: &MainWindow, settings: &LocalChannelSetting
     // different channel doesn't carry the previous edits.
     w.set_channel_settings_name_draft(settings.name.as_str().into());
     w.set_channel_settings_description_draft(settings.description.as_str().into());
+    w.set_channel_settings_saving(false);
     // Clear any icon picked in a previous open.
     w.set_channel_settings_icon_path("".into());
     w.set_channel_settings_has_icon_preview(false);
@@ -715,6 +717,8 @@ fn begin_settings_save(w: &MainWindow, ctx: &ChatterClient) -> Option<u64> {
             settings_id: w.get_channel_settings_id().to_string(),
         });
     });
+    w.set_channel_settings_saving(true);
+    w.set_channel_settings_error("".into());
     Some(epoch)
 }
 
@@ -804,6 +808,7 @@ fn wire_save_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         let ctx_for_error = ui_ctx.clone();
                         paint_if_current(weak, ui_ctx, opened, channel_id, move |w| {
                             if save_request_current(w, &ctx_for_error, epoch) {
+                                w.set_channel_settings_saving(false);
                                 w.set_channel_settings_error(
                                     format!("Couldn't read channel icon: {e}").into(),
                                 );
@@ -850,7 +855,10 @@ fn wire_save_settings(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     Ok((metadata, rows)) => {
                         apply_saved_channel(w, &ctx_for_paint, epoch, metadata, rows)
                     }
-                    Err(e) => w.set_channel_settings_error(e.to_string().into()),
+                    Err(e) => {
+                        w.set_channel_settings_saving(false);
+                        w.set_channel_settings_error(e.to_string().into());
+                    }
                 }
             });
         });

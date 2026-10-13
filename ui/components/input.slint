@@ -11,6 +11,9 @@ export component Input inherits Rectangle {
     in-out property <string> text: "";
     in property <bool> password: false;
     in property <bool> disabled: false;
+    // Screens with touch-first forms can request a 48px field without changing
+    // the existing desktop/default sizing elsewhere.
+    in property <length> control-height: Spacing.button-height;
     in property <bool> error: false;
     in property <string> error-message: "";
 
@@ -47,7 +50,7 @@ export component Input inherits Rectangle {
     };
 
     background: transparent;
-    height: error && error-message != "" ? 66px : 44px;
+    height: error && error-message != "" ? root.control-height + 22px : root.control-height;
 
     // Main container
     VerticalLayout {
@@ -55,7 +58,7 @@ export component Input inherits Rectangle {
 
         // Input container
         Rectangle {
-            height: 44px;
+            height: root.control-height;
             border-radius: Spacing.radius-md;
             background: Colors.surface;
             border-width: Spacing.stroke;
