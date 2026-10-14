@@ -35,7 +35,9 @@ pub use jarvis::{
 mod link_device;
 pub mod membership;
 mod messaging;
+mod search_visible;
 mod send_attempt;
+pub use search_visible::{SearchPage, VisibleSearchHit};
 pub use send_attempt::await_send_with_notice;
 mod receipts;
 pub use anon_group::AnonGroupInviteCandidate;

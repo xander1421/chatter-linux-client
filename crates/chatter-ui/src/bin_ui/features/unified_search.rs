@@ -8,9 +8,7 @@ use std::sync::{Arc, Mutex};
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use chatter_core::client::ChatterClient;
-use chatter_core::services::search::{
-    SearchCategory, SearchDocument, SearchQuery, preview_fragments,
-};
+use chatter_core::services::search::{SearchQuery, preview_fragments};
 
 use crate::{CalendarDay, MainWindow, QuickSwitcherItem, SearchResult};
 
@@ -755,42 +753,10 @@ fn set_conversations(window: &MainWindow, items: Vec<QuickSwitcherItem>) {
 
 /// Port of header.rs message-search shaping. Searches every conversation the
 /// current mode shows (core filters; the palette has no per-channel scope).
-struct SearchHit {
-    row: SearchResult,
-    text: String,
-    category: SearchCategory,
-    created_at: chrono::DateTime<chrono::Utc>,
-    size: u64,
-    sender_id: Option<String>,
-    chat_id: String,
-    thumbnail: Option<Vec<u8>>,
-}
-
 struct SearchThumbnail {
     pixels: Vec<u8>,
     width: u32,
     height: u32,
-}
-
-impl SearchDocument for SearchHit {
-    fn category(&self) -> SearchCategory {
-        self.category
-    }
-    fn search_text(&self) -> &str {
-        &self.text
-    }
-    fn created_at(&self) -> chrono::DateTime<chrono::Utc> {
-        self.created_at
-    }
-    fn size_bytes(&self) -> u64 {
-        self.size
-    }
-    fn sender_id(&self) -> Option<&str> {
-        self.sender_id.as_deref()
-    }
-    fn chat_id(&self) -> &str {
-        &self.chat_id
-    }
 }
 
 fn search_messages(
@@ -808,176 +774,47 @@ fn search_messages(
     Vec<Option<SearchThumbnail>>,
     Vec<String>,
 ) {
-    let results = ui_ctx.search_messages_visible(query, 250);
-    let mut candidates = Vec::with_capacity(results.len());
-    for msg in &results {
-        // Conversation name + sender name resolution both live in core.
-        let channel_name =
-            ui_ctx.search_conversation_display_name(&msg.conversation_id, &msg.conversation_type);
-        let sender_name = ui_ctx.search_sender_display_name(msg);
-        let sent_at = chrono::DateTime::<chrono::Utc>::from_timestamp_nanos(msg.sent_at as i64);
-        let timestamp = sent_at
-            .with_timezone(&chrono::Local)
-            .format("%b %d, %H:%M")
-            .to_string();
-        let attachment = msg
-            .attachments
-            .first()
-            .and_then(|id| ui_ctx.get_attachment_metadata(id));
-        let (attachment_name, size) = if let Some(file) = attachment.as_ref() {
-            let meta = &file.metadata;
-            (meta.name.clone(), meta.size)
-        } else {
-            (String::new(), 0)
-        };
-        let kind = SearchCategory::from_message(
-            attachment
-                .as_ref()
-                .map(|file| file.metadata.mime_type.as_str()),
-            attachment
-                .as_ref()
-                .is_some_and(|file| file.metadata.waveform_samples.is_some()),
-            msg.as_text(),
-        );
-        let content_preview = ui_ctx.search_result_preview(
-            msg.as_text().unwrap_or(&attachment_name), query,
-        );
-        let (before, matched, after, start, end) = preview_fragments(&content_preview, query);
-        candidates.push(SearchHit {
-            row: SearchResult {
-                message_id: msg.id.to_string().into(),
-                channel_id: msg.conversation_id.to_string().into(),
-                channel_name: channel_name.into(),
-                sender_name: sender_name.into(),
-                content_preview: content_preview.into(),
-                timestamp: timestamp.into(),
-                highlight_start: start,
-                highlight_end: end,
-                preview_before: before.into(),
-                preview_match: matched.into(),
-                preview_after: after.into(),
-            },
-            text: format!("{} {}", msg.as_text().unwrap_or(""), attachment_name),
-            category: kind,
-            created_at: sent_at,
-            size,
-            sender_id: msg.sender_id.map(|id| id.to_string()),
-            chat_id: msg.conversation_id.to_string(),
-            thumbnail: attachment
-                .as_ref()
-                .and_then(|file| file.metadata.thumbnail.clone()),
-        });
-    }
     let mut request = SearchQuery::from_controls(query, category, sort, date);
     request.from = (!from.is_empty()).then(|| from.to_owned());
     request.in_chat = (!in_chat.is_empty()).then(|| in_chat.to_owned());
-    let mut all_request = request.clone();
-    all_request.category = SearchCategory::All;
-    if request.category != SearchCategory::Chats {
-        let mut seen: std::collections::HashSet<String> = candidates
-            .iter()
-            .map(|hit| hit.row.message_id.to_string())
-            .collect();
-        for item in ui_ctx.search_shared_content_visible(&all_request, 250) {
-            if !seen.insert(item.message_id.clone()) {
-                continue;
-            }
-            let Ok(id) = item.message_id.parse() else {
-                continue;
-            };
-            let Some(msg) = ui_ctx.get_message_local(&id) else {
-                continue;
-            };
-            let channel_name =
-                ui_ctx.search_conversation_display_name(&msg.conversation_id, &msg.conversation_type);
-            let sender_name = ui_ctx.search_sender_display_name(&msg);
-            let category = SearchCategory::from_shared_kind(&item.category);
-            let sent_at = chrono::DateTime::<chrono::Utc>::from_timestamp_nanos(msg.sent_at as i64);
-            let label = if item.size_bytes > 0 {
-                format!(
-                    "{} · {}",
-                    item.title,
-                    chatter_core::domain::attachment::format_bytes(item.size_bytes)
-                )
-            } else {
-                item.title.clone()
-            };
-            let label = ui_ctx.search_result_preview(&label, query);
-            let (before, matched, after, start, end) = preview_fragments(&label, query);
-            candidates.push(SearchHit {
-                row: SearchResult {
-                    message_id: item.message_id.into(),
-                    channel_id: msg.conversation_id.to_string().into(),
-                    channel_name: channel_name.into(),
-                    sender_name: sender_name.into(),
-                    content_preview: label.into(),
-                    timestamp: sent_at
-                        .with_timezone(&chrono::Local)
-                        .format("%b %d, %H:%M")
-                        .to_string()
-                        .into(),
-                    highlight_start: start,
-                    highlight_end: end,
-                    preview_before: before.into(),
-                    preview_match: matched.into(),
-                    preview_after: after.into(),
-                },
-                text: item.title,
-                category,
-                created_at: sent_at,
-                size: item.size_bytes,
-                sender_id: msg.sender_id.map(|id| id.to_string()),
-                chat_id: msg.conversation_id.to_string(),
-                thumbnail: item.thumbnail,
-            });
-        }
-    }
-    let candidates = all_request.apply(candidates);
-    let mut counts = [0; 7];
-    for hit in &candidates {
-        counts[0] += 1;
-        let slot = match hit.category {
-            SearchCategory::Messages => 2,
-            SearchCategory::Media => 3,
-            SearchCategory::Files => 4,
-            SearchCategory::Links => 5,
-            SearchCategory::Voice => 6,
-            _ => continue,
-        };
-        counts[slot] += 1;
-    }
-    let mut rows = Vec::new();
-    let mut thumbnails = Vec::new();
-    let mut kinds = Vec::new();
-    let mut shown = [0; 7];
-    for hit in request.apply(candidates) {
-        let slot = match hit.category {
-            SearchCategory::Messages => 2,
-            SearchCategory::Media => 3,
-            SearchCategory::Files => 4,
-            SearchCategory::Links => 5,
-            SearchCategory::Voice => 6,
-            _ => continue,
-        };
-        if shown[slot] >= page_limits.get(slot).copied().unwrap_or(50) {
-            continue;
-        }
-        shown[slot] += 1;
-        let decoded = hit
-            .thumbnail
-            .as_deref()
-            .and_then(|bytes| image::load_from_memory(bytes).ok())
-            .map(|image| image.thumbnail(320, 320).to_rgba8())
-            .map(|rgba| SearchThumbnail {
-                width: rgba.width(),
-                height: rgba.height(),
-                pixels: rgba.into_raw(),
-            });
-        thumbnails.push(decoded);
+    let page = ui_ctx.search_visible(request, page_limits);
+    let mut rows = Vec::with_capacity(page.hits.len());
+    let mut thumbnails = Vec::with_capacity(page.hits.len());
+    let mut kinds = Vec::with_capacity(page.hits.len());
+    for hit in page.hits {
+        let (before, matched, after, start, end) = preview_fragments(&hit.preview, query);
+        rows.push(SearchResult {
+            message_id: hit.message_id.into(),
+            channel_id: hit.channel_id.into(),
+            channel_name: hit.channel_name.into(),
+            sender_name: hit.sender_name.into(),
+            content_preview: hit.preview.into(),
+            timestamp: hit
+                .created_at
+                .with_timezone(&chrono::Local)
+                .format("%b %d, %H:%M")
+                .to_string()
+                .into(),
+            highlight_start: start,
+            highlight_end: end,
+            preview_before: before.into(),
+            preview_match: matched.into(),
+            preview_after: after.into(),
+        });
+        thumbnails.push(
+            hit.thumbnail
+                .as_deref()
+                .and_then(|bytes| image::load_from_memory(bytes).ok())
+                .map(|image| image.thumbnail(320, 320).to_rgba8())
+                .map(|rgba| SearchThumbnail {
+                    width: rgba.width(),
+                    height: rgba.height(),
+                    pixels: rgba.into_raw(),
+                }),
+        );
         kinds.push(hit.category.as_str().to_string());
-        rows.push(hit.row);
     }
-    (rows, counts, thumbnails, kinds)
+    (rows, page.counts, thumbnails, kinds)
 }
 
 #[cfg(test)]
