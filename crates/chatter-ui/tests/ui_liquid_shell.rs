@@ -34,6 +34,15 @@ slint::slint! {
             width: parent.width;
             height: parent.height;
             show: root.search-open;
+            conversations: [
+                { id: "design", name: "Design team", conv-type: "private_group", presence-status: "online", unread-count: 2 },
+                { id: "morgan", name: "Morgan", conv-type: "dm", presence-status: "online", unread-count: 0 },
+            ];
+            messages: [
+                { message-id: "preview", channel-id: "design", channel-name: "Design team",
+                    sender-name: "Morgan", content-preview: "The new navigation feels smooth",
+                    timestamp: "09:41", highlight-start: 0, highlight-end: 0 },
+            ];
         }
     }
 }
@@ -50,6 +59,7 @@ fn advance(ms: u64) {
 
 fn frame(window: &ShellHarness, name: &str) {
     let dir = std::env::var_os("UI_SHELL_CAPTURE_DIR")
+        .or_else(|| std::env::var_os("U4_CAPTURE_DIR"))
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|| std::env::temp_dir().join("chatter-ui-liquid-shell"));
     std::fs::create_dir_all(&dir).unwrap();
@@ -99,6 +109,9 @@ fn tab_drop_stretches_and_search_grows_on_phone_and_desktop() {
 
     for (size, viewport) in [("phone", 412.0), ("desktop", 1100.0)] {
         window.set_viewport_width(viewport);
+        window
+            .window()
+            .set_size(slint::LogicalSize::new(viewport, 700.0));
         for theme in ["light", "dark"] {
             window.invoke_theme(theme.into());
             window.set_tab("chats".into());
