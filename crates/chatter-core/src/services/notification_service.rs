@@ -133,7 +133,10 @@ impl NotificationService {
         }
         let keys = self.account_keys.as_ref()?;
         let owner = keys.owner()?;
-        let secret = keys.secret(owner, true).ok()??;
+        let secret = match keys.secret(owner, true) {
+            Ok(Some(secret)) => secret,
+            _ => return Some(false),
+        };
         Some(key.starts_with(&account_namespace(owner, &secret)))
     }
 
@@ -376,6 +379,8 @@ fn account_notification_key(
     secret: &[u8; 32],
     conversation_id: &crate::domain::ids::ChannelId,
 ) -> String {
+    // 8-byte opaque account namespace + 16-byte conversation MAC. Android
+    // can reject another account's tap before its sidebar rows are loaded.
     let mut key = account_namespace(owner, secret);
     key.push_str(&hex::encode(
         &account_mac(
