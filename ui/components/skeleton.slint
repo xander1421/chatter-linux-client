@@ -12,7 +12,7 @@ export component Skeleton inherits Rectangle {
     border-radius: Spacing.radius-sm;
 
     // Base color
-    background: Colors.surface;
+    background: Colors.surface-control;
     clip: true;
 
     // Shimmer overlay that animates across
@@ -40,6 +40,33 @@ export component Skeleton inherits Rectangle {
         // Trigger animation by setting final value
         init => {
             self.shimmer-offset = parent.width * 2;
+        }
+    }
+}
+
+// Matches ChatRow's occupied height and avatar/text geometry, so replacing
+// these placeholders with cached or synced rows does not shift the list.
+export component ChatListSkeleton inherits Rectangle {
+    in property <bool> mobile-mode: false;
+    height: root.mobile-mode ? Spacing.row-height-touch : Spacing.row-height-desktop;
+    background: transparent;
+
+    HorizontalLayout {
+        padding-left: Spacing.sm;
+        padding-right: Spacing.sm;
+        spacing: Spacing.sm;
+        alignment: center;
+
+        Skeleton {
+            width: root.mobile-mode ? Spacing.row-avatar-touch : Spacing.row-avatar-desktop;
+            height: self.width;
+            border-radius: self.height / 2;
+        }
+        VerticalLayout {
+            alignment: center;
+            spacing: Spacing.xs;
+            Skeleton { width: 112px; height: 13px; }
+            Skeleton { width: 168px; height: 10px; }
         }
     }
 }

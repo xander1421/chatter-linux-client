@@ -6,8 +6,10 @@ import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Materials } from "../theme/materials.slint";
+import { Appearance } from "../theme/appearance.slint";
 
 export component EmptyState inherits Rectangle {
+    height: 152px * Appearance.text-grow;
     in property <image> icon;
     in property <string> message: "";
     in property <string> cta-text: "";
@@ -20,6 +22,8 @@ export component EmptyState inherits Rectangle {
     opacity: root.arrival;
 
     VerticalLayout {
+        width: parent.width;
+        height: parent.height;
         y: (1 - root.arrival) * 12px;
         alignment: center;
         spacing: Spacing.xs;

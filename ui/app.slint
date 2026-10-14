@@ -425,6 +425,7 @@ export component MainWindow inherits Window {
 
     // ========== Sidebar properties ==========
     in property <[ChatRowData]> chat-rows: [];
+    in-out property <bool> chat-rows-loading: true;
     in property <[CustomSectionData]> custom-sections: [];
     in property <int> total-unread-count: 0;
     in property <string> user-display-name: "User";
@@ -1754,7 +1755,7 @@ export component MainWindow inherits Window {
             y: root.safe-area-top;
 
             // Loading page
-            if current-view == "loading" || root.exiting-view == "loading": LoadingPage {
+            if current-view == "loading": LoadingPage {
                 z: 2;
                 x: root.view-shift("loading");
                 opacity: root.view-opacity("loading");
@@ -1951,6 +1952,7 @@ export component MainWindow inherits Window {
                     titlebar-height: root.macos-titlebar-height;
                     search-overlay-open: root.unified-search-open;
                     chat-rows: root.chat-rows;
+                    chat-rows-loading: root.is-signed-in && root.chat-rows-loading;
                     custom-sections: root.custom-sections;
                     user-display-name: root.user-display-name;
                     user-avatar-source: root.user-avatar-source;

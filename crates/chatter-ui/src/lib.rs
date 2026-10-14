@@ -499,6 +499,7 @@ pub async fn app_init() -> AppState {
             tracing::info!("Restored auth state for user {}", user_id);
         }
 
+        bin_ui::features::auth::initial_data::show_cached_chat_rows(&window, &ui_ctx);
         window.set_current_view("main".into());
 
         if !connected {

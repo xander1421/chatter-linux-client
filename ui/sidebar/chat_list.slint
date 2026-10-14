@@ -14,6 +14,7 @@ import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
 import { EmptyState } from "../components/empty_state.slint";
+import { ChatListSkeleton } from "../components/skeleton.slint";
 import { DMListItem } from "dm_list_item.slint";
 import { ChannelListItem } from "channel_list_item.slint";
 import { PrivateGroupListItem } from "private_group_list_item.slint";
@@ -226,6 +227,7 @@ export component ChatList inherits VerticalLayout {
     // True when anything else in the sidebar lists conversations (folders);
     // suppresses the empty state.
     in property <bool> has-sibling-content: false;
+    in property <bool> loading: false;
 
     callback row-selected(/* conversation-id */ string, /* kind */ ConversationKind);
     callback row-pin-requested(/* conversation-id */ string, /* pinned */ bool);
@@ -233,7 +235,10 @@ export component ChatList inherits VerticalLayout {
     callback add-friend-clicked();
     callback join-channel-clicked();
 
-    if !root.collapsed && root.rows.length == 0 && !root.has-sibling-content: VerticalLayout {
+    if !root.collapsed && !root.loading && root.rows.length == 0 && !root.has-sibling-content: VerticalLayout {
+        padding-top: Spacing.md;
+        padding-bottom: Spacing.md;
+        spacing: Spacing.xs;
         EmptyState {
             icon: Icons.message-circle;
             message: "No conversations";
@@ -243,11 +248,13 @@ export component ChatList inherits VerticalLayout {
         // FEAT-8: the first controls a brand-new account sees. Joining a
         // channel is the other way in, so the empty list offers it too.
         HorizontalLayout {
+            height: Spacing.touch-target-min;
             alignment: center;
             Text {
                 text: "Browse channels";
                 color: browse-touch.has-hover ? Colors.primary-hover : Colors.primary;
                 font-size: Typography.sm;
+                vertical-alignment: center;
                 browse-touch := TouchArea {
                     mouse-cursor: pointer;
                     clicked => { root.join-channel-clicked(); }
@@ -260,6 +267,13 @@ export component ChatList inherits VerticalLayout {
         padding-left: Spacing.xs;
         padding-right: Spacing.xs;
         spacing: Spacing.xxs;
+
+        if root.loading && root.rows.length == 0 && !root.collapsed: VerticalLayout {
+            spacing: Spacing.xxs;
+            for placeholder in [0, 1, 2, 3, 4]: ChatListSkeleton {
+                mobile-mode: root.mobile-mode;
+            }
+        }
 
         for row in root.rows: ChatRow {
             data: row;

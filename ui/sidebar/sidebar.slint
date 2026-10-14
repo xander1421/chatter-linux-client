@@ -74,6 +74,7 @@ export component Sidebar inherits Rectangle {
     // ── Properties: Data ──
     // The chat list, ordered by core (`ChatterClient::sidebar_rows`).
     in property <[ChatRowData]> chat-rows: [];
+    in property <bool> chat-rows-loading: false;
     in property <[CustomSectionData]> custom-sections: [];
 
     // ── Properties: User profile ──
@@ -581,6 +582,7 @@ export component Sidebar inherits Rectangle {
                 ChatList {
                     vertical-stretch: 0;
                     rows: root.chat-rows;
+                    loading: root.chat-rows-loading;
                     collapsed: root.collapsed;
                     mobile-mode: root.touch;
                     has-sibling-content: root.custom-sections.length > 0;

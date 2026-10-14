@@ -8,10 +8,8 @@ use slint::{Model, ModelRc, VecModel, Weak};
 
 use chatter_core::client::ChatterClient;
 
-use crate::bin_ui::converters::{
-    ChatRowExt, FriendDataExt, FriendRequestExt, FriendRequestSendData,
-};
-use crate::{ChatRowData, FriendData, FriendRequestData, MainWindow};
+use crate::bin_ui::converters::{FriendDataExt, FriendRequestExt, FriendRequestSendData};
+use crate::{FriendData, FriendRequestData, MainWindow};
 use chatter_core::ui::initials_from_name;
 
 /// Rebuild the FriendsModal "Friends" tab list and push it into the UI.
@@ -80,6 +78,20 @@ fn publish_friends(
     });
 }
 
+/// Restore the local conversation snapshot before the main view first paints.
+/// The later initial-data refresh reconciles any server changes in place.
+pub fn show_cached_chat_rows(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let mut rows = ui_ctx.sidebar_rows();
+    if rows.is_empty() {
+        return;
+    }
+    for row in &mut rows {
+        row.pre_decode_avatar();
+    }
+    crate::bin_ui::features::sidebar::apply_chat_list(window, ui_ctx, rows);
+    window.set_chat_rows_loading(false);
+}
+
 /// Load initial data after login or on startup.
 pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<ChatterClient>) {
     let session_owner = super::super::history_owner::SessionOwner::capture(ui_ctx);
@@ -88,6 +100,20 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
         ui_ctx.chat_state().active_conversation(),
     );
     tracing::info!("Loading initial data...");
+
+    // The sidebar snapshot is local. Paint it before any channel/profile RPC
+    // so returning users see their conversations on the first main-view frame.
+    let mut cached_rows = ui_ctx.sidebar_rows();
+    if !cached_rows.is_empty() {
+        for row in &mut cached_rows {
+            row.pre_decode_avatar();
+        }
+        let cached_client = ui_ctx.clone();
+        crate::run_history_ui!(window_weak, session_owner, |w| {
+            crate::bin_ui::features::sidebar::apply_chat_list(&w, &cached_client, cached_rows);
+            w.set_chat_rows_loading(false);
+        });
+    }
 
     // Friends tab, off the awaits below. ListFriends used to run before the
     // first paint and, on failure, publish an empty list over people the
@@ -253,21 +279,13 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
     let notification_detail = ui_ctx.notification_detail_level().as_str();
     let own_username = ui_ctx.full_username().unwrap_or_default();
     crate::run_history_ui!(window_weak_ui, session_owner, |w| {
-        // Convert Send-safe rows to Slint types inside the event loop.
-        let chat_rows: Vec<ChatRowData> = chat_rows.into_iter().map(|r| r.to_slint()).collect();
-        w.set_chat_rows(ModelRc::new(VecModel::from(chat_rows)));
+        // Reconcile rows by identity; replacing the model resets scroll and
+        // flashes cached conversations a second time after server sync.
+        crate::bin_ui::features::sidebar::apply_chat_list(&w, &ui_ctx_for_refresh, chat_rows);
+        w.set_chat_rows_loading(false);
 
         #[cfg(target_os = "android")]
         crate::platform::android::notification_route::open_pending(&w);
-
-        // Apply selection flags on newly-loaded models.
-        crate::bin_ui::features::sidebar::refresh_selection(&w, &ui_ctx_for_refresh);
-
-        // Compute initial total unread count for mobile bottom nav badge
-        crate::bin_ui::features::auth::inbox::domain_handler::recompute_total_unread(
-            &w,
-            &ui_ctx_for_refresh,
-        );
 
         w.set_user_display_name(user_display_name.into());
         w.set_user_initials(user_initials.into());
