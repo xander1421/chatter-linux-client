@@ -4,9 +4,8 @@ import { GlassSurface } from "glass_surface.slint";
 // Replaces QuickSwitcher (Ctrl+K) and SearchModal (Ctrl+F).
 //
 // Opened from the sidebar "Search" row (top, above Saved Messages) or the
-// Ctrl+K / Ctrl+F shortcut. `UnifiedSearch` is a window-root overlay driven by a
-// boolean `if` — same pattern as every other modal here — which makes the
-// shortcut + click-outside + Escape reliable.
+// Ctrl+K / Ctrl+F shortcut. The overlay remains mounted so its native input
+// keeps its identity while the palette grows and recedes.
 
 import { Colors } from "../theme/colors.slint";
 import { Appearance } from "../theme/appearance.slint";
@@ -36,6 +35,7 @@ export struct SearchResult {
 
 // One "Jump to" conversation row.
 component ConvRow inherits Rectangle {
+    in property <bool> interactive: true;
     in property <string> item-id;
     in property <string> name;
     in property <string> conv-type;
@@ -51,6 +51,7 @@ component ConvRow inherits Rectangle {
     background: root.selected ? Colors.selected : touch.has-hover ? Colors.surface-hover : transparent;
 
     touch := TouchArea {
+        enabled: root.interactive;
         mouse-cursor: pointer;
         clicked => { root.clicked(root.item-id, root.conv-type); }
     }
@@ -110,6 +111,7 @@ component ConvRow inherits Rectangle {
 
 // One "Messages" content row.
 component MsgRow inherits Rectangle {
+    in property <bool> interactive: true;
     in property <string> message-id;
     in property <string> channel-name;
     in property <string> sender-name;
@@ -123,6 +125,7 @@ component MsgRow inherits Rectangle {
     background: root.selected ? Colors.selected : touch.has-hover ? Colors.surface-hover : transparent;
 
     touch := TouchArea {
+        enabled: root.interactive;
         mouse-cursor: pointer;
         clicked => { root.clicked(root.message-id); }
     }
@@ -165,6 +168,7 @@ component MsgRow inherits Rectangle {
 
 // One resolved "People" row (exact-handle lookup result).
 component PersonRow inherits Rectangle {
+    in property <bool> interactive: true;
     in property <string> name;
     in property <string> handle;
     callback clicked();
@@ -174,6 +178,7 @@ component PersonRow inherits Rectangle {
     background: touch.has-hover ? Colors.surface-hover : transparent;
 
     touch := TouchArea {
+        enabled: root.interactive;
         mouse-cursor: pointer;
         clicked => { root.clicked(); }
     }
@@ -235,8 +240,14 @@ export component UnifiedSearch inherits Rectangle {
     callback person-selected(string);
 
     property <int> total-count: root.conversations.length + root.messages.length;
+    property <float> open-progress: root.show ? 1 : 0;
+    animate open-progress { duration: Materials.motion-standard; easing: Materials.glide; }
+    property <float> shape-progress: root.show ? 1 : 0;
+    animate shape-progress { duration: Materials.motion-standard; easing: Materials.spring; }
+    property <length> panel-width: min(640px, root.width - 32px);
+    changed show => { if root.show { search-input.focus(); } }
 
-    visible: root.show;
+    visible: root.show || root.open-progress > 0 || root.shape-progress > 0;
 
     function activate-selected() {
         if root.selected-index < root.conversations.length {
@@ -254,27 +265,28 @@ export component UnifiedSearch inherits Rectangle {
         width: 100%;
         height: 100%;
         background: Materials.scrim;
-        TouchArea { clicked => { root.close(); } }
+        opacity: root.open-progress;
+        TouchArea { enabled: root.show; clicked => { root.close(); } }
     }
 
     // Palette panel — near top, centered.
-    GlassSurface {
-        enter-distance: 6px;
-        shown: root.show;
-
+    palette := GlassSurface {
         material-level: 3;
         elevation: 4;
 
-        x: (parent.width - self.width) / 2;
-        y: (min(72px, parent.height * 0.1)) + self.entrance-offset;
-        width: min(640px, parent.width - 32px);
-        height: min(content.preferred-height, parent.height - 160px);
+        x: 16px + ((root.width - root.panel-width) / 2 - 16px) * root.open-progress;
+        y: 16px + (min(72px, parent.height * 0.1) - 16px) * root.open-progress;
+        width: min(240px, root.panel-width) + (root.panel-width - min(240px, root.panel-width)) * root.shape-progress;
+        height: Spacing.touch-target-min + (min(content.preferred-height, parent.height - 160px) - Spacing.touch-target-min) * root.shape-progress;
         border-radius: Spacing.radius-xl;
+        clip: true;
 
         // Swallow clicks so they don't reach the backdrop.
-        TouchArea {}
+        TouchArea { enabled: root.show; }
 
         content := VerticalLayout {
+            opacity: root.show ? 1 : 0;
+            animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
             padding: Spacing.md;
             spacing: Spacing.sm;
 
@@ -313,8 +325,6 @@ export component UnifiedSearch inherits Rectangle {
                             width: 100%;
                             height: 100%;
                             single-line: true;
-                            // Focus as soon as the overlay is created.
-                            init => { self.focus(); }
                             edited => {
                                 root.selected-index = 0;
                                 root.query-changed(root.query);
@@ -378,6 +388,7 @@ export component UnifiedSearch inherits Rectangle {
                     font-size: Typography.xs;
                 }
                 if root.person-status == "found": PersonRow {
+                    interactive: root.show;
                     name: root.person-name;
                     handle: root.person-handle;
                     clicked => { root.person-selected(root.person-id); }
@@ -406,6 +417,7 @@ export component UnifiedSearch inherits Rectangle {
                     border-radius: Spacing.radius-sm;
                     background: find-touch.has-hover ? Colors.surface-hover : transparent;
                     find-touch := TouchArea {
+                        enabled: root.show;
                         mouse-cursor: pointer;
                         clicked => { root.resolve(root.query); }
                     }
@@ -454,6 +466,7 @@ export component UnifiedSearch inherits Rectangle {
                         font-size: Typography.xs;
                     }
                     for c[i] in root.conversations: ConvRow {
+                        interactive: root.show;
                         item-id: c.id;
                         name: c.name;
                         conv-type: c.conv-type;
@@ -469,6 +482,7 @@ export component UnifiedSearch inherits Rectangle {
                         font-size: Typography.xs;
                     }
                     for m[j] in root.messages: MsgRow {
+                        interactive: root.show;
                         message-id: m.message-id;
                         channel-name: m.channel-name;
                         sender-name: m.sender-name;

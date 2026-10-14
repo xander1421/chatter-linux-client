@@ -9,6 +9,7 @@ import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
 import { Materials } from "../theme/materials.slint";
+import { Appearance } from "../theme/appearance.slint";
 
 component NavTab inherits Rectangle {
     in property <image> icon;
@@ -25,16 +26,26 @@ component NavTab inherits Rectangle {
     height: Spacing.bottom-nav-height;
     horizontal-stretch: 1;
     background: transparent;
+    transform-scale-x: touch.pressed ? 0.92 : 1;
+    transform-scale-y: touch.pressed ? 0.88 : 1;
+    animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+    animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
     accessible-role: tab;
     accessible-label: root.label;
     accessible-item-selected: root.active;
     accessible-action-default => { root.clicked(); }
 
     Rectangle {
-        x: 5px; y: 5px;
-        width: parent.width - 10px; height: parent.height - 10px;
+        x: touch.pressed ? 9px : 5px;
+        y: touch.pressed ? 9px : 5px;
+        width: parent.width - (touch.pressed ? 18px : 10px);
+        height: parent.height - (touch.pressed ? 18px : 10px);
         border-radius: self.height / 2;
-        background: root.active ? Colors.text-primary.with-alpha(0.12) : transparent;
+        background: touch.pressed ? Materials.pressed : transparent;
+        animate x { duration: Materials.feedback-duration; easing: Materials.spring; }
+        animate y { duration: Materials.feedback-duration; easing: Materials.spring; }
+        animate width { duration: Materials.feedback-duration; easing: Materials.spring; }
+        animate height { duration: Materials.feedback-duration; easing: Materials.spring; }
     }
 
     VerticalLayout {
@@ -159,6 +170,25 @@ export component MobileBottomNav inherits Rectangle {
     // header (sidebar.slint), not a destination. No Settings tab: it is
     // pushed from the Profile tab's account menu (owner decisions 2026-09-26).
     property <length> tab-width: (root.width - root.side-inset * 2) / 4;
+    property <int> selected-index: root.active-tab == "calls" ? 1
+        : root.active-tab == "contacts" ? 2 : root.active-tab == "profile" ? 3 : 0;
+    property <length> selected-x: root.side-inset + root.tab-width * root.selected-index
+        + 5px;
+    property <length> head-x: root.selected-x;
+    property <length> tail-x: root.selected-x;
+    animate head-x { duration: Materials.motion-standard; easing: Materials.spring; }
+    animate tail-x { duration: Materials.motion-emphasized; easing: Materials.glide; }
+
+    // Two edges travel at different speeds. Their joined capsule stretches
+    // between tabs and gathers back into a single selected drop at rest.
+    selection-drop := Rectangle {
+        x: min(root.head-x, root.tail-x);
+        y: 5px;
+        width: root.tab-width - 10px + abs(root.head-x - root.tail-x);
+        height: Spacing.bottom-nav-height - 10px;
+        border-radius: self.height / 2;
+        background: Colors.text-primary.with-alpha(Appearance.dark ? 0.17 : 0.11);
+    }
 
     NavTab {
         x: root.side-inset;

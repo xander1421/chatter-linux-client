@@ -76,6 +76,7 @@ import { JarvisGlobal } from "jarvis/jarvis_global.slint";
 // Import anon mode global + PIN modal
 import { AnonModePinModal } from "modals/anon_mode_pin.slint";
 import { ShieldNetworkBanner } from "anon_mode/shield_network_banner.slint";
+import { AnonMode } from "anon_mode/anon_mode_global.slint";
 
 // Re-export types for Rust binding
 export { ChatRowData, CustomSectionData, MessageItemData, MessageAttachmentData, ForwardTarget, SessionInfo, PendingLinkInfo, SearchResultChannel, SearchResult, AIProviderOption, AIModelOption, CreateChannelConfig, PendingAttachmentData, EmojiData, GifData, MentionSuggestion, FriendData, FriendRequestData, BlockedUserData, IncomingCallData, ActiveCallData, CallParticipantData, CallHistoryRow, AudioDeviceData, ScreenSourceData, ChannelMemberData, BannedMemberData, PrivateGroupFriend, LocalAIProviderData, CatalogModelData, MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData, InviteUser, ReactionEntry, QuickSwitcherItem, SharedContentItem, SharedTab }
@@ -185,6 +186,31 @@ export component MainWindow inherits Window {
     // ========== View routing ==========
     // Views: "loading", "login", "register", "recovery", "main"
     in-out property <string> current-view: "loading";
+    private property <string> previous-view: "loading";
+    private property <string> exiting-view: "";
+    private property <bool> view-appearing: true;
+    private property <float> view-progress: 1;
+    animate view-progress {
+        duration: root.view-appearing ? Materials.motion-standard : 0ms;
+        easing: Materials.glide;
+    }
+    function view-shift(name: string) -> length {
+        return root.current-view == name ? (1 - root.view-progress) * 24px
+            : -root.view-progress * 12px;
+    }
+    function view-opacity(name: string) -> float {
+        return root.current-view == name ? root.view-progress : 1 - root.view-progress;
+    }
+    view-arrive := Timer {
+        interval: 1ms;
+        running: false;
+        triggered => { self.running = false; root.view-appearing = true; root.view-progress = 1; }
+    }
+    view-leave := Timer {
+        interval: Materials.motion-standard + 40ms;
+        running: false;
+        triggered => { self.running = false; root.exiting-view = ""; }
+    }
 
     // ========== Unified search (top bar) ==========
     in property <[QuickSwitcherItem]> unified-search-conversations: [];
@@ -678,7 +704,7 @@ export component MainWindow inherits Window {
         }
     }
     incoming-exit := Timer {
-        interval: Materials.menu-duration + 40ms;
+        interval: Materials.motion-standard + 40ms;
         running: false;
         triggered => {
             self.running = false;
@@ -698,7 +724,7 @@ export component MainWindow inherits Window {
         }
     }
     device-picker-exit := Timer {
-        interval: Materials.menu-duration + 40ms;
+        interval: Materials.motion-standard + 40ms;
         running: false;
         triggered => {
             self.running = false;
@@ -1414,7 +1440,18 @@ export component MainWindow inherits Window {
     changed thread-composer-text => { root.thread-draft-changed(); }
     changed thread-panel-visible => { VoiceRecording.cancel(); }
     changed active-tab => { root.calls-more-menu-visible = false; root.call-history-selecting = false; root.cancel-composer-keyboard-handover(); VoiceRecording.cancel(); }
-    changed current-view => { root.calls-more-menu-visible = false; root.call-history-selecting = false; root.cancel-composer-keyboard-handover(); VoiceRecording.cancel(); }
+    changed current-view => {
+        root.calls-more-menu-visible = false;
+        root.call-history-selecting = false;
+        root.cancel-composer-keyboard-handover();
+        VoiceRecording.cancel();
+        root.exiting-view = Appearance.reduce-motion ? "" : root.previous-view;
+        root.previous-view = root.current-view;
+        root.view-appearing = false;
+        root.view-progress = 0;
+        view-arrive.start();
+        view-leave.start();
+    }
     // Drop whatever text field holds focus (hiding the soft keyboard with it)
     // without leaving the window focus-less: Back keeps arriving at
     // back-scope. Called from Rust when Android's Back hid the keyboard
@@ -1641,13 +1678,19 @@ export component MainWindow inherits Window {
             y: root.safe-area-top;
 
             // Loading page
-            if current-view == "loading": LoadingPage {
+            if current-view == "loading" || root.exiting-view == "loading": LoadingPage {
+                z: 2;
+                x: root.view-shift("loading");
+                opacity: root.view-opacity("loading");
                 message: root.loading-message;
                 secondary-message: root.loading-secondary-message;
             }
 
             // Login page
-            if current-view == "login": LoginPage {
+            if current-view == "login" || root.exiting-view == "login": LoginPage {
+                z: 2;
+                x: root.view-shift("login");
+                opacity: root.view-opacity("login");
                 touch: root.is-mobile-platform;
                 server-url <=> root.login-server-url;
                 configured-server-url: root.configured-server-url;
@@ -1679,7 +1722,10 @@ export component MainWindow inherits Window {
             }
 
             // Register page
-            if current-view == "register": RegisterPage {
+            if current-view == "register" || root.exiting-view == "register": RegisterPage {
+                z: 2;
+                x: root.view-shift("register");
+                opacity: root.view-opacity("register");
                 touch: root.is-mobile-platform;
                 display-name <=> root.register-display-name;
                 username <=> root.register-username;
@@ -1721,7 +1767,10 @@ export component MainWindow inherits Window {
             }
 
             // Link new device (new-device side QR display)
-            if current-view == "link-device": LinkDevicePage {
+            if current-view == "link-device" || root.exiting-view == "link-device": LinkDevicePage {
+                z: 2;
+                x: root.view-shift("link-device");
+                opacity: root.view-opacity("link-device");
                 touch: root.is-mobile-platform;
                 qr-image: root.link-device-qr;
                 link-url: root.link-device-url;
@@ -1736,7 +1785,10 @@ export component MainWindow inherits Window {
             }
 
             // Account recovery page
-            if current-view == "recovery": AccountRecoveryPage {
+            if current-view == "recovery" || root.exiting-view == "recovery": AccountRecoveryPage {
+                z: 2;
+                x: root.view-shift("recovery");
+                opacity: root.view-opacity("recovery");
                 username <=> root.recovery-username;
                 recovery-code <=> root.recovery-code;
                 new-password <=> root.recovery-new-password;
@@ -1755,11 +1807,22 @@ export component MainWindow inherits Window {
             }
 
             // Welcome page (shown after first registration)
-            if current-view == "welcome": WelcomePage {
+            if current-view == "welcome" || root.exiting-view == "welcome": WelcomePage {
+                z: 2;
+                x: root.view-shift("welcome");
+                opacity: root.view-opacity("welcome");
                 display-name: root.user-display-name;
                 add-friends => { root.welcome-add-friends(); }
                 browse-channels => { root.welcome-browse-channels(); }
                 get-started => { root.welcome-get-started(); }
+            }
+
+            // During the brief visual handoff, neither page accepts a stray tap.
+            if root.exiting-view != "": TouchArea {
+                z: 3;
+                width: parent.width;
+                height: parent.height;
+                clicked => {}
             }
 
             // Main chat layout — parent Rectangle already accounts for all insets.
@@ -2883,8 +2946,10 @@ export component MainWindow inherits Window {
 
         // Channel Settings Modal
         // Unified search overlay (opened by the bar or the Ctrl+K / Ctrl+F shortcut).
-        if root.unified-search-open: UnifiedSearch {
-            show: true;
+        UnifiedSearch {
+            width: parent.width;
+            height: parent.height;
+            show: root.unified-search-open;
             conversations: root.unified-search-conversations;
             messages: root.unified-search-messages;
             searching: root.unified-search-searching;
@@ -3978,5 +4043,20 @@ export component MainWindow inherits Window {
             }
         }
         }
+    }
+
+    // A single transparent wash crosses the chrome as Shield changes state.
+    // No pointer item is placed here, so controls underneath keep their hit
+    // targets and the signed-in/onboarding Tor behavior remains independent.
+    Rectangle {
+        z: 10;
+        width: root.width;
+        height: root.height;
+        background: Appearance.dark
+            ? @linear-gradient(145deg, #36d9ba18 0%, #238cdb0c 100%)
+            : @linear-gradient(145deg, #14ab8d14 0%, #547fd20a 100%);
+        opacity: AnonMode.enabled ? 1 : 0;
+        visible: self.opacity > 0;
+        animate opacity { duration: Materials.motion-emphasized; easing: Materials.glide; }
     }
 }
