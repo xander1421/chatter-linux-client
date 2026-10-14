@@ -65,6 +65,7 @@ pub struct Flickable {
     pub viewport_height: Property<LogicalLength>,
 
     pub interactive: Property<bool>,
+    pub immediate_child_press: Property<bool>,
 
     pub flicked: Callback<VoidArg>,
 
@@ -693,6 +694,11 @@ impl FlickableData {
 
                 if inner.capture_events.is_some() {
                     InputEventFilterResult::Intercept
+                } else if flick.immediate_child_press() {
+                    // Chatter's message list needs the bubble to see the first move without
+                    // waiting 100 ms. Keep this Flickable in the grab path so a vertical
+                    // drag can still intercept and send Exit to the pressed child.
+                    InputEventFilterResult::ForwardAndInterceptGrab
                 } else {
                     InputEventFilterResult::DelayForwarding(FORWARD_DELAY.as_millis() as _)
                 }
