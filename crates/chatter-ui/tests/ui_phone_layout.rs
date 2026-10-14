@@ -272,10 +272,16 @@ fn settings_tab_bar_and_link_device_status_land_where_designed_on_a_phone() {
     // different native input; clearing restores the original compact row.
     let original_input = composer_native_item(&w);
     key(&w, "a".into());
-    // No event-loop sleep: the raised field must already fit its shell on the
-    // first layout, rather than waiting 150ms for an animated parent to catch up.
+    // Even on the first animation frame the native field stays inside its
+    // moving shell; the full endpoint geometry is checked after settlement.
     i_slint_core::properties::ChangeTracker::run_change_handlers();
     slint::platform::update_timers_and_animations();
+    let shell_now = testing::ElementHandle::find_by_element_type_name(&w, "MessageComposer")
+        .find(|e| e.type_name().is_some_and(|t| t == "MessageComposer") && e.size().height > 0.0)
+        .unwrap();
+    let (_, sy_now, _, sh_now) = rect(&shell_now);
+    let (_, fy_now, _, fh_now) = rect(&one(&w, "Message input"));
+    assert!(fy_now >= sy_now - 0.5 && fy_now + fh_now <= sy_now + sh_now + 0.5);
     assert_action_geometry(&w, true);
     assert!(composer_native_item(&w) == original_input);
     assert!(original_input
@@ -1589,6 +1595,13 @@ fn assert_composer_caps(w: &MainWindow, drawer: bool, accessories: f32) {
 
 /// Check actual controls against the actual field: no duplicate layout model.
 fn assert_action_geometry(w: &MainWindow, raised: bool) {
+    // The droplet shell now reaches these endpoint positions through a
+    // retargetable spring; inspect the settled frame, not the first key frame.
+    slint::Timer::single_shot(std::time::Duration::from_millis(520), || {
+        slint::quit_event_loop().unwrap();
+    });
+    w.show().unwrap();
+    slint::run_event_loop().unwrap();
     let shell = testing::ElementHandle::find_by_element_type_name(w, "MessageComposer")
         .find(|e| e.type_name().is_some_and(|t| t == "MessageComposer") && e.size().height > 0.0)
         .unwrap();
