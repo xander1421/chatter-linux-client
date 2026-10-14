@@ -899,64 +899,6 @@ impl MessageService {
         memberships.into_iter().map(|m| m.user_id).collect()
     }
 
-    /// Edit a message in a channel.
-    pub async fn edit_message(
-        &self,
-        channel_id: &ChannelId,
-        message_id: &MessageId,
-        new_text: &str,
-    ) -> Result<Message, MessageError> {
-        // Check logged in
-        let current_user = self.settings_repo.current_user_id()?;
-
-        // Validate new content
-        let trimmed_text = new_text.trim();
-        if trimmed_text.is_empty() {
-            return Err(MessageError::InvalidContent(
-                "message content cannot be empty".to_string(),
-            ));
-        }
-
-        // Get existing message from local DB
-        let existing = self
-            .message_repo
-            .get(message_id)?
-            .ok_or_else(|| MessageError::MessageNotFound(*message_id))?;
-
-        // Verify sender matches current user (only if sender_id is known)
-        if let Some(sender_id) = existing.sender_id {
-            if sender_id != current_user {
-                return Err(MessageError::NotAuthor);
-            }
-        }
-
-        // Build proto content
-        let content = chat_v1::message::Content {
-            r#type: Some(chat_v1::message::content::Type::Text(
-                trimmed_text.to_string(),
-            )),
-        };
-
-        // Call server
-        let mut message_client = self.message_client();
-        let proto_message = message_client
-            .edit_message(&message_id.to_string(), &channel_id.to_string(), content)
-            .await?;
-
-        // Convert to domain message (use server response for consistency)
-        let conv_type =
-            super::conversion::conversation_type_for_channel(&self.channel_repo, channel_id);
-        let mut updated_message = proto_to_domain_message(&proto_message, current_user, conv_type)?;
-
-        // Mark edited locally (in case server didn't set it)
-        updated_message.mark_edited();
-
-        // Update local storage
-        self.message_repo.update(&updated_message)?;
-
-        Ok(updated_message)
-    }
-
     /// Delete a message from a channel.
     pub async fn delete_message(
         &self,

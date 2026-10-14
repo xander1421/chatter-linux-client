@@ -358,9 +358,7 @@ impl ChannelStreamService {
 
     /// One connect → consume → disconnect cycle. `connected_at` is set once
     /// the subscription is established.
-    #[tracing::instrument(skip_all, fields(
-        user_id = ?self.settings_repo.get_string(crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID).ok().flatten()
-    ))]
+    #[tracing::instrument(skip_all)]
     async fn run_once(
         &self,
         connected_at: &mut Option<std::time::Instant>,

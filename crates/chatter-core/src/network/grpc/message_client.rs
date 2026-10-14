@@ -11,7 +11,7 @@ use crate::error::NetworkError;
 use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::proto::chat_v1::{
     AcknowledgeMessagesRequest, AcknowledgeMessagesResponse, DeleteMessageRequest,
-    DeleteMessagesRequest, EditMessageRequest, GetDeviceMessagesRequest, GetDeviceMessagesResponse,
+    DeleteMessagesRequest, GetDeviceMessagesRequest, GetDeviceMessagesResponse,
     GetMessagesRequest, GetMessagesResponse, ListPinnedMessagesResponse, Message, MessageEvent,
     MessageSearchRequest, MessageSearchResponse, MessageSortDirection, MessageUpdate,
     SealedDelivery, SealedDeviceMessage, SendMessageRequest, SendSealedMessageRequest,
@@ -93,33 +93,6 @@ impl MessageClient {
     ) -> Result<Message, NetworkError> {
         self.inner
             .send_message(request)
-            .await
-            .map(|r| r.into_inner())
-            .map_err(|s| NetworkError::from_status(&s))
-    }
-
-    /// Edit an existing message.
-    ///
-    /// # Arguments
-    ///
-    /// * `message_id` - ID of message to edit
-    /// * `channel_id` - Channel containing the message
-    /// * `new_content` - Updated message content
-    pub async fn edit_message(
-        &mut self,
-        message_id: &str,
-        channel_id: &str,
-        new_content: crate::proto::chat_v1::message::Content,
-    ) -> Result<Message, NetworkError> {
-        let request = EditMessageRequest {
-            message_id: message_id.to_string(),
-            channel_id: channel_id.to_string(),
-            new_content: Some(new_content),
-            request_id: uuid::Uuid::new_v4().to_string(),
-        };
-
-        self.inner
-            .edit_message(request)
             .await
             .map(|r| r.into_inner())
             .map_err(|s| NetworkError::from_status(&s))
