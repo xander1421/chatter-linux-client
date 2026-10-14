@@ -28,7 +28,8 @@ export component MeshOnlyBar inherits Rectangle {
     animate height { duration: Materials.motion-standard; easing: Materials.spring; }
     clip: true;
 
-    background: Colors.surface.with-alpha(0.7);
+    border-radius: Spacing.radius-chrome;
+    background: Colors.surface;
 
     // Bottom hairline, matching the other strips.
     Rectangle {

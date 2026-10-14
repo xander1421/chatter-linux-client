@@ -43,6 +43,7 @@ export component ConnectionBanner inherits Rectangle {
     // so closing this trades a paragraph for a pixel rather than for silence.
     // The caller also clears the dismissal on reconnect, so a *later* outage
     // gets a fresh banner instead of being swallowed by an old dismissal.
+    in property <bool> suppressed: false;
     callback dismissed();
 
     // Internal: tracks "just reconnected" for the green flash
@@ -69,14 +70,14 @@ export component ConnectionBanner inherits Rectangle {
 
     // Show banner when not connected (or briefly after reconnect), or while Tor
     // is still establishing / has errored in shield mode.
-    property <bool> should-show:
+    property <bool> should-show: !root.suppressed && (
         connection-state == "connecting"
         || connection-state == "reconnecting"
         || connection-state == "disconnected"
         || connection-state == "failed"
         || root.tor-connecting
         || root.tor-error
-        || root.just-reconnected;
+        || root.just-reconnected);
 
     // The mesh sentence appears only once the server is settled-unreachable:
     // during "connecting" the honest position is that we do not know yet, and
@@ -144,7 +145,13 @@ export component ConnectionBanner inherits Rectangle {
         connection-state == "failed" ? Colors.error :
         Colors.error;  // disconnected
 
-    background: root.banner-color.with-alpha(0.15);
+    border-radius: Spacing.radius-chrome;
+    background: Colors.surface;
+
+    Rectangle {
+        border-radius: root.border-radius;
+        background: root.banner-color.with-alpha(0.10);
+    }
     // Neo 2.0: glow bloom on connecting/reconnecting states
     drop-shadow-blur: connection-state == "connecting" || connection-state == "reconnecting"
         ? Elevation.halo-blur-strong : 0px;

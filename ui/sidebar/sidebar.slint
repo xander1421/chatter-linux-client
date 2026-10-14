@@ -471,10 +471,11 @@ export component Sidebar inherits Rectangle {
                 // as tabs already built into the Friends modal's Requests
                 // tab (requests-sub-tab: received/sent/private/groups/
                 // channels) — nothing lost, just not all surfaced at once.
-                if root.total-pending-requests > 0: Rectangle {
+                Rectangle {
                     height: root.quick-link-height;
                     accessible-role: button;
-                    accessible-label: root.total-pending-requests == 1 ? "1 request" : root.total-pending-requests + " requests";
+                    accessible-label: root.total-pending-requests == 0 ? "Requests"
+                        : root.total-pending-requests == 1 ? "1 request" : root.total-pending-requests + " requests";
                     background: requests-touch.pressed ? Colors.surface-control-hover
                         : requests-touch.has-hover ? Colors.surface-hover : transparent;
                     animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
@@ -490,7 +491,7 @@ export component Sidebar inherits Rectangle {
                         VerticalLayout {
                             alignment: center;
                             horizontal-stretch: 0;
-                            Rectangle {
+                            if root.total-pending-requests > 0: Rectangle {
                                 width: self.height + (root.total-pending-requests > 9 ? 4px : 0px);
                                 height: Spacing.badge-md;
                                 border-radius: self.height / 2;
@@ -514,7 +515,7 @@ export component Sidebar inherits Rectangle {
                         HorizontalLayout { alignment: center; VerticalLayout { alignment: center; Rectangle {
                             width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg;
                             Image { source: Icons.user-plus; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; }
-                            Rectangle {
+                            if root.total-pending-requests > 0: Rectangle {
                                 x: parent.width - 8px; y: -2px;
                                 width: 12px; height: 12px; border-radius: 6px;
                                 border-width: 1px; border-color: Colors.surface;

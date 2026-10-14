@@ -1902,33 +1902,18 @@ export component MainWindow inherits Window {
             }
 
             // Main chat layout — parent Rectangle already accounts for all insets.
-            if current-view == "main": VerticalLayout {
-                // Layer order in this rectangle: chat column (-2), tab screens,
-                // the bottom bar and the return-to-call bar (-1), then pushed
-                // modals (0) — so a dialog's backdrop covers the tab bar too.
+            if current-view == "main": Rectangle {
+                // Keep the sidebar and chat at a fixed origin while notices change.
+                // Layer order: chat column (-2), floating notices (-1), then
+                // the pushed modal layer (0).
                 z: -2;
                 width: 100%;
                 height: parent.height;
+                background: transparent;
 
-                // Connection status banner (auto-hides when connected). Also carries
-                // the "and the mesh still works" half — see the component.
-                if !root.connection-banner-dismissed: ConnectionBanner {
-                    connection-state: root.connection-status;
-                    server-unreachable: root.server-unreachable;
-                    reconnect-attempt: root.connection-reconnect-attempt;
-                    dismissed => { root.connection-banner-dismissed = true; }
-                }
-
-                // Shield on, Tor unavailable: not dismissible (see the component).
-                ShieldNetworkBanner {}
-
-                // Only for a session-less main view (mesh-only entry). Auto-hides the
-                // moment there is an account, and is the only route back to sign-in
-                // from here.
-                MeshOnlyBar {
-                    signed-in: root.is-signed-in;
-                    sign-in => { root.go-to-login(); }
-                }
+                VerticalLayout {
+                    width: 100%;
+                    height: parent.height;
 
                 HorizontalLayout {
                     vertical-stretch: 1;
@@ -2490,7 +2475,44 @@ export component MainWindow inherits Window {
                 } // end chat-panel-area Rectangle
             } // end inner HorizontalLayout (sidebar + chat)
 
-            } // end VerticalLayout (banner + chat area)
+                } // end VerticalLayout (chat area)
+
+                // Status notices float over the header. Their animated height
+                // changes only this overlay's stack, never the list or chat pane.
+                connection-toast := ConnectionBanner {
+                    z: 1;
+                    x: (parent.width - self.width) / 2;
+                    y: self.height > 0px ? Spacing.sm : -self.height - Spacing.sm;
+                    width: min(parent.width - Spacing.sm * 2, 620px);
+                    suppressed: root.connection-banner-dismissed;
+                    connection-state: root.connection-status;
+                    server-unreachable: root.server-unreachable;
+                    reconnect-attempt: root.connection-reconnect-attempt;
+                    dismissed => { root.connection-banner-dismissed = true; }
+                    animate y { duration: Materials.motion-standard; easing: Materials.spring; }
+                }
+
+                // Shield failure is persistent, but uses the same overlay stack.
+                shield-toast := ShieldNetworkBanner {
+                    z: 1;
+                    x: (parent.width - self.width) / 2;
+                    y: connection-toast.height > 0px ? connection-toast.y + connection-toast.height + Spacing.xs : Spacing.sm;
+                    width: min(parent.width - Spacing.sm * 2, 620px);
+                    animate y { duration: Materials.motion-standard; easing: Materials.spring; }
+                }
+
+                // Mesh-only entry stays reachable without occupying list space.
+                MeshOnlyBar {
+                    z: 1;
+                    x: (parent.width - self.width) / 2;
+                    y: shield-toast.height > 0px ? shield-toast.y + shield-toast.height + Spacing.xs
+                        : connection-toast.height > 0px ? connection-toast.y + connection-toast.height + Spacing.xs : Spacing.sm;
+                    width: min(parent.width - Spacing.sm * 2, 620px);
+                    signed-in: root.is-signed-in;
+                    sign-in => { root.go-to-login(); }
+                    animate y { duration: Materials.motion-standard; easing: Materials.spring; }
+                }
+            } // end main view overlay
 
         // ========== Modal overlay layer ==========
         // Semi-transparent backdrop when any modal is active. Not under Settings:
