@@ -31,6 +31,27 @@ import { Button } from "../components/button.slint";
 
 export { ChatRowData, CustomSectionData }
 
+component UpdateBanner inherits GlassSurface {
+    material-level: 2;
+    HorizontalLayout {
+        padding: Spacing.sm;
+        spacing: Spacing.sm;
+        VerticalLayout {
+            alignment: center;
+            Text { text: UpdateGlobal.state == "ready" ? "Ready to restart" : UpdateGlobal.state == "installing" ? "Confirm system install" : UpdateGlobal.state == "error" ? "Update failed" : "Update available";
+                color: Colors.text-primary; font-size: Typography.sm; font-weight: Typography.semibold; }
+            Text { text: UpdateGlobal.state == "downloading" ? UpdateGlobal.progress : UpdateGlobal.state == "confirm-cellular" ? "Cellular download?" : UpdateGlobal.state == "error" ? UpdateGlobal.error : UpdateGlobal.version;
+                color: UpdateGlobal.state == "error" ? Colors.error : Colors.text-secondary;
+                font-size: Typography.xs; wrap: word-wrap; }
+        }
+        Rectangle { horizontal-stretch: 1; }
+        Button { text: UpdateGlobal.state == "error" ? "Retry" : UpdateGlobal.play-distribution ? "Update in Play Store" : UpdateGlobal.state == "ready" ? "Restart" : UpdateGlobal.state == "confirm-cellular" ? "Download now" : "Update";
+            disabled: UpdateGlobal.state == "downloading" || UpdateGlobal.state == "installing";
+            clicked => { if (UpdateGlobal.state == "error") { UpdateGlobal.check(); } else { UpdateGlobal.update(); } }
+        }
+    }
+}
+
 export component Sidebar inherits Rectangle {
     // ── Properties: Data ──
     // The chat list, ordered by core (`ChatterClient::sidebar_rows`).
@@ -236,6 +257,10 @@ export component Sidebar inherits Rectangle {
     animate width { duration: root.mobile-mode ? 0ms : Materials.menu-duration; easing: ease-out; }
 
     in property <length> bottom-inset: 0px;
+    property <bool> update-banner-visible: UpdateGlobal.state == "available" || UpdateGlobal.state == "confirm-cellular" || UpdateGlobal.state == "downloading" || UpdateGlobal.state == "ready" || UpdateGlobal.state == "installing" || UpdateGlobal.state == "error";
+    property <length> update-banner-height: root.mobile-mode
+        ? Spacing.bottom-nav-height + Spacing.button-height - Spacing.xs
+        : Spacing.button-height + Spacing.xxl;
 
     Rectangle {
         // Clip the list and glass chrome together. Child/backdrop painting must
@@ -266,7 +291,20 @@ export component Sidebar inherits Rectangle {
                 // the foot of this list; room for it, so it never covers the
                 // last row.
                 padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.fab-size + Spacing.md * 2
-                    : (root.collapsed ? root.rail-button-count * root.rail-icon-size + (root.rail-button-count - 1) * Spacing.sm + Spacing.lg : Spacing.button-height) + Spacing.md;
+                    : (root.collapsed ? root.rail-button-count * root.rail-icon-size + (root.rail-button-count - 1) * Spacing.sm + Spacing.lg : Spacing.button-height)
+                        + (root.update-banner-visible && !root.collapsed ? root.update-banner-height + Spacing.md : Spacing.none) + Spacing.md;
+
+                // On phones the update action belongs to the chat list, directly
+                // below the pinned search row and clear of the floating dock.
+                if root.mobile-mode && root.update-banner-visible: Rectangle {
+                    height: root.update-banner-height + Spacing.sm;
+                    UpdateBanner {
+                        x: Spacing.sm;
+                        y: Spacing.sm;
+                        width: parent.width - Spacing.sm * 2;
+                        height: root.update-banner-height;
+                    }
+                }
 
                 // QUICK LINKS (top navigation)
 
@@ -877,27 +915,11 @@ export component Sidebar inherits Rectangle {
     // Right edge — the seam against the chat column. Desktop only: on a phone
     // this panel is the whole screen and has no column beside it.
 
-    if !root.collapsed && (UpdateGlobal.state == "available" || UpdateGlobal.state == "confirm-cellular" || UpdateGlobal.state == "downloading" || UpdateGlobal.state == "ready" || UpdateGlobal.state == "installing" || UpdateGlobal.state == "error"): GlassSurface {
+    if !root.mobile-mode && !root.collapsed && root.update-banner-visible: UpdateBanner {
         x: Spacing.sm;
-        y: root.height - self.height - Spacing.md;
+        y: root.height - self.height - Spacing.button-height - Spacing.md;
         width: root.width - Spacing.sm * 2;
-        height: 76px;
-        material-level: 2;
-        HorizontalLayout {
-            padding: Spacing.sm;
-            spacing: Spacing.sm;
-            VerticalLayout {
-                Text { text: UpdateGlobal.state == "ready" ? "Ready to restart" : UpdateGlobal.state == "installing" ? "Confirm system install" : UpdateGlobal.state == "error" ? "Update failed" : "Update available";
-                    color: Colors.text-primary; font-size: Typography.sm; font-weight: Typography.semibold; }
-                Text { text: UpdateGlobal.state == "downloading" ? UpdateGlobal.progress : UpdateGlobal.state == "confirm-cellular" ? "Cellular download?" : UpdateGlobal.state == "error" ? UpdateGlobal.error : UpdateGlobal.version;
-                    color: Colors.text-secondary; font-size: Typography.xs; }
-            }
-            Rectangle { horizontal-stretch: 1; }
-            Button { text: UpdateGlobal.state == "error" ? "Retry" : UpdateGlobal.play-distribution ? "Update in Play Store" : UpdateGlobal.state == "ready" ? "Restart" : UpdateGlobal.state == "confirm-cellular" ? "Download now" : "Update";
-                disabled: UpdateGlobal.state == "downloading" || UpdateGlobal.state == "installing";
-                clicked => { if (UpdateGlobal.state == "error") { UpdateGlobal.check(); } else { UpdateGlobal.update(); } }
-            }
-        }
+        height: root.update-banner-height;
     }
 
 

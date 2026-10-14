@@ -326,11 +326,12 @@ export component SettingsScreen inherits Rectangle {
 
             Flickable {
                 viewport-width: self.width;
-                viewport-height: content-layout.preferred-height + root.content-padding * 2 + root.bottom-inset;
+                viewport-height: content-layout.preferred-height;
 
                 content-layout := VerticalLayout {
                     padding: root.content-padding;
                     padding-top: root.content-padding + (root.compact-mode ? Spacing.touch-target-min + Spacing.sm : Spacing.none);
+                    padding-bottom: root.content-padding + root.bottom-inset;
                     spacing: root.compact-mode ? Spacing.md : Spacing.lg;
                     alignment: start;
 
