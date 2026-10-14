@@ -84,10 +84,12 @@ fn advance(ms: u64) {
 }
 
 fn frame(window: &CallsHarness, name: &str) {
-    let Some(dir) = std::env::var_os("CALLS_CAPTURE_DIR") else {
+    // Render every checkpoint even when PNG capture is disabled. Slint only
+    // evaluates layout and starts geometry animations on a render pass.
+    let pixels = window.window().take_snapshot().unwrap();
+    let Some(dir) = std::env::var_os("U9b_CAPTURE_DIR") else {
         return;
     };
-    let pixels = window.window().take_snapshot().unwrap();
     image::save_buffer(
         std::path::Path::new(&dir).join(name),
         pixels.as_bytes(),
@@ -167,6 +169,10 @@ fn calls_arrive_and_settle_in_both_themes_and_widths() {
             advance(500);
             frame(&window, &format!("{device}-{theme}-05-active-call.png"));
             window.set_active(active(3));
+            // Evaluate the new roster at the transition boundary. Mock time
+            // alone does not render it; without this snapshot the animation
+            // starts at the first measured frame, 80 ms too late.
+            let _ = window.window().take_snapshot().unwrap();
             advance(80);
             frame(&window, &format!("{device}-{theme}-06-grid-travel.png"));
             let travel = window.window().take_snapshot().unwrap().as_bytes().to_vec();
