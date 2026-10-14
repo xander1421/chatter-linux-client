@@ -19,6 +19,7 @@
 use std::future::Future;
 use std::path::PathBuf;
 use std::pin::Pin;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll};
 
@@ -37,6 +38,25 @@ pub(crate) const BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(120);
 pub(crate) const DIAL_TIMEOUT: Duration = Duration::from_secs(90);
 const FIRST_DIAL_TIMEOUT: Duration = Duration::from_secs(45);
 pub(crate) const CONNECT_TIMEOUT: Duration = Duration::from_secs(210);
+static ACTIVE_DIALS: AtomicUsize = AtomicUsize::new(0);
+
+/// Used only by the opt-in diagnostic layer; it never changes Tor behavior.
+pub fn stage_trace_active() -> bool {
+    ACTIVE_DIALS.load(Ordering::Relaxed) != 0
+}
+
+struct ActiveDial;
+impl ActiveDial {
+    fn new() -> Self {
+        ACTIVE_DIALS.fetch_add(1, Ordering::Relaxed);
+        Self
+    }
+}
+impl Drop for ActiveDial {
+    fn drop(&mut self) {
+        ACTIVE_DIALS.fetch_sub(1, Ordering::Relaxed);
+    }
+}
 
 /// Dropping a JoinHandle detaches its task. Keep ownership until completion so
 /// phase timeout, overall timeout, and caller cancellation all request abort.
@@ -257,6 +277,7 @@ impl Service<Uri> for OnionConnector {
         let tor = self.tor.clone();
         let isolated = self.isolated.clone();
         Box::pin(async move {
+            let _active_dial = ActiveDial::new();
             let mut trace = PhaseTrace::new("connector");
             let result = tokio::time::timeout(CONNECT_TIMEOUT, async move {
                 // The endpoint is built from `http://<onion>:443`, so host+port come
@@ -312,23 +333,25 @@ impl Service<Uri> for OnionConnector {
                     // A cancelled caller can leave that task running. Repeating
                     // connect on the same client then waits on the same stalled
                     // work, as RC119's three consecutive 90s deadlines did.
-                    // Give the first attempt half the budget. A quick Arti
-                    // error keeps the existing same-client retry; only a stall
-                    // selects independent state for the SAME pinned onion.
+                    // Give the first attempt half the budget. Every failed
+                    // attempt gets a new isolation token: Arti 0.47 caches the
+                    // descriptor and in-flight work by service and isolation,
+                    // and only an introduction NACK forces a descriptor refetch.
+                    // A completed descriptor/intro/rendezvous error must not
+                    // reuse that state on the final attempt.
                     let first = tokio::time::timeout(
                         FIRST_DIAL_TIMEOUT,
                         client.connect((host.as_str(), port)),
                     )
                     .await;
-                    let retry_client = match first {
+                    match first {
                         Ok(Ok(stream)) => return Ok(stream),
                         Ok(Err(error)) => {
                             tracing::warn!(
                                 error_kind = ?error.kind(),
-                                "onion dial failed; retrying same service once"
+                                "onion dial failed; retrying with fresh Tor isolation"
                             );
                             tokio::time::sleep(Duration::from_millis(500)).await;
-                            client
                         }
                         Err(_) => {
                             tracing::warn!(
@@ -336,9 +359,9 @@ impl Service<Uri> for OnionConnector {
                                 elapsed_ms = FIRST_DIAL_TIMEOUT.as_millis() as u64,
                                 "onion dial stalled; retrying with fresh Tor isolation"
                             );
-                            client.isolated_client()
                         }
-                    };
+                    }
+                    let retry_client = client.isolated_client();
                     let result = retry_client.connect((host.as_str(), port)).await;
                     if let Err(error) = &result {
                         tracing::warn!(error_kind = ?error.kind(), "onion dial retry failed");
@@ -364,6 +387,18 @@ impl Service<Uri> for OnionConnector {
 mod tests {
     use super::*;
     use tokio::sync::oneshot;
+
+    #[test]
+    fn trace_gate_tracks_overlapping_dials() {
+        assert!(!stage_trace_active());
+        let first = ActiveDial::new();
+        let second = ActiveDial::new();
+        assert!(stage_trace_active());
+        drop(first);
+        assert!(stage_trace_active());
+        drop(second);
+        assert!(!stage_trace_active());
+    }
 
     struct DropSignal(Option<oneshot::Sender<()>>);
     impl Drop for DropSignal {

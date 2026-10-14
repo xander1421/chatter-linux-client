@@ -18,6 +18,7 @@ pub mod bin_ui;
 
 // Platform integration (JNI on Android, etc.)
 pub mod platform;
+mod tor_stage_trace;
 
 /// Global tokio runtime handle for use in Slint callbacks.
 /// On Android, Slint's event loop doesn't preserve the tokio runtime context,
@@ -218,14 +219,24 @@ pub async fn app_init() -> AppState {
 
     let shutdown_token = CancellationToken::new();
 
-    tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::from_default_env()
-                .add_directive(tracing::Level::INFO.into())
-                .add_directive("glycin=warn".parse().unwrap())
-                .add_directive("glycin_utils=warn".parse().unwrap())
-                .add_directive("zbus=warn".parse().unwrap()),
-        )
+    use tracing_subscriber::{prelude::*, Layer};
+    let normal_filter = tracing_subscriber::EnvFilter::from_default_env()
+        .add_directive(tracing::Level::INFO.into())
+        .add_directive("glycin=warn".parse().unwrap())
+        .add_directive("glycin_utils=warn".parse().unwrap())
+        .add_directive("zbus=warn".parse().unwrap());
+    let stage_trace = tor_stage_trace::TorStageTrace::open().map(|trace| {
+        trace.with_filter(tracing_subscriber::filter::filter_fn(|meta| {
+            tor_stage_trace::dial_active()
+                && *meta.level() <= tracing::Level::DEBUG
+                && (meta.target().starts_with("tor_hsclient")
+                    || meta.target().starts_with("tor_circmgr")
+                    || meta.target().starts_with("tor_dirmgr"))
+        }))
+    });
+    tracing_subscriber::registry()
+        .with(tracing_subscriber::fmt::layer().with_filter(normal_filter))
+        .with(stage_trace)
         .init();
 
     tracing::info!("Chatter Client v0.1.0 ({})", std::env::consts::OS);
