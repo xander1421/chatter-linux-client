@@ -28,6 +28,14 @@ export component EmojiPicker inherits GlassSurface {
     material-enabled: !root.embedded;
     // Picker visibility
     in property <bool> show: false;
+    property <float> reveal-progress: 0.0;
+    animate reveal-progress { duration: Materials.motion-standard; easing: Materials.spring; }
+    reveal-timer := Timer {
+        interval: 1ms;
+        running: root.show && root.reveal-progress == 0.0;
+        triggered => { root.reveal-progress = 1.0; }
+    }
+    changed show => { if (!root.show) { root.reveal-progress = 0.0; } }
     // Touch platform: category tabs, tone swatches and emoji cells take the
     // 48px Android minimum; desktop keeps the 44px control slot. Both grow
     // with the text size, as the glyphs in them do.
@@ -72,7 +80,7 @@ export component EmojiPicker inherits GlassSurface {
 
     // Only render when visible
     visible: root.show;
-    opacity: root.show ? 1 : 0;
+    opacity: root.reveal-progress;
 
     // Picker container — responsive: never exceed parent width
     in property <length> max-picker-width: 280px;
@@ -201,6 +209,7 @@ export component EmojiPicker inherits GlassSurface {
                         background: current ? Colors.tint-strong
                             : tab-area.pressed ? Materials.pressed
                             : tab-area.has-hover ? Materials.hover : transparent;
+                        animate background { duration: Materials.motion-quick; easing: Materials.settle; }
                         accessible-role: tab;
                         accessible-label: root.category-names[index];
                         accessible-item-selected: current;
@@ -311,7 +320,10 @@ export component EmojiPicker inherits GlassSurface {
                         property <int> grid-col: mod(index, root.emoji-columns);
 
                         x: grid-col * root.emoji-cell-stride + (root.emoji-cell-stride - root.cell) / 2;
-                        y: grid-row * root.cell;
+                        y: grid-row * root.cell + (1.0 - root.reveal-progress) * 12px;
+                        opacity: root.reveal-progress;
+                        animate y { duration: Materials.motion-standard; easing: Materials.spring; delay: Appearance.reduce-motion ? 0ms : mod(index, 8) * 18ms; }
+                        animate opacity { duration: Materials.motion-quick; easing: Materials.settle; delay: Appearance.reduce-motion ? 0ms : mod(index, 8) * 18ms; }
                         width: root.cell;
                         height: root.cell;
                         border-radius: Spacing.radius-sm;
@@ -324,7 +336,8 @@ export component EmojiPicker inherits GlassSurface {
                         Text {
                             text: emoji-data.emoji;
                             font-family: Typography.font-family-emoji;
-                            font-size: Typography.xl;
+                            font-size: emoji-area.pressed ? Typography.xl * 0.82 : Typography.xl;
+                            animate font-size { duration: Materials.motion-quick; easing: Materials.spring; }
                             horizontal-alignment: center;
                             vertical-alignment: center;
                         }

@@ -7,6 +7,7 @@ import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
+import { Materials } from "../theme/materials.slint";
 import { HoldArea } from "../components/hold_area.slint";
 
 export component AudioPlayer inherits HorizontalLayout {
@@ -38,6 +39,8 @@ export component AudioPlayer inherits HorizontalLayout {
     property <length> button-size: root.compact ? 28px : 40px;
     property <length> icon-size: root.compact ? 12px : 16px;
     property <length> track-width: root.compact ? 160px : 180px;
+    property <float> displayed-progress: root.is-this-playing ? clamp(root.audio-progress, 0.0, 1.0) : 0.0;
+    animate displayed-progress { duration: Materials.motion-quick; easing: Materials.settle; }
 
     spacing: root.compact ? Spacing.xs : Spacing.sm;
 
@@ -47,6 +50,8 @@ export component AudioPlayer inherits HorizontalLayout {
         height: root.button-size;
         border-radius: root.button-size / 2;
         background: play-touch.has-hover ? Colors.primary.darker(0.1) : Colors.primary;
+        opacity: play-touch.pressed ? 0.82 : 1.0;
+        animate opacity { duration: Materials.motion-quick; easing: Materials.spring; }
 
         Image {
             width: root.icon-size;
@@ -94,13 +99,33 @@ export component AudioPlayer inherits HorizontalLayout {
                     alignment: center;
                     Rectangle {
                         property <float> bar-position: (idx + 1) / max(1.0, root.waveform.length);
-                        property <bool> is-played: root.is-this-playing && bar-position <= root.audio-progress;
+                        property <bool> is-played: root.is-this-playing && bar-position <= root.displayed-progress;
 
                         height: 3px + clamp(bar / 100.0, 0.0, 1.0) * (waveform.height - 3px);
                         background: is-played ? Colors.primary : Colors.text-muted;
                         border-radius: 1px;
+                        animate background { duration: Materials.motion-quick; easing: Materials.settle; }
                     }
                 }
+            }
+
+            Rectangle {
+                y: parent.height - 2px;
+                height: 2px;
+                width: parent.width * root.displayed-progress;
+                background: Colors.primary;
+                border-radius: 1px;
+            }
+            Rectangle {
+                x: max(0px, min(parent.width - self.width, parent.width * root.displayed-progress - self.width / 2));
+                y: (parent.height - self.height) / 2;
+                width: waveform-touch.pressed ? 10px : 6px;
+                height: waveform-touch.pressed ? 10px : 6px;
+                border-radius: self.width / 2;
+                background: Colors.primary;
+                visible: root.is-this-playing || waveform-touch.pressed;
+                animate width { duration: Materials.motion-quick; easing: Materials.spring; }
+                animate height { duration: Materials.motion-quick; easing: Materials.spring; }
             }
 
             waveform-touch := HoldArea {
@@ -111,6 +136,7 @@ export component AudioPlayer inherits HorizontalLayout {
                     if (self.hold-fired) { return; }
                     root.audio-seek(root.attachment-id, self.seek-pos);
                 }
+                moved => { if (self.pressed) { root.audio-seek(root.attachment-id, self.seek-pos); } }
                 held => { root.more-clicked(self.anchor-x, self.anchor-y); }
             }
         }

@@ -55,12 +55,14 @@ export component PdfPreviewPanel inherits Rectangle {
 
                 // Left side: file info
                 HorizontalLayout {
+                    horizontal-stretch: 1;
                     spacing: Spacing.sm;
                     alignment: start;
 
                     // File name
                     Text {
                         text: root.file-name;
+                        horizontal-stretch: 1;
                         color: Colors.text-primary;
                         font-size: Typography.sm;
                         vertical-alignment: center;

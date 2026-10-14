@@ -27,11 +27,15 @@ export struct GifData {
 // could otherwise send a GIF the user never saw.
 component GifTile inherits Rectangle {
     in property <GifData> gif;
+    in property <float> reveal: 1.0;
+    in property <int> stagger-index: 0;
     callback picked(string, string);
     property <bool> ready: root.gif.preview.width > 0 && !root.gif.failed;
 
     border-radius: Spacing.radius-md;
     clip: true;
+    opacity: root.reveal * (area.pressed ? 0.84 : 1.0);
+    animate opacity { duration: Materials.motion-quick; easing: Materials.spring; delay: Appearance.reduce-motion ? 0ms : mod(root.stagger-index, 8) * 18ms; }
     background: root.ready && (area.has-hover || area.pressed) ? Materials.hover : Colors.inset;
     accessible-role: button;
     accessible-label: root.gif.failed ? "GIF " + root.gif.id + ", preview unavailable" : "GIF " + root.gif.id;
@@ -68,6 +72,14 @@ export component GifPicker inherits GlassSurface {
     border-radius: 0px;
 
     in property <bool> show: false;
+    property <float> reveal-progress: 0.0;
+    animate reveal-progress { duration: Materials.motion-standard; easing: Materials.spring; }
+    reveal-timer := Timer {
+        interval: 1ms;
+        running: root.show && root.reveal-progress == 0.0;
+        triggered => { root.reveal-progress = 1.0; }
+    }
+    changed show => { if (!root.show) { root.reveal-progress = 0.0; } }
 
     // Trending (empty query) or search results, from Rust.
     in property <bool> loading: false;
@@ -90,7 +102,7 @@ export component GifPicker inherits GlassSurface {
 
     // Only render when visible
     visible: root.show;
-    opacity: root.show ? 1 : 0;
+    opacity: root.reveal-progress;
 
     in property <length> max-picker-width: 320px;
     in property <length> max-picker-height: 400px;
@@ -177,8 +189,11 @@ export component GifPicker inherits GlassSurface {
                         height: root.grid-height(root.recent.length);
                         for gif-data[index] in root.recent: GifTile {
                             gif: gif-data;
+                            reveal: root.reveal-progress;
+                            stagger-index: index;
                             x: mod(index, root.columns) * (root.tile-width + root.grid-gap);
-                            y: Math.floor(index / root.columns) * root.row-stride;
+                            y: Math.floor(index / root.columns) * root.row-stride + (1.0 - root.reveal-progress) * 14px;
+                            animate y { duration: Materials.motion-standard; easing: Materials.spring; delay: Appearance.reduce-motion ? 0ms : mod(index, 8) * 18ms; }
                             width: root.tile-width;
                             height: root.tile-height;
                             picked(id, url) => { root.gif-selected(id, url); }
@@ -201,8 +216,11 @@ export component GifPicker inherits GlassSurface {
                         height: root.grid-height(root.results.length);
                         for gif-data[index] in root.results: GifTile {
                             gif: gif-data;
+                            reveal: root.reveal-progress;
+                            stagger-index: index;
                             x: mod(index, root.columns) * (root.tile-width + root.grid-gap);
-                            y: Math.floor(index / root.columns) * root.row-stride;
+                            y: Math.floor(index / root.columns) * root.row-stride + (1.0 - root.reveal-progress) * 14px;
+                            animate y { duration: Materials.motion-standard; easing: Materials.spring; delay: Appearance.reduce-motion ? 0ms : mod(index, 8) * 18ms; }
                             width: root.tile-width;
                             height: root.tile-height;
                             picked(id, url) => { root.gif-selected(id, url); }

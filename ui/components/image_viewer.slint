@@ -44,6 +44,23 @@ export component ImageViewer inherits Rectangle {
     property <length> drag-y: 0px;
     property <length> drag-start-y: 0px;
     property <length> drag-start-x: 0px;
+    property <length> dismiss-offset: 0px;
+    property <bool> dragging-to-dismiss: false;
+    property <length> visual-dismiss-offset: root.dismiss-offset;
+    animate visual-dismiss-offset { duration: root.dragging-to-dismiss ? 0ms : Materials.motion-standard; easing: Materials.spring; }
+    property <float> dismiss-progress: min(1.0, max(0.0, root.visual-dismiss-offset / 220px));
+    // Origin bounds arrive in window coordinates; convert to the image viewport below.
+    in property <length> thumbnail-x: 0px;
+    in property <length> thumbnail-y: 0px;
+    in property <length> thumbnail-width: 0px;
+    in property <length> thumbnail-height: 0px;
+    property <float> arrival: 0.0;
+    animate arrival { duration: Materials.motion-emphasized; easing: Materials.spring; }
+    arrival-timer := Timer {
+        interval: 1ms;
+        running: root.show && root.arrival == 0.0;
+        triggered => { root.arrival = 1.0; }
+    }
 
     function reset-zoom() {
         root.zoom = 1.0;
@@ -70,7 +87,7 @@ export component ImageViewer inherits Rectangle {
     }
 
     changed source => { root.reset-zoom(); }
-    changed show => { if (!root.show) { root.reset-zoom(); } }
+    changed show => { if (!root.show) { root.reset-zoom(); root.dismiss-offset = 0px; root.dragging-to-dismiss = false; root.arrival = 0.0; } }
 
     // Callbacks
     in property <string> position-label;
@@ -85,7 +102,12 @@ export component ImageViewer inherits Rectangle {
 
     // Only render when show is true
     visible: root.show;
-    background: Materials.scrim-media;
+    background: transparent;
+    Rectangle {
+        width: 100%; height: 100%;
+        background: Materials.scrim-media;
+        opacity: root.arrival * (1.0 - root.dismiss-progress * 0.82);
+    }
 
     // Close on backdrop click
     backdrop := TouchArea {
@@ -153,10 +175,24 @@ export component ImageViewer inherits Rectangle {
             Image {
                 source: root.source;
                 image-fit: contain;
-                width: viewer-area.fit-width * root.zoom;
-                height: viewer-area.fit-height * root.zoom;
-                x: (viewer-area.width - self.width) / 2 + root.pan-x;
-                y: (viewer-area.height - self.height) / 2 + root.pan-y;
+                property <length> final-width: viewer-area.fit-width * root.zoom;
+                property <length> final-height: viewer-area.fit-height * root.zoom;
+                width: root.thumbnail-width > 0px
+                    ? root.thumbnail-width + (self.final-width - root.thumbnail-width) * root.arrival
+                    : self.final-width * (0.78 + 0.22 * root.arrival);
+                height: root.thumbnail-height > 0px
+                    ? root.thumbnail-height + (self.final-height - root.thumbnail-height) * root.arrival
+                    : self.final-height * (0.78 + 0.22 * root.arrival);
+                x: root.thumbnail-width > 0px
+                    ? (root.thumbnail-x - viewer-area.absolute-position.x)
+                        + ((viewer-area.width - self.final-width) / 2 + root.pan-x
+                            - (root.thumbnail-x - viewer-area.absolute-position.x)) * root.arrival
+                    : (viewer-area.width - self.width) / 2 + root.pan-x;
+                y: (root.thumbnail-height > 0px
+                    ? (root.thumbnail-y - viewer-area.absolute-position.y)
+                        + ((viewer-area.height - self.final-height) / 2 + root.pan-y
+                            - (root.thumbnail-y - viewer-area.absolute-position.y)) * root.arrival
+                    : (viewer-area.height - self.height) / 2 + root.pan-y) + root.visual-dismiss-offset;
             }
 
             gesture := ScaleRotateGestureHandler {
@@ -180,18 +216,25 @@ export component ImageViewer inherits Rectangle {
                             root.drag-y = self.mouse-y;
                             root.drag-start-x = self.mouse-x;
                             root.drag-start-y = self.mouse-y;
+                            root.dismiss-offset = 0px;
+                            root.dragging-to-dismiss = true;
                         }
-                        if (event.kind == PointerEventKind.up && root.zoom == 1.0
-                            && self.mouse-y - root.drag-start-y > 100px
-                            && abs(self.mouse-y - root.drag-start-y) > abs(self.mouse-x - root.drag-start-x)) {
-                            root.close();
+                        if ((event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) && root.zoom == 1.0) {
+                            let should-close = event.kind == PointerEventKind.up && root.dismiss-offset > 100px;
+                            root.dragging-to-dismiss = false;
+                            root.dismiss-offset = 0px;
+                            if (should-close) { root.close(); }
                         }
                     }
                     moved => {
-                        if (root.zoom > 1.0 && !gesture.active) {
+                        if (root.zoom > 1.0 && !gesture.active && self.pressed) {
                             root.pan-x += self.mouse-x - root.drag-x;
                             root.pan-y += self.mouse-y - root.drag-y;
                             root.clamp-pan();
+                        } else if (root.zoom == 1.0 && self.pressed && !gesture.active
+                            && self.mouse-y > root.drag-start-y
+                            && self.mouse-y - root.drag-start-y > abs(self.mouse-x - root.drag-start-x)) {
+                            root.dismiss-offset = (self.mouse-y - root.drag-start-y) * 0.78;
                         }
                         root.drag-x = self.mouse-x;
                         root.drag-y = self.mouse-y;
