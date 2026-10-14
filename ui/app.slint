@@ -224,6 +224,8 @@ export component MainWindow inherits Window {
     in-out property <string> unified-search-date: "any";
     in property <[string]> unified-search-recents: [];
     in property <[int]> unified-search-counts: [0, 0, 0, 0, 0, 0, 0];
+    in property <[image]> unified-search-thumbnails: [];
+    in property <[bool]> unified-search-has-thumbnails: [];
     // Loaded from SettingsRepository at startup: "k" | "f" | "both".
     in-out property <string> search-shortcut-pref: "both";
     callback unified-search-opened();
@@ -2990,6 +2992,8 @@ export component MainWindow inherits Window {
             date-filter <=> root.unified-search-date;
             recent-searches: root.unified-search-recents;
             category-counts: root.unified-search-counts;
+            thumbnails: root.unified-search-thumbnails;
+            has-thumbnails: root.unified-search-has-thumbnails;
             query-is-handle: root.unified-search-query-is-handle;
             person-status: root.unified-search-person-status;
             person-error: root.unified-search-person-error;
