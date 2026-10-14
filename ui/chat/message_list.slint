@@ -37,6 +37,26 @@ export component MessageList inherits Rectangle {
     in property <length> bottom-inset: 0px;
     // Properties
     in property <[MessageItemData]> messages: [];
+    // Last tapped image thumbnail in window coordinates. The parent reads
+    // these synchronously in attachment-clicked before opening the viewer.
+    out property <length> viewer-origin-x: 0px;
+    out property <length> viewer-origin-y: 0px;
+    out property <length> viewer-origin-width: 0px;
+    out property <length> viewer-origin-height: 0px;
+    private property <int> observed-message-count: 0;
+    private property <string> observed-last-message-id: "";
+    private property <bool> ready-for-arrivals: false;
+    private property <int> arrival-start-index: -1;
+    private property <int> arrival-end-index: -1;
+    arrival-clear := Timer {
+        interval: Materials.motion-emphasized;
+        running: false;
+        triggered => {
+            self.running = false;
+            root.arrival-start-index = -1;
+            root.arrival-end-index = -1;
+        }
+    }
     in property <bool> loading: false;
     /// Every message here rode the mesh, so delivery is reported in words
     /// rather than ticks.
@@ -96,6 +116,12 @@ export component MessageList inherits Rectangle {
     // previous DM's divider and opening three rows from the top.
     changed loading => {
         if (root.loading) {
+            root.observed-message-count = 0;
+            root.observed-last-message-id = "";
+            root.ready-for-arrivals = false;
+            root.arrival-start-index = -1;
+            root.arrival-end-index = -1;
+            arrival-clear.running = false;
             root.unread-index = -1;
             root.unread-count = 0;
             root.end-pending = false;
@@ -110,6 +136,8 @@ export component MessageList inherits Rectangle {
             root.seen-rows = 0;
             root.first-visible-row = 0;
             root.last-visible-row = -1;
+        } else {
+            root.ready-for-arrivals = true;
         }
     }
 
@@ -168,6 +196,20 @@ export component MessageList inherits Rectangle {
     // The list does the same from its layout pass; whichever runs first.
     property <int> row-count: root.messages.length;
     changed row-count => {
+        let count = root.row-count;
+        let last-id = count > 0 ? root.messages[count - 1].message-id : "";
+        // Older history is inserted above the existing last message. Only a
+        // changed tail represents new traffic that should rise into view.
+        if (count > root.observed-message-count && last-id != root.observed-last-message-id
+            && (root.observed-message-count > 0 || (root.ready-for-arrivals && count == 1))
+            && !root.loading) {
+            root.arrival-start-index = root.observed-message-count;
+            root.arrival-end-index = count;
+            arrival-clear.running = false;
+            arrival-clear.running = true;
+        }
+        root.observed-message-count = count;
+        root.observed-last-message-id = last-id;
         root.load-more-armed = true;
         if (root.is-at-bottom && root.should-auto-scroll && root.jump-row < 0) {
             root.go-to-end();
@@ -755,6 +797,8 @@ export component MessageList inherits Rectangle {
 
                 message-bubble := MessageItem {
                     width: 100%;
+                    animate-arrival: idx >= root.arrival-start-index && idx < root.arrival-end-index;
+                    arrival-stagger-index: idx - root.arrival-start-index;
                     message-id: item.message-id;
                     sender-id: item.sender-id;
                     sender-profile-requested(user-id) => { root.sender-profile-requested(user-id); }
@@ -850,6 +894,10 @@ export component MessageList inherits Rectangle {
                     }
 
                     attachment-clicked(id) => {
+                        root.viewer-origin-x = message-bubble.viewer-origin-x;
+                        root.viewer-origin-y = message-bubble.viewer-origin-y;
+                        root.viewer-origin-width = message-bubble.viewer-origin-width;
+                        root.viewer-origin-height = message-bubble.viewer-origin-height;
                         root.attachment-clicked(id);
                     }
 
@@ -865,7 +913,7 @@ export component MessageList inherits Rectangle {
         // Scroll-to-bottom, which becomes a "N new messages" pill when the
         // conversation opened on an unread boundary — the affordance that says
         // how much is below you and takes you there in one tap.
-        if !root.is-at-bottom: GlassSurface {
+        GlassSurface {
             elevation: 0;
             x: root.width - self.width - 16px;
             y: root.height - root.bottom-inset - 60px;
@@ -879,12 +927,13 @@ export component MessageList inherits Rectangle {
                 ? root.unread-count + " new messages, jump to newest"
                 : "Scroll to bottom";
 
-            // Fade in animation
-            opacity: 1.0;
-            animate opacity {
-                duration: Materials.menu-duration;
-                easing: ease-out;
-            }
+            opacity: root.is-at-bottom ? 0 : 1;
+            visible: !root.is-at-bottom || self.opacity > 0;
+            transform-scale-x: root.is-at-bottom ? 72% : (scroll-btn.pressed ? 93% : 100%);
+            transform-scale-y: root.is-at-bottom ? 72% : (scroll-btn.pressed ? 93% : 100%);
+            animate opacity { duration: Materials.motion-standard; easing: Materials.glide; }
+            animate transform-scale-x { duration: scroll-btn.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+            animate transform-scale-y { duration: scroll-btn.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
 
             // Hover/press overlay, as on the FAB: the pill is already thick,
             // so retinting it to thick on hover showed nothing.
@@ -922,6 +971,7 @@ export component MessageList inherits Rectangle {
             }
 
             scroll-btn := TouchArea {
+                enabled: !root.is-at-bottom;
                 clicked => {
                     if (root.unread-index >= 0 && list.is-below(root.unread-index)) {
                         // Scrolled up past the unread boundary: that is

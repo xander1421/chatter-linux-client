@@ -102,7 +102,7 @@ export component MessageItem inherits Rectangle {
     in property <bool> highlighted: false;          // Brief green flash when this is a jump target
     // Animate outside the conditional overlay so it survives until fade-out ends.
     property <float> highlight-progress: root.highlighted ? 1.0 : 0.0;
-    animate highlight-progress { duration: Appearance.reduce-motion ? 0ms : 400ms; easing: ease-out; }
+    animate highlight-progress { duration: Materials.motion-standard; easing: Materials.glide; }
     in property <string> reply-to-sender-name: "";
     in property <string> reply-to-preview: "";
     in property <string> reply-to-category: "";        // Quoted parent media category ("audio"/"image"/"video"/"")
@@ -131,6 +131,33 @@ export component MessageItem inherits Rectangle {
 
     // Multi-select
     in property <bool> selected: false;
+    // The list marks only a newly appended row. Virtualized history rows
+    // remain still when they are recycled during a scroll.
+    in property <bool> animate-arrival: false;
+    in property <int> arrival-stagger-index: 0;
+    property <float> arrival-progress: 1;
+    init => {
+        if (root.animate-arrival) {
+            arrival-timer.running = true;
+            root.arrival-progress = 0;
+        }
+    }
+    changed animate-arrival => {
+        if (root.animate-arrival) {
+            arrival-timer.running = true;
+            root.arrival-progress = 0;
+        }
+    }
+    arrival-timer := Timer {
+        interval: 1ms;
+        running: false;
+        triggered => { self.running = false; root.arrival-progress = 1; }
+    }
+    animate arrival-progress {
+        duration: arrival-timer.running ? 0ms : Materials.motion-emphasized;
+        easing: Materials.spring;
+        delay: Appearance.reduce-motion ? 0ms : min(root.arrival-stagger-index, 5) * 30ms;
+    }
     in property <bool> selection-mode: false;
     // Touch platform. Gates the hold gesture so a desktop left-button hold
     // does not open the menu (desktop keeps right-click).
@@ -149,6 +176,24 @@ export component MessageItem inherits Rectangle {
     callback open-message-link(string);
     callback message-clicked(string);
     callback attachment-clicked(string);
+    // Synchronous image-viewer origin. The existing attachment callback stays
+    // intact for direct MessageItem users such as the thread panel.
+    out property <length> viewer-origin-x: 0px;
+    out property <length> viewer-origin-y: 0px;
+    out property <length> viewer-origin-width: 0px;
+    out property <length> viewer-origin-height: 0px;
+    function open-image(id: string, x: length, y: length, width: length, height: length) {
+        root.viewer-origin-x = x;
+        root.viewer-origin-y = y;
+        root.viewer-origin-width = width;
+        root.viewer-origin-height = height;
+        root.attachment-clicked(id);
+    }
+    function open-other-attachment(id: string) {
+        root.viewer-origin-width = 0px;
+        root.viewer-origin-height = 0px;
+        root.attachment-clicked(id);
+    }
     callback audio-seek(string, float);
     callback quote-clicked(string);  // (reply-to-message-id) — jump to quoted original
 
@@ -216,7 +261,12 @@ export component MessageItem inherits Rectangle {
             root.swipe-active = true;
             root.cancel-hold();
         }
-        root.swipe-offset = (root.is-own ? -1 : 1) * min(max(toward-center, 0px), 88px);
+        // Resistance beyond the reply threshold keeps a long drag attached
+        // to the bubble without letting it run away from the finger.
+        root.swipe-offset = (root.is-own ? -1 : 1)
+            * min(max(toward-center, 0px), root.swipe-threshold)
+            + (root.is-own ? -1 : 1)
+            * min(max(toward-center - root.swipe-threshold, 0px) * 0.33, 24px);
         let armed = toward-center >= root.swipe-threshold;
         if (armed && !root.swipe-haptic-fired) {
             Haptics.reply-ready();
@@ -302,7 +352,7 @@ export component MessageItem inherits Rectangle {
     // main conversation and thread panel instead of inlining both trees.
     property <brush> selection-background: root.selected ? Colors.tint-strong : transparent;
     background: root.selection-background;
-    animate selection-background { duration: Materials.feedback-duration; easing: ease-out; }
+    animate selection-background { duration: Materials.motion-quick; easing: Materials.settle; }
 
     // Wrap entire content in TouchArea for reliable hover detection.
     // Width/Height 100% ensures it covers the whole row.
@@ -322,6 +372,11 @@ export component MessageItem inherits Rectangle {
 
     main-layout := VerticalLayout {
         width: 100%;
+        y: (root.is-own ? 42px : 20px) * (1 - root.arrival-progress);
+        opacity: root.arrival-progress;
+        transform-origin: { x: root.is-own ? self.width : 0px, y: self.height };
+        transform-scale-x: root.is-own ? 84% + 16% * root.arrival-progress : 96% + 4% * root.arrival-progress;
+        transform-scale-y: root.is-own ? 84% + 16% * root.arrival-progress : 96% + 4% * root.arrival-progress;
         padding: root.is-continuation ? Spacing.message-padding-continuation : Spacing.message-padding;
         padding-left: Spacing.sm;
         padding-right: Spacing.sm;
@@ -569,7 +624,7 @@ export component MessageItem inherits Rectangle {
                     width: bubble.width;
                     height: bubble.height;
 
-                if root.swipe-active: Image {
+                Image {
                     source: Icons.reply;
                     width: 24px;
                     height: 24px;
@@ -577,11 +632,14 @@ export component MessageItem inherits Rectangle {
                         : root.swipe-offset / 2 - self.width / 2;
                     y: (bubble.height - self.height) / 2;
                     colorize: root.swipe-armed ? Colors.primary : Colors.text-muted;
+                    opacity: min(1, abs(root.swipe-offset) / 36px);
+                    visible: root.swipe-active || self.opacity > 0;
+                    animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
                 }
 
                 bubble := Rectangle {
                     x: root.swipe-offset;
-                    animate x { duration: root.swipe-active || Appearance.reduce-motion ? 0ms : 180ms; easing: Materials.settle; }
+                    animate x { duration: root.swipe-active ? 0ms : Materials.motion-standard; easing: Materials.spring; }
                     y: 0px;
                     property <bool> bubble-hovered: bubble-touch.has-hover;
                     accessible-role: text;
@@ -909,7 +967,7 @@ export component MessageItem inherits Rectangle {
                                         audio-progress: root.audio-progress;
                                         audio-elapsed: root.audio-elapsed;
 
-                                        play-clicked(id) => { root.attachment-clicked(id); }
+                                        play-clicked(id) => { root.open-other-attachment(id); }
                                         audio-seek(id, pos) => { root.audio-seek(id, pos); }
                                     }
 
@@ -1138,7 +1196,9 @@ export component MessageItem inherits Rectangle {
                                         gesture-ended(cancelled) => { root.end-swipe(cancelled); }
                                         clicked => {
                                             if (self.hold-fired || root.swipe-active) { return; }
-                                            root.attachment-clicked(attachment.id);
+                                            root.open-image(attachment.id,
+                                                self.absolute-position.x, self.absolute-position.y,
+                                                self.width, self.height);
                                         }
                                         held => {
                                             root.more-clicked(root.sender-id, root.timestamp-ns,
@@ -1159,7 +1219,7 @@ export component MessageItem inherits Rectangle {
                                     audio-progress: root.audio-progress;
                                     audio-elapsed: root.audio-elapsed;
 
-                                    play-clicked(id) => { root.attachment-clicked(id); }
+                                    play-clicked(id) => { root.open-other-attachment(id); }
                                     audio-seek(id, pos) => { root.audio-seek(id, pos); }
                                     more-clicked(x, y) => {
                                         root.more-clicked(root.sender-id, root.timestamp-ns, x, y);
@@ -1263,7 +1323,7 @@ export component MessageItem inherits Rectangle {
                                         gesture-ended(cancelled) => { root.end-swipe(cancelled); }
                                         clicked => {
                                             if (self.hold-fired || root.swipe-active) { return; }
-                                            root.attachment-clicked(attachment.id);
+                                            root.open-other-attachment(attachment.id);
                                         }
                                         held => {
                                             root.more-clicked(root.sender-id, root.timestamp-ns,
@@ -1361,7 +1421,7 @@ export component MessageItem inherits Rectangle {
                                         gesture-ended(cancelled) => { root.end-swipe(cancelled); }
                                         clicked => {
                                             if (self.hold-fired || root.swipe-active) { return; }
-                                            root.attachment-clicked(attachment.id);
+                                            root.open-other-attachment(attachment.id);
                                         }
                                         held => {
                                             root.more-clicked(root.sender-id, root.timestamp-ns,
@@ -1403,6 +1463,11 @@ export component MessageItem inherits Rectangle {
                                             // call); the accessible label carries "yours".
                                             border-width: 0px;
                                             background: reaction.own ? Colors.text-primary.with-alpha(0.08) : transparent;
+                                            transform-scale-x: reaction-touch.pressed ? 90% : 100%;
+                                            transform-scale-y: reaction-touch.pressed ? 90% : 100%;
+                                            animate transform-scale-x { duration: reaction-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+                                            animate transform-scale-y { duration: reaction-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+                                            animate background { duration: Materials.motion-quick; easing: Materials.glide; }
                                             accessible-role: button;
                                             accessible-label: reaction.emoji + (reaction.own ? ", your reaction" : "");
                                             accessible-action-default => { root.reaction-toggled(root.sender-id, root.timestamp-ns, reaction.emoji); }
@@ -1430,7 +1495,7 @@ export component MessageItem inherits Rectangle {
                                             // only opened the picker. The picker is still on
                                             // long-press → More reactions and on the hover
                                             // "Add reaction" button.
-                                            TouchArea {
+                                            reaction-touch := TouchArea {
                                                 mouse-cursor: pointer;
                                                 clicked => {
                                                     root.reaction-toggled(root.sender-id, root.timestamp-ns,
@@ -1592,6 +1657,7 @@ export component MessageItem inherits Rectangle {
                                         property <color> tick-color: root.delivery-status == "read" ? Colors.bubble-accent : Colors.text-muted;
                                         width: self.double-tick ? 17px : 12px;
                                         height: 12px;
+                                        animate width { duration: Materials.motion-standard; easing: Materials.spring; }
                                         accessible-role: text;
                                         accessible-label: root.delivery-status == "sent" ? "Sent"
                                             : root.delivery-status == "delivered" ? "Delivered"
@@ -1599,12 +1665,14 @@ export component MessageItem inherits Rectangle {
 
                                         // Second tick behind, offset left, so the
                                         // pair reads as the usual overlapping ✓✓.
-                                        if ticks.double-tick: Image {
+                                        Image {
                                             source: Icons.check;
                                             width: 12px;
                                             height: 12px;
                                             x: 0px;
                                             y: 0px;
+                                            opacity: ticks.double-tick ? 1 : 0;
+                                            animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
                                             colorize: ticks.tick-color;
                                         }
 
