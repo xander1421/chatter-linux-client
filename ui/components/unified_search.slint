@@ -20,6 +20,8 @@ export struct QuickSwitcherItem {
     conv-type: string,
     presence-status: string,
     unread-count: int,
+    avatar: image,
+    has-avatar: bool,
 }
 
 export struct SearchResult {
@@ -31,6 +33,15 @@ export struct SearchResult {
     timestamp: string,
     highlight-start: int,
     highlight-end: int,
+    preview-before: string,
+    preview-match: string,
+    preview-after: string,
+}
+
+export struct CalendarDay {
+    date: string,
+    label: string,
+    in-month: bool,
 }
 
 // One "Jump to" conversation row.
@@ -121,6 +132,9 @@ component MsgRow inherits Rectangle {
     in property <string> channel-name;
     in property <string> sender-name;
     in property <string> content-preview;
+    in property <string> preview-before;
+    in property <string> preview-match;
+    in property <string> preview-after;
     in property <string> timestamp;
     in property <string> match-term;
     in property <int> highlight-start: 0;
@@ -171,22 +185,10 @@ component MsgRow inherits Rectangle {
             }
         }
         HorizontalLayout {
-            spacing: Spacing.xs;
-            if root.match-term != "" && root.highlight-end > root.highlight-start: Rectangle {
-                width: min(88px, match-label.preferred-width + 12px);
-                height: 20px;
-                border-radius: Spacing.radius-sm;
-                background: Colors.action-fill;
-                match-label := Text { text: root.match-term; color: Colors.on-action; font-size: Typography.xs;
-                    x: Spacing.xs; width: parent.width - 2 * Spacing.xs; height: 100%; vertical-alignment: center; overflow: elide; }
-            }
-            Text {
-                text: root.content-preview;
-                color: Colors.text-secondary;
-                font-size: Typography.sm;
-                horizontal-stretch: 1;
-                overflow: elide;
-            }
+            spacing: 0px;
+            Text { text: root.preview-before; color: Colors.text-secondary; font-size: Typography.sm; }
+            Text { text: root.preview-match; color: Colors.primary; font-size: Typography.sm; font-weight: Typography.semibold; }
+            Text { text: root.preview-after; color: Colors.text-secondary; font-size: Typography.sm; horizontal-stretch: 1; overflow: elide; }
         }
     }
 }
@@ -258,17 +260,31 @@ export component UnifiedSearch inherits Rectangle {
     in-out property <string> date-filter: "any";
     in-out property <string> from-filter: "";
     in-out property <string> in-filter: "";
+    in-out property <string> from-label: "";
+    in-out property <string> in-label: "";
+    in property <[QuickSwitcherItem]> picker-options: [];
+    property <string> picker-mode: "";
+    property <string> picker-query: "";
+    callback picker-request(string, string);
     in property <[string]> recent-searches: [];
     in property <[int]> category-counts: [0, 0, 0, 0, 0, 0, 0];
+    in property <[int]> page-limits: [50, 50, 50, 50, 50, 50, 50];
+    callback show-more(string);
     in property <[image]> thumbnails: [];
     in property <[bool]> has-thumbnails: [];
     in property <[string]> message-kinds: [];
     callback filters-changed(string, string, string, string, string);
     callback recent-selected(string);
     callback recent-clear();
+    callback recent-remove(string);
     in-out property <bool> date-sheet-open: false;
+    in property <string> calendar-month: "";
+    in property <[CalendarDay]> calendar-days: [];
+    callback calendar-shift(int);
     property <string> custom-start: "";
     property <string> custom-end: "";
+    property <length> calendar-swipe-start: 0px;
+    property <bool> calendar-swiped: false;
 
     callback query-changed(string);
     callback conversation-selected(string, string);
@@ -461,7 +477,7 @@ export component UnifiedSearch inherits Rectangle {
                             mouse-cursor: pointer;
                             clicked => { root.category = tab.to-lowercase(); root.selected-index = 0; root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter); }
                         }
-                        tab-label := Text { text: tab + (root.category-counts[i] > 0 ? " " + root.category-counts[i] : ""); color: root.category == tab.to-lowercase() ? Colors.primary : Colors.text-secondary; font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; }
+                        tab-label := Text { text: tab + (root.category-counts[i] > 0 ? " " + (root.category-counts[i] > root.page-limits[i] ? root.page-limits[i] + "+" : root.category-counts[i]) : ""); color: root.category == tab.to-lowercase() ? Colors.primary : Colors.text-secondary; font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; }
                     }
                 }
             }
@@ -480,8 +496,34 @@ export component UnifiedSearch inherits Rectangle {
                 Rectangle {
                     width: 146px; height: Spacing.touch-target-min; border-radius: Spacing.radius-lg;
                     background: date-touch.pressed ? Materials.pressed : Colors.inset;
-                    date-touch := TouchArea { mouse-cursor: pointer; clicked => { root.date-sheet-open = true; } }
-                    Text { text: root.date-filter == "any" ? "Any time" : root.date-filter == "today" ? "Today" : root.date-filter == "week" ? "Last 7 days" : root.date-filter == "month" ? "Last 30 days" : "Custom dates"; color: Colors.text-secondary; font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; }
+                    date-touch := TouchArea { mouse-cursor: pointer; clicked => { root.date-sheet-open = true; root.calendar-shift(0); } }
+                    Text { text: root.date-filter == "any" ? "Any time" : root.date-filter == "today" ? "Today" : root.date-filter == "week" ? "Last 7 days" : root.date-filter == "month" ? "Last 30 days" : root.date-filter == "year" ? "This year" : "Date range"; color: Colors.text-secondary; font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; }
+                }
+            }
+
+            HorizontalLayout {
+                height: Spacing.touch-target-min;
+                spacing: Spacing.xs;
+                for kind in ["from", "in"]: Rectangle {
+                    width: min(190px, max(92px, picker-chip-label.preferred-width + 24px));
+                    height: Spacing.touch-target-min; border-radius: Spacing.radius-lg;
+                    background: chip-touch.pressed ? Materials.pressed : Colors.inset;
+                    chip-touch := TouchArea { mouse-cursor: pointer; clicked => {
+                        root.picker-mode = kind; root.picker-query = ""; root.picker-request(kind, "");
+                    } }
+                    picker-chip-label := Text { text: kind == "from" ? (root.from-label == "" ? "From" : "From: " + root.from-label) : (root.in-label == "" ? "In" : "In: " + root.in-label);
+                        width: parent.width - (((kind == "from" && root.from-filter != "") || (kind == "in" && root.in-filter != "")) ? Spacing.touch-target-min : 0px);
+                        color: Colors.text-secondary; font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
+                    if (kind == "from" && root.from-filter != "") || (kind == "in" && root.in-filter != ""): Rectangle {
+                        x: parent.width - self.width; width: Spacing.touch-target-min; height: Spacing.touch-target-min; border-radius: self.width / 2;
+                        background: unselect-touch.pressed ? Materials.pressed : unselect-touch.has-hover ? Materials.hover : transparent;
+                        unselect-touch := TouchArea { mouse-cursor: pointer; clicked => {
+                            if (kind == "from") { root.from-filter = ""; root.from-label = ""; }
+                            else { root.in-filter = ""; root.in-label = ""; }
+                            root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter);
+                        } }
+                        Text { text: "×"; width: 100%; height: 100%; color: Colors.text-muted; font-size: Typography.lg; horizontal-alignment: center; vertical-alignment: center; }
+                    }
                 }
             }
 
@@ -501,7 +543,14 @@ export component UnifiedSearch inherits Rectangle {
                     height: Spacing.touch-target-min; border-radius: Spacing.radius-sm;
                     background: recent-touch.pressed ? Materials.pressed : recent-touch.has-hover ? Materials.hover : transparent;
                     recent-touch := TouchArea { mouse-cursor: pointer; clicked => { root.recent-selected(recent); search-input.focus(); } }
-                    Text { text: recent; color: Colors.text-secondary; font-size: Typography.sm; x: Spacing.md; vertical-alignment: center; height: 100%; }
+                    Text { text: recent; color: Colors.text-secondary; font-size: Typography.sm; x: Spacing.md; width: parent.width - Spacing.touch-target-min - Spacing.md; vertical-alignment: center; height: 100%; overflow: elide; }
+                    Rectangle {
+                        x: parent.width - self.width; width: Spacing.touch-target-min; height: Spacing.touch-target-min;
+                        border-radius: self.width / 2;
+                        background: remove-touch.pressed ? Materials.pressed : remove-touch.has-hover ? Materials.hover : transparent;
+                        remove-touch := TouchArea { mouse-cursor: pointer; clicked => { root.recent-remove(recent); } }
+                        Text { text: "×"; width: 100%; height: 100%; color: Colors.text-muted; font-size: Typography.lg; horizontal-alignment: center; vertical-alignment: center; }
+                    }
                 }
             }
 
@@ -648,6 +697,9 @@ export component UnifiedSearch inherits Rectangle {
                                 channel-name: m.channel-name;
                                 sender-name: m.sender-name;
                                 content-preview: m.content-preview;
+                                preview-before: m.preview-before;
+                                preview-match: m.preview-match;
+                                preview-after: m.preview-after;
                                 match-term: root.query;
                                 highlight-start: m.highlight-start;
                                 highlight-end: m.highlight-end;
@@ -687,6 +739,14 @@ export component UnifiedSearch inherits Rectangle {
                             TouchArea { enabled: root.show; mouse-cursor: pointer; clicked => { root.message-selected(m.message-id); } }
                         }
                     }
+                    for section[i] in ["Messages", "Media", "Files", "Links", "Voice"]: Rectangle {
+                        visible: (root.category == "all" || root.category == section.to-lowercase()) && root.category-counts[i + 2] > root.page-limits[i + 2];
+                        height: self.visible ? Spacing.touch-target-min : 0px;
+                        border-radius: Spacing.radius-lg;
+                        background: more-touch.pressed ? Materials.pressed : more-touch.has-hover ? Colors.surface-hover : Colors.inset;
+                        more-touch := TouchArea { enabled: parent.visible; mouse-cursor: pointer; clicked => { root.show-more(section.to-lowercase()); } }
+                        Text { text: "Show more " + section.to-lowercase(); color: Colors.primary; font-size: Typography.sm; width: 100%; height: 100%; horizontal-alignment: center; vertical-alignment: center; }
+                    }
 
                     if root.searching: Text {
                         text: "Searching this device…";
@@ -717,7 +777,7 @@ export component UnifiedSearch inherits Rectangle {
             x: (parent.width - self.width) / 2;
             y: parent.height - self.height - Spacing.md + (1 - date-layer.reveal) * 48px;
             width: min(420px, parent.width - 24px);
-            height: 404px;
+            height: min(548px, parent.height - 24px);
             border-radius: Spacing.radius-xl;
             transform-origin: { x: self.width / 2, y: self.height };
             transform-scale-x: 94% + date-layer.reveal * 6%;
@@ -726,35 +786,151 @@ export component UnifiedSearch inherits Rectangle {
                 padding: Spacing.lg;
                 spacing: Spacing.xs;
                 Text { text: "When"; color: Colors.text-primary; font-size: Typography.lg; font-weight: Typography.semibold; }
-                for choice in ["Any time", "Today", "Last 7 days", "Last 30 days"]: Rectangle {
+                Flickable {
+                    height: Spacing.touch-target-min;
+                    viewport-width: quick-choices.preferred-width;
+                    viewport-height: self.height;
+                    quick-choices := HorizontalLayout {
+                        spacing: Spacing.xs;
+                for choice in ["Any time", "Today", "7 days", "30 days", "This year"]: Rectangle {
+                    width: max(70px, choice-label.preferred-width + 20px);
                     height: Spacing.touch-target-min; border-radius: Spacing.radius-sm;
                     background: choice-touch.pressed ? Materials.pressed : choice-touch.has-hover ? Materials.hover : transparent;
                     choice-touch := TouchArea { mouse-cursor: pointer; clicked => {
-                        root.date-filter = choice == "Today" ? "today" : choice == "Last 7 days" ? "week" : choice == "Last 30 days" ? "month" : "any";
+                        root.date-filter = choice == "Today" ? "today" : choice == "7 days" ? "week" : choice == "30 days" ? "month" : choice == "This year" ? "year" : "any";
                         root.date-sheet-open = false;
                         root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter);
                     } }
-                    Text { text: choice; color: Colors.text-secondary; font-size: Typography.sm; x: Spacing.md; height: 100%; vertical-alignment: center; }
+                    choice-label := Text { text: choice; width: 100%; color: Colors.text-secondary; font-size: Typography.sm; horizontal-alignment: center; height: 100%; vertical-alignment: center; }
                 }
-                Text { text: "Custom range · YYYY-MM-DD"; color: Colors.text-muted; font-size: Typography.xs; }
+                    }
+                }
                 HorizontalLayout {
-                    spacing: Spacing.sm;
-                    Rectangle { height: Spacing.touch-target-min; horizontal-stretch: 1; border-radius: Spacing.radius-sm; background: Colors.inset;
-                        TextInput { text <=> root.custom-start; x: Spacing.sm; width: parent.width - 2 * Spacing.sm; height: 100%; single-line: true; color: Colors.text-primary; font-size: Typography.sm; }
-                        if root.custom-start == "": Text { text: "From"; x: Spacing.sm; height: 100%; color: Colors.text-muted; font-size: Typography.sm; vertical-alignment: center; }
+                    height: Spacing.touch-target-min;
+                    Rectangle { width: Spacing.touch-target-min; height: Spacing.touch-target-min; border-radius: Spacing.radius-lg;
+                        background: prev-touch.pressed ? Materials.pressed : prev-touch.has-hover ? Materials.hover : Colors.inset;
+                        prev-touch := TouchArea { mouse-cursor: pointer; clicked => { root.calendar-shift(-1); } }
+                        Text { text: "‹"; width: 100%; height: 100%; color: Colors.primary; font-size: Typography.lg; horizontal-alignment: center; vertical-alignment: center; }
                     }
-                    Rectangle { height: Spacing.touch-target-min; horizontal-stretch: 1; border-radius: Spacing.radius-sm; background: Colors.inset;
-                        TextInput { text <=> root.custom-end; x: Spacing.sm; width: parent.width - 2 * Spacing.sm; height: 100%; single-line: true; color: Colors.text-primary; font-size: Typography.sm; }
-                        if root.custom-end == "": Text { text: "To"; x: Spacing.sm; height: 100%; color: Colors.text-muted; font-size: Typography.sm; vertical-alignment: center; }
+                    Text { text: root.calendar-month; color: Colors.text-primary; font-size: Typography.sm; font-weight: Typography.semibold; horizontal-stretch: 1; horizontal-alignment: center; vertical-alignment: center; }
+                    Rectangle { width: Spacing.touch-target-min; height: Spacing.touch-target-min; border-radius: Spacing.radius-lg;
+                        background: next-touch.pressed ? Materials.pressed : next-touch.has-hover ? Materials.hover : Colors.inset;
+                        next-touch := TouchArea { mouse-cursor: pointer; clicked => { root.calendar-shift(1); } }
+                        Text { text: "›"; width: 100%; height: 100%; color: Colors.primary; font-size: Typography.lg; horizontal-alignment: center; vertical-alignment: center; }
                     }
                 }
-                Rectangle { height: Spacing.touch-target-min; border-radius: Spacing.radius-lg; background: root.custom-start != "" || root.custom-end != "" ? Colors.action-fill : Colors.inset;
-                    TouchArea { enabled: root.custom-start != "" || root.custom-end != ""; mouse-cursor: pointer; clicked => {
-                        root.date-filter = "custom:" + root.custom-start + ".." + root.custom-end;
-                        root.date-sheet-open = false;
-                        root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter);
-                    } }
-                    Text { text: "Apply dates"; color: root.custom-start != "" || root.custom-end != "" ? Colors.on-action : Colors.text-muted; font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; }
+                HorizontalLayout {
+                    height: 24px;
+                    for weekday in ["M", "T", "W", "T", "F", "S", "S"]: Text {
+                        text: weekday; color: Colors.text-muted; font-size: Typography.xs;
+                        horizontal-stretch: 1; horizontal-alignment: center; vertical-alignment: center;
+                    }
+                }
+                calendar-grid := Rectangle {
+                    height: 6 * Spacing.touch-target-min;
+                    for day[index] in root.calendar-days: Rectangle {
+                        x: mod(index, 7) * parent.width / 7;
+                        y: Math.floor(index / 7) * Spacing.touch-target-min;
+                        width: parent.width / 7; height: Spacing.touch-target-min;
+                        border-radius: Spacing.radius-lg;
+                        background: day.date == root.custom-start || day.date == root.custom-end ? Colors.action-fill
+                            : root.custom-start != "" && root.custom-end != "" && day.date > root.custom-start && day.date < root.custom-end ? Colors.selected
+                            : day-touch.pressed ? Materials.pressed : day-touch.has-hover ? Materials.hover : transparent;
+                        transform-origin: { x: self.width / 2, y: self.height / 2 };
+                        transform-scale-x: day-touch.pressed ? 90% : 100%;
+                        transform-scale-y: day-touch.pressed ? 90% : 100%;
+                        animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+                        animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
+                        day-touch := TouchArea { mouse-cursor: pointer;
+                            pointer-event(event) => {
+                                if (event.kind == PointerEventKind.down) {
+                                    root.calendar-swipe-start = self.absolute-position.x + self.mouse-x;
+                                    root.calendar-swiped = false;
+                                }
+                                if (event.kind == PointerEventKind.up && abs(self.absolute-position.x + self.mouse-x - root.calendar-swipe-start) > 64px) {
+                                    root.calendar-swiped = true;
+                                    root.calendar-shift(self.absolute-position.x + self.mouse-x < root.calendar-swipe-start ? 1 : -1);
+                                }
+                            }
+                            clicked => {
+                            if (root.calendar-swiped) { root.calendar-swiped = false; return; }
+                            if (root.custom-start == "" || root.custom-end != "") {
+                                root.custom-start = day.date; root.custom-end = "";
+                            } else {
+                                if (day.date < root.custom-start) { root.custom-end = root.custom-start; root.custom-start = day.date; }
+                                else { root.custom-end = day.date; }
+                                root.date-filter = "custom:" + root.custom-start + ".." + root.custom-end;
+                                root.date-sheet-open = false;
+                                root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter);
+                            }
+                        } }
+                        Text { text: day.label; width: 100%; height: 100%; color: day.date == root.custom-start || day.date == root.custom-end ? Colors.on-action : day.in-month ? Colors.text-primary : Colors.text-muted;
+                            font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; }
+                    }
+                }
+                Text { text: root.custom-start == "" ? "Tap a start day, then an end day" : root.custom-end == "" ? "Start: " + root.custom-start + " · choose end" : root.custom-start + " – " + root.custom-end;
+                    color: Colors.text-muted; font-size: Typography.xs; horizontal-alignment: center; }
+            }
+        }
+    }
+    picker-layer := Rectangle {
+        property <float> reveal: root.picker-mode != "" ? 1 : 0;
+        animate reveal { duration: Materials.motion-standard; easing: Materials.glide; }
+        visible: root.picker-mode != "" || self.reveal > 0;
+        opacity: self.reveal;
+        width: 100%; height: 100%; background: Materials.scrim;
+        TouchArea { enabled: root.picker-mode != ""; clicked => { root.picker-mode = ""; } }
+        GlassSurface {
+            material-level: 3; elevation: 4;
+            x: (parent.width - self.width) / 2;
+            y: parent.height - self.height - Spacing.md + (1 - picker-layer.reveal) * 48px;
+            width: min(420px, parent.width - 24px);
+            height: min(560px, parent.height - 24px);
+            border-radius: Spacing.radius-xl;
+            transform-origin: { x: self.width / 2, y: self.height };
+            transform-scale-x: 94% + picker-layer.reveal * 6%;
+            transform-scale-y: 94% + picker-layer.reveal * 6%;
+            VerticalLayout {
+                padding: Spacing.lg; spacing: Spacing.sm;
+                Text { text: root.picker-mode == "from" ? "From a person" : "In a chat"; color: Colors.text-primary; font-size: Typography.lg; font-weight: Typography.semibold; }
+                Rectangle {
+                    height: Spacing.touch-target-min; border-radius: Spacing.radius-lg;
+                    background: Colors.inset;
+                    TextInput { text <=> root.picker-query; x: Spacing.md; width: parent.width - 2 * Spacing.md; height: 100%; single-line: true; color: Colors.text-primary; font-size: Typography.sm;
+                        edited => { root.picker-request(root.picker-mode, root.picker-query); }
+                    }
+                }
+                Flickable {
+                    vertical-stretch: 1;
+                    viewport-width: self.width;
+                    viewport-height: picker-list.preferred-height;
+                    picker-list := VerticalLayout {
+                        width: parent.width; spacing: Spacing.xxs;
+                        for option in root.picker-options: Rectangle {
+                            height: Spacing.touch-target-min + Spacing.xs;
+                            border-radius: Spacing.radius-sm;
+                            background: option-touch.pressed ? Materials.pressed : option-touch.has-hover ? Materials.hover : transparent;
+                            transform-origin: { x: self.width / 2, y: self.height / 2 };
+                            transform-scale-x: option-touch.pressed ? 96% : 100%;
+                            transform-scale-y: option-touch.pressed ? 96% : 100%;
+                            animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+                            animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
+                            option-touch := TouchArea { mouse-cursor: pointer; clicked => {
+                                if (root.picker-mode == "from") { root.from-filter = option.id; root.from-label = option.name; }
+                                else { root.in-filter = option.id; root.in-label = option.name; }
+                                root.picker-mode = "";
+                                root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter);
+                            } }
+                            Rectangle { x: Spacing.sm; y: (parent.height - self.height) / 2; width: 32px; height: 32px; border-radius: self.width / 2; background: Colors.selected; clip: true;
+                                if option.has-avatar: Image { source: option.avatar; width: 100%; height: 100%; image-fit: cover; }
+                                if !option.has-avatar: Image { source: option.conv-type == "channel" ? Icons.hash : option.conv-type == "private_group" ? Icons.users : Icons.user;
+                                    x: 8px; y: 8px; width: 16px; height: 16px; colorize: Colors.primary; }
+                            }
+                            Text { text: option.name; x: Spacing.sm + 40px; width: parent.width - Spacing.sm - 48px; height: 100%; color: Colors.text-primary;
+                                font-size: Typography.sm; vertical-alignment: center; overflow: elide; }
+                        }
+                        if root.picker-options.length == 0: Text { text: "No matches"; color: Colors.text-muted; font-size: Typography.sm; horizontal-alignment: center; }
+                    }
                 }
             }
         }

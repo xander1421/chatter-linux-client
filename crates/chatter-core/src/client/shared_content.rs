@@ -6,6 +6,7 @@
 //! UI picks a tab id and an offset and renders what comes back.
 
 use std::sync::Arc;
+use std::sync::Mutex;
 
 use crate::client::ChatterClient;
 use crate::domain::attachment::SharedCategory;
@@ -13,7 +14,130 @@ use crate::services::search::{SearchCategory, SearchDocument, SearchQuery};
 use crate::state::ActiveConversation;
 use crate::storage::repositories::SharedContentRepository;
 use crate::storage::repositories::SharedContentRow;
+use crate::storage::repositories::settings_repo::SettingsRepository;
 use crate::ui::{SharedContentItemData, SharedTabData};
+
+static SEARCH_HISTORY_LOCK: Mutex<()> = Mutex::new(());
+
+#[derive(Clone, Debug)]
+pub struct SearchFilterOption {
+    pub id: String,
+    pub name: String,
+    pub kind: String,
+    pub avatar: Option<Vec<u8>>,
+}
+
+impl ChatterClient {
+    /// Eligible local picker rows, shaped in core using the same visibility gates as search.
+    pub fn search_filter_options(&self, kind: &str, query: &str) -> Vec<SearchFilterOption> {
+        let needle = query.trim().to_lowercase();
+        let mut rows = if kind == "from" {
+            self.dm_peers()
+                .into_iter()
+                .map(|id| SearchFilterOption {
+                    id: id.to_string(),
+                    name: self.display_name(&id),
+                    kind: "person".into(),
+                    avatar: self.user_avatar(&id),
+                })
+                .collect::<Vec<_>>()
+        } else {
+            self.quick_switcher_entries("")
+                .into_iter()
+                .filter(|entry| {
+                    matches!(
+                        entry.conv_type.as_str(),
+                        "dm" | "anon_dm" | "channel" | "private_group"
+                    )
+                })
+                .map(|entry| {
+                    let kind = match entry.conv_type.as_str() {
+                        "dm" => crate::domain::message::ConversationType::ServerDm,
+                        "anon_dm" => crate::domain::message::ConversationType::AnonDm,
+                        "channel" => crate::domain::message::ConversationType::Channel,
+                        _ => crate::domain::message::ConversationType::AnonGroup,
+                    };
+                    let avatar = self.forward_destination_avatar(&kind, &entry.id);
+                    SearchFilterOption {
+                        id: entry.id,
+                        name: entry.name,
+                        kind: entry.conv_type,
+                        avatar,
+                    }
+                })
+                .collect::<Vec<_>>()
+        };
+        rows.retain(|row| row.name.to_lowercase().contains(&needle));
+        rows.sort_by(|a, b| a.name.to_lowercase().cmp(&b.name.to_lowercase()));
+        rows.dedup_by(|a, b| a.id == b.id);
+        rows
+    }
+    fn search_history_key(&self) -> Option<String> {
+        if self.anon_mode_enabled() {
+            return None;
+        }
+        let id = self.auth_state().get().current_user_id?;
+        Some(format!("ui.search_history.{}", id.0))
+    }
+
+    /// Device-local, encrypted, per-account search history; absent in Shield mode.
+    pub fn recent_searches(&self) -> Vec<String> {
+        let _lock = SEARCH_HISTORY_LOCK.lock().unwrap();
+        let Some(key) = self.search_history_key() else {
+            return Vec::new();
+        };
+        let rows = SettingsRepository::new(self.services.database.clone())
+            .get::<Vec<String>>(&key)
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        if self.search_history_key().as_deref() == Some(key.as_str()) {
+            rows
+        } else {
+            Vec::new()
+        }
+    }
+
+    pub fn remember_search(&self, query: &str) -> Vec<String> {
+        self.change_recent_searches(|rows| {
+            let query = query.trim();
+            if !query.is_empty() {
+                rows.retain(|item| item != query);
+                rows.insert(0, query.to_owned());
+                rows.truncate(6);
+            }
+        })
+    }
+
+    pub fn remove_recent_search(&self, query: &str) -> Vec<String> {
+        self.change_recent_searches(|rows| rows.retain(|item| item != query))
+    }
+
+    pub fn clear_recent_searches(&self) -> Vec<String> {
+        self.change_recent_searches(Vec::clear)
+    }
+
+    fn change_recent_searches(&self, change: impl FnOnce(&mut Vec<String>)) -> Vec<String> {
+        let _lock = SEARCH_HISTORY_LOCK.lock().unwrap();
+        let Some(key) = self.search_history_key() else {
+            return Vec::new();
+        };
+        let repository = SettingsRepository::new(self.services.database.clone());
+        let mut rows = repository
+            .get::<Vec<String>>(&key)
+            .ok()
+            .flatten()
+            .unwrap_or_default();
+        change(&mut rows);
+        if self.search_history_key().as_deref() != Some(key.as_str()) {
+            return Vec::new();
+        }
+        if repository.set(&key, &rows).is_err() {
+            tracing::warn!("recent searches not saved");
+        }
+        rows
+    }
+}
 
 impl ChatterClient {
     /// Search the local shared-content index across only conversations that

@@ -7,8 +7,39 @@
 //! value type so parsing/serialization lives in one place.
 
 use crate::services::quick_switcher::QuickSwitcherEntry;
-use chrono::TimeZone;
 use chrono::{DateTime, Utc};
+use chrono::{Datelike, TimeZone};
+
+/// Split a preview at its first case-insensitive search term for inline styling.
+/// Iterate source character boundaries so Unicode case folding cannot create
+/// byte offsets into the original text.
+pub fn preview_fragments(preview: &str, query: &str) -> (String, String, String, i32, i32) {
+    let Some(term) = query.split_whitespace().next() else {
+        return (preview.to_owned(), String::new(), String::new(), 0, 0);
+    };
+    let folded = term.to_lowercase();
+    for (start, _) in preview.char_indices() {
+        let suffix = &preview[start..];
+        let Some(end) = suffix
+            .char_indices()
+            .nth(term.chars().count())
+            .map(|(i, _)| i)
+            .or_else(|| (suffix.chars().count() == term.chars().count()).then_some(suffix.len()))
+        else {
+            continue;
+        };
+        if suffix[..end].to_lowercase() == folded {
+            return (
+                preview[..start].to_owned(),
+                suffix[..end].to_owned(),
+                suffix[end..].to_owned(),
+                start as i32,
+                (start + end) as i32,
+            );
+        }
+    }
+    (preview.to_owned(), String::new(), String::new(), 0, 0)
+}
 
 /// The searchable local content classes. Attachment metadata determines the
 /// class; callers must only supply documents visible in the current mode.
@@ -130,18 +161,23 @@ impl SearchQuery {
             "today" => local_midnight(chrono::Local::now().date_naive()),
             "week" => Some(now - chrono::Duration::days(7)),
             "month" => Some(now - chrono::Duration::days(30)),
+            "year" => chrono::NaiveDate::from_ymd_opt(chrono::Local::now().year(), 1, 1)
+                .and_then(local_midnight),
             custom if custom.starts_with("custom:") => {
                 let (start, end) = custom
                     .trim_start_matches("custom:")
                     .split_once("..")
                     .unwrap_or(("", ""));
-                until = chrono::NaiveDate::parse_from_str(end, "%Y-%m-%d")
-                    .ok()
-                    .and_then(|day| day.succ_opt())
-                    .and_then(local_midnight);
-                chrono::NaiveDate::parse_from_str(start, "%Y-%m-%d")
-                    .ok()
-                    .and_then(local_midnight)
+                match (
+                    chrono::NaiveDate::parse_from_str(start, "%Y-%m-%d"),
+                    chrono::NaiveDate::parse_from_str(end, "%Y-%m-%d"),
+                ) {
+                    (Ok(start), Ok(end)) if start <= end => {
+                        until = end.succ_opt().and_then(local_midnight);
+                        local_midnight(start)
+                    }
+                    _ => None,
+                }
             }
             _ => None,
         };

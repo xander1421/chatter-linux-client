@@ -47,7 +47,7 @@ import { ChannelSettingsModal, ChannelMemberData, BannedMemberData } from "modal
 import { InvitePrivateGroupModal } from "modals/invite_private_group.slint";
 import { InviteMemberModal, InviteUser } from "modals/invite_member.slint";
 import { CreateSectionModal } from "modals/create_section.slint";
-import { UnifiedSearch, QuickSwitcherItem, SearchResult } from "components/unified_search.slint";
+import { UnifiedSearch, QuickSwitcherItem, SearchResult, CalendarDay } from "components/unified_search.slint";
 
 // Import settings
 import { SettingsScreen, LocalAIProviderData, CatalogModelData } from "settings/settings_screen.slint";
@@ -222,8 +222,16 @@ export component MainWindow inherits Window {
     in-out property <string> unified-search-category: "all";
     in-out property <string> unified-search-sort: "relevance";
     in-out property <string> unified-search-date: "any";
+    in-out property <string> unified-search-from: "";
+    in-out property <string> unified-search-in: "";
+    in-out property <string> unified-search-from-label: "";
+    in-out property <string> unified-search-in-label: "";
+    in property <[QuickSwitcherItem]> unified-search-picker-options: [];
     in property <[string]> unified-search-recents: [];
+    in property <string> unified-search-calendar-month: "";
+    in property <[CalendarDay]> unified-search-calendar-days: [];
     in property <[int]> unified-search-counts: [0, 0, 0, 0, 0, 0, 0];
+    in property <[int]> unified-search-page-limits: [50, 50, 50, 50, 50, 50, 50];
     in property <[image]> unified-search-thumbnails: [];
     in property <[bool]> unified-search-has-thumbnails: [];
     in property <[string]> unified-search-message-kinds: [];
@@ -235,6 +243,10 @@ export component MainWindow inherits Window {
     callback unified-search-filters-changed(string, string, string, string, string);
     callback unified-search-recent-selected(string);
     callback unified-search-recent-clear();
+    callback unified-search-recent-remove(string);
+    callback unified-search-calendar-shift(int);
+    callback unified-search-picker-request(string, string);
+    callback unified-search-show-more(string);
     callback unified-search-conversation-selected(string, string);
     callback unified-search-message-selected(string);
     // People (exact-handle resolve-on-Enter)
@@ -2991,8 +3003,16 @@ export component MainWindow inherits Window {
             category <=> root.unified-search-category;
             sort-order <=> root.unified-search-sort;
             date-filter <=> root.unified-search-date;
+            from-filter <=> root.unified-search-from;
+            in-filter <=> root.unified-search-in;
+            from-label <=> root.unified-search-from-label;
+            in-label <=> root.unified-search-in-label;
+            picker-options: root.unified-search-picker-options;
             recent-searches: root.unified-search-recents;
+            calendar-month: root.unified-search-calendar-month;
+            calendar-days: root.unified-search-calendar-days;
             category-counts: root.unified-search-counts;
+            page-limits: root.unified-search-page-limits;
             thumbnails: root.unified-search-thumbnails;
             has-thumbnails: root.unified-search-has-thumbnails;
             message-kinds: root.unified-search-message-kinds;
@@ -3006,6 +3026,10 @@ export component MainWindow inherits Window {
             filters-changed(c, s, d, f, i) => { root.unified-search-filters-changed(c, s, d, f, i); }
             recent-selected(q) => { root.unified-search-recent-selected(q); }
             recent-clear => { root.unified-search-recent-clear(); }
+            recent-remove(q) => { root.unified-search-recent-remove(q); }
+            calendar-shift(delta) => { root.unified-search-calendar-shift(delta); }
+            picker-request(kind, query) => { root.unified-search-picker-request(kind, query); }
+            show-more(section) => { root.unified-search-show-more(section); }
             resolve(q) => { root.unified-search-resolve(q); }
             person-selected(uid) => {
                 root.unified-search-person-selected(uid);

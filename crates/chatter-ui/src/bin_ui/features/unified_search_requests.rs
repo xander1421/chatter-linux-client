@@ -29,6 +29,10 @@ pub(super) struct SearchRequests {
 }
 
 impl SearchRequests {
+    pub fn same_query(&self, query: &str) -> bool {
+        self.query == query
+    }
+
     /// Every edit (including clear), open and close replaces the request owner.
     pub fn invalidate(&mut self, session: u64, query: &str) -> Ticket {
         self.generation = self.generation.wrapping_add(1);

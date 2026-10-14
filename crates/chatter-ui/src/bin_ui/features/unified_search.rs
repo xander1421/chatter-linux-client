@@ -8,9 +8,11 @@ use std::sync::{Arc, Mutex};
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use chatter_core::client::ChatterClient;
-use chatter_core::services::search::{SearchCategory, SearchDocument, SearchQuery};
+use chatter_core::services::search::{
+    SearchCategory, SearchDocument, SearchQuery, preview_fragments,
+};
 
-use crate::{MainWindow, QuickSwitcherItem, SearchResult};
+use crate::{CalendarDay, MainWindow, QuickSwitcherItem, SearchResult};
 
 /// Wire all unified-search callbacks.
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
@@ -25,19 +27,121 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     wire_resolve(window, ui_ctx, requests.clone());
     wire_person_selected(window, ui_ctx, requests);
     wire_filters(window);
-    wire_recents(window);
+    wire_recents(window, ui_ctx);
+    wire_calendar(window);
+    wire_picker(window, ui_ctx);
+    wire_more(window);
+}
+
+fn wire_more(window: &MainWindow) {
+    let weak = window.as_weak();
+    window.on_unified_search_show_more(move |section| {
+        let Some(w) = weak.upgrade() else { return };
+        let slot = match section.as_str() {
+            "messages" => 2,
+            "media" => 3,
+            "files" => 4,
+            "links" => 5,
+            "voice" => 6,
+            _ => return,
+        };
+        let mut limits = w
+            .get_unified_search_page_limits()
+            .iter()
+            .collect::<Vec<_>>();
+        if limits.len() != 7 {
+            return;
+        }
+        limits[slot] = (limits[slot] + 50).min(500);
+        w.set_unified_search_page_limits(ModelRc::new(VecModel::from(limits)));
+        w.invoke_unified_search_changed(w.get_unified_search_query());
+    });
+}
+
+fn wire_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let weak = window.as_weak();
+    let ui_ctx = ui_ctx.clone();
+    window.on_unified_search_picker_request(move |kind, query| {
+        let Some(w) = weak.upgrade() else { return };
+        if !w.get_unified_search_open() {
+            return;
+        }
+        let rows = ui_ctx
+            .search_filter_options(kind.as_str(), query.as_str())
+            .into_iter()
+            .map(|option| {
+                let avatar = option
+                    .avatar
+                    .as_deref()
+                    .and_then(crate::bin_ui::converters::avatar_bytes_to_image);
+                QuickSwitcherItem {
+                    id: option.id.into(),
+                    name: option.name.into(),
+                    conv_type: option.kind.into(),
+                    presence_status: "".into(),
+                    unread_count: 0,
+                    has_avatar: avatar.is_some(),
+                    avatar: avatar.unwrap_or_default(),
+                }
+            })
+            .collect::<Vec<_>>();
+        w.set_unified_search_picker_options(ModelRc::new(VecModel::from(rows)));
+    });
+}
+
+fn wire_calendar(window: &MainWindow) {
+    use chrono::Datelike;
+    let today = chrono::Local::now().date_naive();
+    let month = Arc::new(Mutex::new(
+        chrono::NaiveDate::from_ymd_opt(today.year(), today.month(), 1).unwrap(),
+    ));
+    let weak = window.as_weak();
+    window.on_unified_search_calendar_shift(move |delta| {
+        let Some(w) = weak.upgrade() else { return };
+        let mut current = month.lock().unwrap();
+        if delta != 0 {
+            let index = current.year() * 12 + current.month0() as i32 + delta;
+            let year = index.div_euclid(12);
+            let month = index.rem_euclid(12) as u32 + 1;
+            let Some(next) = chrono::NaiveDate::from_ymd_opt(year, month, 1) else {
+                return;
+            };
+            *current = next;
+        }
+        w.set_unified_search_calendar_month(current.format("%B %Y").to_string().into());
+        let offset = current.weekday().num_days_from_monday() as i64;
+        let first = *current - chrono::Duration::days(offset);
+        let days = (0..42)
+            .map(|i| {
+                let date = first + chrono::Duration::days(i);
+                CalendarDay {
+                    date: date.format("%Y-%m-%d").to_string().into(),
+                    label: date.day().to_string().into(),
+                    in_month: date.month() == current.month(),
+                }
+            })
+            .collect::<Vec<_>>();
+        w.set_unified_search_calendar_days(ModelRc::new(VecModel::from(days)));
+    });
 }
 
 fn wire_filters(window: &MainWindow) {
     let weak = window.as_weak();
     window.on_unified_search_filters_changed(move |_, _, _, _, _| {
         if let Some(w) = weak.upgrade() {
+            w.set_unified_search_page_limits(ModelRc::new(VecModel::from(vec![50; 7])));
             w.invoke_unified_search_changed(w.get_unified_search_query());
         }
     });
 }
 
-fn wire_recents(window: &MainWindow) {
+fn set_recents(window: &MainWindow, rows: Vec<String>) {
+    window.set_unified_search_recents(ModelRc::new(VecModel::from(
+        rows.into_iter().map(SharedString::from).collect::<Vec<_>>(),
+    )));
+}
+
+fn wire_recents(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak = window.as_weak();
     window.on_unified_search_recent_selected(move |query| {
         if let Some(w) = weak.upgrade() {
@@ -46,9 +150,17 @@ fn wire_recents(window: &MainWindow) {
         }
     });
     let weak = window.as_weak();
+    let clear_ctx = ui_ctx.clone();
     window.on_unified_search_recent_clear(move || {
         if let Some(w) = weak.upgrade() {
-            w.set_unified_search_recents(ModelRc::new(VecModel::default()));
+            set_recents(&w, clear_ctx.clear_recent_searches());
+        }
+    });
+    let weak = window.as_weak();
+    let ui_ctx = ui_ctx.clone();
+    window.on_unified_search_recent_remove(move |query| {
+        if let Some(w) = weak.upgrade() {
+            set_recents(&w, ui_ctx.remove_recent_search(query.as_str()));
         }
     });
 }
@@ -80,11 +192,17 @@ fn wire_opened(
     window.on_unified_search_opened(move || {
         if let Some(w) = weak.upgrade() {
             let mode = ui_ctx.anon_mode_enabled();
+            w.set_unified_search_page_limits(ModelRc::new(VecModel::from(vec![50; 7])));
             let mut previous_mode = recent_mode.lock().unwrap();
             if previous_mode.is_some_and(|previous| previous != mode) {
                 w.set_unified_search_recents(ModelRc::new(VecModel::default()));
+                w.set_unified_search_from("".into());
+                w.set_unified_search_in("".into());
+                w.set_unified_search_from_label("".into());
+                w.set_unified_search_in_label("".into());
             }
             *previous_mode = Some(mode);
+            set_recents(&w, ui_ctx.recent_searches());
             requests
                 .lock()
                 .unwrap()
@@ -147,6 +265,10 @@ fn wire_session(
                     w.set_unified_search_conversations(ModelRc::new(VecModel::default()));
                     w.set_unified_search_recents(ModelRc::new(VecModel::default()));
                     w.set_unified_search_query("".into());
+                    w.set_unified_search_from("".into());
+                    w.set_unified_search_in("".into());
+                    w.set_unified_search_from_label("".into());
+                    w.set_unified_search_in_label("".into());
                     w.set_unified_search_open(false);
                 }
             });
@@ -170,17 +292,7 @@ fn wire_closed(
         if let Some(w) = weak.upgrade() {
             let query = w.get_unified_search_query().trim().to_string();
             if !query.is_empty() {
-                let mut recents = vec![query];
-                recents.extend(w.get_unified_search_recents().iter().map(|s| s.to_string()));
-                let mut seen = std::collections::HashSet::new();
-                recents.retain(|item| seen.insert(item.clone()));
-                recents.truncate(6);
-                w.set_unified_search_recents(ModelRc::new(VecModel::from(
-                    recents
-                        .into_iter()
-                        .map(SharedString::from)
-                        .collect::<Vec<_>>(),
-                )));
+                set_recents(&w, ui_ctx.remember_search(&query));
             }
             clear_search_rows(&w);
         }
@@ -213,6 +325,11 @@ fn wire_changed(
     let ui_ctx = ui_ctx.clone();
     window.on_unified_search_changed(move |query: SharedString| {
         let query_str = query.to_string();
+        if let Some(w) = weak.upgrade() {
+            if !requests.lock().unwrap().same_query(&query_str) {
+                w.set_unified_search_page_limits(ModelRc::new(VecModel::from(vec![50; 7])));
+            }
+        }
         let ticket = requests
             .lock()
             .unwrap()
@@ -270,11 +387,16 @@ fn wire_changed(
         let weak_bg = weak.clone();
         let ui_ctx = ui_ctx.clone();
         let requests = requests.clone();
-        let (category, sort, date) = if let Some(w) = weak.upgrade() {
+        let (category, sort, date, from, in_chat, page_limits) = if let Some(w) = weak.upgrade() {
             (
                 w.get_unified_search_category().to_string(),
                 w.get_unified_search_sort().to_string(),
                 w.get_unified_search_date().to_string(),
+                w.get_unified_search_from().to_string(),
+                w.get_unified_search_in().to_string(),
+                w.get_unified_search_page_limits()
+                    .iter()
+                    .collect::<Vec<_>>(),
             )
         } else {
             return;
@@ -288,8 +410,16 @@ fn wire_changed(
             {
                 return;
             }
-            let (results, mut counts, thumbnails, kinds) =
-                search_messages(&ui_ctx, &query_str, &category, &sort, &date);
+            let (results, mut counts, thumbnails, kinds) = search_messages(
+                &ui_ctx,
+                &query_str,
+                &category,
+                &sort,
+                &date,
+                &from,
+                &in_chat,
+                &page_limits,
+            );
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak_bg.upgrade() {
                     let ids = results
@@ -613,6 +743,8 @@ fn conversation_items(ui_ctx: &ChatterClient, query: &str) -> Vec<QuickSwitcherI
             conv_type: e.conv_type.into(),
             presence_status: e.presence_status.into(),
             unread_count: e.unread_count,
+            avatar: slint::Image::default(),
+            has_avatar: false,
         })
         .collect()
 }
@@ -667,6 +799,9 @@ fn search_messages(
     category: &str,
     sort: &str,
     date: &str,
+    from: &str,
+    in_chat: &str,
+    page_limits: &[i32],
 ) -> (
     Vec<SearchResult>,
     [i32; 7],
@@ -711,14 +846,7 @@ fn search_messages(
             .as_text()
             .map(|t| ui_ctx.truncate_message_preview(&t))
             .unwrap_or_else(|| attachment_name.clone());
-        let lower = content_preview.to_lowercase();
-        let needle = query.trim().to_lowercase();
-        let start = lower.find(&needle).unwrap_or(0) as i32;
-        let end = if lower.contains(&needle) {
-            start + needle.len() as i32
-        } else {
-            0
-        };
+        let (before, matched, after, start, end) = preview_fragments(&content_preview, query);
         candidates.push(SearchHit {
             row: SearchResult {
                 message_id: msg.id.to_string().into(),
@@ -729,6 +857,9 @@ fn search_messages(
                 timestamp: timestamp.into(),
                 highlight_start: start,
                 highlight_end: end,
+                preview_before: before.into(),
+                preview_match: matched.into(),
+                preview_after: after.into(),
             },
             text: format!("{} {}", msg.as_text().unwrap_or(""), attachment_name),
             category: kind,
@@ -741,7 +872,9 @@ fn search_messages(
                 .and_then(|file| file.metadata.thumbnail.clone()),
         });
     }
-    let request = SearchQuery::from_controls(query, category, sort, date);
+    let mut request = SearchQuery::from_controls(query, category, sort, date);
+    request.from = (!from.is_empty()).then(|| from.to_owned());
+    request.in_chat = (!in_chat.is_empty()).then(|| in_chat.to_owned());
     let mut all_request = request.clone();
     all_request.category = SearchCategory::All;
     if request.category != SearchCategory::Chats {
@@ -777,8 +910,7 @@ fn search_messages(
             } else {
                 item.title.clone()
             };
-            let needle = query.trim().to_lowercase();
-            let match_start = label.to_lowercase().find(&needle);
+            let (before, matched, after, start, end) = preview_fragments(&label, query);
             candidates.push(SearchHit {
                 row: SearchResult {
                     message_id: item.message_id.into(),
@@ -791,8 +923,11 @@ fn search_messages(
                         .format("%b %d, %H:%M")
                         .to_string()
                         .into(),
-                    highlight_start: match_start.unwrap_or(0) as i32,
-                    highlight_end: match_start.map_or(0, |start| start + needle.len()) as i32,
+                    highlight_start: start,
+                    highlight_end: end,
+                    preview_before: before.into(),
+                    preview_match: matched.into(),
+                    preview_after: after.into(),
                 },
                 text: item.title,
                 category,
@@ -821,7 +956,20 @@ fn search_messages(
     let mut rows = Vec::new();
     let mut thumbnails = Vec::new();
     let mut kinds = Vec::new();
-    for hit in request.apply(candidates).into_iter().take(50) {
+    let mut shown = [0; 7];
+    for hit in request.apply(candidates) {
+        let slot = match hit.category {
+            SearchCategory::Messages => 2,
+            SearchCategory::Media => 3,
+            SearchCategory::Files => 4,
+            SearchCategory::Links => 5,
+            SearchCategory::Voice => 6,
+            _ => continue,
+        };
+        if shown[slot] >= page_limits.get(slot).copied().unwrap_or(50) {
+            continue;
+        }
+        shown[slot] += 1;
         let decoded = hit
             .thumbnail
             .as_deref()
