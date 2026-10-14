@@ -80,7 +80,7 @@ pub fn open_pending(window: &crate::MainWindow) {
             *pending = None;
         }
     }
-    window.set_active_modal("none".into());
+    crate::bin_ui::features::back::reset_to_chats(window);
     match target {
         chatter_core::client::NotificationTarget::Conversation(conversation) => {
             window.set_active_tab("chats".into());
