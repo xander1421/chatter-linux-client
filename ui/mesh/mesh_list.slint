@@ -108,6 +108,7 @@ export component MeshList inherits Rectangle {
         // ── The standing claim: serverless, and a peer count for connectivity ──
         if !root.collapsed && root.expanded: Rectangle {
             height: 20px * Appearance.text-grow;
+            clip: true;
             caption := HorizontalLayout {
                 padding-left: Spacing.md;
                 padding-right: Spacing.sm;
@@ -134,6 +135,7 @@ export component MeshList inherits Rectangle {
                     // the long form ("Works without server or internet") elided
                     // mid-sentence on every desktop frame.
                     text: "Works offline · ";
+                    wrap: no-wrap;
                     color: Colors.text-muted;
                     font-size: Typography.xs;
                     vertical-alignment: center;
@@ -156,8 +158,10 @@ export component MeshList inherits Rectangle {
                     color: caption.radio-down ? Colors.warning : Colors.text-muted;
                     font-weight: caption.radio-down ? 600 : 400;
                     font-size: Typography.xs;
+                    wrap: no-wrap;
                     vertical-alignment: center;
-                    horizontal-stretch: 0;
+                    horizontal-stretch: 1;
+                    overflow: elide;
                 }
             }
         }
@@ -261,6 +265,7 @@ export component MeshList inherits Rectangle {
         // what goes and what stays: the chatter account is untouched.
         if !root.collapsed && root.expanded && !root.confirming-wipe: Rectangle {
             height: root.touch ? Spacing.touch-target-min : 22px;
+            clip: true;
             HorizontalLayout {
                 padding-left: Spacing.md;
                 alignment: start;
@@ -272,8 +277,11 @@ export component MeshList inherits Rectangle {
                     accessible-action-default => { root.confirming-wipe = true; }
                     wipe-label := Text {
                         x: Spacing.sm;
+                        width: max(0px, parent.width - Spacing.sm * 2);
                         height: parent.height;
                         text: "Wipe mesh data…";
+                        wrap: no-wrap;
+                        overflow: elide;
                         color: wipe-touch.has-hover ? Colors.error : Colors.text-muted;
                         font-size: Typography.xxs;
                         vertical-alignment: center;
