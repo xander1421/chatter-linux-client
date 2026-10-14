@@ -35,8 +35,13 @@ fn advance(ms: u64) {
     }
 }
 
-fn capture(window: &SettingsHarness, name: &str) -> Vec<u8> {
+fn capture(window: &SettingsHarness, name: &str, expected_width: u32) -> Vec<u8> {
     let pixels = window.window().take_snapshot().unwrap();
+    assert_eq!(
+        pixels.width(),
+        expected_width,
+        "capture used the wrong layout width"
+    );
     if let Some(dir) = std::env::var_os("U6_CAPTURE_DIR") {
         image::save_buffer(
             std::path::Path::new(&dir).join(name),
@@ -64,19 +69,19 @@ fn settings_sections_render_and_travel_in_both_themes_and_widths() {
     for theme in ["light", "dark"] {
         window.invoke_theme(theme.into());
         for (phone, size) in [(true, "phone"), (false, "desktop")] {
+            let width = if phone { 412 } else { 1000 };
             window.set_phone(phone);
-            window.window().set_size(slint::LogicalSize::new(
-                if phone { 412.0 } else { 1000.0 },
-                760.0,
-            ));
+            window
+                .window()
+                .set_size(slint::LogicalSize::new(width as f32, 760.0));
             window.set_section("account".into());
             advance(500);
-            let account = capture(&window, &format!("{theme}-{size}-01-account.png"));
+            let account = capture(&window, &format!("{theme}-{size}-01-account.png"), width);
             window.set_section("privacy".into());
             advance(64);
-            let entering = capture(&window, &format!("{theme}-{size}-02-entering.png"));
+            let entering = capture(&window, &format!("{theme}-{size}-02-entering.png"), width);
             advance(400);
-            let privacy = capture(&window, &format!("{theme}-{size}-03-privacy.png"));
+            let privacy = capture(&window, &format!("{theme}-{size}-03-privacy.png"), width);
             assert_ne!(account, privacy, "section navigation did not repaint");
             assert_ne!(entering, privacy, "section movement did not animate");
         }
