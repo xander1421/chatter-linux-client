@@ -271,11 +271,11 @@ export component MessageItem inherits Rectangle {
             return;
         }
         if (!root.swipe-active) {
-            if (abs(dy) > 12px && abs(dy) >= abs(dx)) {
+            if (abs(dy) > 9px && abs(dy) >= abs(dx)) {
                 root.swipe-tracking = false;
                 return;
             }
-            if (abs(dx) < 12px || abs(dx) <= abs(dy) * 1.3) { return; }
+            if (abs(dx) < 9px || abs(dx) <= abs(dy)) { return; }
             root.swipe-active = true;
             root.cancel-hold();
         }

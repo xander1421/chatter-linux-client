@@ -167,6 +167,13 @@ export component MessageComposer inherits GlassSurface {
         text-input.focus();
         text-input.set-selection-offsets(root.saved-anchor, root.saved-cursor);
     }
+    // A user-selected reply goes straight into typing. On Android focus sends
+    // InputMethodRequest::Enable through the same path as tapping TextInput.
+    public function focus-reply-input() {
+        if !root.collapsed {
+            text-input.focus();
+        }
+    }
     public function insert-emoji(emoji: string) {
         root.text = TextFormat.replace(root.text, emoji, root.saved-anchor, root.saved-cursor);
         root.saved-cursor = min(root.saved-anchor, root.saved-cursor) + TextFormat.byte-length(emoji);

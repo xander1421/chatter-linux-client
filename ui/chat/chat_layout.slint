@@ -173,6 +173,8 @@ export component ChatLayout inherits Rectangle {
     
     // Reply properties
     in property <bool> composer-is-replying: false;
+    in property <int> reply-focus-serial: 0;
+    changed reply-focus-serial => { composer.focus-reply-input(); }
     in property <string> composer-reply-to-sender: "";
     in property <string> composer-reply-to-sender-name: "";
     in property <string> composer-reply-to-timestamp: "";
