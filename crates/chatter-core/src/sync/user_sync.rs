@@ -70,7 +70,6 @@ fn record_friend_edge(
             if let Err(e) = user_repo.update_friendship(&updated) {
                 ok = false;
                 tracing::debug!(
-                    user_id = %user_id,
                     error = %e,
                     "Failed to update friendship during sync"
                 );
@@ -91,7 +90,6 @@ fn record_friend_edge(
                 Err(e) => {
                     ok = false;
                     tracing::debug!(
-                        user_id = %user_id,
                         error = %e,
                         "Failed to insert friendship during sync"
                     );
@@ -101,7 +99,6 @@ fn record_friend_edge(
         Err(e) => {
             ok = false;
             tracing::debug!(
-                user_id = %user_id,
                 error = %e,
                 "Failed to read existing friendship during sync"
             );
@@ -206,7 +203,6 @@ impl UserSync {
                     if let Err(e) = self.user_repo.insert(&user) {
                         had_failure = true;
                         tracing::debug!(
-                            user_id = %user_id,
                             error = %e,
                             "Failed to insert user during sync (may already exist)"
                         );
@@ -245,7 +241,6 @@ impl UserSync {
                     Err(e) => {
                         had_failure = true;
                         tracing::debug!(
-                            user_id = %user_id,
                             error = %e,
                             "Failed to upsert profile during sync"
                         );
@@ -281,8 +276,7 @@ impl UserSync {
                             Err(e) => {
                                 had_failure = true;
                                 tracing::debug!(
-                                    user_id = %friendship.addressee_id,
-                                    error = %e,
+                            error = %e,
                                     "Failed to delete stale friendship during sync"
                                 );
                             }

@@ -258,7 +258,6 @@ impl SyncEngine {
             tokio::spawn(async move {
                 if let Err(e) = messages.send_profile_key_handshake(&friend_id).await {
                     tracing::warn!(
-                        peer_id = %friend_id,
                         error = %e,
                         "Sync-learned acceptance: profile-key handshake not delivered"
                     );

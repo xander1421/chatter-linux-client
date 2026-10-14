@@ -323,6 +323,13 @@ impl ChatterClient {
                     let mut config =
                         crate::network::streaming::PushListenerConfig::new(endpoint, topic.clone());
                     config.force_tor = secret;
+                    if secret {
+                        // The foreground inbox keeps delivering while the onion's
+                        // optional ntfy port is unavailable. Retry infrequently so
+                        // a missing port does not wake every Shield device each minute.
+                        config.reconnect_delay = std::time::Duration::from_secs(15 * 60);
+                        config.reconnect.max_delay = config.reconnect_delay;
+                    }
                     let listener = crate::network::streaming::PushListener::new(config);
                     #[cfg(feature = "onion")]
                     let listener = listener.with_tor(tor.clone());

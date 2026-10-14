@@ -348,12 +348,23 @@ impl PushListener {
                                 return;
                             }
 
-                            tracing::warn!(
-                                error = %e,
-                                attempt,
-                                retry_in = ?retry_delay,
-                                "ntfy SSE connection failed, retrying"
-                            );
+                            if self.config.force_tor {
+                                // Anonymous mailbox SSE is an optional wake hint.
+                                // The foreground inbox remains the delivery path.
+                                tracing::debug!(
+                                    error = %e,
+                                    attempt,
+                                    retry_in = ?retry_delay,
+                                    "anonymous ntfy wake unavailable"
+                                );
+                            } else {
+                                tracing::warn!(
+                                    error = %e,
+                                    attempt,
+                                    retry_in = ?retry_delay,
+                                    "ntfy SSE connection failed, retrying"
+                                );
+                            }
                         }
                     }
                 }
