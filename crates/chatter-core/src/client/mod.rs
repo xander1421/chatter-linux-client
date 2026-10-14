@@ -3746,10 +3746,13 @@ impl ChatterClient {
         if !self.is_logged_in() {
             return None;
         }
-        crate::services::notification_service::conversation_for_notification_key(
-            key,
-            self.sidebar_row_keys(),
-        )
+        self.services.notification_service.resolve_key(key, self.sidebar_row_keys())
+    }
+
+    /// `Some(false)` means an opaque tap belongs to a different account and
+    /// must not be retained for a later sidebar refresh.
+    pub fn notification_tap_belongs_to_current_account(&self, key: &str) -> Option<bool> {
+        self.services.notification_service.tap_belongs_to_current_account(key)
     }
 
     /// A pending secret request opens Requests, not its chat row. Resolve the
