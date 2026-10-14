@@ -397,7 +397,12 @@ impl PushListener {
     /// Connect to ntfy SSE endpoint and process events.
     async fn connect_sse(&self) -> PushResult {
         let (url, transport) = endpoint(&self.config)?;
-        if transport == PushTransport::Onion || self.config.force_tor {
+        // A mailbox capability must never be sent to a Tor exit if a build
+        // lacks its pinned onion or the supplied endpoint changes shape.
+        if self.config.force_tor && transport != PushTransport::Onion {
+            return Err(PushError::Endpoint.into());
+        }
+        if transport == PushTransport::Onion {
             #[cfg(feature = "onion")]
             {
                 return self.connect_onion(&url).await;
@@ -429,7 +434,8 @@ impl PushListener {
     #[cfg(feature = "onion")]
     async fn connect_onion(&self, url: &url::Url) -> PushResult {
         use crate::network::grpc::onion_transport::{
-            SharedTorClient, tor_client_config, tor_runtime,
+            HEDGE_DELAY, SharedTorClient, ensure_fresh_directory, hedged_dial, shared_bootstrap,
+            tor_runtime,
         };
         use std::sync::{Arc, OnceLock};
         static TOR: OnceLock<SharedTorClient> = OnceLock::new();
@@ -437,33 +443,43 @@ impl PushListener {
             .tor
             .as_ref()
             .unwrap_or_else(|| TOR.get_or_init(|| Arc::new(tokio::sync::OnceCell::new())));
-        let base = tor
-            .get_or_try_init(|| async {
-                let config = tor_client_config().map_err(|_| PushError::Transport)?;
-                let mut task = AbortTask(tor_runtime().spawn(async move {
-                    let _ =
-                        tokio_rustls::rustls::crypto::ring::default_provider().install_default();
-                    arti_client::TorClient::create_bootstrapped(config).await
-                }));
-                tokio::time::timeout(Duration::from_secs(120), &mut task.0)
-                    .await
-                    .map_err(|_| PushError::Transport)?
-                    .map_err(|_| PushError::Transport)?
-                    .map_err(|_| PushError::Transport)
-            })
-            .await?;
+        tracing::debug!(phase = "bootstrap_wait", "anonymous ntfy wake connecting");
+        let base = shared_bootstrap(tor)
+            .await
+            .map_err(|_| PushError::Transport)?;
+        tracing::debug!(
+            phase = "directory_refresh",
+            "anonymous ntfy wake connecting"
+        );
+        ensure_fresh_directory(base)
+            .await
+            .map_err(|_| PushError::Transport)?;
         let host = url.host_str().ok_or(PushError::Endpoint)?.to_owned();
         let port = url.port_or_known_default().ok_or(PushError::Endpoint)?;
         let client = base.isolated_client();
         let dial_host = host.clone();
-        let mut dial = AbortTask(
-            tor_runtime().spawn(async move { client.connect((dial_host.as_str(), port)).await }),
+        tracing::debug!(
+            phase = "hidden_service_connect",
+            "anonymous ntfy wake connecting"
         );
+        let mut dial = AbortTask(tor_runtime().spawn(async move {
+            let retry_client = client.isolated_client();
+            hedged_dial(
+                client.connect((dial_host.as_str(), port)),
+                retry_client.connect((dial_host.as_str(), port)),
+                HEDGE_DELAY,
+            )
+            .await
+        }));
         let stream = tokio::time::timeout(Duration::from_secs(90), &mut dial.0)
             .await
             .map_err(|_| PushError::Transport)?
             .map_err(|_| PushError::Transport)?
             .map_err(|_| PushError::Transport)?;
+        tracing::debug!(
+            phase = "hidden_service_connected",
+            "anonymous ntfy wake connecting"
+        );
         if url.scheme() == "https" {
             use tokio_rustls::rustls::pki_types::{CertificateDer, ServerName, pem::PemObject};
             use tokio_rustls::rustls::{ClientConfig, RootCertStore};
@@ -504,8 +520,9 @@ impl PushListener {
     {
         use futures::StreamExt;
         use http_body_util::{BodyExt, Full};
+        tracing::debug!(phase = "http_handshake", "anonymous ntfy wake connecting");
         let (mut sender, connection) = tokio::time::timeout(
-            Duration::from_secs(15),
+            Duration::from_secs(45),
             hyper::client::conn::http1::handshake(hyper_util::rt::TokioIo::new(io)),
         )
         .await
@@ -535,13 +552,15 @@ impl PushListener {
         let request = request
             .body(Full::new(bytes::Bytes::new()))
             .map_err(|_| PushError::Endpoint)?;
-        let response = tokio::time::timeout(Duration::from_secs(15), sender.send_request(request))
+        tracing::debug!(phase = "sse_response", "anonymous ntfy wake connecting");
+        let response = tokio::time::timeout(Duration::from_secs(45), sender.send_request(request))
             .await
             .map_err(|_| PushError::Transport)?
             .map_err(|_| PushError::Transport)?;
         if !response.status().is_success() {
             return Err(PushError::Status(response.status().as_u16()).into());
         }
+        tracing::debug!(phase = "sse_stream", "anonymous ntfy wake connected");
         // Hyper has no redirect-following machinery here: a 3xx is an error.
         let stream = response.into_body().into_data_stream().map(|r| {
             r.map_err(|_| Box::new(PushError::Stream) as Box<dyn std::error::Error + Send + Sync>)

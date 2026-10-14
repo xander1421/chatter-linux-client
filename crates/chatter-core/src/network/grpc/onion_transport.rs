@@ -271,7 +271,7 @@ fn wake_directory(client: &TorClient<PreferredRuntime>) {
     }
 }
 
-async fn ensure_fresh_directory(client: &TorClient<PreferredRuntime>) -> Result<(), std::io::Error> {
+pub(crate) async fn ensure_fresh_directory(client: &TorClient<PreferredRuntime>) -> Result<(), std::io::Error> {
     let dir = client.dirmgr().map_err(|_| io_err("onion directory unavailable"))?;
     let is_fresh = || {
         dir.netdir(Timeliness::Strict)
@@ -305,7 +305,7 @@ async fn ensure_fresh_directory(client: &TorClient<PreferredRuntime>) -> Result<
     Ok(())
 }
 
-async fn shared_bootstrap(
+pub(crate) async fn shared_bootstrap(
     tor: &SharedTorClient,
 ) -> Result<&Arc<TorClient<PreferredRuntime>>, std::io::Error> {
     let base_result = tokio::time::timeout(
