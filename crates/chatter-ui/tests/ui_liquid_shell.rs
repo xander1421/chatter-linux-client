@@ -49,12 +49,13 @@ fn advance(ms: u64) {
 }
 
 fn frame(window: &ShellHarness, name: &str) {
-    let Some(dir) = std::env::var_os("UI_SHELL_CAPTURE_DIR") else {
-        return;
-    };
+    let dir = std::env::var_os("UI_SHELL_CAPTURE_DIR")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::env::temp_dir().join("chatter-ui-liquid-shell"));
+    std::fs::create_dir_all(&dir).unwrap();
     let pixels = window.window().take_snapshot().unwrap();
     image::save_buffer(
-        std::path::Path::new(&dir).join(name),
+        dir.join(name),
         pixels.as_bytes(),
         pixels.width(),
         pixels.height(),
@@ -69,6 +70,20 @@ fn width(window: &ShellHarness, id: &str) -> f32 {
         .unwrap_or_else(|| panic!("missing {id}"))
         .size()
         .width
+}
+
+fn search_input(window: &ShellHarness) -> i_slint_core::item_tree::ItemRc {
+    use std::ops::ControlFlow;
+    let root = i_slint_core::window::WindowInner::from_pub(window.window())
+        .window_item_rc()
+        .unwrap();
+    root.visit_descendants(|item| {
+        if item.downcast::<i_slint_core::items::TextInput>().is_some() {
+            return ControlFlow::Break(item.clone());
+        }
+        ControlFlow::Continue(())
+    })
+    .expect("search TextInput")
 }
 
 #[test]
@@ -89,6 +104,7 @@ fn tab_drop_stretches_and_search_grows_on_phone_and_desktop() {
             window.set_tab("chats".into());
             window.set_search_open(false);
             advance(700);
+            let original_input = search_input(&window);
             frame(&window, &format!("{size}-{theme}-01-rest.png"));
             let rest_width = width(&window, "MobileBottomNav::selection-drop");
 
@@ -109,6 +125,7 @@ fn tab_drop_stretches_and_search_grows_on_phone_and_desktop() {
             assert!(width(&window, "UnifiedSearch::palette") > growing_width);
             window.set_search_open(false);
             advance(400);
+            assert!(search_input(&window) == original_input);
         }
     }
 }

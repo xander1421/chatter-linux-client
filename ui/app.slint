@@ -467,6 +467,10 @@ export component MainWindow inherits Window {
     in property <image> image-viewer-source;
     in property <string> image-viewer-filename: "";
     in property <string> image-viewer-size: "";
+    private property <length> viewer-origin-x: 0px;
+    private property <length> viewer-origin-y: 0px;
+    private property <length> viewer-origin-width: 0px;
+    private property <length> viewer-origin-height: 0px;
     callback close-image-viewer();
     in-out property <string> media-viewer-attachment-id: "";
     in-out property <string> media-viewer-position: "";
@@ -1445,6 +1449,7 @@ export component MainWindow inherits Window {
         root.call-history-selecting = false;
         root.cancel-composer-keyboard-handover();
         VoiceRecording.cancel();
+        back-scope.focus();
         root.exiting-view = Appearance.reduce-motion ? "" : root.previous-view;
         root.previous-view = root.current-view;
         root.view-appearing = false;
@@ -2300,7 +2305,13 @@ export component MainWindow inherits Window {
                             root.more-clicked(sender-id, timestamp-ns, x, y);
                         }
                         quote-clicked(id) => { root.quote-clicked(id); }
-                        view-attachment(id) => { root.view-attachment(id); }
+                        view-attachment(id) => {
+                            root.viewer-origin-x = self.viewer-origin-x;
+                            root.viewer-origin-y = self.viewer-origin-y;
+                            root.viewer-origin-width = self.viewer-origin-width;
+                            root.viewer-origin-height = self.viewer-origin-height;
+                            root.view-attachment(id);
+                        }
                         audio-seek(id, pos) => { root.audio-seek(id, pos); }
                         load-more => { root.load-more(); }
                         send(text) => { return root.send(text); }
@@ -2376,7 +2387,10 @@ export component MainWindow inherits Window {
                         is-media-playing: root.is-media-playing;
                         audio-progress: root.audio-progress;
                         audio-elapsed: root.audio-elapsed;
-                        view-attachment(id) => { root.view-attachment(id); }
+                        view-attachment(id) => {
+                            root.viewer-origin-width = 0px;
+                            root.view-attachment(id);
+                        }
                         audio-seek(id, pos) => { root.audio-seek(id, pos); }
                         more-clicked(sender-id, timestamp-ns, x, y) => {
                             // The panel's own header is the menu's ceiling.
@@ -3566,6 +3580,10 @@ export component MainWindow inherits Window {
             source: root.image-viewer-source;
             filename: root.image-viewer-filename;
             size-display: root.image-viewer-size;
+            thumbnail-x: root.viewer-origin-x;
+            thumbnail-y: root.viewer-origin-y;
+            thumbnail-width: root.viewer-origin-width;
+            thumbnail-height: root.viewer-origin-height;
             position-label: root.media-viewer-position;
             has-previous: root.media-viewer-has-previous;
             has-next: root.media-viewer-has-next;
