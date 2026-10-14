@@ -106,7 +106,10 @@ mod sidebar_preview_tests {
     fn emoji_clusters_survive_without_truncation() {
         let emoji = "👩🏽‍💻";
         let source = format!("{}{}{}\n**done**", emoji, emoji, emoji);
-        assert_eq!(plain_sidebar_preview(&source), format!("{}{}{} done", emoji, emoji, emoji));
+        assert_eq!(
+            plain_sidebar_preview(&source),
+            format!("{}{}{} done", emoji, emoji, emoji)
+        );
     }
 }
 
@@ -225,6 +228,19 @@ impl ChatterClient {
         message_id: &crate::domain::ids::MessageId,
     ) -> Option<crate::domain::message::Message> {
         self.messages().get_message_local(message_id).ok().flatten()
+    }
+
+    /// Timestamp of an outgoing failed or parked message eligible for tap-to-retry.
+    pub fn retryable_message_timestamp(
+        &self,
+        message_id: &crate::domain::ids::MessageId,
+    ) -> Option<u64> {
+        let message = self.get_message_local(message_id)?;
+        let me = self.session_current_user_id()?;
+        (message.sender_id == Some(me)
+            && matches!(message.delivery_status.as_str(), "failed" | "parked")
+            && !message.is_deleted)
+            .then_some(message.sent_at)
     }
 
     /// Whether the parent message a reply quotes is missing or deleted.
@@ -566,7 +582,11 @@ impl ChatterClient {
             message.content,
             crate::domain::message::MessageContent::System(_)
         ) {
-            return plain_sidebar_preview(&format!("{} {}", self.message_sender_display_name(message), preview));
+            return plain_sidebar_preview(&format!(
+                "{} {}",
+                self.message_sender_display_name(message),
+                preview
+            ));
         }
         plain_sidebar_preview(&preview)
     }
@@ -818,11 +838,7 @@ impl ChatterClient {
                 timestamp,
                 unread_count: dm.unread_count,
                 last_activity: latest.map(|m| m.created_at),
-                ..ChatRowSendData::new(
-                    ConversationType::AnonDm,
-                    dm.id.to_string(),
-                    display_name,
-                )
+                ..ChatRowSendData::new(ConversationType::AnonDm, dm.id.to_string(), display_name)
             });
         }
 
@@ -2023,7 +2039,12 @@ mod shield_mode_tests {
         assert!(!client.gif_picker_available_for(&ConversationType::Channel));
         assert!(!client.gif_picker_available());
         assert!(client.search_gifs("cat", 1).await.is_err());
-        assert!(client.fetch_gif_media("https://localhost:1/x.gif").await.is_err());
+        assert!(
+            client
+                .fetch_gif_media("https://localhost:1/x.gif")
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]

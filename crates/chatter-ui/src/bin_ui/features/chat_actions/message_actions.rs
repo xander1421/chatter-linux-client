@@ -22,7 +22,11 @@ pub fn wire_message_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let Some(w) = weak_window.upgrade() else {
             return;
         };
-        let Some(sent_at) = own_failed_timestamp(&w, &message_id) else {
+        let Some(sent_at) = message_id
+            .parse::<MessageId>()
+            .ok()
+            .and_then(|id| ui_ctx.retryable_message_timestamp(&id))
+        else {
             return;
         };
 
@@ -103,16 +107,6 @@ pub fn wire_message_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             });
         });
     });
-}
-
-/// `sent_at` of our own bubble `message_id` when it says "not sent".
-fn own_failed_timestamp(w: &MainWindow, message_id: &str) -> Option<u64> {
-    let messages = w.get_messages();
-    messages
-        .iter()
-        .find(|m| m.message_id.as_str() == message_id)
-        .filter(|m| m.is_own && matches!(m.delivery_status.as_str(), "failed" | "parked"))
-        .and_then(|m| m.timestamp_ns.parse().ok())
 }
 
 /// Wire quote/reply-bubble click callback: jump to the quoted parent.
