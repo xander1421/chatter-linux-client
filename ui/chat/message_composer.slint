@@ -1155,7 +1155,7 @@ export component MessageComposer inherits GlassSurface {
                 y: root.row-padding + root.raised-toolbar-height;
                 width: parent.width - root.row-padding * 2
                     - (root.lift-layout * root.lower-terminal-width
-                        + (1 - root.lift-layout) * (Spacing.touch-target-min + Spacing.xs + root.trailing-actions-width));
+                        + (1 - root.lift-layout) * (Spacing.touch-target-min + Spacing.xs + root.trailing-actions-width + Spacing.xs));
                 height: root.content-height;
                 background: Colors.inset;
                 // Concentric with the shell: radius-chrome − chrome-inset.
@@ -1330,7 +1330,9 @@ export component MessageComposer inherits GlassSurface {
                 y: parent.lower-action-y;
                 width: Spacing.touch-target-min;
                 height: Spacing.touch-target-min;
-                opacity: (root.raised-actions && !root.can-send ? 1 : 1 - root.lift-layout)
+                // On the fall, wait for Send to vanish before revealing the mic.
+                opacity: (root.raised-actions && !root.can-send ? 1
+                    : min(1, max(0, (0.4 - root.lift-layout) / 0.4)))
                     * (root.disabled ? 0.5 : 1);
                 accessible-role: button;
                 accessible-label: "Record voice message";
@@ -1383,7 +1385,10 @@ export component MessageComposer inherits GlassSurface {
                 height: Spacing.touch-target-min;
                 background: send-touch.has-hover ? Colors.action-hover : Colors.action-fill;
                 border-radius: Spacing.radius-chrome-inner;
-                opacity: root.disabled ? 0.5 * root.lift-layout : root.lift-layout;
+                // The two glyphs share a landing slot. Leave a small blank beat
+                // between them instead of painting both at half alpha.
+                opacity: min(1, max(0, (root.lift-layout - 0.45) / 0.55))
+                    * (root.disabled ? 0.5 : 1);
                 accessible-role: button;
                 accessible-label: "Send message";
 
