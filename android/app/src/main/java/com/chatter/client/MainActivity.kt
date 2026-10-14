@@ -568,6 +568,9 @@ class MainActivity : GameActivity() {
 
         override fun onCreateInputConnection(outAttrs: EditorInfo): com.google.androidgamesdk.gametextinput.InputConnection? {
             val connection = super.onCreateInputConnection(outAttrs) ?: return null
+            // Message drafts, names, passwords and recovery material must not
+            // enter a keyboard's personalized dictionary.
+            outAttrs.imeOptions = outAttrs.imeOptions or EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING
             // GameTextInput 4.4 setState changes the Editable then restarts input,
             // but does not refresh EditorInfo's initial selection. An IME can
             // then restore stale offsets after toolbar Select all (RC27 D2).
