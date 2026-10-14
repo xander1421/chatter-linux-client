@@ -18,14 +18,26 @@ import { Appearance } from "../theme/appearance.slint";
 
 export component ThreadPanel inherits Rectangle {
     property <bool> entered: false;
-    changed visible => { if (!root.visible) { root.entered = false; } }
+    property <float> panel-progress: 0;
+    animate panel-progress { duration: Materials.motion-standard; easing: Materials.glide; }
+    init => { if (Appearance.reduce-motion && root.visible) { root.panel-progress = 1; } }
+    changed visible => {
+        root.entered = false;
+        root.panel-progress = Appearance.reduce-motion && root.visible ? 1 : 0;
+    }
+    // The app keeps this panel mounted while hidden. A visibility binding can
+    // settle after initialization, so clear a premature entrance before the
+    // next open even if no change callback fired during mounting.
     Timer {
         interval: 16ms;
-        running: root.visible && !root.entered;
-        triggered => { root.entered = true; }
+        running: !root.visible && root.entered;
+        triggered => { root.entered = false; root.panel-progress = 0; }
     }
-    property <float> panel-progress: root.visible && (Appearance.reduce-motion || root.entered) ? 1 : 0;
-    animate panel-progress { duration: Materials.motion-standard; easing: Materials.glide; }
+    Timer {
+        interval: 16ms;
+        running: root.visible && !root.entered && !Appearance.reduce-motion;
+        triggered => { root.entered = true; root.panel-progress = 1; }
+    }
     // Root message data
     in property <string> root-message-id;
     in property <string> root-sender-name;

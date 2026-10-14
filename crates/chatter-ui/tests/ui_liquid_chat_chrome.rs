@@ -5,15 +5,18 @@ use slint::ComponentHandle;
 slint::slint! {
     import { ChatHeader } from "../../ui/chat/chat_header.slint";
     import { ChatHeaderMenu } from "../../ui/chat/chat_header_menu.slint";
+    import { ThreadPanel } from "../../ui/chat/thread_panel.slint";
     import { MentionAutocomplete } from "../../ui/components/mention_autocomplete.slint";
     import { ConversationKind } from "../../ui/chat/conversation_kind.slint";
     import { Colors } from "../../ui/theme/colors.slint";
+    import { Icons } from "../../ui/theme/icons.slint";
     import { Appearance } from "../../ui/theme/appearance.slint";
 
     export component ChromeHarness inherits Window {
         in-out property <length> canvas-width: 412px;
         in-out property <bool> menu-open: false;
         in-out property <bool> mention-open: false;
+        in-out property <bool> thread-open: false;
         in-out property <bool> scrolling: false;
         width: root.canvas-width;
         height: 640px;
@@ -29,7 +32,7 @@ slint::slint! {
             mobile: root.canvas-width < 600px;
             channel-name: "Morgan";
             conversation-kind: ConversationKind.server-dm;
-            typing-indicator: "typing";
+            typing-indicator: root.scrolling ? "typing" : "";
         }
         ChatHeaderMenu {
             show: root.menu-open;
@@ -46,6 +49,23 @@ slint::slint! {
             x: 20px;
             y: parent.height - self.height - 24px;
             max-popup-width: min(240px, parent.width - 40px);
+            suggestions: [
+                { id: "morgan", name: "Morgan", mention-type: "user", avatar: Icons.user, has-avatar: false },
+                { id: "general", name: "General", mention-type: "channel", avatar: Icons.hash, has-avatar: false },
+            ];
+        }
+        ThreadPanel {
+            visible: root.thread-open;
+            x: parent.width - self.width;
+            y: 0;
+            width: root.canvas-width < 600px ? parent.width : 320px;
+            height: parent.height;
+            mobile: root.canvas-width < 600px;
+            root-message-id: "root-1";
+            root-sender-name: "Morgan";
+            root-content-preview: "The original message stays connected to its replies.";
+            channel-name: "General";
+            conversation-kind: ConversationKind.channel;
         }
     }
 }
@@ -90,8 +110,12 @@ fn chat_popovers_grow_from_their_anchors_in_both_themes_and_widths() {
         window.invoke_theme(theme.into());
         for (layout, width) in [("phone", 412.0), ("desktop", 900.0)] {
             window.set_canvas_width(width);
+            window
+                .window()
+                .set_size(slint::LogicalSize::new(width, 640.0));
             window.set_menu_open(false);
             window.set_mention_open(false);
+            window.set_thread_open(false);
             window.set_scrolling(false);
             advance(500);
             frame(&window, &format!("{theme}-{layout}-01-rest.png"));
@@ -106,7 +130,7 @@ fn chat_popovers_grow_from_their_anchors_in_both_themes_and_widths() {
             let menu_moving = frame(&window, &format!("{theme}-{layout}-02-menu-growing.png"));
             advance(500);
             let menu_settled = frame(&window, &format!("{theme}-{layout}-03-menu-settled.png"));
-            assert_ne!(menu_moving, menu_settled, "menu must visibly settle");
+            assert!(menu_moving != menu_settled, "menu must visibly settle");
 
             window.set_menu_open(false);
             advance(500);
@@ -117,9 +141,21 @@ fn chat_popovers_grow_from_their_anchors_in_both_themes_and_widths() {
             advance(500);
             let mention_settled =
                 frame(&window, &format!("{theme}-{layout}-05-mention-settled.png"));
-            assert_ne!(
-                mention_moving, mention_settled,
+            assert!(
+                mention_moving != mention_settled,
                 "mention popup must visibly settle"
+            );
+
+            window.set_mention_open(false);
+            advance(500);
+            window.set_thread_open(true);
+            advance(48);
+            let thread_moving = frame(&window, &format!("{theme}-{layout}-06-thread-gliding.png"));
+            advance(500);
+            let thread_settled = frame(&window, &format!("{theme}-{layout}-07-thread-settled.png"));
+            assert!(
+                thread_moving != thread_settled,
+                "thread content must glide in"
             );
         }
     }
