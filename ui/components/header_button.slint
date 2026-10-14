@@ -71,20 +71,38 @@ export component HeaderButton inherits Rectangle {
     // Keeping opacity below the root lets childless header controls share
     // generated code; caller-supplied status marks remain inside this box.
     box := GlassSurface {
+        transform-scale-x: touch-area.pressed && root.enabled ? 94% : 100%;
+        transform-scale-y: touch-area.pressed && root.enabled ? 94% : 100%;
+        animate transform-scale-x { duration: touch-area.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+        animate transform-scale-y { duration: touch-area.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
         material-enabled: !root.plain;
         opacity: root.enabled ? 1.0 : 0.4;
         material-level: 1;
         elevation: 0;
         backdrop-paused: root.backdrop-paused;
+        highlighted: root.enabled && (touch-area.pressed || touch-area.has-hover || keys.has-focus);
         width: min(root.shell, parent.width);
         height: self.width;
         x: (parent.width - self.width) / 2;
         y: (parent.height - self.height) / 2;
         border-radius: self.height / 2;
-        background: touch-area.pressed ? Materials.pressed : touch-area.has-hover ? Materials.hover
+        background: touch-area.pressed && root.enabled ? Materials.pressed : touch-area.has-hover && root.enabled ? Materials.hover
             : (root.active || keys.has-focus ? Colors.tint-strong : transparent);
 
-        animate background { duration: Materials.feedback-duration; easing: ease-out; }
+        animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
+
+        Rectangle {
+            border-radius: parent.border-radius;
+            background: Materials.specular;
+            opacity: root.enabled && touch-area.pressed ? 0.9 : root.enabled && touch-area.has-hover ? 0.45 : 0;
+            animate opacity { duration: Materials.motion-quick; easing: Materials.settle; }
+        }
+        Rectangle {
+            border-radius: parent.border-radius;
+            border-width: keys.has-focus ? 2px : 0px;
+            border-color: Colors.focus-ring;
+            animate border-width { duration: Materials.motion-quick; easing: Materials.settle; }
+        }
 
         Image {
             source: root.icon;
@@ -106,6 +124,7 @@ export component HeaderButton inherits Rectangle {
     // The whole root box, not the shell: the target never shrinks with the
     // drawing.
     touch-area := TouchArea {
+        enabled: root.enabled;
         mouse-cursor: root.enabled ? pointer : default;
         clicked => { if root.enabled { root.clicked(); } }
     }

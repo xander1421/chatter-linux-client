@@ -12,7 +12,7 @@ export component IconAction inherits Rectangle {
     in property <length> size: Spacing.button-height;
     callback clicked();
 
-    width: max(Spacing.button-height, root.size);
+    width: max(Spacing.touch-target-min, root.size);
     height: self.width;
     accessible-role: button;
     accessible-label: root.label;
@@ -33,15 +33,27 @@ export component IconAction inherits Rectangle {
     }
 
     Rectangle {
+        transform-scale-x: touch.pressed && root.enabled ? 94% : 100%;
+        transform-scale-y: touch.pressed && root.enabled ? 94% : 100%;
+        animate transform-scale-x { duration: touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+        animate transform-scale-y { duration: touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
         border-radius: self.height / 2;
-        border-width: keys.has-focus ? Spacing.stroke : 0px;
-        border-color: Colors.primary;
+        border-width: keys.has-focus ? 2px : 0px;
+        border-color: Colors.focus-ring;
+        animate border-width { duration: Materials.motion-quick; easing: Materials.settle; }
         opacity: root.enabled ? 1 : 0.38;
         background: root.destructive
             ? (touch.pressed || touch.has-hover ? Colors.error-hover : Colors.error)
             : root.active
             ? (touch.pressed ? Colors.action-active : touch.has-hover ? Colors.action-hover : Colors.action-fill)
             : (touch.pressed ? Materials.pressed : touch.has-hover ? Materials.hover : Colors.fill-secondary);
+        animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
+        Rectangle {
+            border-radius: parent.border-radius;
+            background: Materials.specular;
+            opacity: touch.pressed && root.enabled ? 0.9 : touch.has-hover && root.enabled ? 0.4 : 0;
+            animate opacity { duration: Materials.motion-quick; easing: Materials.settle; }
+        }
         Image {
             source: root.icon;
             width: Spacing.button-icon;

@@ -81,13 +81,26 @@ export component Button inherits Rectangle {
     }
 
     Rectangle {
+        transform-scale-x: root.pressed ? 94% : 100%;
+        transform-scale-y: root.pressed ? 94% : 100%;
+        animate transform-scale-x { duration: root.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+        animate transform-scale-y { duration: root.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
         border-radius: root.border-radius;
         background: root.bg-color;
+        animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
         // Keyboard focus ring; nothing at rest.
         border-width: keys.has-focus ? 2px : 0px;
         border-color: Colors.focus-ring;
+        animate border-width { duration: Materials.motion-quick; easing: Materials.settle; }
         // 38%: Material's disabled level, including both fill and content.
         opacity: root.disabled ? 0.38 : 1.0;
+
+        Rectangle {
+            border-radius: parent.border-radius;
+            background: Materials.specular;
+            opacity: root.pressed ? 0.9 : root.hover ? 0.5 : 0;
+            animate opacity { duration: Materials.motion-quick; easing: Materials.settle; }
+        }
 
         // Content layout
         HorizontalLayout {
@@ -172,31 +185,25 @@ export component Button inherits Rectangle {
             }
         }
 
-        // Interaction area
-        touch := TouchArea {
-            mouse-cursor: disabled ? default : pointer;
+    }
 
-            pointer-event(event) => {
-                if !disabled && !loading {
-                    if event.kind == PointerEventKind.move {
-                        hover = true;
-                    }
-                }
-            }
+    // Keep the hit target at its original geometry while the visual squishes.
+    touch := TouchArea {
+        mouse-cursor: disabled ? default : pointer;
 
-            moved => {
-                if !disabled && !loading {
-                    hover = true;
-                }
-            }
-
-            clicked => {
-                if !disabled && !loading {
-                    root.clicked();
-                }
+        pointer-event(event) => {
+            if !disabled && !loading && event.kind == PointerEventKind.move {
+                hover = true;
             }
         }
 
+        moved => {
+            if !disabled && !loading { hover = true; }
+        }
+
+        clicked => {
+            if !disabled && !loading { root.clicked(); }
+        }
     }
 
     // Reset hover when mouse leaves

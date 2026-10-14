@@ -63,7 +63,25 @@ export component Input inherits Rectangle {
             background: Colors.surface;
             border-width: Spacing.stroke;
             border-color: border-col;
+            animate border-color { duration: Materials.motion-quick; easing: Materials.settle; }
             opacity: disabled ? 0.5 : 1.0;
+
+            // The focus halo grows from the field edge; the TextInput stays in
+            // place so caret, selection, and IME composition survive focus.
+            Rectangle {
+                x: -2px;
+                y: -2px;
+                width: parent.width + 4px;
+                height: parent.height + 4px;
+                border-radius: parent.border-radius + 2px;
+                border-width: root.focused && !root.disabled ? 2px : 0px;
+                border-color: root.error ? Colors.error : Colors.focus-ring;
+                drop-shadow-blur: root.focused && !root.disabled ? 8px : 0px;
+                drop-shadow-color: root.error ? Colors.error.with-alpha(0.24) : Colors.primary.with-alpha(0.24);
+                animate border-width { duration: Materials.motion-standard; easing: Materials.spring; }
+                animate border-color { duration: Materials.motion-quick; easing: Materials.settle; }
+                animate drop-shadow-blur { duration: Materials.motion-standard; easing: Materials.settle; }
+            }
 
             // Placeholder text (shown when empty, fades on focus)
             // `root.text` excludes the input method's preedit, so while a word
@@ -120,6 +138,16 @@ export component Input inherits Rectangle {
                 width: Spacing.button-height;
                 height: 100%;
 
+                Rectangle {
+                    width: 36px;
+                    height: 36px;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    border-radius: self.height / 2;
+                    background: eye-touch.pressed ? Materials.pressed : eye-touch.has-hover ? Materials.hover : transparent;
+                    animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
+                }
+
                 Image {
                     source: root.show-password ? Icons.eye-off : Icons.eye;
                     width: 18px;
@@ -127,10 +155,15 @@ export component Input inherits Rectangle {
                     colorize: eye-touch.has-hover ? Colors.text-primary : Colors.text-muted;
                     x: (parent.width - self.width) / 2;
                     y: (parent.height - self.height) / 2;
+                    transform-scale-x: eye-touch.pressed ? 90% : 100%;
+                    transform-scale-y: eye-touch.pressed ? 90% : 100%;
+                    animate transform-scale-x { duration: eye-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+                    animate transform-scale-y { duration: eye-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
                 }
 
                 eye-touch := TouchArea {
-                    mouse-cursor: pointer;
+                    enabled: !root.disabled;
+                    mouse-cursor: root.disabled ? default : pointer;
                     clicked => {
                         root.show-password = !root.show-password;
                         input.focus();

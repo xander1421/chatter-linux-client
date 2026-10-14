@@ -14,6 +14,7 @@ component GlassMaterial inherits Rectangle {
     in property <color> material-tint;
     in property <int> elevation;
     in property <bool> backdrop-paused;
+    in property <bool> highlighted;
     // 1 = the material as designed, 0 = neutral filter values, for which the
     // renderer draws no backdrop layer at all (i-slint-renderer-skia
     // backdrop.rs `filter` returns None). Drops at once, eases back at rest.
@@ -82,6 +83,8 @@ component GlassMaterial inherits Rectangle {
             border-radius: max(0px, root.border-radius - Materials.glass-edge-width / 2);
             border-width: Materials.glass-edge-width;
             border-color: Appearance.glass-effects ? Materials.glass-edge : Elevation.flat-rim;
+            opacity: root.highlighted ? 1.0 : 0.72;
+            animate opacity { duration: Materials.motion-standard; easing: Materials.spring; }
         }
     }
 }
@@ -97,6 +100,8 @@ export component GlassSurface inherits Rectangle {
     // binds MessageList.scrolling): the tint stays, the per-frame backdrop
     // blur + refraction of moving pixels stops, and fades back in at rest.
     in property <bool> backdrop-paused: false;
+    // Light catches the existing optical edge on interactive glass controls.
+    in property <bool> highlighted: false;
     in property <color> material-tint: material-level == 0 ? Materials.ultra-thin
         : material-level == 1 ? Materials.thin
         : material-level == 3 ? Materials.thick : Materials.regular;
@@ -125,6 +130,7 @@ export component GlassSurface inherits Rectangle {
         material-tint: root.material-tint;
         elevation: root.elevation;
         backdrop-paused: root.backdrop-paused;
+        highlighted: root.highlighted;
     }
     @children
 }
