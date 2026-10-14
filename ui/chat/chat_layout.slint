@@ -42,6 +42,7 @@ export component ChatLayout inherits Rectangle {
     in property <bool> privacy-line-exposed: false;
     in property <bool> is-anonymous: false;
     in property <bool> is-dm: false;  // When true, show minimal message UI (no avatars/names)
+    in property <bool> can-forward: false;
     in property <int> member-count: 0;
     in property <string> topic: "";
     in property <string> typing-indicator: "";
@@ -226,6 +227,7 @@ export component ChatLayout inherits Rectangle {
     callback open-message-link(string);
     callback message-clicked(string);
     callback reply-clicked(string, string);  // (sender_id, timestamp_ns)
+    callback forward-clicked(string, string);  // (sender_id, timestamp_ns)
     callback react-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
     callback reaction-toggled(string, string, string);  // (sender_id, timestamp_ns, emoji)
     callback thread-clicked(string);
@@ -277,6 +279,7 @@ export component ChatLayout inherits Rectangle {
         selection-mode: root.selection-mode;
         menu-open: root.menu-open;
         mobile: root.mobile;
+        can-forward: root.can-forward;
         is-dm: root.is-dm;
                     is-anonymous: root.is-anonymous;
         can-thread: root.conversation-kind == ConversationKind.channel;
@@ -327,6 +330,9 @@ export component ChatLayout inherits Rectangle {
         }
         reply-clicked(sender-id, timestamp-ns) => {
             root.reply-clicked(sender-id, timestamp-ns);
+        }
+        forward-clicked(sender-id, timestamp-ns) => {
+            root.forward-clicked(sender-id, timestamp-ns);
         }
         reaction-toggled(sender-id, timestamp-ns, emoji) => {
             root.reaction-toggled(sender-id, timestamp-ns, emoji);

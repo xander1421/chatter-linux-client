@@ -42,6 +42,7 @@ pub fn set_conversation_kind(
     private_channel: bool,
 ) {
     w.set_conversation_kind(conversation_kind(ct));
+    w.set_chat_can_forward(ct.can_forward_from());
     w.set_private_channel(private_channel);
     w.set_composer_gifs_available(ui_ctx.gif_picker_available_for(ct));
     w.set_privacy_line_override(Default::default());
