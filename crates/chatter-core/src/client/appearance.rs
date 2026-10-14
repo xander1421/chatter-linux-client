@@ -42,6 +42,23 @@ impl ChatterClient {
             .set_bool(keys::REDUCE_MOTION, enabled)
     }
 
+    /// Device-local IME geometry used to keep the picker at the keyboard baseline.
+    pub fn composer_keyboard_geometry(&self) -> Option<(f32, f32)> {
+        SettingsRepository::new(self.services.database.clone())
+            .get(keys::COMPOSER_KEYBOARD_GEOMETRY)
+            .ok()
+            .flatten()
+    }
+
+    pub fn set_composer_keyboard_geometry(
+        &self,
+        height: f32,
+        width: f32,
+    ) -> Result<(), crate::error::StorageError> {
+        SettingsRepository::new(self.services.database.clone())
+            .set(keys::COMPOSER_KEYBOARD_GEOMETRY, &(height, width))
+    }
+
     /// The user's theme choice (defaults to [`ThemeMode::System`]).
     pub fn theme_mode(&self) -> ThemeMode {
         let raw = SettingsRepository::new(self.services.database.clone())

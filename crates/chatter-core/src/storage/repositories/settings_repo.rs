@@ -22,6 +22,8 @@ pub mod keys {
     pub const GLASS_EFFECTS: &str = "app.glass_effects";
     /// Device-local motion preference: skip decorative animation.
     pub const REDUCE_MOTION: &str = "app.reduce_motion";
+    /// Last measured native IME height and window width, in logical pixels.
+    pub const COMPOSER_KEYBOARD_GEOMETRY: &str = "app.composer_keyboard_geometry";
     pub const NOTIFICATION_SOUND: &str = "app.notification_sound";
     /// Opaque ntfy push topic issued by the server in AuthResponse. The client
     /// subscribes to this instead of deriving `chatter_{user_id}` locally

@@ -103,6 +103,15 @@ export component MainWindow inherits Window {
     property <length> safe-area-bottom: root.safe-area-insets.bottom
         + max(root.virtual-keyboard-size.height, root.composer-keyboard-reserve);
     private property <length> composer-keyboard-reserve: 0px;
+    in-out property <float> remembered-keyboard-height-px: 0;
+    in-out property <float> remembered-keyboard-width-px: 0;
+    private property <bool> zero-inset-keyboard: false;
+    property <length> drawer-keyboard-height: !root.zero-inset-keyboard
+        && root.remembered-keyboard-height-px > 0
+        && root.width > (root.remembered-keyboard-width-px - 32) * 1px
+        && root.width < (root.remembered-keyboard-width-px + 32) * 1px
+        ? root.remembered-keyboard-height-px * 1px : 0px;
+    callback composer-keyboard-height-learned(float, float);
     public function cancel-composer-keyboard-handover() {
         root.composer-keyboard-reserve = 0px;
         keyboard-handover-timeout.stop();
@@ -113,6 +122,34 @@ export component MainWindow inherits Window {
             root.composer-keyboard-reserve = space;
             keyboard-handover-timeout.start();
             keyboard-handover-timeout.restart();
+        }
+    }
+    function watch-composer-keyboard() {
+        if root.is-mobile-platform && root.virtual-keyboard-size.height <= 0px {
+            keyboard-zero-inset-timeout.start();
+            keyboard-zero-inset-timeout.restart();
+        }
+    }
+    keyboard-zero-inset-timeout := Timer {
+        interval: 1500ms;
+        running: false;
+        triggered => {
+            if root.virtual-keyboard-size.height <= 0px && !root.composer-drawer-visible {
+                root.zero-inset-keyboard = true;
+            }
+        }
+    }
+    keyboard-height-settle := Timer {
+        interval: 120ms;
+        running: false;
+        triggered => {
+            if root.is-mobile-platform && !root.composer-drawer-visible
+                && root.virtual-keyboard-size.height > 0px {
+                root.remembered-keyboard-height-px = root.virtual-keyboard-size.height / 1px;
+                root.remembered-keyboard-width-px = root.width / 1px;
+                root.composer-keyboard-height-learned(
+                    root.remembered-keyboard-height-px, root.remembered-keyboard-width-px);
+            }
         }
     }
     // Keep the drawer's occupied space while the native keyboard is requested.
@@ -1583,6 +1620,16 @@ export component MainWindow inherits Window {
     // (modal_container.slint, §112i), and only the Window can see it.
     changed virtual-keyboard-size => {
         VirtualKeyboard.height = root.virtual-keyboard-size.height;
+        if root.virtual-keyboard-size.height > 0px {
+            root.zero-inset-keyboard = false;
+            keyboard-zero-inset-timeout.stop();
+            if !root.composer-drawer-visible {
+                keyboard-height-settle.start();
+                keyboard-height-settle.restart();
+            }
+        } else {
+            keyboard-height-settle.stop();
+        }
         if root.composer-keyboard-reserve > 0px && root.virtual-keyboard-size.height > 0px {
             keyboard-handover-settle.start();
             keyboard-handover-settle.restart();
@@ -2257,7 +2304,9 @@ export component MainWindow inherits Window {
 
                         // Picker state
                         keyboard-inset: root.virtual-keyboard-size.height;
+                        remembered-keyboard-height: root.drawer-keyboard-height;
                         composer-keyboard-requested(space) => { root.request-composer-keyboard(space); }
+                        composer-input-focused => { root.watch-composer-keyboard(); }
                         composer-focus-released => { root.release-text-focus(); }
                         inserted-emoji: root.inserted-emoji;
                         insert-serial: root.insert-serial;

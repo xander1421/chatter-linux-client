@@ -9,6 +9,17 @@ use chatter_core::client::ChatterClient;
 use crate::MainWindow;
 
 pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    if let Some((height, width)) = ui_ctx.composer_keyboard_geometry() {
+        window.set_remembered_keyboard_height_px(height);
+        window.set_remembered_keyboard_width_px(width);
+    }
+    let ui_ctx_keyboard = ui_ctx.clone();
+    window.on_composer_keyboard_height_learned(move |height, width| {
+        if let Err(error) = ui_ctx_keyboard.set_composer_keyboard_geometry(height, width) {
+            tracing::warn!("Failed to save keyboard geometry: {error}");
+        }
+    });
+
     // Change password
     let weak_window = window.as_weak();
     let ui_ctx_pw = ui_ctx.clone();

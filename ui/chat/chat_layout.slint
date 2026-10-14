@@ -116,11 +116,15 @@ export component ChatLayout inherits Rectangle {
     callback gif-search-changed(string);
     callback composer-focus-released();
     callback composer-keyboard-requested(length);
+    callback composer-input-focused();
     in property <length> keyboard-inset;
+    in property <length> remembered-keyboard-height;
     private property <bool> drawer-search-focused: false;
     // The host already subtracts the IME. Reserve only the part of the drawer
     // it does not occupy while hideSoftInput's asynchronous insets arrive.
-    property <length> drawer-height: min(340px, (root.height + root.keyboard-inset) * 0.48);
+    property <length> drawer-height: root.mobile && root.remembered-keyboard-height > 0px
+        ? root.remembered-keyboard-height
+        : min(340px, (root.height + root.keyboard-inset) * 0.48);
     private property <bool> drawer-visible: (root.emoji-picker-visible || root.gif-picker-visible)
         && !root.selection-mode && root.composer-notice == "";
     changed drawer-visible => { if !root.drawer-visible { root.drawer-search-focused = false; } }
@@ -590,6 +594,7 @@ export component ChatLayout inherits Rectangle {
             input-focused => {
                 root.emoji-picker-visible = false;
                 root.gif-picker-visible = false;
+                root.composer-input-focused();
             }
             mention-triggered(query) => {
                 root.mention-triggered(query);
