@@ -168,9 +168,19 @@ pub(crate) fn tor_client_config() -> Result<TorClientConfig, String> {
     let (state, cache) = TOR_DIRS
         .get()
         .ok_or_else(|| "Tor storage directories are not set".to_string())?;
-    arti_client::config::TorClientConfigBuilder::from_directories(state, cache)
+    let mut builder = arti_client::config::TorClientConfigBuilder::from_directories(state, cache);
+    set_cbt_floor(&mut builder);
+    builder
         .build()
         .map_err(|e| format!("Tor configuration: {e}"))
+}
+
+fn set_cbt_floor(builder: &mut arti_client::config::TorClientConfigBuilder) {
+    // Arti 0.47's consensus default is only 10 ms. A learned sub-second CBT
+    // persisted across restarts can discard otherwise healthy three-hop paths.
+    builder
+        .override_net_params()
+        .insert("cbtmintimeout".into(), 10_000);
 }
 
 pub(crate) fn tor_runtime() -> &'static tokio::runtime::Handle {
@@ -387,6 +397,22 @@ impl Service<Uri> for OnionConnector {
 mod tests {
     use super::*;
     use tokio::sync::oneshot;
+
+    #[test]
+    fn circuit_build_timeout_floor_is_ten_seconds() {
+        let mut builder = arti_client::config::TorClientConfigBuilder::from_directories(
+            "/tmp/chatter-tor-state",
+            "/tmp/chatter-tor-cache",
+        );
+        set_cbt_floor(&mut builder);
+        assert_eq!(
+            builder.override_net_params().get("cbtmintimeout"),
+            Some(&10_000)
+        );
+        builder
+            .build()
+            .expect("CBT floor is a valid Arti configuration");
+    }
 
     #[test]
     fn trace_gate_tracks_overlapping_dials() {
