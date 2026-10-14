@@ -10,6 +10,44 @@ use crate::services::quick_switcher::QuickSwitcherEntry;
 use chrono::{DateTime, Utc};
 use chrono::{Datelike, TimeZone};
 
+impl crate::client::ChatterClient {
+    /// Keep the first query match inside the compact one-line result preview.
+    pub fn search_result_preview(&self, text: &str, query: &str) -> String {
+        let flat = self.plain_message_preview(text);
+        let chars: Vec<char> = flat.chars().collect();
+        if chars.len() <= 100 {
+            return flat;
+        }
+        let (_, matched, _, start, _) = preview_fragments(&flat, query);
+        let match_at = flat[..start as usize].chars().count();
+        let start = if matched.is_empty() || match_at < 70 {
+            0
+        } else {
+            match_at.saturating_sub(30)
+        };
+        let end = (start + 99).min(chars.len());
+        format!(
+            "{}{}{}",
+            if start > 0 { "…" } else { "" },
+            chars[start..end].iter().collect::<String>(),
+            if end < chars.len() { "…" } else { "" }
+        )
+    }
+
+    /// Search labels use the same local sender directory as the conversation,
+    /// with a readable self label and DM fallback for sealed sender rows.
+    pub fn search_sender_display_name(&self, msg: &crate::domain::message::Message) -> String {
+        use crate::domain::message::ConversationType;
+        if msg.sender_id.is_some() && msg.sender_id == self.session_current_user_id() {
+            return "You".to_string();
+        }
+        if msg.sender_id.is_none() && msg.conversation_type == ConversationType::ServerDm {
+            return self.conversation_display_name(&msg.conversation_id, &msg.conversation_type);
+        }
+        self.message_sender_display_name(msg)
+    }
+}
+
 /// Split a preview at its first case-insensitive search term for inline styling.
 /// Iterate source character boundaries so Unicode case folding cannot create
 /// byte offsets into the original text.

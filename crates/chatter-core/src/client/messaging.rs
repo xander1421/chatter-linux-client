@@ -12,12 +12,66 @@ use crate::ui::chat_data::sidebar_time_at;
 /// Make every chat-list preview a single plain-text line, including notices,
 /// attachment labels and pending requests. The row elides to its own width.
 pub(crate) fn plain_sidebar_preview(input: &str) -> String {
+    let chars: Vec<char> = input.chars().collect();
+    let mut remove = vec![false; chars.len()];
+    let mut i = 0;
+    while i < chars.len() {
+        let marker = chars[i];
+        if marker == '>'
+            && chars[..i]
+                .iter()
+                .rev()
+                .take_while(|c| **c != '\n')
+                .all(|c| c.is_whitespace())
+        {
+            remove[i] = true;
+            i += 1;
+            continue;
+        }
+        if matches!(marker, '*' | '_' | '`') {
+            let start = i;
+            while i < chars.len() && chars[i] == marker {
+                i += 1;
+            }
+            let width = i - start;
+            let left_boundary = start == 0
+                || (!chars[start - 1].is_alphanumeric()
+                    && chars[start - 1] != '/'
+                    && chars[start - 1] != '\\');
+            let content_follows = i < chars.len() && !chars[i].is_whitespace();
+            if left_boundary && content_follows {
+                let mut end = i + 1;
+                while end + width <= chars.len() {
+                    if chars[end..end + width].iter().all(|c| *c == marker)
+                        && (!chars[end - 1].is_whitespace() || (marker == '`' && width >= 3))
+                        && (end + width == chars.len()
+                            || (!chars[end + width].is_alphanumeric()
+                                && !(marker == '_'
+                                    && chars[end + width] == '.'
+                                    && end + width + 1 < chars.len()
+                                    && chars[end + width + 1].is_alphanumeric())))
+                    {
+                        for index in start..i {
+                            remove[index] = true;
+                        }
+                        for index in end..end + width {
+                            remove[index] = true;
+                        }
+                        break;
+                    }
+                    end += 1;
+                }
+            }
+            continue;
+        }
+        i += 1;
+    }
     let mut output = String::with_capacity(input.len());
     let mut pending_space = false;
-    for ch in input.chars() {
+    for (index, ch) in chars.into_iter().enumerate() {
         if ch.is_whitespace() {
             pending_space = !output.is_empty();
-        } else if !matches!(ch, '*' | '_' | '`' | '>') && !ch.is_control() {
+        } else if !remove[index] && !ch.is_control() {
             if pending_space {
                 output.push(' ');
                 pending_space = false;
@@ -482,6 +536,11 @@ impl ChatterClient {
         } else {
             label
         })
+    }
+
+    /// Flatten search snippets with the same rules as chat-row previews.
+    pub fn plain_message_preview(&self, input: &str) -> String {
+        plain_sidebar_preview(input)
     }
 
     /// The one-line sidebar preview for a message. `Message::sidebar_preview`

@@ -814,10 +814,7 @@ fn search_messages(
         // Conversation name + sender name resolution both live in core.
         let channel_name =
             ui_ctx.conversation_display_name(&msg.conversation_id, &msg.conversation_type);
-        let sender_name = match msg.sender_id {
-            Some(_) => ui_ctx.message_sender_display_name(&msg),
-            None => "Unknown".to_string(),
-        };
+        let sender_name = ui_ctx.search_sender_display_name(msg);
         let sent_at = chrono::DateTime::<chrono::Utc>::from_timestamp_nanos(msg.sent_at as i64);
         let timestamp = sent_at
             .with_timezone(&chrono::Local)
@@ -842,10 +839,9 @@ fn search_messages(
                 .is_some_and(|file| file.metadata.waveform_samples.is_some()),
             msg.as_text(),
         );
-        let content_preview = msg
-            .as_text()
-            .map(|t| ui_ctx.truncate_message_preview(&t))
-            .unwrap_or_else(|| attachment_name.clone());
+        let content_preview = ui_ctx.search_result_preview(
+            msg.as_text().unwrap_or(&attachment_name), query,
+        );
         let (before, matched, after, start, end) = preview_fragments(&content_preview, query);
         candidates.push(SearchHit {
             row: SearchResult {
@@ -894,11 +890,7 @@ fn search_messages(
             };
             let channel_name =
                 ui_ctx.conversation_display_name(&msg.conversation_id, &msg.conversation_type);
-            let sender_name = if msg.sender_id.is_some() {
-                ui_ctx.message_sender_display_name(&msg)
-            } else {
-                "Unknown".to_string()
-            };
+            let sender_name = ui_ctx.search_sender_display_name(&msg);
             let category = SearchCategory::from_shared_kind(&item.category);
             let sent_at = chrono::DateTime::<chrono::Utc>::from_timestamp_nanos(msg.sent_at as i64);
             let label = if item.size_bytes > 0 {
@@ -910,6 +902,7 @@ fn search_messages(
             } else {
                 item.title.clone()
             };
+            let label = ui_ctx.search_result_preview(&label, query);
             let (before, matched, after, start, end) = preview_fragments(&label, query);
             candidates.push(SearchHit {
                 row: SearchResult {

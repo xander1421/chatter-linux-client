@@ -143,6 +143,7 @@ component MsgRow inherits Rectangle {
     callback clicked(string);
 
     height: 56px * Appearance.text-grow;
+    clip: true;
     border-radius: Spacing.radius-sm;
     background: touch.pressed ? Materials.pressed : root.selected ? Colors.selected : touch.has-hover ? Colors.surface-hover : transparent;
     transform-origin: { x: self.width / 2, y: self.height / 2 };
@@ -170,27 +171,31 @@ component MsgRow inherits Rectangle {
                 color: Colors.text-primary;
                 font-size: Typography.xs;
                 font-weight: Typography.semibold;
+                wrap: no-wrap;
+                overflow: elide;
             }
             Text {
                 text: root.channel-name;
                 color: Colors.text-muted;
                 font-size: Typography.xs;
                 horizontal-stretch: 1;
+                wrap: no-wrap;
                 overflow: elide;
             }
             Text {
                 text: root.timestamp;
                 color: Colors.text-muted;
                 font-size: Typography.xs;
+                wrap: no-wrap;
             }
         }
         HorizontalLayout {
             spacing: 0px;
             before-text := Text { text: root.preview-before; color: Colors.text-secondary; font-size: Typography.sm;
-                width: min(self.preferred-width, parent.width * 0.55); overflow: elide; }
+                width: min(self.preferred-width, parent.width * 0.55); wrap: no-wrap; overflow: elide; }
             match-text := Text { text: root.preview-match; color: Colors.primary; font-size: Typography.sm; font-weight: Typography.semibold;
-                width: min(self.preferred-width, parent.width * 0.4); overflow: elide; }
-            Text { text: root.preview-after; color: Colors.text-secondary; font-size: Typography.sm; horizontal-stretch: 1; overflow: elide; }
+                width: min(self.preferred-width, parent.width * 0.4); wrap: no-wrap; overflow: elide; }
+            Text { text: root.preview-after; color: Colors.text-secondary; font-size: Typography.sm; horizontal-stretch: 1; wrap: no-wrap; overflow: elide; }
         }
     }
 }
@@ -460,15 +465,33 @@ export component UnifiedSearch inherits Rectangle {
             // tab or filter never reparents it, preserving keyboard and IME.
             Flickable {
                 height: Spacing.touch-target-min + Spacing.xs;
-                viewport-width: tab-row.preferred-width;
+                viewport-width: tab-row.width;
                 viewport-height: self.height;
-                tab-row := HorizontalLayout {
-                    spacing: Spacing.xs;
+                tab-row := Rectangle {
+                    width: 7 * 110px;
+                    height: Spacing.touch-target-min;
+                    background: transparent;
+                    selection := Rectangle {
+                        property <int> active-index: root.category == "chats" ? 1 : root.category == "messages" ? 2
+                            : root.category == "media" ? 3 : root.category == "files" ? 4
+                            : root.category == "links" ? 5 : root.category == "voice" ? 6 : 0;
+                        x: self.active-index * 110px + 2px;
+                        y: 4px;
+                        width: 106px;
+                        height: parent.height - 8px;
+                        border-radius: self.height / 2;
+                        background: Colors.row-selected;
+                        border-width: Spacing.stroke;
+                        border-color: Colors.primary;
+                        animate x { duration: Materials.motion-standard; easing: Materials.spring; }
+                        animate width { duration: Materials.motion-standard; easing: Materials.spring; }
+                    }
                     for tab[i] in ["All", "Chats", "Messages", "Media", "Files", "Links", "Voice"]: Rectangle {
-                        width: max(Spacing.touch-target-min, tab-label.preferred-width + 24px);
+                        x: i * 110px;
+                        width: 110px;
                         height: Spacing.touch-target-min;
                         border-radius: Spacing.radius-xl;
-                        background: root.category == tab.to-lowercase() ? Colors.selected : tab-touch.pressed ? Materials.pressed : tab-touch.has-hover ? Materials.hover : transparent;
+                        background: tab-touch.pressed ? Materials.pressed : tab-touch.has-hover ? Materials.hover : transparent;
                         animate background { duration: Materials.motion-quick; easing: Materials.spring; }
                         transform-origin: { x: self.width / 2, y: self.height / 2 };
                         transform-scale-x: tab-touch.pressed ? 94% : 100%;
@@ -479,45 +502,47 @@ export component UnifiedSearch inherits Rectangle {
                             mouse-cursor: pointer;
                             clicked => { root.category = tab.to-lowercase(); root.selected-index = 0; root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter); }
                         }
-                        tab-label := Text { text: tab + (root.category-counts[i] > 0 ? " " + (root.category-counts[i] > root.page-limits[i] ? root.page-limits[i] + "+" : root.category-counts[i]) : ""); color: root.category == tab.to-lowercase() ? Colors.primary : Colors.text-secondary; font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; }
+                        tab-label := Text { text: tab + (root.category-counts[i] > 0 ? " " + (root.category-counts[i] > root.page-limits[i] ? root.page-limits[i] + "+" : root.category-counts[i]) : ""); color: root.category == tab.to-lowercase() ? Colors.primary : Colors.text-secondary; font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; width: 100%; height: 100%; wrap: no-wrap; overflow: elide; }
                     }
                 }
             }
 
-            HorizontalLayout {
+            Flickable {
+                height: 40px;
+                viewport-width: filter-row.preferred-width;
+                viewport-height: self.height;
+                filter-row := HorizontalLayout {
                 spacing: Spacing.xs;
                 Rectangle {
-                    width: 154px; height: Spacing.touch-target-min; border-radius: Spacing.radius-lg;
-                    background: sort-touch.pressed ? Materials.pressed : Colors.inset;
+                    width: 94px; height: 40px; border-radius: Spacing.radius-lg;
+                    background: sort-touch.pressed ? Materials.pressed : root.sort-order != "relevance" ? Colors.row-selected : Materials.ultra-thin;
+                    border-width: Spacing.stroke; border-color: root.sort-order != "relevance" ? Colors.primary : Colors.border;
                     sort-touch := TouchArea { mouse-cursor: pointer; clicked => {
                         root.sort-order = root.sort-order == "relevance" ? "newest" : root.sort-order == "newest" ? "oldest" : root.sort-order == "oldest" ? "largest" : "relevance";
                         root.filters-changed(root.category, root.sort-order, root.date-filter, root.from-filter, root.in-filter);
                     } }
-                    Text { text: root.sort-order == "relevance" ? "Relevance" : root.sort-order == "newest" ? "Newest first" : root.sort-order == "oldest" ? "Oldest first" : "Largest first"; color: Colors.text-secondary; font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; }
+                    Text { text: root.sort-order == "relevance" ? "Relevance" : root.sort-order == "newest" ? "Newest" : root.sort-order == "oldest" ? "Oldest" : "Largest"; color: root.sort-order != "relevance" ? Colors.primary : Colors.text-secondary; font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; width: 100%; height: 100%; wrap: no-wrap; overflow: elide; }
                 }
                 Rectangle {
-                    width: 146px; height: Spacing.touch-target-min; border-radius: Spacing.radius-lg;
-                    background: date-touch.pressed ? Materials.pressed : Colors.inset;
+                    width: 90px; height: 40px; border-radius: Spacing.radius-lg;
+                    background: date-touch.pressed ? Materials.pressed : root.date-filter != "any" ? Colors.row-selected : Materials.ultra-thin;
+                    border-width: Spacing.stroke; border-color: root.date-filter != "any" ? Colors.primary : Colors.border;
                     date-touch := TouchArea { mouse-cursor: pointer; clicked => { root.date-sheet-open = true; root.calendar-shift(0); } }
-                    Text { text: root.date-filter == "any" ? "Any time" : root.date-filter == "today" ? "Today" : root.date-filter == "week" ? "Last 7 days" : root.date-filter == "month" ? "Last 30 days" : root.date-filter == "year" ? "This year" : "Date range"; color: Colors.text-secondary; font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; }
+                    Text { text: root.date-filter == "any" ? "Any time" : root.date-filter == "today" ? "Today" : root.date-filter == "week" ? "7 days" : root.date-filter == "month" ? "30 days" : root.date-filter == "year" ? "This year" : "Range"; color: root.date-filter != "any" ? Colors.primary : Colors.text-secondary; font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; width: 100%; height: 100%; wrap: no-wrap; overflow: elide; }
                 }
-            }
-
-            HorizontalLayout {
-                height: Spacing.touch-target-min;
-                spacing: Spacing.xs;
                 for kind in ["from", "in"]: Rectangle {
-                    width: min(190px, max(92px, picker-chip-label.preferred-width + 24px));
-                    height: Spacing.touch-target-min; border-radius: Spacing.radius-lg;
-                    background: chip-touch.pressed ? Materials.pressed : Colors.inset;
+                    width: kind == "from" ? 78px : 64px;
+                    height: 40px; border-radius: Spacing.radius-lg;
+                    background: chip-touch.pressed ? Materials.pressed : ((kind == "from" && root.from-filter != "") || (kind == "in" && root.in-filter != "")) ? Colors.row-selected : Materials.ultra-thin;
+                    border-width: Spacing.stroke; border-color: ((kind == "from" && root.from-filter != "") || (kind == "in" && root.in-filter != "")) ? Colors.primary : Colors.border;
                     chip-touch := TouchArea { mouse-cursor: pointer; clicked => {
                         root.picker-mode = kind; root.picker-query = ""; root.picker-request(kind, "");
                     } }
                     picker-chip-label := Text { text: kind == "from" ? (root.from-label == "" ? "From" : "From: " + root.from-label) : (root.in-label == "" ? "In" : "In: " + root.in-label);
-                        width: parent.width - (((kind == "from" && root.from-filter != "") || (kind == "in" && root.in-filter != "")) ? Spacing.touch-target-min : 0px);
-                        color: Colors.text-secondary; font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; overflow: elide; }
+                        width: parent.width - (((kind == "from" && root.from-filter != "") || (kind == "in" && root.in-filter != "")) ? 24px : 0px);
+                        height: 100%; color: ((kind == "from" && root.from-filter != "") || (kind == "in" && root.in-filter != "")) ? Colors.primary : Colors.text-secondary; font-size: Typography.sm; horizontal-alignment: center; vertical-alignment: center; wrap: no-wrap; overflow: elide; }
                     if (kind == "from" && root.from-filter != "") || (kind == "in" && root.in-filter != ""): Rectangle {
-                        x: parent.width - self.width; width: Spacing.touch-target-min; height: Spacing.touch-target-min; border-radius: self.width / 2;
+                        x: parent.width - self.width; width: 24px; height: 40px; border-radius: self.width / 2;
                         background: unselect-touch.pressed ? Materials.pressed : unselect-touch.has-hover ? Materials.hover : transparent;
                         unselect-touch := TouchArea { mouse-cursor: pointer; clicked => {
                             if (kind == "from") { root.from-filter = ""; root.from-label = ""; }
@@ -526,6 +551,7 @@ export component UnifiedSearch inherits Rectangle {
                         } }
                         Text { text: "×"; width: 100%; height: 100%; color: Colors.text-muted; font-size: Typography.lg; horizontal-alignment: center; vertical-alignment: center; }
                     }
+                }
                 }
             }
 
