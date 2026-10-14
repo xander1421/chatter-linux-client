@@ -16,14 +16,17 @@
 import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
+import { Materials } from "../theme/materials.slint";
 
 export component MeshOnlyBar inherits Rectangle {
     in property <bool> signed-in: true;
 
     callback sign-in();
 
-    visible: !root.signed-in;
+    visible: !root.signed-in || self.height > 0px;
     height: !root.signed-in ? Spacing.touch-target-min : 0px;
+    animate height { duration: Materials.motion-standard; easing: Materials.spring; }
+    clip: true;
 
     background: Colors.surface.with-alpha(0.7);
 
@@ -59,6 +62,10 @@ export component MeshOnlyBar inherits Rectangle {
                 height: Spacing.button-height;
                 border-radius: self.height / 2;
                 background: sign-in-touch.has-hover ? Colors.surface-hover : transparent;
+                transform-scale-x: sign-in-touch.pressed ? 92% : 100%;
+                transform-scale-y: sign-in-touch.pressed ? 92% : 100%;
+                animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+                animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
 
                 sign-in-label := Text {
                     text: "Sign in";

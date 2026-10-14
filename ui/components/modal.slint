@@ -110,6 +110,7 @@ export component Modal inherits Rectangle {
         max-modal-height: min(root.max-modal-height, root.viewport-height-cap);
         fill-height: root.fill-height;
         full-screen: root.full-screen;
+        allow-back-swipe: !root.root-screen;
         bottom-inset: root.floating-content ? 0px : root.bottom-inset;
         close => { root.close(); }
 

@@ -123,7 +123,8 @@ export component ConnectionBanner inherits Rectangle {
             ? "Mesh is running over Bluetooth — 1 nearby. Mesh conversations do not need the server."
             : "Mesh is running over Bluetooth — " + MeshGlobal.peer-count + " nearby. Mesh conversations do not need the server.";
 
-    visible: root.should-show;
+    visible: root.should-show || self.height > 0px;
+    clip: true;
     // Wide: content-driven, because the mesh sentence wraps and the half of it
     // that would get cut is the half that says the mesh is *not* a substitute
     // for the server.
@@ -132,7 +133,7 @@ export component ConnectionBanner inherits Rectangle {
     height: !root.should-show ? 0px
           : root.tight ? root.compact-height
           : content.preferred-height;
-    animate height { duration: Materials.menu-duration; easing: ease-out; }
+    animate height { duration: Materials.motion-standard; easing: Materials.spring; }
 
     // Banner color based on state
     property <color> banner-color:
@@ -232,6 +233,10 @@ export component ConnectionBanner inherits Rectangle {
                 horizontal-stretch: 0;
                 border-radius: 6px;
                 background: close-touch.has-hover ? root.banner-color.with-alpha(0.15) : transparent;
+                transform-scale-x: close-touch.pressed ? 88% : 100%;
+                transform-scale-y: close-touch.pressed ? 88% : 100%;
+                animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+                animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
 
                 Image {
                     source: Icons.x;

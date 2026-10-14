@@ -4,6 +4,7 @@ import { GlassSurface } from "glass_surface.slint";
 // Ensures modals are centered and have reasonable sizing (not full-screen)
 
 import { Spacing } from "../theme/spacing.slint";
+import { Colors } from "../theme/colors.slint";
 
 // Height of the on-screen keyboard. Only the Window can read
 // `virtual-keyboard-size`, so `app.slint` mirrors it here.
@@ -25,6 +26,8 @@ export component ModalContainer inherits Rectangle {
     // border and shadow with it — those only read as "card" against a visible
     // backdrop, and there is no backdrop left to read against.
     in property <bool> full-screen: false;
+    // Root tabs have no previous page to return to.
+    in property <bool> allow-back-swipe: true;
     // Height to leave uncovered at the bottom when full-screen. The mobile tab
     // bar lives under these modals, and a Contacts screen reached FROM that bar
     // that then hides it reads as a takeover rather than a tab — you lose the
@@ -35,6 +38,19 @@ export component ModalContainer inherits Rectangle {
     in property <string> accessible-title: "Modal dialog";
 
     callback close();
+    property <bool> phone-sheet: !root.full-screen && root.width < 520px;
+    property <bool> phone-page: root.full-screen && root.width < 520px;
+    property <length> drag-offset: 0px;
+    property <length> drag-start-y: 0px;
+    property <length> last-drag-y: 0px;
+    property <length> drag-step: 0px;
+    property <bool> dragging: false;
+    property <float> page-progress: 0;
+    property <bool> page-swiping: false;
+    property <length> page-swipe-start: 0px;
+    init => { root.page-progress = root.show ? 1 : 0; }
+    changed show => { root.page-progress = root.show ? 1 : 0; }
+    animate page-progress { duration: root.page-swiping ? 0ms : Materials.motion-standard; easing: Materials.glide; }
 
     // Forward focus into the modal's keyboard scope for tab trapping
     forward-focus: modal-keys;
@@ -49,13 +65,21 @@ export component ModalContainer inherits Rectangle {
     // Logical close is immediate (nothing below accepts input); the fade and
     // the card's settle run to the end before the surface goes.
     opacity: root.show ? 1 : 0;
-    animate opacity { duration: Materials.sheet-duration; easing: ease-out; }
+    animate opacity { duration: Materials.motion-standard; easing: Materials.glide; }
     visible: root.show || self.opacity > 0;
 
     // Backdrop - full parent coverage. Full-screen has no "outside" to dim:
     // the card covers everything except the strip deliberately left for the tab
     // bar, and dimming THAT is just greying out the navigation.
     background: root.full-screen ? transparent : Materials.scrim;
+
+    // The previous page darkens while the new page travels over it.
+    if root.phone-page: Rectangle {
+        width: root.width;
+        height: root.height - root.bottom-inset;
+        background: Materials.scrim;
+        opacity: root.page-progress * 0.32;
+    }
 
     // Where the Android window does not shrink for the keyboard (edge-to-edge,
     // Android 15+ with targetSdk 35) it covers the card's lower edge — Save/Cancel in Edit Profile were unreachable
@@ -96,14 +120,14 @@ export component ModalContainer inherits Rectangle {
             material-level: 3;
             elevation: 5;
             shown: root.show;
-            enter-distance: root.full-screen ? 0px : 16px;
-            enter-duration: Materials.sheet-duration;
+            enter-distance: root.full-screen ? 0px : root.phone-sheet ? 72px : 24px;
+            enter-duration: Materials.motion-standard;
 
             accessible-role: groupbox;
             accessible-label: root.accessible-title;
             
             // Responsive width: cap at viewport width minus padding
-            width: root.full-screen ? root.width : min(root.modal-width, root.width - 32px);
+            width: root.full-screen || root.phone-sheet ? root.width : min(root.modal-width, root.width - 32px);
 
             // Height: by default sized to content (preferred-height of the children),
             // capped at max-modal-height or viewport. When fill-height is set, expand
@@ -111,15 +135,69 @@ export component ModalContainer inherits Rectangle {
             height: root.full-screen ? root.height - root.bottom-inset
                 : root.fill-height
                 ? min(root.max-modal-height, root.height - 48px)
-                : min(content.preferred-height, min(root.max-modal-height, root.height - 48px));
+                : min(content.preferred-height + (root.phone-sheet ? 24px : 0px), min(root.max-modal-height, root.height - 48px));
 
             // Centering — round to nearest pixel to avoid sub-pixel text rendering
-            x: root.full-screen ? 0 : Math.round((root.width - self.width) / 2 / 1px) * 1px;
-            y: (root.full-screen ? 0px : Math.round((root.height - self.height) / 2 / 1px) * 1px) + self.entrance-offset;
+            x: root.phone-page ? root.width * (1 - root.page-progress)
+                : root.phone-sheet ? 0
+                : root.full-screen ? 0
+                : Math.round((root.width - self.width) / 2 / 1px) * 1px;
+            y: (root.full-screen ? 0px : root.phone-sheet ? root.height - self.height : Math.round((root.height - self.height) / 2 / 1px) * 1px)
+                + self.entrance-offset + root.drag-offset;
+            animate y { duration: root.dragging ? 0ms : Materials.motion-standard; easing: Materials.glide; }
+            transform-scale-x: root.phone-sheet || root.phone-page || root.show ? 100% : 94%;
+            transform-scale-y: root.phone-sheet || root.phone-page || root.show ? 100% : 94%;
+            transform-origin: { x: self.width / 2, y: self.height / 2 };
+            animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; }
+            animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
 
             // Full-screen content stays plain; its header owns the glass.
             background: root.full-screen ? Materials.ambient : transparent;
             border-radius: root.full-screen ? 0px : Spacing.radius-sheet;
+
+            // The handle owns the drag gesture, leaving fields and scrolling content stable.
+            if root.phone-sheet: Rectangle {
+                z: 2;
+                x: 0px;
+                y: 0px;
+                width: parent.width;
+                height: 24px;
+                Rectangle {
+                    width: 36px;
+                    height: 4px;
+                    x: (parent.width - self.width) / 2;
+                    y: 8px;
+                    border-radius: 2px;
+                    background: Colors.text-muted.with-alpha(0.38);
+                }
+                TouchArea {
+                    x: 0px;
+                    y: 0px;
+                    width: parent.width;
+                    height: parent.height;
+                    pointer-event(event) => {
+                        if (event.kind == PointerEventKind.down) {
+                            root.dragging = true;
+                            root.drag-start-y = self.absolute-position.y + self.mouse-y;
+                            root.last-drag-y = root.drag-start-y;
+                        }
+                        if (event.kind == PointerEventKind.move && root.dragging) {
+                            root.drag-step = self.absolute-position.y + self.mouse-y - root.last-drag-y;
+                            root.last-drag-y = self.absolute-position.y + self.mouse-y;
+                            root.drag-offset = root.last-drag-y < root.drag-start-y
+                                ? (root.last-drag-y - root.drag-start-y) / 4
+                                : root.last-drag-y - root.drag-start-y;
+                        }
+                        if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
+                            root.dragging = false;
+                            if (root.drag-offset > 96px || (root.drag-offset > 32px && root.drag-step > 16px)) {
+                                root.close();
+                            }
+                            root.drag-offset = 0px;
+                        }
+                    }
+                }
+            }
 
             // Keyboard handler — Escape to close, Tab trapped within modal
             modal-keys := FocusScope {
@@ -156,8 +234,9 @@ export component ModalContainer inherits Rectangle {
             // keep filling the card exactly as before: their content is laid
             // out to the card and brings its own scrolling.
             body := Flickable {
+                y: root.phone-sheet ? 24px : 0px;
                 width: parent.width;
-                height: parent.height;
+                height: parent.height - (root.phone-sheet ? 24px : 0px);
                 viewport-width: self.width;
                 viewport-height: content.height;
                 interactive: self.viewport-height > self.height;
@@ -166,15 +245,36 @@ export component ModalContainer inherits Rectangle {
                     width: body.width;
                     height: root.full-screen || root.fill-height ? body.height
                         : max(self.preferred-height, body.height);
-                    // Hidden the moment the dialog is logically closed: an
-                    // invisible subtree gets no pointer, key, focus or
-                    // accessible default action (i-slint-core window.rs
-                    // skips key input to an invisible focus item). The shell
-                    // and scrim finish their exit on their own.
-                    visible: root.show;
+                    // Keep the surface populated through its exit; the outer
+                    // close shield blocks input while this content settles.
+                    opacity: root.show ? 1 : 0;
+                    animate opacity { duration: Materials.motion-standard; easing: Materials.glide; }
+                    visible: root.show || self.opacity > 0;
 
                     // The actual content provided by users of ModalContainer
                     @children
+                }
+            }
+
+            // Swipe from the leading edge without stealing the page's scrolling.
+            if root.phone-page && root.show && root.allow-back-swipe: TouchArea {
+                z: 3;
+                width: 24px;
+                height: parent.height;
+                pointer-event(event) => {
+                    if (event.kind == PointerEventKind.down) {
+                        root.page-swiping = true;
+                        root.page-swipe-start = self.absolute-position.x + self.mouse-x;
+                    }
+                    if (event.kind == PointerEventKind.move && root.page-swiping) {
+                        root.page-progress = 1 - min(1, max(0,
+                            (self.absolute-position.x + self.mouse-x - root.page-swipe-start) / root.width));
+                    }
+                    if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
+                        root.page-swiping = false;
+                        if (root.page-progress < 0.7) { root.close(); }
+                        else { root.page-progress = 1; }
+                    }
                 }
             }
         }

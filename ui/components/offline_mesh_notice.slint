@@ -30,12 +30,17 @@ import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
 import { MeshGlobal } from "../mesh/mesh_global.slint";
+import { Materials } from "../theme/materials.slint";
 
 export component OfflineMeshNotice inherits Rectangle {
     // Rust's answer to "is there anything usable without an account".
     in property <bool> account-free-surfaces: false;
 
     callback continue-without-account();
+    property <float> arrival: 0;
+    init => { root.arrival = 1; }
+    animate arrival { duration: Materials.motion-standard; easing: Materials.spring; }
+    opacity: root.arrival;
 
     // Whether the server is unreachable is *not* decided here. Callers wrap this
     // in `if root.server-unreachable:` — a bool chatter-core computes via
@@ -48,6 +53,7 @@ export component OfflineMeshNotice inherits Rectangle {
     border-radius: Spacing.radius-sm;
 
     body := VerticalLayout {
+        y: (1 - root.arrival) * 8px;
         padding: Spacing.md;
         spacing: Spacing.sm;
 
@@ -111,6 +117,10 @@ export component OfflineMeshNotice inherits Rectangle {
             background: continue-touch.has-hover
                 ? Colors.warning.with-alpha(0.22)
                 : Colors.warning.with-alpha(0.14);
+            transform-scale-x: continue-touch.pressed ? 97% : 100%;
+            transform-scale-y: continue-touch.pressed ? 93% : 100%;
+            animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+            animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
 
             HorizontalLayout {
                 padding-left: Spacing.sm;

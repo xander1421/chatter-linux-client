@@ -3,6 +3,7 @@
 import { Colors } from "../theme/colors.slint";
 import { Appearance } from "../theme/appearance.slint";
 import { Spacing } from "../theme/spacing.slint";
+import { Materials } from "../theme/materials.slint";
 
 export component Skeleton inherits Rectangle {
     // Default dimensions (can be overridden by parent)
@@ -31,8 +32,9 @@ export component Skeleton inherits Rectangle {
         shimmer-offset: 0px;
         animate shimmer-offset {
             // Reduce animations: a still placeholder.
-            duration: Appearance.reduce-motion ? 0ms : 1500ms;
+            duration: Appearance.reduce-motion ? 0ms : Materials.motion-emphasized * 3;
             iteration-count: Appearance.reduce-motion ? 1 : -1;
+            easing: Materials.glide;
         }
 
         // Trigger animation by setting final value

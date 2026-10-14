@@ -27,6 +27,7 @@ export component TooltipArea inherits Rectangle {
 
     // Internal hover state
     property <bool> hovered: tooltip-touch.has-hover;
+    property <bool> active: root.hovered && root.tooltip-enabled && root.tooltip-text != "";
 
     // Forward focus and pass through mouse events
     tooltip-touch := TouchArea {
@@ -38,7 +39,14 @@ export component TooltipArea inherits Rectangle {
     @children
 
     // Render tooltip inline when hovered and enabled
-    if root.hovered && root.tooltip-enabled && root.tooltip-text != "": GlassSurface {
+    GlassSurface {
+        visible: root.active || self.opacity > 0;
+        opacity: root.active ? 1 : 0;
+        animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
+        transform-scale-x: root.active ? 100% : 90%;
+        transform-scale-y: root.active ? 100% : 90%;
+        animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+        animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
         material-level: 3;
         elevation: 4;
 
@@ -54,8 +62,6 @@ export component TooltipArea inherits Rectangle {
         height: tt-text.preferred-height + Spacing.sm * 2;
 
         border-radius: Spacing.radius-xl;
-        opacity: 1;
-        animate opacity { duration: Materials.feedback-duration; }
 
         tt-text := Text {
             x: Spacing.sm;

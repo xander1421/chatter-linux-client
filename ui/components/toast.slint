@@ -15,6 +15,9 @@ export component Toast inherits GlassSurface {
     in property <string> message: "";
     in property <string> variant: "info";  // "success", "error", "warning", "info"
     in property <bool> show-toast: false;
+    property <length> swipe-start: 0px;
+    property <length> swipe-offset: 0px;
+    property <bool> swiping: false;
 
     callback dismissed();
 
@@ -27,13 +30,41 @@ export component Toast inherits GlassSurface {
 
     // Visibility and animation
     visible: root.show-toast || self.opacity > 0;
-    opacity: root.show-toast ? 1 : 0;
-    animate opacity { duration: Materials.menu-duration; }
+    opacity: root.show-toast
+        ? (root.swiping ? max(0.6, 1 - abs(root.swipe-offset / 240px)) : 1)
+        : 0;
+    animate opacity { duration: root.swiping ? 0ms : Materials.motion-quick; easing: Materials.glide; }
+    transform-scale-x: root.show-toast ? 100% : 86%;
+    transform-scale-y: root.show-toast ? 100% : 72%;
+    transform-origin: { x: self.width / 2, y: 0px };
+    animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; }
+    animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
 
     // Toast container
     in property <length> max-toast-width: 320px;
     width: root.max-toast-width;
     height: content-layout.preferred-height + Spacing.md * 2;
+
+    // A swipe on the pill dismisses it; the close target remains independent.
+    TouchArea {
+        width: 100%;
+        height: 100%;
+        enabled: root.show-toast;
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.down) {
+                root.swipe-start = self.mouse-y;
+                root.swiping = true;
+            }
+            if (event.kind == PointerEventKind.move && root.swiping) {
+                root.swipe-offset = self.mouse-y - root.swipe-start;
+            }
+            if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
+                if (root.swipe-offset < -48px || root.swipe-offset > 48px) { root.dismissed(); }
+                root.swipe-offset = 0px;
+                root.swiping = false;
+            }
+        }
+    }
 
     content-layout := HorizontalLayout {
         // The variant dot carries status without another material or outline. It
@@ -77,6 +108,10 @@ export component Toast inherits GlassSurface {
                 height: Spacing.touch-target-min;
                 border-radius: Spacing.radius-sm;
                 background: dismiss-area.has-hover ? Colors.surface-hover : transparent;
+                transform-scale-x: dismiss-area.pressed ? 88% : 100%;
+                transform-scale-y: dismiss-area.pressed ? 88% : 100%;
+                animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+                animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
 
                 // The bundled SVG, not U+2715. Inter has no glyph for that codepoint
                 // and Slint's fallback drew a tofu box — so the only way to dismiss a
