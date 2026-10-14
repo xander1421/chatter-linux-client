@@ -63,6 +63,11 @@ impl SearchRequests {
             && ticket.generation == self.generation
     }
 
+    /// A debounce worker checks ownership before touching the local index.
+    pub fn pending(&self, ticket: Ticket, session: u64) -> bool {
+        self.current(ticket, session, true)
+    }
+
     pub fn complete_messages(
         &mut self,
         ticket: Ticket,
@@ -71,7 +76,7 @@ impl SearchRequests {
         ids: Vec<String>,
         paint: impl FnOnce(),
     ) -> bool {
-        if !self.current(ticket, session, open) || self.query.trim().is_empty() {
+        if !self.current(ticket, session, open) {
             return false;
         }
         self.messages = ids;

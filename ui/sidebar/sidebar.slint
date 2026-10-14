@@ -85,6 +85,9 @@ export component Sidebar inherits Rectangle {
     // ── Properties: State ──
     in-out property <bool> collapsed: false;
     in-out property <bool> hidden: false;
+    // The overlay animates from this row; the row stays in layout but its
+    // glass and label recede while the one native search input takes over.
+    in property <bool> search-overlay-open: false;
     // Compact (phone-width) layout: the panel IS the screen and the bottom tab
     // bar carries Contacts, Calls and Profile. Not "is a phone": a tablet
     // shows this panel beside the chat, with its own footer, like desktop.
@@ -329,6 +332,8 @@ export component Sidebar inherits Rectangle {
                 // an ordinary slot at the head of the stack.
                 if root.collapsed: Rectangle {
                     height: root.quick-link-height;
+                    opacity: root.search-overlay-open ? 0 : 1;
+                    animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
                     accessible-role: button;
                     accessible-label: "Search";
                     TooltipArea {
@@ -336,7 +341,7 @@ export component Sidebar inherits Rectangle {
                         tooltip-text: "Search"; tooltip-enabled: true; placement: "right";
                         HorizontalLayout { alignment: center; VerticalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg; Image { source: Icons.search; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; } } } }
                     }
-                    TouchArea { mouse-cursor: pointer; clicked => { root.search-clicked(); } }
+                    TouchArea { enabled: !root.search-overlay-open; mouse-cursor: pointer; clicked => { root.search-clicked(); } }
                 }
 
                 if !AnonMode.enabled : Rectangle {
@@ -680,6 +685,8 @@ export component Sidebar inherits Rectangle {
             y: 0;
             width: root.width - 2 * self.x;
             height: root.top-row-height;
+            opacity: root.search-overlay-open ? 0 : 1;
+            animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
             accessible-role: button;
             accessible-label: "Search";
             HorizontalLayout {
@@ -696,7 +703,7 @@ export component Sidebar inherits Rectangle {
                 }
                 Text { text: "Search"; color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; }
             }
-            search-touch := TouchArea { mouse-cursor: pointer; clicked => { root.search-clicked(); } }
+            search-touch := TouchArea { enabled: !root.search-overlay-open; mouse-cursor: pointer; clicked => { root.search-clicked(); } }
             // Create — New Chat / New Channel / New Section. Two-pane only; a
             // phone has the floating button on the Chats tab instead. Left of
             // the Shield toggle.

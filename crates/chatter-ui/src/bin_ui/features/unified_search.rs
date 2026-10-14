@@ -8,20 +8,49 @@ use std::sync::{Arc, Mutex};
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use chatter_core::client::ChatterClient;
+use chatter_core::services::search::{SearchCategory, SearchDocument, SearchQuery};
 
 use crate::{MainWindow, QuickSwitcherItem, SearchResult};
 
 /// Wire all unified-search callbacks.
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let requests = Arc::new(Mutex::new(SearchRequests::default()));
+    let recent_mode = Arc::new(Mutex::new(None));
     wire_session(window, ui_ctx, requests.clone());
-    wire_opened(window, ui_ctx, requests.clone());
+    wire_opened(window, ui_ctx, requests.clone(), recent_mode);
     wire_closed(window, ui_ctx, requests.clone());
     wire_changed(window, ui_ctx, requests.clone());
     wire_conversation_selected(window, ui_ctx, requests.clone());
     wire_message_selected(window, ui_ctx, requests.clone());
     wire_resolve(window, ui_ctx, requests.clone());
     wire_person_selected(window, ui_ctx, requests);
+    wire_filters(window);
+    wire_recents(window);
+}
+
+fn wire_filters(window: &MainWindow) {
+    let weak = window.as_weak();
+    window.on_unified_search_filters_changed(move |_, _, _, _, _| {
+        if let Some(w) = weak.upgrade() {
+            w.invoke_unified_search_changed(w.get_unified_search_query());
+        }
+    });
+}
+
+fn wire_recents(window: &MainWindow) {
+    let weak = window.as_weak();
+    window.on_unified_search_recent_selected(move |query| {
+        if let Some(w) = weak.upgrade() {
+            w.set_unified_search_query(query.clone());
+            w.invoke_unified_search_changed(query);
+        }
+    });
+    let weak = window.as_weak();
+    window.on_unified_search_recent_clear(move || {
+        if let Some(w) = weak.upgrade() {
+            w.set_unified_search_recents(ModelRc::new(VecModel::default()));
+        }
+    });
 }
 
 /// The person-lookup form of a query: trimmed, one leading `@` dropped.
@@ -44,18 +73,37 @@ fn wire_opened(
     window: &MainWindow,
     ui_ctx: &Arc<ChatterClient>,
     requests: Arc<Mutex<SearchRequests>>,
+    recent_mode: Arc<Mutex<Option<bool>>>,
 ) {
     let weak = window.as_weak();
     let ui_ctx = ui_ctx.clone();
     window.on_unified_search_opened(move || {
         if let Some(w) = weak.upgrade() {
+            let mode = ui_ctx.anon_mode_enabled();
+            let mut previous_mode = recent_mode.lock().unwrap();
+            if previous_mode.is_some_and(|previous| previous != mode) {
+                w.set_unified_search_recents(ModelRc::new(VecModel::default()));
+            }
+            *previous_mode = Some(mode);
             requests
                 .lock()
                 .unwrap()
                 .invalidate(ui_ctx.auth_state().get().session_revision, "");
             clear_search_rows(&w);
-            let convs = conversation_items(&ui_ctx, "");
+            let convs = conversation_items(&ui_ctx, w.get_unified_search_query().as_str());
             set_conversations(&w, convs);
+            let count = w.get_unified_search_conversations().row_count() as i32;
+            w.set_unified_search_counts(ModelRc::new(VecModel::from(vec![
+                count, count, 0, 0, 0, 0, 0,
+            ])));
+            if !w.get_unified_search_query().trim().is_empty()
+                || !matches!(
+                    w.get_unified_search_category().as_str(),
+                    "all" | "chats" | "messages"
+                )
+            {
+                w.invoke_unified_search_changed(w.get_unified_search_query());
+            }
         }
     });
 }
@@ -97,6 +145,8 @@ fn wire_session(
                     requests.lock().unwrap().invalidate(next, "");
                     clear_search_rows(&w);
                     w.set_unified_search_conversations(ModelRc::new(VecModel::default()));
+                    w.set_unified_search_recents(ModelRc::new(VecModel::default()));
+                    w.set_unified_search_query("".into());
                     w.set_unified_search_open(false);
                 }
             });
@@ -118,6 +168,20 @@ fn wire_closed(
             .unwrap()
             .invalidate(ui_ctx.auth_state().get().session_revision, "");
         if let Some(w) = weak.upgrade() {
+            let query = w.get_unified_search_query().trim().to_string();
+            if !query.is_empty() {
+                let mut recents = vec![query];
+                recents.extend(w.get_unified_search_recents().iter().map(|s| s.to_string()));
+                let mut seen = std::collections::HashSet::new();
+                recents.retain(|item| seen.insert(item.clone()));
+                recents.truncate(6);
+                w.set_unified_search_recents(ModelRc::new(VecModel::from(
+                    recents
+                        .into_iter()
+                        .map(SharedString::from)
+                        .collect::<Vec<_>>(),
+                )));
+            }
             clear_search_rows(&w);
         }
     });
@@ -125,6 +189,10 @@ fn wire_closed(
 
 fn clear_search_rows(w: &MainWindow) {
     w.set_unified_search_messages(ModelRc::new(VecModel::default()));
+    w.set_unified_search_counts(ModelRc::new(VecModel::from(vec![0; 7])));
+    w.set_unified_search_thumbnails(ModelRc::new(VecModel::default()));
+    w.set_unified_search_has_thumbnails(ModelRc::new(VecModel::default()));
+    w.set_unified_search_message_kinds(ModelRc::new(VecModel::default()));
     w.set_unified_search_searching(false);
     w.set_unified_search_selected_index(0);
     w.set_unified_search_person_status("".into());
@@ -161,13 +229,34 @@ fn wire_changed(
         }
 
         // Conversations: synchronous, core-built and core-ranked.
-        if let Some(w) = weak.upgrade() {
-            let convs = conversation_items(&ui_ctx, &query_str);
+        let chat_count = if let Some(w) = weak.upgrade() {
+            let all_convs = conversation_items(&ui_ctx, &query_str);
+            let count = all_convs.len() as i32;
+            let convs = if w.get_unified_search_category().as_str() == "all"
+                || w.get_unified_search_category().as_str() == "chats"
+            {
+                all_convs
+            } else {
+                Vec::new()
+            };
             set_conversations(&w, convs);
-        }
+            w.set_unified_search_counts(ModelRc::new(VecModel::from(vec![
+                count, count, 0, 0, 0, 0, 0,
+            ])));
+            count
+        } else {
+            return;
+        };
 
         // Messages: empty query clears; otherwise search in background.
-        if query_str.trim().is_empty() {
+        if weak
+            .upgrade()
+            .is_some_and(|w| w.get_unified_search_category().as_str() == "chats")
+            || (query_str.trim().is_empty()
+                && weak.upgrade().is_some_and(|w| {
+                    matches!(w.get_unified_search_category().as_str(), "all" | "messages")
+                }))
+        {
             if let Some(w) = weak.upgrade() {
                 w.set_unified_search_messages(ModelRc::new(VecModel::default()));
                 w.set_unified_search_searching(false);
@@ -181,8 +270,26 @@ fn wire_changed(
         let weak_bg = weak.clone();
         let ui_ctx = ui_ctx.clone();
         let requests = requests.clone();
+        let (category, sort, date) = if let Some(w) = weak.upgrade() {
+            (
+                w.get_unified_search_category().to_string(),
+                w.get_unified_search_sort().to_string(),
+                w.get_unified_search_date().to_string(),
+            )
+        } else {
+            return;
+        };
         std::thread::spawn(move || {
-            let results = search_messages(&ui_ctx, &query_str);
+            std::thread::sleep(std::time::Duration::from_millis(160));
+            if !requests
+                .lock()
+                .unwrap()
+                .pending(ticket, ui_ctx.auth_state().get().session_revision)
+            {
+                return;
+            }
+            let (results, mut counts, thumbnails, kinds) =
+                search_messages(&ui_ctx, &query_str, &category, &sort, &date);
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak_bg.upgrade() {
                     let ids = results
@@ -195,6 +302,40 @@ fn wire_changed(
                         w.get_unified_search_open(),
                         ids,
                         || {
+                            counts[0] += chat_count;
+                            counts[1] = chat_count;
+                            w.set_unified_search_counts(ModelRc::new(VecModel::from(
+                                counts.to_vec(),
+                            )));
+                            let mut images = Vec::with_capacity(thumbnails.len());
+                            let mut has_images = Vec::with_capacity(thumbnails.len());
+                            for thumb in thumbnails {
+                                if let Some(thumb) = thumb {
+                                    images.push(
+                                        slint::Image::from_rgba8(slint::SharedPixelBuffer::<
+                                            slint::Rgba8Pixel,
+                                        >::clone_from_slice(
+                                            &thumb.pixels,
+                                            thumb.width,
+                                            thumb.height,
+                                        )),
+                                    );
+                                    has_images.push(true);
+                                } else {
+                                    images.push(slint::Image::default());
+                                    has_images.push(false);
+                                }
+                            }
+                            w.set_unified_search_thumbnails(ModelRc::new(VecModel::from(images)));
+                            w.set_unified_search_has_thumbnails(ModelRc::new(VecModel::from(
+                                has_images,
+                            )));
+                            w.set_unified_search_message_kinds(ModelRc::new(VecModel::from(
+                                kinds
+                                    .into_iter()
+                                    .map(SharedString::from)
+                                    .collect::<Vec<_>>(),
+                            )));
                             w.set_unified_search_messages(ModelRc::new(VecModel::from(results)));
                             w.set_unified_search_searching(false);
                         },
@@ -482,9 +623,58 @@ fn set_conversations(window: &MainWindow, items: Vec<QuickSwitcherItem>) {
 
 /// Port of header.rs message-search shaping. Searches every conversation the
 /// current mode shows (core filters; the palette has no per-channel scope).
-fn search_messages(ui_ctx: &Arc<ChatterClient>, query: &str) -> Vec<SearchResult> {
-    let results = ui_ctx.search_messages_visible(query, 50);
-    let mut out: Vec<SearchResult> = Vec::with_capacity(results.len());
+struct SearchHit {
+    row: SearchResult,
+    text: String,
+    category: SearchCategory,
+    created_at: chrono::DateTime<chrono::Utc>,
+    size: u64,
+    sender_id: Option<String>,
+    chat_id: String,
+    thumbnail: Option<Vec<u8>>,
+}
+
+struct SearchThumbnail {
+    pixels: Vec<u8>,
+    width: u32,
+    height: u32,
+}
+
+impl SearchDocument for SearchHit {
+    fn category(&self) -> SearchCategory {
+        self.category
+    }
+    fn search_text(&self) -> &str {
+        &self.text
+    }
+    fn created_at(&self) -> chrono::DateTime<chrono::Utc> {
+        self.created_at
+    }
+    fn size_bytes(&self) -> u64 {
+        self.size
+    }
+    fn sender_id(&self) -> Option<&str> {
+        self.sender_id.as_deref()
+    }
+    fn chat_id(&self) -> &str {
+        &self.chat_id
+    }
+}
+
+fn search_messages(
+    ui_ctx: &Arc<ChatterClient>,
+    query: &str,
+    category: &str,
+    sort: &str,
+    date: &str,
+) -> (
+    Vec<SearchResult>,
+    [i32; 7],
+    Vec<Option<SearchThumbnail>>,
+    Vec<String>,
+) {
+    let results = ui_ctx.search_messages_visible(query, 250);
+    let mut candidates = Vec::with_capacity(results.len());
     for msg in &results {
         // Conversation name + sender name resolution both live in core.
         let channel_name =
@@ -493,27 +683,160 @@ fn search_messages(ui_ctx: &Arc<ChatterClient>, query: &str) -> Vec<SearchResult
             Some(_) => ui_ctx.message_sender_display_name(&msg),
             None => "Unknown".to_string(),
         };
-        let timestamp = msg
-            .created_at
+        let sent_at = chrono::DateTime::<chrono::Utc>::from_timestamp_nanos(msg.sent_at as i64);
+        let timestamp = sent_at
             .with_timezone(&chrono::Local)
             .format("%b %d, %H:%M")
             .to_string();
+        let attachment = msg
+            .attachments
+            .first()
+            .and_then(|id| ui_ctx.get_attachment_metadata(id));
+        let (attachment_name, size) = if let Some(file) = attachment.as_ref() {
+            let meta = &file.metadata;
+            (meta.name.clone(), meta.size)
+        } else {
+            (String::new(), 0)
+        };
+        let kind = SearchCategory::from_message(
+            attachment
+                .as_ref()
+                .map(|file| file.metadata.mime_type.as_str()),
+            attachment
+                .as_ref()
+                .is_some_and(|file| file.metadata.waveform_samples.is_some()),
+            msg.as_text(),
+        );
         let content_preview = msg
             .as_text()
             .map(|t| ui_ctx.truncate_message_preview(&t))
-            .unwrap_or_else(|| "[Attachment]".to_string());
-        out.push(SearchResult {
-            message_id: msg.id.to_string().into(),
-            channel_id: msg.conversation_id.to_string().into(),
-            channel_name: channel_name.into(),
-            sender_name: sender_name.into(),
-            content_preview: content_preview.into(),
-            timestamp: timestamp.into(),
-            highlight_start: 0,
-            highlight_end: 0,
+            .unwrap_or_else(|| attachment_name.clone());
+        let lower = content_preview.to_lowercase();
+        let needle = query.trim().to_lowercase();
+        let start = lower.find(&needle).unwrap_or(0) as i32;
+        let end = if lower.contains(&needle) {
+            start + needle.len() as i32
+        } else {
+            0
+        };
+        candidates.push(SearchHit {
+            row: SearchResult {
+                message_id: msg.id.to_string().into(),
+                channel_id: msg.conversation_id.to_string().into(),
+                channel_name: channel_name.into(),
+                sender_name: sender_name.into(),
+                content_preview: content_preview.into(),
+                timestamp: timestamp.into(),
+                highlight_start: start,
+                highlight_end: end,
+            },
+            text: format!("{} {}", msg.as_text().unwrap_or(""), attachment_name),
+            category: kind,
+            created_at: sent_at,
+            size,
+            sender_id: msg.sender_id.map(|id| id.to_string()),
+            chat_id: msg.conversation_id.to_string(),
+            thumbnail: attachment
+                .as_ref()
+                .and_then(|file| file.metadata.thumbnail.clone()),
         });
     }
-    out
+    let request = SearchQuery::from_controls(query, category, sort, date);
+    let mut all_request = request.clone();
+    all_request.category = SearchCategory::All;
+    if request.category != SearchCategory::Chats {
+        let mut seen: std::collections::HashSet<String> = candidates
+            .iter()
+            .map(|hit| hit.row.message_id.to_string())
+            .collect();
+        for item in ui_ctx.search_shared_content_visible(&all_request, 250) {
+            if !seen.insert(item.message_id.clone()) {
+                continue;
+            }
+            let Ok(id) = item.message_id.parse() else {
+                continue;
+            };
+            let Some(msg) = ui_ctx.get_message_local(&id) else {
+                continue;
+            };
+            let channel_name =
+                ui_ctx.conversation_display_name(&msg.conversation_id, &msg.conversation_type);
+            let sender_name = if msg.sender_id.is_some() {
+                ui_ctx.message_sender_display_name(&msg)
+            } else {
+                "Unknown".to_string()
+            };
+            let category = SearchCategory::from_shared_kind(&item.category);
+            let sent_at = chrono::DateTime::<chrono::Utc>::from_timestamp_nanos(msg.sent_at as i64);
+            let label = if item.size_bytes > 0 {
+                format!(
+                    "{} · {}",
+                    item.title,
+                    chatter_core::domain::attachment::format_bytes(item.size_bytes)
+                )
+            } else {
+                item.title.clone()
+            };
+            let needle = query.trim().to_lowercase();
+            let match_start = label.to_lowercase().find(&needle);
+            candidates.push(SearchHit {
+                row: SearchResult {
+                    message_id: item.message_id.into(),
+                    channel_id: msg.conversation_id.to_string().into(),
+                    channel_name: channel_name.into(),
+                    sender_name: sender_name.into(),
+                    content_preview: label.into(),
+                    timestamp: sent_at
+                        .with_timezone(&chrono::Local)
+                        .format("%b %d, %H:%M")
+                        .to_string()
+                        .into(),
+                    highlight_start: match_start.unwrap_or(0) as i32,
+                    highlight_end: match_start.map_or(0, |start| start + needle.len()) as i32,
+                },
+                text: item.title,
+                category,
+                created_at: sent_at,
+                size: item.size_bytes,
+                sender_id: msg.sender_id.map(|id| id.to_string()),
+                chat_id: msg.conversation_id.to_string(),
+                thumbnail: item.thumbnail,
+            });
+        }
+    }
+    let candidates = all_request.apply(candidates);
+    let mut counts = [0; 7];
+    for hit in &candidates {
+        counts[0] += 1;
+        let slot = match hit.category {
+            SearchCategory::Messages => 2,
+            SearchCategory::Media => 3,
+            SearchCategory::Files => 4,
+            SearchCategory::Links => 5,
+            SearchCategory::Voice => 6,
+            _ => continue,
+        };
+        counts[slot] += 1;
+    }
+    let mut rows = Vec::new();
+    let mut thumbnails = Vec::new();
+    let mut kinds = Vec::new();
+    for hit in request.apply(candidates).into_iter().take(50) {
+        let decoded = hit
+            .thumbnail
+            .as_deref()
+            .and_then(|bytes| image::load_from_memory(bytes).ok())
+            .map(|image| image.thumbnail(320, 320).to_rgba8())
+            .map(|rgba| SearchThumbnail {
+                width: rgba.width(),
+                height: rgba.height(),
+                pixels: rgba.into_raw(),
+            });
+        thumbnails.push(decoded);
+        kinds.push(hit.category.as_str().to_string());
+        rows.push(hit.row);
+    }
+    (rows, counts, thumbnails, kinds)
 }
 
 #[cfg(test)]

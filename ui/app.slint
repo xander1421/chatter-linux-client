@@ -226,6 +226,7 @@ export component MainWindow inherits Window {
     in property <[int]> unified-search-counts: [0, 0, 0, 0, 0, 0, 0];
     in property <[image]> unified-search-thumbnails: [];
     in property <[bool]> unified-search-has-thumbnails: [];
+    in property <[string]> unified-search-message-kinds: [];
     // Loaded from SettingsRepository at startup: "k" | "f" | "both".
     in-out property <string> search-shortcut-pref: "both";
     callback unified-search-opened();
@@ -2994,6 +2995,7 @@ export component MainWindow inherits Window {
             category-counts: root.unified-search-counts;
             thumbnails: root.unified-search-thumbnails;
             has-thumbnails: root.unified-search-has-thumbnails;
+            message-kinds: root.unified-search-message-kinds;
             query-is-handle: root.unified-search-query-is-handle;
             person-status: root.unified-search-person-status;
             person-error: root.unified-search-person-error;

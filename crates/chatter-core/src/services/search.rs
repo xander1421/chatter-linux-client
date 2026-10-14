@@ -24,6 +24,30 @@ pub enum SearchCategory {
 }
 
 impl SearchCategory {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::All => "all",
+            Self::Chats => "chats",
+            Self::Messages => "messages",
+            Self::Media => "media",
+            Self::Files => "files",
+            Self::Links => "links",
+            Self::Voice => "voice",
+        }
+    }
+
+    fn group_order(self) -> u8 {
+        match self {
+            Self::Chats => 0,
+            Self::Messages => 1,
+            Self::Media => 2,
+            Self::Files => 3,
+            Self::Links => 4,
+            Self::Voice => 5,
+            Self::All => 6,
+        }
+    }
+
     pub fn from_str(value: &str) -> Self {
         match value {
             "chats" => Self::Chats,
@@ -155,6 +179,10 @@ impl SearchQuery {
             SearchSort::Newest => out.sort_by_key(|doc| std::cmp::Reverse(doc.created_at())),
             SearchSort::Oldest => out.sort_by_key(|doc| doc.created_at()),
             SearchSort::Largest => out.sort_by_key(|doc| std::cmp::Reverse(doc.size_bytes())),
+        }
+        if self.category == SearchCategory::All {
+            // Stable grouping keeps the requested order within each section.
+            out.sort_by_key(|doc| doc.category().group_order());
         }
         out
     }
@@ -367,6 +395,57 @@ mod tests {
         assert_eq!(
             query.apply(docs).iter().map(|d| d.text).collect::<Vec<_>>(),
             ["first", "second", "third"]
+        );
+    }
+
+    #[test]
+    fn all_results_group_kinds_without_losing_newest_order_inside_groups() {
+        let docs = vec![
+            Doc {
+                text: "photo",
+                category: SearchCategory::Media,
+                time: 40,
+                size: 1,
+                sender: "a",
+                chat: "c",
+            },
+            Doc {
+                text: "older text",
+                category: SearchCategory::Messages,
+                time: 10,
+                size: 0,
+                sender: "a",
+                chat: "c",
+            },
+            Doc {
+                text: "newer text",
+                category: SearchCategory::Messages,
+                time: 30,
+                size: 0,
+                sender: "a",
+                chat: "c",
+            },
+            Doc {
+                text: "report",
+                category: SearchCategory::Files,
+                time: 20,
+                size: 2,
+                sender: "a",
+                chat: "c",
+            },
+        ];
+        let query = SearchQuery {
+            text: String::new(),
+            category: SearchCategory::All,
+            sort: SearchSort::Newest,
+            since: None,
+            until: None,
+            from: None,
+            in_chat: None,
+        };
+        assert_eq!(
+            query.apply(docs).iter().map(|d| d.text).collect::<Vec<_>>(),
+            ["newer text", "older text", "photo", "report"]
         );
     }
 
