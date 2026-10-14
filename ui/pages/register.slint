@@ -37,6 +37,21 @@ export component RegisterPage inherits Rectangle {
     property <int> total-steps: 4;
 
     property <bool> submitted: false;
+    property <float> arrival: 0;
+    animate arrival { duration: Materials.motion-standard; easing: Materials.glide; }
+    init => { root.arrival = 1; }
+    property <length> error-nudge: 0px;
+    changed error => {
+        if root.error != "" {
+            root.error-nudge = -8px;
+            error-settle.restart();
+        }
+    }
+    error-settle := Timer {
+        interval: 16ms;
+        running: false;
+        triggered => { self.running = false; root.error-nudge = 0px; }
+    }
     property <bool> passwords-match: password == confirm-password;
     property <bool> pins-match: pin == confirm-pin;
     
@@ -116,7 +131,7 @@ export component RegisterPage inherits Rectangle {
                     height: 100%;
                     width: parent.width * (current-step / total-steps);
                     background: Colors.primary;
-                    animate width { duration: Materials.sheet-duration; easing: ease-out; }
+                    animate width { duration: Materials.motion-standard; easing: Materials.glide; }
                 }
             }
         }
@@ -137,6 +152,10 @@ export component RegisterPage inherits Rectangle {
                     width: min(480px, flick.width - 2 * Spacing.lg);
                     background: Colors.surface;
                     border-radius: Spacing.radius-lg;
+                    transform-origin: { x: self.width / 2, y: 0px };
+                    transform-scale-x: 96% + root.arrival * 4%;
+                    transform-scale-y: 94% + root.arrival * 6%;
+                    opacity: 0.5 + root.arrival * 0.5;
 
                     VerticalLayout {
                         spacing: Spacing.lg;
@@ -154,12 +173,20 @@ export component RegisterPage inherits Rectangle {
                         // step reported nothing at all — and dev-mode
                         // auto-register submits from step 1. The condition is not
                         // step-specific, so neither is where it is said.
-                        if error != "": Text {
-                            text: root.error;
-                            color: Colors.error;
-                            font-size: Typography.sm;
-                            wrap: word-wrap;
-                            min-height: self.preferred-height; // see the step-3 description
+                        if error != "": Rectangle {
+                            min-height: error-copy.preferred-height + Spacing.sm * 2;
+                            background: Colors.error.with-alpha(0.1);
+                            border-radius: Spacing.radius-sm;
+                            error-copy := Text {
+                                x: Spacing.sm + root.error-nudge;
+                                y: Spacing.sm;
+                                width: parent.width - Spacing.sm * 2;
+                                text: root.error;
+                                color: Colors.error;
+                                font-size: Typography.sm;
+                                wrap: word-wrap;
+                                animate x { duration: Materials.motion-quick; easing: Materials.spring; }
+                            }
                         }
 
                         if root.server-unreachable: OfflineMeshNotice {
@@ -192,6 +219,10 @@ export component RegisterPage inherits Rectangle {
                                     border-radius: 40px;
                                     background: Colors.surface-hover;
                                     clip: true;
+                                    transform-scale-x: avatar-touch.pressed ? 94% : 100%;
+                                    transform-scale-y: avatar-touch.pressed ? 94% : 100%;
+                                    animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+                                    animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
 
                                     Avatar {
                                         size: 80px;
@@ -199,7 +230,7 @@ export component RegisterPage inherits Rectangle {
                                         fallback-text: "+";
                                     }
 
-                                    TouchArea {
+                                    avatar-touch := TouchArea {
                                         enabled: !root.loading;
                                         clicked => { root.select-avatar(); }
                                     }
@@ -221,6 +252,10 @@ export component RegisterPage inherits Rectangle {
                                     // Colors.primary: preset A IS primary.
                                     border-width: root.selected-default-idx == i ? Spacing.stroke : 0px;
                                     border-color: Colors.text-primary;
+                                    transform-scale-x: preset-touch.pressed ? 90% : root.selected-default-idx == i ? 108% : 100%;
+                                    transform-scale-y: preset-touch.pressed ? 90% : root.selected-default-idx == i ? 108% : 100%;
+                                    animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; }
+                                    animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
 
                                     Text {
                                         text: preset.letter;
@@ -233,7 +268,7 @@ export component RegisterPage inherits Rectangle {
                                         height: 100%;
                                     }
 
-                                    TouchArea {
+                                    preset-touch := TouchArea {
                                         enabled: !root.loading;
                                         clicked => { root.select-default-avatar(i); }
                                     }

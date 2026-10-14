@@ -19,6 +19,9 @@ export component LinkDevicePage inherits Rectangle {
     in property <bool> linking: false;
     // Touch density for the Shield header control.
     in property <bool> touch: false;
+    property <float> arrival: 0;
+    animate arrival { duration: Materials.motion-standard; easing: Materials.glide; }
+    init => { root.arrival = 1; }
 
     callback start();          // user clicked "Generate QR" / retry
     callback cancel();         // user wants to bail out
@@ -46,6 +49,10 @@ export component LinkDevicePage inherits Rectangle {
                 width: min(480px, flick.width - 2 * Spacing.lg);
                 background: Colors.surface;
                 border-radius: Spacing.radius-lg;
+                transform-origin: { x: self.width / 2, y: 0px };
+                transform-scale-x: 96% + root.arrival * 4%;
+                transform-scale-y: 94% + root.arrival * 6%;
+                opacity: 0.5 + root.arrival * 0.5;
 
                 VerticalLayout {
                     spacing: Spacing.md;
@@ -74,17 +81,35 @@ export component LinkDevicePage inherits Rectangle {
                         wrap: word-wrap;
                     }
 
-                    // QR image area (white background for camera contrast)
+                    // The code grows out of its waiting surface once core has
+                    // generated the link. Keep the surface stable while it does.
                     Rectangle {
                         height: 280px;
-                        background: white;
+                        background: root.link-url != "" ? white : Colors.surface-hover;
                         border-radius: Spacing.radius-md;
+                        animate background { duration: Materials.motion-standard; easing: Materials.glide; }
 
                         Image {
                             source: root.qr-image;
                             width: 256px;
                             height: 256px;
+                            x: (parent.width - self.width) / 2;
+                            y: (parent.height - self.height) / 2;
                             image-fit: contain;
+                            opacity: root.link-url != "" ? 1 : 0;
+                            animate opacity { duration: Materials.motion-standard; easing: Materials.spring; }
+                        }
+                        Text {
+                            text: root.linking ? "Preparing your secure link…" : "Your QR code will appear here";
+                            color: Colors.text-secondary;
+                            font-size: Typography.sm;
+                            horizontal-alignment: center;
+                            vertical-alignment: center;
+                            width: 100%;
+                            height: 100%;
+                            wrap: word-wrap;
+                            opacity: root.link-url == "" ? 1 : 0;
+                            animate opacity { duration: Materials.motion-quick; easing: Materials.settle; }
                         }
                     }
 
@@ -162,6 +187,10 @@ export component LinkDevicePage inherits Rectangle {
                             text: "Back to login";
                             color: Colors.primary;
                             font-size: Typography.sm;
+                            height: Spacing.touch-target-min;
+                            vertical-alignment: center;
+                            accessible-role: button;
+                            accessible-action-default => { root.go-to-login(); }
                             TouchArea { clicked => { root.go-to-login(); } }
                         }
                     }

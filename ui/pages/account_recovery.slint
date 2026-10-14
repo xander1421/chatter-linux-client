@@ -26,6 +26,21 @@ export component AccountRecoveryPage inherits Rectangle {
     property <bool> new-pin-empty: new-pin == "";
     property <bool> passwords-match: new-password == confirm-password;
     property <bool> fields-valid: !username-empty && !recovery-code-empty && !new-password-empty && !confirm-password-empty && !new-pin-empty && passwords-match;
+    property <float> arrival: 0;
+    animate arrival { duration: Materials.motion-standard; easing: Materials.glide; }
+    init => { root.arrival = 1; }
+    property <length> error-nudge: 0px;
+    changed error => {
+        if root.error != "" {
+            root.error-nudge = -8px;
+            error-settle.restart();
+        }
+    }
+    error-settle := Timer {
+        interval: 16ms;
+        running: false;
+        triggered => { self.running = false; root.error-nudge = 0px; }
+    }
 
     callback recover(string, string, string, string);  // username, recovery_code, new_password, new_pin
     callback go-to-login();
@@ -41,14 +56,19 @@ export component AccountRecoveryPage inherits Rectangle {
         interactive: content.preferred-height > self.height;
 
     content := VerticalLayout {
+        padding: Spacing.md;
         alignment: center;
         // Centre the card (see login.slint).
         cross-axis-alignment: center;
 
         Rectangle {
-            width: min(480px, root.width);
+            width: min(480px, flick.width - 2 * Spacing.md);
             background: Colors.surface;
             border-radius: Spacing.radius-lg;
+            transform-origin: { x: self.width / 2, y: 0px };
+            transform-scale-x: 96% + root.arrival * 4%;
+            transform-scale-y: 94% + root.arrival * 6%;
+            opacity: 0.5 + root.arrival * 0.5;
 
             VerticalLayout {
                 alignment: center;
@@ -129,13 +149,11 @@ export component AccountRecoveryPage inherits Rectangle {
                 }
 
                 // Password fields
-                HorizontalLayout {
+                VerticalLayout {
                     spacing: Spacing.md;
-                    width: 100%;
 
                     VerticalLayout {
                         spacing: Spacing.xs;
-                        horizontal-stretch: 1;
 
                         Text {
                             text: "New Password";
@@ -155,7 +173,6 @@ export component AccountRecoveryPage inherits Rectangle {
 
                     VerticalLayout {
                         spacing: Spacing.xs;
-                        horizontal-stretch: 1;
 
                         Text {
                             text: "Confirm Password";
@@ -187,19 +204,20 @@ export component AccountRecoveryPage inherits Rectangle {
                     spacing: Spacing.xs;
 
                     Text {
-                        text: "New 6-Digit PIN";
+                        text: "New recovery PIN";
                         color: Colors.text-secondary;
                         font-size: Typography.sm;
                     }
 
                     Text {
-                        text: "For future account recovery (remember this!)";
+                        text: "Use at least 8 characters; keep it somewhere safe.";
                         color: Colors.text-muted;
                         font-size: Typography.xs;
                     }
 
                     Input {
                         placeholder: "PIN (8+ characters)";
+                        password: true;
                         text <=> root.new-pin;
                         disabled: root.loading;
                         error: submitted && new-pin-empty;
@@ -227,19 +245,20 @@ export component AccountRecoveryPage inherits Rectangle {
 
                 // Error message display
                 if error != "": Rectangle {
+                    min-height: error-copy.preferred-height + Spacing.md * 2;
                     background: Colors.error.with-alpha(0.1);
                     border-radius: Spacing.radius-md;
 
-                    HorizontalLayout {
-                        padding: Spacing.md;
-
-                        Text {
-                            text: root.error;
-                            color: Colors.error;
-                            font-size: Typography.sm;
-                            horizontal-alignment: center;
-                            wrap: word-wrap;
-                        }
+                    error-copy := Text {
+                        x: Spacing.md + root.error-nudge;
+                        y: Spacing.md;
+                        width: parent.width - Spacing.md * 2;
+                        text: root.error;
+                        color: Colors.error;
+                        font-size: Typography.sm;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                        animate x { duration: Materials.motion-quick; easing: Materials.spring; }
                     }
                 }
 

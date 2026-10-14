@@ -14,6 +14,13 @@ export component RecoveryCodesModal inherits Rectangle {
     in property <bool> loading: false;
 
     property <bool> saved-confirmed: false;
+    property <bool> entered: false;
+    changed show-modal => { if !root.show-modal { root.entered = false; } }
+    Timer {
+        interval: 16ms;
+        running: root.show-modal && !root.entered;
+        triggered => { root.entered = true; }
+    }
 
     callback confirmed();
     callback copy-all();
@@ -23,7 +30,7 @@ export component RecoveryCodesModal inherits Rectangle {
     // the Continue button, and that is gated on the "I saved them" checkbox.
     // Same shape as sealed_sender_intro.slint's acknowledge screen.
     opacity: root.show-modal ? 1 : 0;
-    animate opacity { duration: Materials.sheet-duration; easing: ease-out; }
+    animate opacity { duration: Materials.sheet-duration; easing: Materials.glide; }
     visible: root.show-modal || self.opacity > 0;
 
     // Backdrop
@@ -39,6 +46,11 @@ export component RecoveryCodesModal inherits Rectangle {
     GlassSurface {
         material-level: 3;
         elevation: 5;
+        transform-origin: { x: self.width / 2, y: self.height / 2 };
+        transform-scale-x: root.show-modal && root.entered ? 100% : 94%;
+        transform-scale-y: root.show-modal && root.entered ? 100% : 91%;
+        animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; }
+        animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
 
         width: min(480px, parent.width - 32px);
         height: max(200px, min(content-layout.preferred-height, min(760px, parent.height - 48px)));

@@ -1,6 +1,7 @@
 // SessionsModal - Modal for viewing and revoking active sessions
 
 import { Colors } from "../theme/colors.slint";
+import { Materials } from "../theme/materials.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Modal } from "../components/modal.slint";
@@ -59,7 +60,7 @@ export component SessionsModal inherits Rectangle {
 
             if root.error != "": Text {
                 text: root.error;
-                color: Colors.text-secondary;
+                color: Colors.error;
                 font-size: Typography.sm;
                 wrap: word-wrap;
             }
@@ -194,6 +195,10 @@ export component SessionsModal inherits Rectangle {
                         for session[index] in root.sessions: Rectangle {
                             background: session-touch.has-hover ? Colors.surface-hover : Colors.surface;
                             border-radius: Spacing.radius-md;
+                            transform-scale-x: session-touch.pressed ? 98% : 100%;
+                            transform-scale-y: session-touch.pressed ? 97% : 100%;
+                            animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+                            animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
 
                             // Hover only. Declared before the row content so the
                             // Revoke button stays on top of it and gets the tap.
@@ -215,6 +220,8 @@ export component SessionsModal inherits Rectangle {
                                         colorize: Colors.text-secondary;
                                         width: 20px;
                                         height: 20px;
+                                        x: (parent.width - self.width) / 2;
+                                        y: (parent.height - self.height) / 2;
                                     }
                                 }
 

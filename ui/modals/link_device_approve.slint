@@ -10,6 +10,7 @@ import { Typography } from "../theme/typography.slint";
 import { Modal } from "../components/modal.slint";
 import { Button } from "../components/button.slint";
 import { Input } from "../components/input.slint";
+import { Materials } from "../theme/materials.slint";
 
 export component LinkDeviceApproveModal inherits Rectangle {
     in property <bool> show-modal: false;
@@ -24,6 +25,13 @@ export component LinkDeviceApproveModal inherits Rectangle {
     // the user's gate against MITM substitution of the QR ephemeral key.
     in property <string> verification-code: "";
     in property <bool> preview-ready: false;
+    property <bool> preview-entered: false;
+    changed preview-ready => { if !root.preview-ready { root.preview-entered = false; } }
+    Timer {
+        interval: 16ms;
+        running: root.preview-ready && !root.preview-entered;
+        triggered => { root.preview-entered = true; }
+    }
     // Status / error from core.
     in property <string> error: "";
     in property <string> status: "";
@@ -73,6 +81,9 @@ export component LinkDeviceApproveModal inherits Rectangle {
             if root.preview-ready: Rectangle {
                 background: Colors.surface-hover;
                 border-radius: Spacing.radius-sm;
+                transform-origin: { x: self.width / 2, y: 0px };
+                transform-scale-y: root.preview-entered ? 100% : 88%;
+                animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
                 VerticalLayout {
                     padding: Spacing.sm;
                     spacing: Spacing.xs;

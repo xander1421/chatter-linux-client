@@ -23,44 +23,35 @@ export component LoadingPage inherits Rectangle {
                 alignment: center;
                 spacing: Spacing.lg;
 
-                // Animated spinner (three dots with wave animation)
-                HorizontalLayout {
-                    alignment: center;
-                    spacing: Spacing.sm;
-
-                    property <float> anim-progress;
-
-                    // Three dots with staggered vertical position using cosine wave
-                    Rectangle {
-                        width: 12px;
-                        height: 12px;
-                        border-radius: 6px;
-                        background: Colors.primary;
-                        y: -6px * Math.cos(anim-progress * 360deg);
-                    }
-                    Rectangle {
-                        width: 12px;
-                        height: 12px;
-                        border-radius: 6px;
-                        background: Colors.primary;
-                        y: -6px * Math.cos((anim-progress - 0.33) * 360deg);
-                    }
-                    Rectangle {
-                        width: 12px;
-                        height: 12px;
-                        border-radius: 6px;
-                        background: Colors.primary;
-                        y: -6px * Math.cos((anim-progress - 0.66) * 360deg);
-                    }
-
-                    anim-progress: 0;
+                // A small pool and three droplets; the pool remains visible
+                // when motion is reduced, so loading is never a blank screen.
+                Rectangle {
+                    width: 124px;
+                    height: 58px;
+                    background: transparent;
+                    property <float> anim-progress: 0;
                     animate anim-progress {
-                        duration: Appearance.reduce-motion ? 0ms : 1200ms;
+                        duration: Materials.motion-emphasized;
+                        easing: Materials.settle;
                         iteration-count: Appearance.reduce-motion ? 1 : -1;
                     }
+                    init => { self.anim-progress = 1; }
 
-                    init => {
-                        self.anim-progress = 1.0;
+                    Rectangle {
+                        x: 12px;
+                        y: 37px;
+                        width: 100px;
+                        height: 14px;
+                        border-radius: 7px;
+                        background: Colors.primary.with-alpha(0.16);
+                    }
+                    for dot[i] in [0, 1, 2]: Rectangle {
+                        width: 14px;
+                        height: 14px;
+                        border-radius: 7px;
+                        x: 35px + i * 21px;
+                        y: 30px - 16px * max(0, Math.cos((parent.anim-progress - i * 0.28) * 360deg));
+                        background: Colors.primary;
                     }
                 }
 

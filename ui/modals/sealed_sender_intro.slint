@@ -15,6 +15,13 @@ import { Button } from "../components/button.slint";
 
 export component SealedSenderIntroModal inherits Rectangle {
     in property <bool> show-modal: false;
+    property <bool> entered: false;
+    changed show-modal => { if !root.show-modal { root.entered = false; } }
+    Timer {
+        interval: 16ms;
+        running: root.show-modal && !root.entered;
+        triggered => { root.entered = true; }
+    }
 
     // Whether "allow sealed messages from anyone" is enabled. Off (default) =
     // contacts-only. Two-way bound so the choice made here is the initial
@@ -24,7 +31,7 @@ export component SealedSenderIntroModal inherits Rectangle {
     callback confirmed();
 
     opacity: root.show-modal ? 1 : 0;
-    animate opacity { duration: Materials.sheet-duration; easing: ease-out; }
+    animate opacity { duration: Materials.sheet-duration; easing: Materials.glide; }
     visible: root.show-modal || self.opacity > 0;
 
     background: Materials.scrim;
@@ -38,6 +45,11 @@ export component SealedSenderIntroModal inherits Rectangle {
     GlassSurface {
         material-level: 3;
         elevation: 5;
+        transform-origin: { x: self.width / 2, y: self.height / 2 };
+        transform-scale-x: root.show-modal && root.entered ? 100% : 94%;
+        transform-scale-y: root.show-modal && root.entered ? 100% : 91%;
+        animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; }
+        animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
 
         width: min(480px, parent.width - 32px);
         height: max(200px, min(content-layout.preferred-height, min(640px, parent.height - 48px)));
