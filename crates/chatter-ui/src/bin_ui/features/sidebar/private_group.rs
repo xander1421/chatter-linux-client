@@ -154,6 +154,9 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<Chat
                 chatter_core::state::ActiveConversation::AnonGroup(parsed),
             );
         }
+        if let Some(w) = weak.upgrade() {
+            w.invoke_refresh_screen_protection();
+        }
 
         let owner = HistoryOwner::begin(&ui_ctx, ui_ctx.chat_state().active_conversation());
         tokio::spawn(async move {

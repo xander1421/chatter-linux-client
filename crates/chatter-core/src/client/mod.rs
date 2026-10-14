@@ -2040,6 +2040,24 @@ impl ChatterClient {
         self.conversation_type_of(&self.services.chat_state.get().active_conversation)
     }
 
+    /// Whether the currently displayed screen must be hidden from OS capture.
+    /// The caller supplies presentation visibility and the kind retained on a
+    /// phone while its chat pane slides away. The active conversation takes
+    /// precedence, and secret/Shield classification remains in core.
+    pub fn requires_screen_protection(
+        &self,
+        chat_visible: bool,
+        recovery_codes_visible: bool,
+        exiting_conversation_kind: Option<crate::domain::message::ConversationType>,
+    ) -> bool {
+        recovery_codes_visible
+            || self.anon_mode_enabled()
+            || (chat_visible
+                && self.active_conversation_type()
+                    .or(exiting_conversation_kind)
+                    .is_some_and(|kind| kind.is_secret_chat()))
+    }
+
     /// Same resolution for a conversation that isn't the active one — a handle
     /// can be built for any conversation, and `channel_repo` is private to this
     /// module.

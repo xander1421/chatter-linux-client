@@ -473,9 +473,34 @@ pub async fn app_init() -> AppState {
     #[cfg(target_os = "android")]
     crate::platform::android::notification_route::register_window(window.as_weak());
 
-    // Screenshot/recording protection while the recovery codes are shown.
+    // Recompute from core whenever the visible route changes. The Slint
+    // callback carries no security decision or conversation identifier.
     #[cfg(target_os = "android")]
-    window.on_secure_screen(crate::platform::android::activity::set_secure);
+    {
+        let weak = window.as_weak();
+        let protection_client = client.clone();
+        window.on_refresh_screen_protection(move || {
+            if let Some(w) = weak.upgrade() {
+                let chat_visible = w.get_current_view() == "main"
+                    && w.get_active_tab() == "chats"
+                    && w.get_chat_content_visible();
+                let recovery_visible = w.get_active_modal() == "recovery-codes";
+                let exiting_kind = (w.get_compact_layout() && !w.get_mobile_show_chat()
+                    && w.get_chat_content_visible())
+                    .then(|| {
+                        crate::bin_ui::converters::conversation_type(w.get_conversation_kind())
+                    });
+                crate::platform::android::activity::set_secure(
+                    protection_client.requires_screen_protection(
+                        chat_visible,
+                        recovery_visible,
+                        exiting_kind,
+                    ),
+                );
+            }
+        });
+        window.invoke_refresh_screen_protection();
+    }
 
     // Earpiece / speaker / headset routing for calls; the speaker button
     // becomes a toggle bound to the real route.

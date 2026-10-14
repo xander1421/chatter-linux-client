@@ -460,6 +460,10 @@ export component MainWindow inherits Window {
     // therefore keeps its scroll position while the header and composer travel
     // with the conversation, and Back reverses the same movement.
     property <float> chat-push-progress: 0;
+    // Keep capture protection through the pane's reverse slide.
+    out property <bool> chat-content-visible:
+        !root.compact-layout || root.mobile-show-chat || root.chat-push-progress > 0;
+    changed chat-content-visible => { root.refresh-screen-protection(); }
     property <bool> chat-edge-swiping: false;
     property <length> chat-edge-start: 0px;
     animate chat-push-progress {
@@ -1126,6 +1130,7 @@ export component MainWindow inherits Window {
     // return-to-call bar then stands in for it. The user has navigated for
     // themselves, so the call's end no longer owes them a trip to the list.
     changed mobile-show-chat => {
+        root.refresh-screen-protection();
         root.chat-push-progress = root.mobile-show-chat ? 1 : 0;
         if !root.mobile-show-chat {
             root.cancel-composer-keyboard-handover();
@@ -1488,6 +1493,7 @@ export component MainWindow inherits Window {
             root.sidebar-collapsed = false;
         }
     }
+    changed compact-layout => { root.refresh-screen-protection(); }
 
     // ========== Android back key ==========
     // Fired once per hardware/gesture Back press, from `back-scope` at the
@@ -1495,14 +1501,8 @@ export component MainWindow inherits Window {
     // modal, else background the task) lives in Rust so it is testable:
     // `bin_ui::features::back`. Slint only reports the press.
     callback back-pressed();
-    // Android: protect recovery codes and open secret chats from OS capture.
-    callback secure-screen(bool);
-    private property <bool> secure-screen-required:
-        root.active-modal == "recovery-codes"
-        || (root.channel-id != "" &&
-            (root.conversation-kind == ConversationKind.anon-dm
-             || root.conversation-kind == ConversationKind.anon-group));
-    changed secure-screen-required => { root.secure-screen(root.secure-screen-required); }
+    // Android asks core to recompute capture protection at navigation boundaries.
+    callback refresh-screen-protection();
     // The phone's chat pane closed (Back, header back, a bottom tab): nothing
     // is on screen any more, so no conversation may stay "active".
     callback chat-pane-closed();
@@ -1531,8 +1531,9 @@ export component MainWindow inherits Window {
     changed composer-text => { root.composer-draft-changed(); }
     changed thread-composer-text => { root.thread-draft-changed(); }
     changed thread-panel-visible => { VoiceRecording.cancel(); }
-    changed active-tab => { root.calls-more-menu-visible = false; root.call-history-selecting = false; root.cancel-composer-keyboard-handover(); VoiceRecording.cancel(); }
+    changed active-tab => { root.calls-more-menu-visible = false; root.call-history-selecting = false; root.cancel-composer-keyboard-handover(); VoiceRecording.cancel(); root.refresh-screen-protection(); }
     changed current-view => {
+        root.refresh-screen-protection();
         root.calls-more-menu-visible = false;
         root.call-history-selecting = false;
         root.cancel-composer-keyboard-handover();
@@ -1628,6 +1629,7 @@ export component MainWindow inherits Window {
         }
     }
     changed active-modal => {
+        root.refresh-screen-protection();
         root.modal-generation += 1;
         root.sessions-generation += 1;
         if root.active-modal == "sessions" { root.settings-view-sessions(); }

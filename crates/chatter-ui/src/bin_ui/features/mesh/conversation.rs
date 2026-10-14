@@ -37,6 +37,7 @@ pub fn open(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, id: &str) {
     ui_ctx
         .chat_state()
         .set_active_conversation(ActiveConversation::None);
+    window.invoke_refresh_screen_protection();
 
     crate::bin_ui::features::sidebar::stop_audio_playback();
     crate::bin_ui::gif_state::clear_inline_gifs();

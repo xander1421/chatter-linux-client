@@ -51,6 +51,9 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 );
             }
             if let Some(w) = weak.upgrade() {
+                w.invoke_refresh_screen_protection();
+            }
+            if let Some(w) = weak.upgrade() {
                 crate::bin_ui::features::composer::sync_composer_draft(
                     &w,
                     &ui_ctx,
@@ -77,6 +80,9 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             ui_ctx
                 .chat_state()
                 .set_active_conversation(chatter_core::state::ActiveConversation::Channel(parsed));
+        }
+        if let Some(w) = weak.upgrade() {
+            w.invoke_refresh_screen_protection();
         }
 
         if let Some(w) = weak.upgrade() {

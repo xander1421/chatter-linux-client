@@ -109,6 +109,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         ctx.chat_state()
             .set_active_conversation(chatter_core::state::ActiveConversation::None);
         if let Some(w) = weak.upgrade() {
+            w.invoke_refresh_screen_protection();
             refresh_selection(&w, &ctx);
         }
     });
@@ -547,6 +548,7 @@ pub(crate) fn conversation_removed(
             ui_ctx_ui
                 .chat_state()
                 .set_active_conversation(chatter_core::state::ActiveConversation::None);
+            w.invoke_refresh_screen_protection();
             w.set_messages(slint::ModelRc::new(
                 slint::VecModel::<crate::MessageItemData>::default(),
             ));

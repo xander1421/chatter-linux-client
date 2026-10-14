@@ -50,6 +50,7 @@ import java.util.concurrent.Executors
  * `native…` methods declared here.
  */
 class MainActivity : GameActivity() {
+    private var secureScreenRequested = false
     private var torNetworkCallback: ConnectivityManager.NetworkCallback? = null
     private external fun nativeNetworkChanged()
 
@@ -208,7 +209,7 @@ class MainActivity : GameActivity() {
     }
 
     /**
-     * Called from Rust (JNI) while a secret is on screen (the recovery codes).
+     * Called from Rust (JNI) whenever core's screen protection decision changes.
      * FLAG_SECURE blanks the window — and the SurfaceView Slint draws into,
      * which is its child layer — in screenshots, screen recordings, casting and
      * the recents thumbnail. Signal does the same for its recovery material.
@@ -216,11 +217,17 @@ class MainActivity : GameActivity() {
     @Suppress("unused")
     fun setSecure(secure: Boolean) {
         runOnUiThread {
-            if (secure) {
-                window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
-            } else {
-                window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
-            }
+            secureScreenRequested = secure
+            applySecureScreen()
+        }
+    }
+
+    private fun applySecureScreen() {
+        val wasSecure = (window.attributes.flags and WindowManager.LayoutParams.FLAG_SECURE) != 0
+        if (secureScreenRequested) window.addFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        else window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
+        if (wasSecure != secureScreenRequested) {
+            android.util.Log.d("ChatterScreen", "FLAG_SECURE ${if (secureScreenRequested) "set" else "cleared"}")
         }
     }
 
@@ -388,6 +395,7 @@ class MainActivity : GameActivity() {
 
     override fun onResume() {
         super.onResume()
+        applySecureScreen()
         messagingBackground = false
         updateMessagingService()
         if (intent.action == "com.chatter.client.MESSAGE_OPEN") dispatchMessageNotification(intent)

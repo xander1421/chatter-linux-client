@@ -253,6 +253,9 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         // handle_message_received drops the bubble (`is_active=false`).
         tracing::info!(?active, dm_id = %dm_id_str, is_anon = is_anon_dm, "[UI_OPEN_DM] committing active conversation pre-spawn");
         ui_ctx.chat_state().set_active_conversation(active);
+        if let Some(w) = weak.upgrade() {
+            w.invoke_refresh_screen_protection();
+        }
 
         if let Some(w) = weak.upgrade() {
             crate::bin_ui::features::composer::sync_composer_draft(

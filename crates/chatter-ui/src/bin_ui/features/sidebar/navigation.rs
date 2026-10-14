@@ -43,6 +43,9 @@ pub(crate) fn wire_saved_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClien
         chat_state.set_active_channel(channel_id);
         chat_state
             .set_active_conversation(chatter_core::state::ActiveConversation::Channel(channel_id));
+        if let Some(w) = weak.upgrade() {
+            w.invoke_refresh_screen_protection();
+        }
 
         if let Some(w) = weak.upgrade() {
             crate::bin_ui::features::composer::sync_composer_draft(

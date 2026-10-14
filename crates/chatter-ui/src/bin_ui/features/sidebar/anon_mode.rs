@@ -41,6 +41,7 @@ fn wire_toggle(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             if ui_ctx.anon_mode_enabled() {
                 // Leaving anon mode — no PIN gate.
                 ui_ctx.set_anon_mode_enabled(false);
+                w.invoke_refresh_screen_protection();
                 w.global::<AnonMode>().set_enabled(false);
                 w.set_composer_gifs_available(ui_ctx.gif_picker_available());
                 refresh_sidebar(&w, &ui_ctx);
@@ -92,6 +93,7 @@ fn wire_submit_pin(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     if result == chatter_core::services::link_device_service::PinVerification::Match
                     {
                         ui_ctx.set_anon_mode_enabled(true);
+                        w.invoke_refresh_screen_protection();
                         w.global::<AnonMode>().set_enabled(true);
                         w.set_composer_gifs_available(ui_ctx.gif_picker_available());
                         crate::bin_ui::features::back::close(&w, "anon-mode-pin");
