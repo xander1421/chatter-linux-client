@@ -7,6 +7,7 @@ import { Modal } from "../components/modal.slint";
 import { Button } from "../components/button.slint";
 import { Input } from "../components/input.slint";
 import { Avatar } from "../components/avatar.slint";
+import { Materials } from "../theme/materials.slint";
 
 export component EditProfileModal inherits Rectangle {
     in property <bool> show-modal: false;
@@ -83,6 +84,7 @@ export component EditProfileModal inherits Rectangle {
                     background: Colors.inset;
                     border-width: Spacing.stroke;
                     border-color: bio-input.has-focus ? Colors.primary : Colors.border;
+                    animate border-color { duration: Materials.motion-quick; easing: Materials.settle; }
 
                     bio-input := TextInput {
                         x: Spacing.md;
@@ -98,12 +100,20 @@ export component EditProfileModal inherits Rectangle {
                 }
             }
 
-            if root.error-message != "": Text {
-                text: root.error-message;
-                color: Colors.error;
-                font-size: Typography.sm;
-                horizontal-alignment: center;
-                wrap: word-wrap;
+            Rectangle {
+                height: root.error-message != "" ? error-label.preferred-height : 0px;
+                opacity: root.error-message != "" ? 1 : 0;
+                clip: true;
+                animate height { duration: Materials.motion-standard; easing: root.error-message != "" ? Materials.spring : Materials.glide; }
+                animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
+                error-label := Text {
+                    width: parent.width;
+                    text: root.error-message;
+                    color: Colors.error;
+                    font-size: Typography.sm;
+                    horizontal-alignment: center;
+                    wrap: word-wrap;
+                }
             }
 
             // Action Buttons
@@ -121,6 +131,7 @@ export component EditProfileModal inherits Rectangle {
                     text: "Save Changes";
                     variant: "primary";
                     loading: root.loading;
+                    disabled: root.loading;
                     clicked => { root.save(root.display-name, root.bio); }
                 }
             }

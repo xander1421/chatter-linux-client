@@ -198,6 +198,12 @@ export component FriendsModal inherits Rectangle {
                         horizontal-stretch: 1;
                         border-radius: Spacing.radius-chrome-inner;
                         background: root.active-tab == tab.id ? Colors.tint-strong : (tab-touch.pressed ? Materials.pressed : tab-touch.has-hover ? Materials.hover : transparent);
+                        transform-origin: { x: self.width / 2, y: self.height / 2 };
+                        transform-scale-x: tab-touch.pressed ? 96% : 100%;
+                        transform-scale-y: tab-touch.pressed ? 92% : 100%;
+                        animate background { duration: Materials.motion-standard; easing: Materials.glide; }
+                        animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+                        animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
 
                         Text {
                             width: 100%;
@@ -752,7 +758,7 @@ export component FriendsModal inherits Rectangle {
                     // Sub-tab bar
                     HorizontalLayout {
                         z: 1;
-                        height: 36px * Appearance.text-grow;
+                        height: max(Spacing.touch-target-min, 36px * Appearance.text-grow);
 
                         Rectangle {
                             horizontal-stretch: 1;

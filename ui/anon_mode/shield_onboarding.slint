@@ -11,6 +11,7 @@ import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
+import { Materials } from "../theme/materials.slint";
 import { HeaderButton } from "../components/header_button.slint";
 import { AnonMode, TorStatus } from "anon_mode_global.slint";
 
@@ -19,7 +20,7 @@ export component ShieldOnboardingToggle inherits VerticalLayout {
     in property <bool> busy: false;
     in property <bool> touch: false;
 
-    spacing: Spacing.xxs;
+    spacing: Spacing.none;
 
     HorizontalLayout {
         alignment: end;
@@ -29,6 +30,7 @@ export component ShieldOnboardingToggle inherits VerticalLayout {
             text: !AnonMode.shield-available ? "Shield unavailable"
                 : AnonMode.enabled ? "Shield on" : "Shield off";
             color: AnonMode.enabled ? Colors.primary : Colors.text-secondary;
+            animate color { duration: Materials.motion-standard; easing: Materials.glide; }
             font-size: Typography.sm;
             vertical-alignment: center;
         }
@@ -45,7 +47,13 @@ export component ShieldOnboardingToggle inherits VerticalLayout {
             // Tor status dot, as on the chat-list Shield: green connected,
             // amber connecting, red error.
             Rectangle {
-                visible: AnonMode.enabled;
+                opacity: AnonMode.enabled ? 1 : 0;
+                transform-origin: { x: self.width / 2, y: self.height / 2 };
+                transform-scale-x: AnonMode.enabled ? 100% : 40%;
+                transform-scale-y: AnonMode.enabled ? 100% : 40%;
+                animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
+                animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; }
+                animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
                 width: 8px; height: 8px; border-radius: 4px;
                 x: (parent.width + (root.touch ? Spacing.header-glyph-touch : Spacing.header-glyph)) / 2 - self.width * 0.75;
                 y: (parent.height - (root.touch ? Spacing.header-glyph-touch : Spacing.header-glyph)) / 2 - self.height * 0.25;
@@ -54,14 +62,24 @@ export component ShieldOnboardingToggle inherits VerticalLayout {
                     : TorStatus.state >= 3 ? Colors.error
                     : TorStatus.state == 1 ? Colors.warning
                     : Colors.text-muted;
+                animate background { duration: Materials.motion-standard; easing: Materials.glide; }
             }
         }
     }
 
-    if AnonMode.enabled: Text {
-        text: "You'll connect over Tor to the server's onion service, so it never sees your IP address. The first connection can take up to a minute.";
-        color: Colors.text-muted;
-        font-size: Typography.xxs;
-        wrap: word-wrap;
+    Rectangle {
+        height: AnonMode.enabled ? hint.preferred-height + Spacing.xxs : 0px;
+        opacity: AnonMode.enabled ? 1 : 0;
+        clip: true;
+        animate height { duration: Materials.motion-standard; easing: AnonMode.enabled ? Materials.spring : Materials.glide; }
+        animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
+        hint := Text {
+            y: Spacing.xxs;
+            width: parent.width;
+            text: "You'll connect over Tor to the server's onion service, so it never sees your IP address. The first connection can take up to a minute.";
+            color: Colors.text-muted;
+            font-size: Typography.xxs;
+            wrap: word-wrap;
+        }
     }
 }
