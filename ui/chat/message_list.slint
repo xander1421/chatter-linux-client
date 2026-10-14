@@ -50,6 +50,9 @@ export component MessageList inherits Rectangle {
     private property <int> observed-message-count: 0;
     private property <string> observed-last-message-id: "";
     private property <bool> ready-for-arrivals: false;
+    // A virtualized row seek can briefly report a bottom-sized viewport before
+    // the unread row is measured. Keep the opening anchor until user input.
+    private property <bool> opening-on-unread: false;
     arrival-ready := Timer {
         interval: 1ms;
         running: false;
@@ -128,6 +131,7 @@ export component MessageList inherits Rectangle {
             root.observed-message-count = 0;
             root.observed-last-message-id = "";
             root.ready-for-arrivals = false;
+            root.opening-on-unread = false;
             arrival-ready.running = false;
             root.arrival-start-index = -1;
             root.arrival-end-index = -1;
@@ -210,11 +214,12 @@ export component MessageList inherits Rectangle {
     changed row-count => {
         let count = root.row-count;
         let last-id = count > 0 ? root.messages[count - 1].message-id : "";
+        let new-tail = count > root.observed-message-count
+            && last-id != root.observed-last-message-id
+            && root.ready-for-arrivals && !root.loading;
         // Older history is inserted above the existing last message. Only a
         // changed tail represents new traffic that should rise into view.
-        if (count > root.observed-message-count && last-id != root.observed-last-message-id
-            && (root.observed-message-count > 0 || (root.ready-for-arrivals && count == 1))
-            && !root.loading) {
+        if (new-tail) {
             root.arrival-start-index = root.observed-message-count;
             root.arrival-end-index = count;
             arrival-clear.running = false;
@@ -222,7 +227,8 @@ export component MessageList inherits Rectangle {
         }
         root.observed-message-count = count;
         root.observed-last-message-id = last-id;
-        if (!root.loading && root.is-at-bottom && root.should-auto-scroll && root.jump-row < 0) {
+        if (new-tail && root.is-at-bottom && !root.opening-on-unread
+                && root.should-auto-scroll && root.jump-row < 0) {
             root.go-to-end();
         }
     }
@@ -283,7 +289,8 @@ export component MessageList inherits Rectangle {
     callback scroll-to-bottom-clicked();  // Emitted when scroll-to-bottom button clicked
 
     changed bottom-inset => {
-        if (root.is-at-bottom && !root.scrolling && root.jump-row < 0) { root.go-to-end(); }
+        if (root.is-at-bottom && !root.opening-on-unread
+                && !root.scrolling && root.jump-row < 0) { root.go-to-end(); }
     }
 
     // The same ambient page as the chat list, so a conversation is not a
@@ -464,10 +471,10 @@ export component MessageList inherits Rectangle {
                 // Keyboard reveal and row remeasurement can update viewport-y
                 // before height. That transient gap is not a user leaving the
                 // bottom: retain the anchor until a scroll or explicit jump.
-                root.at-end = self.bottom-gap() <= 1px
-                    || (root.at-end && !root.scrolling && root.jump-row < 0);
-                root.is-at-bottom = self.bottom-gap() <= 50px
-                    || (root.is-at-bottom && !root.scrolling && root.jump-row < 0);
+                root.at-end = !root.opening-on-unread && (self.bottom-gap() <= 1px
+                    || (root.at-end && !root.scrolling && root.jump-row < 0));
+                root.is-at-bottom = !root.opening-on-unread && (self.bottom-gap() <= 50px
+                    || (root.is-at-bottom && !root.scrolling && root.jump-row < 0));
                 // Reaching the newest message is what "caught up" means; the
                 // pill must stop claiming N new messages after that, including
                 // when the user scrolls back up later in the same session.
@@ -504,6 +511,7 @@ export component MessageList inherits Rectangle {
             // A finger, the wheel or a fling's release. Whatever was being
             // pursued, the user has taken over.
             flicked => {
+                root.opening-on-unread = false;
                 root.scrolling = true;
                 root.load-more-armed = true;
                 root.end-pending = false;
@@ -573,7 +581,8 @@ export component MessageList inherits Rectangle {
                 // classify the new geometry as a user scroll away from bottom.
                 if (root.seen-view-height != self.height) {
                     root.seen-view-height = self.height;
-                    if (root.is-at-bottom && !root.scrolling && root.jump-row < 0) {
+                    if (root.is-at-bottom && !root.opening-on-unread
+                            && !root.scrolling && root.jump-row < 0) {
                         root.go-to-end();
                     }
                 }
@@ -617,12 +626,7 @@ export component MessageList inherits Rectangle {
                 } else if (root.jump-row >= 0) {
                     // The bootstrap timer or a fresh delegate measurement owns
                     // navigation; this callback's coordinates may be transient.
-                } else if (self.grown != 0 && root.is-at-bottom && root.should-auto-scroll) {
-                    // A message arrived (or left) under a reader who was on
-                    // the newest one. Decided on where they were, not on the
-                    // gap the message itself just opened.
-                    root.go-to-end();
-                } else if (root.at-end && !root.scrolling
+                } else if (root.at-end && !root.opening-on-unread && !root.scrolling
                         && self.viewport-height != root.seen-height && self.bottom-gap() > 1px) {
                     // A content re-estimate (a row measured, a thumbnail
                     // grown) while sitting exactly on the end keeps the end.
@@ -684,6 +688,7 @@ export component MessageList inherits Rectangle {
             // let the first layout pass, inside this same frame, carry it out.
             // A jump already recorded (a search result) outranks both.
             init => {
+                root.opening-on-unread = root.unread-index >= 0 && root.jump-row < 0;
                 if (root.jump-row < 0) {
                     if (root.unread-index >= 0) {
                         root.go-to-row(root.unread-index);
@@ -988,6 +993,7 @@ export component MessageList inherits Rectangle {
             scroll-btn := TouchArea {
                 enabled: !root.is-at-bottom;
                 clicked => {
+                    root.opening-on-unread = false;
                     if (root.unread-index >= 0 && list.is-below(root.unread-index)) {
                         // Scrolled up past the unread boundary: that is
                         // where reading resumes.
