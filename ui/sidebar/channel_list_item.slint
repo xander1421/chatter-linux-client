@@ -92,12 +92,27 @@ export component ChannelListItem inherits Rectangle {
     height: root.collapsed ? 48px : (root.mobile-mode ? Spacing.row-height-touch : Spacing.row-height-desktop);
     border-radius: Spacing.radius-md;
 
+    // A Flickable cancels the pointer grab when scrolling begins. Release the
+    // visual press as soon as the finger moves past the shared gesture slop.
+    property <bool> press-active: false;
+    property <length> press-x: 0px;
+    property <length> press-y: 0px;
+    function press-down(x: length, y: length) {
+        root.press-x = x;
+        root.press-y = y;
+        root.press-active = true;
+    }
+    function press-moved(x: length, y: length) {
+        if (abs(x - root.press-x) > Spacing.sm || abs(y - root.press-y) > Spacing.sm) {
+            root.press-active = false;
+        }
+    }
     // The whole row compresses under the finger, then springs back from its
     // own center. This keeps the avatar, text and badge moving as one surface.
-    transform-scale-x: touch.pressed ? 98% : 100%;
-    transform-scale-y: touch.pressed ? 96% : 100%;
-    animate transform-scale-x { duration: touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
-    animate transform-scale-y { duration: touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+    transform-scale-x: root.press-active ? 98% : 100%;
+    transform-scale-y: root.press-active ? 96% : 100%;
+    animate transform-scale-x { duration: root.press-active ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+    animate transform-scale-y { duration: root.press-active ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
     animate background { duration: Materials.motion-standard; easing: Materials.glide; }
 
     // Neo 2.0 states: flat → highlight hover → inset selected.
@@ -105,8 +120,8 @@ export component ChannelListItem inherits Rectangle {
     // full-width plate across the rail.
     background: root.collapsed ? transparent
               : root.selected ? Colors.row-selected
-              : touch.pressed ? Colors.surface-control-hover
-              : touch.has-hover ? Colors.row-hover
+              : root.press-active ? Colors.surface-control-hover
+              : (!root.mobile-mode && touch.has-hover) ? Colors.row-hover
               : transparent;
 
     Rectangle {
@@ -313,7 +328,7 @@ export component ChannelListItem inherits Rectangle {
             y: (parent.height - self.height) / 2;
             border-radius: Spacing.radius-lg;
             background: root.selected ? Colors.primary
-                      : touch.has-hover ? Colors.fill-secondary
+                      : (!root.mobile-mode && touch.has-hover) ? Colors.fill-secondary
                       : Colors.surface-hover;
 
             if root.has-avatar: Rectangle {
@@ -373,8 +388,8 @@ export component ChannelListItem inherits Rectangle {
             if (!self.hold-fired) { root.clicked(); }
         }
         held => { root.context-menu-requested(self.anchor-x, self.anchor-y); }
-        gesture-down(x, y) => { root.swipe-down(x, y); }
-        gesture-moved(x, y) => { root.swipe-moved(x, y); }
-        gesture-ended(cancelled) => { root.swipe-ended(cancelled); }
+        gesture-down(x, y) => { root.press-down(x, y); root.swipe-down(x, y); }
+        gesture-moved(x, y) => { root.press-moved(x, y); root.swipe-moved(x, y); }
+        gesture-ended(cancelled) => { root.press-active = false; root.swipe-ended(cancelled); }
     }
 }

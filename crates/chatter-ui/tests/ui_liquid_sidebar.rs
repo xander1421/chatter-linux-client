@@ -145,3 +145,37 @@ fn sidebar_frames_show_spring_states_in_both_themes_and_widths() {
         }
     }
 }
+
+#[test]
+fn dragging_chat_rows_past_scroll_slop_clears_press_highlight() {
+    use slint::platform::{PointerEventButton, WindowEvent};
+    slint::platform::set_platform(Box::new(TestingBackend::new(TestingBackendOptions {
+        mock_time: true,
+        threading: false,
+        renderer_name: Some("software".into()),
+    }))).unwrap();
+    let window = SidebarHarness::new().unwrap();
+    window.set_phone(true);
+    window.invoke_theme("light".into());
+    window.show().unwrap();
+    advance(500);
+    let before = frame(&window, "drag-01-rest.png");
+    // DM, channel, private group, and mesh rows: leave the pointer over the
+    // following row, as a touch scroll does. No row should retain hover/press.
+    for y in [82.0, 160.0, 238.0, 316.0] {
+        let start = slint::LogicalPosition::new(210.0, y);
+        let end = slint::LogicalPosition::new(210.0, y + 34.0);
+        window.window().dispatch_event(WindowEvent::PointerPressed {
+            position: start, button: PointerEventButton::Left,
+        });
+        advance(32);
+        window.window().dispatch_event(WindowEvent::PointerMoved { position: end });
+        advance(32);
+        window.window().dispatch_event(WindowEvent::PointerReleased {
+            position: end, button: PointerEventButton::Left,
+        });
+        advance(500);
+    }
+    let after = frame(&window, "drag-02-released.png");
+    assert_eq!(before, after, "touch drag left a row painted as pressed or hovered");
+}

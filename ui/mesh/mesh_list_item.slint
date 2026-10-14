@@ -40,15 +40,19 @@ export component MeshListItem inherits Rectangle {
                           : root.kind == "dm" ? Icons.message-circle
                           : Icons.radio;
 
+    property <bool> press-active: false;
+    property <length> press-x: 0px;
+    property <length> press-y: 0px;
     height: root.collapsed ? 48px : root.touch ? Spacing.row-height-touch : Spacing.row-height-desktop;
     border-radius: Spacing.radius-sm;
-    transform-scale-x: touch.pressed ? 98% : 100%;
-    transform-scale-y: touch.pressed ? 96% : 100%;
-    animate transform-scale-x { duration: touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
-    animate transform-scale-y { duration: touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+    transform-scale-x: root.press-active ? 98% : 100%;
+    transform-scale-y: root.press-active ? 96% : 100%;
+    animate transform-scale-x { duration: root.press-active ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+    animate transform-scale-y { duration: root.press-active ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
     animate background { duration: Materials.motion-standard; easing: Materials.glide; }
     background: root.selected ? Colors.inset
-              : touch.has-hover ? Colors.surface-hover
+              : root.press-active ? Colors.surface-control-hover
+              : (!root.touch && touch.has-hover) ? Colors.surface-hover
               : transparent;
 
     accessible-role: button;
@@ -220,6 +224,19 @@ export component MeshListItem inherits Rectangle {
 
     touch := TouchArea {
         mouse-cursor: pointer;
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.down) {
+                root.press-x = self.mouse-x;
+                root.press-y = self.mouse-y;
+                root.press-active = true;
+            } else if (event.kind == PointerEventKind.move
+                && (abs(self.mouse-x - root.press-x) > Spacing.sm
+                    || abs(self.mouse-y - root.press-y) > Spacing.sm)) {
+                root.press-active = false;
+            } else if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
+                root.press-active = false;
+            }
+        }
         clicked => { root.clicked(); }
     }
 }

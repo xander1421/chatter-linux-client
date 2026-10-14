@@ -327,8 +327,11 @@ export component Sidebar inherits Rectangle {
 
                 if !AnonMode.enabled : Rectangle {
                     height: root.quick-link-height;
-                    background: saved-touch.pressed ? Colors.surface-control-hover
-                        : saved-touch.has-hover ? Colors.surface-hover : transparent;
+                    property <bool> press-active: false;
+                    property <length> press-x: 0px;
+                    property <length> press-y: 0px;
+                    background: self.press-active ? Colors.surface-control-hover
+                        : (!root.mobile-mode && saved-touch.has-hover) ? Colors.surface-hover : transparent;
                     animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
                     accessible-role: button;
                     accessible-label: "Saved Messages";
@@ -344,7 +347,22 @@ export component Sidebar inherits Rectangle {
                         tooltip-text: "Saved Messages"; tooltip-enabled: true; placement: "right";
                         HorizontalLayout { alignment: center; VerticalLayout { alignment: center; Rectangle { width: root.rail-slot-size; height: root.rail-slot-size; border-radius: root.rail-slot-radius; background: root.rail-slot-bg; Image { source: Icons.bookmark; width: 18px; height: 18px; x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2; colorize: Colors.text-secondary; } } } }
                     }
-                    saved-touch := TouchArea { clicked => { root.saved-messages-clicked(); } }
+                    saved-touch := TouchArea {
+                        pointer-event(event) => {
+                            if (event.kind == PointerEventKind.down) {
+                                parent.press-x = self.mouse-x;
+                                parent.press-y = self.mouse-y;
+                                parent.press-active = true;
+                            } else if (event.kind == PointerEventKind.move
+                                && (abs(self.mouse-x - parent.press-x) > Spacing.sm
+                                    || abs(self.mouse-y - parent.press-y) > Spacing.sm)) {
+                                parent.press-active = false;
+                            } else if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
+                                parent.press-active = false;
+                            }
+                        }
+                        clicked => { root.saved-messages-clicked(); }
+                    }
                 }
 
                 // Visible in BOTH modes. In shield mode it's the entry to add an
