@@ -50,6 +50,9 @@ pub struct AudioRecorder {
     channels: u16,
     /// When recording started (for duration tracking).
     start_time: Option<Instant>,
+    /// Next interleaved input sample to include in the live meter.
+    meter_cursor: usize,
+    meter_decay: f32,
 }
 
 impl AudioRecorder {
@@ -87,6 +90,8 @@ impl AudioRecorder {
             sample_rate,
             channels,
             start_time: None,
+            meter_cursor: 0,
+            meter_decay: 0.0,
         })
     }
 
@@ -107,6 +112,8 @@ impl AudioRecorder {
             let mut samples = self.samples.lock().unwrap();
             samples.clear();
         }
+        self.meter_cursor = 0;
+        self.meter_decay = 0.0;
 
         let samples_clone = Arc::clone(&self.samples);
 
@@ -147,6 +154,28 @@ impl AudioRecorder {
         self.state = RecordingState::Recording { started_at: now };
 
         Ok(())
+    }
+
+    /// Read the input captured since the previous meter frame. This runs on
+    /// the recording worker, never on the UI or CPAL callback thread.
+    pub fn take_live_level(&mut self) -> u8 {
+        let samples = self.samples.lock().unwrap();
+        let fresh = &samples[self.meter_cursor.min(samples.len())..];
+        let level = if fresh.is_empty() {
+            0.0
+        } else {
+            let energy = fresh.iter().map(|sample| sample * sample).sum::<f32>();
+            let rms = (energy / fresh.len() as f32).sqrt();
+            let peak = fresh
+                .iter()
+                .fold(0.0_f32, |peak, sample| peak.max(sample.abs()));
+            // Speech is usually far below digital full scale. A square-root
+            // response makes quiet speech visible while silence stays flat.
+            ((rms * 0.78 + peak * 0.22) * 3.0).sqrt().clamp(0.0, 1.0)
+        };
+        self.meter_cursor = samples.len();
+        self.meter_decay = level.max(self.meter_decay * 0.72);
+        (self.meter_decay * 100.0).round() as u8
     }
 
     /// Builds an input stream for a specific sample type.

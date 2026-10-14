@@ -1,3 +1,7 @@
+import { Colors } from "../theme/colors.slint";
+import { Materials } from "../theme/materials.slint";
+import { Spacing } from "../theme/spacing.slint";
+
 // Presentation state only; capture, duration limits and attachment preparation
 // are owned by chatter-core's recording session.
 export global VoiceRecording {
@@ -6,7 +10,49 @@ export global VoiceRecording {
     in-out property <bool> locked: false;
     in-out property <string> elapsed: "00:00";
     in-out property <string> status: "";
+    in-out property <[int]> live-levels: [];
+    in-out property <bool> pulse-bright: false;
     callback start();
     callback finish();
     callback cancel();
+}
+
+// The bars arrive from the capture worker at 25 Hz. There is no idle timer.
+export component LiveVoiceWaveform inherits Rectangle {
+    background: transparent;
+    min-width: 104px;
+    height: 40px;
+    horizontal-stretch: 1;
+    clip: true;
+
+    HorizontalLayout {
+        x: 0;
+        y: 0;
+        width: parent.width;
+        height: parent.height;
+        spacing: 2px;
+        alignment: center;
+        for level in VoiceRecording.live-levels: VerticalLayout {
+            width: 3px;
+            height: parent.height;
+            alignment: center;
+            Rectangle {
+                width: 3px;
+                height: 4px + 32px * level / 100;
+                border-radius: Spacing.radius-full;
+                background: Colors.glass-accent;
+                opacity: level < 4 ? 0.34 : 0.95;
+                animate height { duration: Materials.motion-quick; easing: Materials.settle; }
+            }
+        }
+    }
+}
+
+export component RecordingPulse inherits Rectangle {
+    width: 9px;
+    height: 9px;
+    border-radius: Spacing.radius-full;
+    background: Colors.error;
+    opacity: VoiceRecording.busy ? 0.45 : VoiceRecording.pulse-bright ? 1.0 : 0.55;
+    animate opacity { duration: Materials.motion-standard; easing: Materials.settle; }
 }

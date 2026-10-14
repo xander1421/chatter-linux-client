@@ -1,5 +1,5 @@
 import { GlassSurface } from "../components/glass_surface.slint";
-import { VoiceRecording } from "voice_recording.slint";
+import { VoiceRecording, LiveVoiceWaveform, RecordingPulse } from "voice_recording.slint";
 import { HeaderButton } from "../components/header_button.slint";
 // Message composer component
 //
@@ -1445,7 +1445,7 @@ export component MessageComposer inherits GlassSurface {
         visible: VoiceRecording.active;
         width: parent.width;
         height: parent.height;
-        background: Colors.surface;
+        background: transparent;
         TouchArea { }
         recording-layout := VerticalLayout {
             padding: root.row-padding;
@@ -1473,11 +1473,17 @@ export component MessageComposer inherits GlassSurface {
                 VerticalLayout {
                     alignment: center;
                     horizontal-stretch: 1;
-                    Text {
-                        text: VoiceRecording.elapsed;
-                        color: Colors.text-primary;
-                        font-size: Typography.sm;
+                    HorizontalLayout {
+                        spacing: Spacing.sm;
+                        alignment: center;
+                        RecordingPulse { }
+                        Text {
+                            text: VoiceRecording.elapsed;
+                            color: Colors.text-primary;
+                            font-size: Typography.sm;
+                        }
                     }
+                    LiveVoiceWaveform { }
                 }
                 HeaderButton {
                     backdrop-paused: root.backdrop-paused;

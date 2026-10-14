@@ -11,6 +11,7 @@ pub const MAX_RECORDING_SECONDS: u64 = 300;
 pub enum RecordingEvent {
     Started,
     Elapsed(u64),
+    Level(u8),
     Ready,
     Finished(Result<RecordedVoiceNote, String>),
     Cancelled,
@@ -101,7 +102,7 @@ fn record(
             recorder.cancel();
             return Ok(None);
         }
-        match commands.recv_timeout(Duration::from_millis(100)) {
+        match commands.recv_timeout(Duration::from_millis(40)) {
             Ok(Command::Cancel) | Err(RecvTimeoutError::Disconnected) => {
                 recorder.cancel();
                 return Ok(None);
@@ -110,6 +111,7 @@ fn record(
             Err(RecvTimeoutError::Timeout) => {}
         }
         if !stopped {
+            let _ = events.send(RecordingEvent::Level(recorder.take_live_level()));
             let seconds = recorder.duration().unwrap_or_default().as_secs();
             if seconds != elapsed {
                 elapsed = seconds;

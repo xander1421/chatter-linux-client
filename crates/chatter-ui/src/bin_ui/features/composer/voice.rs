@@ -4,7 +4,7 @@ use chatter_core::client::ChatterClient;
 use chatter_core::services::voice_recording::{
     RecordedVoiceNote, RecordingEvent, RecordingSession, recording_context_is_current,
 };
-use slint::ComponentHandle;
+use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
@@ -79,6 +79,8 @@ pub(super) fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
         g.set_busy(true);
         g.set_locked(false);
         g.set_elapsed("00:00".into());
+        g.set_live_levels(ModelRc::new(VecModel::from(vec![0; 20])));
+        g.set_pulse_bright(false);
         g.set_status("Opening microphone…".into());
         let (weak, client, session, generation) = (
             weak.clone(),
@@ -88,6 +90,8 @@ pub(super) fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
         );
         let ready = ready.clone();
         tokio::spawn(async move {
+            let mut live_levels = vec![0; 20];
+            let mut level_frames = 0u64;
             #[cfg(target_os = "android")]
             {
                 use crate::platform::android::permissions;
@@ -153,6 +157,14 @@ pub(super) fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
                         return;
                     }
                     event => {
+                        let levels = if let RecordingEvent::Level(level) = event {
+                            live_levels.rotate_left(1);
+                            *live_levels.last_mut().unwrap() = i32::from(level);
+                            level_frames += 1;
+                            Some((live_levels.clone(), level_frames / 12 % 2 == 0))
+                        } else {
+                            None
+                        };
                         let (weak, generation) = (weak.clone(), generation.clone());
                         let _ = slint::invoke_from_event_loop(move || {
                             if generation.load(Ordering::SeqCst) != ticket {
@@ -171,6 +183,17 @@ pub(super) fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
                                     RecordingEvent::Ready => {
                                         g.set_locked(true);
                                         g.set_status("Recording ready (5 minute limit)".into());
+                                    }
+                                    RecordingEvent::Level(_) => {
+                                        if let Some((levels, pulse)) = levels {
+                                            let live_model = g.get_live_levels();
+                                            if let Some(model) = live_model.as_any().downcast_ref::<VecModel<i32>>() {
+                                                for (index, level) in levels.into_iter().enumerate() {
+                                                    model.set_row_data(index, level);
+                                                }
+                                            }
+                                            g.set_pulse_bright(pulse);
+                                        }
                                     }
                                     _ => {}
                                 }
