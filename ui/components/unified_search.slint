@@ -186,8 +186,10 @@ component MsgRow inherits Rectangle {
         }
         HorizontalLayout {
             spacing: 0px;
-            Text { text: root.preview-before; color: Colors.text-secondary; font-size: Typography.sm; }
-            Text { text: root.preview-match; color: Colors.primary; font-size: Typography.sm; font-weight: Typography.semibold; }
+            before-text := Text { text: root.preview-before; color: Colors.text-secondary; font-size: Typography.sm;
+                width: min(self.preferred-width, parent.width * 0.55); overflow: elide; }
+            match-text := Text { text: root.preview-match; color: Colors.primary; font-size: Typography.sm; font-weight: Typography.semibold;
+                width: min(self.preferred-width, parent.width * 0.4); overflow: elide; }
             Text { text: root.preview-after; color: Colors.text-secondary; font-size: Typography.sm; horizontal-stretch: 1; overflow: elide; }
         }
     }
