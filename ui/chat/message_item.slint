@@ -446,7 +446,7 @@ export component MessageItem inherits Rectangle {
                 // slack that the fixed-size icon did not share.
                 width: min(call-content.preferred-width, root.width * 0.7);
                 height: call-content.preferred-height;
-                background: root.is-own ? Colors.bubble-own : Colors.bubble-other;
+                background: transparent;
                 border-top-left-radius: root.is-own ? root.r-round : root.r-outer-top;
                 border-top-right-radius: root.is-own ? root.r-outer-top : root.r-round;
                 border-bottom-left-radius: root.is-own ? root.r-round : root.r-outer-bottom;
@@ -454,8 +454,9 @@ export component MessageItem inherits Rectangle {
 
                 Rectangle {
                     y: 0;
+                    width: parent.width;
                     height: call-content.preferred-height;
-                    background: transparent;
+                    background: root.is-own ? Colors.bubble-own : Colors.bubble-other;
                     border-top-left-radius: parent.border-top-left-radius;
                     border-top-right-radius: parent.border-top-right-radius;
                     border-bottom-left-radius: parent.border-bottom-left-radius;
@@ -655,9 +656,7 @@ export component MessageItem inherits Rectangle {
                     accessible-label: root.is-own ? "Your message: " + root.content : root.sender-name + " says: " + root.content;
 
                     // One rounded surface avoids a square backing at the corners.
-                    background: bubble-hovered
-                        ? (root.is-own ? Colors.bubble-own-hover : Colors.bubble-other-hover)
-                        : (root.is-own ? Colors.bubble-own : Colors.bubble-other);
+                    background: transparent;
                     border-top-left-radius: root.is-own ? root.r-round : root.r-outer-top;
                     border-top-right-radius: root.is-own ? root.r-outer-top : root.r-round;
                     border-bottom-left-radius: root.is-own ? root.r-round : root.r-outer-bottom;
@@ -669,8 +668,11 @@ export component MessageItem inherits Rectangle {
 
                     Rectangle {
                         y: 0;
+                        width: parent.width;
                         height: bubble-content.preferred-height;
-                        background: transparent;
+                        background: bubble-hovered
+                            ? (root.is-own ? Colors.bubble-own-hover : Colors.bubble-other-hover)
+                            : (root.is-own ? Colors.bubble-own : Colors.bubble-other);
                         border-top-left-radius: parent.border-top-left-radius;
                         border-top-right-radius: parent.border-top-right-radius;
                         border-bottom-left-radius: parent.border-bottom-left-radius;
