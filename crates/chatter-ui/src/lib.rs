@@ -589,7 +589,7 @@ pub async fn app_init() -> AppState {
             ui_ctx
                 .auth_state()
                 .set_logged_in(user_id, device_id, display_name);
-            tracing::info!("Restored auth state for user {}", user_id);
+            tracing::info!("Restored auth state");
         }
 
         bin_ui::features::auth::initial_data::show_cached_chat_rows(&window, &ui_ctx);

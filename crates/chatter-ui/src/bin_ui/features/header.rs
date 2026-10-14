@@ -691,10 +691,7 @@ fn load_older(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, until: Option<Message
             return;
         }
 
-        let older_messages: Vec<_> = older_messages
-            .into_iter()
-            .filter(|m| !chatter_core::services::disappearing::is_timer_notice(m))
-            .collect();
+        let older_messages = chatter_core::services::disappearing::visible_history_messages(older_messages);
         if !owner.is_current() {
             return;
         }

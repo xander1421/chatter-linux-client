@@ -106,7 +106,10 @@ mod sidebar_preview_tests {
     fn emoji_clusters_survive_without_truncation() {
         let emoji = "👩🏽‍💻";
         let source = format!("{}{}{}\n**done**", emoji, emoji, emoji);
-        assert_eq!(plain_sidebar_preview(&source), format!("{}{}{} done", emoji, emoji, emoji));
+        assert_eq!(
+            plain_sidebar_preview(&source),
+            format!("{}{}{} done", emoji, emoji, emoji)
+        );
     }
 }
 
@@ -225,6 +228,19 @@ impl ChatterClient {
         message_id: &crate::domain::ids::MessageId,
     ) -> Option<crate::domain::message::Message> {
         self.messages().get_message_local(message_id).ok().flatten()
+    }
+
+    /// Timestamp of an outgoing failed or parked message eligible for tap-to-retry.
+    pub fn retryable_message_timestamp(
+        &self,
+        message_id: &crate::domain::ids::MessageId,
+    ) -> Option<u64> {
+        let message = self.get_message_local(message_id)?;
+        let me = self.session_current_user_id()?;
+        (message.sender_id == Some(me)
+            && matches!(message.delivery_status.as_str(), "failed" | "parked")
+            && !message.is_deleted)
+            .then_some(message.sent_at)
     }
 
     /// Whether the parent message a reply quotes is missing or deleted.
@@ -566,7 +582,11 @@ impl ChatterClient {
             message.content,
             crate::domain::message::MessageContent::System(_)
         ) {
-            return plain_sidebar_preview(&format!("{} {}", self.message_sender_display_name(message), preview));
+            return plain_sidebar_preview(&format!(
+                "{} {}",
+                self.message_sender_display_name(message),
+                preview
+            ));
         }
         plain_sidebar_preview(&preview)
     }
@@ -818,11 +838,7 @@ impl ChatterClient {
                 timestamp,
                 unread_count: dm.unread_count,
                 last_activity: latest.map(|m| m.created_at),
-                ..ChatRowSendData::new(
-                    ConversationType::AnonDm,
-                    dm.id.to_string(),
-                    display_name,
-                )
+                ..ChatRowSendData::new(ConversationType::AnonDm, dm.id.to_string(), display_name)
             });
         }
 
@@ -1259,10 +1275,9 @@ impl ChatterClient {
             .collect()
     }
 
-    /// Local message search, limited to conversations the current mode shows:
-    /// shield on never surfaces an identified conversation's messages, and
-    /// off never surfaces an anon DM's. Returns the matching messages, best
-    /// match first.
+    /// Local global search excludes device-bound secret chats even though
+    /// their rows remain in the sidebar in either mode. Returns matching
+    /// regular messages, best match first.
     pub fn search_messages_visible(
         &self,
         query: &str,
@@ -1284,7 +1299,8 @@ impl ChatterClient {
         hits.iter()
             .filter_map(|hit| self.get_message_local(&hit.message_id))
             .filter(|msg| {
-                self.visible_in_mode(&msg.conversation_type)
+                !msg.conversation_type.is_secret_chat()
+                    && self.visible_in_mode(&msg.conversation_type)
                     && (msg.conversation_type != crate::domain::message::ConversationType::Channel
                         || joined_channels.contains(&msg.conversation_id))
                     && !self.is_blocked_conversation(
@@ -1297,9 +1313,9 @@ impl ChatterClient {
 
     /// Jump-to / quick-switcher rows for `query`, ranked by the core rule
     /// (`services::search::filter_conversations`). Built from the same
-    /// mode-filtered sources the sidebar renders — loose rows AND folder rows
-    /// (a foldered conversation is still a jump target) — so it can never
-    /// offer a conversation the current mode hides.
+    /// mode-filtered sources the sidebar renders — loose rows AND folder rows.
+    /// Secret chats stay in the sidebar, but their names must not appear in
+    /// the regular global search palette.
     ///
     /// `conv_type` uses the palette's vocabulary: "channel", "dm", "anon_dm",
     /// "private_group", "saved_messages" (id is the sentinel
@@ -1343,11 +1359,13 @@ impl ChatterClient {
             ));
         }
         for dm in self.list_dm_sidebar() {
-            let kind = if dm.is_anon_dm() { "anon_dm" } else { "dm" };
+            if dm.is_anon_dm() {
+                continue;
+            }
             entries.push(entry(
                 dm.id,
                 dm.display_name,
-                kind,
+                "dm",
                 dm.presence_status,
                 dm.unread_count,
             ));
@@ -1357,13 +1375,11 @@ impl ChatterClient {
             let count = unread(&id, channel.conversation_type());
             entries.push(entry(id, channel.name, "channel", String::new(), count));
         }
-        for group in self.sidebar_private_groups() {
-            let id = group.id.to_string();
-            let count = unread(&id, CT::AnonGroup);
-            entries.push(entry(id, group.name, "private_group", String::new(), count));
-        }
         for section in self.list_sections_with_conversations().unwrap_or_default() {
             for conv in section.conversations {
+                if conv.conversation_type.is_secret_chat() {
+                    continue;
+                }
                 let kind = match conv.conversation_type {
                     CT::Channel => "channel",
                     CT::ServerDm => "dm",
@@ -2023,7 +2039,12 @@ mod shield_mode_tests {
         assert!(!client.gif_picker_available_for(&ConversationType::Channel));
         assert!(!client.gif_picker_available());
         assert!(client.search_gifs("cat", 1).await.is_err());
-        assert!(client.fetch_gif_media("https://localhost:1/x.gif").await.is_err());
+        assert!(
+            client
+                .fetch_gif_media("https://localhost:1/x.gif")
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]

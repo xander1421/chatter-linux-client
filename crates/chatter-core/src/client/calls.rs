@@ -1738,13 +1738,17 @@ impl ChatterClient {
         }
     }
 
-    /// Avatar for a call-history row's peer, from the stores the chat list
-    /// reads: the peer's profile for a server DM. Group and channel calls have
-    /// no single peer → `None`.
+    /// Avatar for a call-history row: the peer's profile for a server DM or
+    /// the channel icon for a channel call. Anonymous groups have no stored
+    /// group icon and must not borrow an unrelated channel's icon.
     fn call_peer_avatar(&self, conversation_type: &str, conversation_id: &str) -> Option<Vec<u8>> {
         use crate::domain::message::ConversationType as CT;
         match CT::from_str_value(conversation_type).ok()? {
             CT::ServerDm => self.user_avatar(&conversation_id.parse().ok()?),
+            CT::Channel => self
+                .get_channel_local(&conversation_id.parse().ok()?)
+                .filter(|channel| channel.conversation_type() == CT::Channel)
+                .and_then(|channel| channel.icon),
             _ => None,
         }
     }

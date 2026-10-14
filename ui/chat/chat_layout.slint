@@ -162,6 +162,10 @@ export component ChatLayout inherits Rectangle {
     // composer is replaced by this text, worded by chatter-core.
     in property <string> composer-notice: "";
     in property <bool> conversation-read-only: false;
+    in property <bool> header-can-call: false;
+    in property <bool> header-can-invite: false;
+    in property <bool> header-can-open-settings: false;
+    in property <bool> header-can-open-pinned-list: false;
     // A secret-chat request we have not answered (core's
     // `SecretChatGate::offers_answer`): the notice offers Accept / Decline.
     in property <bool> secret-request-actions: false;
@@ -396,6 +400,10 @@ export component ChatLayout inherits Rectangle {
             private-channel: root.private-channel;
             member-count: root.member-count;
             read-only: root.conversation-read-only;
+            can-call: root.header-can-call;
+            can-invite: root.header-can-invite;
+            can-open-settings: root.header-can-open-settings;
+            can-open-pinned-list: root.header-can-open-pinned-list;
             topic: root.topic;
             typing-indicator: root.typing-indicator;
             presence-status: root.presence-status;

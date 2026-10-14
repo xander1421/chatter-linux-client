@@ -5,7 +5,93 @@ use std::sync::Arc;
 use super::ChatterClient;
 use crate::domain::channel::{Channel, ChannelType};
 
+/// Complete or partial channel roster returned by the core paging policy.
+#[derive(Debug)]
+pub struct ChannelMemberLists {
+    pub members: Vec<crate::domain::channel::MemberWithProfile>,
+    pub bans: Option<Vec<crate::domain::channel::BannedMember>>,
+    pub complete: bool,
+    pub failure_stage: Option<ChannelMemberFailure>,
+}
+
+#[derive(Debug)]
+pub enum ChannelMemberFailure {
+    Members(String),
+    MembersPartial(String),
+    MembersLimit,
+    Bans(String),
+}
+
 impl ChatterClient {
+    /// Fetch all roster pages, preserving a partial roster when a later page fails.
+    /// Bans are fetched after members because the member fetch refreshes our role.
+    pub async fn channel_member_lists(
+        &self,
+        channel_id: &crate::domain::ids::ChannelId,
+    ) -> ChannelMemberLists {
+        const PAGE: u32 = 100;
+        const MAX_PAGES: u32 = 100;
+        let mut members = Vec::new();
+        let mut seen = std::collections::HashSet::new();
+        let mut page = 0;
+        loop {
+            let rows = match self
+                .list_members_with_profiles(channel_id, PAGE, page * PAGE)
+                .await
+            {
+                Ok(rows) => rows,
+                Err(error) => {
+                    tracing::warn!(%error, page, "Failed to list channel members");
+                    let failure_stage = if members.is_empty() {
+                        ChannelMemberFailure::Members(error.to_string())
+                    } else {
+                        ChannelMemberFailure::MembersPartial(error.to_string())
+                    };
+                    return ChannelMemberLists {
+                        members,
+                        bans: None,
+                        complete: false,
+                        failure_stage: Some(failure_stage),
+                    };
+                }
+            };
+            let last = (rows.len() as u32) < PAGE;
+            members.extend(
+                rows.into_iter()
+                    .filter(|member| seen.insert(member.membership.user_id)),
+            );
+            page += 1;
+            if last {
+                break;
+            }
+            if page == MAX_PAGES {
+                return ChannelMemberLists {
+                    members,
+                    bans: None,
+                    complete: false,
+                    failure_stage: Some(ChannelMemberFailure::MembersLimit),
+                };
+            }
+        }
+        match self.list_banned_members(channel_id).await {
+            Ok(bans) => ChannelMemberLists {
+                members,
+                bans,
+                complete: true,
+                failure_stage: None,
+            },
+            Err(error) => {
+                tracing::warn!(%error, "Failed to list channel bans");
+                ChannelMemberLists {
+                    members,
+                    bans: None,
+                    complete: true,
+                    failure_stage: Some(ChannelMemberFailure::Bans(error.to_string())),
+                }
+            }
+        }
+    }
+
     // ── Conversation listing ────────────────────────────────────────
 
     // ── Channel operations ────────────────────────────────────────

@@ -400,20 +400,12 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let name = name.to_string();
 
             // Extract selected friends with their roles
-            let selected_friends: Vec<(UserId, chatter_core::domain::anon_group::AnonGroupRole)> =
-                friends
-                    .iter()
-                    .filter(|f| f.selected)
-                    .filter_map(|f| {
-                        let user_id = f.user_id.to_string().parse::<UserId>().ok()?;
-                        let role = if f.role == "admin" {
-                            chatter_core::domain::anon_group::AnonGroupRole::Admin
-                        } else {
-                            chatter_core::domain::anon_group::AnonGroupRole::Member
-                        };
-                        Some((user_id, role))
-                    })
-                    .collect();
+            let selected_friends =
+                chatter_core::domain::anon_group::PrivateGroupInviteSelection::parse(
+                    friends
+                        .iter()
+                        .map(|f| (f.selected, f.user_id.to_string(), f.role.to_string())),
+                );
 
             if selected_friends.is_empty() {
                 return;
@@ -550,20 +542,9 @@ pub fn wire_invite_to_private_group(window: &MainWindow, ui_ctx: &Arc<ChatterCli
             .unwrap_or_default();
 
         // Extract selected friends with their roles
-        let selected_friends: Vec<(UserId, chatter_core::domain::anon_group::AnonGroupRole)> =
-            friends
-                .iter()
-                .filter(|f| f.selected)
-                .filter_map(|f| {
-                    let user_id = f.user_id.to_string().parse::<UserId>().ok()?;
-                    let role = if f.role == "admin" {
-                        chatter_core::domain::anon_group::AnonGroupRole::Admin
-                    } else {
-                        chatter_core::domain::anon_group::AnonGroupRole::Member
-                    };
-                    Some((user_id, role))
-                })
-                .collect();
+        let selected_friends = chatter_core::domain::anon_group::PrivateGroupInviteSelection::parse(
+                friends.iter().map(|f| (f.selected, f.user_id.to_string(), f.role.to_string())),
+            );
 
         if selected_friends.is_empty() || group_id_str.is_empty() {
             return;

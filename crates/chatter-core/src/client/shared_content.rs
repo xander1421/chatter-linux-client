@@ -44,18 +44,12 @@ impl ChatterClient {
         } else {
             self.quick_switcher_entries("")
                 .into_iter()
-                .filter(|entry| {
-                    matches!(
-                        entry.conv_type.as_str(),
-                        "dm" | "anon_dm" | "channel" | "private_group"
-                    )
-                })
+                .filter(|entry| matches!(entry.conv_type.as_str(), "dm" | "channel"))
                 .map(|entry| {
                     let kind = match entry.conv_type.as_str() {
                         "dm" => crate::domain::message::ConversationType::ServerDm,
-                        "anon_dm" => crate::domain::message::ConversationType::AnonDm,
                         "channel" => crate::domain::message::ConversationType::Channel,
-                        _ => crate::domain::message::ConversationType::AnonGroup,
+                        _ => unreachable!("search filter only lists DMs and channels"),
                     };
                     let avatar = self.forward_destination_avatar(&kind, &entry.id);
                     SearchFilterOption {
@@ -73,7 +67,11 @@ impl ChatterClient {
         rows
     }
     fn search_history_key(&self) -> Option<String> {
-        if self.anon_mode_enabled() {
+        if self.anon_mode_enabled()
+            || self
+                .active_conversation_type()
+                .is_some_and(|kind| kind.is_secret_chat())
+        {
             return None;
         }
         let id = self.auth_state().get().current_user_id?;
@@ -168,7 +166,8 @@ impl ChatterClient {
             {
                 return None;
             }
-            if !self.visible_in_mode(&message.conversation_type)
+            if message.conversation_type.is_secret_chat()
+                || !self.visible_in_mode(&message.conversation_type)
                 || self.is_blocked_conversation(
                     &message.conversation_type,
                     &message.conversation_id.to_string(),

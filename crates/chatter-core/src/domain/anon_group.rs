@@ -74,6 +74,27 @@ impl From<i32> for AnonGroupStatus {
     }
 }
 
+/// Parse selected invite rows supplied by a UI adapter. Invalid IDs are
+/// omitted, matching the selection behavior for create and invite flows.
+pub struct PrivateGroupInviteSelection;
+
+impl PrivateGroupInviteSelection {
+    pub fn parse<I, U, R>(rows: I) -> Vec<(UserId, AnonGroupRole)>
+    where
+        I: IntoIterator<Item = (bool, U, R)>,
+        U: AsRef<str>,
+        R: AsRef<str>,
+    {
+        rows.into_iter()
+            .filter(|(selected, _, _)| *selected)
+            .filter_map(|(_, user_id, role)| {
+                let user_id = user_id.as_ref().parse::<UserId>().ok()?;
+                Some((user_id, AnonGroupRole::from_invite_token(role.as_ref())))
+            })
+            .collect()
+    }
+}
+
 /// Role within an anonymous group.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default)]
 #[repr(i32)]
@@ -94,6 +115,15 @@ impl AnonGroupRole {
             1 => Self::Admin,
             2 => Self::Owner,
             _ => Self::Member,
+        }
+    }
+
+    /// Parse the role token from a selected invite row.
+    pub fn from_invite_token(role: &str) -> Self {
+        if role == "admin" {
+            Self::Admin
+        } else {
+            Self::Member
         }
     }
 

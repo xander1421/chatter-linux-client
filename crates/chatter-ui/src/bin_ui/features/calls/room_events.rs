@@ -82,7 +82,6 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
         tracing::info!("Started room events listener");
         while let Some(event) = rx.recv().await {
-            tracing::debug!("UI received room event: {:?}", event);
             let weak = weak.clone();
             // Only explicitly scoped recovery events may produce a notice.
             // Ordinary queued state changes remain roster wakeups.
@@ -141,17 +140,11 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
                 LiveKitRoomEvent::TrackSubscribed {
                     participant_identity,
-                    track_sid,
+                    track_sid: _,
                     is_video,
                     is_screen_share,
                 } => {
-                    tracing::info!(
-                        "Track subscribed: {} from {} (video: {}, screen_share: {})",
-                        track_sid,
-                        participant_identity,
-                        is_video,
-                        is_screen_share
-                    );
+                    tracing::info!(is_video, is_screen_share, "Track subscribed");
 
                     if !is_video {
                         continue;
@@ -213,17 +206,11 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
                 LiveKitRoomEvent::TrackUnsubscribed {
                     participant_identity,
-                    track_sid,
+                    track_sid: _,
                     is_video,
                     is_screen_share,
                 } => {
-                    tracing::info!(
-                        "Track unsubscribed: {} from {} (video={}, screen_share={})",
-                        track_sid,
-                        participant_identity,
-                        is_video,
-                        is_screen_share
-                    );
+                    tracing::info!(is_video, is_screen_share, "Track unsubscribed");
 
                     if !is_video {
                         // Audio-only unsubscribe — UI tile state unchanged.
@@ -256,22 +243,14 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         let participants = order_participants(remotes, local);
                         data.participants = ModelRc::new(VecModel::from(participants));
                         w.set_active_call_data(data);
-                        tracing::debug!(
-                            "Cleared video state for {} (screen_share={})",
-                            identity,
-                            is_screen_share
-                        );
+                        tracing::debug!(is_screen_share, "Cleared video state");
                     });
                 }
                 LiveKitRoomEvent::EncryptionStateChanged {
-                    participant_identity,
+                    participant_identity: _,
                     is_encrypted,
                 } => {
-                    tracing::debug!(
-                        "Encryption state changed: {} - encrypted: {}",
-                        participant_identity,
-                        is_encrypted
-                    );
+                    tracing::debug!(is_encrypted, "Encryption state changed");
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             let mut data = w.get_active_call_data();
@@ -301,16 +280,12 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     });
                 }
                 LiveKitRoomEvent::ConnectionQualityChanged {
-                    participant_identity,
+                    participant_identity: _,
                     quality,
                 } => {
                     // UI doesn't surface per-participant quality today.
                     // Log so SDK users see the stream is live.
-                    tracing::debug!(
-                        "Connection quality: {} -> {}",
-                        participant_identity,
-                        quality
-                    );
+                    tracing::debug!(?quality, "Connection quality changed");
                 }
             }
         }

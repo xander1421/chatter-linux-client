@@ -39,6 +39,10 @@ export component ChatHeader inherits GlassSurface {
     // A channel we left or were removed from: we no longer see its roster
     // (Channel Settings lists no one) and, as in Signal, cannot call it.
     in property <bool> read-only: false;
+    in property <bool> can-call: false;
+    in property <bool> can-invite: false;
+    in property <bool> can-open-settings: false;
+    in property <bool> can-open-pinned-list: false;
     in property <string> topic: "";
     in property <string> typing-indicator: "";
     in property <string> presence-status: "offline";
@@ -91,7 +95,7 @@ export component ChatHeader inherits GlassSurface {
     property <bool> has-channel: channel-name != "";
 
     // Show settings for regular channels and private groups, not for anon DMs or saved messages
-    property <bool> show-settings: has-channel && ((!is-anon-dm && !is-saved) || is-private-group) && !is-mesh;
+    property <bool> show-settings: root.can-open-settings;
 
     // A mesh conversation is open. Calls, invites and channel settings are all
     // server operations; offering them over a transport that reaches no server
@@ -144,16 +148,16 @@ export component ChatHeader inherits GlassSurface {
       : MeshGlobal.peer-count + " nearby";
 
     // Show invite button for channels and private groups only (not DMs, anon DMs, or saved)
-    property <bool> show-invite: has-channel && !tight && !is-dm && !is-anon-dm && !is-saved && !is-mesh;
+    property <bool> show-invite: root.can-invite && !tight;
 
     // No calls in saved messages, the mesh, or secret chats: LiveKit media
     // would leave Tor and expose the user's IP.
-    property <bool> show-calls: has-channel && !is-saved && !is-mesh && !read-only && !is-anon-dm && !is-private-group;
+    property <bool> show-calls: root.can-call;
     // ⋯ holds Video call (owner, 2026-10-05: out of the header row, into the
     // menu) and Conversation settings, so it is there when either is.
     // Saved always has its pinned list (the only row its menu has), so the
     // overflow is reachable there before the first pin.
-    property <bool> show-more: root.show-calls || root.show-settings || root.has-any-pinned || root.is-saved;
+    property <bool> show-more: root.show-calls || root.show-settings || root.has-any-pinned || root.can-open-pinned-list;
 
     // "Touch input", plumbed from ChatLayout. The 52px/28px/18px set below is
     // mouse density; on a phone this is the bar you navigate the whole app from
