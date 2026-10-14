@@ -58,16 +58,18 @@ class MessagingService : Service() {
             .setContentText("Chatter is connected")
             .setSmallIcon(android.R.drawable.stat_notify_chat)
             .setContentIntent(open).setOngoing(true).setShowWhen(false).build()
-        try {
-            if (Build.VERSION.SDK_INT >= 34) {
-                startForeground(ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-            } else {
-                startForeground(ID, notification)
-            }
+        if (Build.VERSION.SDK_INT >= 34) {
+            startForeground(ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        } else {
+            startForeground(ID, notification)
+        }
+        // Every startForegroundService request must be promoted, even if the
+        // activity returned to the foreground before this command ran.
+        if (pendingStarts > 0) pendingStarts--
+        if (stopRequested) {
+            if (pendingStarts == 0) stopSelf(startId)
+        } else {
             retainInboxExecution()
-        } catch (_: Exception) {
-            Log.w("MessagingService", "Foreground messaging unavailable")
-            stopSelf()
         }
         // Rust state cannot be reconstructed by a service-only process restart.
         return START_NOT_STICKY
@@ -78,17 +80,26 @@ class MessagingService : Service() {
     companion object {
         private const val CHANNEL = "chatter_connection"
         private const val ID = 0x4348
+        // Activity lifecycle callbacks and service callbacks run on the main thread.
+        private var pendingStarts = 0
+        private var stopRequested = false
         fun start(context: Context) {
+            stopRequested = false
+            pendingStarts++
             try {
                 // POST_NOTIFICATIONS denial does not prohibit an FGS: Android
                 // shows it in Active apps instead of the notification drawer.
                 context.startForegroundService(Intent(context, MessagingService::class.java))
             } catch (_: Exception) {
+                pendingStarts--
                 Log.w("MessagingService", "Foreground messaging start refused")
             }
         }
         fun stop(context: Context) {
-            context.stopService(Intent(context, MessagingService::class.java))
+            stopRequested = true
+            if (pendingStarts == 0) {
+                context.stopService(Intent(context, MessagingService::class.java))
+            }
         }
     }
 }
