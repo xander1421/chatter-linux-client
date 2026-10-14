@@ -33,13 +33,42 @@ export struct PendingAttachmentData {
     thumbnail: image,
 }
 
-// A filled meniscus overlaps both bodies. Its broad foot and curved waist
-// stay visibly attached to the field without turning the droplets into a bar.
-component LiquidNeck inherits Path {
-    fill: Materials.regular;
+// The outer edge stays on the composer edge. Only the inner flank rounds into
+// the field, so the action reads as a droplet drawn from the same surface.
+component EdgeDroplet inherits Path {
+    in property <bool> trailing: false;
+    fill: Materials.opaque;
     viewbox-width: 100;
     viewbox-height: 100;
-    // Contain preserves a square viewbox and collapses a short neck to a thread.
+    fit: fill;
+    MoveTo { x: trailing ? 100 : 0; y: 100; }
+    LineTo { x: trailing ? 100 : 0; y: 0; }
+    LineTo { x: trailing ? 46 : 54; y: 0; }
+    CubicTo { control-1-x: trailing ? 14 : 86; control-1-y: 0; control-2-x: trailing ? 0 : 100; control-2-y: 19; x: trailing ? 0 : 100; y: 50; }
+    CubicTo { control-1-x: trailing ? 0 : 100; control-1-y: 79; control-2-x: trailing ? 23 : 77; control-2-y: 100; x: trailing ? 52 : 48; y: 100; }
+    Close { }
+}
+
+// The narrow inner flank opens into a broad foot. An opaque shared fill makes
+// the overlap with both bodies seamless in light and dark appearances.
+component EdgeMeniscus inherits Path {
+    in property <bool> trailing: false;
+    fill: Materials.opaque;
+    viewbox-width: 100;
+    viewbox-height: 100;
+    fit: fill;
+    MoveTo { x: trailing ? 100 : 0; y: 0; }
+    LineTo { x: trailing ? 55 : 45; y: 0; }
+    CubicTo { control-1-x: trailing ? 69 : 31; control-1-y: 22; control-2-x: trailing ? 67 : 33; control-2-y: 38; x: trailing ? 65 : 35; y: 53; }
+    CubicTo { control-1-x: trailing ? 62 : 38; control-1-y: 78; control-2-x: trailing ? 32 : 68; control-2-y: 100; x: trailing ? 0 : 100; y: 100; }
+    LineTo { x: trailing ? 100 : 0; y: 100; }
+    Close { }
+}
+
+component LiquidNeck inherits Path {
+    fill: Materials.opaque;
+    viewbox-width: 100;
+    viewbox-height: 100;
     fit: fill;
     MoveTo { x: 20; y: 0; }
     CubicTo { control-1-x: 20; control-1-y: 34; control-2-x: 32; control-2-y: 34; x: 32; y: 52; }
@@ -50,26 +79,15 @@ component LiquidNeck inherits Path {
     Close { }
 }
 
-// A shallow crest hides the field's straight rim where each neck lands.
-// Its height follows spring speed, making a short ripple during merge-back.
-component LiquidRim inherits Path {
-    fill: Materials.regular;
-    viewbox-width: 100;
-    viewbox-height: 100;
-    // Contain preserves a square viewbox and collapses a short neck to a thread.
-    fit: fill;
-    MoveTo { x: 0; y: 100; }
-    CubicTo { control-1-x: 28; control-1-y: 100; control-2-x: 27; control-2-y: 15; x: 50; y: 15; }
-    CubicTo { control-1-x: 73; control-1-y: 15; control-2-x: 72; control-2-y: 100; x: 100; y: 100; }
-    Close { }
-}
-
 export component MessageComposer inherits GlassSurface {
-    material-enabled: (Appearance.reduce-motion
-        ? root.surface-opacity < 0.999 : root.lift-progress <= 0.001) || VoiceRecording.active;
+    material-enabled: VoiceRecording.active;
+    background: !VoiceRecording.active && (Appearance.reduce-motion
+        ? root.surface-opacity < 0.999 : root.lift-progress <= 0.001) ? Materials.opaque : transparent;
     material-level: 2;
     elevation: 3;
     border-radius: Spacing.radius-chrome;
+    border-width: !VoiceRecording.active && root.lift-progress <= 0.001 ? Materials.glass-edge-width : 0px;
+    border-color: Materials.glass-edge;
 
     in property <bool> collapsed: false;
     visible: !root.collapsed;
@@ -226,18 +244,18 @@ export component MessageComposer inherits GlassSurface {
     animate surface-opacity { duration: Appearance.reduce-motion ? 90ms : 0ms; easing: linear; }
     property <float> content-pressure: is-replying || has-attachments ? 1 : 0;
     animate content-pressure {
-        duration: Appearance.reduce-motion ? 0ms : 420ms;
-        easing: cubic-bezier(0.22, 1.16, 0.36, 1);
+        duration: Materials.motion-emphasized;
+        easing: Materials.spring;
     }
     property <float> reply-reveal: is-replying ? 1 : 0;
     animate reply-reveal {
-        duration: Appearance.reduce-motion ? 90ms : 390ms;
-        easing: Appearance.reduce-motion ? linear : cubic-bezier(0.22, 1.12, 0.36, 1);
+        duration: Appearance.reduce-motion ? 90ms : Materials.motion-standard;
+        easing: Appearance.reduce-motion ? linear : Materials.spring;
     }
     property <float> strip-reveal: has-attachments ? 1 : 0;
     animate strip-reveal {
-        duration: Appearance.reduce-motion ? 90ms : 390ms;
-        easing: Appearance.reduce-motion ? linear : cubic-bezier(0.22, 1.12, 0.36, 1);
+        duration: Appearance.reduce-motion ? 90ms : Materials.motion-standard;
+        easing: Appearance.reduce-motion ? linear : Materials.spring;
     }
     property <bool> show-attachment-action: !root.is-editing && (MeshGlobal.active-id == "" || MeshGlobal.active-kind != "dm");
     property <bool> show-terminal-action: root.can-send || (!root.is-editing && MeshGlobal.active-id == "");
@@ -702,53 +720,27 @@ export component MessageComposer inherits GlassSurface {
             left-action-surface := GlassSurface {
                 x: 0px;
                 y: 0px;
-                visible: Appearance.reduce-motion ? root.surface-opacity > 0.001 : root.lift-progress > 0.001;
-                opacity: Appearance.reduce-motion ? root.surface-opacity : min(1, root.lift-progress * 2);
-                transform-scale-x: 100% - 5% * root.content-pressure
-                    - min(14%, abs(root.lift-velocity) * 170%)
-                    + min(18%, root.impact-squash * 130%);
-                transform-scale-y: 100% + min(20%, abs(root.lift-velocity) * 230%)
-                    - min(16%, root.impact-squash * 115%);
+                visible: false;
                 width: Spacing.touch-target-min + root.row-padding * 2;
                 height: root.top-shell-height;
                 material-enabled: false;
-                background: Materials.regular;
-                border-width: Materials.glass-edge-width;
-                border-color: Materials.glass-edge;
-                border-radius: Spacing.radius-chrome;
-                material-level: root.material-level;
-                elevation: root.elevation;
-                backdrop-paused: root.backdrop-paused;
             }
             if root.show-attachment-action: right-action-surface := GlassSurface {
                 y: 0px;
                 x: parent.width - self.width;
-                visible: Appearance.reduce-motion ? root.surface-opacity > 0.001 : root.lift-progress > 0.001;
-                opacity: Appearance.reduce-motion ? root.surface-opacity : min(1, root.lift-progress * 2);
-                transform-scale-x: 100% - 5% * root.content-pressure
-                    - min(14%, abs(root.lift-velocity) * 170%)
-                    + min(18%, root.impact-squash * 130%);
-                transform-scale-y: 100% + min(20%, abs(root.lift-velocity) * 230%)
-                    - min(16%, root.impact-squash * 115%);
+                visible: false;
                 width: Spacing.touch-target-min + root.row-padding * 2;
                 height: root.top-shell-height;
                 material-enabled: false;
-                background: Materials.regular;
-                border-width: Materials.glass-edge-width;
-                border-color: Materials.glass-edge;
-                border-radius: Spacing.radius-chrome;
-                material-level: root.material-level;
-                elevation: root.elevation;
-                backdrop-paused: root.backdrop-paused;
             }
             field-surface := GlassSurface {
                 visible: Appearance.reduce-motion ? root.surface-opacity > 0.001 : root.lift-progress > 0.001;
-                opacity: Appearance.reduce-motion ? root.surface-opacity : min(1, root.lift-progress * 2);
+                opacity: Appearance.reduce-motion ? root.surface-opacity : 1;
                 y: root.raised-toolbar-height;
                 width: parent.width;
                 height: root.content-height + root.row-padding * 2;
                 material-enabled: false;
-                background: Materials.regular;
+                background: Materials.opaque;
                 border-width: Materials.glass-edge-width;
                 border-color: Materials.glass-edge;
                 border-radius: Spacing.radius-chrome;
@@ -757,38 +749,42 @@ export component MessageComposer inherits GlassSurface {
                 backdrop-paused: root.backdrop-paused;
             }
 
-            LiquidRim {
-                x: left-action-surface.width / 2 - self.width / 2;
-                y: field-surface.y - self.height + 2px;
-                width: 72px;
-                height: 8px + min(7px, abs(root.lift-velocity) * 90px);
-                visible: !Appearance.reduce-motion && root.lift-progress > 0.001;
+            left-body := EdgeDroplet {
+                x: 0px;
+                y: 0px;
+                width: left-action-surface.width * (1 - 0.05 * root.content-pressure)
+                    - min(8px, abs(root.lift-velocity) * 90px) + min(7px, root.impact-squash * 55px);
+                height: root.top-shell-height + min(8px, abs(root.lift-velocity) * 95px)
+                    - min(6px, root.impact-squash * 45px);
+                visible: root.lift-progress > 0.001;
+                opacity: Appearance.reduce-motion ? root.surface-opacity : 1;
             }
-            if root.show-attachment-action: LiquidRim {
-                x: parent.width - root.action-shell-height / 2 - self.width / 2;
-                y: field-surface.y - self.height + 2px;
-                width: 72px;
-                height: 8px + min(7px, abs(root.lift-velocity) * 90px);
-                visible: !Appearance.reduce-motion && root.lift-progress > 0.001;
+            if root.show-attachment-action: right-body := EdgeDroplet {
+                trailing: true;
+                width: left-body.width;
+                x: parent.width - self.width;
+                y: 0px;
+                height: left-body.height;
+                visible: root.lift-progress > 0.001;
+                opacity: Appearance.reduce-motion ? root.surface-opacity : 1;
             }
 
-            // The waist remains visible in the four-pixel separation. It
-            // stretches while the field pulls away, then settles to a meniscus.
-            left-neck := LiquidNeck {
-                x: (left-action-surface.width - self.width) / 2;
-                y: root.top-shell-height - 4px;
-                width: min(left-action-surface.width, 50px);
-                height: max(0px, field-surface.y - self.y + 5px);
+            // Keep the outside vertical and pull only the inner flank inward.
+            // The full-width foot covers the field rim without a hairline seam.
+            left-neck := EdgeMeniscus {
+                x: 0px;
+                y: root.top-shell-height - 5px;
+                width: left-body.width;
+                height: max(0px, field-surface.y - self.y + 7px);
                 visible: !Appearance.reduce-motion && root.lift-progress > 0.001 && self.height > 1px;
-                opacity: min(1, root.lift-progress * 2);
             }
-            if root.show-attachment-action: right-neck := LiquidNeck {
-                x: parent.width - root.action-shell-height + (root.action-shell-height - self.width) / 2;
-                y: root.top-shell-height - 4px;
-                width: min(root.action-shell-height, 50px);
-                height: max(0px, field-surface.y - self.y + 5px);
+            if root.show-attachment-action: right-neck := EdgeMeniscus {
+                trailing: true;
+                width: left-body.width;
+                x: parent.width - self.width;
+                y: root.top-shell-height - 5px;
+                height: max(0px, field-surface.y - self.y + 7px);
                 visible: !Appearance.reduce-motion && root.lift-progress > 0.001 && self.height > 1px;
-                opacity: min(1, root.lift-progress * 2);
             }
             if root.is-replying: reply-neck := LiquidNeck {
                 x: (parent.width - self.width) / 2;
@@ -819,7 +815,7 @@ export component MessageComposer inherits GlassSurface {
                 border-radius: Spacing.radius-chrome;
                 clip: true;
                 material-enabled: false;
-                background: Materials.regular;
+                background: Materials.opaque;
                 border-width: Materials.glass-edge-width;
                 border-color: Materials.glass-edge;
                 material-level: root.material-level;
@@ -925,7 +921,7 @@ export component MessageComposer inherits GlassSurface {
                 border-radius: Spacing.radius-chrome;
                 clip: true;
                 material-enabled: false;
-                background: Materials.regular;
+                background: Materials.opaque;
                 border-width: Materials.glass-edge-width;
                 border-color: Materials.glass-edge;
                 material-level: root.material-level;
