@@ -45,9 +45,13 @@ component UpdateBanner inherits GlassSurface {
                 font-size: Typography.xs; wrap: word-wrap; }
         }
         Rectangle { horizontal-stretch: 1; }
-        Button { text: UpdateGlobal.state == "error" ? "Retry" : UpdateGlobal.play-distribution ? "Update in Play Store" : UpdateGlobal.state == "ready" ? "Restart" : UpdateGlobal.state == "confirm-cellular" ? "Download now" : "Update";
-            disabled: UpdateGlobal.state == "downloading" || UpdateGlobal.state == "installing";
-            clicked => { if (UpdateGlobal.state == "error") { UpdateGlobal.check(); } else { UpdateGlobal.update(); } }
+        VerticalLayout {
+            alignment: center;
+            horizontal-stretch: 0;
+            Button { text: UpdateGlobal.state == "error" ? "Retry" : UpdateGlobal.play-distribution ? "Update in Play Store" : UpdateGlobal.state == "ready" ? "Restart" : UpdateGlobal.state == "confirm-cellular" ? "Download now" : "Update";
+                disabled: UpdateGlobal.state == "downloading" || UpdateGlobal.state == "installing";
+                clicked => { if (UpdateGlobal.state == "error") { UpdateGlobal.check(); } else { UpdateGlobal.update(); } }
+            }
         }
     }
 }
@@ -258,9 +262,7 @@ export component Sidebar inherits Rectangle {
 
     in property <length> bottom-inset: 0px;
     property <bool> update-banner-visible: UpdateGlobal.state == "available" || UpdateGlobal.state == "confirm-cellular" || UpdateGlobal.state == "downloading" || UpdateGlobal.state == "ready" || UpdateGlobal.state == "installing" || UpdateGlobal.state == "error";
-    property <length> update-banner-height: root.mobile-mode
-        ? Spacing.bottom-nav-height + Spacing.button-height - Spacing.xs
-        : Spacing.button-height + Spacing.xxl;
+    property <length> update-banner-height: Spacing.button-height + Spacing.md;
 
     Rectangle {
         // Clip the list and glass chrome together. Child/backdrop painting must
