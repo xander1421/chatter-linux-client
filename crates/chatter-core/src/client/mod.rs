@@ -318,6 +318,15 @@ impl IdentityChangePrompt {
     }
 }
 
+/// Actions available in the open conversation header.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ConversationActions {
+    pub can_call: bool,
+    pub can_invite: bool,
+    pub can_open_settings: bool,
+    pub can_open_pinned_list: bool,
+}
+
 /// The main entry point for the chatter-core SDK.
 ///
 /// # Example
@@ -1936,11 +1945,16 @@ impl ChatterClient {
         }
     }
 
-    pub async fn check_available_update(&self) -> Result<Option<crate::update::UpdateManifest>, String> {
-        let found = self.check_for_update(
-            crate::update::platform(), crate::update::channel(),
-            crate::update::installed_version_code(),
-        ).await?;
+    pub async fn check_available_update(
+        &self,
+    ) -> Result<Option<crate::update::UpdateManifest>, String> {
+        let found = self
+            .check_for_update(
+                crate::update::platform(),
+                crate::update::channel(),
+                crate::update::installed_version_code(),
+            )
+            .await?;
         *self.pending_update.lock() = found.clone();
         Ok(found)
     }
@@ -1953,7 +1967,10 @@ impl ChatterClient {
         &self,
         progress: &(dyn Fn(u64) + Send + Sync),
     ) -> Result<std::path::PathBuf, String> {
-        let manifest = self.pending_update.lock().clone()
+        let manifest = self
+            .pending_update
+            .lock()
+            .clone()
             .ok_or_else(|| "no verified update is available".to_string())?;
         let mut changed = self.update_transport_epoch.subscribe();
         tokio::select! {
@@ -2033,10 +2050,30 @@ impl ChatterClient {
         conversation.conversation_type(&self.services.channel_repo)
     }
 
-    /// Shortcut for `chat_state().active_conversation()`. The typed
-    /// `ActiveConversation` is the single source of truth for "which
-    /// conversation is currently being viewed" — use this (or the
-    /// `matches_*` predicates on it) instead of string-comparing UI state.
+    /// Header capabilities from the same conversation type and membership state
+    /// used by core operations. Mesh has no `ActiveConversation` and yields none.
+    pub fn conversation_actions(
+        &self,
+        conversation: crate::state::ActiveConversation,
+    ) -> ConversationActions {
+        use crate::domain::message::ConversationType as Kind;
+        let Some(kind) = self.conversation_type_of(&conversation) else {
+            return ConversationActions::default();
+        };
+        let can_call = matches!(kind, Kind::Channel | Kind::ServerDm)
+            && !conversation
+                .channel_id()
+                .is_some_and(|id| self.is_former_channel(&id));
+        ConversationActions {
+            can_call,
+            can_invite: matches!(kind, Kind::Channel | Kind::AnonGroup),
+            can_open_settings: matches!(kind, Kind::Channel | Kind::ServerDm | Kind::AnonGroup),
+            can_open_pinned_list: matches!(kind, Kind::SavedMessages),
+        }
+    }
+
+    /// `ActiveConversation` is the single source of truth for which
+    /// conversation is currently being viewed.
     pub fn active_conversation(&self) -> crate::state::ActiveConversation {
         self.services.chat_state.active_conversation()
     }
@@ -2142,16 +2179,22 @@ impl ChatterClient {
             let shield = self.anon_mode_enabled();
             self.services.runtime_handle.spawn(async move {
                 crate::network::grpc::onion_transport::refresh_directory(pool.onion_tor());
-                if shield && pool.transport_mode() == crate::network::grpc::client_pool::TransportMode::Onion {
-                    let _ = tokio::join!(async {
-                        if let Err(error) = pool.connect().await {
-                            tracing::debug!(%error, "Shield onion preconnect failed");
+                if shield
+                    && pool.transport_mode()
+                        == crate::network::grpc::client_pool::TransportMode::Onion
+                {
+                    let _ = tokio::join!(
+                        async {
+                            if let Err(error) = pool.connect().await {
+                                tracing::debug!(%error, "Shield onion preconnect failed");
+                            }
+                        },
+                        async {
+                            if let Err(error) = pool.preconnect_unidentified().await {
+                                tracing::debug!(%error, "Shield anonymous preconnect failed");
+                            }
                         }
-                    }, async {
-                        if let Err(error) = pool.preconnect_unidentified().await {
-                            tracing::debug!(%error, "Shield anonymous preconnect failed");
-                        }
-                    });
+                    );
                 }
                 if let Err(error) = pool.preconnect_secret().await {
                     tracing::debug!(%error, "secret onion preconnect failed");
@@ -2170,7 +2213,8 @@ impl ChatterClient {
     /// this method does not emit a domain event because the flag is a
     /// presentation concern, not a chatter-core state change.
     pub fn set_anon_mode_enabled(self: &Arc<Self>, enabled: bool) {
-        self.update_transport_epoch.send_modify(|epoch| *epoch = epoch.wrapping_add(1));
+        self.update_transport_epoch
+            .send_modify(|epoch| *epoch = epoch.wrapping_add(1));
         self.anon_mode.store(enabled, Ordering::Release);
         // Suspend direct SSE synchronously at Shield entry, before queuing
         // transport rebuild. configure_push holds this same admission lock.
@@ -2246,17 +2290,21 @@ impl ChatterClient {
             {
                 let pool = this.services.grpc_pool.clone();
                 // Warm authenticated, unidentified-deposit, and secret routes.
-                let _ = tokio::join!(pool.connect(), async {
-                    #[cfg(feature = "onion")]
-                    if let Err(error) = pool.preconnect_unidentified().await {
-                        tracing::debug!(%error, "Shield anonymous preconnect failed");
+                let _ = tokio::join!(
+                    pool.connect(),
+                    async {
+                        #[cfg(feature = "onion")]
+                        if let Err(error) = pool.preconnect_unidentified().await {
+                            tracing::debug!(%error, "Shield anonymous preconnect failed");
+                        }
+                    },
+                    async {
+                        #[cfg(feature = "onion")]
+                        if let Err(error) = pool.preconnect_secret().await {
+                            tracing::debug!(%error, "secret onion preconnect will retry on use");
+                        }
                     }
-                }, async {
-                    #[cfg(feature = "onion")]
-                    if let Err(error) = pool.preconnect_secret().await {
-                        tracing::debug!(%error, "secret onion preconnect will retry on use");
-                    }
-                });
+                );
             }
         });
     }
@@ -3759,7 +3807,11 @@ impl ChatterClient {
     pub fn notification_target_for_key(&self, key: &str) -> Option<NotificationTarget> {
         let conversation = self.conversation_for_notification_key(key)?;
         if let crate::state::ActiveConversation::AnonDm(id) = conversation {
-            if self.list_anon_dm_message_requests().iter().any(|dm| dm.id == id) {
+            if self
+                .list_anon_dm_message_requests()
+                .iter()
+                .any(|dm| dm.id == id)
+            {
                 return Some(NotificationTarget::SecretRequest);
             }
         }
@@ -5409,7 +5461,10 @@ mod transport_switch_tests {
 
         assert!(listed(&client), "a stored channel is listed outside Shield");
         client.set_anon_mode_enabled(true);
-        assert!(!listed(&client), "Shield hides it at once, from local state");
+        assert!(
+            !listed(&client),
+            "Shield hides it at once, from local state"
+        );
         client.set_anon_mode_enabled(false);
         assert!(listed(&client), "leaving Shield lists it again");
     }

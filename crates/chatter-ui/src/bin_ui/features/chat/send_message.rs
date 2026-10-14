@@ -350,6 +350,9 @@ fn set_send_notice(
         return;
     }
     let read_only = ui_ctx.is_former_channel(&channel_id);
+    let can_call = ui_ctx
+        .conversation_actions(ui_ctx.active_conversation())
+        .can_call;
     // The membership banner and public badge travel with the notice: both say
     // whether (and why) this channel can be posted to.
     let membership = ui_ctx.channel_membership_header(&channel_id);
@@ -364,6 +367,7 @@ fn set_send_notice(
             w.set_composer_notice(notice.into());
             w.set_secret_request_actions(answer);
             w.set_conversation_read_only(read_only);
+            w.set_header_can_call(can_call);
             super::membership::apply_header(&w, &membership);
         }
     });
@@ -478,7 +482,9 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             return true;
         }
 
-        let Some(w) = weak_window.upgrade() else { return false };
+        let Some(w) = weak_window.upgrade() else {
+            return false;
+        };
         let send = match ui_ctx_jarvis.begin_composer_send(text, composer_reply(&w)) {
             Ok(send) => send,
             Err(message) => {
@@ -777,7 +783,10 @@ async fn deliver_inner(
     );
     tokio::pin!(sending);
     let tor_send = ui_ctx.anon_mode_enabled()
-        || matches!(conversation, ActiveConversation::AnonDm(_) | ActiveConversation::AnonGroup(_));
+        || matches!(
+            conversation,
+            ActiveConversation::AnonDm(_) | ActiveConversation::AnonGroup(_)
+        );
     let outcome = if tor_send {
         tokio::select! {
             result = &mut sending => result,

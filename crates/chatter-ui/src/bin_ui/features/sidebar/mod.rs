@@ -552,6 +552,10 @@ pub(crate) fn conversation_removed(
             ));
             // No name = nothing open: the pane shows "Select a conversation".
             w.set_channel_name("".into());
+            w.set_header_can_call(false);
+            w.set_header_can_invite(false);
+            w.set_header_can_open_settings(false);
+            w.set_header_can_open_pinned_list(false);
             // The empty detail pane is useful on desktop; on a phone the
             // removed conversation must reveal the list without another Back.
             // Keep pushed screens intact: their owners close them separately.
@@ -595,6 +599,10 @@ pub(crate) fn show_chat_pane(weak: &slint::Weak<MainWindow>) {
         // waiting for the next conversation's asynchronous load.
         w.set_loading_messages(true);
         w.set_channel_name("".into());
+        w.set_header_can_call(false);
+        w.set_header_can_invite(false);
+        w.set_header_can_open_settings(false);
+        w.set_header_can_open_pinned_list(false);
         w.set_topic("".into());
         w.set_member_count(0);
         w.set_header_presence_status("offline".into());

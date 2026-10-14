@@ -45,6 +45,11 @@ pub fn set_conversation_kind(
     w.set_chat_can_forward(ct.can_forward_from());
     w.set_private_channel(private_channel);
     w.set_composer_gifs_available(ui_ctx.gif_picker_available_for(ct));
+    let actions = ui_ctx.conversation_actions(ui_ctx.active_conversation());
+    w.set_header_can_call(actions.can_call);
+    w.set_header_can_invite(actions.can_invite);
+    w.set_header_can_open_settings(actions.can_open_settings);
+    w.set_header_can_open_pinned_list(actions.can_open_pinned_list);
     w.set_privacy_line_override(Default::default());
     w.set_privacy_line_exposed(false);
 }

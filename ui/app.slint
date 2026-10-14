@@ -512,6 +512,10 @@ export component MainWindow inherits Window {
     in property <string> composer-notice: "";
     // A channel we are no longer in (core's `is_former_channel`): read-only.
     in property <bool> conversation-read-only: false;
+    in-out property <bool> header-can-call: false;
+    in-out property <bool> header-can-invite: false;
+    in-out property <bool> header-can-open-settings: false;
+    in-out property <bool> header-can-open-pinned-list: false;
     in property <bool> secret-request-actions: false;
     callback secret-request-accept-clicked();
     callback secret-request-decline-clicked();
@@ -2318,6 +2322,10 @@ export component MainWindow inherits Window {
                         composer-placeholder: root.composer-placeholder;
                         composer-notice: root.composer-notice;
                         conversation-read-only: root.conversation-read-only;
+                        header-can-call: root.header-can-call;
+                        header-can-invite: root.header-can-invite;
+                        header-can-open-settings: root.header-can-open-settings;
+                        header-can-open-pinned-list: root.header-can-open-pinned-list;
                         secret-request-actions: root.secret-request-actions;
                         secret-request-accept-clicked => { root.secret-request-accept-clicked(); }
                         secret-request-decline-clicked => { root.secret-request-decline-clicked(); }
