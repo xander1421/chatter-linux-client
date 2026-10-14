@@ -12,7 +12,7 @@ use tonic::transport::Endpoint;
 use crate::error::NetworkError;
 
 use super::interceptors::AuthInterceptor;
-use super::retry::{retry_unary, RetryConfig};
+use super::retry::{RetryConfig, retry_unary};
 use super::transport::GrpcTransport;
 
 /// Ceiling on the QUIC reachability probe in [`GrpcClientPool::dial`]. QUIC/UDP
@@ -416,8 +416,6 @@ impl GrpcClientPool {
                     // Build an h2c endpoint straight at the `.onion` (no TLS — the
                     // onion address self-authenticates). The real dial goes through
                     // the Arti connector on the next `channel()`/`connect()`.
-                    // TODO(onion): isolate anon vs auth circuits — one shared circuit
-                    // for the whole pool for now (hides client + server IP).
                     let ep = Self::create_endpoint(&_onion, self.timeout)?;
                     self.swap_endpoint(ep, TransportMode::Onion);
                     tracing::info!("transport: onion ({_onion})");
@@ -795,6 +793,30 @@ impl GrpcClientPool {
             let _ = (onion, &mut guard);
             Err(NetworkError::SecretChatNeedsTor("this build has none"))
         }
+    }
+
+    /// Establish the isolated secret-chat h2 connection before its first RPC.
+    /// The cached channel retains the connection and its idle keepalives.
+    #[cfg(feature = "onion")]
+    pub async fn preconnect_secret(&self) -> Result<(), NetworkError> {
+        let onion = self
+            .onion_addr
+            .read()
+            .clone()
+            .ok_or(NetworkError::SecretChatNeedsTor(
+                "no server .onion address is pinned",
+            ))?;
+        let endpoint = Self::create_endpoint(&onion, self.timeout)?;
+        let channel: GrpcTransport = endpoint
+            .connect_with_connector(self.secret_onion_connector())
+            .await
+            .map_err(|e| NetworkError::ConnectionFailed(format!("secret onion preconnect: {e}")))?
+            .into();
+        let mut guard = self.secret_channel.write();
+        if self.onion_addr.read().as_deref() == Some(onion.as_str()) {
+            *guard = Some(channel);
+        }
+        Ok(())
     }
 
     /// Whether secret-chat traffic has a route at all (see
@@ -1601,7 +1623,7 @@ mod tests {
     #[tokio::test]
     async fn cached_quic_connect_and_probe_do_not_fabricate_authority() {
         use crate::network::connection::{
-            server_evidence_revision, server_status, set_server_status, ServerStatus,
+            ServerStatus, server_evidence_revision, server_status, set_server_status,
         };
         let pool = GrpcClientPool::new("https://192.0.2.1:50051").unwrap();
         *pool.quic_probe.write() = QuicProbeState::Working;

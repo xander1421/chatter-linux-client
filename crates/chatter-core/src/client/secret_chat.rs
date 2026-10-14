@@ -20,6 +20,15 @@ impl ChatterClient {
         if tokio::runtime::Handle::try_current().is_err() {
             return;
         }
+        #[cfg(feature = "onion")]
+        {
+            let pool = self.services.grpc_pool.clone();
+            tokio::spawn(async move {
+                if let Err(error) = pool.preconnect_secret().await {
+                    tracing::debug!(%error, "secret onion preconnect will retry on use");
+                }
+            });
+        }
         let (service, bus) = (self.anon_dms().clone(), self.event_bus().clone());
         tokio::spawn(async move {
             match service.retry_pending_peer_avatar(&conversation_id).await {

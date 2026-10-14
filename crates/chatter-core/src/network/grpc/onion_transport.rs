@@ -6,15 +6,10 @@
 //! Each dial hands tonic a [`DataStream`] tunnelled through Tor to the pinned
 //! `.onion`, which hides both the client's and the server's IP.
 //!
-//! The [`arti_client::TorClient`] is prewarmed at app launch, with first-dial retry
-//! (bootstrap walks the Tor directory and is slow) and is then cached in a
-//! shared [`OnceCell`] so every reconnect reuses the same warm client.
-//!
-//! # Scope (Stage 2)
-//! One Tor circuit for the whole pool. That already hides client + server IP.
-//! Per-purpose circuit isolation (anonymous mailbox polling on a different
-//! circuit than authenticated RPCs, via arti `StreamPrefs`/`isolated_client`)
-//! is a deliberate follow-up — see the `TODO(onion)` in [`OnionConnector::call`].
+//! The [`arti_client::TorClient`] bootstraps at app launch and is cached in a
+//! shared [`OnceCell`]. Authenticated, unidentified, and secret-chat channels
+//! use distinct isolation groups; a slow hidden-service dial gets a second
+//! isolated attempt after a short head start.
 
 use std::future::Future;
 use std::path::PathBuf;
@@ -36,7 +31,7 @@ use tower::Service;
 /// 90s hidden-service dial. The total cap also bounds OnceCell contention.
 pub(crate) const BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(120);
 pub(crate) const DIAL_TIMEOUT: Duration = Duration::from_secs(90);
-const FIRST_DIAL_TIMEOUT: Duration = Duration::from_secs(45);
+pub(crate) const HEDGE_DELAY: Duration = Duration::from_secs(18);
 pub(crate) const CONNECT_TIMEOUT: Duration = Duration::from_secs(210);
 static ACTIVE_DIALS: AtomicUsize = AtomicUsize::new(0);
 
@@ -170,6 +165,7 @@ pub(crate) fn tor_client_config() -> Result<TorClientConfig, String> {
         .ok_or_else(|| "Tor storage directories are not set".to_string())?;
     let mut builder = arti_client::config::TorClientConfigBuilder::from_directories(state, cache);
     set_cbt_floor(&mut builder);
+    set_hs_attempts(&mut builder);
     builder
         .build()
         .map_err(|e| format!("Tor configuration: {e}"))
@@ -181,6 +177,49 @@ fn set_cbt_floor(builder: &mut arti_client::config::TorClientConfigBuilder) {
     builder
         .override_net_params()
         .insert("cbtmintimeout".into(), 10_000);
+}
+
+fn set_hs_attempts(builder: &mut arti_client::config::TorClientConfigBuilder) {
+    // Eight sequential attempts can use the 90s dial budget at the 10s CBT
+    // floor, while giving a failed HSDir or intro path two more alternatives.
+    builder.circuit_timing().hs_desc_fetch_attempts(8);
+    builder.circuit_timing().hs_intro_rend_attempts(8);
+}
+
+/// Start an independent isolation attempt after a short head start. A failed
+/// first attempt starts the second immediately; a successful attempt drops
+/// the other future so it cannot keep a caller-owned stream alive.
+pub(crate) async fn hedged_dial<T, E, A, B>(first: A, second: B, delay: Duration) -> Result<T, E>
+where
+    A: Future<Output = Result<T, E>>,
+    B: Future<Output = Result<T, E>>,
+{
+    tokio::pin!(first);
+    tokio::pin!(second);
+    match tokio::select! {
+        result = &mut first => Some(result),
+        _ = tokio::time::sleep(delay) => None,
+    } {
+        Some(Ok(value)) => return Ok(value),
+        Some(Err(_)) => {
+            tracing::info!(phase = "hidden_service_connect", "onion first dial failed; starting isolated attempt");
+            return second.await;
+        }
+        None => {
+            tracing::info!(phase = "hidden_service_connect", elapsed_ms = delay.as_millis() as u64, "onion dial hedged with fresh isolation");
+        }
+    }
+    tokio::select! {
+        result = &mut first => match result {
+            Ok(value) => Ok(value),
+            Err(_) => second.await,
+        },
+        result = &mut second => {
+            match result { Ok(value) => Ok(value), Err(error) => {
+                match first.await { Ok(value) => Ok(value), Err(_) => Err(error) }
+            }}
+        }
+    }
 }
 
 pub(crate) fn tor_runtime() -> &'static tokio::runtime::Handle {
@@ -343,38 +382,18 @@ impl Service<Uri> for OnionConnector {
                     // A cancelled caller can leave that task running. Repeating
                     // connect on the same client then waits on the same stalled
                     // work, as RC119's three consecutive 90s deadlines did.
-                    // Give the first attempt half the budget. Every failed
-                    // attempt gets a new isolation token: Arti 0.47 caches the
-                    // descriptor and in-flight work by service and isolation,
-                    // and only an introduction NACK forces a descriptor refetch.
-                    // A completed descriptor/intro/rendezvous error must not
-                    // reuse that state on the final attempt.
-                    let first = tokio::time::timeout(
-                        FIRST_DIAL_TIMEOUT,
+                    // A new isolation token gives Arti independent HS state.
+                    // The second future is not polled until the first fails or
+                    // the hedge timer fires, so it starts no early traffic.
+                    let retry_client = client.isolated_client();
+                    let result = hedged_dial(
                         client.connect((host.as_str(), port)),
+                        retry_client.connect((host.as_str(), port)),
+                        HEDGE_DELAY,
                     )
                     .await;
-                    match first {
-                        Ok(Ok(stream)) => return Ok(stream),
-                        Ok(Err(error)) => {
-                            tracing::warn!(
-                                error_kind = ?error.kind(),
-                                "onion dial failed; retrying with fresh Tor isolation"
-                            );
-                            tokio::time::sleep(Duration::from_millis(500)).await;
-                        }
-                        Err(_) => {
-                            tracing::warn!(
-                                phase = "hidden_service_connect",
-                                elapsed_ms = FIRST_DIAL_TIMEOUT.as_millis() as u64,
-                                "onion dial stalled; retrying with fresh Tor isolation"
-                            );
-                        }
-                    }
-                    let retry_client = client.isolated_client();
-                    let result = retry_client.connect((host.as_str(), port)).await;
                     if let Err(error) = &result {
-                        tracing::warn!(error_kind = ?error.kind(), "onion dial retry failed");
+                        tracing::warn!(error_kind = ?error.kind(), "onion dial attempts failed");
                     }
                     result
                 });
@@ -396,6 +415,7 @@ impl Service<Uri> for OnionConnector {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use arti_client::config::circ::CircMgrConfig;
     use tokio::sync::oneshot;
 
     #[test]
@@ -412,6 +432,71 @@ mod tests {
         builder
             .build()
             .expect("CBT floor is a valid Arti configuration");
+    }
+
+    #[test]
+    fn hs_attempt_limits_fit_the_dial_budget() {
+        let mut builder = arti_client::config::TorClientConfigBuilder::from_directories(
+            "/tmp/chatter-tor-state",
+            "/tmp/chatter-tor-cache",
+        );
+        set_cbt_floor(&mut builder);
+        set_hs_attempts(&mut builder);
+        let config = builder.build().expect("HS attempt limits are valid");
+        assert_eq!(config.circuit_timing().hs_desc_fetch_attempts(), 8);
+        assert_eq!(config.circuit_timing().hs_intro_rend_attempts(), 8);
+        assert_eq!(HEDGE_DELAY, Duration::from_secs(18));
+        assert!(HEDGE_DELAY < DIAL_TIMEOUT);
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn hedge_starts_after_delay_and_cancels_loser() {
+        let (first_drop_tx, first_dropped) = oneshot::channel();
+        let first = async move {
+            let _drop = DropSignal(Some(first_drop_tx));
+            std::future::pending::<Result<u8, &'static str>>().await
+        };
+        let (second_start_tx, second_started) = oneshot::channel();
+        let second = async move {
+            let _ = second_start_tx.send(());
+            Ok::<u8, &'static str>(2)
+        };
+        let race = tokio::spawn(hedged_dial(first, second, HEDGE_DELAY));
+        tokio::task::yield_now().await;
+        assert!(!race.is_finished());
+        tokio::time::advance(HEDGE_DELAY).await;
+        assert_eq!(race.await.unwrap(), Ok(2));
+        second_started.await.unwrap();
+        first_dropped.await.unwrap();
+    }
+
+    #[tokio::test]
+    async fn first_success_does_not_start_hedge() {
+        let (second_start_tx, second_started) = oneshot::channel();
+        assert_eq!(
+            hedged_dial(
+                async { Ok::<u8, &'static str>(1) },
+                async move {
+                    let _ = second_start_tx.send(());
+                    Ok(2)
+                },
+                HEDGE_DELAY,
+            )
+            .await,
+            Ok(1)
+        );
+        assert!(second_started.await.is_err());
+    }
+
+    #[tokio::test(start_paused = true)]
+    async fn first_failure_starts_isolated_attempt_without_waiting() {
+        let result = hedged_dial(
+            async { Err::<u8, &'static str>("first failed") },
+            async { Ok::<u8, &'static str>(2) },
+            HEDGE_DELAY,
+        )
+        .await;
+        assert_eq!(result, Ok(2));
     }
 
     #[test]

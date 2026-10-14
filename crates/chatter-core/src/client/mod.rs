@@ -2210,6 +2210,20 @@ impl ChatterClient {
         self.services.runtime_handle.spawn(async move {
             let _guard = this.transport_switch_lock.lock().await;
             this.rebuild_transport_loops().await;
+            drop(_guard);
+            if this.anon_mode_enabled()
+                && this.services.grpc_pool.transport_mode() == TransportMode::Onion
+            {
+                let pool = this.services.grpc_pool.clone();
+                // Warm the authenticated Shield route and the separately isolated
+                // secret route before the user's next send. Both are cached.
+                let _ = tokio::join!(pool.connect(), async {
+                    #[cfg(feature = "onion")]
+                    if let Err(error) = pool.preconnect_secret().await {
+                        tracing::debug!(%error, "secret onion preconnect will retry on use");
+                    }
+                });
+            }
         });
     }
 

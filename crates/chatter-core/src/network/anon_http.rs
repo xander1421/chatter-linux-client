@@ -249,10 +249,15 @@ mod tor {
             base.clone()
         };
         let (dial_host, dial_port) = (host.to_string(), port);
-        let mut task = TorTask(
-            tor_runtime()
-                .spawn(async move { client.connect((dial_host.as_str(), dial_port)).await }),
-        );
+        let mut task = TorTask(tor_runtime().spawn(async move {
+            let retry_client = client.isolated_client();
+            crate::network::grpc::onion_transport::hedged_dial(
+                client.connect((dial_host.as_str(), dial_port)),
+                retry_client.connect((dial_host.as_str(), dial_port)),
+                crate::network::grpc::onion_transport::HEDGE_DELAY,
+            )
+            .await
+        }));
         match tokio::time::timeout(std::time::Duration::from_secs(90), &mut task.0).await {
             Err(_) => Err(format!("Tor connect to {host}:{port} timed out after 90s")),
             Ok(Err(join)) => Err(format!("Tor connect task panicked: {join}")),
