@@ -337,12 +337,23 @@ pub async fn app_init() -> AppState {
                             || meta.target().starts_with("tor_circmgr"))))
         }))
     });
-    tracing_subscriber::registry()
-        .with(
-            tracing_subscriber::fmt::layer()
-                .event_format(redacted_log::RedactedEventFormatter)
-                .with_filter(normal_filter),
+    // Debug builds keep full event values for development; release builds
+    // never format event values (identifiers, errors, message text).
+    let (full_layer, redacted_layer) = if cfg!(debug_assertions) {
+        (Some(tracing_subscriber::fmt::layer().with_filter(normal_filter)), None)
+    } else {
+        (
+            None,
+            Some(
+                tracing_subscriber::fmt::layer()
+                    .event_format(redacted_log::RedactedEventFormatter)
+                    .with_filter(normal_filter),
+            ),
         )
+    };
+    tracing_subscriber::registry()
+        .with(full_layer)
+        .with(redacted_layer)
         .with(stage_trace)
         .init();
 
