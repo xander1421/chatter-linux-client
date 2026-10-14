@@ -18,6 +18,7 @@ pub mod bin_ui;
 
 // Platform integration (JNI on Android, etc.)
 pub mod platform;
+mod redacted_log;
 mod tor_stage_trace;
 
 /// Global tokio runtime handle for use in Slint callbacks.
@@ -317,12 +318,16 @@ pub async fn app_init() -> AppState {
 
     let shutdown_token = CancellationToken::new();
 
-    use tracing_subscriber::{prelude::*, Layer};
-    let normal_filter = tracing_subscriber::EnvFilter::from_default_env()
-        .add_directive(tracing::Level::INFO.into())
-        .add_directive("glycin=warn".parse().unwrap())
-        .add_directive("glycin_utils=warn".parse().unwrap())
-        .add_directive("zbus=warn".parse().unwrap());
+    use tracing_subscriber::{Layer, prelude::*};
+    let normal_filter = if cfg!(debug_assertions) {
+        tracing_subscriber::EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into())
+    } else {
+        // Release logs must not be made verbose through RUST_LOG.
+        tracing_subscriber::EnvFilter::new("warn")
+    }
+    .add_directive("glycin=warn".parse().unwrap())
+    .add_directive("glycin_utils=warn".parse().unwrap())
+    .add_directive("zbus=warn".parse().unwrap());
     let stage_trace = tor_stage_trace::TorStageTrace::open().map(|trace| {
         trace.with_filter(tracing_subscriber::filter::filter_fn(|meta| {
             *meta.level() <= tracing::Level::DEBUG
@@ -332,8 +337,23 @@ pub async fn app_init() -> AppState {
                             || meta.target().starts_with("tor_circmgr"))))
         }))
     });
+    // Debug builds keep full event values for development; release builds
+    // never format event values (identifiers, errors, message text).
+    let (full_layer, redacted_layer) = if cfg!(debug_assertions) {
+        (Some(tracing_subscriber::fmt::layer().with_filter(normal_filter)), None)
+    } else {
+        (
+            None,
+            Some(
+                tracing_subscriber::fmt::layer()
+                    .event_format(redacted_log::RedactedEventFormatter)
+                    .with_filter(normal_filter),
+            ),
+        )
+    };
     tracing_subscriber::registry()
-        .with(tracing_subscriber::fmt::layer().with_filter(normal_filter))
+        .with(full_layer)
+        .with(redacted_layer)
         .with(stage_trace)
         .init();
 
@@ -414,9 +434,9 @@ pub async fn app_init() -> AppState {
 
         let android_sink =
             std::sync::Arc::new(crate::platform::android::AndroidNotifications::new());
-        if let Err(e) = android_sink.init_channel() {
+        if android_sink.init_channel().is_err() {
             // Non-fatal — notifications just won't fire.
-            eprintln!("Failed to init Android notification channel: {}", e);
+            eprintln!("Failed to init Android notification channel");
         }
         builder = builder.notification_sink(android_sink);
     }
@@ -424,7 +444,7 @@ pub async fn app_init() -> AppState {
         Ok(c) => c,
         Err(e) => {
             tracing::error!("Failed to initialize application: {}", e);
-            eprintln!("Failed to initialize: {}", e);
+            eprintln!("Failed to initialize application");
             std::process::exit(1);
         }
     };

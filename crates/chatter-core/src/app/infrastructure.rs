@@ -220,6 +220,7 @@ impl InfrastructureContainer {
         // SECURITY: Zeroize passphrase immediately after use
         // This prevents it from lingering in memory
         passphrase.zeroize();
+        drop(passphrase);
 
         // Run migrations
         database.run_migrations()?;
@@ -343,7 +344,7 @@ impl InfrastructureContainer {
     fn android_passphrase(
         directories: &Directories,
         wrap: &dyn crate::system::sealed_secret::KeyWrap,
-    ) -> Result<String, ContextError> {
+    ) -> Result<zeroize::Zeroizing<String>, ContextError> {
         use crate::system::sealed_secret;
         let err = |e: String| ContextError::System(crate::error::SystemError::Keyring(e));
         let key_file = directories.data_dir().join(".db_key");
@@ -357,7 +358,7 @@ impl InfrastructureContainer {
             })?
         {
             tracing::info!("unsealed the database passphrase with the Android Keystore");
-            return Ok(existing.to_string());
+            return Ok(existing);
         }
 
         if directories.database_path().exists() {
@@ -383,7 +384,7 @@ impl InfrastructureContainer {
         // store would be unopenable on the next launch.
         sealed_secret::write(&key_file, sealed_secret::DB_ALIAS, wrap, &passphrase).map_err(err)?;
         tracing::info!("generated a database passphrase and sealed it with the Android Keystore");
-        Ok(passphrase.to_string())
+        Ok(passphrase)
     }
 
     /// Get or generate database passphrase from keyring.
@@ -395,7 +396,7 @@ impl InfrastructureContainer {
     fn passphrase_or_generate(
         keyring: &Keyring,
         directories: &Directories,
-    ) -> Result<String, ContextError> {
+    ) -> Result<zeroize::Zeroizing<String>, ContextError> {
         #[cfg(target_os = "android")]
         {
             let _ = keyring;
@@ -417,7 +418,7 @@ impl InfrastructureContainer {
                         source = keyring.passphrase_source(),
                         "retrieved the existing database passphrase"
                     );
-                    return Ok(passphrase);
+                    return Ok(zeroize::Zeroizing::new(passphrase));
                 }
                 // ONLY a genuine absence may generate a new passphrase.
                 //
@@ -444,16 +445,16 @@ impl InfrastructureContainer {
             }
 
             // Generate new passphrase (32 random bytes as hex = 64 chars)
-            let mut bytes = [0u8; 32];
+            let mut bytes = zeroize::Zeroizing::new([0u8; 32]);
             // OsRng for the DB master passphrase (highest-value key) — matches
             // the crate's stated RNG policy, not the ThreadRng userspace CSPRNG.
             {
                 use rand::TryRngCore;
                 rand::rngs::OsRng
-                    .try_fill_bytes(&mut bytes)
+                    .try_fill_bytes(bytes.as_mut())
                     .expect("OS CSPRNG must not fail");
             }
-            let passphrase = hex::encode(bytes);
+            let passphrase = zeroize::Zeroizing::new(hex::encode(bytes.as_ref()));
 
             // Store in keyring with retries
             tracing::info!(
@@ -491,7 +492,7 @@ mod android_passphrase_tests {
         let first = InfrastructureContainer::android_passphrase(&dirs, &OK).unwrap();
         assert_eq!(first.len(), 64);
         let on_disk = std::fs::read_to_string(dirs.data_dir().join(".db_key")).unwrap();
-        assert!(on_disk.starts_with("ks1:") && !on_disk.contains(&first));
+        assert!(on_disk.starts_with("ks1:") && !on_disk.contains(first.as_str()));
         std::fs::write(dirs.database_path(), b"db").unwrap();
         assert_eq!(
             InfrastructureContainer::android_passphrase(&dirs, &OK).unwrap(),

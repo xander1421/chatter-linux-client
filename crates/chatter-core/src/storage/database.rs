@@ -47,12 +47,12 @@ struct ReaderPool {
 }
 
 impl ReaderPool {
-    fn new(path: PathBuf, passphrase: String) -> Self {
+    fn new(path: PathBuf, passphrase: Zeroizing<String>) -> Self {
         Self {
             available: Mutex::new(VecDeque::with_capacity(READER_POOL_SIZE)),
             returned: Condvar::new(),
             path,
-            passphrase: Mutex::new(Zeroizing::new(passphrase)),
+            passphrase: Mutex::new(passphrase),
             count: AtomicUsize::new(0),
         }
     }
@@ -257,7 +257,10 @@ impl Database {
         // OS page cache. Don't set it.
 
         // Create reader pool for concurrent read access
-        let readers = Arc::new(ReaderPool::new(path.to_path_buf(), passphrase.to_string()));
+        let readers = Arc::new(ReaderPool::new(
+            path.to_path_buf(),
+            Zeroizing::new(passphrase.to_string()),
+        ));
 
         Ok(Self {
             writer: Arc::new(Mutex::new(conn)),
