@@ -33,6 +33,81 @@ export struct PendingAttachmentData {
     thumbnail: image,
 }
 
+// One closed contour for the field and both droplets. The circle quarters use
+// the standard cubic circle constant. Each inner flank leaves its circle with
+// a vertical tangent, narrows to a 24px waist, then joins the field with a
+// horizontal tangent. The outer flanks remain flush with the composer edges.
+component LiquidComposerSilhouette inherits Path {
+    in property <float> rise;
+    in property <float> field-top;
+    in property <float> shell-height;
+    in property <bool> trailing-drop;
+    property <float> w: self.width / 1px;
+    property <float> h: self.height / 1px;
+    property <float> p: min(1.03, max(0, rise));
+    property <float> r: 16 + 8 * p;
+    property <float> cy: field-top * (1 - p) + shell-height * 0.5 * p;
+    property <float> top: field-top * (1 - p) + (cy - r) * p;
+    property <float> side-y: (field-top + 16) * (1 - p) + cy * p;
+    property <float> inner-x: r * (1 + p);
+    property <float> waist-x: 16 + 25 * p;
+    property <float> waist-y: field-top - 14 * p;
+    property <float> join-x: 16 + 59 * p;
+    property <float> ripple: 12 * p * (1 - min(1, p));
+    property <float> k: 0.55228475;
+    fill: Appearance.glass-effects ? Materials.regular : Materials.opaque;
+    stroke: Materials.glass-edge;
+    stroke-width: Materials.glass-edge-width;
+    viewbox-width: w;
+    viewbox-height: h;
+    fit: fill;
+    MoveTo { x: 0; y: h - 16; }
+    LineTo { x: 0; y: side-y; }
+    CubicTo { control-1-x: 0; control-1-y: side-y - k * r;
+        control-2-x: r * (1 - k); control-2-y: top; x: r; y: top; }
+    CubicTo { control-1-x: r + k * r * p; control-1-y: top;
+        control-2-x: inner-x; control-2-y: cy - k * r * p; x: inner-x; y: cy; }
+    CubicTo { control-1-x: inner-x; control-1-y: cy + 12 * p;
+        control-2-x: waist-x; control-2-y: waist-y - 9 * p; x: waist-x; y: waist-y; }
+    CubicTo { control-1-x: waist-x; control-1-y: waist-y + 9 * p;
+        control-2-x: join-x - 14 * p; control-2-y: field-top; x: join-x; y: field-top; }
+    CubicTo { control-1-x: join-x + 12; control-1-y: field-top;
+        control-2-x: join-x + 24; control-2-y: field-top - ripple;
+        x: join-x + 36; y: field-top; }
+    LineTo { x: trailing-drop ? w - join-x - 36 : w - 16; y: field-top; }
+    CubicTo { control-1-x: trailing-drop ? w - join-x - 24 : w - 16;
+        control-1-y: trailing-drop ? field-top - ripple : field-top;
+        control-2-x: trailing-drop ? w - join-x - 12 : w - 16;
+        control-2-y: field-top;
+        x: trailing-drop ? w - join-x : w - 16; y: field-top; }
+    CubicTo { control-1-x: trailing-drop ? w - join-x + 14 * p : w - 16;
+        control-1-y: field-top;
+        control-2-x: trailing-drop ? w - waist-x : w;
+        control-2-y: trailing-drop ? waist-y + 9 * p : field-top;
+        x: trailing-drop ? w - waist-x : w; y: trailing-drop ? waist-y : field-top + 16; }
+    CubicTo { control-1-x: trailing-drop ? w - waist-x : w;
+        control-1-y: trailing-drop ? waist-y - 9 * p : field-top + 16;
+        control-2-x: trailing-drop ? w - inner-x : w;
+        control-2-y: trailing-drop ? cy + 12 * p : field-top + 16;
+        x: trailing-drop ? w - inner-x : w; y: trailing-drop ? cy : field-top + 16; }
+    CubicTo { control-1-x: trailing-drop ? w - inner-x : w;
+        control-1-y: trailing-drop ? cy - k * r * p : field-top + 16;
+        control-2-x: trailing-drop ? w - r - k * r * p : w;
+        control-2-y: trailing-drop ? top : field-top + 16;
+        x: trailing-drop ? w - r : w; y: trailing-drop ? top : field-top + 16; }
+    CubicTo { control-1-x: trailing-drop ? w - r * (1 - k) : w;
+        control-1-y: trailing-drop ? top : field-top + 16;
+        control-2-x: w; control-2-y: trailing-drop ? side-y - k * r : field-top + 16;
+        x: w; y: trailing-drop ? side-y : field-top + 16; }
+    LineTo { x: w; y: h - 16; }
+    CubicTo { control-1-x: w; control-1-y: h - 7.16;
+        control-2-x: w - 7.16; control-2-y: h; x: w - 16; y: h; }
+    LineTo { x: 16; y: h; }
+    CubicTo { control-1-x: 7.16; control-1-y: h;
+        control-2-x: 0; control-2-y: h - 7.16; x: 0; y: h - 16; }
+    Close { }
+}
+
 export component MessageComposer inherits GlassSurface {
     material-enabled: VoiceRecording.active;
     background: transparent;
@@ -93,7 +168,6 @@ export component MessageComposer inherits GlassSurface {
     callback keyboard-requested();
     changed collapsed => {
         if root.collapsed {
-            root.action-menu-open = false;
             root.suspend-input();
             root.input-focused();
             root.input-dismissed();
@@ -123,7 +197,7 @@ export component MessageComposer inherits GlassSurface {
         triggered => { root.voice-held = true; self.running = false; }
     }
     // Properties
-    in property <string> placeholder: "Message";
+    in property <string> placeholder: "Type a message...";
     in-out property <string> text: "";
     in property <bool> disabled: false;
     in property <[PendingAttachmentData]> pending-attachments: [];
@@ -156,33 +230,44 @@ export component MessageComposer inherits GlassSurface {
     // so the send button is disabled and the word cannot be sent at all
     // (OPEN-ITEMS §112c).
     property <bool> can-send: text != "" || text-input.preedit-text != "" || pending-attachments.length > 0;
-    // The action tray grows from the plus. The native input remains in the
-    // same field throughout, preserving selection and IME composition.
-    private property <bool> action-menu-open: false;
-    property <float> menu-reveal: root.action-menu-open ? 1 : 0;
-    animate menu-reveal { duration: Materials.motion-standard; easing: Materials.spring; }
+    // Keep one native input alive across the inline/raised transition. Preedit
+    // participates without being committed; attachments also raise the controls.
+    // A reply raises them too: its preview lives in the raised toolbar gap.
+    property <bool> raised-actions: text != "" || text-input.preedit-text != "" || root.has-attachments || root.is-replying;
+    // The same spring as other chrome drives the field bulge and droplet rise.
+    // Slint retargets this animation from its current value when the draft changes.
+    property <float> lift-progress: raised-actions ? 1 : 0;
+    animate lift-progress { duration: Materials.motion-emphasized; easing: Materials.spring; }
+    property <float> lift-geometry: max(0, root.lift-progress);
     property <float> reply-reveal: is-replying ? 1 : 0;
     animate reply-reveal {
-        duration: Materials.motion-standard;
-        easing: Materials.spring;
+        duration: Appearance.reduce-motion ? 90ms : Materials.motion-standard;
+        easing: Appearance.reduce-motion ? linear : Materials.spring;
     }
     property <float> strip-reveal: has-attachments ? 1 : 0;
     animate strip-reveal {
-        duration: Materials.motion-standard;
-        easing: Materials.spring;
+        duration: Appearance.reduce-motion ? 90ms : Materials.motion-standard;
+        easing: Appearance.reduce-motion ? linear : Materials.spring;
     }
     property <bool> show-attachment-action: !root.is-editing && (MeshGlobal.active-id == "" || MeshGlobal.active-kind != "dm");
-    property <bool> show-voice-menu-action: !root.is-editing && MeshGlobal.active-id == "";
+    property <bool> show-terminal-action: root.can-send || (!root.is-editing && MeshGlobal.active-id == "");
     property <length> action-shell-height: Spacing.touch-target-min + row-padding * 2;
     property <length> attachment-chip-height: Spacing.touch-target-min;
     property <length> attachment-band-height: attachment-chip-height + Spacing.sm * 2;
-    // Preview rows stack directly over the capsule and share its edge.
+    // Reply preview sits in the first toolbar row's gap; with attachments too,
+    // the strip takes a second gap row below it so the two never overlap.
     property <length> reply-row-height: is-replying ? max(action-shell-height, 48px * Appearance.text-grow) : 0px;
-    property <length> menu-row-height: Spacing.touch-target-min;
-    property <length> raised-toolbar-height:
-        reply-reveal * max(action-shell-height, 48px * Appearance.text-grow)
-        + strip-reveal * attachment-band-height
-        + max(0, menu-reveal) * menu-row-height;
+    // The first raised row: the emoji and attach shells are as tall as the
+    // reply chip beside them, so large text cannot leave the chip taller
+    // than its neighbours.
+    property <length> top-shell-height: is-replying ? reply-row-height : action-shell-height;
+    property <length> raised-toolbar-height: lift-geometry
+        * ((is-replying ? reply-row-height + Spacing.xs : 0px)
+            + (has-attachments ? attachment-band-height + Spacing.xs
+                : !is-replying ? action-shell-height + Spacing.xs : 0px));
+    property <length> lower-terminal-width: show-terminal-action ? Spacing.touch-target-min + Spacing.xs : 0px;
+    property <length> trailing-actions-width: (show-attachment-action ? Spacing.touch-target-min + Spacing.xs : 0px)
+        + (show-terminal-action ? Spacing.touch-target-min + Spacing.xs : 0px);
 
     // What actually gets sent. `TextInput.text` EXCLUDES the preedit -- the text
     // the input method is still composing -- so sending `text` silently drops
@@ -234,14 +319,14 @@ export component MessageComposer inherits GlassSurface {
     // minimum. A shorter row was what made them 36dp on a phone.
     property <length> min-input-height: Spacing.touch-target-min;
     // The host supplies the chat pane after IME/system insets. Leave room for
-    // history even on a short landscape pane, and stop growing at five lines.
+    // history even on a short landscape pane, and stop growing at six lines.
     in property <length> available-pane-height: 800px;
     property <length> input-line-height: line-measure.preferred-height;
     property <length> max-input-height: root.mobile
-        ? max(min-input-height, min(input-line-height * 5 + padding-vertical,
+        ? max(min-input-height, min(input-line-height * 6 + padding-vertical,
             available-pane-height * 0.4 - edit-bar-height
                 - format-bar-height - raised-toolbar-height - row-padding * 2))
-        : input-line-height * 5 + padding-vertical;
+        : 400px;
     property <length> padding-vertical: Spacing.sm * 2;
     function reveal-cursor() {
         // Native geometry shapes the full input and follows the actual IME
@@ -269,7 +354,6 @@ export component MessageComposer inherits GlassSurface {
         min-input-height,
         min(max-input-height, text-input.preferred-height + padding-vertical)
     );
-    animate content-height { duration: Materials.motion-standard; easing: Materials.settle; }
 
     // Bar heights. Each bar is drawn at exactly this height, and the bars
     // hold text, so they grow with the text size.
@@ -340,6 +424,8 @@ export component MessageComposer inherits GlassSurface {
     // 44px touch targets rather than the 28px boxes measured on a phone.
     property <length> format-bar-height: show-formatting ? 44px : 0px;
 
+    // Bento Box — expands when user is actively typing (text is non-empty)
+
     // Forward focus to input
     forward-focus: text-input;
 
@@ -347,11 +433,11 @@ export component MessageComposer inherits GlassSurface {
     // 48px touch target, so the row is already tall enough to breathe on its own
     // — 16px on top of it made the composer 65px for one line of text and left
     // the screen looking bottom-heavy. The buttons are untouched.
-    // Desktop adds its own side margin; phone margin comes from ChatLayout.
+    // The same inset on all four sides of the row, so the field and the
+    // buttons are concentric with the shell (Spacing.radius-chrome-inner).
     property <length> row-padding: Spacing.chrome-inset;
-    property <length> composer-inset: root.mobile ? row-padding : Spacing.md;
 
-    // Layout follows wrapped content and the raised glass trays.
+    // Layout - dynamic height based on content (includes Bento Box when expanded)
     property <length> recording-height: max(112px, recording-layout.preferred-height + row-padding * 2);
     height: root.collapsed ? 0px : VoiceRecording.active ? recording-height : content-height + raised-toolbar-height + edit-bar-height + format-bar-height + row-padding * 2;
     // Action/input positions change immediately with text/preedit on every
@@ -366,7 +452,7 @@ export component MessageComposer inherits GlassSurface {
         // material to its indicators, or an edit paints a full-width empty bar
         // behind the raised action row instead of behind the edit indicator.
         y: 0px;
-        visible: !VoiceRecording.active && self.height > 0px;
+        visible: root.raised-actions && !VoiceRecording.active && self.height > 0px;
         width: root.width;
         height: root.edit-bar-height + root.format-bar-height;
         material-level: root.material-level;
@@ -615,57 +701,41 @@ export component MessageComposer inherits GlassSurface {
             }
         }
 
-        // Absolute geometry changes neither the native input nor its selection.
+        // Populated actions have compact shells with transparent space between them.
+        // Absolute geometry changes neither the native input nor focus/selection.
         Rectangle {
             width: 100%;
             height: root.content-height + root.raised-toolbar-height + root.row-padding * 2;
-            property <length> action-y: root.row-padding + root.raised-toolbar-height
-                + (root.content-height - Spacing.touch-target-min) / 2;
+            property <length> action-y: root.row-padding + (root.content-height - Spacing.touch-target-min) / 2
+                + root.lift-geometry * ((root.top-shell-height - Spacing.touch-target-min) / 2
+                    - root.row-padding - (root.content-height - Spacing.touch-target-min) / 2);
             property <length> lower-action-y: root.row-padding + root.raised-toolbar-height + root.content-height - Spacing.touch-target-min;
 
-            // A short glass tray emerges from the plus while the circle and
-            // capsule remain distinct at rest. Its edge overlaps the circle
-            // during travel, giving the two surfaces a liquid join.
-            menu-tray := GlassSurface {
-                x: root.composer-inset;
-                y: parent.action-y - max(0, root.menu-reveal) * root.menu-row-height;
-                width: Spacing.touch-target-min + max(0, root.menu-reveal)
-                    * ((root.show-attachment-action ? Spacing.touch-target-min + Spacing.sm : 0px)
-                        + (root.show-voice-menu-action ? Spacing.touch-target-min + Spacing.sm : 0px));
-                height: Spacing.touch-target-min;
-                border-radius: self.height / 2;
-                material-level: root.material-level;
-                elevation: root.elevation;
-                visible: root.menu-reveal > 0.02 && !VoiceRecording.active;
-                opacity: min(1, max(0, root.menu-reveal));
-                backdrop-paused: root.backdrop-paused;
+            // The field, two round droplets, their waists, and the optical rim
+            // are a single shape. It sits below the controls and never owns input.
+            composer-silhouette := LiquidComposerSilhouette {
+                width: parent.width;
+                height: parent.height;
+                rise: root.lift-geometry;
+                field-top: root.raised-toolbar-height / 1px;
+                shell-height: root.top-shell-height / 1px;
+                trailing-drop: root.show-attachment-action;
+                visible: !VoiceRecording.active;
             }
 
-            // A short optical neck joins the two lenses only while the tray
-            // travels. At both settled endpoints their eight-pixel air gap is
-            // clean again, like separate drops leaving one glass container.
-            glass-neck := GlassSurface {
-                property <float> p: min(1, max(0, root.menu-reveal));
-                x: root.composer-inset + Spacing.touch-target-min;
-                width: Spacing.sm;
-                height: 28px * (4 * p * (1 - p));
-                y: parent.action-y + Spacing.touch-target-min / 2 - self.height / 2;
-                border-radius: min(self.width / 2, self.height / 2);
-                material-level: root.material-level;
-                elevation: root.elevation;
-                backdrop-paused: root.backdrop-paused;
-                visible: self.height > 1px && !VoiceRecording.active;
-            }
-
-            // Reply and attachment previews share the capsule's leading edge.
+            // Reply preview in the gap between the raised emoji and attach shells.
             if root.is-replying: reply-chip := GlassSurface {
-                x: root.composer-inset + Spacing.touch-target-min + Spacing.sm;
+                x: Spacing.touch-target-min + root.row-padding * 2 + Spacing.xs;
                 y: Appearance.reduce-motion ? 0px : (1 - root.reply-reveal) * root.raised-toolbar-height;
-                width: max(0px, parent.width - self.x - root.composer-inset);
-                height: root.reply-row-height + root.row-padding;
+                width: max(0px, parent.width - (root.show-attachment-action ? root.action-shell-height : 0px) - self.x - Spacing.xs);
+                height: root.reply-row-height;
                 opacity: min(1, max(0, root.reply-reveal));
                 border-radius: Spacing.radius-chrome;
                 clip: true;
+                material-enabled: false;
+                background: Materials.opaque;
+                border-width: Materials.glass-edge-width;
+                border-color: Materials.glass-edge;
                 material-level: root.material-level;
                 elevation: root.elevation;
                 backdrop-paused: root.backdrop-paused;
@@ -755,18 +825,23 @@ export component MessageComposer inherits GlassSurface {
                 }
             }
 
-            // Pending files sit above the field, under a reply when both exist.
+            // Bounded previews occupy only the gap between the individual action shells,
+            // one row below the reply preview when both are present.
             if root.has-attachments: attachment-strip := GlassSurface {
-                x: root.composer-inset + Spacing.touch-target-min + Spacing.sm;
-                y: (root.is-replying ? root.reply-row-height : 0px)
+                x: Spacing.touch-target-min + root.row-padding * 2 + Spacing.xs;
+                y: (root.is-replying ? root.reply-row-height + Spacing.xs : 0px)
                     + (Appearance.reduce-motion ? 0px : (1 - root.strip-reveal) * root.attachment-band-height);
-                width: max(0px, parent.width - self.x - root.composer-inset);
-                height: root.attachment-band-height + root.row-padding;
+                width: max(0px, parent.width - (root.show-attachment-action ? root.action-shell-height : 0px) - self.x - Spacing.xs);
+                height: root.attachment-band-height;
                 opacity: min(1, max(0, root.strip-reveal));
                 // One material with the reply chip and the action shells; the
                 // cards are wells inside it, not a second card style.
                 border-radius: Spacing.radius-chrome;
                 clip: true;
+                material-enabled: false;
+                background: Materials.opaque;
+                border-width: Materials.glass-edge-width;
+                border-color: Materials.glass-edge;
                 material-level: root.material-level;
                 elevation: root.elevation;
                 backdrop-paused: root.backdrop-paused;
@@ -956,58 +1031,60 @@ export component MessageComposer inherits GlassSurface {
                 }
             }
 
-            // The resting plus is a circular glass lens, separate from the
-            // message capsule by an eight-pixel gap.
-            GlassSurface {
-                x: root.composer-inset;
+            // Emoji & GIF button (unified — pickers toggle via tabs inside).
+            // 48px, not 36px: measured on a phone the old box was a 36dp target,
+            // under the 48dp minimum. The icon keeps its size; only the box grows.
+            Rectangle {
+                x: root.row-padding * (1 - min(1, root.lift-geometry));
                 y: parent.action-y;
                 width: Spacing.touch-target-min;
                 height: Spacing.touch-target-min;
-                background: emoji-touch.pressed ? Materials.pressed : transparent;
-                highlighted: emoji-touch.pressed || root.action-menu-open;
-                material-level: root.material-level;
-                elevation: root.elevation;
-                backdrop-paused: root.backdrop-paused;
-                border-radius: self.height / 2;
-                transform-scale-x: emoji-touch.pressed ? 94% : 100%;
-                transform-scale-y: emoji-touch.pressed ? 94% : 100%;
-                animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
-                animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
+                background: root.picker-open && !root.mobile ? Colors.tint-strong
+                    : emoji-touch.pressed ? Materials.pressed
+                    : emoji-touch.has-hover ? Materials.hover : transparent;
+                border-radius: Spacing.radius-chrome-inner;
                 opacity: root.disabled ? 0.5 : 1.0;
                 accessible-role: button;
-                accessible-label: root.action-menu-open ? "Close actions" : "More actions";
+                // On a phone the open drawer stands where the keyboard was, so
+                // the button offers the keyboard back; a desktop window has no
+                // soft keyboard, so there the same click is "close".
+                accessible-label: root.picker-open ? (root.mobile ? "Show keyboard" : "Close picker") : "Emoji & GIF picker";
 
                 Image {
-                    source: Icons.plus;
+                    source: root.picker-open && root.mobile ? Icons.keyboard : Icons.smile;
                     width: 20px;
                     height: 20px;
                     x: (parent.width - self.width) / 2;
                     y: (parent.height - self.height) / 2;
-                    colorize: emoji-touch.has-hover ? Colors.text-primary : Colors.text-secondary;
-                    transform-rotation: root.action-menu-open ? 45deg : 0deg;
-                    animate transform-rotation { duration: Materials.motion-standard; easing: Materials.spring; }
+                    colorize: root.picker-open && !root.mobile ? Colors.glass-accent
+                        : emoji-touch.has-hover ? Colors.text-primary : Colors.text-secondary;
                 }
 
                 emoji-touch := TouchArea {
                     enabled: !root.disabled;
                     mouse-cursor: pointer;
                     clicked => {
-                        root.action-menu-open = !root.action-menu-open;
+                        if !root.picker-open { root.suspend-input(); }
+                        if root.picker-open { root.keyboard-requested(); }
+                        root.emoji-clicked();
+                        if !root.picker-open { root.restore-input(); }
                     }
                 }
             }
 
-            // Capsule stays in place while its trailing mic becomes Send.
-            GlassSurface {
-                x: root.composer-inset + Spacing.touch-target-min + Spacing.sm;
+            // One native input below the toolbar beside Send; compact inline when empty.
+            Rectangle {
+                x: root.row-padding + (1 - root.lift-geometry) * (Spacing.touch-target-min + Spacing.xs);
                 y: root.row-padding + root.raised-toolbar-height;
-                width: parent.width - self.x - root.composer-inset;
+                width: parent.width - root.row-padding * 2
+                    - (root.lift-geometry * root.lower-terminal-width
+                        + (1 - root.lift-geometry) * (Spacing.touch-target-min + Spacing.xs + root.trailing-actions-width));
                 height: root.content-height;
-                material-level: root.material-level;
-                elevation: root.elevation;
-                backdrop-paused: root.backdrop-paused;
-                highlighted: text-input.has-focus;
-                border-radius: min(self.height / 2, 28px);
+                background: Colors.inset;
+                // Concentric with the shell: radius-chrome − chrome-inset.
+                border-radius: Spacing.radius-chrome-inner;
+                // The glass shell supplies the resting silhouette. Keep a
+                // physical-pixel focus cue without a second permanent rim.
                 border-width: text-input.has-focus ? 1phx : 0px;
                 border-color: Colors.primary;
                 opacity: root.disabled ? 0.5 : 1.0;
@@ -1026,7 +1103,7 @@ export component MessageComposer inherits GlassSurface {
                 if root.text == "" && text-input.preedit-text == "": Text {
                     x: Spacing.md;
                     y: (parent.height - self.preferred-height) / 2;
-                    width: parent.width - Spacing.md - Spacing.touch-target-min - Spacing.sm;
+                    width: parent.width - Spacing.md * 2;
                     text: root.placeholder;
                     color: Colors.text-muted;
                     font-size: Typography.base;
@@ -1042,7 +1119,7 @@ export component MessageComposer inherits GlassSurface {
                 input-scroll := Flickable {
                     x: Spacing.md;
                     y: Spacing.sm;
-                    width: parent.width - Spacing.md - Spacing.touch-target-min - Spacing.sm;
+                    width: parent.width - Spacing.md * 2;
                     height: parent.height - Spacing.sm * 2;
                     viewport-width: self.width;
                     viewport-height: max(self.height, text-input.preferred-height);
@@ -1123,15 +1200,14 @@ export component MessageComposer inherits GlassSurface {
             // would be an offer the transport declines. Hidden while editing:
             // an edit changes text only.
             if root.show-attachment-action: Rectangle {
-                x: root.composer-inset;
-                y: menu-tray.y;
+                x: parent.width - root.row-padding * (1 - min(1, root.lift-geometry)) - Spacing.touch-target-min
+                    - (1 - root.lift-geometry) * (root.show-terminal-action ? Spacing.touch-target-min + Spacing.xs : 0px);
+                y: parent.action-y;
                 width: Spacing.touch-target-min;
                 height: Spacing.touch-target-min;
-                visible: root.menu-reveal > 0.02;
-                opacity: min(1, max(0, root.menu-reveal));
-                background: attachment-touch.pressed ? Materials.pressed
-                    : attachment-touch.has-hover ? Materials.hover : transparent;
-                border-radius: self.height / 2;
+                background: attachment-touch.has-hover ? Colors.surface-hover : transparent;
+                border-radius: Spacing.radius-chrome-inner;
+                opacity: root.disabled ? 0.5 : 1.0;
                 accessible-role: button;
                 accessible-label: "Attach file";
 
@@ -1148,100 +1224,23 @@ export component MessageComposer inherits GlassSurface {
                     enabled: !root.disabled;
                     mouse-cursor: pointer;
                     clicked => {
-                        root.action-menu-open = false;
                         root.attachment-clicked();
-                    }
-                }
-            }
-
-            Rectangle {
-                x: root.composer-inset + (root.show-attachment-action
-                    ? Spacing.touch-target-min + Spacing.sm : 0px);
-                y: menu-tray.y;
-                width: Spacing.touch-target-min;
-                height: Spacing.touch-target-min;
-                visible: root.menu-reveal > 0.02;
-                opacity: min(1, max(0, root.menu-reveal));
-                background: menu-emoji-touch.pressed ? Materials.pressed
-                    : menu-emoji-touch.has-hover ? Materials.hover : transparent;
-                border-radius: self.height / 2;
-                accessible-role: button;
-                accessible-label: root.picker-open ? (root.mobile ? "Show keyboard" : "Close picker") : "Emoji & GIF picker";
-                Image {
-                    source: root.picker-open && root.mobile ? Icons.keyboard : Icons.smile;
-                    width: 20px;
-                    height: 20px;
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                    colorize: Colors.text-secondary;
-                }
-                menu-emoji-touch := TouchArea {
-                    enabled: !root.disabled;
-                    mouse-cursor: pointer;
-                    clicked => {
-                        if !root.picker-open { root.suspend-input(); }
-                        if root.picker-open { root.keyboard-requested(); }
-                        root.emoji-clicked();
-                        if !root.picker-open { root.restore-input(); }
-                        root.action-menu-open = false;
-                    }
-                }
-            }
-
-            if root.show-voice-menu-action: Rectangle {
-                x: root.composer-inset + (root.show-attachment-action
-                    ? Spacing.touch-target-min + Spacing.sm : 0px)
-                    + Spacing.touch-target-min + Spacing.sm;
-                y: menu-tray.y;
-                width: Spacing.touch-target-min;
-                height: Spacing.touch-target-min;
-                visible: root.menu-reveal > 0.02;
-                opacity: min(1, max(0, root.menu-reveal));
-                background: menu-voice-touch.pressed ? Materials.pressed
-                    : menu-voice-touch.has-hover ? Materials.hover : transparent;
-                border-radius: self.height / 2;
-                accessible-role: button;
-                accessible-label: "Record voice message";
-                accessible-enabled: !root.disabled;
-                accessible-action-default => {
-                    if !root.disabled { root.action-menu-open = false; root.start-recording(); VoiceRecording.locked = true; }
-                }
-                Image {
-                    source: Icons.mic;
-                    width: 20px;
-                    height: 20px;
-                    x: (parent.width - self.width) / 2;
-                    y: (parent.height - self.height) / 2;
-                    colorize: Colors.text-secondary;
-                }
-                menu-voice-touch := TouchArea {
-                    enabled: !root.disabled;
-                    mouse-cursor: pointer;
-                    clicked => {
-                        root.action-menu-open = false;
-                        root.start-recording();
-                        VoiceRecording.locked = true;
                     }
                 }
             }
 
             // Tap locks recording; hold releases to send, slide left cancels,
             // slide up locks. Mesh has its own file transport, not this path.
-            if !root.is-editing && MeshGlobal.active-id == "": Rectangle {
-                x: parent.width - root.composer-inset - Spacing.touch-target-min;
-                y: parent.lower-action-y;
+            if !root.can-send && !root.is-editing && MeshGlobal.active-id == "": Rectangle {
+                x: parent.width - root.row-padding - Spacing.touch-target-min;
+                // Raised by a reply alone: mic takes Send's slot beside the field.
+                y: root.raised-actions ? parent.lower-action-y : parent.action-y;
                 width: Spacing.touch-target-min;
                 height: Spacing.touch-target-min;
-                opacity: root.can-send ? 0 : 1;
-                transform-scale-x: root.can-send ? 82% : 100%;
-                transform-scale-y: root.can-send ? 82% : 100%;
-                animate opacity { duration: Materials.motion-quick; easing: Materials.settle; }
-                animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; }
-                animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
                 accessible-role: button;
                 accessible-label: "Record voice message";
-                accessible-enabled: !root.disabled && !root.can-send;
-                accessible-action-default => { if !root.disabled && !root.can-send { root.start-recording(); VoiceRecording.locked = true; } }
+                accessible-enabled: !root.disabled;
+                accessible-action-default => { if !root.disabled { root.start-recording(); VoiceRecording.locked = true; } }
                 Image {
                     source: Icons.mic;
                     width: 20px;
@@ -1250,8 +1249,8 @@ export component MessageComposer inherits GlassSurface {
                     y: (parent.height - self.height) / 2;
                     colorize: Colors.text-secondary;
                 }
-                voice-touch := TouchArea {
-                    enabled: !root.disabled && !root.can-send;
+                TouchArea {
+                    enabled: !root.disabled;
                     pointer-event(event) => {
                         if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
                             root.voice-press-x = self.mouse-x + self.absolute-position.x;
@@ -1282,22 +1281,16 @@ export component MessageComposer inherits GlassSurface {
             }
 
             // Send stays at the normal bottom action position beside the native field.
-            Rectangle {
-                x: parent.width - root.composer-inset - Spacing.touch-target-min;
+            if root.can-send: Rectangle {
+                x: parent.width - root.row-padding - Spacing.touch-target-min;
                 y: parent.lower-action-y;
                 width: Spacing.touch-target-min;
                 height: Spacing.touch-target-min;
                 background: send-touch.has-hover ? Colors.action-hover : Colors.action-fill;
-                border-radius: self.height / 2;
-                opacity: root.can-send ? (root.disabled ? 0.5 : 1.0) : 0;
-                transform-scale-x: send-touch.pressed ? 94% : root.can-send ? 100% : 76%;
-                transform-scale-y: send-touch.pressed ? 94% : root.can-send ? 100% : 76%;
-                animate opacity { duration: Materials.motion-quick; easing: Materials.settle; }
-                animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; }
-                animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
+                border-radius: Spacing.radius-chrome-inner;
+                opacity: root.disabled ? 0.5 : 1.0;
                 accessible-role: button;
                 accessible-label: "Send message";
-                accessible-enabled: !root.disabled && root.can-send;
 
                 // SVG, not a glyph: "\u{27A4}" has no coverage in the Android
                 // system font and rendered as a tofu box on device.
