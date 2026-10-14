@@ -712,7 +712,7 @@ export component MessageItem inherits Rectangle {
                     // sweep is indeterminate and only the state is real:
                     // sending / landed (line gone, tick) / failed.
                     if root.is-own && !root.mesh-delivery
-                        && (root.delivery-status == "sending" || root.delivery-status == "failed"): send-line := Rectangle {
+                        && (root.delivery-status == "sending" || root.delivery-status == "waiting-tor" || root.delivery-status == "failed"): send-line := Rectangle {
                         property <bool> failed: root.delivery-status == "failed";
                         // Inset past the bottom corners' curve so the line
                         // never pokes out of the rounded fill.
@@ -728,7 +728,7 @@ export component MessageItem inherits Rectangle {
                             : Appearance.reduce-motion ? Colors.primary
                             : Colors.primary.transparentize(0.8);
                         accessible-role: progress-indicator;
-                        accessible-label: failed ? "Not sent" : "Sending";
+                        accessible-label: failed ? "Not sent" : root.delivery-status == "waiting-tor" ? "Waiting for Tor" : "Sending";
 
                         // One sweep per 1.4s; `animation-tick` only ticks while
                         // this element exists, i.e. while a send is pending
@@ -1616,13 +1616,13 @@ export component MessageItem inherits Rectangle {
                                     // that queue's flush failed: a word, not a tick —
                                     // neither has reached the server, and "failed"
                                     // must never read as delivered.
-                                    if root.is-own && !root.mesh-delivery && root.delivery-status == "sending": Text {
-                                        text: "sending";
+                                    if root.is-own && !root.mesh-delivery && (root.delivery-status == "sending" || root.delivery-status == "waiting-tor"): Text {
+                                        text: root.delivery-status == "waiting-tor" ? "waiting for Tor" : "sending";
                                         color: Colors.text-muted;
                                         font-size: Typography.xs;
                                         font-italic: true;
                                         accessible-role: text;
-                                        accessible-label: "Sending";
+                                        accessible-label: root.delivery-status == "waiting-tor" ? "Waiting for Tor" : "Sending";
                                     }
 
                                     if root.is-own && !root.mesh-delivery && root.delivery-status == "parked": Text {
@@ -1686,7 +1686,7 @@ export component MessageItem inherits Rectangle {
                                         }
                                     }
 
-                                    if root.is-own && !root.mesh-delivery && root.delivery-status != "sending" && root.delivery-status != "failed" && root.delivery-status != "unconfirmed" && root.delivery-status != "parked": ticks := Rectangle {
+                                    if root.is-own && !root.mesh-delivery && root.delivery-status != "sending" && root.delivery-status != "waiting-tor" && root.delivery-status != "failed" && root.delivery-status != "unconfirmed" && root.delivery-status != "parked": ticks := Rectangle {
                                         property <bool> double-tick: root.delivery-status != "sent";
                                         property <color> tick-color: root.delivery-status == "read" ? Colors.bubble-accent : Colors.text-muted;
                                         width: self.double-tick ? 17px : 12px;

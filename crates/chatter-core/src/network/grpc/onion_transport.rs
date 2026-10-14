@@ -19,12 +19,14 @@ use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll};
 
 use std::time::{Duration, Instant};
+use std::time::SystemTime;
 
 use arti_client::{DataStream, HasKind, TorClient, TorClientConfig};
 use http::Uri;
 use hyper_util::rt::TokioIo;
 use tokio::sync::OnceCell;
 use tor_rtcompat::PreferredRuntime;
+use tor_netdir::Timeliness;
 use tower::Service;
 
 /// Phase budgets: 120s bootstrap (including shared-initializer wait), then
@@ -249,6 +251,60 @@ pub fn prewarm(tor: SharedTorClient) {
     });
 }
 
+/// Wake Arti's existing directory updater after resume or a network change.
+/// The updater owns the cache; bootstrapping a second client would contend for
+/// its storage lock and would not refresh the channel already in use.
+pub fn refresh_directory(tor: SharedTorClient) {
+    tor_runtime().spawn(async move {
+        if let Ok(client) = shared_bootstrap(&tor).await {
+            wake_directory(client);
+        }
+    });
+}
+
+fn wake_directory(client: &TorClient<PreferredRuntime>) {
+    if let Ok(dir) = client.dirmgr() {
+        if let Some(task) = dir.download_task_handle() {
+            task.fire();
+            tracing::info!(phase = "directory_refresh", "onion directory updater woken");
+        }
+    }
+}
+
+async fn ensure_fresh_directory(client: &TorClient<PreferredRuntime>) -> Result<(), std::io::Error> {
+    let dir = client.dirmgr().map_err(|_| io_err("onion directory unavailable"))?;
+    let is_fresh = || {
+        dir.netdir(Timeliness::Strict)
+            .map(|netdir| netdir.lifetime().fresh_until() > SystemTime::now())
+            .unwrap_or(false)
+    };
+    if is_fresh() {
+        return Ok(());
+    }
+    wake_directory(client);
+    tracing::info!(phase = "directory_refresh", "onion consensus stale; waiting for refresh");
+    let result = tokio::time::timeout(Duration::from_secs(20), async {
+        loop {
+            if is_fresh() {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(500)).await;
+        }
+    }).await;
+    if result.is_err() {
+        // Freshness is advisory until valid-until. The updater keeps running;
+        // a still-valid consensus can make progress while downloads recover.
+        if dir.netdir(Timeliness::Timely).is_ok() {
+            tracing::warn!(phase = "directory_refresh", "onion consensus remains stale; dialling with timely directory");
+            return Ok(());
+        }
+        tracing::warn!(phase = "directory_refresh", "onion consensus unavailable after refresh");
+        return Err(io_err("onion directory refresh timed out"));
+    }
+    tracing::info!(phase = "directory_refresh", "onion consensus refreshed");
+    Ok(())
+}
+
 async fn shared_bootstrap(
     tor: &SharedTorClient,
 ) -> Result<&Arc<TorClient<PreferredRuntime>>, std::io::Error> {
@@ -356,6 +412,9 @@ impl Service<Uri> for OnionConnector {
                 };
                 drop(bootstrap_trace);
                 let base = result?;
+                // A cached but no longer fresh consensus can outlive Android
+                // doze. Wake the updater and wait before choosing HSDirs.
+                ensure_fresh_directory(base).await?;
                 // get_or_try_init publishes only success. Cancellation drops the
                 // initializer and releases its permit, so the next waiter retries;
                 // await_tor_task's guard aborts the initializer's spawned work.

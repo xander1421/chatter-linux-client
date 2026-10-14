@@ -25,6 +25,20 @@ mod tor_stage_trace;
 /// so tokio::spawn silently fails from callbacks. This handle is set once at
 /// startup and used via `rt_handle().spawn(...)` instead of `tokio::spawn(...)`.
 static RT_HANDLE: std::sync::OnceLock<tokio::runtime::Handle> = std::sync::OnceLock::new();
+#[cfg(target_os = "android")]
+static ANDROID_CLIENT: std::sync::OnceLock<std::sync::Arc<chatter_core::client::ChatterClient>> =
+    std::sync::OnceLock::new();
+
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_chatter_client_MainActivity_nativeNetworkChanged(
+    _env: jni::EnvUnowned<'_>,
+    _this: jni::objects::JObject,
+) {
+    if let Some(client) = ANDROID_CLIENT.get() {
+        client.refresh_onion_routes();
+    }
+}
 
 static STARTUP_STARTED: std::sync::OnceLock<std::time::Instant> = std::sync::OnceLock::new();
 static FIRST_FRAME_RECORDED: std::sync::atomic::AtomicBool =
@@ -222,6 +236,7 @@ fn android_main(app: i_slint_backend_android_activity::AndroidApp) {
     let app_state = rt.block_on(app_init());
     let _guard = rt.enter();
     let _ = visibility_client.set(app_state.ui_ctx.clone());
+    let _ = ANDROID_CLIENT.set(app_state.ui_ctx.clone());
     let _ = visibility_window.set(slint::ComponentHandle::as_weak(&app_state.window));
 
     // Safe-area insets (status bar, nav bar, IME) are now bound in `app.slint`
@@ -305,11 +320,11 @@ pub async fn app_init() -> AppState {
         .add_directive("zbus=warn".parse().unwrap());
     let stage_trace = tor_stage_trace::TorStageTrace::open().map(|trace| {
         trace.with_filter(tracing_subscriber::filter::filter_fn(|meta| {
-            tor_stage_trace::dial_active()
-                && *meta.level() <= tracing::Level::DEBUG
-                && (meta.target().starts_with("tor_hsclient")
-                    || meta.target().starts_with("tor_circmgr")
-                    || meta.target().starts_with("tor_dirmgr"))
+            *meta.level() <= tracing::Level::DEBUG
+                && (meta.target().starts_with("tor_dirmgr")
+                    || (tor_stage_trace::dial_active()
+                        && (meta.target().starts_with("tor_hsclient")
+                            || meta.target().starts_with("tor_circmgr"))))
         }))
     });
     tracing_subscriber::registry()

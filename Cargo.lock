@@ -2019,6 +2019,7 @@ dependencies = [
  "tonic",
  "tonic-h3",
  "tonic-prost",
+ "tor-netdir",
  "tor-rtcompat",
  "tower",
  "tracing",

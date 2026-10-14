@@ -2118,6 +2118,7 @@ impl ChatterClient {
         if !visible || was_visible {
             return;
         }
+        self.refresh_onion_routes();
         let active = self.chat_state().active_conversation();
         if !active.is_active() {
             return;
@@ -2128,6 +2129,33 @@ impl ChatterClient {
                 tracing::debug!(error = %e, "mark-read on return to foreground failed");
             }
         });
+    }
+
+    /// Refresh the Tor directory and replace potentially dead h2 connections
+    /// after foreground resume or an Android default-network change.
+    pub fn refresh_onion_routes(&self) {
+        #[cfg(feature = "onion")]
+        {
+            let pool = self.services.grpc_pool.clone();
+            let shield = self.anon_mode_enabled();
+            self.services.runtime_handle.spawn(async move {
+                crate::network::grpc::onion_transport::refresh_directory(pool.onion_tor());
+                if shield && pool.transport_mode() == crate::network::grpc::client_pool::TransportMode::Onion {
+                    let _ = tokio::join!(async {
+                        if let Err(error) = pool.connect().await {
+                            tracing::debug!(%error, "Shield onion preconnect failed");
+                        }
+                    }, async {
+                        if let Err(error) = pool.preconnect_unidentified().await {
+                            tracing::debug!(%error, "Shield anonymous preconnect failed");
+                        }
+                    });
+                }
+                if let Err(error) = pool.preconnect_secret().await {
+                    tracing::debug!(%error, "secret onion preconnect failed");
+                }
+            });
+        }
     }
 
     /// Read the in-memory anon-mode flag.
@@ -2215,9 +2243,13 @@ impl ChatterClient {
                 && this.services.grpc_pool.transport_mode() == TransportMode::Onion
             {
                 let pool = this.services.grpc_pool.clone();
-                // Warm the authenticated Shield route and the separately isolated
-                // secret route before the user's next send. Both are cached.
+                // Warm authenticated, unidentified-deposit, and secret routes.
                 let _ = tokio::join!(pool.connect(), async {
+                    #[cfg(feature = "onion")]
+                    if let Err(error) = pool.preconnect_unidentified().await {
+                        tracing::debug!(%error, "Shield anonymous preconnect failed");
+                    }
+                }, async {
                     #[cfg(feature = "onion")]
                     if let Err(error) = pool.preconnect_secret().await {
                         tracing::debug!(%error, "secret onion preconnect will retry on use");

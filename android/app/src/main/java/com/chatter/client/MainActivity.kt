@@ -7,6 +7,8 @@ import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.drawable.ColorDrawable
 import android.net.Uri
+import android.net.ConnectivityManager
+import android.net.Network
 import android.os.Build
 import android.os.Bundle
 import android.os.Handler
@@ -48,6 +50,9 @@ import java.util.concurrent.Executors
  * `native…` methods declared here.
  */
 class MainActivity : GameActivity() {
+    private var torNetworkCallback: ConnectivityManager.NetworkCallback? = null
+    private external fun nativeNetworkChanged()
+
     @Suppress("unused")
     fun isUpdateNetworkMetered(): Boolean {
         val manager = getSystemService(android.content.Context.CONNECTIVITY_SERVICE)
@@ -147,11 +152,30 @@ class MainActivity : GameActivity() {
         // has loaded libchatter_ui by now (android.app.lib_name), so the native
         // symbol resolves.
         nativeRegisterActivity()
+        val connectivity = getSystemService(android.content.Context.CONNECTIVITY_SERVICE)
+            as ConnectivityManager
+        val callback = object : ConnectivityManager.NetworkCallback() {
+            override fun onAvailable(network: Network) {
+                nativeNetworkChanged()
+            }
+        }
+        connectivity.registerDefaultNetworkCallback(callback)
+        torNetworkCallback = callback
         dispatchMessageNotification(intent)
         // Wire the JavaVM into libwebrtc from the Java main thread so its
         // FindClass for the bundled livekit.org.webrtc classes resolves via the
         // app classloader. Doing this from Rust's native thread fails.
         nativeInitWebrtc()
+    }
+
+    override fun onDestroy() {
+        torNetworkCallback?.let { callback ->
+            val connectivity = getSystemService(android.content.Context.CONNECTIVITY_SERVICE)
+                as ConnectivityManager
+            connectivity.unregisterNetworkCallback(callback)
+        }
+        torNetworkCallback = null
+        super.onDestroy()
     }
 
     /**
