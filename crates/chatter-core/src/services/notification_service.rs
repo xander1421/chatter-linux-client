@@ -373,13 +373,15 @@ pub fn spawn_notification_listener(
                     }
                     // Requests reveal no more than an incoming secret message,
                     // including when the user allows normal message previews.
-                    let _ = notification_service.show_message_notification(
+                    if let Err(error) = notification_service.show_message_notification(
                         &id,
                         None,
                         None,
                         true,
                         NotificationPriority::Normal,
-                    );
+                    ) {
+                        tracing::warn!(%error, "Secret request notification failed");
+                    }
                 }
                 DomainEvent::ReactionAdded {
                     scope,

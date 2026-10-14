@@ -3720,6 +3720,18 @@ impl ChatterClient {
         )
     }
 
+    /// A pending secret request opens Requests, not its chat row. Resolve the
+    /// opaque key against this account before exposing that distinction to UI.
+    pub fn notification_target_for_key(&self, key: &str) -> Option<NotificationTarget> {
+        let conversation = self.conversation_for_notification_key(key)?;
+        if let crate::state::ActiveConversation::AnonDm(id) = conversation {
+            if self.list_anon_dm_message_requests().iter().any(|dm| dm.id == id) {
+                return Some(NotificationTarget::SecretRequest);
+            }
+        }
+        Some(NotificationTarget::Conversation(conversation))
+    }
+
     /// Whether `message` belongs in the conversation on screen — the one
     /// predicate for "insert it into the open view", "mark it read", "don't
     /// badge it" and "don't notify for it".
@@ -4818,10 +4830,13 @@ impl ChatterClient {
             return Ok(());
         }
 
-        let config = crate::network::streaming::push_listener::PushListenerConfig::new(
+        let mut config = crate::network::streaming::push_listener::PushListenerConfig::new(
             ntfy_url.to_string(),
             topic.clone(),
         );
+        // Devices behind one NAT should not retry a throttled ntfy listener
+        // at exactly the same instant.
+        config.reconnect.jitter_ratio = 0.2;
 
         // Fresh shutdown channel for this listener instance.
         let (shutdown_tx, shutdown_rx) = tokio::sync::broadcast::channel::<()>(1);
@@ -4920,6 +4935,12 @@ pub struct SendOptions {
 pub struct UploadedAttachments {
     pub pointers: Vec<AttachmentPointer>,
     pub attachments: Vec<Attachment>,
+}
+
+/// Destination resolved from an account-scoped Android notification key.
+pub enum NotificationTarget {
+    Conversation(crate::state::ActiveConversation),
+    SecretRequest,
 }
 
 // =============================================================================

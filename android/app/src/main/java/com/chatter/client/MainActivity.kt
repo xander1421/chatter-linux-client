@@ -319,11 +319,13 @@ class MainActivity : GameActivity() {
     }
 
     private fun dispatchMessageNotification(intent: Intent) {
-        if (intent.action != "com.chatter.client.MESSAGE_OPEN" ||
-            getSystemService(KeyguardManager::class.java)?.isDeviceLocked == true) {
+        if (intent.action != "com.chatter.client.MESSAGE_OPEN") {
             nativeNotificationOpened("")
             return
         }
+        // A notification opened from the lock screen can reach onCreate or
+        // onNewIntent before unlock. Keep its key until onResume can route it.
+        if (getSystemService(KeyguardManager::class.java)?.isDeviceLocked == true) return
         try {
             val key = intent.getStringExtra("notification_conversation_key") ?: ""
             if (key.isEmpty() || (key.length == 32 && key.all { it in '0'..'9' || it in 'a'..'f' })) {
@@ -332,6 +334,7 @@ class MainActivity : GameActivity() {
         } catch (_: RuntimeException) {
             // Public launcher extras are untrusted.
         }
+        intent.action = null
     }
 
     private external fun nativeNotificationOpened(key: String)
@@ -363,6 +366,7 @@ class MainActivity : GameActivity() {
         super.onResume()
         messagingBackground = false
         updateMessagingService()
+        if (intent.action == "com.chatter.client.MESSAGE_OPEN") dispatchMessageNotification(intent)
     }
 
     /** Implemented in Rust. Stores a GlobalRef to this Activity. */
