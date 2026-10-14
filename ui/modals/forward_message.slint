@@ -112,6 +112,11 @@ export component ForwardMessageModal inherits Rectangle {
                             height: 48px * Appearance.text-grow;
                             background: is-selected ? Colors.tint-strong : target-touch.pressed ? Materials.pressed : target-touch.has-hover ? Materials.hover : transparent;
                             border-radius: Spacing.radius-md;
+                            transform-scale-x: target-touch.pressed ? 97% : 100%;
+                            transform-scale-y: target-touch.pressed ? 94% : 100%;
+                            animate transform-scale-x { duration: target-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+                            animate transform-scale-y { duration: target-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+                            animate background { duration: Materials.motion-quick; easing: Materials.glide; }
 
                             HorizontalLayout {
                                 padding-left: Spacing.sm;

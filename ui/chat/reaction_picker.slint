@@ -45,7 +45,7 @@ export component ReactionPicker inherits Rectangle {
 
     // Logical close is immediate; the fade finishes before the surface goes.
     opacity: root.show ? 1 : 0;
-    animate opacity { duration: Materials.menu-duration; easing: ease-out; }
+    animate opacity { duration: Materials.motion-standard; easing: Materials.glide; }
     visible: root.show || self.opacity > 0;
 
     // Full screen backdrop, dimmed like the message menu it replaces.
@@ -65,8 +65,14 @@ export component ReactionPicker inherits Rectangle {
 
     // Picker container — Neo convex popup with strong shadow
     picker-shell := GlassSurface {
-        enter-distance: 6px;
+        enter-distance: 20px;
+        enter-duration: Materials.motion-standard;
         shown: root.show;
+        transform-origin: { x: max(0px, min(root.position-x - self.x, self.width)), y: max(0px, min(root.position-y - self.y, self.height)) };
+        transform-scale-x: root.show ? 100% : 84%;
+        transform-scale-y: root.show ? 100% : 84%;
+        animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; }
+        animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
 
         material-level: 3;
         elevation: 4;
@@ -107,6 +113,10 @@ export component ReactionPicker inherits Rectangle {
                         horizontal-stretch: 1;
                         height: root.quick-row-height;
                         min-width: root.touch ? root.quick-target : 0px;
+                        transform-scale-x: root.show ? 100% : 64%;
+                        transform-scale-y: root.show ? 100% : 64%;
+                        animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; delay: Appearance.reduce-motion ? 0ms : index * 18ms; }
+                        animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; delay: Appearance.reduce-motion ? 0ms : index * 18ms; }
 
                         Rectangle {
                             width: root.quick-target;
@@ -114,7 +124,11 @@ export component ReactionPicker inherits Rectangle {
                             x: (parent.width - self.width) / 2;
                             y: (parent.height - self.height) / 2;
                             border-radius: Spacing.radius-sm;
-                            background: quick-area.has-hover ? Colors.background : transparent;
+                            background: quick-area.pressed ? Materials.pressed : quick-area.has-hover ? Colors.background : transparent;
+                            transform-scale-x: quick-area.pressed ? 88% : 100%;
+                            transform-scale-y: quick-area.pressed ? 88% : 100%;
+                            animate transform-scale-x { duration: quick-area.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+                            animate transform-scale-y { duration: quick-area.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
                             border-width: keys.has-focus ? Spacing.stroke : 0px;
                             border-color: Colors.primary;
                             accessible-role: button;

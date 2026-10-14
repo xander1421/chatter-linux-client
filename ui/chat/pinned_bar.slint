@@ -1,4 +1,5 @@
 import { GlassSurface } from "../components/glass_surface.slint";
+import { Materials } from "../theme/materials.slint";
 // Pinned messages bar component
 //
 // Telegram-style always-visible bar for navigating pinned messages.
@@ -47,17 +48,23 @@ export component PinnedBar inherits GlassSurface {
 
             // Up/prev button
             Rectangle {
-                width: Spacing.button-height;
-                height: Spacing.button-height;
-                background: prev-touch.has-hover ? Colors.surface-hover : transparent;
+                width: Spacing.touch-target-min;
+                height: Spacing.touch-target-min;
+                background: prev-touch.pressed ? Materials.pressed : prev-touch.has-hover ? Colors.surface-hover : transparent;
                 border-radius: Spacing.radius-sm;
+                transform-scale-x: prev-touch.pressed ? 90% : 100%;
+                transform-scale-y: prev-touch.pressed ? 90% : 100%;
+                animate transform-scale-x { duration: prev-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+                animate transform-scale-y { duration: prev-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
 
-                Text {
-                    text: "\u{25B2}";  // Up triangle
-                    font-size: Typography.xxs;
-                    color: Colors.text-secondary;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
+                Image {
+                    source: Icons.chevron-right;
+                    width: Spacing.button-icon;
+                    height: Spacing.button-icon;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    transform-rotation: 270deg;
+                    colorize: Colors.text-secondary;
                 }
 
                 prev-touch := TouchArea {
@@ -70,17 +77,23 @@ export component PinnedBar inherits GlassSurface {
 
             // Down/next button
             Rectangle {
-                width: Spacing.button-height;
-                height: Spacing.button-height;
-                background: next-touch.has-hover ? Colors.surface-hover : transparent;
+                width: Spacing.touch-target-min;
+                height: Spacing.touch-target-min;
+                background: next-touch.pressed ? Materials.pressed : next-touch.has-hover ? Colors.surface-hover : transparent;
                 border-radius: Spacing.radius-sm;
+                transform-scale-x: next-touch.pressed ? 90% : 100%;
+                transform-scale-y: next-touch.pressed ? 90% : 100%;
+                animate transform-scale-x { duration: next-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+                animate transform-scale-y { duration: next-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
 
-                Text {
-                    text: "\u{25BC}";  // Down triangle
-                    font-size: Typography.xxs;
-                    color: Colors.text-secondary;
-                    horizontal-alignment: center;
-                    vertical-alignment: center;
+                Image {
+                    source: Icons.chevron-right;
+                    width: Spacing.button-icon;
+                    height: Spacing.button-icon;
+                    x: (parent.width - self.width) / 2;
+                    y: (parent.height - self.height) / 2;
+                    transform-rotation: 90deg;
+                    colorize: Colors.text-secondary;
                 }
 
                 next-touch := TouchArea {
@@ -117,6 +130,8 @@ export component PinnedBar inherits GlassSurface {
         // Clickable content area (go to message)
         Rectangle {
             horizontal-stretch: 1;
+            background: bar-touch.pressed ? Materials.pressed : bar-touch.has-hover ? Materials.hover : transparent;
+            border-radius: Spacing.radius-sm;
 
             bar-touch := TouchArea {
                 mouse-cursor: pointer;
@@ -153,8 +168,12 @@ export component PinnedBar inherits GlassSurface {
         Rectangle {
             width: Spacing.touch-target-min;
             height: Spacing.touch-target-min;
-            background: dismiss-touch.has-hover ? Colors.surface-hover : transparent;
+            background: dismiss-touch.pressed ? Materials.pressed : dismiss-touch.has-hover ? Colors.surface-hover : transparent;
             border-radius: Spacing.radius-sm;
+            transform-scale-x: dismiss-touch.pressed ? 90% : 100%;
+            transform-scale-y: dismiss-touch.pressed ? 90% : 100%;
+            animate transform-scale-x { duration: dismiss-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+            animate transform-scale-y { duration: dismiss-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
             accessible-role: button;
             accessible-label: "Hide pinned messages";
 

@@ -1,4 +1,5 @@
 import { Materials } from "../theme/materials.slint";
+import { Appearance } from "../theme/appearance.slint";
 import { GlassSurface } from "../components/glass_surface.slint";
 // Message context menu component
 //
@@ -40,14 +41,20 @@ export global MessageMenuActions {
 // pointer path alone left every quick reaction invisible to TalkBack.
 component QuickReaction inherits Rectangle {
     in property <string> emoji;
+    in property <bool> shown: false;
+    in property <int> stagger-index: 0;
     // The emoji's spoken name; the glyph alone is not a name.
     in property <string> name;
     callback clicked();
 
     width: Spacing.touch-target-min;
     height: Spacing.touch-target-min;
+    transform-scale-x: root.shown ? 100% : 64%;
+    transform-scale-y: root.shown ? 100% : 64%;
+    animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; delay: Appearance.reduce-motion ? 0ms : root.stagger-index * 18ms; }
+    animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; delay: Appearance.reduce-motion ? 0ms : root.stagger-index * 18ms; }
     border-radius: Spacing.touch-target-min / 2;
-    background: touch.has-hover ? Colors.surface-hover : transparent;
+    background: touch.pressed ? Materials.pressed : touch.has-hover ? Colors.surface-hover : transparent;
     border-width: keys.has-focus ? Spacing.stroke : 0px;
     border-color: Colors.primary;
     accessible-role: button;
@@ -68,6 +75,10 @@ component QuickReaction inherits Rectangle {
 
     Text {
         text: root.emoji;
+        transform-scale-x: touch.pressed ? 90% : 100%;
+        transform-scale-y: touch.pressed ? 90% : 100%;
+        animate transform-scale-x { duration: touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+        animate transform-scale-y { duration: touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
         // Same font the reaction picker and the reactions pill use — the app's
         // bundled UI font has no emoji coverage, which is what turns bare
         // dingbats into tofu boxes elsewhere in this tree.
@@ -93,7 +104,11 @@ component MenuItem inherits Rectangle {
     callback clicked();
 
     height: Spacing.touch-target-min;
-    background: touch.has-hover ? Colors.surface-hover : transparent;
+    background: touch.pressed ? Materials.pressed : touch.has-hover ? Colors.surface-hover : transparent;
+    transform-scale-x: touch.pressed ? 97% : 100%;
+    transform-scale-y: touch.pressed ? 94% : 100%;
+    animate transform-scale-x { duration: touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+    animate transform-scale-y { duration: touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
     border-radius: Spacing.radius-sm;
     border-width: keys.has-focus ? Spacing.stroke : 0px;
     border-color: Colors.primary;
@@ -192,7 +207,7 @@ export component MessageContextMenu inherits Rectangle {
     z: 10;
     visible: root.show || self.opacity > 0;
     opacity: root.show ? 1 : 0;
-    animate opacity { duration: Materials.menu-duration; easing: ease-out; }
+    animate opacity { duration: Materials.motion-standard; easing: Materials.glide; }
 
     // Full screen backdrop, dimmed like every other modal surface so the menu
     // reads as a modal choice over the chat, not a stray card on top of it.
@@ -219,8 +234,14 @@ export component MessageContextMenu inherits Rectangle {
     //     conversation header, or the gesture strip;
     //   * a menu taller than that band is capped to it and its body scrolls.
     menu-container := GlassSurface {
-        enter-distance: 6px;
+        enter-distance: 20px;
+        enter-duration: Materials.motion-standard;
         shown: root.show;
+        transform-origin: { x: max(0px, min(root.position-x - self.x, self.width)), y: max(0px, min(root.position-y - self.y, self.height)) };
+        transform-scale-x: root.show ? 100% : 86%;
+        transform-scale-y: root.show ? 100% : 86%;
+        animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; }
+        animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
 
         material-level: 3;
         elevation: 4;
@@ -280,6 +301,8 @@ export component MessageContextMenu inherits Rectangle {
 
                     for emoji[index] in QuickReactions.emojis: QuickReaction {
                         emoji: emoji;
+                        shown: root.show;
+                        stagger-index: index;
                         name: QuickReactions.names[index];
                         clicked => {
                             root.quick-react(root.sender-id, root.timestamp-ns, emoji);

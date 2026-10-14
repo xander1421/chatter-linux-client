@@ -1,4 +1,5 @@
 import { GlassSurface } from "../components/glass_surface.slint";
+import { Materials } from "../theme/materials.slint";
 // Multi-select action bar.
 //
 // Stands in for the channel's own header while selection mode is active: how
@@ -51,7 +52,12 @@ export component SelectionBar inherits GlassSurface {
     callback copy-clicked();
     callback forward-clicked();
 
-    visible: root.show;
+    transform-origin: { x: self.width / 2, y: 0px };
+    transform-scale-y: root.show ? 100% : 88%;
+    animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
+    opacity: root.show ? 1 : 0;
+    visible: root.show || self.opacity > 0;
+    animate opacity { duration: Materials.motion-standard; easing: Materials.glide; }
     height: (root.touch ? Spacing.header-height-touch : Spacing.header-height) + root.safe-area-top;
 
     HorizontalLayout {
@@ -64,6 +70,7 @@ export component SelectionBar inherits GlassSurface {
         // Exit selection mode. Mirrors what Android Back does.
         HeaderButton {
             backdrop-paused: root.backdrop-paused;
+            enabled: root.show;
             touch: root.touch;
             icon: Icons.x;
             label: "Exit selection";
@@ -82,10 +89,10 @@ export component SelectionBar inherits GlassSurface {
 
         HeaderButton {
             backdrop-paused: root.backdrop-paused;
+            enabled: root.show;
             touch: root.touch;
             icon: Icons.check;
             label: "Select all";
-            enabled: true;
             clicked => { SelectionChrome.select-all(); }
         }
 
@@ -94,7 +101,7 @@ export component SelectionBar inherits GlassSurface {
             touch: root.touch;
             icon: Icons.copy;
             label: "Copy selected";
-            enabled: root.count > 0;
+            enabled: root.show && root.count > 0;
             clicked => { root.copy-clicked(); }
         }
 
@@ -103,7 +110,7 @@ export component SelectionBar inherits GlassSurface {
             touch: root.touch;
             icon: Icons.send;
             label: "Forward selected";
-            enabled: root.count > 0;
+            enabled: root.show && root.count > 0;
             clicked => { root.forward-clicked(); }
         }
 
@@ -113,7 +120,7 @@ export component SelectionBar inherits GlassSurface {
             icon: Icons.trash;
             label: "Delete selected";
             destructive: true;
-            enabled: root.count > 0;
+            enabled: root.show && root.count > 0;
             clicked => { root.delete-clicked(); }
         }
     }
