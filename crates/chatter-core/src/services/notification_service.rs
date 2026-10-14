@@ -310,12 +310,19 @@ impl NotificationService {
 
 impl AccountNotificationKeys {
     fn owner(&self) -> Option<crate::domain::UserId> {
-        self.auth.get().current_user_id.or_else(|| {
-            self.settings
-                .get(crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID)
-                .ok()
-                .flatten()
-        })
+        // Linked-device bring-up can have only the persisted owner. If both
+        // sources are set during a switch, refuse an inconsistent account.
+        let active = self.auth.get().current_user_id;
+        let stored = self
+            .settings
+            .get(crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID)
+            .ok()
+            .flatten();
+        match (active, stored) {
+            (Some(a), Some(b)) if a != b => None,
+            (Some(a), _) => Some(a),
+            (None, b) => b,
+        }
     }
 
     fn secret(
