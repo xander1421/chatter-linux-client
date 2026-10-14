@@ -269,21 +269,22 @@ export component ChatLayout inherits Rectangle {
     in property <bool> rounded-page-top: false;
 
     // Layout — Neo 2.0 surface continuity: deepest background as base plane
-    background: Colors.background;
+    background: Materials.ambient;
 
     message-list := MessageList {
+        background: transparent;
         border-top-left-radius: root.rounded-page-top && !root.hide-header
             ? (root.mobile ? Spacing.header-height-touch : Spacing.header-height) / 2 : 0px;
         border-top-right-radius: self.border-top-left-radius;
         clip: root.rounded-page-top;
         sender-profile-requested(user-id) => { root.sender-profile-requested(user-id); }
         width: 100%;
-        height: 100%;
+        // End the viewport at the highest point the composer can occupy.
+        // Virtual rows must not paint through the gaps around raised droplets
+        // or the reply preview while the keyboard changes the pane height.
+        height: max(0px, root.height - bottom-chrome.height - composer.list-clearance-extra);
         top-inset: top-chrome.height;
-        // Keep the newest bubble above the droplet's full travel. The
-        // composer slot itself follows lift progress, while this clearance
-        // stays fixed across a plain draft's rise and fall.
-        bottom-inset: bottom-chrome.height + composer.list-clearance-extra;
+        bottom-inset: 0px;
         messages: root.messages;
         loading: root.loading-messages;
         selection-mode: root.selection-mode;

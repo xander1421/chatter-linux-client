@@ -231,8 +231,27 @@ export component MessageList inherits Rectangle {
         }
         root.observed-message-count = count;
         root.observed-last-message-id = last-id;
+        // A live incoming tail stays below the reader while they are looking
+        // at history. Count only new remote rows, never a sent/pending row or
+        // a history page inserted above the existing tail.
+        if (new-tail && !root.is-at-bottom && !root.messages[count - 1].is-own) {
+            root.unread-count += count - root.arrival-start-index;
+        }
         if (new-tail && root.is-at-bottom && !root.opening-on-unread
-                && root.should-auto-scroll && root.jump-row < 0) {
+                && (root.should-auto-scroll || root.messages[count - 1].is-own)
+                && root.jump-row < 0) {
+            root.go-to-end();
+        }
+    }
+
+    // The send path sets this true before appending its pending bubble. An
+    // unread opening anchor must be consumed at that moment; otherwise the
+    // row-count observer refuses the tail seek and the new bubble stays hidden.
+    changed is-at-bottom => {
+        if (root.is-at-bottom && !root.loading) {
+            root.opening-on-unread = false;
+            root.unread-index = -1;
+            root.unread-count = 0;
             root.go-to-end();
         }
     }
