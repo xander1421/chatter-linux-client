@@ -50,6 +50,11 @@ export component MessageList inherits Rectangle {
     private property <int> observed-message-count: 0;
     private property <string> observed-last-message-id: "";
     private property <bool> ready-for-arrivals: false;
+    arrival-ready := Timer {
+        interval: 1ms;
+        running: false;
+        triggered => { self.running = false; root.ready-for-arrivals = true; }
+    }
     private property <int> arrival-start-index: -1;
     private property <int> arrival-end-index: -1;
     arrival-clear := Timer {
@@ -123,6 +128,7 @@ export component MessageList inherits Rectangle {
             root.observed-message-count = 0;
             root.observed-last-message-id = "";
             root.ready-for-arrivals = false;
+            arrival-ready.running = false;
             root.arrival-start-index = -1;
             root.arrival-end-index = -1;
             arrival-clear.running = false;
@@ -135,13 +141,15 @@ export component MessageList inherits Rectangle {
             // first layout pass, over its unread divider.
             root.at-end = false;
             root.scrolling = false;
-            root.load-more-armed = true;
+            // The initial bottom seek can transiently look close to row zero.
+            // Paging starts only after a real scroll in this conversation.
+            root.load-more-armed = false;
             root.load-failed = false;
             root.seen-rows = 0;
             root.first-visible-row = 0;
             root.last-visible-row = -1;
         } else {
-            root.ready-for-arrivals = true;
+            arrival-ready.running = true;
         }
     }
 
@@ -214,8 +222,7 @@ export component MessageList inherits Rectangle {
         }
         root.observed-message-count = count;
         root.observed-last-message-id = last-id;
-        root.load-more-armed = true;
-        if (root.is-at-bottom && root.should-auto-scroll && root.jump-row < 0) {
+        if (!root.loading && root.is-at-bottom && root.should-auto-scroll && root.jump-row < 0) {
             root.go-to-end();
         }
     }
@@ -498,6 +505,7 @@ export component MessageList inherits Rectangle {
             // pursued, the user has taken over.
             flicked => {
                 root.scrolling = true;
+                root.load-more-armed = true;
                 root.end-pending = false;
                 root.jump-row = -1;
                 self.read-position();
@@ -621,7 +629,8 @@ export component MessageList inherits Rectangle {
                     self.seek-end();
                 } else {
                     self.read-position();
-                    if (root.load-more-armed && self.viewport-y > -self.height * 1.5) {
+                    if (root.load-more-armed && !root.at-end
+                            && self.viewport-y > -self.height * 1.5) {
                         // Approaching the top, early enough that the page is
                         // in before row 0 is on screen: rows inserted above
                         // the live ones move nothing.

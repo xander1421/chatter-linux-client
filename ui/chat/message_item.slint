@@ -1118,11 +1118,14 @@ export component MessageItem inherits Rectangle {
                                     property <float> aspect-ratio: attachment.width > 0 ? attachment.width / max(1, attachment.height) : 1.5;
                                     property <length> max-w: min(280px, root.width * 0.7 - Spacing.md);
                                     property <length> max-h: 380px;
-                                    property <length> calc-w: aspect-ratio >= 1 ? min(max-w, attachment.width * 1px) : min(max-h * aspect-ratio, attachment.width * 1px);
-                                    property <length> calc-h: aspect-ratio >= 1 ? min(max-h, calc-w / aspect-ratio) : min(max-h, attachment.height * 1px);
+                                    property <length> calc-w: min(max-w, max-h * aspect-ratio);
+                                    property <length> calc-h: min(max-h, calc-w / aspect-ratio);
 
-                                    width: attachment.has-thumbnail && attachment.width > 0 ? max(100px, min(max-w, calc-w)) : 180px;
-                                    height: attachment.has-thumbnail && attachment.height > 0 ? max(60px, min(max-h, calc-h)) : 140px;
+                                    // Reserve the final geometry from stored dimensions before
+                                    // the thumbnail is decoded, so rows above the viewport do
+                                    // not grow and pull the opening anchor away from the end.
+                                    width: attachment.width > 0 && attachment.height > 0 ? max(100px, calc-w) : 180px;
+                                    height: attachment.width > 0 && attachment.height > 0 ? max(60px, calc-h) : 140px;
                                     background: Colors.bubble-inset;
                                     border-radius: Spacing.radius-sm;
                                     clip: true;
@@ -1240,11 +1243,11 @@ export component MessageItem inherits Rectangle {
                                     property <float> aspect-ratio: attachment.width > 0 ? attachment.width / max(1, attachment.height) : 1.6;
                                     property <length> max-w: min(280px, root.width * 0.7 - Spacing.md);
                                     property <length> max-h: 220px;
-                                    property <length> calc-w: aspect-ratio >= 1 ? min(max-w, attachment.width * 1px) : min(max-h * aspect-ratio, attachment.width * 1px);
-                                    property <length> calc-h: aspect-ratio >= 1 ? min(max-h, calc-w / aspect-ratio) : min(max-h, attachment.height * 1px);
+                                    property <length> calc-w: min(max-w, max-h * aspect-ratio);
+                                    property <length> calc-h: min(max-h, calc-w / aspect-ratio);
 
-                                    width: attachment.has-thumbnail && attachment.width > 0 ? max(160px, min(max-w, calc-w)) : 260px;
-                                    height: attachment.has-thumbnail && attachment.height > 0 ? max(100px, min(max-h, calc-h)) : 160px;
+                                    width: attachment.width > 0 && attachment.height > 0 ? max(160px, calc-w) : 260px;
+                                    height: attachment.width > 0 && attachment.height > 0 ? max(100px, calc-h) : 160px;
                                     background: Colors.bubble-inset;
                                     border-radius: Spacing.radius-sm;
                                     clip: true;
