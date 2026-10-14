@@ -97,6 +97,7 @@ export component DMListItem inherits Rectangle {
     // above and below.
     height: root.collapsed ? 48px : root.row-height;
     border-radius: Spacing.radius-md;
+    clip: true;
 
     // A Flickable cancels the pointer grab when scrolling begins. Release the
     // visual press as soon as the finger moves past the shared gesture slop.
@@ -198,6 +199,7 @@ export component DMListItem inherits Rectangle {
 
                 Text {
                     text: root.display-name;
+                    wrap: no-wrap;
                     // The name is the anchor of the row on every density, so it
                     // carries full-strength text at all times. Desktop used to
                     // hold it in grey until selected, one step above a grey
@@ -257,11 +259,19 @@ export component DMListItem inherits Rectangle {
                 }
             }
 
-            if !root.is-typing: Text {
-                text: root.last-message;
-                color: Colors.text-muted;
-                font-size: root.preview-size;
-                overflow: elide;
+            if !root.is-typing: Rectangle {
+                horizontal-stretch: 1;
+                height: root.preview-size * 1.4;
+                clip: true;
+                preview-text := Text {
+                    width: parent.width;
+                    height: parent.height;
+                    text: root.last-message;
+                    wrap: no-wrap;
+                    color: Colors.text-muted;
+                    font-size: root.preview-size;
+                    overflow: elide;
+                }
             }
         }
 
@@ -273,6 +283,7 @@ export component DMListItem inherits Rectangle {
             // Timestamp
             Text {
                 text: root.timestamp;
+                wrap: no-wrap;
                 color: Colors.text-muted;
                 font-size: Typography.xs2;
                 horizontal-alignment: right;

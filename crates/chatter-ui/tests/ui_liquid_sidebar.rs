@@ -17,8 +17,15 @@ slint::slint! {
         in-out property <bool> menu-open: false;
         in-out property <int> unread: 0;
         in-out property <bool> selection: false;
+        in-out property <bool> stress-preview: false;
         callback theme(string);
         theme(value) => { Appearance.theme = value; }
+        callback scale(float);
+        scale(value) => { Appearance.text-scale = value; }
+        out property <length> first-row-bottom: dm-row.y + dm-row.height;
+        out property <length> second-row-top: channel-row.y;
+        out property <length> second-row-bottom: channel-row.y + channel-row.height;
+        out property <length> third-row-top: group-row.y;
         width: root.phone ? 412px : 920px;
         height: 500px;
         background: Colors.background;
@@ -33,28 +40,28 @@ slint::slint! {
                 padding-right: 8px;
                 padding-top: 50px;
                 spacing: 4px;
-                ChatRow {
+                dm-row := ChatRow {
                     data: {
                         conversation-id: "demo-morgan",
                         conversation-type: ConversationKind.server-dm,
                         display-name: "Morgan",
                         initials: "MO",
-                        last-message: "A message just arrived",
+                        last-message: root.stress-preview ? "You: rc117-secret-a\n```\n**\nrc117-secret-a" : "A message just arrived",
                         timestamp: "now",
                         unread-count: root.unread,
                         is-selected: root.selection,
                     };
                     mobile-mode: root.phone;
                 }
-                ChannelListItem {
+                channel-row := ChannelListItem {
                     name: "Design notes";
-                    last-message: "Preview of the newest post";
+                    last-message: root.stress-preview ? "First line\n**bold**\n```\ncode\n```" : "Preview of the newest post";
                     timestamp: "9:42";
                     mobile-mode: root.phone;
                 }
-                PrivateGroupListItem {
+                group-row := PrivateGroupListItem {
                     name: "Quiet circle";
-                    last-message: "See you this evening";
+                    last-message: root.stress-preview ? "A group message\n> continued on another line" : "See you this evening";
                     timestamp: "Yesterday";
                     mobile-mode: root.phone;
                 }
@@ -74,6 +81,32 @@ slint::slint! {
     }
 }
 
+#[test]
+fn multiline_markdown_previews_stay_inside_each_row() {
+    slint::platform::set_platform(Box::new(TestingBackend::new(TestingBackendOptions {
+        mock_time: true,
+        threading: false,
+        renderer_name: Some("software".into()),
+    }))).unwrap();
+    for phone in [true, false] {
+        for theme in ["light", "dark"] {
+            let window = SidebarHarness::new().unwrap();
+            window.set_phone(phone);
+            window.invoke_theme(theme.into());
+            window.invoke_scale(1.6);
+            window.show().unwrap();
+            advance(500);
+            let prefix = format!("{}-{theme}", if phone { "phone" } else { "desktop" });
+            frame(&window, &format!("{prefix}-06-before.png"));
+            window.set_stress_preview(true);
+            advance(32);
+            frame(&window, &format!("{prefix}-07-multiline.png"));
+            assert!(window.get_second_row_top() >= window.get_first_row_bottom());
+            assert!(window.get_third_row_top() >= window.get_second_row_bottom());
+        }
+    }
+}
+
 fn advance(ms: u64) {
     for _ in 0..(ms / 16 + 1) {
         testing::testing_backend::mock_elapsed_time(16);
@@ -84,7 +117,9 @@ fn advance(ms: u64) {
 fn frame(window: &SidebarHarness, name: &str) -> Vec<u8> {
     let pixels = window.window().take_snapshot().unwrap();
     assert_eq!(pixels.height(), 500);
-    if let Some(dir) = std::env::var_os("SIDEBAR_CAPTURE_DIR") {
+    if let Some(dir) = std::env::var_os("U5c_CAPTURE_DIR")
+        .or_else(|| std::env::var_os("SIDEBAR_CAPTURE_DIR"))
+    {
         image::save_buffer(
             std::path::Path::new(&dir).join(name), pixels.as_bytes(),
             pixels.width(), pixels.height(), image::ColorType::Rgba8,

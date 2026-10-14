@@ -3164,7 +3164,6 @@ impl ChatterClient {
         options: Option<SendOptions>,
     ) -> Result<crate::client::messaging::SendMessageUiResult, SendError> {
         use crate::client::messaging::SendMessageUiResult;
-        use crate::domain::message::truncate_preview_text;
 
         let mut result = self
             .send_message_attempt(
@@ -3244,7 +3243,7 @@ impl ChatterClient {
         // message so an attachment-only send gets its type label, not "You: ".
         let sidebar_preview = match result.message.as_ref() {
             Some(message) => self.message_sidebar_preview(message),
-            None => format!("You: {}", truncate_preview_text(text, 50)),
+            None => messaging::plain_sidebar_preview(&format!("You: {}", text)),
         };
 
         // Bootstrap sends carry attachments only after the key exchange, so

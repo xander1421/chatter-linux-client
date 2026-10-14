@@ -522,7 +522,7 @@ impl Message {
             _ => {}
         }
         let body = if !text.is_empty() {
-            truncate_preview_text(text, 50)
+            text.to_string()
         } else if let Some(label) = attachment_label {
             label.to_string()
         } else if att_count > 0 {

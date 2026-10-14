@@ -9,6 +9,45 @@ use crate::state::ActiveConversation;
 
 use crate::ui::chat_data::sidebar_time_at;
 
+/// Make every chat-list preview a single plain-text line, including notices,
+/// attachment labels and pending requests. The row elides to its own width.
+pub(crate) fn plain_sidebar_preview(input: &str) -> String {
+    let mut output = String::with_capacity(input.len());
+    let mut pending_space = false;
+    for ch in input.chars() {
+        if ch.is_whitespace() {
+            pending_space = !output.is_empty();
+        } else if !matches!(ch, '*' | '_' | '`' | '>') && !ch.is_control() {
+            if pending_space {
+                output.push(' ');
+                pending_space = false;
+            }
+            output.push(ch);
+        }
+    }
+    output
+}
+
+#[cfg(test)]
+mod sidebar_preview_tests {
+    use super::plain_sidebar_preview;
+
+    #[test]
+    fn markdown_fences_and_lines_become_one_plain_line() {
+        assert_eq!(
+            plain_sidebar_preview("  You: **hello**\n```\n> _world_  `again`\n```  "),
+            "You: hello world again"
+        );
+    }
+
+    #[test]
+    fn emoji_clusters_survive_without_truncation() {
+        let emoji = "👩🏽‍💻";
+        let source = format!("{}{}{}\n**done**", emoji, emoji, emoji);
+        assert_eq!(plain_sidebar_preview(&source), format!("{}{}{} done", emoji, emoji, emoji));
+    }
+}
+
 #[cfg(test)]
 mod sidebar_time_tests {
     #[test]
@@ -460,9 +499,9 @@ impl ChatterClient {
             message.content,
             crate::domain::message::MessageContent::System(_)
         ) {
-            return format!("{} {}", self.message_sender_display_name(message), preview);
+            return plain_sidebar_preview(&format!("{} {}", self.message_sender_display_name(message), preview));
         }
-        preview
+        plain_sidebar_preview(&preview)
     }
 
     /// Preview + local-time stamp of a conversation's latest activity: the
@@ -669,7 +708,7 @@ impl ChatterClient {
     /// separate lists (that races and drops fresh DMs).
     pub fn list_dm_sidebar(&self) -> Vec<crate::ui::sidebar_data::ChatRowSendData> {
         use crate::domain::anon_dm::AnonDmStatus;
-        use crate::domain::message::{ConversationType, truncate_preview_text};
+        use crate::domain::message::ConversationType;
         use crate::ui::chat_data::initials_from_name;
         use crate::ui::sidebar_data::ChatRowSendData;
 
@@ -762,7 +801,7 @@ impl ChatterClient {
                     let preview = msg
                         .as_text()
                         .filter(|t| !t.is_empty())
-                        .map(|t| format!("You: {}", truncate_preview_text(t, 50)))
+                        .map(|t| plain_sidebar_preview(&format!("You: {}", t)))
                         .unwrap_or_else(|| "Message request sent".to_string());
                     (preview, self.sidebar_time(msg.created_at))
                 }

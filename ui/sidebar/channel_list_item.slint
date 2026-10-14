@@ -91,6 +91,7 @@ export component ChannelListItem inherits Rectangle {
     // above and below.
     height: root.collapsed ? 48px : (root.mobile-mode ? Spacing.row-height-touch : Spacing.row-height-desktop);
     border-radius: Spacing.radius-md;
+    clip: true;
 
     // A Flickable cancels the pointer grab when scrolling begins. Release the
     // visual press as soon as the finger moves past the shared gesture slop.
@@ -193,6 +194,7 @@ export component ChannelListItem inherits Rectangle {
                     // Same rule as the DM row: the name is the anchor and is
                     // always full-strength, the preview below is the muted one.
                     text: root.name;
+                    wrap: no-wrap;
                     color: Colors.text-primary;
                     font-size: root.name-size;
                     font-weight: root.unread-count > 0 ? 600 : 500;
@@ -249,11 +251,19 @@ export component ChannelListItem inherits Rectangle {
                 }
             }
 
-            if !root.is-typing && root.last-message != "": Text {
-                text: root.last-message;
-                color: Colors.text-muted;
-                font-size: root.preview-size;
-                overflow: elide;
+            if !root.is-typing && root.last-message != "": Rectangle {
+                horizontal-stretch: 1;
+                height: root.preview-size * 1.4;
+                clip: true;
+                preview-text := Text {
+                    width: parent.width;
+                    height: parent.height;
+                    text: root.last-message;
+                    wrap: no-wrap;
+                    color: Colors.text-muted;
+                    font-size: root.preview-size;
+                    overflow: elide;
+                }
             }
         }
 
@@ -265,6 +275,7 @@ export component ChannelListItem inherits Rectangle {
 
             Text {
                 text: root.timestamp;
+                wrap: no-wrap;
                 color: Colors.text-muted;
                 font-size: Typography.xs2;
                 horizontal-alignment: right;
