@@ -219,11 +219,18 @@ export component MainWindow inherits Window {
     in-out property <string> unified-search-query: "";
     in-out property <bool> unified-search-open: false;
     in-out property <int> unified-search-selected-index: 0;
+    in-out property <string> unified-search-category: "all";
+    in-out property <string> unified-search-sort: "relevance";
+    in-out property <string> unified-search-date: "any";
+    in property <[string]> unified-search-recents: [];
     // Loaded from SettingsRepository at startup: "k" | "f" | "both".
     in-out property <string> search-shortcut-pref: "both";
     callback unified-search-opened();
     callback unified-search-closed();
     callback unified-search-changed(string);
+    callback unified-search-filters-changed(string, string, string, string, string);
+    callback unified-search-recent-selected(string);
+    callback unified-search-recent-clear();
     callback unified-search-conversation-selected(string, string);
     callback unified-search-message-selected(string);
     // People (exact-handle resolve-on-Enter)
@@ -596,6 +603,8 @@ export component MainWindow inherits Window {
     in-out property <length> context-menu-y: 0px;
     // Where the open conversation's content starts; the menu stays below it.
     in-out property <length> context-menu-content-top: 0px;
+    private property <length> context-menu-anchor-top: 0px;
+    private property <length> context-menu-anchor-bottom: 0px;
     // All callbacks use (sender_id, timestamp_ns) for Signal-style lookups
     callback reply-message(string, string);
     callback edit-message(string, string);
@@ -1630,7 +1639,6 @@ export component MainWindow inherits Window {
                 if (event.modifiers.control
                     && ((event.text == "k" && root.search-shortcut-pref != "f")
                      || (event.text == "f" && root.search-shortcut-pref != "k"))) {
-                    root.unified-search-query = "";
                     root.unified-search-selected-index = 0;
                     root.unified-search-open = true;
                     root.unified-search-opened();
@@ -1893,6 +1901,7 @@ export component MainWindow inherits Window {
                     // that has to keep the macOS traffic lights clear.
                     traffic-lights-width: root.macos-traffic-lights-width;
                     titlebar-height: root.macos-titlebar-height;
+                    search-overlay-open: root.unified-search-open;
                     chat-rows: root.chat-rows;
                     custom-sections: root.custom-sections;
                     user-display-name: root.user-display-name;
@@ -1925,7 +1934,6 @@ export component MainWindow inherits Window {
                         root.private-group-selected(id);
                     }
                     search-clicked => {
-                        root.unified-search-query = "";
                         root.unified-search-selected-index = 0;
                         root.unified-search-open = true;
                         root.unified-search-opened();
@@ -2302,6 +2310,8 @@ export component MainWindow inherits Window {
                         thread-clicked(id) => { root.thread-clicked(id); }
                         more-clicked(sender-id, timestamp-ns, x, y) => {
                             root.context-menu-content-top = self.content-top;
+                            root.context-menu-anchor-top = 0px;
+                            root.context-menu-anchor-bottom = 0px;
                             root.more-clicked(sender-id, timestamp-ns, x, y);
                         }
                         quote-clicked(id) => { root.quote-clicked(id); }
@@ -2395,6 +2405,8 @@ export component MainWindow inherits Window {
                         more-clicked(sender-id, timestamp-ns, x, y) => {
                             // The panel's own header is the menu's ceiling.
                             root.context-menu-content-top = self.absolute-position.y;
+                            root.context-menu-anchor-top = 0px;
+                            root.context-menu-anchor-bottom = 0px;
                             root.more-clicked(sender-id, timestamp-ns, x, y);
                         }
                         react-clicked(sender-id, timestamp-ns, x, y) => {
@@ -2964,11 +2976,18 @@ export component MainWindow inherits Window {
             width: parent.width;
             height: parent.height;
             show: root.unified-search-open;
+            source-x: root.compact-layout ? 12px : 0px;
+            source-y: root.macos-titlebar-height;
+            source-width: root.compact-layout ? root.width - 24px : root.sidebar-is-rail ? Spacing.sidebar-width-collapsed : Spacing.sidebar-width;
             conversations: root.unified-search-conversations;
             messages: root.unified-search-messages;
             searching: root.unified-search-searching;
             query <=> root.unified-search-query;
             selected-index <=> root.unified-search-selected-index;
+            category <=> root.unified-search-category;
+            sort-order <=> root.unified-search-sort;
+            date-filter <=> root.unified-search-date;
+            recent-searches: root.unified-search-recents;
             query-is-handle: root.unified-search-query-is-handle;
             person-status: root.unified-search-person-status;
             person-error: root.unified-search-person-error;
@@ -2976,6 +2995,9 @@ export component MainWindow inherits Window {
             person-name: root.unified-search-person-name;
             person-handle: root.unified-search-person-handle;
             query-changed(q) => { root.unified-search-changed(q); }
+            filters-changed(c, s, d, f, i) => { root.unified-search-filters-changed(c, s, d, f, i); }
+            recent-selected(q) => { root.unified-search-recent-selected(q); }
+            recent-clear => { root.unified-search-recent-clear(); }
             resolve(q) => { root.unified-search-resolve(q); }
             person-selected(uid) => {
                 root.unified-search-person-selected(uid);
@@ -2993,6 +3015,11 @@ export component MainWindow inherits Window {
                 root.unified-search-closed();
             }
             close => {
+                root.unified-search-open = false;
+                root.unified-search-closed();
+            }
+            cancel => {
+                root.unified-search-query = "";
                 root.unified-search-open = false;
                 root.unified-search-closed();
             }
@@ -3806,6 +3833,10 @@ export component MainWindow inherits Window {
             // composer. Its height already excludes the IME and system bars.
             position-y: root.context-menu-y - root.safe-area-top;
             content-top: root.context-menu-content-top - root.safe-area-top;
+            anchor-top: root.context-menu-anchor-top > 0px
+                ? root.context-menu-anchor-top - root.safe-area-top : 0px;
+            anchor-bottom: root.context-menu-anchor-bottom > 0px
+                ? root.context-menu-anchor-bottom - root.safe-area-top : 0px;
             retry-clicked(id) => { root.message-clicked(id); }
             info-clicked(id) => { MessageInfo.open(id); }
             can-thread: root.conversation-kind == ConversationKind.channel;
