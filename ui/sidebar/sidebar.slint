@@ -116,6 +116,18 @@ export component Sidebar inherits Rectangle {
     in property <int> missed-call-count: 0;
     property <int> total-pending-requests: root.pending-friend-requests
         + root.pending-message-requests + root.pending-group-invites + root.pending-channel-invites;
+    property <bool> requests-row-was-visible: false;
+    changed total-pending-requests => {
+        let now-visible = root.total-pending-requests > 0;
+        if (now-visible != root.requests-row-was-visible) {
+            // A row inserted above the visible conversations must not move
+            // the content already under the user's finger.
+            if (central-scroll.viewport-y < -requests-anchor.y) {
+                central-scroll.viewport-y += now-visible ? -root.quick-link-height : root.quick-link-height;
+            }
+            root.requests-row-was-visible = now-visible;
+        }
+    }
 
     // ── Callbacks ──
     callback channel-selected(string);
@@ -298,7 +310,7 @@ export component Sidebar inherits Rectangle {
         // ════════════════════════════════════════
         // SCROLLABLE CENTRAL CONTENT
         // ════════════════════════════════════════
-        Flickable {
+        central-scroll := Flickable {
             width: root.width;
             height: root.height;
             viewport-height: central-layout.preferred-height;
@@ -472,11 +484,11 @@ export component Sidebar inherits Rectangle {
                 // as tabs already built into the Friends modal's Requests
                 // tab (requests-sub-tab: received/sent/private/groups/
                 // channels) — nothing lost, just not all surfaced at once.
-                Rectangle {
+                requests-anchor := Rectangle { height: 0px; }
+                if root.total-pending-requests > 0: Rectangle {
                     height: root.quick-link-height;
                     accessible-role: button;
-                    accessible-label: root.total-pending-requests == 0 ? "Requests"
-                        : root.total-pending-requests == 1 ? "1 request" : root.total-pending-requests + " requests";
+                    accessible-label: root.total-pending-requests == 1 ? "1 request" : root.total-pending-requests + " requests";
                     background: requests-touch.pressed ? Colors.surface-control-hover
                         : requests-touch.has-hover ? Colors.surface-hover : transparent;
                     animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
