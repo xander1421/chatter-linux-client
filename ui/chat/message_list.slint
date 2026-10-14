@@ -139,6 +139,7 @@ export component MessageList inherits Rectangle {
             root.unread-index = -1;
             root.unread-count = 0;
             root.end-pending = false;
+            root.following-tail = false;
             root.jump-row = -1;
             // Root state, so it outlives the list: left true from a previous
             // conversation, it would drag the next one to its end on the
@@ -161,6 +162,9 @@ export component MessageList inherits Rectangle {
     // Virtualization estimates materialize rows; navigation completes only
     // against geometry from the rendered message bubble.
     private property <bool> end-pending: false;
+    // A seek to the newest row owns the bottom anchor through row insertion
+    // and its settle animation. Only an actual user scroll releases it.
+    private property <bool> following-tail: false;
     private property <int> end-passes: 0;
     // Sitting exactly on the newest message, as of the last layout pass.
     private property <bool> at-end: false;
@@ -249,6 +253,7 @@ export component MessageList inherits Rectangle {
     // Newest message flush with the bottom edge, and stay there.
     function go-to-end() {
         root.jump-row = -1;
+        root.following-tail = true;
         root.end-pending = true;
         root.end-passes = 0;
         root.nav-serial += 1;
@@ -257,6 +262,7 @@ export component MessageList inherits Rectangle {
     // Row `i` at the top edge. Leaves the end, so nothing may pull back to it.
     function go-to-row(i: int) {
         root.end-pending = false;
+        root.following-tail = false;
         root.at-end = false;
         root.is-at-bottom = false;
         root.jump-measured = false;
@@ -456,6 +462,7 @@ export component MessageList inherits Rectangle {
         list := ListView {
             width: 100%;
             height: 100%;
+            immediate-child-press: true;
 
             // How far the content extends below the bottom edge. Exact once the
             // last row is live (the runtime's estimate then closes on the real
@@ -475,7 +482,8 @@ export component MessageList inherits Rectangle {
                 // bottom: retain the anchor until a scroll or explicit jump.
                 root.at-end = !root.opening-on-unread && (self.bottom-gap() <= 1px
                     || (root.at-end && !root.scrolling && root.jump-row < 0));
-                root.is-at-bottom = !root.opening-on-unread && (self.bottom-gap() <= 50px
+                root.is-at-bottom = !root.opening-on-unread && (root.following-tail
+                    || self.bottom-gap() <= (root.is-at-bottom ? 70px : 40px)
                     || (root.is-at-bottom && !root.scrolling && root.jump-row < 0));
                 // Reaching the newest message is what "caught up" means; the
                 // pill must stop claiming N new messages after that, including
@@ -514,6 +522,7 @@ export component MessageList inherits Rectangle {
             // pursued, the user has taken over.
             flicked => {
                 root.opening-on-unread = false;
+                root.following-tail = false;
                 root.scrolling = true;
                 root.load-more-armed = true;
                 root.end-pending = false;

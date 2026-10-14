@@ -521,6 +521,7 @@ export component MainWindow inherits Window {
 
     // ========== Reply-to state (Signal-style: sender_id + timestamp) ==========
     in-out property <bool> composer-is-replying: false;
+    private property <int> reply-focus-serial: 0;
     in-out property <string> composer-reply-to-sender: "";       // Sender UUID (for protocol)
     in-out property <string> composer-reply-to-sender-name: ""; // Sender display name (for UI)
     in-out property <string> composer-reply-to-timestamp: "";
@@ -2320,6 +2321,8 @@ export component MainWindow inherits Window {
                         composer-is-editing <=> root.composer-is-editing;
                         composer-edit-message-id <=> root.composer-edit-message-id;
                         composer-is-replying: root.composer-is-replying;
+                        reply-focus-serial: root.reply-focus-serial;
+                        keyboard-open: root.keyboard-open;
                         composer-reply-to-sender-name: root.composer-reply-to-sender-name;
                         composer-reply-preview: root.composer-reply-preview;
                         composer-reply-has-thumbnail: root.composer-reply-has-thumbnail;
@@ -2381,7 +2384,10 @@ export component MainWindow inherits Window {
                         sender-profile-requested(user-id) => { root.sender-profile-requested(user-id); }
                         open-message-link(url) => { root.open-message-link(url); }
                         message-clicked(id) => { root.message-clicked(id); }
-                        reply-clicked(sender-id, timestamp-ns) => { root.reply-clicked(sender-id, timestamp-ns); }
+                        reply-clicked(sender-id, timestamp-ns) => {
+                            root.reply-clicked(sender-id, timestamp-ns);
+                            root.reply-focus-serial += 1;
+                        }
                         forward-clicked(sender-id, timestamp-ns) => { root.forward-message-action(sender-id, timestamp-ns); }
                         react-clicked(sender-id, timestamp-ns, x, y) => {
                             root.reaction-picker-sender-id = sender-id;
@@ -2479,7 +2485,10 @@ export component MainWindow inherits Window {
                         open-message-link(url) => { root.open-message-link(url); }
                         message-clicked(id) => { root.message-clicked(id); }
                         menu-open: root.context-menu-visible || root.reaction-picker-visible;
-                        reply-clicked(sender-id, timestamp-ns) => { root.reply-clicked(sender-id, timestamp-ns); }
+                        reply-clicked(sender-id, timestamp-ns) => {
+                            root.reply-clicked(sender-id, timestamp-ns);
+                            root.reply-focus-serial += 1;
+                        }
                         quote-clicked(id) => { root.quote-clicked(id); }
                         sender-profile-requested(user-id) => { root.sender-profile-requested(user-id); }
                         current-playing-attachment-id: root.current-playing-attachment-id;
@@ -4038,6 +4047,7 @@ export component MainWindow inherits Window {
             reply-clicked(sender-id, timestamp-ns) => {
                 root.context-menu-visible = false;
                 root.reply-message(sender-id, timestamp-ns);
+                root.reply-focus-serial += 1;
             }
             edit-clicked(sender-id, timestamp-ns) => {
                 root.context-menu-visible = false;
