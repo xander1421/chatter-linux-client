@@ -83,8 +83,8 @@ export component Avatar inherits Rectangle {
         background: root.presence-color;
         border-width: 2px;
         border-color: Colors.background;
-        // A calm breathing halo only accompanies live presence. The solid
-        // centre remains legible at every phase and reduced motion freezes it.
+        // Keep the halo at the breathing animation's midpoint. A clock-bound
+        // color makes every online avatar redraw the whole window at idle.
         if root.presence-color == Colors.online: Rectangle {
             width: parent.width + 5px;
             height: self.width;
@@ -93,7 +93,7 @@ export component Avatar inherits Rectangle {
             border-radius: self.width / 2;
             background: transparent;
             border-width: 1px;
-            border-color: Colors.online.with-alpha(Appearance.reduce-motion ? 0 : 0.22 + 0.12 * Math.sin((animation-tick() / 1800ms) * 360deg));
+            border-color: Colors.online.with-alpha(Appearance.reduce-motion ? 0 : 0.28);
         }
     }
 }

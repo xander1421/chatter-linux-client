@@ -330,10 +330,6 @@ export component UserProfileModal inherits Rectangle {
                                 height: 8px;
                                 border-radius: 4px;
                                 background: root.presence-color(root.presence);
-                                transform-origin: { x: self.width / 2, y: self.height / 2 };
-                                transform-scale-x: root.presence == "online" && !Appearance.reduce-motion
-                                    ? 100% + 12% * Math.sin((animation-tick() / 1800ms) * 360deg) : 100%;
-                                transform-scale-y: self.transform-scale-x;
                             }
                         }
 
