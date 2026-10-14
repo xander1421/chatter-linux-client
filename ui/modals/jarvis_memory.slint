@@ -71,6 +71,7 @@ export component JarvisMemoryModal inherits GlassSurface {
     // Instantiation site clamps to the window; these are just defaults.
     width: 860px;
     height: 560px;
+    property <bool> narrow: root.width < 700px;
 
     // Hidden the moment the dialog is logically closed: an invisible subtree
     // gets no pointer, key, Tab focus or accessible default action (Slint
@@ -86,38 +87,50 @@ export component JarvisMemoryModal inherits GlassSurface {
             // Header — as tall as its header button, title on the same axis.
             HorizontalLayout {
                 spacing: Spacing.sm;
-                height: Spacing.header-action-box;
+                height: root.narrow ? Spacing.header-action-box-touch : Spacing.header-action-box;
                 Text {
                     horizontal-stretch: 1;
-                    text: "Jarvis Memory";
+                    text: root.narrow ? "Memory" : "Jarvis Memory";
                     color: Colors.text-primary;
                     font-size: Typography.xl;
                     font-weight: Typography.semibold;
                     vertical-alignment: center;
                 }
                 Text {
+                    visible: !root.narrow;
                     text: root.stats-label;
                     color: Colors.text-muted;
                     font-size: Typography.xs;
                     vertical-alignment: center;
                 }
-                Button { text: "Clear history"; variant: "ghost"; disabled: !root.show; clicked => { JarvisGlobal.clear-history(); } }
-                Button { text: "Refresh"; variant: "ghost"; disabled: !root.show; clicked => { root.refresh(); } }
+                Button { text: root.narrow ? "Clear" : "Clear history"; variant: "ghost"; touch: root.narrow; disabled: !root.show; clicked => { JarvisGlobal.clear-history(); } }
+                Button { text: root.narrow ? "Reload" : "Refresh"; variant: "ghost"; touch: root.narrow; disabled: !root.show; clicked => { root.refresh(); } }
                 // Centered dialog → the shared X on the trailing edge. A "Close"
                 // text button was a fourth spelling of the same action, and it sat
                 // next to "Refresh" looking like another content action.
                 DismissButton {
                     back: false;
+                    touch: root.narrow;
                     enabled: root.show;
                     clicked => { root.close(); }
                 }
             }
 
-            HorizontalLayout {
-                spacing: Spacing.md;
+            // A stacked phone layout is taller than this fixed sheet. Keep the
+            // header fixed and let the two panes scroll together inside it.
+            Flickable {
+                vertical-stretch: 1;
+                viewport-width: self.width;
+                viewport-height: memory-grid.preferred-height;
+
+                memory-grid := GridLayout {
+                    width: parent.width;
+                    spacing: Spacing.md;
 
                 // ── Facts column ────────────────────────────────────────────
                 Rectangle {
+                    row: 0;
+                    col: 0;
                     horizontal-stretch: 1;
                     background: Colors.inset;
                     border-radius: Spacing.radius-md;
@@ -141,6 +154,7 @@ export component JarvisMemoryModal inherits GlassSurface {
 
                         Flickable {
                             vertical-stretch: 1;
+                            min-height: root.narrow ? 96px : 160px;
                             viewport-height: facts-column.preferred-height;
                             facts-column := VerticalLayout {
                                 spacing: Spacing.sm;
@@ -181,6 +195,8 @@ export component JarvisMemoryModal inherits GlassSurface {
 
                 // ── Entities + graph column ─────────────────────────────────
                 Rectangle {
+                    row: root.narrow ? 1 : 0;
+                    col: root.narrow ? 0 : 1;
                     horizontal-stretch: 1;
                     background: Colors.inset;
                     border-radius: Spacing.radius-md;
@@ -204,15 +220,21 @@ export component JarvisMemoryModal inherits GlassSurface {
 
                         // Entity chips (click → radial map)
                         Flickable {
-                            height: 92px;
+                            height: root.entities.length == 0 ? 0px : 92px;
                             viewport-height: chips.preferred-height;
+                            animate height { duration: Materials.motion-standard; easing: Materials.spring; }
                             chips := VerticalLayout {
                                 spacing: Spacing.xs;
                                 for row in root.entities: Rectangle {
-                                    height: Spacing.button-height;
+                                    height: Spacing.touch-target-min;
                                     border-radius: Spacing.radius-md;
-                                    background: row.is-selected ? Colors.selected : transparent;
-                                    TouchArea { enabled: root.show; clicked => { root.select-entity(row.entity-id); } }
+                                    background: row.is-selected ? Colors.selected : chip-touch.pressed ? Materials.pressed : chip-touch.has-hover ? Materials.hover : transparent;
+                                    transform-scale-x: chip-touch.pressed ? 0.97 : 1;
+                                    transform-scale-y: chip-touch.pressed ? 0.92 : 1;
+                                    animate background { duration: Materials.motion-quick; easing: Materials.settle; }
+                                    animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+                                    animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
+                                    chip-touch := TouchArea { enabled: root.show; clicked => { root.select-entity(row.entity-id); } }
                                     HorizontalLayout {
                                         padding-left: Spacing.sm;
                                         padding-right: Spacing.sm;
@@ -239,6 +261,7 @@ export component JarvisMemoryModal inherits GlassSurface {
                         // Radial connection map
                         graph-pane := Rectangle {
                             vertical-stretch: 1;
+                            min-height: root.narrow ? 112px : 180px;
                             border-radius: Spacing.radius-md;
                             background: Colors.surface;
                             clip: true;
@@ -266,6 +289,9 @@ export component JarvisMemoryModal inherits GlassSurface {
                                 background: node.is-center ? Colors.primary : Colors.background;
                                 border-width: node.is-center ? Spacing.stroke : 0px;
                                 border-color: Colors.primary;
+                                animate x { duration: Materials.motion-emphasized; easing: Materials.glide; }
+                                animate y { duration: Materials.motion-emphasized; easing: Materials.glide; }
+                                animate width { duration: Materials.motion-standard; easing: Materials.spring; }
                                 Text {
                                     width: parent.width - 8px;
                                     x: 4px;
@@ -290,6 +316,7 @@ export component JarvisMemoryModal inherits GlassSurface {
                             }
                         }
                     }
+                }
                 }
             }
         }

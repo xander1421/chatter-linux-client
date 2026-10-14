@@ -3,6 +3,7 @@
 import { Avatar } from "../components/avatar.slint";
 import { Icons } from "../theme/icons.slint";
 import { Colors } from "../theme/colors.slint";
+import { Materials } from "../theme/materials.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Modal } from "../components/modal.slint";
@@ -65,9 +66,22 @@ export component InvitePrivateGroupModal inherits Rectangle {
                         padding: Spacing.xs;
 
                         for friend[index] in root.available-friends: Rectangle {
-                            height: 52px;
-                            background: friend-touch.has-hover ? Colors.surface-hover : transparent;
+                            height: max(52px, Spacing.touch-target-min);
+                            background: friend.selected ? Colors.inset : friend-touch.pressed ? Materials.pressed : friend-touch.has-hover ? Colors.surface-hover : transparent;
                             border-radius: Spacing.radius-md;
+                            transform-scale-x: friend-touch.pressed ? 0.97 : 1;
+                            transform-scale-y: friend-touch.pressed ? 0.94 : 1;
+                            animate background { duration: Materials.motion-quick; easing: Materials.settle; }
+                            animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+                            animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
+
+                            // Keep the row target behind the role chip so
+                            // pressing Admin/Member changes the role instead
+                            // of deselecting the friend.
+                            friend-touch := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { root.toggle-selection(index); }
+                            }
 
                             HorizontalLayout {
                                 padding-left: Spacing.sm;
@@ -103,15 +117,24 @@ export component InvitePrivateGroupModal inherits Rectangle {
                                     }
                                 }
 
-                                // Role selector (only shown when selected)
-                                if friend.selected: VerticalLayout {
+                                // The chip grows from the selected row, then
+                                // returns to zero width when deselected.
+                                VerticalLayout {
                                     alignment: center;
                                     horizontal-stretch: 0;
                                     Rectangle {
-                                        width: invite-role-text.preferred-width + Spacing.sm * 2;
+                                        width: friend.selected ? invite-role-text.preferred-width + Spacing.sm * 2 : 0px;
                                         height: Spacing.button-height;
                                         border-radius: Spacing.radius-sm;
                                         background: friend.role == "admin" ? Colors.warning.with-alpha(0.2) : Colors.surface-hover;
+                                        opacity: friend.selected ? 1 : 0;
+                                        clip: true;
+                                        animate width { duration: Materials.motion-standard; easing: Materials.spring; }
+                                        animate opacity { duration: Materials.motion-quick; easing: Materials.settle; }
+                                        transform-scale-x: invite-role-touch.pressed ? 0.9 : 1;
+                                        transform-scale-y: invite-role-touch.pressed ? 0.9 : 1;
+                                        animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+                                        animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
 
                                         invite-role-text := Text {
                                             text: friend.role == "admin" ? "Admin" : "Member";
@@ -123,6 +146,7 @@ export component InvitePrivateGroupModal inherits Rectangle {
                                         }
 
                                         invite-role-touch := TouchArea {
+                                            enabled: friend.selected;
                                             mouse-cursor: pointer;
                                             clicked => {
                                                 root.toggle-role(index);
@@ -152,12 +176,6 @@ export component InvitePrivateGroupModal inherits Rectangle {
                                 }
                             }
 
-                            friend-touch := TouchArea {
-                                mouse-cursor: pointer;
-                                clicked => {
-                                    root.toggle-selection(index);
-                                }
-                            }
                         }
                     }
                 }

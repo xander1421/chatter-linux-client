@@ -1,6 +1,7 @@
 // InviteMemberModal - Modal for inviting users to a channel
 
 import { Colors } from "../theme/colors.slint";
+import { Materials } from "../theme/materials.slint";
 import { Icons } from "../theme/icons.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
@@ -85,11 +86,16 @@ export component InviteMemberModal inherits Rectangle {
                         for user[index] in root.users: Rectangle {
                             // Members and banned users can't be invited.
                             property <bool> unavailable: user.already-member || user.banned;
-                            height: 52px;
+                            height: max(52px, Spacing.touch-target-min);
                             background: unavailable ? transparent :
-                                (user-touch.has-hover ? Colors.surface-hover : transparent);
+                                (user-touch.pressed ? Materials.pressed : user-touch.has-hover ? Colors.surface-hover : transparent);
                             border-radius: Spacing.radius-md;
                             opacity: unavailable ? 0.5 : 1.0;
+                            transform-scale-x: user-touch.pressed ? 0.97 : 1;
+                            transform-scale-y: user-touch.pressed ? 0.94 : 1;
+                            animate background { duration: Materials.motion-quick; easing: Materials.settle; }
+                            animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+                            animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
 
                             HorizontalLayout {
                                 padding-left: Spacing.sm;

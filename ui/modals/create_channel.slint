@@ -7,6 +7,7 @@ import { Checkbox } from "../components/checkbox.slint";
 
 import { Colors } from "../theme/colors.slint";
 import { Appearance } from "../theme/appearance.slint";
+import { Materials } from "../theme/materials.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
@@ -158,12 +159,9 @@ export component CreateChannelModal inherits Rectangle {
         title: "New Channel";
         modal-width: 620px;
         max-modal-height: 720px;
-        // The Create tab brings its own scrolling body with the footer pinned
-        // below it, which only works when the card lays the content out to
-        // the card's height. Content-sized, a capped card scrolled the whole
-        // tab instead, so with the keyboard up (the window shrinks to its top
-        // edge) Create sat clipped below the card, unreachable.
-        fill-height: root.active-tab == 0;
+        // Keep one sheet size as the Create/Join indicator travels. Both tabs
+        // give their result/body area the spare height and pin their footer.
+        fill-height: true;
 
         close => { root.close(); }
 
@@ -173,50 +171,45 @@ export component CreateChannelModal inherits Rectangle {
             // ============================================================
             // Tab switcher: Create | Join
             // ============================================================
-            HorizontalLayout {
-                height: 34px;
+            tab-track := Rectangle {
+                height: Spacing.touch-target-min;
+                background: Colors.surface-control;
+                border-radius: Spacing.radius-lg;
 
+                // One surface travels between tabs, preserving its shape and
+                // position instead of replacing two unrelated backgrounds.
                 Rectangle {
-                    horizontal-stretch: 1;
+                    x: root.active-tab == 0 ? 4px : tab-track.width / 2;
+                    y: 4px;
+                    width: (tab-track.width - 8px) / 2;
+                    height: tab-track.height - 8px;
+                    background: Colors.surface-section;
                     border-radius: Spacing.radius-md;
-                    background: root.active-tab == 0 ? Colors.surface-hover : transparent;
-
-                    Text {
-                        text: "Create";
-                        color: root.active-tab == 0 ? Colors.text-primary : Colors.text-secondary;
-                        font-size: Typography.sm;
-                        font-weight: root.active-tab == 0 ? Typography.semibold : Typography.medium;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                        width: 100%;
-                        height: 100%;
-                    }
-
-                    create-tab-touch := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => { root.active-tab = 0; }
-                    }
+                    animate x { duration: Materials.motion-standard; easing: Materials.glide; }
                 }
 
-                Rectangle {
-                    horizontal-stretch: 1;
-                    border-radius: Spacing.radius-md;
-                    background: root.active-tab == 1 ? Colors.surface-hover : transparent;
+                for tab[index] in ["Create", "Join"]: Rectangle {
+                    x: index * tab-track.width / 2;
+                    width: tab-track.width / 2;
+                    height: tab-track.height;
+                    transform-scale-x: tab-touch.pressed ? 0.96 : 1;
+                    transform-scale-y: tab-touch.pressed ? 0.92 : 1;
+                    animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+                    animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
 
                     Text {
-                        text: "Join";
-                        color: root.active-tab == 1 ? Colors.text-primary : Colors.text-secondary;
-                        font-size: Typography.sm;
-                        font-weight: root.active-tab == 1 ? Typography.semibold : Typography.medium;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
+                        text: tab;
                         width: 100%;
                         height: 100%;
+                        color: root.active-tab == index ? Colors.text-primary : Colors.text-secondary;
+                        font-size: Typography.sm;
+                        font-weight: root.active-tab == index ? Typography.semibold : Typography.medium;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
                     }
-
-                    join-tab-touch := TouchArea {
+                    tab-touch := TouchArea {
                         mouse-cursor: pointer;
-                        clicked => { root.active-tab = 1; }
+                        clicked => { root.active-tab = index; }
                     }
                 }
             }
@@ -323,7 +316,9 @@ export component CreateChannelModal inherits Rectangle {
 
                     // Inside an `if`, so the name field cannot call its
                     // focus() directly; it bumps this counter instead.
-                    if !root.is-private-group: Input {
+                    Input {
+                        visible: !root.is-private-group;
+                        height: root.is-private-group ? 0px : Spacing.button-height;
                         property <int> focus-requests: root.description-focus-requests;
                         changed focus-requests => { self.focus(); }
                         placeholder: "Description (optional)";
@@ -355,7 +350,12 @@ export component CreateChannelModal inherits Rectangle {
                         border-radius: Spacing.radius-md;
                         border-width: root.is-open ? Spacing.stroke : 0px;
                         border-color: Colors.primary;
-                        background: root.is-open ? Colors.inset : (open-touch.has-hover ? Colors.surface-hover : Colors.surface);
+                        background: root.is-open ? Colors.inset : (open-touch.pressed ? Materials.pressed : open-touch.has-hover ? Colors.surface-hover : Colors.surface);
+                        transform-scale-x: open-touch.pressed ? 0.985 : 1;
+                        transform-scale-y: open-touch.pressed ? 0.96 : 1;
+                        animate background { duration: Materials.motion-quick; easing: Materials.settle; }
+                        animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+                        animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
 
                         VerticalLayout {
                             padding: Spacing.sm;
@@ -398,7 +398,12 @@ export component CreateChannelModal inherits Rectangle {
                         border-radius: Spacing.radius-md;
                         border-width: root.is-invite ? Spacing.stroke : 0px;
                         border-color: Colors.primary;
-                        background: root.is-invite ? Colors.inset : (invite-touch.has-hover ? Colors.surface-hover : Colors.surface);
+                        background: root.is-invite ? Colors.inset : (invite-touch.pressed ? Materials.pressed : invite-touch.has-hover ? Colors.surface-hover : Colors.surface);
+                        transform-scale-x: invite-touch.pressed ? 0.985 : 1;
+                        transform-scale-y: invite-touch.pressed ? 0.96 : 1;
+                        animate background { duration: Materials.motion-quick; easing: Materials.settle; }
+                        animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+                        animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
 
                         VerticalLayout {
                             padding: Spacing.sm;
@@ -441,7 +446,12 @@ export component CreateChannelModal inherits Rectangle {
                         border-radius: Spacing.radius-md;
                         border-width: root.is-private-group ? Spacing.stroke : 0px;
                         border-color: Colors.primary;
-                        background: root.is-private-group ? Colors.inset : (pg-touch.has-hover ? Colors.surface-hover : Colors.surface);
+                        background: root.is-private-group ? Colors.inset : (pg-touch.pressed ? Materials.pressed : pg-touch.has-hover ? Colors.surface-hover : Colors.surface);
+                        transform-scale-x: pg-touch.pressed ? 0.985 : 1;
+                        transform-scale-y: pg-touch.pressed ? 0.96 : 1;
+                        animate background { duration: Materials.motion-quick; easing: Materials.settle; }
+                        animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+                        animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
 
                         VerticalLayout {
                             padding: Spacing.sm;
@@ -573,10 +583,15 @@ export component CreateChannelModal inherits Rectangle {
                             spacing: Spacing.xxs;
 
                             for friend[idx] in root.available-friends: Rectangle {
-                                height: 48px * Appearance.text-grow;
+                                height: max(Spacing.touch-target-min, 48px * Appearance.text-grow);
                                 border-radius: Spacing.radius-sm;
                                 background: friend.selected ? Colors.inset :
-                                            (friend-touch.has-hover ? Colors.surface-hover : transparent);
+                                            (friend-touch.pressed ? Materials.pressed : friend-touch.has-hover ? Colors.surface-hover : transparent);
+                                transform-scale-x: friend-touch.pressed ? 0.97 : 1;
+                                transform-scale-y: friend-touch.pressed ? 0.94 : 1;
+                                animate background { duration: Materials.motion-quick; easing: Materials.settle; }
+                                animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+                                animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
 
                                 friend-touch := TouchArea {
                                     mouse-cursor: pointer;
@@ -636,14 +651,18 @@ export component CreateChannelModal inherits Rectangle {
                                         }
                                     }
 
-                                    if friend.selected: VerticalLayout {
+                                    VerticalLayout {
                                         alignment: center;
                                         horizontal-stretch: 0;
                                         Rectangle {
-                                            width: role-text.preferred-width + Spacing.sm * 2;
+                                            width: friend.selected ? role-text.preferred-width + Spacing.sm * 2 : 0px;
                                             height: Spacing.button-height;
                                             border-radius: Spacing.radius-sm;
                                             background: role-touch.has-hover ? (friend.role == "admin" ? Colors.warning.with-alpha(0.3) : Colors.surface) : (friend.role == "admin" ? Colors.warning.with-alpha(0.2) : Colors.surface-hover);
+                                            opacity: friend.selected ? 1 : 0;
+                                            clip: true;
+                                            animate width { duration: Materials.motion-standard; easing: Materials.spring; }
+                                            animate opacity { duration: Materials.motion-quick; easing: Materials.settle; }
 
                                             role-text := Text {
                                                 text: friend.role == "admin" ? "Admin" : "Member";
@@ -655,6 +674,7 @@ export component CreateChannelModal inherits Rectangle {
                                             }
 
                                             role-touch := TouchArea {
+                                                enabled: friend.selected;
                                                 mouse-cursor: pointer;
                                                 clicked => { root.toggle-friend-role(idx); }
                                             }
@@ -691,6 +711,7 @@ export component CreateChannelModal inherits Rectangle {
                             height: 14px;
                             colorize: Colors.text-secondary;
                             transform-rotation: root.more-options-expanded ? 90deg : 0deg;
+                            animate transform-rotation { duration: Materials.motion-standard; easing: Materials.spring; }
                         }
 
                         Text {
@@ -998,6 +1019,7 @@ export component CreateChannelModal inherits Rectangle {
                 // Search input
                 VerticalLayout {
                     spacing: Spacing.xs;
+                    vertical-stretch: 0;
 
                     Text {
                         text: "Search channels, or paste a channel ID or invite link";
@@ -1021,12 +1043,10 @@ export component CreateChannelModal inherits Rectangle {
                     }
                 }
 
-                // Results area. No min-height: it already scrolls internally,
-                // and a floor here would push the Join footer off-screen in
-                // landscape. vertical-stretch still gives it all spare room.
+                // Results take the sheet's spare height, keeping Create and
+                // Join the same size while the selection slides between them.
                 Rectangle {
                     vertical-stretch: 1;
-                    max-height: 320px;
                     // The children below are free-positioned at height: 100%,
                     // so on a phone-height dialog this box shrinks and its
                     // centred text spilled straight over the Cancel/Join

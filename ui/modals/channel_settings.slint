@@ -2,6 +2,7 @@
 
 import { Avatar } from "../components/avatar.slint";
 import { Colors } from "../theme/colors.slint";
+import { Materials } from "../theme/materials.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
@@ -179,6 +180,9 @@ export component ChannelSettingsModal inherits Rectangle {
     // Phone-width layout switch. No media queries in Slint; this is the one
     // place the breakpoint is decided (§112z).
     property <bool> narrow: root.width < 560px;
+    property <int> section-tab: root.active-section == "members" ? 1
+        : root.active-section == "access" ? 2
+        : root.active-section == "notifications" ? (root.has-access-pane ? 3 : 2) : 0;
     property <bool> has-edits: root.channel-name-draft != root.channel-name
         || root.channel-description-draft != root.channel-description || root.channel-has-icon-preview;
     property <bool> name-invalid: root.channel-name-draft == "";
@@ -202,6 +206,57 @@ export component ChannelSettingsModal inherits Rectangle {
         // One content column on every screen; phones use Modal's full-screen page.
         VerticalLayout {
             spacing: 0;
+
+            if root.active-section != "general" && root.active-section != "destructive": Rectangle {
+                height: Spacing.touch-target-min + Spacing.sm * 2;
+                background: transparent;
+
+                settings-tabs := Rectangle {
+                    x: Spacing.md;
+                    y: Spacing.sm;
+                    width: parent.width - Spacing.md * 2;
+                    height: Spacing.touch-target-min;
+                    background: Colors.surface-control;
+                    border-radius: Spacing.radius-lg;
+                    property <int> tab-count: root.has-access-pane ? 4 : 3;
+
+                    Rectangle {
+                        x: 4px + root.section-tab * (settings-tabs.width - 8px) / settings-tabs.tab-count;
+                        y: 4px;
+                        width: (settings-tabs.width - 8px) / settings-tabs.tab-count;
+                        height: settings-tabs.height - 8px;
+                        background: Colors.surface-section;
+                        border-radius: Spacing.radius-md;
+                        animate x { duration: Materials.motion-standard; easing: Materials.glide; }
+                        animate width { duration: Materials.motion-standard; easing: Materials.glide; }
+                    }
+
+                    for tab[index] in root.has-access-pane ? ["Info", "Members", "Access", "Alerts"] : ["Info", "Members", "Alerts"]: Rectangle {
+                        x: index * settings-tabs.width / settings-tabs.tab-count;
+                        width: settings-tabs.width / settings-tabs.tab-count;
+                        height: settings-tabs.height;
+                        transform-scale-x: section-touch.pressed ? 0.96 : 1;
+                        transform-scale-y: section-touch.pressed ? 0.92 : 1;
+                        animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+                        animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
+                        Text {
+                            text: tab;
+                            width: 100%; height: 100%;
+                            color: root.section-tab == index ? Colors.text-primary : Colors.text-secondary;
+                            font-size: Typography.sm;
+                            font-weight: root.section-tab == index ? Typography.semibold : Typography.medium;
+                            horizontal-alignment: center; vertical-alignment: center;
+                        }
+                        section-touch := TouchArea {
+                            mouse-cursor: pointer;
+                            clicked => {
+                                root.active-section = index == 0 ? "overview" : index == 1 ? "members"
+                                    : root.has-access-pane && index == 2 ? "access" : "notifications";
+                            }
+                        }
+                    }
+                }
+            }
 
             // Right content area
             Rectangle {
@@ -306,12 +361,19 @@ export component ChannelSettingsModal inherits Rectangle {
                                     color: Colors.text-secondary; font-size: Typography.sm;
                                     horizontal-alignment: center;
                                 }
-                                if root.can-edit: Button {
-                                    text: root.is-private-group ? "Edit group info" : "Edit channel info";
-                                    variant: "secondary";
-                                    icon: Icons.edit;
+                                if root.can-edit: Rectangle {
+                                    horizontal-stretch: 1;
                                     height: Spacing.touch-target-min;
-                                    clicked => { root.active-section = "general"; }
+                                    background: transparent;
+                                    Button {
+                                        width: 220px;
+                                        height: Spacing.touch-target-min;
+                                        x: (parent.width - self.width) / 2;
+                                        text: root.is-private-group ? "Edit group info" : "Edit channel info";
+                                        variant: "secondary";
+                                        icon: Icons.edit;
+                                        clicked => { root.active-section = "general"; }
+                                    }
                                 }
                             }
                             if root.loading: Text { text: "Loading group info…"; color: Colors.text-secondary; font-size: Typography.sm; }
@@ -325,7 +387,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                 horizontal-alignment: center; wrap: word-wrap;
                             }
                             if root.has-edits: Text {
-                                text: "Unsaved changes to group info";
+                                text: root.is-private-group ? "Unsaved changes to group info" : "Unsaved changes to channel info";
                                 color: Colors.warning; font-size: Typography.sm;
                             }
                             if !root.loading: Rectangle {
@@ -361,14 +423,14 @@ export component ChannelSettingsModal inherits Rectangle {
                                         clickable: false;
                                         show-chevron: false;
                                     }
-                                    Rectangle { height: 1px; background: Colors.divider; }
-                                    SettingsRow {
+                                    if !root.is-private-group && root.channel-type != "dm": Rectangle { height: 1px; background: Colors.divider; }
+                                    if !root.is-private-group && root.channel-type != "dm": SettingsRow {
                                         touch: true;
                                         icon: Icons.phone; title: "Call history";
                                         clicked => { root.server-calls(); }
                                     }
-                                    if root.is-owner: Rectangle { height: 1px; background: Colors.divider; }
-                                    if root.is-owner: SettingsRow {
+                                    if root.is-owner && !root.is-private-group: Rectangle { height: 1px; background: Colors.divider; }
+                                    if root.is-owner && !root.is-private-group: SettingsRow {
                                         touch: true;
                                         icon: Icons.settings; title: "Integrations";
                                         clicked => { root.integrations(); }
@@ -667,7 +729,12 @@ export component ChannelSettingsModal inherits Rectangle {
                             // All messages — Neo selection card
                             Rectangle {
                                 min-height: Spacing.touch-target-min;
-                                background: root.notification-preference == "all" ? Colors.inset : transparent;
+                                background: root.notification-preference == "all" ? Colors.inset : all-touch.pressed ? Materials.pressed : transparent;
+                                transform-scale-x: all-touch.pressed ? 0.98 : 1;
+                                transform-scale-y: all-touch.pressed ? 0.94 : 1;
+                                animate background { duration: Materials.motion-quick; easing: Materials.settle; }
+                                animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+                                animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
                                 accessible-role: button;
                                 accessible-label: "All messages";
                                 accessible-description: root.notification-preference == "all" ? "Selected" : "";
@@ -706,7 +773,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                     }
                                 }
 
-                                TouchArea {
+                                all-touch := TouchArea {
                                     clicked => { root.change-notification("all"); }
                                 }
                             }
@@ -714,7 +781,12 @@ export component ChannelSettingsModal inherits Rectangle {
                             // Mentions only — Neo selection card
                             Rectangle {
                                 min-height: Spacing.touch-target-min;
-                                background: root.notification-preference == "mentions" ? Colors.inset : transparent;
+                                background: root.notification-preference == "mentions" ? Colors.inset : mentions-touch.pressed ? Materials.pressed : transparent;
+                                transform-scale-x: mentions-touch.pressed ? 0.98 : 1;
+                                transform-scale-y: mentions-touch.pressed ? 0.94 : 1;
+                                animate background { duration: Materials.motion-quick; easing: Materials.settle; }
+                                animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+                                animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
                                 accessible-role: button;
                                 accessible-label: "Mentions only";
                                 accessible-description: root.notification-preference == "mentions" ? "Selected" : "";
@@ -753,7 +825,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                     }
                                 }
 
-                                TouchArea {
+                                mentions-touch := TouchArea {
                                     clicked => { root.change-notification("mentions"); }
                                 }
                             }
@@ -761,7 +833,12 @@ export component ChannelSettingsModal inherits Rectangle {
                             // None — Neo selection card
                             Rectangle {
                                 min-height: Spacing.touch-target-min;
-                                background: root.notification-preference == "none" ? Colors.inset : transparent;
+                                background: root.notification-preference == "none" ? Colors.inset : none-touch.pressed ? Materials.pressed : transparent;
+                                transform-scale-x: none-touch.pressed ? 0.98 : 1;
+                                transform-scale-y: none-touch.pressed ? 0.94 : 1;
+                                animate background { duration: Materials.motion-quick; easing: Materials.settle; }
+                                animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+                                animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
                                 accessible-role: button;
                                 accessible-label: "Nothing";
                                 accessible-description: root.notification-preference == "none" ? "Selected" : "";
@@ -800,7 +877,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                     }
                                 }
 
-                                TouchArea {
+                                none-touch := TouchArea {
                                     clicked => { root.change-notification("none"); }
                                 }
                             }
@@ -1088,7 +1165,11 @@ export component ChannelSettingsModal inherits Rectangle {
                             }
                             for member in root.members: Rectangle {
                                 height: member-col.preferred-height;
-                                background: transparent;
+                                background: root.role-picker-user == member.user-id ? Colors.surface-section : transparent;
+                                border-radius: Spacing.radius-md;
+                                clip: true;
+                                animate height { duration: Materials.motion-standard; easing: Materials.glide; }
+                                animate background { duration: Materials.motion-quick; easing: Materials.settle; }
 
                                 member-col := VerticalLayout {
                                     HorizontalLayout {
@@ -1203,6 +1284,11 @@ export component ChannelSettingsModal inherits Rectangle {
                                             border-radius: Spacing.radius-sm;
                                             background: member-more.has-hover || root.role-picker-user == member.user-id
                                                 ? Colors.surface-hover : transparent;
+                                            transform-scale-x: member-more.pressed ? 0.88 : 1;
+                                            transform-scale-y: member-more.pressed ? 0.88 : 1;
+                                            animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+                                            animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
+                                            animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
                                             accessible-role: button;
                                             accessible-label: "Actions for " + member.display-name;
                                             accessible-action-default => {

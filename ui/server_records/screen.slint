@@ -66,19 +66,26 @@ export component ServerRecordsScreen inherits Rectangle {
                 records := VerticalLayout {
                     alignment: start;
                     spacing: Spacing.md;
-                    for row in ServerRecordsGlobal.rows: VerticalLayout {
-                        spacing: Spacing.xs;
-                        Text { width: list.visible-width; text: row.title; wrap: word-wrap; color: Colors.text-primary; font-size: Typography.base; }
-                        Text { width: list.visible-width; text: row.body; wrap: word-wrap; color: Colors.text-secondary; font-size: Typography.sm; }
-                        HorizontalLayout {
+                    for row in ServerRecordsGlobal.rows: Rectangle {
+                        width: list.visible-width;
+                        height: record-content.preferred-height;
+                        background: Colors.surface-section;
+                        border-radius: Spacing.radius-lg;
+                        record-content := VerticalLayout {
+                            padding: Spacing.md;
                             spacing: Spacing.sm;
-                            if row.primary != "": Button {
-                                text: row.primary; variant: "secondary"; disabled: ServerRecordsGlobal.loading;
-                                clicked => { ServerRecordsGlobal.act(row.id, row.primary); }
-                            }
-                            if row.secondary != "": Button {
-                                text: row.secondary; variant: "ghost"; disabled: ServerRecordsGlobal.loading;
-                                clicked => { ServerRecordsGlobal.act(row.id, row.secondary); }
+                            Text { text: row.title; wrap: word-wrap; color: Colors.text-primary; font-size: Typography.base; font-weight: Typography.semibold; }
+                            Text { text: row.body; wrap: word-wrap; color: Colors.text-secondary; font-size: Typography.sm; }
+                            if row.primary != "" || row.secondary != "": HorizontalLayout {
+                                spacing: Spacing.sm;
+                                if row.primary != "": Button {
+                                    text: row.primary; variant: "secondary"; disabled: ServerRecordsGlobal.loading;
+                                    clicked => { ServerRecordsGlobal.act(row.id, row.primary); }
+                                }
+                                if row.secondary != "": Button {
+                                    text: row.secondary; variant: "ghost"; disabled: ServerRecordsGlobal.loading;
+                                    clicked => { ServerRecordsGlobal.act(row.id, row.secondary); }
+                                }
                             }
                         }
                     }

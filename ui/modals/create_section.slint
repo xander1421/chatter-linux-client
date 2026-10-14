@@ -76,7 +76,12 @@ export component CreateSectionModal inherits Rectangle {
                     border-radius: Spacing.radius-md;
                     border-width: root.picker-open ? Spacing.stroke : 0px;
                     border-color: Colors.primary;
-                    background: emoji-touch.has-hover ? Colors.surface-hover : Colors.surface;
+                    background: emoji-touch.pressed ? Materials.pressed : emoji-touch.has-hover ? Colors.surface-hover : Colors.surface;
+                    transform-scale-x: emoji-touch.pressed ? 0.90 : 1;
+                    transform-scale-y: emoji-touch.pressed ? 0.90 : 1;
+                    animate background { duration: Materials.motion-quick; easing: Materials.settle; }
+                    animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+                    animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
 
                     Text {
                         text: root.selected-emoji;
@@ -103,10 +108,14 @@ export component CreateSectionModal inherits Rectangle {
             }
 
             // ── Inline emoji grid (shown when picker-open) ────────
-            if root.picker-open: grid-box := Rectangle {
-                height: 200px;
+            grid-box := Rectangle {
+                height: root.picker-open ? 200px : 0px;
                 background: Colors.inset;
                 border-radius: Spacing.radius-md;
+                clip: true;
+                opacity: root.picker-open ? 1 : 0;
+                animate height { duration: Materials.motion-standard; easing: Materials.spring; }
+                animate opacity { duration: Materials.motion-quick; easing: Materials.settle; }
 
                 // Columns are derived, not fixed at seven. Seven columns is a
                 // 324px row: fine inside the 400px card on a desktop, off the
@@ -134,6 +143,11 @@ export component CreateSectionModal inherits Rectangle {
                             background: icon == root.selected-emoji
                                 ? Colors.tint-strong
                                 : (icon-touch.pressed ? Materials.pressed : icon-touch.has-hover ? Materials.hover : transparent);
+                            transform-scale-x: icon-touch.pressed ? 0.82 : 1;
+                            transform-scale-y: icon-touch.pressed ? 0.82 : 1;
+                            animate background { duration: Materials.motion-quick; easing: Materials.settle; }
+                            animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+                            animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
 
                             Text {
                                 text: icon;
