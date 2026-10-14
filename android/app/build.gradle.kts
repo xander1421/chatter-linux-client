@@ -12,6 +12,10 @@ require(!productionRequested || (!suppliedVersionCode.isNullOrEmpty() && !suppli
 }
 val clientVersionCode = suppliedVersionCode ?: "1"
 val clientVersionName = suppliedVersionName ?: "0.1.0"
+val updateDistribution = System.getenv("CHATTER_ANDROID_DISTRIBUTION") ?: "sideload"
+require(updateDistribution == "sideload" || updateDistribution == "play") {
+    "CHATTER_ANDROID_DISTRIBUTION must be sideload or play"
+}
 require(clientVersionCode.matches(Regex("[1-9][0-9]{0,9}")) &&
     (clientVersionCode.toLongOrNull() ?: Long.MAX_VALUE) <= 2100000000L) {
     "CHATTER_ANDROID_VERSION_CODE must be 1..2100000000 (decimal, no leading zeros)"
@@ -33,6 +37,8 @@ android {
         targetSdk = 36
         versionCode = clientVersionCode.toInt()
         versionName = clientVersionName
+        manifestPlaceholders["updateInstallPermission"] = if (updateDistribution == "play")
+            "android.permission.INTERNET" else "android.permission.REQUEST_INSTALL_PACKAGES"
         // We only ship the Rust cdylib for arm64 today.
         ndk { abiFilters += "arm64-v8a" }
     }

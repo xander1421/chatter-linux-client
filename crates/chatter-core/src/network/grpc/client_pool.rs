@@ -957,6 +957,12 @@ impl GrpcClientPool {
         self.endpoint.read().uri().to_string()
     }
 
+    /// The configured HTTPS origin, even while the RPC endpoint is an onion.
+    /// Update HTTP travels to this hostname through Tor with the pinned CA.
+    pub fn update_origin(&self) -> String {
+        self.direct_url.read().clone()
+    }
+
     // ========================================================================
     // Retry middleware — transport-aware retry for all RPCs
     // ========================================================================

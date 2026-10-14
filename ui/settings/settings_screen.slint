@@ -17,6 +17,7 @@ import { Appearance } from "../theme/appearance.slint";
 import { Icons } from "../theme/icons.slint";
 import { NotificationSound, NotificationDelivery } from "notification_sound.slint";
 import { AnonMode } from "../anon_mode/anon_mode_global.slint";
+import { UpdateGlobal } from "../update/update_global.slint";
 
 // A local AI provider found running on this machine.
 export struct LocalAIProviderData {
@@ -264,7 +265,8 @@ export component SettingsScreen inherits Rectangle {
                     { id: "devices", label: "Linked devices", enabled: true },
                     { id: "appearance", label: "Appearance", enabled: true },
                     { id: "encryption", label: "Encryption", enabled: true },
-                    { id: "ai", label: "AI Assistant", enabled: true }
+                    { id: "ai", label: "AI Assistant", enabled: true },
+                    { id: "about", label: "About", enabled: true }
                 ]: Rectangle {
                     height: root.mobile-platform ? Spacing.touch-target-min : Spacing.button-height;
                     border-radius: Spacing.radius-md;
@@ -308,6 +310,7 @@ export component SettingsScreen inherits Rectangle {
                                 active-section = item.id;
                             }
                         }
+
                     }
                 }
 
@@ -2812,6 +2815,29 @@ export component SettingsScreen inherits Rectangle {
                                 }
                             }
                         }
+                        if active-section == "about": VerticalLayout {
+                            spacing: Spacing.md;
+                            Text { text: "About Chatter"; color: Colors.text-primary;
+                                font-size: Typography.xl; font-weight: Typography.semibold; }
+                            Text { text: "Version " + UpdateGlobal.installed-version;
+                                color: Colors.text-secondary; font-size: Typography.sm; }
+                            Button { text: UpdateGlobal.state == "checking" ? "Checking…" : "Check for updates";
+                                disabled: UpdateGlobal.state == "checking";
+                                clicked => { UpdateGlobal.check(); }
+                            }
+                            if UpdateGlobal.state == "available": Text {
+                                text: "Update available — " + UpdateGlobal.version;
+                                color: Colors.text-primary; font-size: Typography.sm;
+                            }
+                            if UpdateGlobal.error != "": Text {
+                                text: UpdateGlobal.error; color: Colors.error;
+                                font-size: Typography.sm; wrap: word-wrap;
+                            }
+                            if UpdateGlobal.notice != "": Text {
+                                text: UpdateGlobal.notice; color: Colors.text-secondary;
+                                font-size: Typography.sm;
+                            }
+                        }
                     }
                 }
             }
@@ -2871,7 +2897,8 @@ export component SettingsScreen inherits Rectangle {
                             { id: "devices", label: "Linked devices" },
                             { id: "appearance", label: "Appearance" },
                             { id: "encryption", label: "Encryption" },
-                            { id: "ai", label: "AI" }
+                            { id: "ai", label: "AI" },
+                            { id: "about", label: "About" }
                         ]: Button {
                             touch: root.mobile-platform;
                             text: item.label;

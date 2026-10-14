@@ -33,6 +33,49 @@ pub fn activity() -> Result<&'static Global<JObject<'static>>, String> {
         .ok_or_else(|| "MainActivity not registered yet".to_string())
 }
 
+/// Handoff only a digest-verified APK in app-private staging to PackageInstaller.
+pub fn install_verified_update(path: &str) -> Result<(), String> {
+    let act = activity()?;
+    with_jni_env(|env| {
+        let jpath = env.new_string(path).map_err(|e| e.to_string())?;
+        let result = env.call_method(
+            act,
+            jni::jni_str!("installVerifiedUpdate"),
+            jni::jni_sig!("(Ljava/lang/String;)Z"),
+            &[jni::objects::JValue::Object(&jpath)],
+        );
+        if result.is_err() { clear_exception(env); }
+        match result.and_then(|value| value.z()) {
+            Ok(true) => Ok(()),
+            Ok(false) => Err("Allow Chatter to install updates, then tap Update again".into()),
+            Err(error) => Err(error.to_string()),
+        }
+    })
+}
+
+pub fn update_network_metered() -> Result<bool, String> {
+    let act = activity()?;
+    with_jni_env(|env| {
+        let result = env.call_method(act, jni::jni_str!("isUpdateNetworkMetered"),
+            jni::jni_sig!("()Z"), &[]);
+        if result.is_err() { clear_exception(env); }
+        result.and_then(|value| value.z()).map_err(|e| e.to_string())
+    })
+}
+
+pub fn open_play_store_update() -> Result<(), String> {
+    let act = activity()?;
+    with_jni_env(|env| {
+        let url = env.new_string("https://play.google.com/store/apps/details?id=com.chatter.client")
+            .map_err(|e| e.to_string())?;
+        let result = env.call_method(act, jni::jni_str!("openWebLink"),
+            jni::jni_sig!("(Ljava/lang/String;)V"),
+            &[jni::objects::JValue::Object(&url)]);
+        if result.is_err() { clear_exception(env); }
+        result.map(|_| ()).map_err(|e| e.to_string())
+    })
+}
+
 /// Clear any pending JNI exception so a failed call can't abort the next one
 /// (ART's CheckJNI SIGABRTs if a JNI call is made with an exception pending).
 pub fn clear_exception(env: &mut Env) {

@@ -265,6 +265,7 @@ mod tor {
     async fn send<T>(
         io: TokioIo<T>,
         req: hyper::Request<Full<Bytes>>,
+        limit: usize,
     ) -> Result<(u16, hyper::HeaderMap, Vec<u8>), String>
     where
         T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
@@ -286,7 +287,6 @@ mod tor {
         let headers = resp.headers().clone();
         let mut incoming = resp.into_body();
         let mut body = Vec::new();
-        let limit = super::storage_response_limit();
         while let Some(frame) = incoming.frame().await {
             let frame = frame.map_err(|e| format!("reading response body failed: {e}"))?;
             if let Ok(data) = frame.into_data() {
@@ -301,6 +301,7 @@ mod tor {
         tor: &SharedTorClient,
         p: &ParsedUrl,
         req: hyper::Request<Full<Bytes>>,
+        limit: usize,
     ) -> Result<(u16, hyper::HeaderMap, Vec<u8>), String> {
         let stream = connect_tor(tor, &p.host, p.port, false).await?;
         if p.https {
@@ -311,9 +312,9 @@ mod tor {
                 .connect(server_name, stream)
                 .await
                 .map_err(|e| format!("TLS handshake to {} failed: {e}", p.host))?;
-            send(TokioIo::new(tls), req).await
+            send(TokioIo::new(tls), req, limit).await
         } else {
-            send(TokioIo::new(stream), req).await
+            send(TokioIo::new(stream), req, limit).await
         }
     }
 
@@ -326,11 +327,28 @@ mod tor {
             .header(hyper::header::HOST, host_header(&p))
             .body(Full::new(Bytes::new()))
             .map_err(|e| format!("building GET request failed: {e}"))?;
-        let (status, _headers, body) = request(tor, &p, req).await?;
+        let (status, _headers, body) = request(tor, &p, req, super::storage_response_limit()).await?;
         if !(200..300).contains(&status) {
             return Err(format!("storage GET returned status {status}"));
         }
         Ok(body)
+    }
+
+    /// A missing public object means no update has been published yet.
+    pub async fn get_optional(tor: &SharedTorClient, url: &str) -> Result<Option<Vec<u8>>, String> {
+        let p = parse_url(url)?;
+        let req = hyper::Request::builder()
+            .method(hyper::Method::GET)
+            .uri(&p.path_and_query)
+            .header(hyper::header::HOST, host_header(&p))
+            .body(Full::new(Bytes::new()))
+            .map_err(|_| "update request construction failed".to_string())?;
+        let (status, _headers, body) = request(tor, &p, req, crate::update::MAX_MANIFEST_BYTES).await?;
+        if status == 404 { return Ok(None); }
+        if !(200..300).contains(&status) {
+            return Err(format!("update GET returned status {status}"));
+        }
+        Ok(Some(body))
     }
 
     /// Stream the authenticated Tor/TLS response into an encrypted staging
@@ -340,6 +358,16 @@ mod tor {
         url: &str,
         file: &mut tokio::fs::File,
         limit: u64,
+    ) -> Result<u64, String> {
+        get_to_file_with_progress(tor, url, file, limit, &|_| {}).await
+    }
+
+    pub async fn get_to_file_with_progress(
+        tor: &SharedTorClient,
+        url: &str,
+        file: &mut tokio::fs::File,
+        limit: u64,
+        progress: &(dyn Fn(u64) + Send + Sync),
     ) -> Result<u64, String> {
         let p = parse_url(url)?;
         let req = hyper::Request::builder()
@@ -368,9 +396,9 @@ mod tor {
                 .connect(name, stream)
                 .await
                 .map_err(|_| "storage TLS handshake failed".to_string())?;
-            send_to_file(TokioIo::new(tls), req, file, limit).await
+            send_to_file(TokioIo::new(tls), req, file, limit, progress).await
         } else {
-            send_to_file(TokioIo::new(stream), req, file, limit).await
+            send_to_file(TokioIo::new(stream), req, file, limit, progress).await
         }
     }
 
@@ -379,6 +407,7 @@ mod tor {
         req: hyper::Request<Full<Bytes>>,
         file: &mut tokio::fs::File,
         limit: u64,
+        progress: &(dyn Fn(u64) + Send + Sync),
     ) -> Result<u64, String>
     where
         T: tokio::io::AsyncRead + tokio::io::AsyncWrite + Unpin + Send + 'static,
@@ -417,6 +446,7 @@ mod tor {
             let frame = frame.map_err(|_| "storage response read failed".to_string())?;
             if let Ok(data) = frame.into_data() {
                 total = super::write_storage_chunk(file, total, &data, limit).await?;
+                progress(total);
             }
         }
         Ok(total)
@@ -438,7 +468,7 @@ mod tor {
             .header(hyper::header::CONTENT_TYPE, content_type)
             .body(Full::new(Bytes::from(body)))
             .map_err(|e| format!("building PUT request failed: {e}"))?;
-        let (status, headers, _body) = request(tor, &p, req).await?;
+        let (status, headers, _body) = request(tor, &p, req, super::storage_response_limit()).await?;
         let etag = headers
             .get(hyper::header::ETAG)
             .and_then(|v| v.to_str().ok())
@@ -449,7 +479,7 @@ mod tor {
 }
 
 #[cfg(feature = "onion")]
-pub use tor::{get, get_to_file, put};
+pub use tor::{get, get_optional, get_to_file, get_to_file_with_progress, put};
 
 #[cfg(test)]
 mod tests {

@@ -2,6 +2,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android">
 
     <uses-permission android:name="android.permission.INTERNET" />
+    <!-- Release distribution controls this at build time: Play must never
+         request REQUEST_INSTALL_PACKAGES. Its placeholder resolves to the
+         already-declared INTERNET permission, which manifest merge dedupes. -->
+    <uses-permission android:name="${updateInstallPermission}" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <uses-permission android:name="android.permission.CAMERA" />
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
@@ -94,6 +98,8 @@
         <receiver
             android:name=".CallActionReceiver"
             android:exported="false" />
+
+        <receiver android:name=".UpdateInstallReceiver" android:exported="false" />
 
         <!-- Keeps the BLE mesh radio running while the app is backgrounded.
              Started and stopped by MeshBleBridge; nothing binds to it. The

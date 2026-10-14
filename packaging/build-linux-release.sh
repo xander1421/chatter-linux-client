@@ -6,10 +6,12 @@ cd "$ROOT"
 die() { echo "FATAL: $*" >&2; exit 1; }
 [ "$#" = 0 ] || die 'No extra cargo arguments are accepted'
 [ "$(uname -s)" = Linux ] && [ "$(uname -m)" = x86_64 ] || die 'Build on x86_64 Linux'
-for v in CHATTER_SERVER_URL CHATTER_LINUX_VERSION; do
+for v in CHATTER_SERVER_URL CHATTER_LINUX_VERSION CHATTER_LINUX_VERSION_CODE; do
     [ -n "${!v:-}" ] || die "$v is required (existing provisioned production inputs)"
 done
 [[ "$CHATTER_LINUX_VERSION" =~ ^[0-9][A-Za-z0-9._+-]{0,63}$ ]] || die 'invalid CHATTER_LINUX_VERSION'
+[[ "$CHATTER_LINUX_VERSION_CODE" =~ ^[1-9][0-9]{0,9}$ ]] &&
+    [ "$CHATTER_LINUX_VERSION_CODE" -le 2100000000 ] || die 'invalid CHATTER_LINUX_VERSION_CODE'
 "$ROOT/packaging/check-release-inputs.sh" "$CHATTER_SERVER_URL"
 # Cargo env rustflags replace target config flags. Preserve its linker choices
 # explicitly and replace native CPU selection with the baseline x86_64 ISA.
@@ -39,7 +41,7 @@ install -m 0755 "$ROOT/packaging/check-linux-runtime.sh" "$STAGE/$NAME/"
 cp "$ROOT/packaging/README.md" "$STAGE/$NAME/README.md"
 cp "$ROOT/assets/chatter-linux.desktop" "$STAGE/$NAME/assets/"
 cp "$ROOT/assets/"icon-*.png "$STAGE/$NAME/assets/"
-printf 'version=%s\ntarget=x86_64-unknown-linux-gnu\ncpu=x86-64\nfeatures=%s\nruntime=system GStreamer (not bundled)\n' "$CHATTER_LINUX_VERSION" "$features" > "$STAGE/$NAME/BUILD.txt"
+printf 'version=%s\nversion_code=%s\ntarget=x86_64-unknown-linux-gnu\ncpu=x86-64\nfeatures=%s\nruntime=system GStreamer (not bundled)\n' "$CHATTER_LINUX_VERSION" "$CHATTER_LINUX_VERSION_CODE" "$features" > "$STAGE/$NAME/BUILD.txt"
 tar -C "$STAGE" -czf "$OUT/$NAME.tar.gz" "$NAME"
 (cd "$OUT" && sha256sum "$NAME.tar.gz" > "$NAME.tar.gz.sha256")
 echo "Package: $OUT/$NAME.tar.gz (requires system runtime; see packaging/README.md)"

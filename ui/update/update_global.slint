@@ -1,0 +1,12 @@
+// Presentation state for the signed updater. Core owns manifest validation.
+export global UpdateGlobal {
+    in-out property <string> state: "idle"; // idle, checking, available, confirm-cellular, downloading, installing, ready, error
+    in-out property <string> version: "";
+    in-out property <string> installed-version: "";
+    in-out property <string> error: "";
+    in-out property <string> notice: "";
+    in-out property <string> progress: "";
+    in-out property <bool> play-distribution: false;
+    callback check();
+    callback update();
+}

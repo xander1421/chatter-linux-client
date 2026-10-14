@@ -49,6 +49,16 @@ import java.util.concurrent.Executors
  */
 class MainActivity : GameActivity() {
     @Suppress("unused")
+    fun isUpdateNetworkMetered(): Boolean {
+        val manager = getSystemService(android.content.Context.CONNECTIVITY_SERVICE)
+            as android.net.ConnectivityManager
+        return manager.isActiveNetworkMetered
+    }
+
+    @Suppress("unused")
+    fun installVerifiedUpdate(path: String): Boolean = UpdateInstaller.start(this, path)
+
+    @Suppress("unused")
     fun beginViewerMediaExport(name: String, mime: String, copy: Boolean): LongArray? =
         ViewerMediaExport.begin(this, name, mime, copy)
 

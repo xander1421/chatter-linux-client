@@ -187,6 +187,8 @@ impl ClientBuilder {
             outgoing_typing: crate::services::outgoing_typing::OutgoingTypingManager::new(),
             link_device_service: std::sync::OnceLock::new(),
             anon_mode,
+            pending_update: Mutex::new(None),
+            update_transport_epoch: tokio::sync::watch::channel(0u64).0,
             authed_notif_started: AtomicBool::new(false),
             auth_lifecycle_lock: tokio::sync::Mutex::new(()),
             authed_notif_session: Mutex::new(None),
@@ -371,6 +373,8 @@ pub struct ChatterClient {
     /// every client construction (not persisted by design — auto revert on
     /// restart is the privacy property).
     anon_mode: Arc<AtomicBool>,
+    pending_update: Mutex<Option<crate::update::UpdateManifest>>,
+    update_transport_epoch: tokio::sync::watch::Sender<u64>,
     /// Guards the auth-gated notification streams (gRPC message stream + call
     /// → notification bridge) so they spawn exactly once, after login. They
     /// can't start at boot like the consumer because there's no authenticated
@@ -1910,6 +1914,67 @@ impl ChatterClient {
         self.auth().endpoint()
     }
 
+    /// Query the dedicated signed release channel over the active network path.
+    pub async fn check_for_update(
+        &self,
+        platform: &str,
+        channel: &str,
+        installed_code: u64,
+    ) -> Result<Option<crate::update::UpdateManifest>, String> {
+        let mut changed = self.update_transport_epoch.subscribe();
+        tokio::select! {
+          result = crate::update::check_latest(
+            &self.services.grpc_pool,
+            self.anon_mode.load(Ordering::Acquire),
+            platform,
+            channel,
+            installed_code,
+          ) => result,
+          _ = changed.changed() => Err("network mode changed during update check".into()),
+        }
+    }
+
+    pub async fn check_available_update(&self) -> Result<Option<crate::update::UpdateManifest>, String> {
+        let found = self.check_for_update(
+            crate::update::platform(), crate::update::channel(),
+            crate::update::installed_version_code(),
+        ).await?;
+        *self.pending_update.lock() = found.clone();
+        Ok(found)
+    }
+
+    pub async fn download_available_update(&self) -> Result<std::path::PathBuf, String> {
+        self.download_available_update_with_progress(&|_| {}).await
+    }
+
+    pub async fn download_available_update_with_progress(
+        &self,
+        progress: &(dyn Fn(u64) + Send + Sync),
+    ) -> Result<std::path::PathBuf, String> {
+        let manifest = self.pending_update.lock().clone()
+            .ok_or_else(|| "no verified update is available".to_string())?;
+        let mut changed = self.update_transport_epoch.subscribe();
+        tokio::select! {
+          result = crate::update::download_verified_with_progress(
+            &self.services.grpc_pool,
+            self.anon_mode.load(Ordering::Acquire),
+            &manifest,
+            self.directories().data_dir(),
+            progress,
+          ) => result,
+          _ = changed.changed() => {
+              let staged = self.directories().data_dir().join("updates")
+                  .join(format!("{}-{}.download", manifest.platform, manifest.version_code));
+              let _ = tokio::fs::remove_file(staged).await;
+              Err("network mode changed during update download".into())
+          },
+        }
+    }
+
+    pub fn available_update(&self) -> Option<crate::update::UpdateManifest> {
+        self.pending_update.lock().clone()
+    }
+
     pub fn set_server_url(&self, url: &str) -> Result<(), crate::error::NetworkError> {
         self.auth().set_server_url(url)
     }
@@ -2075,6 +2140,7 @@ impl ChatterClient {
     /// this method does not emit a domain event because the flag is a
     /// presentation concern, not a chatter-core state change.
     pub fn set_anon_mode_enabled(self: &Arc<Self>, enabled: bool) {
+        self.update_transport_epoch.send_modify(|epoch| *epoch = epoch.wrapping_add(1));
         self.anon_mode.store(enabled, Ordering::Release);
         // Suspend direct SSE synchronously at Shield entry, before queuing
         // transport rebuild. configure_push holds this same admission lock.

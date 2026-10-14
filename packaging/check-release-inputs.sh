@@ -14,7 +14,8 @@ for flag in DEV_TRUST_ROOT DEV_AUTO_REGISTER; do
     [ "${!flag:-0}" = 0 ] || die "$flag must be 0"
 done
 for v in CHATTER_TLS_ROOT_CA_PEM CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX \
-    CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX CHATTER_KT_VRF_PUBLIC_KEY_HEX; do
+    CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX CHATTER_KT_VRF_PUBLIC_KEY_HEX \
+    CHATTER_RELEASE_UPDATE_PUBLIC_KEY_HEX; do
     [ -n "${!v:-}" ] || die "$v is required (existing provisioned production inputs)"
 done
 CHECK_SERVER_URL="$1" python3 - <<'CHECK'
@@ -54,8 +55,9 @@ if onion and not re.fullmatch(r'[a-z2-7]{56}\.onion', onion):
 # Committed development public keys (scripts/anchors.sh DEV_*_HEX); forgeable by anyone.
 dev = ('ca49d96aa6417d724b4531dfc6cbdc8e291b5231caac088a3092de5120be6833',
        '88ad412806054a7534e1b9deb42ef249bd7c92709f5bebf1d6be7b0e40926f72',
-       '48af975feaba33ea110d4ab0c8f7a38c5c7122db185ff9499b81e5e74da6ec47')
-for key in ('CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX', 'CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX', 'CHATTER_KT_VRF_PUBLIC_KEY_HEX'):
+       '48af975feaba33ea110d4ab0c8f7a38c5c7122db185ff9499b81e5e74da6ec47',
+       'ca2efc2c4186cdcdf29fabe4f33975dd4672bc2e09469a42595a864fca39795a')
+for key in ('CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX', 'CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX', 'CHATTER_KT_VRF_PUBLIC_KEY_HEX', 'CHATTER_RELEASE_UPDATE_PUBLIC_KEY_HEX'):
     value = os.environ[key]
     if not re.fullmatch(r'[0-9a-fA-F]{64}', value) or value.lower() in dev: fail(key + ' must be a non-development 32-byte public pin')
 CHECK

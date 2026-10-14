@@ -28,13 +28,13 @@ Operator inputs, all required unless marked optional:
 | `CHATTER_ANDROID_VERSION_NAME` | e.g. `1.0.0` |
 | `CHATTER_SERVER_URL` (or `CHATTER_ANDROID_SERVER`, which wins on Android) | public `https://<dns-host>[:port]` RPC origin; no IP literal, localhost, `.local`/`.test`/`.internal`/example domains |
 | `CHATTER_TLS_ROOT_CA_PEM` | provisioned private CA PEM (not expired, `CA:TRUE`, not the committed `dev_tls_root_ca.pem`) |
-| `CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX`, `CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX`, `CHATTER_KT_VRF_PUBLIC_KEY_HEX` | provisioned 32-byte hex pins, never the `scripts/anchors.sh` dev values |
+| `CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX`, `CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX`, `CHATTER_KT_VRF_PUBLIC_KEY_HEX`, `CHATTER_RELEASE_UPDATE_PUBLIC_KEY_HEX` | provisioned 32-byte hex pins, never the `scripts/anchors.sh` dev values |
 | `CHATTER_KEYSTORE` | release keystore file **outside** the repository |
 | `CHATTER_KEYSTORE_PASSWORD`, `CHATTER_KEY_ALIAS`, `CHATTER_KEY_PASSWORD` | the established external signing setup |
 | `CHATTER_NTFY_URL` (optional) | public HTTPS push edge or v3 onion; without it no push wake |
 | `CHATTER_ONION_ADDR` (optional) | provisioned v3 `.onion`; without it Shield cannot hide network location |
 
-The four anchors are resolved and cross-checked against the server by
+The five anchors are resolved and cross-checked against the server by
 `scripts/anchors.sh exec` (repository root), so the reproducible command is:
 
 ```sh
@@ -65,11 +65,11 @@ production server, nor that `CHATTER_SERVER_URL` is the right host; run
 
 ## Linux x86_64 system-runtime archive
 
-Export the existing public HTTPS RPC origin `CHATTER_SERVER_URL`, the four
-provisioned pins listed above, and `CHATTER_LINUX_VERSION`, then run:
+Export the existing public HTTPS RPC origin `CHATTER_SERVER_URL`, the five
+provisioned pins listed above, `CHATTER_LINUX_VERSION_CODE` and `CHATTER_LINUX_VERSION`, then run:
 
 ```sh
-CHATTER_LINUX_VERSION=1.0.0 ./packaging/build-linux-release.sh
+CHATTER_LINUX_VERSION_CODE=100 CHATTER_LINUX_VERSION=1.0.0 ./packaging/build-linux-release.sh
 ```
 
 The entrypoint refuses absent inputs, known development public keys, placeholder

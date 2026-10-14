@@ -43,6 +43,38 @@
 
 use libsignal_protocol::PublicKey;
 
+// Dedicated release-update signing anchor. Never share this key with the
+// sealed-sender, KT, or TLS trust roots: it authorizes executable code.
+const DEV_RELEASE_UPDATE_PUBLIC_KEY_BYTES: [u8; 32] = [
+    0xca, 0x2e, 0xfc, 0x2c, 0x41, 0x86, 0xcd, 0xcd, 0xf2, 0x9f, 0xab, 0xe4, 0xf3, 0x39, 0x75, 0xdd,
+    0x46, 0x72, 0xbc, 0x2e, 0x09, 0x46, 0x9a, 0x42, 0x59, 0x5a, 0x86, 0x4f, 0xca, 0x39, 0x79, 0x5a,
+];
+
+#[cfg(feature = "dev-trust-root")]
+pub const RELEASE_UPDATE_PUBLIC_KEY_BYTES: [u8; 32] = DEV_RELEASE_UPDATE_PUBLIC_KEY_BYTES;
+
+#[cfg(not(feature = "dev-trust-root"))]
+pub const RELEASE_UPDATE_PUBLIC_KEY_BYTES: [u8; 32] =
+    match option_env!("CHATTER_RELEASE_UPDATE_PUBLIC_KEY_HEX") {
+        Some(hex) => decode_hex32(hex),
+        None if cfg!(test) || cfg!(feature = "insecure-test-anchors") =>
+            DEV_RELEASE_UPDATE_PUBLIC_KEY_BYTES,
+        None => panic!("no release-update public key is baked into this build; provision CHATTER_RELEASE_UPDATE_PUBLIC_KEY_HEX or use --features dev-trust-root for local development"),
+    };
+
+#[cfg(all(not(feature = "dev-trust-root"), not(test), not(feature = "insecure-test-anchors")))]
+const _: () = {
+    let mut same = true;
+    let mut i = 0;
+    while i < 32 {
+        if RELEASE_UPDATE_PUBLIC_KEY_BYTES[i] != DEV_RELEASE_UPDATE_PUBLIC_KEY_BYTES[i] {
+            same = false;
+        }
+        i += 1;
+    }
+    assert!(!same, "production update key is the public development key; use a provisioned release-update key");
+};
+
 // ─── Sealed sender trust root ──────────────────────────────────────────────
 
 /// Public half of the development trust root that signed the development

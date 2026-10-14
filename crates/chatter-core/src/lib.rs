@@ -72,6 +72,7 @@ pub mod services;
 pub mod storage;
 #[doc(hidden)]
 pub mod sync;
+pub mod update;
 #[doc(hidden)]
 pub mod ui;
 #[doc(hidden)]

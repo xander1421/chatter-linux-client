@@ -125,30 +125,32 @@ fi
 
 # Pinned keys. This script targets the local docker-compose stack, whose Vault
 # signs with the committed dev keypairs, so it opts into the dev keys
-# EXPLICITLY. All three development keys are forgeable by anyone
+# EXPLICITLY. All four development keys are forgeable by anyone
 # with a copy of this repository.
 #
-# The `dev-trust-root` feature selects the dev value for all three key pins:
+# The `dev-trust-root` feature selects the dev value for all four key pins:
 #   - the sealed-sender trust root (forged sender certificates = impersonation)
 #   - the KT tree-head key         (forged signed tree heads = KT defeated)
 #   - the KT VRF key               (public seed defeats query privacy)
+#   - the release-update key       (forged update manifests = code execution)
 #
-# For a real build, export DEV_TRUST_ROOT=0 and all three hex values. Resolve them with
+# For a real build, export DEV_TRUST_ROOT=0 and all four public-key hex values. Resolve them with
 # `scripts/anchors.sh exec` after provisioning in the server repo.
-# The TLS CA is the fourth anchor and is required in both modes.
+# The TLS CA is the fifth anchor and is required in both modes.
 TRUST_ROOT_FEATURE=""
 if [ "${DEV_TRUST_ROOT:-1}" = "1" ]; then
     TRUST_ROOT_FEATURE=",dev-trust-root"
-    echo ">> !! DEV pinned keys (trust root + KT tree head + VRF) — forgeable, local dev only"
+    echo ">> !! DEV pinned keys (trust root + KT tree head + VRF + release update) — forgeable, local dev only"
 else
     missing=""
     [ -z "${CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX:-}" ] && missing="$missing CHATTER_TRUST_ROOT_PUBLIC_KEY_HEX"
     [ -z "${CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX:-}" ] && missing="$missing CHATTER_KT_TREE_HEAD_PUBLIC_KEY_HEX"
     [ -z "${CHATTER_KT_VRF_PUBLIC_KEY_HEX:-}" ] && missing="$missing CHATTER_KT_VRF_PUBLIC_KEY_HEX"
+    [ -z "${CHATTER_RELEASE_UPDATE_PUBLIC_KEY_HEX:-}" ] && missing="$missing CHATTER_RELEASE_UPDATE_PUBLIC_KEY_HEX"
     if [ -n "$missing" ]; then
         echo "FATAL: DEV_TRUST_ROOT=0 but unset:$missing"
         echo
-        echo "All three are compile-time pins. Without them the cargo build fails"
+        echo "All four public keys are compile-time pins. Without them the cargo build fails"
         echo "(config.rs refuses to fall back to a dev key), so this stops here"
         echo "with a better message than a const-eval panic."
         echo
@@ -158,8 +160,8 @@ else
     echo ">> production pinned keys from the environment"
 fi
 
-# The TLS root CA is the FOURTH pin, separate from DEV_TRUST_ROOT above (which
-# covers the sealed-sender, KT tree-head and VRF keys) -- the server has no plaintext mode,
+# The TLS root CA is the fifth pin, separate from DEV_TRUST_ROOT above (which
+# covers the four Ed25519 public keys) -- the server has no plaintext mode,
 # so every build needs one now, dev-trust-root included. Local dev: point it
 # at create-certs.sh's cert. Real build: your server's actual CA.
 if [ -z "${CHATTER_TLS_ROOT_CA_PEM:-}" ]; then

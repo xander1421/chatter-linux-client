@@ -35,6 +35,7 @@ pub mod sidebar;
 pub mod status;
 pub mod thread;
 pub mod unified_search;
+pub mod update;
 
 use std::sync::Arc;
 
@@ -64,6 +65,7 @@ pub fn wire_all(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     status::wire(window, ui_ctx);
     connection::wire(window, ui_ctx);
     unified_search::wire(window, ui_ctx);
+    update::wire(window, ui_ctx);
     ui_ctx.start_notification_listener();
     server_records::wire(window, ui_ctx);
 

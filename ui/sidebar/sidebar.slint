@@ -26,6 +26,8 @@ import { AnonMode, TorStatus } from "../anon_mode/anon_mode_global.slint";
 import { MeshGlobal } from "../mesh/mesh_global.slint";
 import { MeshList } from "../mesh/mesh_list.slint";
 import { ConversationKind } from "../chat/conversation_kind.slint";
+import { UpdateGlobal } from "../update/update_global.slint";
+import { Button } from "../components/button.slint";
 
 export { ChatRowData, CustomSectionData }
 
@@ -874,6 +876,29 @@ export component Sidebar inherits Rectangle {
 
     // Right edge — the seam against the chat column. Desktop only: on a phone
     // this panel is the whole screen and has no column beside it.
+
+    if !root.collapsed && (UpdateGlobal.state == "available" || UpdateGlobal.state == "confirm-cellular" || UpdateGlobal.state == "downloading" || UpdateGlobal.state == "ready" || UpdateGlobal.state == "installing" || UpdateGlobal.state == "error"): GlassSurface {
+        x: Spacing.sm;
+        y: root.height - self.height - Spacing.md;
+        width: root.width - Spacing.sm * 2;
+        height: 76px;
+        material-level: 2;
+        HorizontalLayout {
+            padding: Spacing.sm;
+            spacing: Spacing.sm;
+            VerticalLayout {
+                Text { text: UpdateGlobal.state == "ready" ? "Ready to restart" : UpdateGlobal.state == "installing" ? "Confirm system install" : UpdateGlobal.state == "error" ? "Update failed" : "Update available";
+                    color: Colors.text-primary; font-size: Typography.sm; font-weight: Typography.semibold; }
+                Text { text: UpdateGlobal.state == "downloading" ? UpdateGlobal.progress : UpdateGlobal.state == "confirm-cellular" ? "Cellular download?" : UpdateGlobal.state == "error" ? UpdateGlobal.error : UpdateGlobal.version;
+                    color: Colors.text-secondary; font-size: Typography.xs; }
+            }
+            Rectangle { horizontal-stretch: 1; }
+            Button { text: UpdateGlobal.state == "error" ? "Retry" : UpdateGlobal.play-distribution ? "Update in Play Store" : UpdateGlobal.state == "ready" ? "Restart" : UpdateGlobal.state == "confirm-cellular" ? "Download now" : "Update";
+                disabled: UpdateGlobal.state == "downloading" || UpdateGlobal.state == "installing";
+                clicked => { if (UpdateGlobal.state == "error") { UpdateGlobal.check(); } else { UpdateGlobal.update(); } }
+            }
+        }
+    }
 
 
     // Section context menu overlay (renders on top of all sidebar content)
