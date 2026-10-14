@@ -17,8 +17,8 @@ use crate::MainWindow;
 
 static WINDOW: OnceLock<slint::Weak<MainWindow>> = OnceLock::new();
 static CLIENT: OnceLock<Arc<ChatterClient>> = OnceLock::new();
-static GALLERY: std::sync::Mutex<(ActiveConversation, Vec<String>, bool)> =
-    std::sync::Mutex::new((ActiveConversation::None, Vec::new(), false));
+static GALLERY: std::sync::Mutex<(ActiveConversation, Vec<String>, bool, u64)> =
+    std::sync::Mutex::new((ActiveConversation::None, Vec::new(), false, 0));
 static REQUEST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 pub(crate) fn invalidate() {
@@ -77,9 +77,16 @@ pub(super) fn select(w: &MainWindow, id: &str) -> u64 {
         .get()
         .map(|client| client.active_conversation())
         .unwrap_or(ActiveConversation::None);
+    let session_revision = CLIENT
+        .get()
+        .map(|client| client.auth_state().get().session_revision)
+        .unwrap_or(0);
     let mut stored = GALLERY.lock().unwrap_or_else(|poison| poison.into_inner());
-    if stored.0 != conversation || !stored.1.iter().any(|item| item == id) {
-        *stored = (conversation, gallery(w), false);
+    if stored.0 != conversation
+        || stored.3 != session_revision
+        || !stored.1.iter().any(|item| item == id)
+    {
+        *stored = (conversation, gallery(w), false, session_revision);
     }
     let items = stored.1.clone();
     let needs_refresh = !stored.2;
@@ -148,11 +155,12 @@ pub(super) fn select(w: &MainWindow, id: &str) -> u64 {
                 if !is_current(request)
                     || w.get_media_viewer_attachment_id().as_str() != selected
                     || client.active_conversation() != conversation
+                    || client.auth_state().get().session_revision != session_revision
                 {
                     return;
                 }
                 let mut stored = GALLERY.lock().unwrap_or_else(|poison| poison.into_inner());
-                *stored = (conversation, all.clone(), true);
+                *stored = (conversation, all.clone(), true, session_revision);
                 w.set_media_viewer_has_previous(index > 0);
                 w.set_media_viewer_has_next(index + 1 < all.len());
                 w.set_media_viewer_position(format!("{} / {}", index + 1, all.len()).into());

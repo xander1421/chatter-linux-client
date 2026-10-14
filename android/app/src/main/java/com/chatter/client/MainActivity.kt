@@ -352,7 +352,7 @@ class MainActivity : GameActivity() {
         if (getSystemService(KeyguardManager::class.java)?.isDeviceLocked == true) return
         try {
             val key = intent.getStringExtra("notification_conversation_key") ?: ""
-            if (key.isEmpty() || (key.length == 32 && key.all { it in '0'..'9' || it in 'a'..'f' })) {
+            if (key.isEmpty() || (key.length == 48 && key.all { it in '0'..'9' || it in 'a'..'f' })) {
                 nativeNotificationOpened(key)
             }
         } catch (_: RuntimeException) {

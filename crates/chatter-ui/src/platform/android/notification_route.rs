@@ -67,6 +67,16 @@ pub fn open_pending(window: &crate::MainWindow) {
         return;
     }
     let key = PENDING_KEY.lock().ok().and_then(|pending| pending.clone());
+    if let Some(ref key) = key {
+        if client.notification_tap_belongs_to_current_account(key) == Some(false) {
+            if let Ok(mut pending) = PENDING_KEY.lock() {
+                if pending.as_ref() == Some(key) {
+                    *pending = None;
+                }
+            }
+            return;
+        }
+    }
     let Some(target) = key
         .as_deref()
         .and_then(|key| client.notification_target_for_key(key))

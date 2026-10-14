@@ -177,6 +177,7 @@ impl CoreServices {
             services.message_service.clone(),
         ));
 
+        let auth_state = AuthState::new();
         Self {
             // Runtime handle for async spawning from UI callbacks
             runtime_handle: tokio::runtime::Handle::current(),
@@ -208,7 +209,11 @@ impl CoreServices {
             #[cfg(feature = "jarvis")]
             jarvis_engine: services.jarvis_engine.clone(),
             notification_service: {
-                let svc = NotificationService::new(notification_sink);
+                let svc = NotificationService::with_account_keys(
+                    notification_sink,
+                    infra.settings_repo.clone(),
+                    auth_state.clone(),
+                );
                 // Load privacy setting from local DB
                 if let Ok(Some(level_str)) = infra.settings_repo.get::<String>(
                     crate::storage::repositories::settings_repo::keys::NOTIFICATION_DETAIL_LEVEL,
@@ -248,7 +253,7 @@ impl CoreServices {
             ),
 
             // State stores
-            auth_state: AuthState::new(),
+            auth_state,
             chat_state: ChatState::new(),
             message_state: MessageState::new(),
             user_state: UserState::new(),
