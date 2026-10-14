@@ -55,11 +55,23 @@ export component ImageViewer inherits Rectangle {
     in property <length> thumbnail-width: 0px;
     in property <length> thumbnail-height: 0px;
     property <float> arrival: 0.0;
-    animate arrival { duration: Materials.motion-emphasized; easing: Materials.spring; }
+    property <bool> closing: false;
+    animate arrival { duration: root.closing ? Materials.motion-standard : Materials.motion-emphasized; easing: root.closing ? Materials.glide : Materials.spring; }
     arrival-timer := Timer {
         interval: 1ms;
-        running: root.show && root.arrival == 0.0;
+        running: root.show && !root.closing && root.arrival == 0.0;
         triggered => { root.arrival = 1.0; }
+    }
+    exit-timer := Timer {
+        interval: Materials.motion-standard;
+        running: false;
+        triggered => { self.stop(); root.close(); }
+    }
+    function request-close() {
+        if (root.closing) { return; }
+        root.closing = true;
+        root.arrival = 0.0;
+        exit-timer.start();
     }
 
     function reset-zoom() {
@@ -87,10 +99,10 @@ export component ImageViewer inherits Rectangle {
     }
 
     function move-page(direction: int) {
-        if (root.settling-page || (direction == 1 && !root.has-next) || (direction == -1 && !root.has-previous)) { return; }
+        if (root.closing || root.settling-page || (direction == 1 && !root.has-next) || (direction == -1 && !root.has-previous)) { return; }
         root.reset-zoom();
         root.page-direction = direction;
-        root.page-offset = direction == 1 ? -viewer-area.width : viewer-area.width;
+        root.page-offset = direction == 1 ? -root.page-distance : root.page-distance;
         root.settling-page = true;
     }
 
@@ -103,12 +115,16 @@ export component ImageViewer inherits Rectangle {
     property <bool> settling-page: false;
     property <int> page-direction: 0;
     property <bool> chrome-visible: true;
+    property <length> page-distance: viewer-area.width + Spacing.md;
     animate page-offset { duration: root.dragging-page ? 0ms : Materials.motion-standard; easing: Materials.glide; }
     page-timer := Timer {
         interval: Materials.motion-standard;
         running: root.settling-page;
         triggered => {
             root.settling-page = false;
+            // The neighbour is now at x=0. Rebase the same pixels as the
+            // current image without animating a second trip back to zero.
+            root.dragging-page = true;
             if (root.page-direction == 1) {
                 if (root.next-thumbnail.width > 0) { root.page-image = root.next-thumbnail; }
                 root.next();
@@ -118,11 +134,17 @@ export component ImageViewer inherits Rectangle {
             }
             root.page-direction = 0;
             root.page-offset = 0px;
+            page-rebase.start();
         }
     }
-    changed source => { root.page-image = root.source; root.reset-zoom(); root.page-offset = 0px; }
+    page-rebase := Timer {
+        interval: 1ms;
+        running: false;
+        triggered => { self.stop(); root.dragging-page = false; }
+    }
+    changed source => { root.page-image = root.source; root.reset-zoom(); }
 
-    changed show => { if (!root.show) { root.reset-zoom(); root.dismiss-offset = 0px; root.dragging-to-dismiss = false; root.arrival = 0.0; root.page-offset = 0px; root.chrome-visible = true; } }
+    changed show => { if (!root.show) { root.reset-zoom(); root.dismiss-offset = 0px; root.dragging-to-dismiss = false; root.arrival = 0.0; root.page-offset = 0px; root.chrome-visible = true; root.closing = false; } }
 
     // Callbacks
     in property <string> position-label;
@@ -135,9 +157,28 @@ export component ImageViewer inherits Rectangle {
     callback open-downloads();
     callback close();
 
+    forward-focus: viewer-keys;
+    init => { viewer-keys.focus(); }
+
     // Only render when show is true
     visible: root.show;
     background: transparent;
+    viewer-keys := FocusScope {
+        width: 0px;
+        height: 0px;
+        key-pressed(event) => {
+            if (event.text == Key.Escape || event.text == Key.Back) {
+                root.request-close();
+                return accept;
+            }
+            if (event.text == Key.LeftArrow) { root.move-page(-1); return accept; }
+            if (event.text == Key.RightArrow) { root.move-page(1); return accept; }
+            return reject;
+        }
+        key-released(event) => {
+            return event.text == Key.Escape || event.text == Key.Back ? accept : reject;
+        }
+    }
     Rectangle {
         width: 100%; height: 100%;
         background: Materials.scrim-media;
@@ -146,8 +187,9 @@ export component ImageViewer inherits Rectangle {
 
     // Close on backdrop click
     backdrop := TouchArea {
+        width: 100%; height: 100%;
         clicked => {
-            root.close();
+            root.request-close();
         }
     }
 
@@ -171,16 +213,16 @@ export component ImageViewer inherits Rectangle {
             image-fit: contain;
             width: viewer-area.width;
             height: viewer-area.height;
-            x: -viewer-area.width - Spacing.md + root.page-offset;
+            x: -root.page-distance + root.page-offset;
         }
         if root.has-next && root.next-thumbnail.width > 0: Image {
             source: root.next-thumbnail;
             image-fit: contain;
             width: viewer-area.width;
             height: viewer-area.height;
-            x: viewer-area.width + Spacing.md + root.page-offset;
+            x: root.page-distance + root.page-offset;
         }
-        Image {
+        main-image := Image {
             source: root.page-image;
             image-fit: contain;
             property <length> final-width: viewer-area.fit-width * root.zoom;
@@ -205,6 +247,7 @@ export component ImageViewer inherits Rectangle {
 
         gesture := ScaleRotateGestureHandler {
             started => {
+                root.gesture-moved = true;
                 root.pinch-start-zoom = root.zoom;
                 root.pinch-center-x = self.center.x;
                 root.pinch-center-y = self.center.y;
@@ -231,20 +274,24 @@ export component ImageViewer inherits Rectangle {
                     }
                     if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
                         let should-close = event.kind == PointerEventKind.up && root.zoom == 1.0 && root.dismiss-offset > 100px;
-                        let direction = root.page-offset < -viewer-area.width * 0.20 && root.has-next ? 1
-                            : root.page-offset > viewer-area.width * 0.20 && root.has-previous ? -1 : 0;
+                        let direction = event.kind == PointerEventKind.up && root.page-offset < -viewer-area.width * 0.20 && root.has-next ? 1
+                            : event.kind == PointerEventKind.up && root.page-offset > viewer-area.width * 0.20 && root.has-previous ? -1 : 0;
                         root.dragging-to-dismiss = false;
                         root.dragging-page = false;
                         root.dismiss-offset = 0px;
-                        if (should-close) { root.close(); }
+                        if (should-close) { root.request-close(); }
                         else if (direction != 0 && root.zoom == 1.0) {
                             root.page-direction = direction;
-                            root.page-offset = direction == 1 ? -viewer-area.width : viewer-area.width;
+                            root.page-offset = direction == 1 ? -root.page-distance : root.page-distance;
                             root.settling-page = true;
                         } else { root.page-offset = 0px; }
                     }
                 }
                 moved => {
+                    if (self.pressed && (abs(self.mouse-x - root.drag-start-x) > 8px
+                        || abs(self.mouse-y - root.drag-start-y) > 8px)) {
+                        root.gesture-moved = true;
+                    }
                     if (root.zoom > 1.0 && !gesture.active && self.pressed) {
                         root.pan-x += self.mouse-x - root.drag-x;
                         root.pan-y += self.mouse-y - root.drag-y;
@@ -252,7 +299,6 @@ export component ImageViewer inherits Rectangle {
                     } else if (root.zoom == 1.0 && self.pressed && !gesture.active) {
                         let dx = self.mouse-x - root.drag-start-x;
                         let dy = self.mouse-y - root.drag-start-y;
-                        if (abs(dx) > 8px || abs(dy) > 8px) { root.gesture-moved = true; }
                         if (dy > 0px && dy > abs(dx)) {
                             root.dismiss-offset = dy * 0.78;
                             root.page-offset = 0px;
@@ -265,7 +311,14 @@ export component ImageViewer inherits Rectangle {
                     root.drag-x = self.mouse-x;
                     root.drag-y = self.mouse-y;
                 }
-                clicked => { if (!root.gesture-moved) { root.chrome-visible = !root.chrome-visible; } }
+                clicked => {
+                    if (!root.gesture-moved) {
+                        if (self.mouse-x < main-image.x || self.mouse-x > main-image.x + main-image.width
+                            || self.mouse-y < main-image.y || self.mouse-y > main-image.y + main-image.height) {
+                            root.request-close();
+                        } else { root.chrome-visible = !root.chrome-visible; }
+                    }
+                }
                 double-clicked => { root.toggle-zoom(self.mouse-x, self.mouse-y); }
                 scroll-event(event) => {
                     root.zoom-at(root.zoom * (event.delta-y < 0px ? 1.12 : 1.0 / 1.12), self.mouse-x, self.mouse-y);
@@ -275,24 +328,33 @@ export component ImageViewer inherits Rectangle {
         }
     }
 
-    property <length> chrome-width: min(viewer-area.width, max(300px, viewer-area.fit-width));
-    animate chrome-width { duration: Materials.motion-standard; easing: Materials.glide; }
-    property <length> chrome-x: viewer-area.x + (viewer-area.width - root.chrome-width) / 2 + root.page-offset;
-    property <length> header-y: max(viewer-area.y, viewer-area.y + viewer-area.image-top - 48px * Appearance.text-grow - Spacing.sm);
+    property <float> page-progress: min(1.0, abs(root.page-offset) / root.page-distance);
+    property <image> target-image: root.page-offset < 0px ? root.next-thumbnail : root.previous-thumbnail;
+    property <length> target-fit-width: root.target-image.width <= 0 || root.target-image.height <= 0
+        ? viewer-area.fit-width : min(viewer-area.width, viewer-area.height * root.target-image.width / root.target-image.height);
+    property <length> target-fit-height: root.target-image.width <= 0 || root.target-image.height <= 0
+        ? viewer-area.fit-height : min(viewer-area.height, viewer-area.width * root.target-image.height / root.target-image.width);
+    property <length> chrome-fit-width: viewer-area.fit-width + (root.target-fit-width - viewer-area.fit-width) * root.page-progress;
+    property <length> chrome-fit-height: viewer-area.fit-height + (root.target-fit-height - viewer-area.fit-height) * root.page-progress;
+    property <length> chrome-width: min(viewer-area.width, max(300px, root.chrome-fit-width));
+    property <length> chrome-x: viewer-area.x + (viewer-area.width - root.chrome-width) / 2;
+    property <length> chrome-top: (viewer-area.height - root.chrome-fit-height) / 2;
+    property <length> header-y: max(viewer-area.y, viewer-area.y + root.chrome-top - 48px * Appearance.text-grow - Spacing.sm);
     property <length> footer-y: min(root.height - root.action-size - viewer-area.y,
-        viewer-area.y + viewer-area.image-top + viewer-area.fit-height + Spacing.sm);
+        viewer-area.y + root.chrome-top + root.chrome-fit-height + Spacing.sm);
+    property <float> chrome-alpha: root.chrome-visible ? 1.0 : 0.0;
+    animate chrome-alpha { duration: Materials.motion-quick; easing: Materials.settle; }
 
     GlassSurface {
         x: root.chrome-x;
-        y: root.header-y + root.visual-dismiss-offset;
+        y: root.header-y + root.visual-dismiss-offset - (1.0 - root.arrival) * 12px;
         width: root.chrome-width;
         height: 48px * Appearance.text-grow;
         material-enabled: true;
         border-radius: Spacing.radius-lg;
-        opacity: root.chrome-visible ? root.arrival : 0.0;
+        opacity: root.chrome-alpha * root.arrival;
         visible: root.chrome-visible || self.opacity > 0;
-        animate opacity { duration: Materials.motion-quick; easing: Materials.settle; }
-        animate y { duration: root.dragging-to-dismiss ? 0ms : Materials.motion-standard; easing: Materials.glide; }
+        TouchArea { width: 100%; height: 100%; }
         HorizontalLayout {
             padding-left: Spacing.md;
             padding-right: Spacing.md;
@@ -303,20 +365,19 @@ export component ImageViewer inherits Rectangle {
                 Text { text: root.filename; overflow: elide; color: Colors.text-primary; font-size: Typography.base; font-weight: Typography.medium; }
                 if root.size-display != "": Text { text: root.size-display; color: Colors.text-muted; font-size: Typography.xs; }
             }
-            DismissButton { clicked => { root.close(); } }
+            DismissButton { clicked => { root.request-close(); } }
         }
     }
 
     GlassSurface {
         x: root.chrome-x;
-        y: root.footer-y + root.visual-dismiss-offset;
+        y: root.footer-y + root.visual-dismiss-offset + (1.0 - root.arrival) * 12px;
         width: root.chrome-width;
         height: root.action-size;
         border-radius: Spacing.radius-lg;
         visible: root.chrome-visible || self.opacity > 0;
-        opacity: root.chrome-visible ? root.arrival : 0.0;
-        animate opacity { duration: Materials.motion-quick; easing: Materials.settle; }
-        animate y { duration: root.dragging-to-dismiss ? 0ms : Materials.motion-standard; easing: Materials.glide; }
+        opacity: root.chrome-alpha * root.arrival;
+        TouchArea { width: 100%; height: 100%; }
         HorizontalLayout {
             alignment: center;
             spacing: Spacing.xxs;

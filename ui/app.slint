@@ -3791,6 +3791,7 @@ export component MainWindow inherits Window {
             close => {
                 root.image-viewer-visible = false;
                 root.close-image-viewer();
+                back-scope.focus();
             }
         }
 
