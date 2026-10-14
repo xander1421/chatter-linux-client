@@ -43,6 +43,10 @@ export component MessageList inherits Rectangle {
     out property <length> viewer-origin-y: 0px;
     out property <length> viewer-origin-width: 0px;
     out property <length> viewer-origin-height: 0px;
+    // Captured synchronously with more-clicked so the overlay can avoid the
+    // pressed bubble even when a row is recycled by the virtual list.
+    out property <length> menu-anchor-top: 0px;
+    out property <length> menu-anchor-bottom: 0px;
     private property <int> observed-message-count: 0;
     private property <string> observed-last-message-id: "";
     private property <bool> ready-for-arrivals: false;
@@ -886,6 +890,8 @@ export component MessageList inherits Rectangle {
                     }
 
                     more-clicked(sender-id, timestamp-ns, x, y) => {
+                        root.menu-anchor-top = message-bubble.menu-anchor-top;
+                        root.menu-anchor-bottom = message-bubble.menu-anchor-bottom;
                         root.more-clicked(sender-id, timestamp-ns, x, y);
                     }
 

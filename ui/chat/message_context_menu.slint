@@ -75,6 +75,7 @@ component QuickReaction inherits Rectangle {
 
     Text {
         text: root.emoji;
+        color: Colors.text-primary;
         transform-scale-x: touch.pressed ? 90% : 100%;
         transform-scale-y: touch.pressed ? 90% : 100%;
         animate transform-scale-x { duration: touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
@@ -167,6 +168,12 @@ export component MessageContextMenu inherits Rectangle {
     changed show => { root.more-actions = false; }
     in property <length> position-x: 0;
     in property <length> position-y: 0;
+    // Window-local vertical bounds of the pressed bubble. Zero/zero keeps
+    // callers without a message anchor on the press-point placement.
+    in property <length> anchor-top: 0px;
+    in property <length> anchor-bottom: 0px;
+    out property <length> popup-top: menu-container.y;
+    out property <length> popup-bottom: menu-container.y + menu-container.height;
 
     // Local y of conversation content below the header. The parent already
     // excludes system bars and the IME, exactly like the composer.
@@ -234,7 +241,7 @@ export component MessageContextMenu inherits Rectangle {
     //     conversation header, or the gesture strip;
     //   * a menu taller than that band is capped to it and its body scrolls.
     menu-container := GlassSurface {
-        enter-distance: 20px;
+        enter-distance: self.flip-up ? -20px : 20px;
         enter-duration: Materials.motion-standard;
         shown: root.show;
         transform-origin: { x: max(0px, min(root.position-x - self.x, self.width)), y: max(0px, min(root.position-y - self.y, self.height)) };
@@ -251,16 +258,25 @@ export component MessageContextMenu inherits Rectangle {
         property <length> menu-h: menu-layout.preferred-height;
         property <length> top-limit: max(0px, root.content-top) + Spacing.sm;
         property <length> bottom-limit: parent.height - Spacing.sm;
-        // Does the preferred (below-the-anchor) placement fit?
-        property <bool> flip-up: root.position-y + Spacing.sm + self.height > self.bottom-limit;
+        property <bool> has-bubble-anchor: root.anchor-bottom > root.anchor-top;
+        property <length> room-below: max(0px, self.bottom-limit - root.anchor-bottom - Spacing.sm);
+        property <length> room-above: max(0px, root.anchor-top - Spacing.sm - self.top-limit);
+        // Keep the entire bubble visible. If neither side fits, use the larger
+        // side and let the existing Flickable scroll the menu's body.
+        property <bool> flip-up: self.has-bubble-anchor
+            ? (self.room-below < self.menu-h && self.room-above > self.room-below)
+            : root.position-y + Spacing.sm + self.menu-h > self.bottom-limit;
 
         x: max(Spacing.sm, min(root.position-x - Spacing.sm, parent.width - self.width - Spacing.md));
         y: (max(self.top-limit,
-               min(self.flip-up ? root.position-y - Spacing.sm - self.height
-                                : root.position-y + Spacing.sm,
+               min(self.flip-up
+                    ? (self.has-bubble-anchor ? root.anchor-top : root.position-y) - Spacing.sm - self.height
+                    : (self.has-bubble-anchor ? root.anchor-bottom : root.position-y) + Spacing.sm,
                    self.bottom-limit - self.height))) + self.entrance-offset;
         width: min(304px, parent.width - 2 * Spacing.md);
-        height: max(0px, min(self.menu-h, self.bottom-limit - self.top-limit));
+        height: max(0px, min(self.menu-h, self.has-bubble-anchor
+            ? (self.flip-up ? self.room-above : self.room-below)
+            : self.bottom-limit - self.top-limit));
         border-radius: Spacing.radius-xl;
 
         // Block backdrop clicks on menu

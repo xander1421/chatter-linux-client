@@ -172,6 +172,8 @@ export component MessageItem inherits Rectangle {
     callback reaction-toggled(string, string, string);  // (sender_id, timestamp_ns, emoji)
     callback thread-clicked(string);
     callback more-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
+    out property <length> menu-anchor-top: 0px;
+    out property <length> menu-anchor-bottom: 0px;
     callback selection-toggled(string);
     callback open-message-link(string);
     callback message-clicked(string);
@@ -223,6 +225,11 @@ export component MessageItem inherits Rectangle {
     // not reachable from a component-level function.
     property <length> anchor-x: 0px;
     property <length> anchor-y: 0px;
+    function request-menu(x: length, y: length, top: length, bottom: length) {
+        root.menu-anchor-top = top;
+        root.menu-anchor-bottom = bottom;
+        root.more-clicked(root.sender-id, root.timestamp-ns, x, y);
+    }
     property <bool> holding: false;
     // 0 = nothing fired yet, 1 = menu opened, 2 = selection engaged. Also used
     // to swallow the release-tap, so a hold never doubles as a click.
@@ -294,13 +301,15 @@ export component MessageItem inherits Rectangle {
 
     // Both the bubble TouchArea and link-owned StyledText stream use absolute
     // coordinates, so movement and anchoring are identical across inline runs.
-    function begin-message-press(x: length, y: length, menu-x: length, menu-y: length) {
+    function begin-message-press(x: length, y: length, menu-x: length, menu-y: length, menu-top: length) {
         root.cancel-hold();
         root.begin-swipe(x, y);
         root.press-x = x;
         root.press-y = y;
         root.anchor-x = menu-x;
         root.anchor-y = menu-y;
+        root.menu-anchor-top = menu-top;
+        root.menu-anchor-bottom = menu-y;
         root.hold-tier = 0;
         if (root.mobile && !root.selection-mode
             && (!root.is-system || root.is-call) && !root.is-deleted) {
@@ -319,7 +328,7 @@ export component MessageItem inherits Rectangle {
     }
 
     function open-menu() {
-        root.more-clicked(root.sender-id, root.timestamp-ns, root.anchor-x, root.anchor-y);
+        root.request-menu(root.anchor-x, root.anchor-y, root.menu-anchor-top, root.menu-anchor-bottom);
     }
 
     tier1-timer := Timer {
@@ -436,10 +445,8 @@ export component MessageItem inherits Rectangle {
                 // call-content carries its own padding; adding more here left
                 // slack that the fixed-size icon did not share.
                 width: min(call-content.preferred-width, root.width * 0.7);
-                height: call-content.preferred-height + Elevation.contact-offset;
-                // Contact-shadow plate; the fill below is contact-offset shorter, so a
-                // crescent of it shows along the bottom edge (same as text bubbles).
-                background: Elevation.contact-shadow;
+                height: call-content.preferred-height;
+                background: root.is-own ? Colors.bubble-own : Colors.bubble-other;
                 border-top-left-radius: root.is-own ? root.r-round : root.r-outer-top;
                 border-top-right-radius: root.is-own ? root.r-outer-top : root.r-round;
                 border-bottom-left-radius: root.is-own ? root.r-round : root.r-outer-bottom;
@@ -448,7 +455,7 @@ export component MessageItem inherits Rectangle {
                 Rectangle {
                     y: 0;
                     height: call-content.preferred-height;
-                    background: root.is-own ? Colors.bubble-own : Colors.bubble-other;
+                    background: transparent;
                     border-top-left-radius: parent.border-top-left-radius;
                     border-top-right-radius: parent.border-top-right-radius;
                     border-bottom-left-radius: parent.border-bottom-left-radius;
@@ -555,10 +562,12 @@ export component MessageItem inherits Rectangle {
                     mouse-cursor: pointer;
                     pointer-event(event) => {
                         if event.button == PointerEventButton.right && event.kind == PointerEventKind.up {
-                            root.more-clicked(root.sender-id, root.timestamp-ns, self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y);
+                            root.request-menu(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y,
+                                self.absolute-position.y, self.absolute-position.y + self.height);
                         }
                         if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
-                            root.begin-message-press(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y, self.absolute-position.x, self.absolute-position.y + self.height);
+                            root.begin-message-press(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y,
+                                self.absolute-position.x, self.absolute-position.y + self.height, self.absolute-position.y);
                         }
                         if event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel { root.cancel-hold(); }
                     }
@@ -645,29 +654,23 @@ export component MessageItem inherits Rectangle {
                     accessible-role: text;
                     accessible-label: root.is-own ? "Your message: " + root.content : root.sender-name + " says: " + root.content;
 
-                    // Elevation level 2: the matched own/peer pair, a lit top
-                    // rim and a tight contact shadow lift it off the list. AI
-                    // replies are peer bubbles marked by the accent bar.
-                    // The bubble itself is the contact-shadow plate; its first child is
-                    // the fill, contact-offset shorter, so a crescent of shadow shows
-                    // along the bottom edge. A blurred shadow on a recycled row would be
-                    // re-rendered on every reuse (PERF1); this is one more rounded rect.
-                    background: Elevation.contact-shadow;
+                    // One rounded surface avoids a square backing at the corners.
+                    background: bubble-hovered
+                        ? (root.is-own ? Colors.bubble-own-hover : Colors.bubble-other-hover)
+                        : (root.is-own ? Colors.bubble-own : Colors.bubble-other);
                     border-top-left-radius: root.is-own ? root.r-round : root.r-outer-top;
                     border-top-right-radius: root.is-own ? root.r-outer-top : root.r-round;
                     border-bottom-left-radius: root.is-own ? root.r-round : root.r-outer-bottom;
                     border-bottom-right-radius: root.is-own ? root.r-outer-bottom : root.r-round;
 
                     // Calculate height based on content
-                    height: bubble-content.preferred-height + Elevation.contact-offset;
+                    height: bubble-content.preferred-height;
                     width: bubble-content.preferred-width + (root.is-ai ? 4px : 0);
 
                     Rectangle {
                         y: 0;
                         height: bubble-content.preferred-height;
-                        background: bubble-hovered
-                            ? (root.is-own ? Colors.bubble-own-hover : Colors.bubble-other-hover)
-                            : (root.is-own ? Colors.bubble-own : Colors.bubble-other);
+                        background: transparent;
                         border-top-left-radius: parent.border-top-left-radius;
                         border-top-right-radius: parent.border-top-right-radius;
                         border-bottom-left-radius: parent.border-bottom-left-radius;
@@ -734,9 +737,9 @@ export component MessageItem inherits Rectangle {
                             // Unreachable from a finger — see the note on the
                             // hold timers above.
                             if (event.button == PointerEventButton.right && event.kind == PointerEventKind.up) {
-                                root.more-clicked(root.sender-id, root.timestamp-ns,
-                                    self.absolute-position.x + self.mouse-x,
-                                    self.absolute-position.y + self.mouse-y);
+                                root.request-menu(self.absolute-position.x + self.mouse-x,
+                                    self.absolute-position.y + self.mouse-y,
+                                    bubble.absolute-position.y, bubble.absolute-position.y + bubble.height);
                                 return;
                             }
 
@@ -745,7 +748,8 @@ export component MessageItem inherits Rectangle {
                                     self.absolute-position.x + self.mouse-x,
                                     self.absolute-position.y + self.mouse-y,
                                     self.absolute-position.x,
-                                    self.absolute-position.y + self.height);
+                                    self.absolute-position.y + self.height,
+                                    self.absolute-position.y);
                             }
 
                             // Release, or a grab stolen by the scrolling
@@ -1034,7 +1038,8 @@ export component MessageItem inherits Rectangle {
                                                 self.absolute-position.x + self.mouse-x,
                                                 self.absolute-position.y + self.mouse-y,
                                                 bubble-touch.absolute-position.x,
-                                                bubble-touch.absolute-position.y + bubble-touch.height);
+                                                bubble-touch.absolute-position.y + bubble-touch.height,
+                                                bubble.absolute-position.y);
                                         }
                                         if (event.kind == PointerEventKind.move) {
                                             root.move-message-press(self.absolute-position.x + self.mouse-x,
@@ -1078,7 +1083,8 @@ export component MessageItem inherits Rectangle {
                                         root.begin-message-press(self.absolute-position.x + self.mouse-x,
                                             self.absolute-position.y + self.mouse-y,
                                             bubble-touch.absolute-position.x,
-                                            bubble-touch.absolute-position.y + bubble-touch.height);
+                                            bubble-touch.absolute-position.y + bubble-touch.height,
+                                            bubble.absolute-position.y);
                                     }
                                     if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
                                         root.end-swipe(event.kind == PointerEventKind.cancel);
@@ -1201,8 +1207,8 @@ export component MessageItem inherits Rectangle {
                                                 self.width, self.height);
                                         }
                                         held => {
-                                            root.more-clicked(root.sender-id, root.timestamp-ns,
-                                                self.anchor-x, self.anchor-y);
+                                            root.request-menu(self.anchor-x, self.anchor-y,
+                                                bubble.absolute-position.y, bubble.absolute-position.y + bubble.height);
                                         }
                                     }
                                 }
@@ -1222,7 +1228,8 @@ export component MessageItem inherits Rectangle {
                                     play-clicked(id) => { root.open-other-attachment(id); }
                                     audio-seek(id, pos) => { root.audio-seek(id, pos); }
                                     more-clicked(x, y) => {
-                                        root.more-clicked(root.sender-id, root.timestamp-ns, x, y);
+                                        root.request-menu(x, y,
+                                            bubble.absolute-position.y, bubble.absolute-position.y + bubble.height);
                                     }
                                 }
 
@@ -1326,8 +1333,8 @@ export component MessageItem inherits Rectangle {
                                             root.open-other-attachment(attachment.id);
                                         }
                                         held => {
-                                            root.more-clicked(root.sender-id, root.timestamp-ns,
-                                                self.anchor-x, self.anchor-y);
+                                            root.request-menu(self.anchor-x, self.anchor-y,
+                                                bubble.absolute-position.y, bubble.absolute-position.y + bubble.height);
                                         }
                                     }
                                 }
@@ -1424,8 +1431,8 @@ export component MessageItem inherits Rectangle {
                                             root.open-other-attachment(attachment.id);
                                         }
                                         held => {
-                                            root.more-clicked(root.sender-id, root.timestamp-ns,
-                                                self.anchor-x, self.anchor-y);
+                                            root.request-menu(self.anchor-x, self.anchor-y,
+                                                bubble.absolute-position.y, bubble.absolute-position.y + bubble.height);
                                         }
                                     }
                                 }
@@ -1773,9 +1780,9 @@ export component MessageItem inherits Rectangle {
                                 label: "More message actions";
                                 icon: Icons.more-horizontal;
                                 clicked => {
-                                        root.more-clicked(root.sender-id, root.timestamp-ns,
-                                            more-btn.absolute-position.x,
-                                            more-btn.absolute-position.y + more-btn.height);
+                                        root.request-menu(more-btn.absolute-position.x,
+                                            more-btn.absolute-position.y + more-btn.height,
+                                            bubble.absolute-position.y, bubble.absolute-position.y + bubble.height);
                                 }
                             }
                         }
