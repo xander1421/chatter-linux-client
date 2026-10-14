@@ -163,7 +163,7 @@ export component Button inherits Rectangle {
 
                 anim-progress: 0;
                 animate anim-progress {
-                    duration: Appearance.reduce-motion ? 0ms : 800ms;
+                    duration: Appearance.reduce-motion ? 0ms : 800ms / Appearance.animation-speed;
                     iteration-count: Appearance.reduce-motion ? 1 : -1;
                 }
 

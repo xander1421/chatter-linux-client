@@ -36,9 +36,9 @@ export component CreateMenu inherits Rectangle {
     property <bool> first-arrived: false;
     property <bool> second-arrived: false;
     property <bool> third-arrived: false;
-    Timer { interval: Appearance.reduce-motion ? 0ms : 24ms; running: root.show && !root.first-arrived; triggered => { root.first-arrived = true; } }
-    Timer { interval: Appearance.reduce-motion ? 0ms : 62ms; running: root.show && !root.second-arrived; triggered => { root.second-arrived = true; } }
-    Timer { interval: Appearance.reduce-motion ? 0ms : 100ms; running: root.show && !root.third-arrived; triggered => { root.third-arrived = true; } }
+    Timer { interval: Appearance.reduce-motion ? 0ms : 24ms / Appearance.animation-speed; running: root.show && !root.first-arrived; triggered => { root.first-arrived = true; } }
+    Timer { interval: Appearance.reduce-motion ? 0ms : 62ms / Appearance.animation-speed; running: root.show && !root.second-arrived; triggered => { root.second-arrived = true; } }
+    Timer { interval: Appearance.reduce-motion ? 0ms : 100ms / Appearance.animation-speed; running: root.show && !root.third-arrived; triggered => { root.third-arrived = true; } }
 
     // Logical close is immediate; the card settles back and the scrim fades
     // before the host unmounts it. Nothing is a live target meanwhile.

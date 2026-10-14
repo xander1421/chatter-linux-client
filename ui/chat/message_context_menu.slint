@@ -52,8 +52,8 @@ component QuickReaction inherits Rectangle {
     height: Spacing.touch-target-min;
     transform-scale-x: root.shown ? 100% : 64%;
     transform-scale-y: root.shown ? 100% : 64%;
-    animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; delay: Appearance.reduce-motion ? 0ms : root.stagger-index * 18ms; }
-    animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; delay: Appearance.reduce-motion ? 0ms : root.stagger-index * 18ms; }
+    animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; delay: Appearance.reduce-motion ? 0ms : root.stagger-index * 18ms / Appearance.animation-speed; }
+    animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; delay: Appearance.reduce-motion ? 0ms : root.stagger-index * 18ms / Appearance.animation-speed; }
     border-radius: Spacing.touch-target-min / 2;
     background: touch.pressed ? Materials.pressed : touch.has-hover ? Colors.surface-hover : transparent;
     border-width: keys.has-focus ? Spacing.stroke : 0px;

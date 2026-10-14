@@ -322,8 +322,8 @@ export component EmojiPicker inherits GlassSurface {
                         x: grid-col * root.emoji-cell-stride + (root.emoji-cell-stride - root.cell) / 2;
                         y: grid-row * root.cell + (1.0 - root.reveal-progress) * 12px;
                         opacity: root.reveal-progress;
-                        animate y { duration: Materials.motion-standard; easing: Materials.spring; delay: Appearance.reduce-motion ? 0ms : mod(index, 8) * 18ms; }
-                        animate opacity { duration: Materials.motion-quick; easing: Materials.settle; delay: Appearance.reduce-motion ? 0ms : mod(index, 8) * 18ms; }
+                        animate y { duration: Materials.motion-standard; easing: Materials.spring; delay: Appearance.reduce-motion ? 0ms : mod(index, 8) * 18ms / Appearance.animation-speed; }
+                        animate opacity { duration: Materials.motion-quick; easing: Materials.settle; delay: Appearance.reduce-motion ? 0ms : mod(index, 8) * 18ms / Appearance.animation-speed; }
                         width: root.cell;
                         height: root.cell;
                         border-radius: Spacing.radius-sm;

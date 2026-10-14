@@ -115,8 +115,8 @@ export component ReactionPicker inherits Rectangle {
                         min-width: root.touch ? root.quick-target : 0px;
                         transform-scale-x: root.show ? 100% : 64%;
                         transform-scale-y: root.show ? 100% : 64%;
-                        animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; delay: Appearance.reduce-motion ? 0ms : index * 18ms; }
-                        animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; delay: Appearance.reduce-motion ? 0ms : index * 18ms; }
+                        animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; delay: Appearance.reduce-motion ? 0ms : index * 18ms / Appearance.animation-speed; }
+                        animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; delay: Appearance.reduce-motion ? 0ms : index * 18ms / Appearance.animation-speed; }
 
                         Rectangle {
                             width: root.quick-target;

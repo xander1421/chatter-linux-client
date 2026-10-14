@@ -2748,6 +2748,66 @@ export component SettingsScreen inherits Rectangle {
                                 }
                             }
 
+                            Rectangle {
+                                background: Colors.surface-section;
+                                border-radius: Spacing.radius-lg;
+
+                                VerticalLayout {
+                                    padding: Spacing.md;
+                                    spacing: Spacing.sm;
+
+                                    Text {
+                                        text: "Animation speed";
+                                        color: Colors.text-primary;
+                                        font-size: Typography.sm;
+                                        font-weight: Typography.medium;
+                                    }
+                                    Text {
+                                        text: "How quickly menus and transitions move";
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                    }
+
+                                    HorizontalLayout {
+                                        spacing: Spacing.xs;
+                                        for opt in [
+                                            { value: 0.5, label: "0.5×" },
+                                            { value: 1.0, label: "1×" },
+                                            { value: 2.0, label: "2×" },
+                                            { value: 4.0, label: "4×" },
+                                            { value: 8.0, label: "8×" },
+                                        ]: Rectangle {
+                                            property <bool> selected: Appearance.animation-speed == opt.value;
+                                            horizontal-stretch: 1;
+                                            height: Spacing.touch-target-min;
+                                            border-radius: Spacing.radius-md;
+                                            background: selected ? Colors.action-fill : Colors.surface-hover;
+                                            accessible-role: button;
+                                            accessible-label: "Animation speed " + opt.label;
+                                            accessible-action-default => {
+                                                Appearance.animation-speed = opt.value;
+                                                Appearance.animation-speed-changed(opt.value);
+                                            }
+                                            Text {
+                                                text: opt.label;
+                                                horizontal-alignment: center;
+                                                vertical-alignment: center;
+                                                color: selected ? Colors.on-action : Colors.text-secondary;
+                                                font-size: Typography.sm;
+                                                font-weight: selected ? Typography.semibold : Typography.medium;
+                                            }
+                                            TouchArea {
+                                                mouse-cursor: pointer;
+                                                clicked => {
+                                                    Appearance.animation-speed = opt.value;
+                                                    Appearance.animation-speed-changed(opt.value);
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+
                             // Message spacing. Kept on this device (core: `MessageDensity`);
                             // read through the density tokens in `Spacing`.
                             Rectangle {

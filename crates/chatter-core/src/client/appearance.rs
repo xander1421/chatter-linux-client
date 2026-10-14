@@ -6,6 +6,21 @@ use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
 use super::ChatterClient;
 
 impl ChatterClient {
+    /// Device-local animation multiplier. Only supported segmented values are stored.
+    pub fn animation_speed(&self) -> f32 {
+        let speed = SettingsRepository::new(self.services.database.clone())
+            .get::<f32>("app.animation_speed")
+            .ok()
+            .flatten()
+            .unwrap_or(4.0);
+        if matches!(speed, 0.5 | 1.0 | 2.0 | 4.0 | 8.0) { speed } else { 4.0 }
+    }
+
+    pub fn set_animation_speed(&self, speed: f32) -> Result<(), crate::error::StorageError> {
+        let speed = if matches!(speed, 0.5 | 1.0 | 2.0 | 4.0 | 8.0) { speed } else { 4.0 };
+        SettingsRepository::new(self.services.database.clone()).set("app.animation_speed", &speed)
+    }
+
     /// Whether chrome uses glass optics. Enabled by default on each device.
     pub fn glass_effects_enabled(&self) -> bool {
         SettingsRepository::new(self.services.database.clone())

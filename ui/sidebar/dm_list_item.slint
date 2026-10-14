@@ -53,7 +53,7 @@ export component DMListItem inherits Rectangle {
             in {
                 animate typing-animation-progress {
                     // Reduce animations: the dots hold one static mark.
-                    duration: Appearance.reduce-motion ? 0ms : 600ms;
+                    duration: Appearance.reduce-motion ? 0ms : 600ms / Appearance.animation-speed;
                     iteration-count: Appearance.reduce-motion ? 1 : -1;
                 }
             }

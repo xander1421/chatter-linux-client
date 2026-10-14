@@ -35,7 +35,7 @@ component GifTile inherits Rectangle {
     border-radius: Spacing.radius-md;
     clip: true;
     opacity: root.reveal * (area.pressed ? 0.84 : 1.0);
-    animate opacity { duration: Materials.motion-quick; easing: Materials.spring; delay: Appearance.reduce-motion ? 0ms : mod(root.stagger-index, 8) * 18ms; }
+    animate opacity { duration: Materials.motion-quick; easing: Materials.spring; delay: Appearance.reduce-motion ? 0ms : mod(root.stagger-index, 8) * 18ms / Appearance.animation-speed; }
     background: root.ready && (area.has-hover || area.pressed) ? Materials.hover : Colors.inset;
     accessible-role: button;
     accessible-label: root.gif.failed ? "GIF " + root.gif.id + ", preview unavailable" : "GIF " + root.gif.id;
@@ -193,7 +193,7 @@ export component GifPicker inherits GlassSurface {
                             stagger-index: index;
                             x: mod(index, root.columns) * (root.tile-width + root.grid-gap);
                             y: Math.floor(index / root.columns) * root.row-stride + (1.0 - root.reveal-progress) * 14px;
-                            animate y { duration: Materials.motion-standard; easing: Materials.spring; delay: Appearance.reduce-motion ? 0ms : mod(index, 8) * 18ms; }
+                            animate y { duration: Materials.motion-standard; easing: Materials.spring; delay: Appearance.reduce-motion ? 0ms : mod(index, 8) * 18ms / Appearance.animation-speed; }
                             width: root.tile-width;
                             height: root.tile-height;
                             picked(id, url) => { root.gif-selected(id, url); }
@@ -220,7 +220,7 @@ export component GifPicker inherits GlassSurface {
                             stagger-index: index;
                             x: mod(index, root.columns) * (root.tile-width + root.grid-gap);
                             y: Math.floor(index / root.columns) * root.row-stride + (1.0 - root.reveal-progress) * 14px;
-                            animate y { duration: Materials.motion-standard; easing: Materials.spring; delay: Appearance.reduce-motion ? 0ms : mod(index, 8) * 18ms; }
+                            animate y { duration: Materials.motion-standard; easing: Materials.spring; delay: Appearance.reduce-motion ? 0ms : mod(index, 8) * 18ms / Appearance.animation-speed; }
                             width: root.tile-width;
                             height: root.tile-height;
                             picked(id, url) => { root.gif-selected(id, url); }

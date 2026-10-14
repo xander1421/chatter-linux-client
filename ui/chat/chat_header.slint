@@ -24,7 +24,7 @@ export component ChatHeader inherits GlassSurface {
     border-radius: self.height / 2;
     property <int> typing-phase: 0;
     Timer {
-        interval: 180ms;
+        interval: 180ms / Appearance.animation-speed;
         running: root.typing-indicator != "" && !Appearance.reduce-motion;
         triggered => { root.typing-phase = root.typing-phase == 2 ? 0 : root.typing-phase + 1; }
     }
@@ -461,7 +461,7 @@ export component ChatHeader inherits GlassSurface {
                     height: 6px;
                     border-radius: 3px;
                     background: Colors.primary;
-                    y: (parent.height - self.height) / 2 + 2px * Math.sin((animation-tick() / 250ms + i * 0.3) * 360deg);
+                    y: (parent.height - self.height) / 2 + 2px * Math.sin((animation-tick() / (250ms / Appearance.animation-speed) + i * 0.3) * 360deg);
                 }
                 Text {
                     text: "Jarvis is thinking...";

@@ -156,7 +156,7 @@ export component MessageItem inherits Rectangle {
     animate arrival-progress {
         duration: arrival-timer.running ? 0ms : Materials.motion-emphasized;
         easing: Materials.spring;
-        delay: Appearance.reduce-motion ? 0ms : min(root.arrival-stagger-index, 5) * 30ms;
+        delay: Appearance.reduce-motion ? 0ms : min(root.arrival-stagger-index, 5) * 30ms / Appearance.animation-speed;
     }
     in property <bool> selection-mode: false;
     // Touch platform. Gates the hold gesture so a desktop left-button hold
@@ -714,7 +714,7 @@ export component MessageItem inherits Rectangle {
                         // the element is never created, so nothing ticks).
                         if !send-line.failed && !Appearance.reduce-motion: Rectangle {
                             width: parent.width * 0.35;
-                            x: (parent.width + self.width) * (Math.mod(animation-tick(), 1400ms) / 1400ms) - self.width;
+                            x: (parent.width + self.width) * (Math.mod(animation-tick(), 1400ms / Appearance.animation-speed) / (1400ms / Appearance.animation-speed)) - self.width;
                             height: parent.height;
                             border-radius: parent.border-radius;
                             background: Colors.primary;

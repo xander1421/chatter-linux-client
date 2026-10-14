@@ -226,6 +226,18 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
     // Reduce animations is device-local too, and read before the first frame
     // so no decorative loop starts only to be stopped.
     appearance.set_reduce_motion(ui_ctx.reduce_motion_enabled());
+    appearance.set_animation_speed(ui_ctx.animation_speed());
+    let ui_ctx_speed = ui_ctx.clone();
+    let weak_speed = window.as_weak();
+    appearance.on_animation_speed_changed(move |speed: f32| {
+        if let Err(e) = ui_ctx_speed.set_animation_speed(speed) {
+            tracing::error!("Failed to save animation speed: {}", e);
+        }
+        if let Some(w) = weak_speed.upgrade() {
+            w.global::<crate::Appearance>()
+                .set_animation_speed(ui_ctx_speed.animation_speed());
+        }
+    });
     let ui_ctx_motion = ui_ctx.clone();
     let weak_motion = window.as_weak();
     appearance.on_reduce_motion_changed(move |enabled: bool| {
