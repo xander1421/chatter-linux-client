@@ -1259,10 +1259,9 @@ impl ChatterClient {
             .collect()
     }
 
-    /// Local message search, limited to conversations the current mode shows:
-    /// shield on never surfaces an identified conversation's messages, and
-    /// off never surfaces an anon DM's. Returns the matching messages, best
-    /// match first.
+    /// Local global search excludes device-bound secret chats even though
+    /// their rows remain in the sidebar in either mode. Returns matching
+    /// regular messages, best match first.
     pub fn search_messages_visible(
         &self,
         query: &str,
@@ -1284,7 +1283,8 @@ impl ChatterClient {
         hits.iter()
             .filter_map(|hit| self.get_message_local(&hit.message_id))
             .filter(|msg| {
-                self.visible_in_mode(&msg.conversation_type)
+                !msg.conversation_type.is_secret_chat()
+                    && self.visible_in_mode(&msg.conversation_type)
                     && (msg.conversation_type != crate::domain::message::ConversationType::Channel
                         || joined_channels.contains(&msg.conversation_id))
                     && !self.is_blocked_conversation(
@@ -1297,9 +1297,9 @@ impl ChatterClient {
 
     /// Jump-to / quick-switcher rows for `query`, ranked by the core rule
     /// (`services::search::filter_conversations`). Built from the same
-    /// mode-filtered sources the sidebar renders — loose rows AND folder rows
-    /// (a foldered conversation is still a jump target) — so it can never
-    /// offer a conversation the current mode hides.
+    /// mode-filtered sources the sidebar renders — loose rows AND folder rows.
+    /// Secret chats stay in the sidebar, but their names must not appear in
+    /// the regular global search palette.
     ///
     /// `conv_type` uses the palette's vocabulary: "channel", "dm", "anon_dm",
     /// "private_group", "saved_messages" (id is the sentinel
@@ -1343,11 +1343,13 @@ impl ChatterClient {
             ));
         }
         for dm in self.list_dm_sidebar() {
-            let kind = if dm.is_anon_dm() { "anon_dm" } else { "dm" };
+            if dm.is_anon_dm() {
+                continue;
+            }
             entries.push(entry(
                 dm.id,
                 dm.display_name,
-                kind,
+                "dm",
                 dm.presence_status,
                 dm.unread_count,
             ));
@@ -1357,13 +1359,11 @@ impl ChatterClient {
             let count = unread(&id, channel.conversation_type());
             entries.push(entry(id, channel.name, "channel", String::new(), count));
         }
-        for group in self.sidebar_private_groups() {
-            let id = group.id.to_string();
-            let count = unread(&id, CT::AnonGroup);
-            entries.push(entry(id, group.name, "private_group", String::new(), count));
-        }
         for section in self.list_sections_with_conversations().unwrap_or_default() {
             for conv in section.conversations {
+                if conv.conversation_type.is_secret_chat() {
+                    continue;
+                }
                 let kind = match conv.conversation_type {
                     CT::Channel => "channel",
                     CT::ServerDm => "dm",

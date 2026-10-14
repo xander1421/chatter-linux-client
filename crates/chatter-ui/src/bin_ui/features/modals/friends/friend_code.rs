@@ -272,17 +272,14 @@ fn wire_copy_friend_code(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
 
                         match result {
                             Ok(status) if status.success() => {
-                                tracing::info!("Copied friend code to clipboard: {}", code_clone);
+                                tracing::info!("Copied friend code to clipboard");
                             }
                             _ => {
                                 match arboard::Clipboard::new()
                                     .and_then(|mut c| c.set_text(code_clone.clone()))
                                 {
                                     Ok(()) => {
-                                        tracing::info!(
-                                            "Copied friend code to clipboard: {}",
-                                            code_clone
-                                        );
+                                        tracing::info!("Copied friend code to clipboard");
                                     }
                                     Err(e) => {
                                         tracing::error!("Failed to copy to clipboard: {}", e);
@@ -295,7 +292,7 @@ fn wire_copy_friend_code(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
                 #[cfg(target_os = "android")]
                 match crate::platform::android::clipboard::set_text("Friend code", &code) {
                     Ok(()) => {
-                        tracing::info!("Copied friend code to clipboard: {}", code);
+                        tracing::info!("Copied friend code to clipboard");
                         w.set_friends_code_status("Copied to clipboard!".into());
                     }
                     Err(e) => {
