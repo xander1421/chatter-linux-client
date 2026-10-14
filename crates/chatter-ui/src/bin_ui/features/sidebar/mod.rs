@@ -5,7 +5,7 @@
 mod anon_mode;
 pub mod channel;
 pub mod dm;
-mod navigation;
+pub(crate) mod navigation;
 pub mod private_group;
 pub mod sections;
 
@@ -516,6 +516,8 @@ pub(crate) fn apply_chat_list(
     settle_arrivals(window.get_chat_rows(), arrivals);
     refresh_selection(window, ui_ctx);
     crate::bin_ui::features::auth::inbox::domain_handler::recompute_total_unread(window, ui_ctx);
+    #[cfg(target_os = "android")]
+    crate::platform::android::notification_route::open_pending(window);
 }
 
 /// A conversation's stored history changed without a new message arriving —

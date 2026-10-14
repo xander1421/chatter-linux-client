@@ -325,6 +325,15 @@ impl PushListener {
                                 first_failure_at = Some(Instant::now());
                             }
                             attempt = attempt.saturating_add(1);
+                            // ntfy explicitly throttled this subscriber. A
+                            // quick retry only extends the ban, especially
+                            // when several devices share one public IP.
+                            if matches!(
+                                e.downcast_ref::<PushError>(),
+                                Some(PushError::Status(429))
+                            ) {
+                                retry_delay = retry_delay.max(Duration::from_secs(60));
+                            }
                             let elapsed = first_failure_at
                                 .map(|t| t.elapsed())
                                 .unwrap_or_default();

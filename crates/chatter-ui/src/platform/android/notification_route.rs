@@ -66,11 +66,35 @@ pub fn open_pending(window: &crate::MainWindow) {
     {
         return;
     }
-    let key = PENDING_KEY
-        .lock()
-        .ok()
-        .and_then(|mut pending| pending.take());
-    if let Some(conversation) = key.and_then(|key| client.conversation_for_notification_key(&key)) {
-        crate::bin_ui::features::sidebar::select_conversation(window, conversation);
+    let key = PENDING_KEY.lock().ok().and_then(|pending| pending.clone());
+    let Some(target) = key
+        .as_deref()
+        .and_then(|key| client.notification_target_for_key(key))
+    else {
+        // A cold-start inbox arrival may not be in the sidebar yet. The next
+        // list refresh retries this key after the request has been persisted.
+        return;
+    };
+    if let Ok(mut pending) = PENDING_KEY.lock() {
+        if *pending == key {
+            *pending = None;
+        }
+    }
+    window.set_active_modal("none".into());
+    match target {
+        chatter_core::client::NotificationTarget::Conversation(conversation) => {
+            window.set_active_tab("chats".into());
+            window.set_mobile_show_chat(true);
+            crate::bin_ui::features::sidebar::select_conversation(window, conversation);
+        }
+        chatter_core::client::NotificationTarget::SecretRequest => {
+            window.set_mobile_show_chat(false);
+            crate::bin_ui::features::sidebar::navigation::load_pending_message_requests_count(
+                window, &client,
+            );
+            window.set_friends_modal_tab("requests".into());
+            window.set_friends_requests_sub_tab("private".into());
+            window.set_active_tab("contacts".into());
+        }
     }
 }

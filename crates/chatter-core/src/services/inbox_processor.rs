@@ -1901,7 +1901,6 @@ impl InboxEventProcessor {
 
         tokio::spawn(async move {
             let intro_msg_for_event = intro_msg.clone();
-            let (resolved, retry) = first_avatar_fetch(&anon_dm_service, avatar).await;
             let service_for_handle = anon_dm_service.clone();
             let result = tokio::task::spawn_blocking(move || {
                 service_for_handle.handle_request_encrypted(
@@ -1912,18 +1911,18 @@ impl InboxEventProcessor {
                     intro_msg.as_deref(),
                     profile_key,
                     encrypted_display_name,
-                    resolved,
+                    None,
                 )
             })
             .await;
-            if let (Ok(Ok(_)), Some(pointer)) = (&result, retry) {
+            if let (Ok(Ok(_)), Some(pointer)) = (&result, avatar) {
                 tokio::spawn(refresh_peer_avatar(
                     anon_dm_service,
                     event_bus.clone(),
                     anon_dm_id,
                     peer_id,
                     pointer,
-                    &crate::services::secret_avatar::RETRY_DELAYS[1..],
+                    &crate::services::secret_avatar::RETRY_DELAYS,
                 ));
             }
 
