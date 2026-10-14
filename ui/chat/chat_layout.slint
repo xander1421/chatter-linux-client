@@ -128,7 +128,14 @@ export component ChatLayout inherits Rectangle {
         : min(340px, (root.height + root.keyboard-inset) * 0.48);
     private property <bool> drawer-visible: (root.emoji-picker-visible || root.gif-picker-visible)
         && !root.selection-mode && root.composer-notice == "";
-    changed drawer-visible => { if !root.drawer-visible { root.drawer-search-focused = false; } }
+    private property <bool> instant-drawer-handover: false;
+    changed drawer-visible => {
+        if root.drawer-visible {
+            root.instant-drawer-handover = root.keyboard-inset > 0px;
+        } else {
+            root.drawer-search-focused = false;
+        }
+    }
     private property <bool> drawer-search-with-ime: root.drawer-visible
         && root.drawer-search-focused && root.keyboard-inset > 0px;
     // The pane already excludes the IME. Search lifts the drawer only while
@@ -145,6 +152,15 @@ export component ChatLayout inherits Rectangle {
         // Desktop popover: never taller than the gap between header and
         // composer, so a short window shrinks it rather than covering the title.
         : min(root.drawer-height, max(0px, root.drawer-search-room - Spacing.xs));
+    // On touch the drawer replaces the IME's occupied space. Drive both the
+    // composer and list from this one value, including during the IME handover.
+    property <length> drawer-occupied-height: root.mobile && root.drawer-visible
+        ? root.drawer-space : 0px;
+    animate drawer-occupied-height {
+        duration: root.instant-drawer-handover || root.keyboard-inset > 0px
+            ? 0ms : Materials.motion-standard;
+        easing: Materials.glide;
+    }
     in property <string> inserted-emoji;
     in property <int> insert-serial;
     changed insert-serial => {
@@ -281,7 +297,8 @@ export component ChatLayout inherits Rectangle {
         width: 100%;
         // Composer supplies its steady chrome reserve plus a circle row that
         // follows the lift, so the newest bubble stays above both droplets.
-        height: max(0px, root.height - bottom-chrome.height - composer.list-clearance-extra);
+        height: max(0px, root.height - bottom-chrome.height
+            - root.drawer-occupied-height - composer.list-clearance-extra);
         top-inset: top-chrome.height;
         bottom-inset: 0px;
         messages: root.messages;
@@ -509,7 +526,7 @@ export component ChatLayout inherits Rectangle {
         x: 0;
         width: root.width;
         height: self.preferred-height;
-        y: root.height - self.height;
+        y: root.height - self.height - root.drawer-occupied-height;
         padding-left: root.mobile ? Spacing.sm : Spacing.none;
         padding-right: self.padding-left;
         // Floating composer — placed directly in VerticalLayout so its
@@ -610,7 +627,10 @@ export component ChatLayout inherits Rectangle {
                 root.gif-picker-visible = false;
                 root.emoji-clicked();
             }
-            keyboard-requested => { root.composer-keyboard-requested(root.drawer-height); }
+            keyboard-requested => {
+                root.instant-drawer-handover = true;
+                root.composer-keyboard-requested(root.drawer-height);
+            }
             input-dismissed => { root.composer-focus-released(); }
             input-focused => {
                 root.emoji-picker-visible = false;
@@ -626,13 +646,6 @@ export component ChatLayout inherits Rectangle {
             typing-changed(is-typing) => {
                 root.typing-changed(is-typing);
             }
-        }
-
-        // The drawer itself is a root-level element (below); on touch it is
-        // docked here, so hold its row open and the thumb room under it.
-        if root.mobile && root.drawer-visible: Rectangle {
-            vertical-stretch: 0;
-            height: root.drawer-space;
         }
 
         // Thumb room under the composer. On a phone it otherwise sits flush on
@@ -659,7 +672,7 @@ export component ChatLayout inherits Rectangle {
         }
     }
 
-    if root.drawer-visible: picker-drawer := GlassSurface {
+    if root.drawer-visible || (root.mobile && root.drawer-occupied-height > 0px): picker-drawer := GlassSurface {
         init => {
             root.drawer-search-focused = false;
             // A fullscreen call can destroy/remount the chat while picker
@@ -667,22 +680,24 @@ export component ChatLayout inherits Rectangle {
             root.composer-focus-released();
         }
         // Touch: the whole pane width, docked under the composer where the
-        // IME stood (bottom-chrome reserves the row). Desktop: a popover
+        // IME stood (drawer-occupied-height reserves the space). Desktop: a popover
         // above the composer, aligned with the emoji button, over the
         // conversation — the input stays pinned at the bottom and nothing
         // reserves a row beside it (RC87). No wider than a picker needs:
         // across a 1600px pane two GIF tiles were 10:1 strips (RC86).
         x: root.mobile ? Spacing.sm : 0px;
         width: root.mobile ? root.width - 2 * Spacing.sm : min(root.width, 420px);
-        y: root.mobile ? root.height - Spacing.sm - root.drawer-space
+        y: root.mobile ? root.height - Spacing.sm - root.drawer-occupied-height
             : root.height - bottom-chrome.height - Spacing.xs - root.drawer-space;
-        height: root.drawer-space;
+        height: root.mobile ? root.drawer-occupied-height : root.drawer-space;
+        opacity: root.drawer-visible ? 1 : 0;
+        animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
         elevation: root.mobile ? 3 : 4;
         clip: true;
         // Derive chrome from the independent drawer budget, never from
         // a layout's measured height. Keep room for embedded picker chrome
         // even when the IME leaves too little space for full touch targets.
-        private property <float> chrome-scale: min(1, max(0px, root.drawer-space - Spacing.touch-target-min)
+        private property <float> chrome-scale: min(1, max(0px, self.height - Spacing.touch-target-min)
             / (2 * Spacing.touch-target-min + 2 * Spacing.sm + 2 * Spacing.xs));
         private property <length> drawer-padding: Spacing.sm * self.chrome-scale;
         private property <length> drawer-gap: Spacing.xs * self.chrome-scale;
@@ -692,7 +707,7 @@ export component ChatLayout inherits Rectangle {
         // where a mode switch is looked for.
         private property <bool> tabs-on-top: !root.mobile;
         private property <length> tabs-y: self.tabs-on-top ? self.drawer-padding
-            : root.drawer-space - self.drawer-padding - self.control-height;
+            : self.height - self.drawer-padding - self.control-height;
         private property <length> search-y: self.tabs-on-top
             ? self.drawer-padding + self.control-height + self.drawer-gap
             : self.drawer-padding;
@@ -714,10 +729,10 @@ export component ChatLayout inherits Rectangle {
         }
         // The message list runs full height underneath: swallow clicks that
         // land between the picker's controls.
-        TouchArea {}
+        TouchArea { enabled: root.drawer-visible; }
         Rectangle {
             width: parent.width;
-            height: root.drawer-space;
+            height: picker-drawer.height;
             drawer-search-row := Rectangle {
                 x: picker-drawer.drawer-padding;
                 y: picker-drawer.search-y;
@@ -784,7 +799,7 @@ export component ChatLayout inherits Rectangle {
                 x: picker-drawer.drawer-padding;
                 y: drawer-search-row.y + drawer-search-row.height + picker-drawer.drawer-gap;
                 width: drawer-search-row.width;
-                height: max(0px, root.drawer-space - 2 * picker-drawer.drawer-padding
+                height: max(0px, picker-drawer.height - 2 * picker-drawer.drawer-padding
                     - 2 * picker-drawer.drawer-gap - 2 * picker-drawer.control-height);
                 clip: true;
                 if root.emoji-picker-visible: EmojiPicker {
