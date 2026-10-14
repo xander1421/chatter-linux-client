@@ -62,6 +62,46 @@ impl SharedContentRepository {
         Self { db }
     }
 
+    /// Local, global filename/URL lookup for unified search. The caller
+    /// applies the active mode's conversation visibility before presentation.
+    /// A blank query browses recent shared content within the selected tab.
+    pub fn search_global(
+        &self,
+        query: &str,
+        limit: u32,
+    ) -> Result<Vec<SharedContentRow>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let pattern = format!(
+            "%{}%",
+            query
+                .replace('\\', "\\\\")
+                .replace('%', "\\%")
+                .replace('_', "\\_")
+        );
+        let mut stmt = conn.prepare(
+            "SELECT s.message_id, s.attachment_id, s.category, s.sent_at,
+                    s.title, s.size_bytes, a.thumbnail_bytes
+             FROM shared_content s
+             JOIN messages m ON m.id = s.message_id
+             LEFT JOIN attachments a ON a.id = s.attachment_id
+             WHERE s.category != 'unsorted' AND m.is_deleted = 0
+               AND s.title LIKE ?1 ESCAPE '\\'
+             ORDER BY s.sent_at DESC, s.rowid DESC LIMIT ?2",
+        )?;
+        let rows = stmt.query_map(params![pattern, limit], |row| {
+            Ok(SharedContentRow {
+                message_id: row.get(0)?,
+                attachment_id: row.get(1)?,
+                category: row.get(2)?,
+                sent_at: row.get(3)?,
+                title: row.get(4)?,
+                size_bytes: row.get(5)?,
+                thumbnail: row.get(6)?,
+            })
+        })?;
+        rows.collect::<Result<Vec<_>, _>>().map_err(Into::into)
+    }
+
     /// One page of a conversation's tab, newest first.
     ///
     /// `offset` pages backwards through the same ordering. Keyset paging
@@ -409,6 +449,29 @@ mod tests {
         m.content = content;
         m.attachments = atts;
         m
+    }
+
+    #[test]
+    fn global_search_finds_local_names_and_escapes_like_wildcards() {
+        let db = setup_db();
+        let atts = AttachmentRepository::new(db.clone());
+        let msgs = UnifiedMessageRepository::new(db.clone());
+        let shared = SharedContentRepository::new(db);
+        for (name, timestamp) in [("plan_100%.pdf", 100), ("plan-other.pdf", 200)] {
+            let file = attachment(name, "application/pdf", false);
+            atts.insert(&file).unwrap();
+            msgs.insert(&message(
+                &ChannelId::new(),
+                timestamp,
+                MessageContent::Mixed(MixedContent::attachments_only(vec![file.id])),
+                vec![file.id],
+            ))
+            .unwrap();
+        }
+        let hits = shared.search_global("100%", 10).unwrap();
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].title, "plan_100%.pdf");
+        assert_eq!(shared.search_global("", 10).unwrap().len(), 2);
     }
 
     #[test]

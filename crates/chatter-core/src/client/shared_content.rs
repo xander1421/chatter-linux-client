@@ -9,11 +9,64 @@ use std::sync::Arc;
 
 use crate::client::ChatterClient;
 use crate::domain::attachment::SharedCategory;
+use crate::services::search::{SearchCategory, SearchDocument, SearchQuery};
 use crate::state::ActiveConversation;
 use crate::storage::repositories::SharedContentRepository;
+use crate::storage::repositories::SharedContentRow;
 use crate::ui::{SharedContentItemData, SharedTabData};
 
 impl ChatterClient {
+    /// Search the local shared-content index across only conversations that
+    /// are visible in the current Shield mode. No server query is involved.
+    pub fn search_shared_content_visible(
+        &self,
+        query: &SearchQuery,
+        limit: usize,
+    ) -> Vec<SharedContentRow> {
+        let joined_channels: std::collections::HashSet<String> = self
+            .list_channels()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|channel| channel.id.to_string())
+            .collect();
+        let rows = match self.shared_content_repo().search_global(&query.text, 5000) {
+            Ok(rows) => rows,
+            Err(error) => {
+                tracing::error!(%error, "shared content search");
+                return Vec::new();
+            }
+        };
+        let candidates = rows.into_iter().filter_map(|row| {
+            let message_id = row.message_id.parse().ok()?;
+            let message = self.get_message_local(&message_id)?;
+            if message.conversation_type == crate::domain::message::ConversationType::Channel
+                && !joined_channels.contains(&message.conversation_id.to_string())
+            {
+                return None;
+            }
+            if !self.visible_in_mode(&message.conversation_type)
+                || self.is_blocked_conversation(
+                    &message.conversation_type,
+                    &message.conversation_id.to_string(),
+                )
+            {
+                return None;
+            }
+            let category = SearchCategory::from_shared_kind(&row.category);
+            Some(SharedSearchHit {
+                sender_id: message.sender_id.map(|id| id.to_string()),
+                chat_id: message.conversation_id.to_string(),
+                row,
+                category,
+            })
+        });
+        query
+            .apply(candidates)
+            .into_iter()
+            .take(limit)
+            .map(|hit| hit.row)
+            .collect()
+    }
     /// One page of a conversation's shared-content tab, newest first.
     ///
     /// Async because `SharedContentRepository` is a synchronous SQLite handle:
@@ -131,6 +184,34 @@ impl ChatterClient {
             self.peer_presence(user_id),
             repo.last_seen_at(user_id).ok().flatten(),
         )
+    }
+}
+
+struct SharedSearchHit {
+    row: SharedContentRow,
+    category: SearchCategory,
+    sender_id: Option<String>,
+    chat_id: String,
+}
+
+impl SearchDocument for SharedSearchHit {
+    fn category(&self) -> SearchCategory {
+        self.category
+    }
+    fn search_text(&self) -> &str {
+        &self.row.title
+    }
+    fn created_at(&self) -> chrono::DateTime<chrono::Utc> {
+        chrono::DateTime::from_timestamp_nanos(self.row.sent_at as i64)
+    }
+    fn size_bytes(&self) -> u64 {
+        self.row.size_bytes
+    }
+    fn sender_id(&self) -> Option<&str> {
+        self.sender_id.as_deref()
+    }
+    fn chat_id(&self) -> &str {
+        &self.chat_id
     }
 }
 

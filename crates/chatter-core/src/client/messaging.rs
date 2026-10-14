@@ -1162,6 +1162,12 @@ impl ChatterClient {
         query: &str,
         limit: u32,
     ) -> Vec<crate::domain::message::Message> {
+        let joined_channels: std::collections::HashSet<_> = self
+            .list_channels()
+            .unwrap_or_default()
+            .into_iter()
+            .map(|channel| channel.id)
+            .collect();
         let hits = match self.messages().search_local(query, None, limit) {
             Ok(hits) => hits,
             Err(e) => {
@@ -1173,6 +1179,8 @@ impl ChatterClient {
             .filter_map(|hit| self.get_message_local(&hit.message_id))
             .filter(|msg| {
                 self.visible_in_mode(&msg.conversation_type)
+                    && (msg.conversation_type != crate::domain::message::ConversationType::Channel
+                        || joined_channels.contains(&msg.conversation_id))
                     && !self.is_blocked_conversation(
                         &msg.conversation_type,
                         &msg.conversation_id.to_string(),
@@ -2199,6 +2207,9 @@ mod local_friends_tests {
 #[cfg(test)]
 mod search_hit_tests {
     use crate::client::ChatterClient;
+    use crate::domain::channel::{
+        Channel, ChannelType, MemberRole, Membership, NotificationPreference,
+    };
     use crate::domain::ids::{ChannelId, UserId};
     use crate::domain::message::{ConversationType, Message};
 
@@ -2247,6 +2258,67 @@ mod search_hit_tests {
                 ("saved_messages", "saved-messages".to_string())
             ]
         );
+    }
+
+    #[tokio::test]
+    async fn global_search_does_not_surface_messages_from_left_channels() {
+        static MOCK_KEYRING: std::sync::Once = std::sync::Once::new();
+        MOCK_KEYRING.call_once(|| {
+            keyring::set_default_store(crate::system::keyring::test_credential_store());
+        });
+        let dir = tempfile::tempdir().unwrap();
+        let client = ChatterClient::builder()
+            .server_url("https://localhost:1")
+            .data_dir(dir.path().to_str().unwrap())
+            .build()
+            .expect("build client");
+        let me = UserId::new();
+        client
+            .messages()
+            .settings_repo
+            .set_string(
+                crate::storage::repositories::settings_repo::keys::CURRENT_USER_ID,
+                &me.to_string(),
+            )
+            .unwrap();
+        client.messages().user_repo.ensure_user_exists(&me).unwrap();
+        let joined = ChannelId::new();
+        let left = ChannelId::new();
+        for (id, name) in [(joined, "joined"), (left, "left")] {
+            client
+                .services
+                .channel_repo
+                .insert(&Channel::new(id, name.into(), ChannelType::Public, me))
+                .unwrap();
+            client
+                .messages()
+                .message_repo
+                .insert(&Message::new_text(
+                    id,
+                    ConversationType::Channel,
+                    Some(me),
+                    "search privacy".into(),
+                    1,
+                ))
+                .unwrap();
+        }
+        client
+            .services
+            .channel_repo
+            .insert_membership(&Membership {
+                channel_id: joined,
+                user_id: me,
+                role: MemberRole::Owner,
+                joined_at: chrono::Utc::now(),
+                last_read_message_id: None,
+                is_muted: false,
+                muted_until: None,
+                notification_preference: NotificationPreference::All,
+            })
+            .unwrap();
+        let hits = client.search_messages_visible("search privacy", 10);
+        assert_eq!(hits.len(), 1);
+        assert_eq!(hits[0].conversation_id, joined);
     }
 }
 
