@@ -33,60 +33,88 @@ export struct PendingAttachmentData {
     thumbnail: image,
 }
 
-// The outer edge stays on the composer edge. Only the inner flank rounds into
-// the field, so the action reads as a droplet drawn from the same surface.
-component EdgeDroplet inherits Path {
-    in property <bool> trailing: false;
-    fill: Materials.opaque;
-    viewbox-width: 100;
-    viewbox-height: 100;
+// One closed contour for the field and both droplets. The circle quarters use
+// the standard cubic circle constant. Each inner flank leaves its circle with
+// a vertical tangent, narrows to a 24px waist, then joins the field with a
+// horizontal tangent. The outer flanks remain flush with the composer edges.
+component LiquidComposerSilhouette inherits Path {
+    in property <float> rise;
+    in property <float> field-top;
+    in property <float> shell-height;
+    in property <bool> trailing-drop;
+    property <float> w: self.width / 1px;
+    property <float> h: self.height / 1px;
+    property <float> p: min(1.03, max(0, rise));
+    property <float> r: 16 + 8 * p;
+    property <float> cy: field-top * (1 - p) + shell-height * 0.5 * p;
+    property <float> top: field-top * (1 - p) + (cy - r) * p;
+    property <float> side-y: (field-top + 16) * (1 - p) + cy * p;
+    property <float> inner-x: r * (1 + p);
+    property <float> waist-x: 16 + 25 * p;
+    property <float> waist-y: field-top - 14 * p;
+    property <float> join-x: 16 + 59 * p;
+    property <float> ripple: 12 * p * (1 - min(1, p));
+    property <float> k: 0.55228475;
+    fill: Appearance.glass-effects ? Materials.regular : Materials.opaque;
+    stroke: Materials.glass-edge;
+    stroke-width: Materials.glass-edge-width;
+    viewbox-width: w;
+    viewbox-height: h;
     fit: fill;
-    MoveTo { x: trailing ? 100 : 0; y: 100; }
-    LineTo { x: trailing ? 100 : 0; y: 0; }
-    LineTo { x: trailing ? 46 : 54; y: 0; }
-    CubicTo { control-1-x: trailing ? 14 : 86; control-1-y: 0; control-2-x: trailing ? 0 : 100; control-2-y: 19; x: trailing ? 0 : 100; y: 50; }
-    CubicTo { control-1-x: trailing ? 0 : 100; control-1-y: 79; control-2-x: trailing ? 23 : 77; control-2-y: 100; x: trailing ? 52 : 48; y: 100; }
-    Close { }
-}
-
-// The narrow inner flank opens into a broad foot. An opaque shared fill makes
-// the overlap with both bodies seamless in light and dark appearances.
-component EdgeMeniscus inherits Path {
-    in property <bool> trailing: false;
-    fill: Materials.opaque;
-    viewbox-width: 100;
-    viewbox-height: 100;
-    fit: fill;
-    MoveTo { x: trailing ? 100 : 0; y: 0; }
-    LineTo { x: trailing ? 55 : 45; y: 0; }
-    CubicTo { control-1-x: trailing ? 69 : 31; control-1-y: 22; control-2-x: trailing ? 67 : 33; control-2-y: 38; x: trailing ? 65 : 35; y: 53; }
-    CubicTo { control-1-x: trailing ? 62 : 38; control-1-y: 78; control-2-x: trailing ? 32 : 68; control-2-y: 100; x: trailing ? 0 : 100; y: 100; }
-    LineTo { x: trailing ? 100 : 0; y: 100; }
-    Close { }
-}
-
-component LiquidNeck inherits Path {
-    fill: Materials.opaque;
-    viewbox-width: 100;
-    viewbox-height: 100;
-    fit: fill;
-    MoveTo { x: 20; y: 0; }
-    CubicTo { control-1-x: 20; control-1-y: 34; control-2-x: 32; control-2-y: 34; x: 32; y: 52; }
-    CubicTo { control-1-x: 32; control-1-y: 70; control-2-x: 15; control-2-y: 78; x: 15; y: 100; }
-    LineTo { x: 85; y: 100; }
-    CubicTo { control-1-x: 85; control-1-y: 78; control-2-x: 68; control-2-y: 70; x: 68; y: 52; }
-    CubicTo { control-1-x: 68; control-1-y: 34; control-2-x: 80; control-2-y: 34; x: 80; y: 0; }
+    MoveTo { x: 0; y: h - 16; }
+    LineTo { x: 0; y: side-y; }
+    CubicTo { control-1-x: 0; control-1-y: side-y - k * r;
+        control-2-x: r * (1 - k); control-2-y: top; x: r; y: top; }
+    CubicTo { control-1-x: r + k * r * p; control-1-y: top;
+        control-2-x: inner-x; control-2-y: cy - k * r * p; x: inner-x; y: cy; }
+    CubicTo { control-1-x: inner-x; control-1-y: cy + 12 * p;
+        control-2-x: waist-x; control-2-y: waist-y - 9 * p; x: waist-x; y: waist-y; }
+    CubicTo { control-1-x: waist-x; control-1-y: waist-y + 9 * p;
+        control-2-x: join-x - 14 * p; control-2-y: field-top; x: join-x; y: field-top; }
+    CubicTo { control-1-x: join-x + 12; control-1-y: field-top;
+        control-2-x: join-x + 24; control-2-y: field-top - ripple;
+        x: join-x + 36; y: field-top; }
+    LineTo { x: trailing-drop ? w - join-x - 36 : w - 16; y: field-top; }
+    CubicTo { control-1-x: trailing-drop ? w - join-x - 24 : w - 16;
+        control-1-y: trailing-drop ? field-top - ripple : field-top;
+        control-2-x: trailing-drop ? w - join-x - 12 : w - 16;
+        control-2-y: field-top;
+        x: trailing-drop ? w - join-x : w - 16; y: field-top; }
+    CubicTo { control-1-x: trailing-drop ? w - join-x + 14 * p : w - 16;
+        control-1-y: field-top;
+        control-2-x: trailing-drop ? w - waist-x : w;
+        control-2-y: trailing-drop ? waist-y + 9 * p : field-top;
+        x: trailing-drop ? w - waist-x : w; y: trailing-drop ? waist-y : field-top + 16; }
+    CubicTo { control-1-x: trailing-drop ? w - waist-x : w;
+        control-1-y: trailing-drop ? waist-y - 9 * p : field-top + 16;
+        control-2-x: trailing-drop ? w - inner-x : w;
+        control-2-y: trailing-drop ? cy + 12 * p : field-top + 16;
+        x: trailing-drop ? w - inner-x : w; y: trailing-drop ? cy : field-top + 16; }
+    CubicTo { control-1-x: trailing-drop ? w - inner-x : w;
+        control-1-y: trailing-drop ? cy - k * r * p : field-top + 16;
+        control-2-x: trailing-drop ? w - r - k * r * p : w;
+        control-2-y: trailing-drop ? top : field-top + 16;
+        x: trailing-drop ? w - r : w; y: trailing-drop ? top : field-top + 16; }
+    CubicTo { control-1-x: trailing-drop ? w - r * (1 - k) : w;
+        control-1-y: trailing-drop ? top : field-top + 16;
+        control-2-x: w; control-2-y: trailing-drop ? side-y - k * r : field-top + 16;
+        x: w; y: trailing-drop ? side-y : field-top + 16; }
+    LineTo { x: w; y: h - 16; }
+    CubicTo { control-1-x: w; control-1-y: h - 7.16;
+        control-2-x: w - 7.16; control-2-y: h; x: w - 16; y: h; }
+    LineTo { x: 16; y: h; }
+    CubicTo { control-1-x: 7.16; control-1-y: h;
+        control-2-x: 0; control-2-y: h - 7.16; x: 0; y: h - 16; }
     Close { }
 }
 
 export component MessageComposer inherits GlassSurface {
     material-enabled: VoiceRecording.active;
-    background: !VoiceRecording.active && (Appearance.reduce-motion
-        ? root.surface-opacity < 0.999 : root.lift-progress <= 0.001) ? Materials.opaque : transparent;
+    background: transparent;
     material-level: 2;
     elevation: 3;
     border-radius: Spacing.radius-chrome;
-    border-width: !VoiceRecording.active && root.lift-progress <= 0.001 ? Materials.glass-edge-width : 0px;
+    border-width: 0px;
     border-color: Materials.glass-edge;
 
     in property <bool> collapsed: false;
@@ -206,47 +234,11 @@ export component MessageComposer inherits GlassSurface {
     // participates without being committed; attachments also raise the controls.
     // A reply raises them too: its preview lives in the raised toolbar gap.
     property <bool> raised-actions: text != "" || text-input.preedit-text != "" || root.has-attachments || root.is-replying;
-    // A fixed-step damped spring keeps velocity when the target reverses.
-    // It runs only during motion; no path strings or heap objects are built per frame.
-    property <float> lift-progress: 0;
-    property <float> lift-velocity: 0;
+    // The same spring as other chrome drives the field bulge and droplet rise.
+    // Slint retargets this animation from its current value when the draft changes.
+    property <float> lift-progress: raised-actions ? 1 : 0;
+    animate lift-progress { duration: Materials.motion-emphasized; easing: Materials.spring; }
     property <float> lift-geometry: max(0, root.lift-progress);
-    property <float> impact-squash: max(0, root.lift-progress - 1);
-    changed raised-actions => {
-        if Appearance.reduce-motion {
-            root.lift-progress = root.raised-actions ? 1 : 0;
-            root.lift-velocity = 0;
-        } else {
-            liquid-tick.running = true;
-        }
-    }
-    liquid-tick := Timer {
-        interval: 16ms;
-        running: false;
-        triggered => {
-            let target = root.raised-actions ? 1 : 0;
-            if Appearance.reduce-motion {
-                root.lift-progress = target;
-                root.lift-velocity = 0;
-                self.running = false;
-                return;
-            }
-            root.lift-velocity = (root.lift-velocity + (target - root.lift-progress) * 0.080) * 0.76;
-            root.lift-progress += root.lift-velocity;
-            if abs(root.lift-velocity) < 0.0005 && abs(target - root.lift-progress) < 0.001 {
-                root.lift-progress = target;
-                root.lift-velocity = 0;
-                self.running = false;
-            }
-        }
-    }
-    property <float> surface-opacity: raised-actions ? 1 : 0;
-    animate surface-opacity { duration: Appearance.reduce-motion ? 90ms : 0ms; easing: linear; }
-    property <float> content-pressure: is-replying || has-attachments ? 1 : 0;
-    animate content-pressure {
-        duration: Materials.motion-emphasized;
-        easing: Materials.spring;
-    }
     property <float> reply-reveal: is-replying ? 1 : 0;
     animate reply-reveal {
         duration: Appearance.reduce-motion ? 90ms : Materials.motion-standard;
@@ -716,98 +708,21 @@ export component MessageComposer inherits GlassSurface {
                     - root.row-padding - (root.content-height - Spacing.touch-target-min) / 2);
             property <length> lower-action-y: root.row-padding + root.raised-toolbar-height + root.content-height - Spacing.touch-target-min;
 
-            // Decorative surfaces never reparent or replace the native input.
-            left-action-surface := GlassSurface {
-                x: 0px;
-                y: 0px;
-                visible: false;
-                width: Spacing.touch-target-min + root.row-padding * 2;
-                height: root.top-shell-height;
-                material-enabled: false;
-            }
-            if root.show-attachment-action: right-action-surface := GlassSurface {
-                y: 0px;
-                x: parent.width - self.width;
-                visible: false;
-                width: Spacing.touch-target-min + root.row-padding * 2;
-                height: root.top-shell-height;
-                material-enabled: false;
-            }
-            field-surface := GlassSurface {
-                visible: Appearance.reduce-motion ? root.surface-opacity > 0.001 : root.lift-progress > 0.001;
-                opacity: Appearance.reduce-motion ? root.surface-opacity : 1;
-                y: root.raised-toolbar-height;
+            // The field, two round droplets, their waists, and the optical rim
+            // are a single shape. It sits below the controls and never owns input.
+            composer-silhouette := LiquidComposerSilhouette {
                 width: parent.width;
-                height: root.content-height + root.row-padding * 2;
-                material-enabled: false;
-                background: Materials.opaque;
-                border-width: Materials.glass-edge-width;
-                border-color: Materials.glass-edge;
-                border-radius: Spacing.radius-chrome;
-                material-level: root.material-level;
-                elevation: root.elevation;
-                backdrop-paused: root.backdrop-paused;
-            }
-
-            left-body := EdgeDroplet {
-                x: 0px;
-                y: 0px;
-                width: left-action-surface.width * (1 - 0.05 * root.content-pressure)
-                    - min(8px, abs(root.lift-velocity) * 90px) + min(7px, root.impact-squash * 55px);
-                height: root.top-shell-height + min(8px, abs(root.lift-velocity) * 95px)
-                    - min(6px, root.impact-squash * 45px);
-                visible: root.lift-progress > 0.001;
-                opacity: Appearance.reduce-motion ? root.surface-opacity : 1;
-            }
-            if root.show-attachment-action: right-body := EdgeDroplet {
-                trailing: true;
-                width: left-body.width;
-                x: parent.width - self.width;
-                y: 0px;
-                height: left-body.height;
-                visible: root.lift-progress > 0.001;
-                opacity: Appearance.reduce-motion ? root.surface-opacity : 1;
-            }
-
-            // Keep the outside vertical and pull only the inner flank inward.
-            // The full-width foot covers the field rim without a hairline seam.
-            left-neck := EdgeMeniscus {
-                x: 0px;
-                y: root.top-shell-height - 5px;
-                width: left-body.width;
-                height: max(0px, field-surface.y - self.y + 7px);
-                visible: !Appearance.reduce-motion && root.lift-progress > 0.001 && self.height > 1px;
-            }
-            if root.show-attachment-action: right-neck := EdgeMeniscus {
-                trailing: true;
-                width: left-body.width;
-                x: parent.width - self.width;
-                y: root.top-shell-height - 5px;
-                height: max(0px, field-surface.y - self.y + 7px);
-                visible: !Appearance.reduce-motion && root.lift-progress > 0.001 && self.height > 1px;
-            }
-            if root.is-replying: reply-neck := LiquidNeck {
-                x: (parent.width - self.width) / 2;
-                y: (1 - root.reply-reveal) * root.raised-toolbar-height + root.reply-row-height - 2px;
-                width: 50px;
-                height: max(0px, field-surface.y - self.y + 5px);
-                visible: !Appearance.reduce-motion && self.height > 1px;
-                opacity: min(1, max(0, root.reply-reveal));
-            }
-            if root.has-attachments: strip-neck := LiquidNeck {
-                x: (parent.width - self.width) / 2;
-                y: (root.is-replying ? root.reply-row-height + Spacing.xs : 0px)
-                    + (1 - root.strip-reveal) * root.action-shell-height
-                    + root.action-shell-height - 2px;
-                width: 50px;
-                height: max(0px, field-surface.y - self.y + 5px);
-                visible: !Appearance.reduce-motion && self.height > 1px;
-                opacity: min(1, max(0, root.strip-reveal));
+                height: parent.height;
+                rise: root.lift-geometry;
+                field-top: root.raised-toolbar-height / 1px;
+                shell-height: root.top-shell-height / 1px;
+                trailing-drop: root.show-attachment-action;
+                visible: !VoiceRecording.active;
             }
 
             // Reply preview in the gap between the raised emoji and attach shells.
             if root.is-replying: reply-chip := GlassSurface {
-                x: left-action-surface.width + Spacing.xs;
+                x: Spacing.touch-target-min + root.row-padding * 2 + Spacing.xs;
                 y: Appearance.reduce-motion ? 0px : (1 - root.reply-reveal) * root.raised-toolbar-height;
                 width: max(0px, parent.width - (root.show-attachment-action ? root.action-shell-height : 0px) - self.x - Spacing.xs);
                 height: root.reply-row-height;
@@ -910,7 +825,7 @@ export component MessageComposer inherits GlassSurface {
             // Bounded previews occupy only the gap between the individual action shells,
             // one row below the reply preview when both are present.
             if root.has-attachments: attachment-strip := GlassSurface {
-                x: left-action-surface.width + Spacing.xs;
+                x: Spacing.touch-target-min + root.row-padding * 2 + Spacing.xs;
                 y: (root.is-replying ? root.reply-row-height + Spacing.xs : 0px)
                     + (Appearance.reduce-motion ? 0px : (1 - root.strip-reveal) * root.action-shell-height);
                 width: max(0px, parent.width - (root.show-attachment-action ? root.action-shell-height : 0px) - self.x - Spacing.xs);
@@ -1113,7 +1028,7 @@ export component MessageComposer inherits GlassSurface {
             // 48px, not 36px: measured on a phone the old box was a 36dp target,
             // under the 48dp minimum. The icon keeps its size; only the box grows.
             Rectangle {
-                x: root.row-padding;
+                x: root.row-padding * (1 - min(1, root.lift-geometry));
                 y: parent.action-y;
                 width: Spacing.touch-target-min;
                 height: Spacing.touch-target-min;
@@ -1278,7 +1193,7 @@ export component MessageComposer inherits GlassSurface {
             // would be an offer the transport declines. Hidden while editing:
             // an edit changes text only.
             if root.show-attachment-action: Rectangle {
-                x: parent.width - root.row-padding - Spacing.touch-target-min
+                x: parent.width - root.row-padding * (1 - min(1, root.lift-geometry)) - Spacing.touch-target-min
                     - (1 - root.lift-geometry) * (root.show-terminal-action ? Spacing.touch-target-min + Spacing.xs : 0px);
                 y: parent.action-y;
                 width: Spacing.touch-target-min;
