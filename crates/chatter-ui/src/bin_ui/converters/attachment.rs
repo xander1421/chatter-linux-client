@@ -121,10 +121,17 @@ impl AttachmentDisplayData {
 
     /// Convert to Slint MessageAttachmentData (must be called on UI thread).
     pub fn to_slint(&self) -> MessageAttachmentData {
+        self.to_slint_with_media(true)
+    }
+
+    /// A placeholder with the final image aspect ratio for the first paint.
+    pub fn to_slint_with_media(&self, media_ready: bool) -> MessageAttachmentData {
         // Priority 0: Use pre-decoded pixels (fastest - no decoding on UI thread)
         // Priority 1: Try to load thumbnail from sender-provided bytes (instant preview)
         // Priority 2: Load from local path after download
-        let (has_thumbnail, thumbnail, img_width, img_height) = if let Some(pixels) =
+        let (has_thumbnail, thumbnail, img_width, img_height) = if !media_ready {
+            (false, Image::default(), self.width, self.height)
+        } else if let Some(pixels) =
             &self.thumbnail_pixels
         {
             // Pre-decoded and shared: wrapping it is a reference count, no copy.

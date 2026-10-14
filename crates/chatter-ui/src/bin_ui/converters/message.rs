@@ -159,7 +159,11 @@ impl MessageDisplayData {
             }
         }
 
-        // Decode reply-bubble thumbnail
+        self.decode_reply_thumbnail();
+    }
+
+    fn decode_reply_thumbnail(&mut self) {
+        // Quote thumbnails are small and determine the quote's first layout.
         if let Some(bytes) = &self.reply_to_thumbnail_bytes {
             if !bytes.is_empty() {
                 self.reply_to_thumbnail_decoded = image::load_from_memory(bytes).ok().map(|img| {
@@ -175,8 +179,17 @@ impl MessageDisplayData {
     ///
     /// The `current_user_id` is used to determine call direction (outgoing vs incoming).
     pub fn to_slint_with_user(&self, current_user_id: &str) -> MessageItemData {
+        self.to_slint_with_media(current_user_id, true)
+    }
+
+    /// First paint keeps image geometry while pixel decoding happens off-thread.
+    pub fn to_slint_preview_with_user(&self, current_user_id: &str) -> MessageItemData {
+        self.to_slint_with_media(current_user_id, false)
+    }
+
+    fn to_slint_with_media(&self, current_user_id: &str, media_ready: bool) -> MessageItemData {
         let slint_attachments: Vec<crate::MessageAttachmentData> =
-            self.attachments.iter().map(|a| a.to_slint()).collect();
+            self.attachments.iter().map(|a| a.to_slint_with_media(media_ready)).collect();
 
         // Preserve channel event phases; DM records display direction/result.
         let call_type = if self.is_call {
@@ -540,6 +553,33 @@ pub fn messages_to_display_batch(
     reply_not_found: impl Fn(&Message) -> bool,
     reply_parent_media: impl Fn(&Message) -> chatter_core::client::ReplyParentMedia,
 ) -> Vec<MessageDisplayData> {
+    messages_to_display_batch_impl(messages, sender_names, sender_avatar, resolve_attachment,
+        reply_author_name, reply_not_found, reply_parent_media, true)
+}
+
+pub fn messages_to_display_batch_deferred(
+    messages: &[Message],
+    sender_names: impl FnOnce(&[Message]) -> Vec<String>,
+    sender_avatar: impl Fn(&Message) -> Option<Vec<u8>>,
+    resolve_attachment: impl Fn(&chatter_core::domain::AttachmentId) -> Option<Attachment>,
+    reply_author_name: impl Fn(&Message) -> String,
+    reply_not_found: impl Fn(&Message) -> bool,
+    reply_parent_media: impl Fn(&Message) -> chatter_core::client::ReplyParentMedia,
+) -> Vec<MessageDisplayData> {
+    messages_to_display_batch_impl(messages, sender_names, sender_avatar, resolve_attachment,
+        reply_author_name, reply_not_found, reply_parent_media, false)
+}
+
+fn messages_to_display_batch_impl(
+    messages: &[Message],
+    sender_names: impl FnOnce(&[Message]) -> Vec<String>,
+    sender_avatar: impl Fn(&Message) -> Option<Vec<u8>>,
+    resolve_attachment: impl Fn(&chatter_core::domain::AttachmentId) -> Option<Attachment>,
+    reply_author_name: impl Fn(&Message) -> String,
+    reply_not_found: impl Fn(&Message) -> bool,
+    reply_parent_media: impl Fn(&Message) -> chatter_core::client::ReplyParentMedia,
+    decode_media: bool,
+) -> Vec<MessageDisplayData> {
     let mut display_messages = Vec::with_capacity(messages.len());
     // The whole page's names in one call (core batches the lookup).
     let display_senders: Vec<_> = messages.iter().map(call_display_sender).collect();
@@ -598,7 +638,11 @@ pub fn messages_to_display_batch(
 
     // Pre-decode attachment + reply thumbnails before UI thread
     for msg in &mut display_messages {
-        msg.decode_attachment_thumbnails();
+        if decode_media {
+            msg.decode_attachment_thumbnails();
+        } else {
+            msg.decode_reply_thumbnail();
+        }
     }
 
     display_messages

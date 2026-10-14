@@ -9,7 +9,7 @@ use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::{ChannelId, UserId};
 
-use crate::bin_ui::converters::messages_to_display_batch;
+use crate::bin_ui::converters::messages_to_display_batch_deferred;
 use crate::MainWindow;
 
 use super::stop_audio_playback;
@@ -201,10 +201,12 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
     window.on_dm_selected(move |dm_id: SharedString| {
         let open_started = std::time::Instant::now();
+        tracing::info!(kind = "dm", stage = "tap", elapsed_ms = 0, "conversation_open");
         let dm_id_str = dm_id.to_string();
         if dm_id_str.is_empty() {
             return;
         }
+        crate::trace_chat_open_started(open_started, "dm");
 
         let ui_ctx = ui_ctx_clone.clone();
         let weak = weak_window.clone();
@@ -228,6 +230,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             return;
         };
         super::show_chat_pane(&weak);
+        tracing::info!(kind = "dm", stage = "slide_requested", elapsed_ms = open_started.elapsed().as_millis(), "conversation_open");
 
         // Stop any playing audio
         stop_audio_playback();
@@ -289,6 +292,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             // Receipts go out below, for the page this open loads anyway.
             let read_handle = ui_ctx.conversation(active);
             let anchor = read_handle.mark_read_local().unwrap_or_default();
+            tracing::info!(kind = "dm", stage = "read_marked", elapsed_ms = open_started.elapsed().as_millis(), "conversation_open");
 
             // 1. Handle Anon DM selection
             // The resolved conversation, not the row id: a peer's row can
@@ -328,9 +332,10 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     }
                 };
                 if !owner.is_current() { return; }
+                tracing::info!(kind = "secret_dm", stage = "page_loaded", rows = messages.len(), elapsed_ms = open_started.elapsed().as_millis(), "conversation_open");
             read_handle.send_read_receipts_for_page(&messages);
 
-                let display_messages = messages_to_display_batch(
+                let display_messages = messages_to_display_batch_deferred(
                     &messages,
                     |ms| ui_ctx.message_sender_display_names(ms),
                     |m| ui_ctx.message_sender_avatar(m),
@@ -341,6 +346,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 );
 
                 let initial_count = display_messages.len();
+                tracing::info!(kind = "secret_dm", stage = "display_built", rows = initial_count, elapsed_ms = open_started.elapsed().as_millis(), "conversation_open");
                 tracing::info!(dm_id = %anon_dm_id, count = initial_count, "[UI_OPEN_DM] anon DM spawn run_ui firing");
                 let anchor_page = messages.clone();
                 crate::run_history_ui!(weak, owner, |w| {
@@ -348,9 +354,13 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     super::apply_unread_anchor(&w, anchor, &anchor_page);
                     let before = w.get_messages().row_count();
                     let current_user_id = ui_ctx.session_current_user_id().map(|id| id.to_string()).unwrap_or_default();
-                    let slint_messages: Vec<_> = display_messages.iter().map(|d| d.to_slint_with_user(&current_user_id)).collect();
+                    let slint_messages: Vec<_> = display_messages.iter().map(|d| d.to_slint_preview_with_user(&current_user_id)).collect();
                     tracing::info!(before_count = before, replacing_with = slint_messages.len(), "[UI_OPEN_DM] anon DM run_ui replacing messages");
                     w.set_messages(ModelRc::new(VecModel::from(slint_messages)));
+                    crate::trace_chat_open_model(initial_count, 0);
+                    let fill_weak = w.as_weak();
+                    crate::trace_chat_open_after_content(move || super::fill_open_media(fill_weak, owner, display_messages, current_user_id));
+                    tracing::info!(kind = "secret_dm", stage = "model_replaced", rows = initial_count, elapsed_ms = open_started.elapsed().as_millis(), "conversation_open");
                     tracing::debug!(elapsed_ms = open_started.elapsed().as_millis(), "conversation open: messages presented");
                     w.set_loading_messages(false);
                 super::super::header::finish_pending_jump(&w, &ui_ctx);
@@ -405,6 +415,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 _ => (vec![], String::new()),
             };
             if !owner.is_current() { return; }
+            tracing::info!(kind = "dm", stage = "pins_loaded", elapsed_ms = open_started.elapsed().as_millis(), "conversation_open");
                 super::apply_pinned_ui_owned(&weak, &ui_ctx.chat_state(), msg_ids, preview, &owner);
 
             // Load messages
@@ -417,6 +428,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
             };
             if !owner.is_current() { return; }
+            tracing::info!(kind = "dm", stage = "page_loaded", rows = messages.len(), elapsed_ms = open_started.elapsed().as_millis(), "conversation_open");
             read_handle.send_read_receipts_for_page(&messages);
 
             // The stored profile, not a server fetch: the open no longer waits
@@ -430,7 +442,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
             let status_str = ui_ctx.peer_presence(&peer_id).as_str();
 
-            let display_messages = messages_to_display_batch(
+            let display_messages = messages_to_display_batch_deferred(
                 &messages,
                 |ms| ui_ctx.message_sender_display_names(ms),
                 |m| ui_ctx.message_sender_avatar(m),
@@ -439,6 +451,7 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 |m| ui_ctx.reply_parent_missing_for(m),
                 |m| ui_ctx.reply_parent_media(m),
             );
+            tracing::info!(kind = "dm", stage = "display_built", rows = display_messages.len(), elapsed_ms = open_started.elapsed().as_millis(), "conversation_open");
 
             if !owner.is_current() { return; }
             // Decode the peer's avatar (Send-safe RGBA); the non-Send Image is
@@ -456,11 +469,16 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
             let refresh_ctx = ui_ctx.clone();
             let anchor_page = messages.clone();
+            let media_owner = owner.clone();
             crate::run_history_ui!(weak, owner, |w| {
                 super::apply_unread_anchor(&w, anchor, &anchor_page);
                 let current_user_id = ui_ctx.session_current_user_id().map(|id| id.to_string()).unwrap_or_default();
-                let slint_messages: Vec<_> = display_messages.iter().map(|d| d.to_slint_with_user(&current_user_id)).collect();
+                let slint_messages: Vec<_> = display_messages.iter().map(|d| d.to_slint_preview_with_user(&current_user_id)).collect();
                 w.set_messages(ModelRc::new(VecModel::from(slint_messages)));
+                tracing::info!(kind = "dm", stage = "model_replaced", rows = display_messages.len(), elapsed_ms = open_started.elapsed().as_millis(), "conversation_open");
+                crate::trace_chat_open_model(display_messages.len(), 0);
+                let fill_weak = w.as_weak();
+                crate::trace_chat_open_after_content(move || super::fill_open_media(fill_weak, media_owner, display_messages, current_user_id));
                 tracing::debug!(elapsed_ms = open_started.elapsed().as_millis(), "conversation open: messages presented");
                 w.set_loading_messages(false);
                 super::super::header::finish_pending_jump(&w, &ui_ctx);

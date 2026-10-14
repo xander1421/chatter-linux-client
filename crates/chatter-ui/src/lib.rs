@@ -30,8 +30,86 @@ static STARTUP_STARTED: std::sync::OnceLock<std::time::Instant> = std::sync::Onc
 static FIRST_FRAME_RECORDED: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 
+struct ChatOpenFrame {
+    started: std::time::Instant,
+    kind: &'static str,
+    slide_pending: bool,
+    content_pending: bool,
+    images_pending: bool,
+    rows: usize,
+    images: usize,
+    after_content: Option<Box<dyn FnOnce() + Send>>,
+}
+
+static CHAT_OPEN_FRAME: std::sync::Mutex<Option<ChatOpenFrame>> = std::sync::Mutex::new(None);
+
+pub(crate) fn trace_chat_open_started(started: std::time::Instant, kind: &'static str) {
+    if let Ok(mut frame) = CHAT_OPEN_FRAME.lock() {
+        *frame = Some(ChatOpenFrame {
+            started,
+            kind,
+            slide_pending: true,
+            content_pending: false,
+            images_pending: false,
+            rows: 0,
+            images: 0,
+            after_content: None,
+        });
+    }
+}
+
+pub(crate) fn trace_chat_open_model(rows: usize, images: usize) {
+    if let Ok(mut frame) = CHAT_OPEN_FRAME.lock() {
+        if let Some(frame) = frame.as_mut() {
+            frame.rows = rows;
+            frame.images = images;
+            frame.content_pending = true;
+        }
+    }
+}
+
+pub(crate) fn trace_chat_open_after_content(task: impl FnOnce() + Send + 'static) {
+    if let Ok(mut frame) = CHAT_OPEN_FRAME.lock() {
+        if let Some(frame) = frame.as_mut() {
+            frame.after_content = Some(Box::new(task));
+        }
+    }
+}
+
+pub(crate) fn trace_chat_open_images(images: usize) {
+    if let Ok(mut frame) = CHAT_OPEN_FRAME.lock() {
+        if let Some(frame) = frame.as_mut() {
+            frame.images = images;
+            frame.images_pending = true;
+        }
+    }
+}
+
 /// Called by existing rendering notifiers so timing never replaces video/JNI hooks.
 pub(crate) fn record_startup_frame(state: &slint::RenderingState) {
+    if matches!(state, slint::RenderingState::AfterRendering) {
+        let mut after_content = None;
+        if let Ok(mut open) = CHAT_OPEN_FRAME.lock() {
+            if let Some(frame) = open.as_mut() {
+                if frame.slide_pending {
+                    tracing::info!(kind = frame.kind, stage = "first_slide_frame", elapsed_ms = frame.started.elapsed().as_millis(), "conversation_open");
+                    frame.slide_pending = false;
+                }
+                if frame.content_pending {
+                    tracing::info!(kind = frame.kind, stage = "first_content_frame", rows = frame.rows, images = frame.images, elapsed_ms = frame.started.elapsed().as_millis(), "conversation_open");
+                    frame.content_pending = false;
+                    after_content = frame.after_content.take();
+                }
+                if frame.images_pending {
+                    tracing::info!(kind = frame.kind, stage = "first_images_frame", images = frame.images, elapsed_ms = frame.started.elapsed().as_millis(), "conversation_open");
+                    frame.images_pending = false;
+                }
+            }
+        }
+        if let Some(task) = after_content {
+            task();
+        }
+    }
     if matches!(state, slint::RenderingState::AfterRendering)
         && !FIRST_FRAME_RECORDED.swap(true, std::sync::atomic::Ordering::Relaxed)
     {

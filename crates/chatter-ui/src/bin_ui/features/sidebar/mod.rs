@@ -53,6 +53,46 @@ fn settle_arrivals(
 // Re-export public functions
 pub use channel::load_channel_into_ui;
 
+/// Fill media pixels after the first text frame. MessageItem reserves image
+/// geometry from stored dimensions, so this changes pixels without moving the
+/// unread anchor or the scroll position.
+pub(crate) fn fill_open_media(
+    weak: slint::Weak<MainWindow>,
+    owner: crate::bin_ui::features::history_owner::HistoryOwner,
+    mut rows: Vec<crate::bin_ui::converters::MessageDisplayData>,
+    current_user_id: String,
+) {
+    crate::rt_handle().spawn(async move {
+        for row in &mut rows {
+            row.decode_attachment_thumbnails();
+        }
+        let image_count = rows.iter().flat_map(|m| &m.attachments)
+            .filter(|a| a.thumbnail_pixels.is_some()).count();
+        tracing::info!(stage = "images_decoded", images = image_count, "conversation_open");
+        crate::run_history_ui!(weak, owner, |w| {
+            use slint::Model;
+            let model = w.get_messages();
+            for display in &rows {
+                if !display.attachments.iter().any(|a| a.thumbnail_pixels.is_some()) {
+                    continue;
+                }
+                let Some(index) = (0..model.row_count()).find(|&i| model.row_data(i)
+                    .is_some_and(|row| row.message_id.as_str() == display.message_id)) else {
+                    continue;
+                };
+                if let Some(mut row) = model.row_data(index) {
+                    let decoded = display.to_slint_with_user(&current_user_id);
+                    row.attachments = decoded.attachments;
+                    model.set_row_data(index, row);
+                }
+            }
+            if image_count > 0 {
+                crate::trace_chat_open_images(image_count);
+            }
+        });
+    });
+}
+
 /// Wire sidebar callbacks (channel/DM selection, settings, profile).
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     channel::wire_channel_selected(window, ui_ctx);
