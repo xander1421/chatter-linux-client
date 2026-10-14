@@ -1,4 +1,4 @@
-//! Gallery controls operate on attachments of one message, in their stored order.
+//! Gallery controls for the currently displayed conversation.
 #[cfg(target_os = "android")]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, OnceLock};
@@ -9,15 +9,24 @@ static HAS_NEXT: AtomicBool = AtomicBool::new(false);
 
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::AttachmentId;
+use chatter_core::services::media_gallery::{GalleryAttachment, GalleryMessage, ordered_media};
+use chatter_core::state::ActiveConversation;
 use slint::{ComponentHandle, Model};
 
 use crate::MainWindow;
 
 static WINDOW: OnceLock<slint::Weak<MainWindow>> = OnceLock::new();
+static CLIENT: OnceLock<Arc<ChatterClient>> = OnceLock::new();
+static GALLERY: std::sync::Mutex<(ActiveConversation, Vec<String>, bool)> =
+    std::sync::Mutex::new((ActiveConversation::None, Vec::new(), false));
 static REQUEST: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
 pub(crate) fn invalidate() {
     REQUEST.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    GALLERY
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .2 = false;
 }
 pub(crate) fn is_current(request: u64) -> bool {
     REQUEST.load(std::sync::atomic::Ordering::SeqCst) == request
@@ -26,20 +35,33 @@ pub(crate) fn current_request() -> u64 {
     REQUEST.load(std::sync::atomic::Ordering::SeqCst)
 }
 
-fn gallery(w: &MainWindow, current: &str) -> Vec<String> {
+fn gallery(w: &MainWindow) -> Vec<String> {
+    ordered_media(
+        w.get_messages()
+            .iter()
+            .chain(w.get_thread_replies().iter())
+            .map(|message| GalleryMessage {
+                sent_at_ns: message.timestamp_ns.parse().unwrap_or(0),
+                attachments: message
+                    .attachments
+                    .iter()
+                    .map(|attachment| GalleryAttachment {
+                        id: attachment.id.to_string(),
+                        is_image: attachment.is_image,
+                        is_video: attachment.is_video,
+                    })
+                    .collect(),
+            }),
+    )
+}
+
+fn thumbnail(w: &MainWindow, id: &str) -> slint::Image {
     w.get_messages()
         .iter()
         .chain(w.get_thread_replies().iter())
-        .find_map(|message| {
-            let attachments: Vec<_> = message.attachments.iter().collect();
-            attachments.iter().any(|a| a.id == current).then(|| {
-                attachments
-                    .iter()
-                    .filter(|a| a.is_image || a.is_video)
-                    .map(|a| a.id.to_string())
-                    .collect()
-            })
-        })
+        .flat_map(|message| message.attachments.iter())
+        .find(|attachment| attachment.id == id && attachment.has_thumbnail)
+        .map(|attachment| attachment.thumbnail.clone())
         .unwrap_or_default()
 }
 
@@ -47,8 +69,26 @@ pub(super) fn select(w: &MainWindow, id: &str) -> u64 {
     let request = REQUEST.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
     #[cfg(target_os = "android")]
     crate::platform::android::media::invalidate_pending_video();
-    let items = gallery(w, id);
+    let conversation = CLIENT
+        .get()
+        .map(|client| client.active_conversation())
+        .unwrap_or(ActiveConversation::None);
+    let mut stored = GALLERY.lock().unwrap_or_else(|poison| poison.into_inner());
+    if stored.0 != conversation || !stored.1.iter().any(|item| item == id) {
+        *stored = (conversation, gallery(w), false);
+    }
+    let items = stored.1.clone();
+    let needs_refresh = !stored.2;
+    drop(stored);
     let index = items.iter().position(|item| item == id);
+    let previous = index
+        .and_then(|i| i.checked_sub(1))
+        .and_then(|i| items.get(i));
+    let next = index.and_then(|i| items.get(i + 1));
+    w.set_media_viewer_previous_thumbnail(
+        previous.map(|item| thumbnail(w, item)).unwrap_or_default(),
+    );
+    w.set_media_viewer_next_thumbnail(next.map(|item| thumbnail(w, item)).unwrap_or_default());
     #[cfg(target_os = "android")]
     {
         HAS_PREVIOUS.store(index.is_some_and(|i| i > 0), Ordering::Relaxed);
@@ -66,12 +106,85 @@ pub(super) fn select(w: &MainWindow, id: &str) -> u64 {
             .unwrap_or_default()
             .into(),
     );
+    if index.is_none() {
+        return request;
+    }
+    if let Some(client) = CLIENT.get() {
+        let client = client.clone();
+        let weak = w.as_weak();
+        let selected = id.to_string();
+        std::thread::spawn(move || {
+            let all = if needs_refresh {
+                let Ok(all) = chatter_core::services::media_gallery::conversation_media(
+                    &client,
+                    &conversation,
+                ) else {
+                    return;
+                };
+                all
+            } else {
+                items
+            };
+            if !all.iter().any(|item| item == &selected) {
+                return;
+            }
+            let index = all.iter().position(|item| item == &selected).unwrap_or(0);
+            let preview = |neighbor: Option<&String>| {
+                neighbor
+                    .and_then(|id| {
+                        id.parse::<AttachmentId>()
+                            .ok()
+                            .or_else(|| Some(AttachmentId::from_cdn_key(id)))
+                    })
+                    .and_then(|id| client.get_attachment_preview_image(&id))
+            };
+            let previous = preview(index.checked_sub(1).and_then(|i| all.get(i)));
+            let next = preview(all.get(index + 1));
+            let _ = weak.upgrade_in_event_loop(move |w| {
+                if !is_current(request)
+                    || w.get_media_viewer_attachment_id().as_str() != selected
+                    || client.active_conversation() != conversation
+                {
+                    return;
+                }
+                let mut stored = GALLERY.lock().unwrap_or_else(|poison| poison.into_inner());
+                *stored = (conversation, all.clone(), true);
+                w.set_media_viewer_has_previous(index > 0);
+                w.set_media_viewer_has_next(index + 1 < all.len());
+                w.set_media_viewer_position(format!("{} / {}", index + 1, all.len()).into());
+                w.set_media_viewer_previous_thumbnail(
+                    previous
+                        .map(|(rgba, width, height)| {
+                            crate::bin_ui::slint_conversions::rgba_to_slint_image(
+                                &rgba, width, height,
+                            )
+                        })
+                        .unwrap_or_default(),
+                );
+                w.set_media_viewer_next_thumbnail(
+                    next.map(|(rgba, width, height)| {
+                        crate::bin_ui::slint_conversions::rgba_to_slint_image(&rgba, width, height)
+                    })
+                    .unwrap_or_default(),
+                );
+                #[cfg(target_os = "android")]
+                {
+                    HAS_PREVIOUS.store(index > 0, Ordering::Relaxed);
+                    HAS_NEXT.store(index + 1 < all.len(), Ordering::Relaxed);
+                }
+            });
+        });
+    }
     request
 }
 
 fn navigate(w: &MainWindow, delta: i32) {
     let current = w.get_media_viewer_attachment_id();
-    let items = gallery(w, current.as_str());
+    let items = GALLERY
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+        .1
+        .clone();
     let Some(index) = items.iter().position(|item| item == current.as_str()) else {
         return;
     };
@@ -81,7 +194,8 @@ fn navigate(w: &MainWindow, delta: i32) {
     }
     crate::bin_ui::gif_state::stop_gif_animation();
     crate::bin_ui::video_state::stop_video();
-    w.set_image_viewer_visible(false);
+    // Keep the lightbox alive across image pages so its image and chrome can
+    // travel together. Video selections replace it in the attachment handler.
     w.set_video_player_visible(false);
     w.invoke_view_attachment(items[next as usize].clone().into());
 }
@@ -117,6 +231,7 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
     #[cfg(target_os = "android")]
     crate::platform::android::media_export::wire_session(client);
     let _ = WINDOW.set(window.as_weak());
+    let _ = CLIENT.set(client.clone());
     let weak = window.as_weak();
     window.on_media_viewer_navigate(move |delta| {
         if let Some(w) = weak.upgrade() {

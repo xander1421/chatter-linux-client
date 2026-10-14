@@ -86,8 +86,43 @@ export component ImageViewer inherits Rectangle {
         else { root.zoom-at(ImageZoomMath.double-tap-scale(root.zoom), x, y); }
     }
 
-    changed source => { root.reset-zoom(); }
-    changed show => { if (!root.show) { root.reset-zoom(); root.dismiss-offset = 0px; root.dragging-to-dismiss = false; root.arrival = 0.0; } }
+    function move-page(direction: int) {
+        if (root.settling-page || (direction == 1 && !root.has-next) || (direction == -1 && !root.has-previous)) { return; }
+        root.reset-zoom();
+        root.page-direction = direction;
+        root.page-offset = direction == 1 ? -viewer-area.width : viewer-area.width;
+        root.settling-page = true;
+    }
+
+    in property <image> previous-thumbnail;
+    in property <image> next-thumbnail;
+    property <image> page-image: root.source;
+    property <length> page-offset: 0px;
+    property <bool> dragging-page: false;
+    property <bool> gesture-moved: false;
+    property <bool> settling-page: false;
+    property <int> page-direction: 0;
+    property <bool> chrome-visible: true;
+    animate page-offset { duration: root.dragging-page ? 0ms : Materials.motion-standard; easing: Materials.glide; }
+    page-timer := Timer {
+        interval: Materials.motion-standard;
+        running: root.settling-page;
+        triggered => {
+            root.settling-page = false;
+            if (root.page-direction == 1) {
+                if (root.next-thumbnail.width > 0) { root.page-image = root.next-thumbnail; }
+                root.next();
+            } else if (root.page-direction == -1) {
+                if (root.previous-thumbnail.width > 0) { root.page-image = root.previous-thumbnail; }
+                root.previous();
+            }
+            root.page-direction = 0;
+            root.page-offset = 0px;
+        }
+    }
+    changed source => { root.page-image = root.source; root.reset-zoom(); root.page-offset = 0px; }
+
+    changed show => { if (!root.show) { root.reset-zoom(); root.dismiss-offset = 0px; root.dragging-to-dismiss = false; root.arrival = 0.0; root.page-offset = 0px; root.chrome-visible = true; } }
 
     // Callbacks
     in property <string> position-label;
@@ -116,148 +151,181 @@ export component ImageViewer inherits Rectangle {
         }
     }
 
-    // Fill the overlay so the stretchable image area gets the space between controls.
-    VerticalLayout {
-        width: 100%;
-        height: 100%;
-        alignment: stretch;
-        padding: root.compact-layout ? Spacing.sm : Spacing.xl;
+    // The image owns the layout. Chrome is anchored to its fitted bounds,
+    // with an overlay fallback for portrait media that reaches the safe edge.
+    viewer-area := Rectangle {
+        x: root.compact-layout ? Spacing.sm : Spacing.xl;
+        y: root.compact-layout ? Spacing.sm : Spacing.xl;
+        width: root.width - 2 * self.x;
+        height: root.height - 2 * self.y;
+        clip: true;
+        property <length> fit-width: root.page-image.width <= 0 || root.page-image.height <= 0
+            ? self.width : min(self.width, self.height * root.page-image.width / root.page-image.height);
+        property <length> fit-height: root.page-image.width <= 0 || root.page-image.height <= 0
+            ? self.height : min(self.height, self.width * root.page-image.height / root.page-image.width);
+        property <length> image-left: (self.width - self.fit-width) / 2;
+        property <length> image-top: (self.height - self.fit-height) / 2;
 
-        // Header with filename and close button
-        GlassSurface {
-            material-enabled: true;
-            border-radius: 0px;
-            height: 48px * Appearance.text-grow;
-            HorizontalLayout {
-                padding-left: Spacing.md;
-                padding-right: Spacing.md;
-                alignment: space-between;
-
-                // File info
-                VerticalLayout {
-                    horizontal-stretch: 1;
-                    alignment: center;
-
-                    Text {
-                        text: root.filename;
-                        overflow: elide;
-                        // The header is a themed GlassSurface (near-white in light),
-                        // so its text is the theme's; only labels drawn straight on
-                        // the dark scrim use on-media.
-                        color: Colors.text-primary;
-                        font-size: Typography.base;
-                        font-weight: Typography.medium;
-                    }
-
-                    if root.size-display != "": Text {
-                        text: root.size-display;
-                        color: Colors.text-muted;
-                        font-size: Typography.xs;
-                    }
-                }
-
-                // Close button
-                DismissButton {
-                    clicked => { root.close(); }
-                }
-            }
+        if root.has-previous && root.previous-thumbnail.width > 0: Image {
+            source: root.previous-thumbnail;
+            image-fit: contain;
+            width: viewer-area.width;
+            height: viewer-area.height;
+            x: -viewer-area.width - Spacing.md + root.page-offset;
+        }
+        if root.has-next && root.next-thumbnail.width > 0: Image {
+            source: root.next-thumbnail;
+            image-fit: contain;
+            width: viewer-area.width;
+            height: viewer-area.height;
+            x: viewer-area.width + Spacing.md + root.page-offset;
+        }
+        Image {
+            source: root.page-image;
+            image-fit: contain;
+            property <length> final-width: viewer-area.fit-width * root.zoom;
+            property <length> final-height: viewer-area.fit-height * root.zoom;
+            width: root.thumbnail-width > 0px
+                ? root.thumbnail-width + (self.final-width - root.thumbnail-width) * root.arrival
+                : self.final-width * (0.78 + 0.22 * root.arrival);
+            height: root.thumbnail-height > 0px
+                ? root.thumbnail-height + (self.final-height - root.thumbnail-height) * root.arrival
+                : self.final-height * (0.78 + 0.22 * root.arrival);
+            x: (root.thumbnail-width > 0px
+                ? (root.thumbnail-x - viewer-area.absolute-position.x)
+                    + (viewer-area.image-left + root.pan-x
+                        - (root.thumbnail-x - viewer-area.absolute-position.x)) * root.arrival
+                : (viewer-area.width - self.width) / 2 + root.pan-x) + root.page-offset;
+            y: (root.thumbnail-height > 0px
+                ? (root.thumbnail-y - viewer-area.absolute-position.y)
+                    + (viewer-area.image-top + root.pan-y
+                        - (root.thumbnail-y - viewer-area.absolute-position.y)) * root.arrival
+                : (viewer-area.height - self.height) / 2 + root.pan-y) + root.visual-dismiss-offset;
         }
 
-        // Image display area
-        viewer-area := Rectangle {
-            vertical-stretch: 1;
-            clip: true;
-            property <length> fit-width: root.source.width <= 0 || root.source.height <= 0
-                ? self.width : min(self.width, self.height * root.source.width / root.source.height);
-            property <length> fit-height: root.source.width <= 0 || root.source.height <= 0
-                ? self.height : min(self.height, self.width * root.source.height / root.source.width);
-
-            Image {
-                source: root.source;
-                image-fit: contain;
-                property <length> final-width: viewer-area.fit-width * root.zoom;
-                property <length> final-height: viewer-area.fit-height * root.zoom;
-                width: root.thumbnail-width > 0px
-                    ? root.thumbnail-width + (self.final-width - root.thumbnail-width) * root.arrival
-                    : self.final-width * (0.78 + 0.22 * root.arrival);
-                height: root.thumbnail-height > 0px
-                    ? root.thumbnail-height + (self.final-height - root.thumbnail-height) * root.arrival
-                    : self.final-height * (0.78 + 0.22 * root.arrival);
-                x: root.thumbnail-width > 0px
-                    ? (root.thumbnail-x - viewer-area.absolute-position.x)
-                        + ((viewer-area.width - self.final-width) / 2 + root.pan-x
-                            - (root.thumbnail-x - viewer-area.absolute-position.x)) * root.arrival
-                    : (viewer-area.width - self.width) / 2 + root.pan-x;
-                y: (root.thumbnail-height > 0px
-                    ? (root.thumbnail-y - viewer-area.absolute-position.y)
-                        + ((viewer-area.height - self.final-height) / 2 + root.pan-y
-                            - (root.thumbnail-y - viewer-area.absolute-position.y)) * root.arrival
-                    : (viewer-area.height - self.height) / 2 + root.pan-y) + root.visual-dismiss-offset;
+        gesture := ScaleRotateGestureHandler {
+            started => {
+                root.pinch-start-zoom = root.zoom;
+                root.pinch-center-x = self.center.x;
+                root.pinch-center-y = self.center.y;
+                root.page-offset = 0px;
             }
-
-            gesture := ScaleRotateGestureHandler {
-                started => {
-                    root.pinch-start-zoom = root.zoom;
-                    root.pinch-center-x = self.center.x;
-                    root.pinch-center-y = self.center.y;
-                }
-                updated => {
-                    root.pan-x += self.center.x - root.pinch-center-x;
-                    root.pan-y += self.center.y - root.pinch-center-y;
-                    root.pinch-center-x = self.center.x;
-                    root.pinch-center-y = self.center.y;
-                    root.zoom-at(root.pinch-start-zoom * self.scale, self.center.x, self.center.y);
-                }
-
-                drag := TouchArea {
-                    pointer-event(event) => {
-                        if (event.kind == PointerEventKind.down) {
-                            root.drag-x = self.mouse-x;
-                            root.drag-y = self.mouse-y;
-                            root.drag-start-x = self.mouse-x;
-                            root.drag-start-y = self.mouse-y;
-                            root.dismiss-offset = 0px;
-                            root.dragging-to-dismiss = true;
-                        }
-                        if ((event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) && root.zoom == 1.0) {
-                            let should-close = event.kind == PointerEventKind.up && root.dismiss-offset > 100px;
-                            root.dragging-to-dismiss = false;
-                            root.dismiss-offset = 0px;
-                            if (should-close) { root.close(); }
-                        }
-                    }
-                    moved => {
-                        if (root.zoom > 1.0 && !gesture.active && self.pressed) {
-                            root.pan-x += self.mouse-x - root.drag-x;
-                            root.pan-y += self.mouse-y - root.drag-y;
-                            root.clamp-pan();
-                        } else if (root.zoom == 1.0 && self.pressed && !gesture.active
-                            && self.mouse-y > root.drag-start-y
-                            && self.mouse-y - root.drag-start-y > abs(self.mouse-x - root.drag-start-x)) {
-                            root.dismiss-offset = (self.mouse-y - root.drag-start-y) * 0.78;
-                        }
+            updated => {
+                root.pan-x += self.center.x - root.pinch-center-x;
+                root.pan-y += self.center.y - root.pinch-center-y;
+                root.pinch-center-x = self.center.x;
+                root.pinch-center-y = self.center.y;
+                root.zoom-at(root.pinch-start-zoom * self.scale, self.center.x, self.center.y);
+            }
+            drag := TouchArea {
+                pointer-event(event) => {
+                    if (event.kind == PointerEventKind.down) {
                         root.drag-x = self.mouse-x;
                         root.drag-y = self.mouse-y;
+                        root.drag-start-x = self.mouse-x;
+                        root.drag-start-y = self.mouse-y;
+                        root.dismiss-offset = 0px;
+                        root.dragging-to-dismiss = true;
+                        root.dragging-page = true;
+                        root.gesture-moved = false;
                     }
-                    double-clicked => { root.toggle-zoom(self.mouse-x, self.mouse-y); }
-                    scroll-event(event) => {
-                        root.zoom-at(root.zoom * (event.delta-y < 0px ? 1.12 : 1.0 / 1.12), self.mouse-x, self.mouse-y);
-                        return accept;
+                    if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
+                        let should-close = event.kind == PointerEventKind.up && root.zoom == 1.0 && root.dismiss-offset > 100px;
+                        let direction = root.page-offset < -viewer-area.width * 0.20 && root.has-next ? 1
+                            : root.page-offset > viewer-area.width * 0.20 && root.has-previous ? -1 : 0;
+                        root.dragging-to-dismiss = false;
+                        root.dragging-page = false;
+                        root.dismiss-offset = 0px;
+                        if (should-close) { root.close(); }
+                        else if (direction != 0 && root.zoom == 1.0) {
+                            root.page-direction = direction;
+                            root.page-offset = direction == 1 ? -viewer-area.width : viewer-area.width;
+                            root.settling-page = true;
+                        } else { root.page-offset = 0px; }
                     }
+                }
+                moved => {
+                    if (root.zoom > 1.0 && !gesture.active && self.pressed) {
+                        root.pan-x += self.mouse-x - root.drag-x;
+                        root.pan-y += self.mouse-y - root.drag-y;
+                        root.clamp-pan();
+                    } else if (root.zoom == 1.0 && self.pressed && !gesture.active) {
+                        let dx = self.mouse-x - root.drag-start-x;
+                        let dy = self.mouse-y - root.drag-start-y;
+                        if (abs(dx) > 8px || abs(dy) > 8px) { root.gesture-moved = true; }
+                        if (dy > 0px && dy > abs(dx)) {
+                            root.dismiss-offset = dy * 0.78;
+                            root.page-offset = 0px;
+                        } else if (abs(dx) > abs(dy)) {
+                            root.dismiss-offset = 0px;
+                            // Ends resist the finger rather than presenting an empty page.
+                            root.page-offset = ((dx > 0px && !root.has-previous) || (dx < 0px && !root.has-next)) ? dx * 0.22 : dx;
+                        }
+                    }
+                    root.drag-x = self.mouse-x;
+                    root.drag-y = self.mouse-y;
+                }
+                clicked => { if (!root.gesture-moved) { root.chrome-visible = !root.chrome-visible; } }
+                double-clicked => { root.toggle-zoom(self.mouse-x, self.mouse-y); }
+                scroll-event(event) => {
+                    root.zoom-at(root.zoom * (event.delta-y < 0px ? 1.12 : 1.0 / 1.12), self.mouse-x, self.mouse-y);
+                    return accept;
                 }
             }
         }
+    }
 
+    property <length> chrome-width: min(viewer-area.width, max(300px, viewer-area.fit-width));
+    animate chrome-width { duration: Materials.motion-standard; easing: Materials.glide; }
+    property <length> chrome-x: viewer-area.x + (viewer-area.width - root.chrome-width) / 2 + root.page-offset;
+    property <length> header-y: max(viewer-area.y, viewer-area.y + viewer-area.image-top - 48px * Appearance.text-grow - Spacing.sm);
+    property <length> footer-y: min(root.height - root.action-size - viewer-area.y,
+        viewer-area.y + viewer-area.image-top + viewer-area.fit-height + Spacing.sm);
+
+    GlassSurface {
+        x: root.chrome-x;
+        y: root.header-y + root.visual-dismiss-offset;
+        width: root.chrome-width;
+        height: 48px * Appearance.text-grow;
+        material-enabled: true;
+        border-radius: Spacing.radius-lg;
+        opacity: root.chrome-visible ? root.arrival : 0.0;
+        visible: root.chrome-visible || self.opacity > 0;
+        animate opacity { duration: Materials.motion-quick; easing: Materials.settle; }
+        animate y { duration: root.dragging-to-dismiss ? 0ms : Materials.motion-standard; easing: Materials.glide; }
         HorizontalLayout {
-            height: root.action-size;
+            padding-left: Spacing.md;
+            padding-right: Spacing.md;
+            alignment: space-between;
+            VerticalLayout {
+                horizontal-stretch: 1;
+                alignment: center;
+                Text { text: root.filename; overflow: elide; color: Colors.text-primary; font-size: Typography.base; font-weight: Typography.medium; }
+                if root.size-display != "": Text { text: root.size-display; color: Colors.text-muted; font-size: Typography.xs; }
+            }
+            DismissButton { clicked => { root.close(); } }
+        }
+    }
+
+    GlassSurface {
+        x: root.chrome-x;
+        y: root.footer-y + root.visual-dismiss-offset;
+        width: root.chrome-width;
+        height: root.action-size;
+        border-radius: Spacing.radius-lg;
+        visible: root.chrome-visible || self.opacity > 0;
+        opacity: root.chrome-visible ? root.arrival : 0.0;
+        animate opacity { duration: Materials.motion-quick; easing: Materials.settle; }
+        animate y { duration: root.dragging-to-dismiss ? 0ms : Materials.motion-standard; easing: Materials.glide; }
+        HorizontalLayout {
             alignment: center;
             spacing: Spacing.xxs;
             IconAction { size: root.action-size; icon: Icons.download; label: "Download"; clicked => { root.download(); } }
             IconAction { size: root.action-size; icon: Icons.copy; label: "Copy image"; clicked => { root.copy-image(); } }
             IconAction { size: root.action-size; icon: Icons.folder; label: "Open downloads"; clicked => { root.open-downloads(); } }
-            IconAction { size: root.action-size; icon: Icons.chevron-left; label: "Previous media"; enabled: root.has-previous; clicked => { root.previous(); } }
-            Text { text: root.position-label; color: Colors.on-media-muted; vertical-alignment: center; horizontal-stretch: 0; }
-            IconAction { size: root.action-size; icon: Icons.chevron-right; label: "Next media"; enabled: root.has-next; clicked => { root.next(); } }
+            IconAction { size: root.action-size; icon: Icons.chevron-left; label: "Previous media"; enabled: root.has-previous; clicked => { root.move-page(-1); } }
+            Text { text: root.position-label; color: Colors.text-muted; vertical-alignment: center; horizontal-stretch: 0; }
+            IconAction { size: root.action-size; icon: Icons.chevron-right; label: "Next media"; enabled: root.has-next; clicked => { root.move-page(1); } }
         }
     }
 }

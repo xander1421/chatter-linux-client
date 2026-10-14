@@ -36,6 +36,7 @@ pub mod jarvis;
 pub mod key_recovery;
 pub mod link_device_service;
 pub mod local_ai_service;
+pub mod media_gallery;
 #[cfg(feature = "mesh")]
 pub mod mesh;
 pub mod message;

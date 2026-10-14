@@ -548,6 +548,8 @@ export component MainWindow inherits Window {
     in-out property <string> media-viewer-position: "";
     in-out property <bool> media-viewer-has-previous: false;
     in-out property <bool> media-viewer-has-next: false;
+    in-out property <image> media-viewer-previous-thumbnail;
+    in-out property <image> media-viewer-next-thumbnail;
     callback media-viewer-navigate(int);
     callback media-viewer-export(bool); // true = copy image, false = download
     callback media-viewer-open-downloads();
@@ -3777,6 +3779,8 @@ export component MainWindow inherits Window {
             position-label: root.media-viewer-position;
             has-previous: root.media-viewer-has-previous;
             has-next: root.media-viewer-has-next;
+            previous-thumbnail: root.media-viewer-previous-thumbnail;
+            next-thumbnail: root.media-viewer-next-thumbnail;
             previous => { root.media-viewer-navigate(-1); }
             next => { root.media-viewer-navigate(1); }
             download => { root.media-viewer-export(false); }

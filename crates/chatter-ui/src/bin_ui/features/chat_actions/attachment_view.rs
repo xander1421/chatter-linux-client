@@ -883,6 +883,7 @@ fn play_video_from_buffer(
                         w.set_video_player_progress(0.0);
                         w.set_video_player_is_playing(true);
                         w.set_video_player_volume(1.0);
+                        w.set_image_viewer_visible(false);
                         w.set_video_player_visible(true);
                         start_video_progress_timer(&w);
                         tracing::info!("Started video from memory: {}", filename_for_video);
@@ -930,6 +931,7 @@ fn play_video_from_range(
                         w.set_video_player_progress(0.0);
                         w.set_video_player_is_playing(true);
                         w.set_video_player_volume(1.0);
+                        w.set_image_viewer_visible(false);
                         w.set_video_player_visible(true);
                         start_video_progress_timer(&w);
                         tracing::info!("Started streaming video: {}", filename_for_video);
