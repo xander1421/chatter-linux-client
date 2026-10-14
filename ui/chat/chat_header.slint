@@ -18,12 +18,10 @@ import { Materials } from "../theme/materials.slint";
 import { Appearance } from "../theme/appearance.slint";
 
 export component ChatHeader inherits GlassSurface {
-    material-level: 2;
-    material-tint: Materials.regular.mix(Materials.thick, root.scroll-compression);
+    material-level: 4;
+    material-tint: Materials.header-chrome;
     elevation: 3;
     border-radius: self.height / 2;
-    property <float> scroll-compression: root.backdrop-paused ? 1 : 0;
-    animate scroll-compression { duration: Materials.motion-standard; easing: Materials.settle; }
     property <int> typing-phase: 0;
     Timer {
         interval: 180ms;
@@ -180,7 +178,7 @@ export component ChatHeader inherits GlassSurface {
     // 52px is a 44px touch row plus 4px of air above and below; the old 56px was
     // that plus a spare row of nothing, repeated at the top of every
     // conversation.
-    height: root.header-height - 4px * root.scroll-compression;
+    height: root.header-height;
     animate height { duration: Materials.motion-standard; easing: Materials.settle; }
     HorizontalLayout {
         // Constrain to the header width so the name elides instead of growing
@@ -319,11 +317,6 @@ export component ChatHeader inherits GlassSurface {
                         font-weight: Typography.semibold;
                         min-width: 0px;
                         overflow: elide;
-                        transform-origin: { x: 0px, y: self.height / 2 };
-                        transform-scale-x: 100% - 3% * root.scroll-compression;
-                        transform-scale-y: 100% - 3% * root.scroll-compression;
-                        animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.settle; }
-                        animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.settle; }
                     }
                     // Typing shares the title's bounded column, so long peer
                     // names yield to the call buttons instead of drawing over them.

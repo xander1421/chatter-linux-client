@@ -252,6 +252,8 @@ export component MessageComposer inherits GlassSurface {
     property <bool> show-attachment-action: !root.is-editing && (MeshGlobal.active-id == "" || MeshGlobal.active-kind != "dm");
     property <bool> show-terminal-action: root.can-send || (!root.is-editing && MeshGlobal.active-id == "");
     property <length> action-shell-height: Spacing.touch-target-min + row-padding * 2;
+    property <length> attachment-chip-height: Spacing.touch-target-min;
+    property <length> attachment-band-height: attachment-chip-height + Spacing.sm * 2;
     // Reply preview sits in the first toolbar row's gap; with attachments too,
     // the strip takes a second gap row below it so the two never overlap.
     property <length> reply-row-height: is-replying ? max(action-shell-height, 48px * Appearance.text-grow) : 0px;
@@ -261,7 +263,8 @@ export component MessageComposer inherits GlassSurface {
     property <length> top-shell-height: is-replying ? reply-row-height : action-shell-height;
     property <length> raised-toolbar-height: lift-geometry
         * ((is-replying ? reply-row-height + Spacing.xs : 0px)
-            + (has-attachments || !is-replying ? action-shell-height + Spacing.xs : 0px));
+            + (has-attachments ? attachment-band-height + Spacing.xs
+                : !is-replying ? action-shell-height + Spacing.xs : 0px));
     property <length> lower-terminal-width: show-terminal-action ? Spacing.touch-target-min + Spacing.xs : 0px;
     property <length> trailing-actions-width: (show-attachment-action ? Spacing.touch-target-min + Spacing.xs : 0px)
         + (show-terminal-action ? Spacing.touch-target-min + Spacing.xs : 0px);
@@ -827,9 +830,9 @@ export component MessageComposer inherits GlassSurface {
             if root.has-attachments: attachment-strip := GlassSurface {
                 x: Spacing.touch-target-min + root.row-padding * 2 + Spacing.xs;
                 y: (root.is-replying ? root.reply-row-height + Spacing.xs : 0px)
-                    + (Appearance.reduce-motion ? 0px : (1 - root.strip-reveal) * root.action-shell-height);
+                    + (Appearance.reduce-motion ? 0px : (1 - root.strip-reveal) * root.attachment-band-height);
                 width: max(0px, parent.width - (root.show-attachment-action ? root.action-shell-height : 0px) - self.x - Spacing.xs);
-                height: Spacing.touch-target-min + root.row-padding * 2;
+                height: root.attachment-band-height;
                 opacity: min(1, max(0, root.strip-reveal));
                 // One material with the reply chip and the action shells; the
                 // cards are wells inside it, not a second card style.
@@ -861,6 +864,8 @@ export component MessageComposer inherits GlassSurface {
                         height: attachment-scroll.viewport-height;
                         padding-left: root.row-padding;
                         padding-right: root.row-padding;
+                        padding-top: Spacing.sm;
+                        padding-bottom: Spacing.sm;
                         spacing: Spacing.xs;
                         alignment: center;
 
@@ -868,7 +873,7 @@ export component MessageComposer inherits GlassSurface {
                         // the shell (radius-chrome-inner − chrome-inset).
                         for attachment in root.pending-attachments: Rectangle {
                             width: 180px;
-                            height: Spacing.touch-target-min + root.row-padding * 2;
+                            height: root.attachment-chip-height;
                             background: Colors.inset;
                             border-radius: Spacing.radius-lg;
                             opacity: attachment.is-ready ? 1.0 : 0.7;
@@ -890,7 +895,8 @@ export component MessageComposer inherits GlassSurface {
                                                               "\u{1F4CE}\u{FE0F}";
 
                             HorizontalLayout {
-                                padding: root.row-padding;
+                                padding-left: root.row-padding;
+                                padding-right: 0px;
                                 spacing: Spacing.xs;
 
                                 // Icon or thumbnail with loading indicator
@@ -991,6 +997,7 @@ export component MessageComposer inherits GlassSurface {
                         // Add more: the same 48dp box as the remove control,
                         // centred in the row, with the bundled plus glyph.
                         VerticalLayout {
+                            height: root.attachment-chip-height;
                             alignment: center;
                             Rectangle {
                                 width: Spacing.touch-target-min;

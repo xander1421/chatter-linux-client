@@ -13,16 +13,9 @@ component GlassMaterial inherits Rectangle {
     in property <int> material-level;
     in property <color> material-tint;
     in property <int> elevation;
-    in property <bool> backdrop-paused;
     in property <bool> highlighted;
-    // 1 = the material as designed, 0 = neutral filter values, for which the
-    // renderer draws no backdrop layer at all (i-slint-renderer-skia
-    // backdrop.rs `filter` returns None). Drops at once, eases back at rest.
-    property <float> sampling: root.backdrop-paused ? 0 : 1;
-    animate sampling {
-        duration: root.backdrop-paused ? 0ms : Materials.motion-quick;
-        easing: Materials.glide;
-    }
+    // Keep the same optical treatment while the underlying list scrolls.
+    // Disabling the filter during scrolling caused a visible material switch.
 
     // Elevation shadows (theme/elevation.slint), falling downwards. Levels
     // 0-2 cast none here (flat in-content glass); 3 chrome casts one, 4
@@ -54,14 +47,14 @@ component GlassMaterial inherits Rectangle {
     // SLINT1 builtin integration is intentionally confined to this one element.
     if root.material-enabled: Backdrop {
         border-radius: root.border-radius;
-        blur: (Appearance.glass-effects ? (root.material-level == 3
-            ? Materials.blur-thick : Materials.blur-regular) : 0px) * root.sampling;
-        saturation: 1.0 + ((Appearance.glass-effects ? Materials.saturation : 1.0) - 1.0) * root.sampling;
+        blur: Appearance.glass-effects ? (root.material-level == 4 ? Materials.blur-header
+            : root.material-level == 3 ? Materials.blur-thick : Materials.blur-regular) : 0px;
+        saturation: Appearance.glass-effects ? Materials.saturation : 1.0;
         brightness: (Appearance.glass-effects && root.material-level == 2
-            ? Materials.chrome-brightness : 0.0) * root.sampling;
+            ? Materials.chrome-brightness : 0.0);
         // Liquid Glass lenses its backdrop at the edges; keep it subtle so
         // text under chrome stays legible.
-        refraction: (Appearance.glass-effects ? Materials.refraction : 0.0) * root.sampling;
+        refraction: Appearance.glass-effects ? Materials.refraction : 0.0;
         Rectangle {
             border-radius: root.border-radius;
             background: root.material-tint;
@@ -92,20 +85,21 @@ component GlassMaterial inherits Rectangle {
 
 export component GlassSurface inherits Rectangle {
     in property <bool> material-enabled: true;
-    // 0 ultra-thin / 1 thin: controlled ambient backgrounds only; 2 regular / 3 thick.
+    // 0 ultra-thin / 1 thin: controlled ambient backgrounds only; 2 regular /
+    // 3 thick / 4 text-obscuring header chrome.
     in property <int> material-level: 2;
     // Level on the theme/elevation.slint scale: 0 flat in-content glass (no
     // shadow), 3 floating chrome, 4 popover/menu, 5 modal/sheet.
     in property <int> elevation: 3;
-    // Set while content under this surface is scrolling (the chat chrome
-    // binds MessageList.scrolling): the tint stays, the per-frame backdrop
-    // blur + refraction of moving pixels stops, and fades back in at rest.
+    // Kept for callers that signal scrolling; the material stays visually
+    // constant so settling a list cannot expose readable text behind chrome.
     in property <bool> backdrop-paused: false;
     // Light catches the existing optical edge on interactive glass controls.
     in property <bool> highlighted: false;
     in property <color> material-tint: material-level == 0 ? Materials.ultra-thin
         : material-level == 1 ? Materials.thin
-        : material-level == 3 ? Materials.thick : Materials.regular;
+        : material-level == 3 ? Materials.thick
+        : material-level == 4 ? Materials.header-chrome : Materials.regular;
     // Opt in only on transient chrome. No animation exists at idle.
     in property <bool> shown: true;
     in property <length> enter-distance: 0px;
@@ -130,7 +124,6 @@ export component GlassSurface inherits Rectangle {
         material-level: root.material-level;
         material-tint: root.material-tint;
         elevation: root.elevation;
-        backdrop-paused: root.backdrop-paused;
         highlighted: root.highlighted;
     }
     @children

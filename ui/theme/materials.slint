@@ -20,6 +20,11 @@ export global Materials {
     out property <color> thick: Appearance.glass-effects
         ? (Appearance.dark ? #1c2837df : #ffffffe0)
         : (Appearance.dark ? #1f2b39 : #ffffff);
+    // Chat headers float over message text, so their tint must obscure glyphs
+    // even after the message list's initial scroll has settled.
+    out property <color> header-chrome: Appearance.glass-effects
+        ? (Appearance.dark ? #1c2837cc : #ffffffcc)
+        : (Appearance.dark ? #1f2b39 : #ffffff);
     out property <color> opaque: Appearance.dark ? #18232f : #fbfdff;
     // A dark optical base bounds the white FAB glyph against either backdrop.
     out property <color> fab-base: #0a3839b8;
@@ -53,6 +58,7 @@ export global Materials {
         : @linear-gradient(165deg, #e2f1f0 0%, #eaf0f4 32%, #edf1f5 62%, #efeff7 100%);
     out property <length> blur-regular: 26px;
     out property <length> blur-thick: 30px;
+    out property <length> blur-header: 34px;
     out property <float> saturation: 1.55;
     // Dark chrome reduces a white backdrop enough for light foreground labels
     // to keep AA contrast with a 60% tint; the list remains visible through it.
