@@ -44,7 +44,9 @@ component LiquidComposerSilhouette inherits Path {
     property <float> h: self.height / 1px;
     property <float> p: min(1, max(0, rise));
     property <float> wave: min(10, max(0, (1 - p) * p * 36 + max(0, -velocity) * 14));
-    fill: Appearance.glass-effects ? Materials.regular : Materials.opaque;
+    // The bar's GlassSurface owns the backdrop. A thin tint grows only with
+    // the lifted wave, keeping the resting bar identical to the bottom dock.
+    fill: Appearance.glass-effects ? transparent.mix(Materials.ultra-thin, p) : transparent;
     stroke: Materials.glass-edge;
     stroke-width: Materials.glass-edge-width;
     viewbox-width: w;
@@ -763,6 +765,17 @@ export component MessageComposer inherits GlassSurface {
 
             // One bar surface; the circles and their temporary bridges sit above
             // it without adding another backdrop capture.
+            GlassSurface {
+                x: 0px;
+                y: root.raised-toolbar-height;
+                width: parent.width;
+                height: parent.height - self.y;
+                border-radius: Spacing.radius-chrome;
+                material-level: root.material-level;
+                elevation: root.elevation;
+                backdrop-paused: root.backdrop-paused;
+                visible: !VoiceRecording.active;
+            }
             composer-silhouette := LiquidComposerSilhouette {
                 width: parent.width;
                 height: parent.height;
@@ -1117,18 +1130,20 @@ export component MessageComposer inherits GlassSurface {
                 // soft keyboard, so there the same click is "close".
                 accessible-label: root.picker-open ? (root.mobile ? "Show keyboard" : "Close picker") : "Emoji & GIF picker";
 
-                Rectangle {
+                GlassSurface {
                     width: parent.width - (emoji-touch.pressed ? 4px : 0px);
                     height: parent.height - (emoji-touch.pressed ? 4px : 0px);
                     x: (parent.width - self.width) / 2;
                     y: (parent.height - self.height) / 2;
+                    material-enabled: root.lift-layout > 0.6;
+                    material-level: root.material-level;
+                    elevation: root.lift-layout > 0.6 ? 3 : 0;
+                    backdrop-paused: root.backdrop-paused;
                     background: root.picker-open && !root.mobile ? Colors.tint-strong
                         : emoji-touch.pressed ? Materials.pressed
                         : emoji-touch.has-hover ? Materials.hover
-                        : Appearance.glass-effects ? Materials.regular : Materials.opaque;
+                        : transparent;
                     border-radius: self.width / 2;
-                    border-width: root.lift-layout * Materials.glass-edge-width;
-                    border-color: Materials.glass-edge;
                     opacity: emoji-touch.pressed || emoji-touch.has-hover || (root.picker-open && !root.mobile)
                         ? 1 : min(1, max(0, (root.lift-layout - 0.6) * 2.5));
                     animate width { duration: Materials.feedback-duration; easing: Materials.spring; }
@@ -1165,7 +1180,11 @@ export component MessageComposer inherits GlassSurface {
                     - (root.lift-layout * root.lower-terminal-width
                         + (1 - root.lift-layout) * (Spacing.touch-target-min + Spacing.xs + root.trailing-actions-width + Spacing.xs));
                 height: root.content-height;
-                background: Colors.inset;
+                // A brighter inset over the one sampled composer surface. The
+                // native TextInput stays mounted while controls lift and settle.
+                background: Appearance.glass-effects
+                    ? (Appearance.dark ? #ffffff18 : #ffffff9c)
+                    : Colors.inset;
                 // Concentric with the shell: radius-chrome − chrome-inset.
                 border-radius: Spacing.radius-chrome-inner;
                 // The glass shell supplies the resting silhouette. Keep a
@@ -1295,17 +1314,19 @@ export component MessageComposer inherits GlassSurface {
                 accessible-role: button;
                 accessible-label: "Attach file";
 
-                Rectangle {
+                GlassSurface {
                     width: parent.width - (attachment-touch.pressed ? 4px : 0px);
                     height: parent.height - (attachment-touch.pressed ? 4px : 0px);
                     x: (parent.width - self.width) / 2;
                     y: (parent.height - self.height) / 2;
+                    material-enabled: root.lift-layout > 0.6;
+                    material-level: root.material-level;
+                    elevation: root.lift-layout > 0.6 ? 3 : 0;
+                    backdrop-paused: root.backdrop-paused;
                     background: attachment-touch.pressed ? Materials.pressed
                         : attachment-touch.has-hover ? Materials.hover
-                        : Appearance.glass-effects ? Materials.regular : Materials.opaque;
+                        : transparent;
                     border-radius: self.width / 2;
-                    border-width: root.lift-layout * Materials.glass-edge-width;
-                    border-color: Materials.glass-edge;
                     opacity: attachment-touch.pressed || attachment-touch.has-hover
                         ? 1 : min(1, max(0, (root.lift-layout - 0.6) * 2.5));
                     animate width { duration: Materials.feedback-duration; easing: Materials.spring; }

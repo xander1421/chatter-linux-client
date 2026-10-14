@@ -18,8 +18,10 @@ import { Materials } from "../theme/materials.slint";
 import { Appearance } from "../theme/appearance.slint";
 
 export component ChatHeader inherits GlassSurface {
-    material-level: 4;
-    material-tint: Materials.header-chrome;
+    // Match the floating bottom dock; the shared backdrop still blurs text
+    // passing behind this header without an opaque cap over the conversation.
+    material-level: 2;
+    material-tint: Materials.regular;
     elevation: 3;
     border-radius: self.height / 2;
     property <int> typing-phase: 0;
@@ -209,6 +211,9 @@ export component ChatHeader inherits GlassSurface {
             // Mobile back button (returns to chat list)
             if root.show-back-button: HeaderButton {
                 touch: root.mobile;
+                // The header is already one sampled glass pane. Keep its
+                // controls on that pane instead of stacking dark lenses.
+                plain: true;
                 backdrop-paused: root.backdrop-paused;
                 icon: Icons.chevron-left;
                 label: "Back";
@@ -492,6 +497,7 @@ export component ChatHeader inherits GlassSurface {
                 alignment: center;
                 HeaderButton {
                     touch: root.mobile;
+                    plain: true;
                     backdrop-paused: root.backdrop-paused;
                     icon: Icons.phone;
                     label: "Voice call";
@@ -560,6 +566,7 @@ export component ChatHeader inherits GlassSurface {
                 alignment: center;
                 if root.show-invite: HeaderButton {
                     touch: root.mobile;
+                    plain: true;
                     backdrop-paused: root.backdrop-paused;
                     icon: Icons.user-plus;
                     label: "Invite";
@@ -567,6 +574,7 @@ export component ChatHeader inherits GlassSurface {
                 }
                 if root.show-more: HeaderButton {
                     touch: root.mobile;
+                    plain: true;
                     backdrop-paused: root.backdrop-paused;
                     icon: Icons.more-vertical;
                     label: "More options";
