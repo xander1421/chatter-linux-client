@@ -5,6 +5,7 @@ import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
 import { Button } from "button.slint";
+import { Materials } from "../theme/materials.slint";
 
 export component SettingsRow inherits Rectangle {
     in property <image> icon;
@@ -19,9 +20,11 @@ export component SettingsRow inherits Rectangle {
     callback clicked();
 
     min-height: root.touch ? Spacing.list-row-height-touch : Spacing.button-height;
+    preferred-height: max(self.min-height, row-content.preferred-height);
     border-radius: Spacing.radius-md;
     background: row-touch.pressed ? Colors.surface-control-hover
         : row-touch.has-hover && root.clickable ? Colors.row-hover : transparent;
+    animate background { duration: Materials.motion-quick; easing: Materials.settle; }
     accessible-role: button;
     accessible-label: root.title;
     accessible-description: root.detail;
@@ -40,7 +43,9 @@ export component SettingsRow inherits Rectangle {
         }
     }
 
-    HorizontalLayout {
+    row-content := HorizontalLayout {
+        y: row-touch.pressed ? Spacing.xxs : 0px;
+        animate y { duration: Materials.motion-quick; easing: Materials.spring; }
         padding-left: Spacing.md;
         padding-right: Spacing.md;
         padding-top: Spacing.xs;

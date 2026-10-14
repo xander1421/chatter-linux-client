@@ -1,8 +1,8 @@
 import { Spacing } from "../theme/spacing.slint";
 // AI feature toggle. State uses a tinted track; the surrounding chrome owns depth.
 
-import { Appearance } from "../theme/appearance.slint";
 import { Colors } from "../theme/colors.slint";
+import { Materials } from "../theme/materials.slint";
 
 export component NeoActionToggle inherits Rectangle {
     in-out property <bool> checked: false;
@@ -16,11 +16,16 @@ export component NeoActionToggle inherits Rectangle {
     accessible-enabled: !root.disabled;
     accessible-checkable: true;
     accessible-checked: root.checked;
+    accessible-action-default => {
+        if !root.disabled { root.checked = !root.checked; root.toggled(root.checked); }
+    }
 
     callback toggled(bool);
 
     // Resolved glow colors based on mode
     property <color> glow-color: glow-mode == "violet" ? Colors.accent-purple : Colors.primary;
+    property <float> travel: checked ? 1 : 0;
+    animate travel { duration: Materials.motion-standard; easing: Materials.spring; }
 
     // Track color: when checked, glow color replaces primary
     property <color> track-color: {
@@ -44,6 +49,20 @@ export component NeoActionToggle inherits Rectangle {
     height: Spacing.button-height;
     opacity: disabled ? 0.5 : 1.0;
 
+    keys := FocusScope {
+        width: 0px;
+        height: 0px;
+        enabled: !root.disabled;
+        key-pressed(event) => {
+            if event.text == Key.Space || event.text == Key.Return {
+                root.checked = !root.checked;
+                root.toggled(root.checked);
+                return accept;
+            }
+            return reject;
+        }
+    }
+
     // Track
     Rectangle {
         width: 100%;
@@ -51,25 +70,21 @@ export component NeoActionToggle inherits Rectangle {
         y: (root.height - self.height) / 2;
         border-radius: self.height / 2;
         background: root.track-color;
+        border-width: keys.has-focus ? Spacing.stroke : 0px;
+        border-color: Colors.focus-ring;
 
-        animate background {
-            duration: Appearance.reduce-motion ? 0ms : 160ms;
-            easing: ease-in-out;
-        }
+        animate background { duration: Materials.motion-standard; easing: Materials.glide; }
 
         // Thumb — short state transition, respecting reduced motion.
         Rectangle {
-            width: Spacing.switch-thumb;
-            height: Spacing.switch-thumb;
+            width: Spacing.switch-thumb + 8px * (root.travel < 0.5 ? root.travel * 2 : (1 - root.travel) * 2);
+            height: touch.pressed ? Spacing.switch-thumb - Spacing.xxs : Spacing.switch-thumb;
             border-radius: self.height / 2;
             background: Colors.on-action;
-            y: Spacing.xxs;
-            x: root.checked ? parent.width - self.width - Spacing.xxs : Spacing.xxs;
-
-            animate x {
-                duration: Appearance.reduce-motion ? 0ms : 160ms;
-                easing: cubic-bezier(0.34, 1.56, 0.64, 1);  // Snappy overshoot
-            }
+            y: (parent.height - self.height) / 2;
+            x: Spacing.xxs + (parent.width - Spacing.switch-thumb - Spacing.xxs * 2) * root.travel
+                - (self.width - Spacing.switch-thumb) / 2;
+            animate height { duration: Materials.motion-quick; easing: Materials.spring; }
         }
     }
 

@@ -140,6 +140,28 @@ export component SettingsScreen inherits Rectangle {
     property <bool> shield-on: AnonMode.enabled;
     changed shield-on => { root.shield-switch = root.shield-on; }
     in-out property <string> active-section: "account";  // "account", "devices", "privacy", "notifications", "encryption", "ai", "appearance"
+    property <bool> page-appearing: false;
+    property <float> page-entry: 1;
+    changed active-section => {
+        // Snap the new section a little toward its source, then let it glide
+        // into the same content column. The timer separates the two frames.
+        root.page-appearing = false;
+        root.page-entry = 0;
+        page-entry-timer.running = true;
+    }
+    page-entry-timer := Timer {
+        interval: 1ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            root.page-appearing = true;
+            root.page-entry = 1;
+        }
+    }
+    animate page-entry {
+        duration: root.page-appearing ? Materials.motion-standard : 0ms;
+        easing: Materials.glide;
+    }
     property <length> selected-tab-start: 0px;
     property <length> selected-tab-end: 0px;
     property <bool> show-password-form: false;
@@ -270,8 +292,10 @@ export component SettingsScreen inherits Rectangle {
                 ]: Rectangle {
                     height: root.mobile-platform ? Spacing.touch-target-min : Spacing.button-height;
                     border-radius: Spacing.radius-md;
-                    background: active-section == item.id ? (root.compact-mode ? Colors.action-fill : Colors.row-selected) :
-                               (nav-touch.has-hover && item.enabled ? Colors.row-hover : transparent);
+                    background: active-section == item.id ? Colors.row-selected :
+                               (nav-touch.pressed && item.enabled ? Materials.pressed
+                               : nav-touch.has-hover && item.enabled ? Colors.row-hover : transparent);
+                    animate background { duration: Materials.motion-quick; easing: Materials.settle; }
                     opacity: item.enabled ? 1.0 : 0.5;
 
                     HorizontalLayout {
@@ -330,6 +354,7 @@ export component SettingsScreen inherits Rectangle {
 
                 content-layout := VerticalLayout {
                     padding: root.content-padding;
+                    padding-left: root.content-padding + Spacing.md * (1 - root.page-entry);
                     padding-top: root.content-padding + (root.compact-mode ? Spacing.touch-target-min + Spacing.sm : Spacing.none);
                     padding-bottom: root.content-padding + root.bottom-inset;
                     spacing: root.compact-mode ? Spacing.md : Spacing.lg;
@@ -2886,6 +2911,7 @@ export component SettingsScreen inherits Rectangle {
                     height: parent.height;
                     viewport-width: tab-layout.preferred-width;
                     viewport-height: self.height;
+                    animate viewport-x { duration: Materials.motion-standard; easing: Materials.glide; }
 
                     tab-layout := HorizontalLayout {
                         spacing: Spacing.xxs;

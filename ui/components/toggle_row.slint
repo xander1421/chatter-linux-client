@@ -11,6 +11,8 @@
 import { Spacing } from "../theme/spacing.slint";
 import { Toggle } from "toggle.slint";
 import { NeoActionToggle } from "neo_action_toggle.slint";
+import { Colors } from "../theme/colors.slint";
+import { Materials } from "../theme/materials.slint";
 
 export component ToggleRow inherits Rectangle {
     in-out property <bool> checked: false;
@@ -25,8 +27,12 @@ export component ToggleRow inherits Rectangle {
     callback toggled(bool);
     min-height: Spacing.button-height;
     preferred-height: max(Spacing.button-height, row-layout.preferred-height);
+    border-radius: Spacing.radius-md;
+    background: row-touch.pressed ? Materials.pressed
+        : row-touch.has-hover && !root.disabled ? Materials.hover : transparent;
+    animate background { duration: Materials.motion-quick; easing: Materials.settle; }
 
-    TouchArea {
+    row-touch := TouchArea {
         mouse-cursor: root.disabled ? default : pointer;
         clicked => {
             if !root.disabled {
@@ -37,6 +43,8 @@ export component ToggleRow inherits Rectangle {
     }
 
     row-layout := HorizontalLayout {
+        y: row-touch.pressed ? Spacing.xxs : 0px;
+        animate y { duration: Materials.motion-quick; easing: Materials.spring; }
         padding: root.row-padding;
         spacing: root.row-spacing;
 

@@ -16,6 +16,7 @@ import { Modal } from "../components/modal.slint";
 import { Avatar } from "../components/avatar.slint";
 import { Toggle } from "../components/toggle.slint";
 import { AnonMode } from "../anon_mode/anon_mode_global.slint";
+import { Materials } from "../theme/materials.slint";
 
 export component MenuRow inherits Rectangle {
     in property <image> icon;
@@ -23,12 +24,28 @@ export component MenuRow inherits Rectangle {
     callback clicked();
 
     height: Spacing.list-row-height-touch;
-    background: touch.has-hover ? Colors.surface-hover : transparent;
+    background: touch.pressed ? Materials.pressed
+        : touch.has-hover ? Colors.surface-hover : transparent;
+    animate background { duration: Materials.motion-quick; easing: Materials.settle; }
     accessible-role: button;
     accessible-label: root.label;
     accessible-action-default => { root.clicked(); }
 
-    HorizontalLayout {
+    keys := FocusScope {
+        width: 0px;
+        height: 0px;
+        key-pressed(event) => {
+            if event.text == Key.Space || event.text == Key.Return {
+                root.clicked();
+                return accept;
+            }
+            return reject;
+        }
+    }
+
+    row-content := HorizontalLayout {
+        y: touch.pressed ? Spacing.xxs : 0px;
+        animate y { duration: Materials.motion-quick; easing: Materials.spring; }
         padding-left: Spacing.md;
         padding-right: Spacing.md;
         spacing: Spacing.lg;
@@ -47,6 +64,11 @@ export component MenuRow inherits Rectangle {
     }
 
     touch := TouchArea { mouse-cursor: pointer; clicked => { root.clicked(); } }
+    if keys.has-focus: Rectangle {
+        border-width: Spacing.stroke;
+        border-color: Colors.focus-ring;
+        border-radius: Spacing.radius-md;
+    }
 }
 
 component Divider inherits Rectangle {
@@ -151,7 +173,9 @@ export component AccountMenu inherits Rectangle {
                         accessible-checkable: true;
                         accessible-checked: Appearance.dark;
                         accessible-action-default => { root.toggle-night(); }
-                        background: night-touch.has-hover ? Colors.surface-hover : transparent;
+                        background: night-touch.pressed ? Materials.pressed
+                            : night-touch.has-hover ? Colors.surface-hover : transparent;
+                        animate background { duration: Materials.motion-quick; easing: Materials.settle; }
                         HorizontalLayout {
                             padding-left: Spacing.md;
                             padding-right: Spacing.md;
