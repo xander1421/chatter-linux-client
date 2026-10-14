@@ -138,7 +138,7 @@ tempfile = "3"
 # links i-slint-core, which must be the SAME version as the generated MainWindow's
 # i-slint-core or ElementHandle/Window types won't line up. default-features=false
 # keeps it lean (no mcp/protobuf/system-testing pulled in).
-i-slint-backend-testing = { version = "=1.17.1", default-features = false }
+i-slint-backend-testing = { version = "=1.17.1", default-features = false, features = ["renderer-software"] }
 
 [build-dependencies]
 # Android calls: force-keep + export the libwebrtc Java_* JNI symbols so the

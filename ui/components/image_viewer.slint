@@ -94,9 +94,11 @@ export component ImageViewer inherits Rectangle {
         }
     }
 
-    // Image container - centered
+    // Fill the overlay so the stretchable image area gets the space between controls.
     VerticalLayout {
-        alignment: center;
+        width: 100%;
+        height: 100%;
+        alignment: stretch;
         padding: root.compact-layout ? Spacing.sm : Spacing.xl;
 
         // Header with filename and close button
