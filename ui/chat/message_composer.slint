@@ -33,27 +33,29 @@ export struct PendingAttachmentData {
     thumbnail: image,
 }
 
-// One closed contour for the field and both droplets. The circle quarters use
-// the standard cubic circle constant. Each inner flank leaves its circle with
-// a vertical tangent, narrows to a 24px waist, then joins the field with a
-// horizontal tangent. The outer flanks remain flush with the composer edges.
+// One closed contour for the field and both droplets. At full lift each lobe
+// has a 48px circular crown; its inner vertical tangent flows through a thin
+// neck into the field. At rest those segments flatten into the field top.
 component LiquidComposerSilhouette inherits Path {
     in property <float> rise;
+    in property <float> velocity;
     in property <float> field-top;
     in property <float> shell-height;
     in property <bool> trailing-drop;
     property <float> w: self.width / 1px;
     property <float> h: self.height / 1px;
-    property <float> p: min(1.03, max(0, rise));
+    property <float> p: min(1.08, max(0, rise));
     property <float> r: 16 + 8 * p;
-    property <float> cy: field-top * (1 - p) + shell-height * 0.5 * p;
+    property <float> cy: (field-top + 16) * (1 - p) + shell-height * 0.5 * p;
     property <float> top: field-top * (1 - p) + (cy - r) * p;
-    property <float> side-y: (field-top + 16) * (1 - p) + cy * p;
-    property <float> inner-x: r * (1 + p);
-    property <float> waist-x: 16 + 25 * p;
-    property <float> waist-y: field-top - 14 * p;
-    property <float> join-x: 16 + 59 * p;
-    property <float> ripple: 12 * p * (1 - min(1, p));
+    property <float> side-y: cy;
+    property <float> inner-x: 32 + 16 * p;
+    property <float> inner-y: field-top * (1 - p) + cy * p;
+    property <float> waist-x: 42 + 2 * p;
+    property <float> waist-y: field-top - 12 * p;
+    property <float> join-x: 76;
+    property <float> dip: min(5, max(0, velocity) * 24);
+    property <float> splash: min(7, max(0, -velocity) * 28) * (1 - min(1, p));
     property <float> k: 0.55228475;
     fill: Appearance.glass-effects ? Materials.regular : Materials.opaque;
     stroke: Materials.glass-edge;
@@ -66,19 +68,19 @@ component LiquidComposerSilhouette inherits Path {
     CubicTo { control-1-x: 0; control-1-y: side-y - k * r;
         control-2-x: r * (1 - k); control-2-y: top; x: r; y: top; }
     CubicTo { control-1-x: r + k * r * p; control-1-y: top;
-        control-2-x: inner-x; control-2-y: cy - k * r * p; x: inner-x; y: cy; }
-    CubicTo { control-1-x: inner-x; control-1-y: cy + 12 * p;
+        control-2-x: inner-x; control-2-y: inner-y - k * r * p; x: inner-x; y: inner-y; }
+    CubicTo { control-1-x: inner-x; control-1-y: inner-y + 10 * p;
         control-2-x: waist-x; control-2-y: waist-y - 9 * p; x: waist-x; y: waist-y; }
     CubicTo { control-1-x: waist-x; control-1-y: waist-y + 9 * p;
         control-2-x: join-x - 14 * p; control-2-y: field-top; x: join-x; y: field-top; }
-    CubicTo { control-1-x: join-x + 12; control-1-y: field-top;
-        control-2-x: join-x + 24; control-2-y: field-top - ripple;
+    CubicTo { control-1-x: join-x + 12; control-1-y: field-top + dip;
+        control-2-x: join-x + 24; control-2-y: field-top - splash;
         x: join-x + 36; y: field-top; }
     LineTo { x: trailing-drop ? w - join-x - 36 : w - 16; y: field-top; }
     CubicTo { control-1-x: trailing-drop ? w - join-x - 24 : w - 16;
-        control-1-y: trailing-drop ? field-top - ripple : field-top;
+        control-1-y: trailing-drop ? field-top - splash : field-top;
         control-2-x: trailing-drop ? w - join-x - 12 : w - 16;
-        control-2-y: field-top;
+        control-2-y: trailing-drop ? field-top + dip : field-top;
         x: trailing-drop ? w - join-x : w - 16; y: field-top; }
     CubicTo { control-1-x: trailing-drop ? w - join-x + 14 * p : w - 16;
         control-1-y: field-top;
@@ -88,10 +90,10 @@ component LiquidComposerSilhouette inherits Path {
     CubicTo { control-1-x: trailing-drop ? w - waist-x : w;
         control-1-y: trailing-drop ? waist-y - 9 * p : field-top + 16;
         control-2-x: trailing-drop ? w - inner-x : w;
-        control-2-y: trailing-drop ? cy + 12 * p : field-top + 16;
-        x: trailing-drop ? w - inner-x : w; y: trailing-drop ? cy : field-top + 16; }
+        control-2-y: trailing-drop ? inner-y + 10 * p : field-top + 16;
+        x: trailing-drop ? w - inner-x : w; y: trailing-drop ? inner-y : field-top + 16; }
     CubicTo { control-1-x: trailing-drop ? w - inner-x : w;
-        control-1-y: trailing-drop ? cy - k * r * p : field-top + 16;
+        control-1-y: trailing-drop ? inner-y - k * r * p : field-top + 16;
         control-2-x: trailing-drop ? w - r - k * r * p : w;
         control-2-y: trailing-drop ? top : field-top + 16;
         x: trailing-drop ? w - r : w; y: trailing-drop ? top : field-top + 16; }
@@ -234,11 +236,46 @@ export component MessageComposer inherits GlassSurface {
     // participates without being committed; attachments also raise the controls.
     // A reply raises them too: its preview lives in the raised toolbar gap.
     property <bool> raised-actions: text != "" || text-input.preedit-text != "" || root.has-attachments || root.is-replying;
-    // The same spring as other chrome drives the field bulge and droplet rise.
-    // Slint retargets this animation from its current value when the draft changes.
-    property <float> lift-progress: raised-actions ? 1 : 0;
-    animate lift-progress { duration: Materials.motion-emphasized; easing: Materials.spring; }
-    property <float> lift-geometry: max(0, root.lift-progress);
+    // A damped neck spring pulls the droplets upward against gravity. Keeping
+    // velocity across target changes lets a send reverse the same moving drop.
+    // One tick is a tenth of the shared quick duration, including speed scale.
+    private property <float> lift-progress: 0;
+    private property <float> lift-velocity: 0;
+    property <float> lift-geometry: min(1.08, max(0, root.lift-progress));
+    changed raised-actions => {
+        if Appearance.reduce-motion {
+            root.lift-progress = root.raised-actions ? 1 : 0;
+            root.lift-velocity = 0;
+            lift-timer.running = false;
+        } else {
+            lift-timer.running = true;
+        }
+    }
+    lift-timer := Timer {
+        interval: Materials.motion-quick / 10;
+        running: false;
+        triggered => {
+            if Appearance.reduce-motion {
+                root.lift-progress = root.raised-actions ? 1 : 0;
+                root.lift-velocity = 0;
+                self.running = false;
+                return;
+            }
+            // Tension starts the rise slowly, gravity pulls it back from the
+            // crest, and damping leaves one small oscillation before rest.
+            root.lift-velocity = (root.lift-velocity
+                + ((root.raised-actions ? 1 : 0) - root.lift-progress)
+                    * (root.raised-actions ? 0.12 : 0.16)) * 0.65;
+            root.lift-progress += root.lift-velocity;
+            if max(root.lift-velocity, -root.lift-velocity) < 0.002
+                && max(root.lift-progress - (root.raised-actions ? 1 : 0),
+                    (root.raised-actions ? 1 : 0) - root.lift-progress) < 0.002 {
+                root.lift-progress = root.raised-actions ? 1 : 0;
+                root.lift-velocity = 0;
+                self.running = false;
+            }
+        }
+    }
     property <float> reply-reveal: is-replying ? 1 : 0;
     animate reply-reveal {
         duration: Appearance.reduce-motion ? 90ms : Materials.motion-standard;
@@ -717,6 +754,7 @@ export component MessageComposer inherits GlassSurface {
                 width: parent.width;
                 height: parent.height;
                 rise: root.lift-geometry;
+                velocity: root.lift-velocity;
                 field-top: root.raised-toolbar-height / 1px;
                 shell-height: root.top-shell-height / 1px;
                 trailing-drop: root.show-attachment-action;
