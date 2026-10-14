@@ -24,14 +24,21 @@ component ParticipantTile inherits Rectangle {
     in property <image> video-frame;
     in property <bool> is-local: false;
     in property <bool> show-video: true;
+    in property <bool> interactive: true;
     callback clicked();
 
     TouchArea {
+        enabled: root.interactive;
         clicked => { root.clicked(); }
     }
 
     background: Colors.surface;
     border-radius: Spacing.radius-lg;
+    // Retain spatial continuity when the stage or picture-in-picture resizes.
+    animate x { duration: Materials.motion-standard; easing: Materials.spring; }
+    animate y { duration: Materials.motion-standard; easing: Materials.spring; }
+    animate width { duration: Materials.motion-standard; easing: Materials.spring; }
+    animate height { duration: Materials.motion-standard; easing: Materials.spring; }
     // Border + outer glow drive the "is speaking" affordance — both animate
     // between idle and active so the transition feels alive rather than a
     // hard on/off flip. Uses the sidebar accent teal so "talking" matches the
@@ -44,10 +51,10 @@ component ParticipantTile inherits Rectangle {
     drop-shadow-offset-y: 0px;
     clip: true;
 
-    animate border-width { duration: Materials.menu-duration; easing: ease-in-out; }
-    animate border-color { duration: Materials.menu-duration; easing: ease-in-out; }
-    animate drop-shadow-blur { duration: Materials.menu-duration; easing: ease-in-out; }
-    animate drop-shadow-color { duration: Materials.menu-duration; easing: ease-in-out; }
+    animate border-width { duration: Materials.motion-quick; easing: Materials.settle; }
+    animate border-color { duration: Materials.motion-quick; easing: Materials.settle; }
+    animate drop-shadow-blur { duration: Materials.motion-quick; easing: Materials.settle; }
+    animate drop-shadow-color { duration: Materials.motion-quick; easing: Materials.settle; }
 
     // Video frame or avatar placeholder. Screen-share streams ALWAYS use
     // `contain` — never crop. Cropping a screen share hides content (the
@@ -163,6 +170,7 @@ export component ActiveCallView inherits Rectangle {
     in property <bool> speaker-on: false;
     in property <image> local-video-frame;
     in property <[image]> remote-video-frames;
+    private property <CallParticipantData> empty-participant;
     // When true, the dock expands to fill the viewport (chat panel hides at
     // the parent layout). Driven by app.slint, toggled via the fullscreen
     // button on the maximized tile.
@@ -188,7 +196,8 @@ export component ActiveCallView inherits Rectangle {
     // Effective focus: honor the user's explicit choice, otherwise auto-focus a
     // screen share so it comes forward big instead of a letterboxed grid cell.
     // -1 = grid view, 0..n = that tile is maximized. Render branches read this.
-    property <int> maximized-index: user-focus == -2 ? screen-share-index : user-focus;
+    property <int> maximized-index: user-focus >= call-data.participant-count
+        ? -1 : (user-focus == -2 ? screen-share-index : user-focus);
     // A new/changed screen share re-arms auto-focus even if the user had dropped
     // back to the grid, so the share always surfaces.
     changed screen-share-index => { user-focus = -2; }
@@ -205,22 +214,10 @@ export component ActiveCallView inherits Rectangle {
         || (call-data.participants.length > 3 && (call-data.participants[3].is-video-enabled || call-data.participants[3].is-screen-sharing))
         || (call-data.participants.length > 4 && (call-data.participants[4].is-video-enabled || call-data.participants[4].is-screen-sharing))
         || (call-data.participants.length > 5 && (call-data.participants[5].is-video-enabled || call-data.participants[5].is-screen-sharing));
-    // Derived properties only evaluate meaningfully when maximized-index >= 0;
-    // the explicit guard avoids `remote-video-frames[-1]` (Slint indexes the
-    // array eagerly and a negative index aborts the per-frame property
-    // re-eval, which silently drops the binding update path for the grid
-    // tiles too).
     // The local tile is pinned last in the list; the count can lag it (a
     // ringing 1:1 call lists the callee ahead of us while only we are in).
     property <bool> maximized-is-local: maximized-index >= 0
         && maximized-index == call-data.participants.length - 1;
-    property <image> maximized-video-frame: maximized-index < 0
-        ? local-video-frame
-        : (maximized-is-local
-            ? local-video-frame
-            : (remote-video-frames.length > maximized-index
-                ? remote-video-frames[maximized-index]
-                : local-video-frame));
 
     callback toggle-mute();
     callback toggle-video();
@@ -263,119 +260,42 @@ export component ActiveCallView inherits Rectangle {
             vertical-stretch: 1;
             background: transparent;
 
-            // Alone in the room: either a group call nobody else has joined,
-            // or a 1:1 call still ringing — then the callee's tile is listed
-            // first and shown instead of our own.
-            if maximized-index < 0 && call-data.participant-count == 1: ParticipantTile {
-                x: Spacing.sm;
-                y: Spacing.sm;
-                width: parent.width - 2 * Spacing.sm;
-                height: parent.height - 2 * Spacing.sm;
-                participant: call-data.participants[0];
-                video-frame: local-video-frame;
-                is-local: call-data.participants.length == 1;
-                clicked => { root.user-focus = 0; }
-            }
-
-            // 1:1 call — remote party dominates the stage, self is a small
-            // picture-in-picture thumbnail (messenger convention: you watch
-            // them, not yourself). A voice-only 1:1 shows just the remote: a
-            // "You" tile with no video says nothing.
-            if maximized-index < 0 && call-data.participant-count == 2 && any-video: Rectangle {
-                x: Spacing.sm;
-                y: Spacing.sm;
-                width: parent.width - 2 * Spacing.sm;
-                height: parent.height - 2 * Spacing.sm;
-                background: transparent;
-
-                ParticipantTile {
-                    width: 100%;
-                    height: 100%;
-                    participant: call-data.participants[0];
-                    video-frame: remote-video-frames.length > 0 ? remote-video-frames[0] : local-video-frame;
-                    clicked => { root.user-focus = 0; }
-                }
-
-                ParticipantTile {
-                    property <length> pip-width: clamp(parent.width * 0.24, 120px, 200px);
-                    width: pip-width;
-                    height: pip-width * 0.62;
-                    x: parent.width - self.width - Spacing.sm;
-                    y: parent.height - self.height - Spacing.sm;
-                    participant: call-data.participants.length > 1 ? call-data.participants[1] : call-data.participants[0];
-                    video-frame: local-video-frame;
-                    is-local: true;
-                    clicked => { root.user-focus = 1; }
-                }
-            }
-
-            if maximized-index < 0 && call-data.participant-count == 2 && !any-video: ParticipantTile {
-                x: Spacing.sm;
-                y: Spacing.sm;
-                width: parent.width - 2 * Spacing.sm;
-                height: parent.height - 2 * Spacing.sm;
-                participant: call-data.participants[0];
-                video-frame: remote-video-frames.length > 0 ? remote-video-frames[0] : local-video-frame;
-                clicked => { root.user-focus = 0; }
-            }
-
-            if maximized-index < 0 && call-data.participant-count >= 3 && call-data.participant-count <= 4: VerticalLayout {
-                padding: Spacing.sm;
-                spacing: Spacing.sm;
-
-                HorizontalLayout {
-                    spacing: Spacing.sm;
-
-                    ParticipantTile {
-                        horizontal-stretch: 1;
-                        participant: call-data.participants[0];
-                        video-frame: remote-video-frames.length > 0 ? remote-video-frames[0] : local-video-frame;
-                        clicked => { root.user-focus = 0; }
-                    }
-                    ParticipantTile {
-                        horizontal-stretch: 1;
-                        participant: call-data.participants.length > 1 ? call-data.participants[1] : call-data.participants[0];
-                        video-frame: remote-video-frames.length > 1 ? remote-video-frames[1] : local-video-frame;
-                        clicked => { root.user-focus = 1; }
-                    }
-                }
-
-                HorizontalLayout {
-                    spacing: Spacing.sm;
-
-                    ParticipantTile {
-                        horizontal-stretch: 1;
-                        participant: call-data.participants.length > 2 ? call-data.participants[2] : call-data.participants[0];
-                        video-frame: remote-video-frames.length > 2 ? remote-video-frames[2] : local-video-frame;
-                        clicked => { root.user-focus = 2; }
-                    }
-                    ParticipantTile {
-                        horizontal-stretch: 1;
-                        participant: call-data.participants.length > 3 ? call-data.participants[3] : call-data.participants[0];
-                        video-frame: local-video-frame;
-                        is-local: call-data.participant-count >= 4;
-                        opacity: call-data.participant-count >= 4 ? 1.0 : 0.0;
-                        clicked => {
-                            if (call-data.participant-count >= 4) { root.user-focus = 3; }
-                        }
-                    }
-                }
-            }
-
-            // Maximized single tile — click the tile to restore the grid.
-            // Per-peer controls (mute/pause) are rendered as a small overlay
-            // bar above the tile when the maximized participant is remote.
-            // Fullscreen + maximized fills (cover) so ultrawide screen-share
-            // captures aren't squashed into a thin letterboxed band.
-            if maximized-index >= 0 && maximized-index < call-data.participant-count: ParticipantTile {
-                x: Spacing.sm;
-                y: Spacing.sm;
-                width: parent.width - 2 * Spacing.sm;
-                height: parent.height - 2 * Spacing.sm;
-                participant: call-data.participants[maximized-index];
-                video-frame: maximized-video-frame;
-                is-local: maximized-is-local;
-                clicked => { root.user-focus = -1; }
+            // Keep each participant tile mounted while the roster or focus
+            // changes. A tile travels from its grid cell to the stage (and
+            // back) instead of being destroyed and recreated by a branch.
+            // Fixed slots keep their Slint items across a new roster model.
+            // Core replaces the model on call updates, so iterating that
+            // model directly would recreate every tile and lose its travel.
+            for slot[idx] in [0, 1, 2, 3, 4, 5]: ParticipantTile {
+                property <int> columns: call-data.participant-count >= 5 ? 3 : 2;
+                property <length> grid-width: (parent.width - 2 * Spacing.sm - (columns - 1) * Spacing.sm) / columns;
+                property <length> grid-height: (parent.height - 2 * Spacing.sm - Spacing.sm) / 2;
+                property <length> pip-width: clamp(parent.width * 0.24, 120px, 200px);
+                property <bool> full-stage: root.maximized-index >= 0 || call-data.participant-count <= 1
+                    || (call-data.participant-count == 2 && idx == 0);
+                property <bool> pip: root.maximized-index < 0 && call-data.participant-count == 2 && idx == 1;
+                x: full-stage ? Spacing.sm
+                    : pip ? parent.width - pip-width - 2 * Spacing.sm
+                    : Spacing.sm + Math.mod(idx, columns) * (grid-width + Spacing.sm);
+                y: full-stage ? Spacing.sm
+                    : pip ? parent.height - pip-width * 0.62 - 2 * Spacing.sm
+                    : Spacing.sm + Math.floor(idx / columns) * (grid-height + Spacing.sm);
+                width: full-stage ? parent.width - 2 * Spacing.sm : pip ? pip-width : grid-width;
+                height: full-stage ? parent.height - 2 * Spacing.sm : pip ? pip-width * 0.62 : grid-height;
+                opacity: idx >= call-data.participant-count || idx >= call-data.participants.length
+                    || (call-data.participant-count == 2 && !root.any-video && idx == 1)
+                    || (root.maximized-index >= 0 && root.maximized-index != idx) ? 0 : 1;
+                animate opacity { duration: Materials.motion-standard; easing: Materials.settle; }
+                visible: (idx < call-data.participants.length && idx < call-data.participant-count)
+                    || self.opacity > 0;
+                interactive: self.opacity > 0.95
+                    && (root.maximized-index < 0 || root.maximized-index == idx);
+                participant: call-data.participants.length > idx
+                    ? call-data.participants[idx] : root.empty-participant;
+                video-frame: idx == call-data.participants.length - 1 ? local-video-frame
+                    : remote-video-frames.length > idx ? remote-video-frames[idx] : local-video-frame;
+                is-local: idx == call-data.participants.length - 1;
+                clicked => { root.user-focus = root.maximized-index == idx ? -1 : idx; }
             }
 
             // Per-peer controls bar — top of the maximized tile, remote only.
@@ -598,7 +518,9 @@ export component ActiveCallView inherits Rectangle {
             padding-bottom: Spacing.sm;
 
             CallControls {
-                width: min(296px, root.width - 2 * Spacing.md);
+                // Six desktop actions need more than 296px; otherwise the
+                // rightmost end-call target is clipped by the control pill.
+                width: min(root.speaker-toggle ? 288px : 376px, root.width - 2 * Spacing.md);
                 height: controls-height;
                 button-size: root.button-size;
                 is-connected: root.call-data.is-connected;

@@ -5,11 +5,18 @@ import { GlassSurface } from "../components/glass_surface.slint";
 
 import { Spacing } from "../theme/spacing.slint";
 import { Icons } from "../theme/icons.slint";
+import { Materials } from "../theme/materials.slint";
 
 export component CallControls inherits GlassSurface {
     material-level: 3;
     elevation: 3;
     border-radius: self.height / 2;
+    property <float> arrival: 0;
+    init => { root.arrival = 1; }
+    opacity: arrival;
+    transform-scale-x: 90% + arrival * 10%;
+    transform-scale-y: 82% + arrival * 18%;
+    animate arrival { duration: Materials.motion-standard; easing: Materials.spring; }
 
     in property <bool> is-connected: false;
     in property <bool> is-muted: false;

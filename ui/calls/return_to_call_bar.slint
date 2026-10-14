@@ -1,4 +1,5 @@
 import { GlassSurface } from "../components/glass_surface.slint";
+import { Materials } from "../theme/materials.slint";
 // "Return to call" pill — the active call's presence everywhere the docked
 // call view is not on screen (the chat list, Contacts, any modal). Tapping it
 // goes back to the call.
@@ -13,6 +14,14 @@ export component ReturnToCallBar inherits GlassSurface {
     material-level: 2;
     elevation: 0;
     border-radius: self.height / 2;
+    property <float> arrival: 0;
+    init => { root.arrival = 1; }
+    opacity: arrival;
+    transform-scale-x: return-touch.pressed ? 96% : 90% + arrival * 10%;
+    transform-scale-y: return-touch.pressed ? 94% : 82% + arrival * 18%;
+    animate arrival { duration: Materials.motion-standard; easing: Materials.spring; }
+    animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+    animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
 
     in property <ActiveCallData> call-data;
     callback clicked();
@@ -27,7 +36,7 @@ export component ReturnToCallBar inherits GlassSurface {
     accessible-label: "Return to call with " + call-data.title;
     accessible-action-default => { root.clicked(); }
 
-    TouchArea {
+    return-touch := TouchArea {
         clicked => { root.clicked(); }
     }
 

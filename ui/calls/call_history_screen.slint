@@ -217,6 +217,11 @@ export component CallHistoryScreen inherits Rectangle {
                         horizontal-stretch: 1;
                         border-radius: Spacing.radius-chrome-inner;
                         background: root.active-filter == tab.id ? Colors.tint-strong : (tab-touch.pressed ? Materials.pressed : tab-touch.has-hover ? Materials.hover : transparent);
+                        transform-scale-x: tab-touch.pressed ? 96% : 100%;
+                        transform-scale-y: tab-touch.pressed ? 94% : 100%;
+                        animate transform-scale-x { duration: tab-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+                        animate transform-scale-y { duration: tab-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+                        animate background { duration: Materials.motion-quick; easing: Materials.settle; }
                         accessible-role: AccessibleRole.tab;
                         accessible-label: tab.label;
                         accessible-item-selected: root.active-filter == tab.id;
@@ -374,8 +379,13 @@ export component CallHistoryScreen inherits Rectangle {
                         Rectangle {
                             height: root.row-height;
                             background: root.selecting && row.selected ? Colors.text-primary.with-alpha(0.12)
-                                : row-touch.has-hover ? Colors.surface-hover : transparent;
+                                : row-touch.pressed ? Materials.pressed : row-touch.has-hover ? Colors.surface-hover : transparent;
                             border-radius: Spacing.radius-md;
+                            transform-scale-x: row-touch.pressed ? 99% : 100%;
+                            transform-scale-y: row-touch.pressed ? 97% : 100%;
+                            animate transform-scale-x { duration: row-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+                            animate transform-scale-y { duration: row-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+                            animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
 
                             // Under the row's content, not over it: declared last it
                             // sat on top and took the redial buttons' taps, so
@@ -510,6 +520,10 @@ export component CallHistoryScreen inherits Rectangle {
                                         width: Spacing.touch-target-min;
                                         border-radius: Spacing.radius-sm;
                                         background: voice-touch.has-hover ? Colors.surface : transparent;
+                                        transform-scale-x: voice-touch.pressed ? 92% : 100%;
+                                        transform-scale-y: voice-touch.pressed ? 92% : 100%;
+                                        animate transform-scale-x { duration: voice-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+                                        animate transform-scale-y { duration: voice-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
                                         accessible-role: button;
                                         accessible-label: "Call " + row.name;
 
@@ -534,6 +548,10 @@ export component CallHistoryScreen inherits Rectangle {
                                         width: Spacing.touch-target-min;
                                         border-radius: Spacing.radius-sm;
                                         background: video-touch.has-hover ? Colors.surface : transparent;
+                                        transform-scale-x: video-touch.pressed ? 92% : 100%;
+                                        transform-scale-y: video-touch.pressed ? 92% : 100%;
+                                        animate transform-scale-x { duration: video-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+                                        animate transform-scale-y { duration: video-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
                                         accessible-role: button;
                                         accessible-label: "Video call " + row.name;
 
