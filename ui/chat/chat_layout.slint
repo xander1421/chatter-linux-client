@@ -273,7 +273,10 @@ export component ChatLayout inherits Rectangle {
         width: 100%;
         height: 100%;
         top-inset: top-chrome.height;
-        bottom-inset: bottom-chrome.height;
+        // Keep the newest bubble above the droplet's full travel. The
+        // composer slot itself follows lift progress, while this clearance
+        // stays fixed across a plain draft's rise and fall.
+        bottom-inset: bottom-chrome.height + composer.list-clearance-extra;
         messages: root.messages;
         loading: root.loading-messages;
         selection-mode: root.selection-mode;

@@ -242,6 +242,9 @@ export component MessageComposer inherits GlassSurface {
     private property <float> lift-progress: 0;
     private property <float> lift-velocity: 0;
     property <float> lift-geometry: min(1.08, max(0, root.lift-progress));
+    // The contour can overshoot; hit targets and the field stop at their
+    // aligned endpoints so the neck never pulls a glyph across the input.
+    property <float> lift-layout: min(1, max(0, root.lift-progress));
     changed raised-actions => {
         if Appearance.reduce-motion {
             root.lift-progress = root.raised-actions ? 1 : 0;
@@ -298,13 +301,25 @@ export component MessageComposer inherits GlassSurface {
     // reply chip beside them, so large text cannot leave the chip taller
     // than its neighbours.
     property <length> top-shell-height: is-replying ? reply-row-height : action-shell-height;
-    property <length> raised-toolbar-height: lift-geometry
+    property <length> raised-toolbar-height: lift-layout
         * ((is-replying ? reply-row-height + Spacing.xs : 0px)
             + (has-attachments ? attachment-band-height + Spacing.xs
                 : !is-replying ? action-shell-height + Spacing.xs : 0px));
+    // The list reserves the droplet's full travel even when the controls are
+    // inline, keeping its last bubble still while the composer breathes.
+    property <length> list-clearance-height: max(action-shell-height + Spacing.xs,
+        (is-replying ? reply-row-height + Spacing.xs : 0px)
+            + (has-attachments ? attachment-band-height + Spacing.xs
+                : !is-replying ? action-shell-height + Spacing.xs : 0px));
+    out property <length> list-clearance-extra: root.collapsed || VoiceRecording.active
+        ? 0px : list-clearance-height - raised-toolbar-height;
     property <length> lower-terminal-width: show-terminal-action ? Spacing.touch-target-min + Spacing.xs : 0px;
+    // Reserve the inline terminal only when a mic actually occupies it. In
+    // rooms without voice recording, Send claims its width as lift advances.
+    property <length> inline-terminal-width: !root.is-editing && MeshGlobal.active-id == ""
+        ? Spacing.touch-target-min + Spacing.xs : 0px;
     property <length> trailing-actions-width: (show-attachment-action ? Spacing.touch-target-min + Spacing.xs : 0px)
-        + (show-terminal-action ? Spacing.touch-target-min + Spacing.xs : 0px);
+        + inline-terminal-width;
 
     // What actually gets sent. `TextInput.text` EXCLUDES the preedit -- the text
     // the input method is still composing -- so sending `text` silently drops
@@ -744,7 +759,7 @@ export component MessageComposer inherits GlassSurface {
             width: 100%;
             height: root.content-height + root.raised-toolbar-height + root.row-padding * 2;
             property <length> action-y: root.row-padding + (root.content-height - Spacing.touch-target-min) / 2
-                + root.lift-geometry * ((root.top-shell-height - Spacing.touch-target-min) / 2
+                + root.lift-layout * ((root.top-shell-height - Spacing.touch-target-min) / 2
                     - root.row-padding - (root.content-height - Spacing.touch-target-min) / 2);
             property <length> lower-action-y: root.row-padding + root.raised-toolbar-height + root.content-height - Spacing.touch-target-min;
 
@@ -1073,7 +1088,7 @@ export component MessageComposer inherits GlassSurface {
             // 48px, not 36px: measured on a phone the old box was a 36dp target,
             // under the 48dp minimum. The icon keeps its size; only the box grows.
             Rectangle {
-                x: root.row-padding * (1 - min(1, root.lift-geometry));
+                x: root.row-padding * (1 - root.lift-layout);
                 y: parent.action-y;
                 width: Spacing.touch-target-min;
                 height: Spacing.touch-target-min;
@@ -1112,11 +1127,11 @@ export component MessageComposer inherits GlassSurface {
 
             // One native input below the toolbar beside Send; compact inline when empty.
             Rectangle {
-                x: root.row-padding + (1 - root.lift-geometry) * (Spacing.touch-target-min + Spacing.xs);
+                x: root.row-padding + (1 - root.lift-layout) * (Spacing.touch-target-min + Spacing.xs);
                 y: root.row-padding + root.raised-toolbar-height;
                 width: parent.width - root.row-padding * 2
-                    - (root.lift-geometry * root.lower-terminal-width
-                        + (1 - root.lift-geometry) * (Spacing.touch-target-min + Spacing.xs + root.trailing-actions-width));
+                    - (root.lift-layout * root.lower-terminal-width
+                        + (1 - root.lift-layout) * (Spacing.touch-target-min + Spacing.xs + root.trailing-actions-width));
                 height: root.content-height;
                 background: Colors.inset;
                 // Concentric with the shell: radius-chrome − chrome-inset.
@@ -1238,8 +1253,8 @@ export component MessageComposer inherits GlassSurface {
             // would be an offer the transport declines. Hidden while editing:
             // an edit changes text only.
             if root.show-attachment-action: Rectangle {
-                x: parent.width - root.row-padding * (1 - min(1, root.lift-geometry)) - Spacing.touch-target-min
-                    - (1 - root.lift-geometry) * (root.show-terminal-action ? Spacing.touch-target-min + Spacing.xs : 0px);
+                x: parent.width - root.row-padding * (1 - root.lift-layout) - Spacing.touch-target-min
+                    - (1 - root.lift-layout) * root.inline-terminal-width;
                 y: parent.action-y;
                 width: Spacing.touch-target-min;
                 height: Spacing.touch-target-min;
@@ -1269,16 +1284,18 @@ export component MessageComposer inherits GlassSurface {
 
             // Tap locks recording; hold releases to send, slide left cancels,
             // slide up locks. Mesh has its own file transport, not this path.
-            if !root.can-send && !root.is-editing && MeshGlobal.active-id == "": Rectangle {
+            if !root.is-editing && MeshGlobal.active-id == "": Rectangle {
                 x: parent.width - root.row-padding - Spacing.touch-target-min;
-                // Raised by a reply alone: mic takes Send's slot beside the field.
-                y: root.raised-actions ? parent.lower-action-y : parent.action-y;
+                // Stay beside the field while the attachment droplet lands.
+                y: parent.lower-action-y;
                 width: Spacing.touch-target-min;
                 height: Spacing.touch-target-min;
+                opacity: (root.raised-actions && !root.can-send ? 1 : 1 - root.lift-layout)
+                    * (root.disabled ? 0.5 : 1);
                 accessible-role: button;
                 accessible-label: "Record voice message";
-                accessible-enabled: !root.disabled;
-                accessible-action-default => { if !root.disabled { root.start-recording(); VoiceRecording.locked = true; } }
+                accessible-enabled: !root.disabled && !root.can-send;
+                accessible-action-default => { if !root.disabled && !root.can-send { root.start-recording(); VoiceRecording.locked = true; } }
                 Image {
                     source: Icons.mic;
                     width: 20px;
@@ -1288,7 +1305,7 @@ export component MessageComposer inherits GlassSurface {
                     colorize: Colors.text-secondary;
                 }
                 TouchArea {
-                    enabled: !root.disabled;
+                    enabled: !root.disabled && !root.can-send;
                     pointer-event(event) => {
                         if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
                             root.voice-press-x = self.mouse-x + self.absolute-position.x;
@@ -1319,14 +1336,14 @@ export component MessageComposer inherits GlassSurface {
             }
 
             // Send stays at the normal bottom action position beside the native field.
-            if root.can-send: Rectangle {
+            if root.can-send || (!root.raised-actions && root.lift-layout > 0): Rectangle {
                 x: parent.width - root.row-padding - Spacing.touch-target-min;
                 y: parent.lower-action-y;
                 width: Spacing.touch-target-min;
                 height: Spacing.touch-target-min;
                 background: send-touch.has-hover ? Colors.action-hover : Colors.action-fill;
                 border-radius: Spacing.radius-chrome-inner;
-                opacity: root.disabled ? 0.5 : 1.0;
+                opacity: root.disabled ? 0.5 * root.lift-layout : root.lift-layout;
                 accessible-role: button;
                 accessible-label: "Send message";
 
