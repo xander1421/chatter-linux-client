@@ -279,9 +279,8 @@ export component ChatLayout inherits Rectangle {
         clip: root.rounded-page-top;
         sender-profile-requested(user-id) => { root.sender-profile-requested(user-id); }
         width: 100%;
-        // End the viewport at the highest point the composer can occupy.
-        // Virtual rows must not paint through the gaps around raised droplets
-        // or the reply preview while the keyboard changes the pane height.
+        // Composer supplies its steady chrome reserve plus a circle row that
+        // follows the lift, so the newest bubble stays above both droplets.
         height: max(0px, root.height - bottom-chrome.height - composer.list-clearance-extra);
         top-inset: top-chrome.height;
         bottom-inset: 0px;

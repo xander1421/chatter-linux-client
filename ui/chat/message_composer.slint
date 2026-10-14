@@ -307,13 +307,15 @@ export component MessageComposer inherits GlassSurface {
         * (action-shell-height + Spacing.xs
             + (has-attachments ? attachment-band-height + Spacing.xs : 0px)
             + (is-replying ? reply-row-height + Spacing.xs : 0px));
-    // The list reserves the droplet's full travel even when the controls are
-    // inline, keeping its last bubble still while the composer breathes.
+    // Keep the base composer, attachment and reply clearance steady as the
+    // toolbar grows. Reserve one more circle row as the droplets rise so the
+    // newest bubble clears their entire touch targets, including their bob.
     property <length> list-clearance-height: action-shell-height + Spacing.xs
         + (has-attachments ? attachment-band-height + Spacing.xs : 0px)
         + (is-replying ? reply-row-height + Spacing.xs : 0px);
     out property <length> list-clearance-extra: root.collapsed || VoiceRecording.active
-        ? 0px : list-clearance-height - raised-toolbar-height;
+        ? 0px : list-clearance-height - raised-toolbar-height
+            + lift-layout * (Spacing.touch-target-min + Spacing.xs);
     property <length> lower-terminal-width: show-terminal-action ? Spacing.touch-target-min + Spacing.xs : 0px;
     // Reserve the inline terminal only when a mic actually occupies it. In
     // rooms without voice recording, Send claims its width as lift advances.
