@@ -89,6 +89,33 @@ impl AttachmentService {
         &self,
         file_path: &Path,
     ) -> Result<CdnUploadResult, AttachmentError> {
+        self.upload_to_cdn_encrypted_with_media(file_path, None)
+            .await
+    }
+
+    /// Recorded voice notes already have these values from the capture worker.
+    /// Re-probing the WAV starts a decoder and scans the audio a second time.
+    pub async fn upload_recorded_voice_note(
+        &self,
+        file_path: &Path,
+        waveform: &[u8],
+        duration_ms: u64,
+    ) -> Result<CdnUploadResult, AttachmentError> {
+        let media = MediaMetadata {
+            waveform: Some(waveform.to_vec()),
+            duration_ms,
+            ..MediaMetadata::default()
+        };
+        self.upload_to_cdn_encrypted_with_media(file_path, Some(media))
+            .await
+    }
+
+    async fn upload_to_cdn_encrypted_with_media(
+        &self,
+        file_path: &Path,
+        known_media: Option<MediaMetadata>,
+    ) -> Result<CdnUploadResult, AttachmentError> {
+        let started = std::time::Instant::now();
         let plaintext_size = tokio::fs::metadata(file_path)
             .await
             .map_err(|e| {
@@ -149,7 +176,17 @@ impl AttachmentService {
         );
 
         // Extract media metadata from the original file before encryption
-        let media_meta = self.extract_media_metadata(file_path, &mime_type).await;
+        let media_start = std::time::Instant::now();
+        let media_meta = match known_media {
+            Some(media) => media,
+            None => self.extract_media_metadata(file_path, &mime_type).await,
+        };
+        if self.secret_chat {
+            tracing::info!(
+                elapsed_ms = media_start.elapsed().as_millis(),
+                "secret attachment upload: media metadata ready"
+            );
+        }
 
         // Streaming encryption to temp file (O(CHUNK_SIZE) memory)
         ensure_attachments_dir().map_err(|e| {
@@ -186,12 +223,19 @@ impl AttachmentService {
         } else {
             // Get presigned upload URL
             let mut file_client = self.file_client()?;
+            let mint_start = std::time::Instant::now();
             let upload_response = file_client
                 .get_attachment_upload_url(encrypt_result.ciphertext_size)
                 .await
                 .map_err(|e| {
                     AttachmentError::NetworkError(format!("Failed to get upload URL: {}", e))
                 })?;
+            if self.secret_chat {
+                tracing::info!(
+                    elapsed_ms = mint_start.elapsed().as_millis(),
+                    "secret attachment upload: URL minted"
+                );
+            }
 
             let cdn_key = upload_response.cdn_key;
             let upload_url = upload_response.upload_url;
@@ -258,12 +302,19 @@ impl AttachmentService {
             tracing::info!(elapsed = ?upload_start.elapsed(), "CDN upload complete");
 
             // Confirm upload with server
+            let confirm_start = std::time::Instant::now();
             file_client
                 .confirm_attachment_upload(&cdn_key)
                 .await
                 .map_err(|e| {
                     AttachmentError::NetworkError(format!("Failed to confirm upload: {}", e))
                 })?;
+            if self.secret_chat {
+                tracing::info!(
+                    elapsed_ms = confirm_start.elapsed().as_millis(),
+                    "secret attachment upload: confirmed"
+                );
+            }
 
             cdn_key
         };
@@ -341,6 +392,12 @@ impl AttachmentService {
             "Encrypted attachment uploaded to CDN (streaming)"
         );
 
+        if self.secret_chat {
+            tracing::info!(
+                elapsed_ms = started.elapsed().as_millis(),
+                "secret attachment upload: ready"
+            );
+        }
         Ok(CdnUploadResult {
             attachment_id,
             cdn_key,

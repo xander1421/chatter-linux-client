@@ -122,6 +122,7 @@ fn record(
             }
         }
     }
+    let prepare_start = std::time::Instant::now();
     if !stopped {
         recorder.stop().map_err(|e| e.to_string())?;
     }
@@ -130,7 +131,13 @@ fn record(
         .suffix(".wav")
         .tempfile_in(cache)
         .map_err(|e| e.to_string())?;
+    let encode_start = std::time::Instant::now();
     recorder.save(file.path()).map_err(|e| e.to_string())?;
+    tracing::info!(
+        elapsed_ms = encode_start.elapsed().as_millis(),
+        "voice recording: WAV encoded"
+    );
+    let waveform_start = std::time::Instant::now();
     let mut reader = hound::WavReader::open(file.path()).map_err(|e| e.to_string())?;
     let spec = reader.spec();
     let samples = reader
@@ -142,10 +149,19 @@ fn record(
     if duration_ms < 300 {
         return Err("Recording is too short".into());
     }
+    let waveform = waveform(&samples);
+    tracing::info!(
+        elapsed_ms = waveform_start.elapsed().as_millis(),
+        "voice recording: waveform ready"
+    );
+    tracing::info!(
+        elapsed_ms = prepare_start.elapsed().as_millis(),
+        "voice recording: preparation complete"
+    );
     Ok(Some(RecordedVoiceNote {
         file,
         conversation,
-        waveform: waveform(&samples),
+        waveform,
         duration_ms,
     }))
 }

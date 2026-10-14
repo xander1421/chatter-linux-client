@@ -308,18 +308,40 @@ mod tor {
         req: hyper::Request<Full<Bytes>>,
         limit: usize,
     ) -> Result<(u16, hyper::HeaderMap, Vec<u8>), String> {
+        let dial_start = std::time::Instant::now();
         let stream = connect_tor(tor, &p.host, p.port, false).await?;
+        tracing::info!(
+            elapsed_ms = dial_start.elapsed().as_millis(),
+            "storage Tor dial complete"
+        );
         if p.https {
             let server_name = ServerName::try_from(p.host.clone())
                 .map_err(|e| format!("invalid SNI host {}: {e}", p.host))?;
             let connector = TlsConnector::from(Arc::new(tls_config()));
+            let tls_start = std::time::Instant::now();
             let tls = connector
                 .connect(server_name, stream)
                 .await
                 .map_err(|e| format!("TLS handshake to {} failed: {e}", p.host))?;
-            send(TokioIo::new(tls), req, limit).await
+            tracing::info!(
+                elapsed_ms = tls_start.elapsed().as_millis(),
+                "storage TLS handshake complete"
+            );
+            let request_start = std::time::Instant::now();
+            let result = send(TokioIo::new(tls), req, limit).await;
+            tracing::info!(
+                elapsed_ms = request_start.elapsed().as_millis(),
+                "storage HTTP request complete"
+            );
+            result
         } else {
-            send(TokioIo::new(stream), req, limit).await
+            let request_start = std::time::Instant::now();
+            let result = send(TokioIo::new(stream), req, limit).await;
+            tracing::info!(
+                elapsed_ms = request_start.elapsed().as_millis(),
+                "storage HTTP request complete"
+            );
+            result
         }
     }
 
@@ -332,7 +354,8 @@ mod tor {
             .header(hyper::header::HOST, host_header(&p))
             .body(Full::new(Bytes::new()))
             .map_err(|e| format!("building GET request failed: {e}"))?;
-        let (status, _headers, body) = request(tor, &p, req, super::storage_response_limit()).await?;
+        let (status, _headers, body) =
+            request(tor, &p, req, super::storage_response_limit()).await?;
         if !(200..300).contains(&status) {
             return Err(format!("storage GET returned status {status}"));
         }
@@ -348,8 +371,11 @@ mod tor {
             .header(hyper::header::HOST, host_header(&p))
             .body(Full::new(Bytes::new()))
             .map_err(|_| "update request construction failed".to_string())?;
-        let (status, _headers, body) = request(tor, &p, req, crate::update::MAX_MANIFEST_BYTES).await?;
-        if status == 404 { return Ok(None); }
+        let (status, _headers, body) =
+            request(tor, &p, req, crate::update::MAX_MANIFEST_BYTES).await?;
+        if status == 404 {
+            return Ok(None);
+        }
         if !(200..300).contains(&status) {
             return Err(format!("update GET returned status {status}"));
         }
@@ -473,7 +499,8 @@ mod tor {
             .header(hyper::header::CONTENT_TYPE, content_type)
             .body(Full::new(Bytes::from(body)))
             .map_err(|e| format!("building PUT request failed: {e}"))?;
-        let (status, headers, _body) = request(tor, &p, req, super::storage_response_limit()).await?;
+        let (status, headers, _body) =
+            request(tor, &p, req, super::storage_response_limit()).await?;
         let etag = headers
             .get(hyper::header::ETAG)
             .and_then(|v| v.to_str().ok())

@@ -1140,12 +1140,16 @@ impl ChatterClient {
             return Err("Conversation changed; recording discarded".into());
         }
         // Routed for the recording's conversation: Tor-only for a secret chat.
+        let started = std::time::Instant::now();
         let upload = self
             .attachments()
             .for_conversation(&note.conversation)
-            .upload_to_cdn_encrypted(note.file.path())
+            .upload_recorded_voice_note(note.file.path(), &note.waveform, note.duration_ms)
             .await
             .map_err(|e| e.to_string())?;
+        if note.conversation.is_anon() {
+            tracing::info!(elapsed_ms = started.elapsed().as_millis(), "secret voice: encrypted upload complete");
+        }
         if !recording_context_is_current(self.chat_state(), note.conversation) {
             return Err("Conversation changed; recording discarded".into());
         }
@@ -1168,6 +1172,9 @@ impl ChatterClient {
             .update(&attachment)
             .map_err(|e| e.to_string())?;
 
+        if note.conversation.is_anon() {
+            tracing::info!(elapsed_ms = started.elapsed().as_millis(), "secret voice: pending attachment ready");
+        }
         Ok(crate::state::chat_state::PendingAttachment::with_pointer(
             upload.attachment_id,
             std::path::PathBuf::new(),
