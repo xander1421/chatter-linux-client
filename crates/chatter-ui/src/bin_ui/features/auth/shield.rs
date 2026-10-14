@@ -32,6 +32,7 @@ pub(super) fn wire_shield_before_login(window: &MainWindow, ui_ctx: &Arc<Chatter
         let enable = !ui_ctx.anon_mode_enabled();
         match ui_ctx.set_shield_before_login(enable) {
             Ok(()) => {
+                w.invoke_refresh_screen_protection();
                 w.global::<AnonMode>().set_enabled(enable);
                 w.set_login_error("".into());
                 w.set_register_error("".into());

@@ -215,6 +215,11 @@ fn android_main(app: i_slint_backend_android_activity::AndroidApp) {
                     let _rt = rt_handle().enter();
                     client.set_app_visible(visible);
                 }
+                if visible {
+                    if let Some(window) = listener_window.get().and_then(slint::Weak::upgrade) {
+                        window.invoke_refresh_screen_protection();
+                    }
+                }
             },
         )
         .with_refresh_rate_vote(crate::platform::android::activity::set_ui_moving)
