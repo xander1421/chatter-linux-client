@@ -1938,6 +1938,11 @@ export component MainWindow inherits Window {
                 // window width — a landscape viewport for a landscape screen share.
                 if !root.active-call-fullscreen: Sidebar {
                     x: root.compact-layout ? -self.width * 0.28 * root.chat-push-progress : 0px;
+                    // Keep the list mounted for the reverse push, but do not
+                    // paint its rows after the chat fully covers it. Show it
+                    // immediately when an edge swipe starts, before progress
+                    // has moved off 1 in the first gesture frame.
+                    visible: !root.compact-layout || root.chat-push-progress < 1 || root.chat-edge-swiping;
                     y: 0px;
                     height: parent.height;
                     bottom-inset: root.bottom-nav-visible ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom
