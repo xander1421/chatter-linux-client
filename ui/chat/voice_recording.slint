@@ -1,5 +1,6 @@
 import { Colors } from "../theme/colors.slint";
 import { Materials } from "../theme/materials.slint";
+import { Appearance } from "../theme/appearance.slint";
 import { Spacing } from "../theme/spacing.slint";
 
 // Presentation state only; capture, duration limits and attachment preparation
@@ -20,7 +21,7 @@ export global VoiceRecording {
 // The bars arrive from the capture worker at 25 Hz. There is no idle timer.
 export component LiveVoiceWaveform inherits Rectangle {
     background: transparent;
-    min-width: 104px;
+    min-width: 96px;
     height: 40px;
     horizontal-stretch: 1;
     clip: true;
@@ -30,7 +31,7 @@ export component LiveVoiceWaveform inherits Rectangle {
         y: 0;
         width: parent.width;
         height: parent.height;
-        spacing: 2px;
+        spacing: min(8px, max(2px, (self.width - 60px) / 19));
         alignment: center;
         for level in VoiceRecording.live-levels: VerticalLayout {
             width: 3px;
@@ -38,11 +39,14 @@ export component LiveVoiceWaveform inherits Rectangle {
             alignment: center;
             Rectangle {
                 width: 3px;
-                height: 4px + 32px * level / 100;
+                // The capture meter is already compressed to 0..100. Give
+                // quiet speech visible motion and let normal speech use the
+                // full track without clipping louder peaks.
+                height: 4px + 32px * min(100, level * 2.5) / 100;
                 border-radius: Spacing.radius-full;
                 background: Colors.glass-accent;
-                opacity: level < 4 ? 0.34 : 0.95;
-                animate height { duration: Materials.motion-quick; easing: Materials.settle; }
+                opacity: level < 2 ? 0.34 : 0.95;
+                animate height { duration: Appearance.reduce-motion ? 0ms : Materials.motion-quick; easing: Materials.settle; }
             }
         }
     }
@@ -54,5 +58,5 @@ export component RecordingPulse inherits Rectangle {
     border-radius: Spacing.radius-full;
     background: Colors.error;
     opacity: VoiceRecording.busy ? 0.45 : VoiceRecording.pulse-bright ? 1.0 : 0.55;
-    animate opacity { duration: Materials.motion-standard; easing: Materials.settle; }
+    animate opacity { duration: Appearance.reduce-motion ? 0ms : Materials.motion-standard; easing: Materials.settle; }
 }

@@ -101,7 +101,7 @@ component DropletNeck inherits Path {
 }
 
 export component MessageComposer inherits GlassSurface {
-    material-enabled: VoiceRecording.active;
+    material-enabled: false;
     background: transparent;
     material-level: 2;
     elevation: 3;
@@ -113,6 +113,11 @@ export component MessageComposer inherits GlassSurface {
     in property <bool> keyboard-open: false;
     visible: !root.collapsed;
     clip: VoiceRecording.active;
+    property <float> recording-reveal: VoiceRecording.active ? 1 : 0;
+    animate recording-reveal {
+        duration: Appearance.reduce-motion ? 0ms : Materials.motion-standard;
+        easing: Materials.spring;
+    }
     in property <bool> picker-open: false;
     in property <int> attachment-prepare-serial;
     in property <int> attachment-restore-serial;
@@ -490,7 +495,8 @@ export component MessageComposer inherits GlassSurface {
     property <length> row-padding: Spacing.chrome-inset;
 
     // Layout - dynamic height based on content (includes Bento Box when expanded)
-    property <length> recording-height: max(112px, recording-layout.preferred-height + row-padding * 2);
+    property <length> recording-height: max(80px,
+        Spacing.touch-target-min + recording-hint.preferred-height + Spacing.xs + row-padding * 2);
     height: root.collapsed ? 0px : VoiceRecording.active ? recording-height : content-height + raised-toolbar-height + edit-bar-height + format-bar-height + row-padding * 2;
     // Action/input positions change immediately with text/preedit on every
     // platform. Settle the shell with them so the focused native field remains
@@ -512,9 +518,10 @@ export component MessageComposer inherits GlassSurface {
         backdrop-paused: root.backdrop-paused;
     }
 
-    VerticalLayout {
+    idle-composer := VerticalLayout {
         // 100% width for proper text wrapping in children
         width: 100%;
+        opacity: min(1, max(0, 1 - root.recording-reveal));
 
         // Edit mode indicator bar
         if root.is-editing: Rectangle {
@@ -1464,14 +1471,16 @@ export component MessageComposer inherits GlassSurface {
     }
     recording-panel := Rectangle {
         visible: VoiceRecording.active;
+        opacity: min(1, max(0, root.recording-reveal));
         width: parent.width;
         height: parent.height;
         background: transparent;
         TouchArea { }
         recording-layout := VerticalLayout {
+            height: parent.height;
             padding: root.row-padding;
             spacing: Spacing.xs;
-            Text {
+            recording-hint := Text {
                 text: VoiceRecording.status != "" ? VoiceRecording.status
                     : VoiceRecording.locked ? "Voice message"
                     : root.mobile ? "Slide left to cancel · up to lock"
@@ -1481,47 +1490,57 @@ export component MessageComposer inherits GlassSurface {
                 wrap: word-wrap;
                 horizontal-alignment: center;
             }
-            HorizontalLayout {
-                spacing: Spacing.xs;
-                HeaderButton {
-                    backdrop-paused: root.backdrop-paused;
-                    icon: Icons.trash;
-                    label: "Cancel voice message";
-                    touch: true;
-                    destructive: true;
-                    clicked => { VoiceRecording.cancel(); }
-                }
-                VerticalLayout {
-                    alignment: center;
-                    horizontal-stretch: 1;
+            GlassSurface {
+                horizontal-stretch: 1;
+                height: Spacing.touch-target-min;
+                border-radius: Spacing.radius-chrome;
+                material-level: root.material-level;
+                elevation: root.elevation;
+                backdrop-paused: root.backdrop-paused;
+                HorizontalLayout {
+                    width: parent.width;
+                    height: parent.height;
+                    spacing: Spacing.xs;
+                    HeaderButton {
+                        backdrop-paused: root.backdrop-paused;
+                        icon: Icons.trash;
+                        label: "Cancel voice message";
+                        touch: true;
+                        plain: true;
+                        destructive: true;
+                        clicked => { VoiceRecording.cancel(); }
+                    }
                     HorizontalLayout {
-                        spacing: Spacing.sm;
                         alignment: center;
+                        horizontal-stretch: 1;
+                        spacing: Spacing.sm;
                         RecordingPulse { }
                         Text {
                             text: VoiceRecording.elapsed;
                             color: Colors.text-primary;
                             font-size: Typography.sm;
                         }
+                        LiveVoiceWaveform { }
                     }
-                    LiveVoiceWaveform { }
-                }
-                HeaderButton {
-                    backdrop-paused: root.backdrop-paused;
-                    icon: Icons.lock;
-                    label: "Lock recording";
-                    touch: true;
-                    active: VoiceRecording.locked;
-                    enabled: !VoiceRecording.busy;
-                    clicked => { VoiceRecording.locked = true; }
-                }
-                HeaderButton {
-                    backdrop-paused: root.backdrop-paused;
-                    icon: Icons.send;
-                    label: "Send voice message";
-                    touch: true;
-                    enabled: !VoiceRecording.busy;
-                    clicked => { VoiceRecording.finish(); }
+                    HeaderButton {
+                        backdrop-paused: root.backdrop-paused;
+                        icon: Icons.lock;
+                        label: "Lock recording";
+                        touch: true;
+                        plain: true;
+                        active: VoiceRecording.locked;
+                        enabled: !VoiceRecording.busy;
+                        clicked => { VoiceRecording.locked = true; }
+                    }
+                    HeaderButton {
+                        backdrop-paused: root.backdrop-paused;
+                        icon: Icons.send;
+                        label: "Send voice message";
+                        touch: true;
+                        plain: true;
+                        enabled: !VoiceRecording.busy;
+                        clicked => { VoiceRecording.finish(); }
+                    }
                 }
             }
         }
