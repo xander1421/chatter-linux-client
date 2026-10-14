@@ -350,6 +350,7 @@ export component UnifiedSearch inherits Rectangle {
     // Palette panel — near top, centered.
     palette := GlassSurface {
         material-level: 3;
+        material-tint: Materials.ultra-thin.mix(Materials.search-raised, root.open-progress);
         elevation: 4;
 
         x: root.source-x + ((root.width - root.panel-width) / 2 - root.source-x) * root.open-progress;

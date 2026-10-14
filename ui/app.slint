@@ -456,6 +456,16 @@ export component MainWindow inherits Window {
     // is what keeps navigation always-available now. Desktop ignores this
     // entirely and keeps the side-by-side panel it has always had.
     in-out property <bool> mobile-show-chat: false;
+    // Both phone panes stay mounted until the push settles. The message list
+    // therefore keeps its scroll position while the header and composer travel
+    // with the conversation, and Back reverses the same movement.
+    property <float> chat-push-progress: 0;
+    property <bool> chat-edge-swiping: false;
+    property <length> chat-edge-start: 0px;
+    animate chat-push-progress {
+        duration: root.chat-edge-swiping ? 0ms : Materials.motion-standard;
+        easing: Materials.glide;
+    }
 
     // ========== Chat properties ==========
     in property <string> channel-id: "";
@@ -1108,6 +1118,7 @@ export component MainWindow inherits Window {
     // return-to-call bar then stands in for it. The user has navigated for
     // themselves, so the call's end no longer owes them a trip to the list.
     changed mobile-show-chat => {
+        root.chat-push-progress = root.mobile-show-chat ? 1 : 0;
         if !root.mobile-show-chat {
             root.cancel-composer-keyboard-handover();
             root.active-call-fullscreen = false;
@@ -1916,14 +1927,18 @@ export component MainWindow inherits Window {
                     width: 100%;
                     height: parent.height;
 
-                HorizontalLayout {
+                Rectangle {
                     vertical-stretch: 1;
+                    width: 100%;
+                    clip: true;
 
                 // Sidebar (width controlled by collapsed state; mobile-mode for full-width).
                 // Hidden entirely in call-fullscreen so the call view fills the whole
                 // window width — a landscape viewport for a landscape screen share.
-                if !root.active-call-fullscreen
-                    && !(root.compact-layout && root.mobile-show-chat): Sidebar {
+                if !root.active-call-fullscreen: Sidebar {
+                    x: root.compact-layout ? -self.width * 0.28 * root.chat-push-progress : 0px;
+                    y: 0px;
+                    height: parent.height;
                     bottom-inset: root.bottom-nav-visible ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom
                         + (root.active-call-visible ? 44px + Spacing.sm : 0px) : 0px;
                     // Survives dismissing the connection banner: the dot on the
@@ -2097,17 +2112,29 @@ export component MainWindow inherits Window {
                     }
                 }
 
+                // The list recedes under the travelling conversation. It is
+                // retained through the whole push and can receive the reverse
+                // motion even after the logical chat route has closed.
+                if root.compact-layout && root.chat-push-progress > 0: Rectangle {
+                    width: parent.width;
+                    height: parent.height;
+                    background: Materials.scrim;
+                    opacity: root.chat-push-progress * 0.32;
+                    TouchArea {}
+                }
+
                 // Right side area (Chat + Panels).
                 //
-                // Removed from the layout while the panel is expanded on touch,
-                // where the panel takes the whole screen. `if` rather than
-                // `visible: false`, for the reason documented at the ChatLayout
-                // below: a hidden element still occupies its layout slot, and a
-                // zero-width chat column beside a full-width panel is exactly the
-                // shape that pushes content past the clipped edge.
-                if !(root.compact-layout && !root.mobile-show-chat): chat-panel-area := Rectangle {
-                    horizontal-stretch: 1;
-                    vertical-stretch: 1;
+                // On phones the pane is added for the push and retained through
+                // its reverse travel; offscreen content never takes layout width.
+                if !root.compact-layout || root.mobile-show-chat || root.chat-push-progress > 0: chat-panel-area := Rectangle {
+                    x: root.compact-layout ? parent.width * (1 - root.chat-push-progress)
+                        : root.sidebar-hidden || root.active-call-fullscreen ? 0px
+                        : root.sidebar-is-rail ? (root.is-mobile-platform ? 68px : Spacing.sidebar-width-collapsed)
+                        : Spacing.sidebar-width;
+                    y: 0px;
+                    width: root.compact-layout ? parent.width : parent.width - self.x;
+                    height: parent.height;
                     visible: true;
                     // Clip this area to prevent inner panels from overflowing the whole app
                     clip: true;
@@ -2475,7 +2502,30 @@ export component MainWindow inherits Window {
                     }
 
                 } // end chat-panel-area Rectangle
-            } // end inner HorizontalLayout (sidebar + chat)
+                // Only the leading edge handles the gesture, so message
+                // scrolling and text selection remain under the chat pane.
+                if root.compact-layout && root.mobile-show-chat: TouchArea {
+                    x: 0px;
+                    y: Spacing.header-height-touch;
+                    width: 24px;
+                    height: max(0px, parent.height - self.y - 96px);
+                    pointer-event(event) => {
+                        if event.kind == PointerEventKind.down {
+                            root.chat-edge-swiping = true;
+                            root.chat-edge-start = self.absolute-position.x + self.mouse-x;
+                        }
+                        if event.kind == PointerEventKind.move && root.chat-edge-swiping {
+                            root.chat-push-progress = 1 - min(1, max(0,
+                                (self.absolute-position.x + self.mouse-x - root.chat-edge-start) / root.width));
+                        }
+                        if event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel {
+                            root.chat-edge-swiping = false;
+                            if root.chat-push-progress < 0.7 { root.mobile-show-chat = false; }
+                            else { root.chat-push-progress = 1; }
+                        }
+                    }
+                }
+            } // end inner page stack (sidebar + chat)
 
                 } // end VerticalLayout (chat area)
 
@@ -3065,9 +3115,9 @@ export component MainWindow inherits Window {
             width: parent.width;
             height: parent.height;
             show: root.unified-search-open;
-            source-x: root.compact-layout ? 12px : 0px;
+            source-x: root.compact-layout ? Spacing.sm : 0px;
             source-y: root.macos-titlebar-height;
-            source-width: root.compact-layout ? root.width - 24px : root.sidebar-is-rail ? Spacing.sidebar-width-collapsed : Spacing.sidebar-width;
+            source-width: root.compact-layout ? root.width - 2 * Spacing.sm : root.sidebar-is-rail ? Spacing.sidebar-width-collapsed : Spacing.sidebar-width;
             conversations: root.unified-search-conversations;
             messages: root.unified-search-messages;
             searching: root.unified-search-searching;

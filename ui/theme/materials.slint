@@ -13,6 +13,10 @@ export global Materials {
     out property <color> regular: Appearance.glass-effects
         ? (Appearance.dark ? #1a263566 : #ffffff75)
         : (Appearance.dark ? #18232f : #fbfdff);
+    // Search gains contrast as its glass travels above the results.
+    out property <color> search-raised: Appearance.glass-effects
+        ? (Appearance.dark ? #1c2837bd : #ffffffe0)
+        : (Appearance.dark ? #1f2b39 : #ffffff);
     // Sheets sample the dimmed backdrop and need a little more tint than
     // regular chrome to separate their controls from the scrim.
     out property <color> thick: Appearance.glass-effects

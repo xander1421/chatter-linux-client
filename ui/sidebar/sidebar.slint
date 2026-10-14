@@ -665,10 +665,9 @@ export component Sidebar inherits Rectangle {
         if !root.collapsed: GlassSurface {
             // Bound backdrop and shadow painting to this chrome silhouette.
             clip: true;
-            material-enabled: !root.mobile-mode;
-            material-level: 2;
+            material-level: 0;
             elevation: 3;
-            background: root.mobile-mode ? Colors.surface-section : transparent;
+            background: transparent;
             border-radius: root.mobile-mode ? Spacing.radius-lg : Spacing.radius-chrome;
 
             // Pinned to the top: without x/y a sized element is centred. On a
