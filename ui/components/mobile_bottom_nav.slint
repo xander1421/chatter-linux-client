@@ -64,7 +64,7 @@ component NavTab inherits Rectangle {
                 source: root.icon;
                 width: 24px;
                 height: 24px;
-                colorize: root.active ? Colors.glass-accent : Colors.text-muted;
+                colorize: Colors.text-primary;
             }
 
             if root.use-avatar: Rectangle {
@@ -109,7 +109,7 @@ component NavTab inherits Rectangle {
             text: root.label;
             font-size: Typography.xs2;
             font-weight: root.active ? 600 : 400;
-            color: root.active ? Colors.glass-accent : Colors.text-muted;
+            color: Colors.text-primary;
             horizontal-alignment: center;
         }
     }
@@ -147,12 +147,9 @@ export component MobileBottomNav inherits Rectangle {
     background: transparent;
 
     dock := GlassSurface {
-        // The software renderer paints the backdrop's rectangular layer beyond
-        // the dock's round corners. A solid rounded fill keeps the silhouette.
-        material-enabled: false;
-        background: Materials.opaque;
-        border-width: Spacing.stroke;
-        border-color: Colors.border;
+        clip: true;
+        material-level: 2;
+        background: transparent;
 
         x: root.side-inset;
         y: 0;

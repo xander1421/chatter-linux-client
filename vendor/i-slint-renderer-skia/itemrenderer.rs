@@ -1044,10 +1044,11 @@ impl ItemRenderer for SkiaItemRenderer<'_> {
         );
 
         self.save_state();
-        self.canvas.clip_rrect(skia_safe::RRect::new_rect_xy(bounds, radius, radius), None, true);
+        let rounded = skia_safe::RRect::new_rect_xy(bounds, radius, radius);
         if let Some(filter) = filter {
-            // Restore the filtered backdrop before painting children: foreground text and
-            // controls must not be blurred, recoloured, or included in the lens input.
+            // SaveLayerRec's backdrop is initialized across its rectangular bounds.
+            // Clear the corner area of that layer before compositing it, even on
+            // Skia surfaces where a pre-layer clip does not mask the backdrop.
             let paint = self.default_paint();
             let mut layer = skia_safe::canvas::SaveLayerRec::default()
                 .bounds(&bounds)
@@ -1057,8 +1058,21 @@ impl ItemRenderer for SkiaItemRenderer<'_> {
                 layer = layer.paint(paint);
             }
             self.canvas.save_layer(&layer);
+            if radius > 0.0 {
+                let mut clear = skia_safe::Paint::default();
+                clear.set_anti_alias(true);
+                clear.set_blend_mode(skia_safe::BlendMode::Clear);
+                self.canvas.draw_drrect(
+                    skia_safe::RRect::new_rect(bounds),
+                    rounded,
+                    &clear,
+                );
+            }
             self.canvas.restore();
         }
+        // Paint children after the filtered backdrop so text and controls stay
+        // sharp. This clip also applies when backdrop effects are disabled.
+        self.canvas.clip_rrect(rounded, None, true);
         let window_adapter = WindowInner::from_pub(self.window).window_adapter();
         i_slint_core::item_rendering::render_item_children(
             self,

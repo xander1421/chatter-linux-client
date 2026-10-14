@@ -7,8 +7,10 @@ Keep upstream licensing files.
   edge refraction RuntimeEffect; cache shader compilation once, plus raster
   pixel and matrix/SkSL tests. Blur is Gaussian sigma in logical pixels, scaled
   once by the renderer. Refraction is clamped to 0..1, brightness to -1..1.
-- `itemrenderer.rs`: clip to a rounded rect and initialize SaveLayerRec with the
-  backdrop filter, composite it, then paint sharp children. Backdrop reads the
+- `itemrenderer.rs`: initialize SaveLayerRec with the backdrop filter, clear
+  its rectangular corner area before compositing, then clip sharp children to
+  the rounded rect. The explicit corner mask covers Skia surfaces that apply
+  the backdrop before honoring a clip. Backdrop reads the
   current compositing layer, so an isolated ancestor layer defines its backdrop.
 - `lib.rs`: register the filter module. Core partial-rendering trait advertises
   backdrop support. Android/OpenGL Surface defaults to full repaint; core also

@@ -4,9 +4,8 @@ import { Appearance } from "appearance.slint";
 export global Materials {
     // With real backdrop blur (glass effects on) the tint is see-through like
     // iOS materials. Regular/thick bound backdrop luminance for readable labels.
-    // Dark tints are one slate step above the page (#080d13) so chrome floats
-    // instead of reading as a grey slab; muted text stays >= 5.3:1 over a
-    // white (>= 4.67:1) or black backdrop at regular/thick (contrast.py).
+    // Dark tints are one slate step above the page (#080d13). The blur keeps
+    // labels readable while the lower alpha leaves moving content visible.
     out property <color> ultra-thin: Appearance.glass-effects
         ? (Appearance.dark ? #1a26351c : #ffffff24)
         : (Appearance.dark ? #18232f : #fbfdff);
@@ -14,14 +13,17 @@ export global Materials {
         ? (Appearance.dark ? #1a263570 : #ffffff6c)
         : (Appearance.dark ? #18232f : #fbfdff);
     out property <color> regular: Appearance.glass-effects
-        ? (Appearance.dark ? #1a2635e6 : #ffffffe8)
+        ? (Appearance.dark ? #1a263599 : #ffffff99)
         : (Appearance.dark ? #18232f : #fbfdff);
     // Sheets sample the dimmed backdrop; light mode needs a milkier tint
     // to stay distinct from the scrim while retaining the blurred content.
     out property <color> thick: Appearance.glass-effects
-        ? (Appearance.dark ? #1c2837ee : #fffffff2)
+        ? (Appearance.dark ? #1c2837df : #ffffffe0)
         : (Appearance.dark ? #1f2b39 : #ffffff);
     out property <color> opaque: Appearance.dark ? #18232f : #fbfdff;
+    // A dark optical base bounds the white FAB glyph against either backdrop.
+    out property <color> fab-base: #0a3839b8;
+    out property <color> fab-accent: #0f766e85;
     // The single optical edge is local to GlassSurface, never a row/card stroke.
     // Dark: a lit top-left arc that fades out. Light: white chrome on a light
     // page needs a faint cool-ink lower rim to keep its silhouette.
@@ -49,9 +51,12 @@ export global Materials {
     out property <brush> ambient: Appearance.dark
         ? @linear-gradient(165deg, #10252b 0%, #0a151c 28%, #080d13 58%, #0b0e19 100%)
         : @linear-gradient(165deg, #e2f1f0 0%, #eaf0f4 32%, #edf1f5 62%, #efeff7 100%);
-    out property <length> blur-regular: 18px;
-    out property <length> blur-thick: 24px;
-    out property <float> saturation: 1.4;
+    out property <length> blur-regular: 26px;
+    out property <length> blur-thick: 30px;
+    out property <float> saturation: 1.55;
+    // Dark chrome reduces a white backdrop enough for light foreground labels
+    // to keep AA contrast with a 60% tint; the list remains visible through it.
+    out property <float> chrome-brightness: Appearance.dark ? -0.16 : 0.0;
     // Edge lensing strength for the Backdrop refraction shader (0..1).
     out property <float> refraction: 0.10;
     out property <duration> feedback-duration: Appearance.reduce-motion ? 0ms : 100ms;

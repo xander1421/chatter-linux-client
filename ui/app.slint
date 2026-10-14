@@ -4035,22 +4035,33 @@ export component MainWindow inherits Window {
         // dock (-1), under every modal and overlay (0) — the incoming-call screen
         // and toasts are not covered by fab-visible, so they must stay on top.
         if root.fab-visible: GlassSurface {
-            // Backdrop's rectangular software layer leaks beyond round corners.
-            material-enabled: false;
-
             z: -0.5;
             width: Spacing.fab-size;
             height: Spacing.fab-size;
             x: parent.width - self.width - Spacing.xl;
             y: root.fab-y;
             border-radius: self.width / 2;
-            background: Colors.action-fill;
-            // The compose action is the one filled action in the phone list.
-            // Its white glyph stays readable on both theme-specific teal fills.
+            clip: true;
+            material-level: 2;
+            material-tint: Appearance.glass-effects ? Materials.fab-base : Colors.action-fill;
+            background: transparent;
+            transform-scale-x: fab-touch.pressed ? 0.92 : 1;
+            transform-scale-y: fab-touch.pressed ? 0.88 : 1;
+            animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+            animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
+            // Keep the teal tint inside the lit rim and the white glyph clear.
             Rectangle {
-                border-radius: parent.border-radius;
-                background: fab-touch.pressed ? Colors.action-active
-                    : fab-touch.has-hover ? Colors.action-hover : transparent;
+                x: 2px;
+                y: 2px;
+                width: parent.width - 4px;
+                height: parent.height - 4px;
+                border-radius: self.height / 2;
+                background: Appearance.glass-effects
+                    ? (fab-touch.pressed ? Colors.action-active.with-alpha(0.68)
+                        : fab-touch.has-hover ? Colors.action-hover.with-alpha(0.58)
+                        : Materials.fab-accent)
+                    : (fab-touch.pressed ? Colors.action-active
+                        : fab-touch.has-hover ? Colors.action-hover : transparent);
             }
             accessible-role: button;
             accessible-label: "Create";

@@ -20,8 +20,8 @@ component GlassMaterial inherits Rectangle {
     // backdrop.rs `filter` returns None). Drops at once, eases back at rest.
     property <float> sampling: root.backdrop-paused ? 0 : 1;
     animate sampling {
-        duration: root.backdrop-paused || Appearance.reduce-motion ? 0ms : 160ms;
-        easing: ease-out;
+        duration: root.backdrop-paused ? 0ms : Materials.motion-quick;
+        easing: Materials.glide;
     }
 
     // Elevation shadows (theme/elevation.slint), falling downwards. Levels
@@ -57,7 +57,8 @@ component GlassMaterial inherits Rectangle {
         blur: (Appearance.glass-effects ? (root.material-level == 3
             ? Materials.blur-thick : Materials.blur-regular) : 0px) * root.sampling;
         saturation: 1.0 + ((Appearance.glass-effects ? Materials.saturation : 1.0) - 1.0) * root.sampling;
-        brightness: 0.0;
+        brightness: (Appearance.glass-effects && root.material-level == 2
+            ? Materials.chrome-brightness : 0.0) * root.sampling;
         // Liquid Glass lenses its backdrop at the edges; keep it subtle so
         // text under chrome stays legible.
         refraction: (Appearance.glass-effects ? Materials.refraction : 0.0) * root.sampling;
