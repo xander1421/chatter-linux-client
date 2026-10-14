@@ -1045,6 +1045,10 @@ impl ItemRenderer for SkiaItemRenderer<'_> {
 
         self.save_state();
         let rounded = skia_safe::RRect::new_rect_xy(bounds, radius, radius);
+        // SaveLayerRec::bounds is only an allocation hint, not a clip. Keep the
+        // backdrop confined to this item before the layer samples the canvas;
+        // otherwise a small chrome surface can filter the entire chat canvas.
+        self.canvas.clip_rrect(rounded, None, true);
         if let Some(filter) = filter {
             // SaveLayerRec's backdrop is initialized across its rectangular bounds.
             // Clear the corner area of that layer before compositing it, even on
@@ -1071,8 +1075,7 @@ impl ItemRenderer for SkiaItemRenderer<'_> {
             self.canvas.restore();
         }
         // Paint children after the filtered backdrop so text and controls stay
-        // sharp. This clip also applies when backdrop effects are disabled.
-        self.canvas.clip_rrect(rounded, None, true);
+        // sharp. The pre-layer clip also applies when effects are disabled.
         let window_adapter = WindowInner::from_pub(self.window).window_adapter();
         i_slint_core::item_rendering::render_item_children(
             self,
