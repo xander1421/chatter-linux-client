@@ -50,7 +50,7 @@ component GlassMaterial inherits Rectangle {
         blur: Appearance.glass-effects ? (root.material-level == 4 ? Materials.blur-header
             : root.material-level == 3 ? Materials.blur-thick : Materials.blur-regular) : 0px;
         saturation: Appearance.glass-effects ? Materials.saturation : 1.0;
-        brightness: (Appearance.glass-effects && root.material-level == 2
+        brightness: (Appearance.glass-effects && root.material-level >= 2
             ? Materials.chrome-brightness : 0.0);
         // Liquid Glass lenses its backdrop at the edges; keep it subtle so
         // text under chrome stays legible.

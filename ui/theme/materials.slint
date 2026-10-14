@@ -2,39 +2,37 @@
 import { Appearance } from "appearance.slint";
 
 export global Materials {
-    // With real backdrop blur (glass effects on) the tint is see-through like
-    // iOS materials. Regular/thick bound backdrop luminance for readable labels.
-    // Dark tints are one slate step above the page (#080d13). The blur keeps
-    // labels readable while the lower alpha leaves moving content visible.
+    // Blur separates foreground labels from the scene while the low-alpha
+    // tints let colour and motion remain visible through chrome.
     out property <color> ultra-thin: Appearance.glass-effects
         ? (Appearance.dark ? #1a26351c : #ffffff24)
         : (Appearance.dark ? #18232f : #fbfdff);
     out property <color> thin: Appearance.glass-effects
-        ? (Appearance.dark ? #1a263570 : #ffffff6c)
+        ? (Appearance.dark ? #1a263552 : #ffffff61)
         : (Appearance.dark ? #18232f : #fbfdff);
     out property <color> regular: Appearance.glass-effects
-        ? (Appearance.dark ? #1a263599 : #ffffff99)
+        ? (Appearance.dark ? #1a263566 : #ffffff75)
         : (Appearance.dark ? #18232f : #fbfdff);
-    // Sheets sample the dimmed backdrop; light mode needs a milkier tint
-    // to stay distinct from the scrim while retaining the blurred content.
+    // Sheets sample the dimmed backdrop and need a little more tint than
+    // regular chrome to separate their controls from the scrim.
     out property <color> thick: Appearance.glass-effects
-        ? (Appearance.dark ? #1c2837df : #ffffffe0)
+        ? (Appearance.dark ? #1c283770 : #ffffff80)
         : (Appearance.dark ? #1f2b39 : #ffffff);
-    // Chat headers float over message text, so their tint must obscure glyphs
-    // even after the message list's initial scroll has settled.
+    // Chat headers float over message text; the heavier blur obscures glyphs
+    // while this tint still shows the scene's colour and motion.
     out property <color> header-chrome: Appearance.glass-effects
-        ? (Appearance.dark ? #1c2837cc : #ffffffcc)
+        ? (Appearance.dark ? #1c283794 : #ffffff94)
         : (Appearance.dark ? #1f2b39 : #ffffff);
     out property <color> opaque: Appearance.dark ? #18232f : #fbfdff;
     // A dark optical base bounds the white FAB glyph against either backdrop.
-    out property <color> fab-base: #0a3839b8;
-    out property <color> fab-accent: #0f766e85;
+    out property <color> fab-base: #0a383980;
+    out property <color> fab-accent: #0f766e61;
     // The single optical edge is local to GlassSurface, never a row/card stroke.
     // Dark: a lit top-left arc that fades out. Light: white chrome on a light
     // page needs a faint cool-ink lower rim to keep its silhouette.
     out property <brush> glass-edge: Appearance.dark
-        ? @linear-gradient(160deg, #ffffff4c 0%, #ffffff18 22%, #ffffff00 50%, #ffffff00 74%, #ffffff10 100%)
-        : @linear-gradient(160deg, #ffffffe6 0%, #ffffff60 24%, #ffffff00 48%, #1a2c3e10 76%, #1a2c3e24 100%);
+        ? @linear-gradient(160deg, #ffffff66 0%, #ffffff24 22%, #ffffff00 50%, #ffffff00 74%, #ffffff1a 100%)
+        : @linear-gradient(160deg, #fffffff0 0%, #ffffff78 24%, #ffffff00 48%, #1a2c3e18 76%, #1a2c3e30 100%);
     out property <physical-length> glass-edge-width: 1phx;
     // Physical pixels keep the rim one device pixel even at 2x/3x scale.
     out property <brush> specular: Appearance.dark
@@ -42,8 +40,8 @@ export global Materials {
         : @linear-gradient(170deg, #ffffff30 0%, #ffffff00 45%, #ffffff00 100%);
     // A soft internal falloff, not another stroke around the silhouette.
     out property <brush> inner-shade: Appearance.dark
-        ? @linear-gradient(180deg, #00000000 0%, #00000000 80%, #0000001a 100%)
-        : @linear-gradient(180deg, #00000000 0%, #00000000 84%, #1a2c3e08 100%);
+        ? @linear-gradient(180deg, #00000000 0%, #00000000 78%, #0000002b 100%)
+        : @linear-gradient(180deg, #00000000 0%, #00000000 82%, #1a2c3e12 100%);
     out property <color> scrim: Appearance.dark ? #02050999 : #08111c40;
     // Media viewers sit on a dark backdrop in both themes, as every photo
     // viewer does; their text uses Colors.on-media. Light `Colors.overlay`
@@ -56,13 +54,12 @@ export global Materials {
     out property <brush> ambient: Appearance.dark
         ? @linear-gradient(165deg, #10252b 0%, #0a151c 28%, #080d13 58%, #0b0e19 100%)
         : @linear-gradient(165deg, #e2f1f0 0%, #eaf0f4 32%, #edf1f5 62%, #efeff7 100%);
-    out property <length> blur-regular: 26px;
-    out property <length> blur-thick: 30px;
-    out property <length> blur-header: 34px;
-    out property <float> saturation: 1.55;
-    // Dark chrome reduces a white backdrop enough for light foreground labels
-    // to keep AA contrast with a 60% tint; the list remains visible through it.
-    out property <float> chrome-brightness: Appearance.dark ? -0.16 : 0.0;
+    out property <length> blur-regular: 34px;
+    out property <length> blur-thick: 38px;
+    out property <length> blur-header: 42px;
+    out property <float> saturation: 1.7;
+    // Bound bright content behind dark chrome so light labels retain contrast.
+    out property <float> chrome-brightness: Appearance.dark ? -0.20 : 0.0;
     // Edge lensing strength for the Backdrop refraction shader (0..1).
     out property <float> refraction: 0.10;
     out property <duration> feedback-duration: Appearance.reduce-motion ? 0ms : 100ms;
