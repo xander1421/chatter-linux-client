@@ -34,6 +34,14 @@ pub(crate) fn plain_sidebar_preview(input: &str) -> String {
                 i += 1;
             }
             let width = i - start;
+            let standalone = (start == 0 || chars[start - 1].is_whitespace())
+                && (i == chars.len() || chars[i].is_whitespace());
+            if standalone && ((marker == '`' && width >= 3) || (marker != '`' && width >= 2)) {
+                for index in start..i {
+                    remove[index] = true;
+                }
+                continue;
+            }
             let left_boundary = start == 0
                 || (!chars[start - 1].is_alphanumeric()
                     && chars[start - 1] != '/'

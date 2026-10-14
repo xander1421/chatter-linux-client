@@ -813,7 +813,7 @@ fn search_messages(
     for msg in &results {
         // Conversation name + sender name resolution both live in core.
         let channel_name =
-            ui_ctx.conversation_display_name(&msg.conversation_id, &msg.conversation_type);
+            ui_ctx.search_conversation_display_name(&msg.conversation_id, &msg.conversation_type);
         let sender_name = ui_ctx.search_sender_display_name(msg);
         let sent_at = chrono::DateTime::<chrono::Utc>::from_timestamp_nanos(msg.sent_at as i64);
         let timestamp = sent_at
@@ -889,7 +889,7 @@ fn search_messages(
                 continue;
             };
             let channel_name =
-                ui_ctx.conversation_display_name(&msg.conversation_id, &msg.conversation_type);
+                ui_ctx.search_conversation_display_name(&msg.conversation_id, &msg.conversation_type);
             let sender_name = ui_ctx.search_sender_display_name(&msg);
             let category = SearchCategory::from_shared_kind(&item.category);
             let sent_at = chrono::DateTime::<chrono::Utc>::from_timestamp_nanos(msg.sent_at as i64);

@@ -11,6 +11,23 @@ use chrono::{DateTime, Utc};
 use chrono::{Datelike, TimeZone};
 
 impl crate::client::ChatterClient {
+    /// Resolve result labels from the same local record as secret-chat rows.
+    pub fn search_conversation_display_name(
+        &self,
+        conversation_id: &crate::domain::ids::ChannelId,
+        conversation_type: &crate::domain::message::ConversationType,
+    ) -> String {
+        if *conversation_type == crate::domain::message::ConversationType::AnonDm {
+            let id = crate::domain::anon_dm::AnonDmId::from_uuid(*conversation_id.as_uuid());
+            if let Some(dm) = self.get_anon_dm_conversation(&id) {
+                return dm
+                    .peer_display_name
+                    .unwrap_or_else(|| self.fallback_display_name(&dm.peer_id));
+            }
+        }
+        self.conversation_display_name(conversation_id, conversation_type)
+    }
+
     /// Keep the first query match inside the compact one-line result preview.
     pub fn search_result_preview(&self, text: &str, query: &str) -> String {
         let flat = self.plain_message_preview(text);
