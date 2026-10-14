@@ -4,7 +4,7 @@
 
 use std::future::Future;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use parking_lot::RwLock;
 use tonic::transport::Endpoint;
@@ -111,10 +111,14 @@ pub struct GrpcClientPool {
     /// connection — an isolated Tor circuit under onion — and the server can't
     /// correlate those ops with authenticated RPCs by connection.
     unidentified_channel: Arc<RwLock<Option<GrpcTransport>>>,
+    #[cfg(feature = "onion")]
+    unidentified_health: Arc<RwLock<Option<Instant>>>,
     /// Channel for secret chats (anonymous DMs and groups). Always an isolated
     /// Tor circuit to the pinned `.onion`, whatever `transport_mode` is; never
     /// built over the direct transport. See [`Self::secret_channel`].
     secret_channel: Arc<RwLock<Option<GrpcTransport>>>,
+    #[cfg(feature = "onion")]
+    secret_health: Arc<RwLock<Option<Instant>>>,
     /// Cached QUIC reachability, probed once and reused. Only ever consulted
     /// for `TransportMode::Direct` over `https://` — onion carries TCP, and
     /// QUIC needs TLS 1.3 to negotiate ALPN.
@@ -196,7 +200,11 @@ impl GrpcClientPool {
             transport_mode: Arc::new(RwLock::new(TransportMode::Direct)),
             transport_gen: Arc::new(std::sync::atomic::AtomicU64::new(0)),
             unidentified_channel: Arc::new(RwLock::new(None)),
+            #[cfg(feature = "onion")]
+            unidentified_health: Arc::new(RwLock::new(None)),
             secret_channel: Arc::new(RwLock::new(None)),
+            #[cfg(feature = "onion")]
+            secret_health: Arc::new(RwLock::new(None)),
             #[cfg(feature = "quic")]
             quic_probe: Arc::new(RwLock::new(QuicProbeState::Untried)),
             #[cfg(feature = "onion")]
@@ -325,6 +333,10 @@ impl GrpcClientPool {
         let mut current = self.onion_addr.write();
         if *current != addr {
             *secret = None;
+            #[cfg(feature = "onion")]
+            {
+                *self.secret_health.write() = None;
+            }
         }
         *current = addr;
     }
@@ -362,6 +374,10 @@ impl GrpcClientPool {
             .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
         *channel = None;
         *self.unidentified_channel.write() = None;
+        #[cfg(feature = "onion")]
+        {
+            *self.unidentified_health.write() = None;
+        }
     }
 
     /// Endpoint, transport and generation read together (under the channel
@@ -418,7 +434,7 @@ impl GrpcClientPool {
                     // the Arti connector on the next `channel()`/`connect()`.
                     let ep = Self::create_endpoint(&_onion, self.timeout)?;
                     self.swap_endpoint(ep, TransportMode::Onion);
-                    tracing::info!("transport: onion ({_onion})");
+                    tracing::info!("transport: onion");
                     Ok(())
                 }
                 #[cfg(not(feature = "onion"))]
@@ -756,6 +772,68 @@ impl GrpcClientPool {
         self.channel()
     }
 
+    /// Establish and health-check Shield's anonymous deposit route in advance.
+    #[cfg(feature = "onion")]
+    pub async fn preconnect_unidentified(&self) -> Result<(), NetworkError> {
+        if self.transport_mode() != TransportMode::Onion {
+            return Ok(());
+        }
+        let (endpoint, _, generation) = self.snapshot();
+        let channel: GrpcTransport = endpoint
+            .connect_with_connector(self.unidentified_onion_connector())
+            .await
+            .map_err(|e| NetworkError::ConnectionFailed(format!("anonymous onion preconnect: {e}")))?
+            .into();
+        let mut probe = super::AnonymousMailboxClient::new(channel.clone());
+        tokio::time::timeout(Duration::from_secs(15), probe.get_blind_signature_public_key())
+            .await
+            .map_err(|_| NetworkError::Timeout)??;
+        let mut guard = self.unidentified_channel.write();
+        if self.transport_gen.load(std::sync::atomic::Ordering::Acquire) == generation {
+            *guard = Some(channel);
+            *self.unidentified_health.write() = Some(Instant::now());
+        }
+        Ok(())
+    }
+
+    /// Check the cached anonymous route before a deposit starts. If the probe
+    /// stalls, move the *upcoming* deposit to a freshly dialled Tor circuit.
+    #[cfg(feature = "onion")]
+    pub async fn prepare_unidentified_deposit(&self) -> Result<(), NetworkError> {
+        if self.transport_mode() != TransportMode::Onion {
+            return Ok(());
+        }
+        if self.unidentified_channel.read().is_some()
+            && self.unidentified_health.read().is_some_and(|at| at.elapsed() < Duration::from_secs(30))
+        {
+            return Ok(());
+        }
+        let mut probe = super::AnonymousMailboxClient::new(self.unidentified_channel());
+        if !matches!(
+            tokio::time::timeout(Duration::from_secs(8), probe.get_blind_signature_public_key()).await,
+            Ok(Ok(_))
+        ) {
+            *self.unidentified_channel.write() = None;
+            *self.unidentified_health.write() = None;
+            tracing::warn!("Shield anonymous deposit route stalled; redialing before deposit");
+            self.preconnect_unidentified().await?;
+        } else {
+            *self.unidentified_health.write() = Some(Instant::now());
+        }
+        if self.transport_mode() != TransportMode::Onion {
+            return Err(NetworkError::ConnectionFailed(
+                "onion transport changed before anonymous deposit".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "onion")]
+    pub fn disconnect_unidentified(&self) {
+        *self.unidentified_channel.write() = None;
+        *self.unidentified_health.write() = None;
+    }
+
     /// The channel for secret chats (anonymous DMs and anonymous groups).
     ///
     /// Secret chats are device-bound and ALL their traffic goes over Tor, so
@@ -812,9 +890,38 @@ impl GrpcClientPool {
             .await
             .map_err(|e| NetworkError::ConnectionFailed(format!("secret onion preconnect: {e}")))?
             .into();
+        // A completed h2 handshake does not prove the server can answer an
+        // RPC after doze. Probe through this same isolated channel before it
+        // becomes the cached secret route; the response is never persisted.
+        let mut probe = super::AnonymousMailboxClient::new(channel.clone());
+        tokio::time::timeout(Duration::from_secs(15), probe.get_blind_signature_public_key())
+            .await
+            .map_err(|_| NetworkError::Timeout)??;
         let mut guard = self.secret_channel.write();
         if self.onion_addr.read().as_deref() == Some(onion.as_str()) {
             *guard = Some(channel);
+            *self.secret_health.write() = Some(Instant::now());
+        }
+        Ok(())
+    }
+
+    #[cfg(feature = "onion")]
+    pub async fn prepare_secret_deposit(&self) -> Result<(), NetworkError> {
+        if self.secret_channel.read().is_some()
+            && self.secret_health.read().is_some_and(|at| at.elapsed() < Duration::from_secs(30))
+        {
+            return Ok(());
+        }
+        let mut probe = super::AnonymousMailboxClient::new(self.secret_channel()?);
+        if !matches!(
+            tokio::time::timeout(Duration::from_secs(8), probe.get_blind_signature_public_key()).await,
+            Ok(Ok(_))
+        ) {
+            self.disconnect_secret();
+            tracing::warn!("secret deposit route stalled; redialing before deposit");
+            self.preconnect_secret().await?;
+        } else {
+            *self.secret_health.write() = Some(Instant::now());
         }
         Ok(())
     }
@@ -829,6 +936,10 @@ impl GrpcClientPool {
     /// re-dials (still over Tor). For retry loops after a transport error.
     pub fn disconnect_secret(&self) {
         *self.secret_channel.write() = None;
+        #[cfg(feature = "onion")]
+        {
+            *self.secret_health.write() = None;
+        }
     }
 
     /// Disconnect from the server.
@@ -838,6 +949,11 @@ impl GrpcClientPool {
         *self.channel.write() = None;
         *self.unidentified_channel.write() = None;
         *self.secret_channel.write() = None;
+        #[cfg(feature = "onion")]
+        {
+            *self.unidentified_health.write() = None;
+            *self.secret_health.write() = None;
+        }
     }
 
     /// Demote a cached `Working` QUIC verdict to `Failed` after a real RPC

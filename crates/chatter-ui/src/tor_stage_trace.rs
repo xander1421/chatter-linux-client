@@ -122,17 +122,26 @@ impl<S: Subscriber> Layer<S> for TorStageTrace {
         if stage == "other" {
             return;
         }
+        let detail = message.0.to_ascii_lowercase();
+        let outcome = if detail.contains("timed out") || detail.contains("timeout") {
+            "timeout"
+        } else if detail.contains("failed") || detail.contains("error") {
+            "failure"
+        } else {
+            "progress"
+        };
         if self.lines.fetch_add(1, Ordering::Relaxed) >= 10_000 {
             return;
         }
         if let Ok(mut file) = self.file.lock() {
             let _ = writeln!(
                 file,
-                "{} component={} level={} stage={}",
+                "{} component={} level={} stage={} outcome={}",
                 chrono::Utc::now().to_rfc3339(),
                 component,
                 event.metadata().level(),
-                stage
+                stage,
+                outcome
             );
         }
     }

@@ -46,14 +46,30 @@ impl MailboxManager {
         encrypted_envelope: Vec<u8>,
         envelope_type: EnvelopeType,
     ) -> Result<(), MailboxError> {
+        #[cfg(feature = "onion")]
+        {
+            self.client_pool.prepare_unidentified_deposit().await?;
+        }
         let client = self.client_pool.anonymous_mailbox_client();
-        Self::deposit(
+        let result = Self::deposit(
             client,
             destination_public_key,
             encrypted_envelope,
             envelope_type,
         )
-        .await
+        .await;
+        #[cfg(feature = "onion")]
+        if matches!(&result, Err(MailboxError::Network(NetworkError::Timeout)))
+            && self.client_pool.transport_mode()
+                == crate::network::grpc::client_pool::TransportMode::Onion
+        {
+            self.client_pool.disconnect_unidentified();
+            let pool = self.client_pool.clone();
+            tokio::spawn(async move {
+                let _ = pool.preconnect_unidentified().await;
+            });
+        }
+        result
     }
 
     /// Send a secret-chat (anonymous DM / anonymous group) envelope to an
@@ -65,14 +81,27 @@ impl MailboxManager {
         encrypted_envelope: Vec<u8>,
         envelope_type: EnvelopeType,
     ) -> Result<(), MailboxError> {
+        #[cfg(feature = "onion")]
+        {
+            self.client_pool.prepare_secret_deposit().await?;
+        }
         let client = self.client_pool.secret_mailbox_client()?;
-        Self::deposit(
+        let result = Self::deposit(
             client,
             destination_public_key,
             encrypted_envelope,
             envelope_type,
         )
-        .await
+        .await;
+        #[cfg(feature = "onion")]
+        if matches!(&result, Err(MailboxError::Network(NetworkError::Timeout))) {
+            self.client_pool.disconnect_secret();
+            let pool = self.client_pool.clone();
+            tokio::spawn(async move {
+                let _ = pool.preconnect_secret().await;
+            });
+        }
+        result
     }
 
     async fn deposit(
@@ -81,13 +110,19 @@ impl MailboxManager {
         encrypted_envelope: Vec<u8>,
         envelope_type: EnvelopeType,
     ) -> Result<(), MailboxError> {
-        client
-            .send_to_ephemeral_mailbox(
+        // A connected h2 channel can stop answering after Android doze.
+        // Bound the ambiguous deposit attempt; callers retain its ciphertext
+        // and report delivery unconfirmed rather than encrypting a new copy.
+        tokio::time::timeout(
+            std::time::Duration::from_secs(75),
+            client.send_to_ephemeral_mailbox(
                 destination_public_key.to_vec(),
                 encrypted_envelope,
                 envelope_type as i32,
-            )
-            .await?;
+            ),
+        )
+        .await
+        .map_err(|_| NetworkError::Timeout)??;
         Ok(())
     }
 }

@@ -195,6 +195,24 @@ fn mark_pending_unconfirmed(w: &MainWindow, send: &ComposerSend) {
     }
 }
 
+/// A Tor send can spend its time on directory and hidden-service work before
+/// the server sees a deposit. Keep the same in-flight attempt, but name that
+/// wait on the bubble so it never appears stuck at an unqualified "sending".
+fn mark_pending_waiting_for_tor(w: &MainWindow, send: &ComposerSend) {
+    use slint::Model;
+    let pending_id = pending_message_id(send);
+    let messages = w.get_messages();
+    for i in 0..messages.row_count() {
+        if let Some(mut m) = messages.row_data(i)
+            && m.message_id.as_str() == pending_id
+            && m.delivery_status.as_str() == "sending"
+        {
+            m.delivery_status = "waiting-tor".into();
+            messages.set_row_data(i, m);
+        }
+    }
+}
+
 /// A staged file as the pending row shows it: the local file stands in for
 /// the stored attachment until the send returns one.
 fn pending_attachment_to_display_data(
@@ -740,21 +758,46 @@ async fn deliver_inner(
         text_len = text.len(),
         "[UI_SEND] entering send_message_ui"
     );
-    let outcome = chatter_core::client::await_send_with_notice(
-        ui_ctx.send_composer_message(&send_for_delivery, quote),
+    let send_client = ui_ctx.clone();
+    let notice_weak = weak.clone();
+    let notice_client = ui_ctx.clone();
+    let sending = chatter_core::client::await_send_with_notice(
+        send_client.send_composer_message(&send_for_delivery, quote),
         send_timeout,
-        || {
+        move || {
             // The pending row keeps showing "sending"; this says why it is
             // taking so long, once.
             notice(
-                &weak,
-                &ui_ctx,
+                &notice_weak,
+                &notice_client,
                 session_revision,
                 "Delivery is taking longer. Waiting for the original attempt; do not resend.",
             )
         },
-    )
-    .await;
+    );
+    tokio::pin!(sending);
+    let tor_send = ui_ctx.anon_mode_enabled()
+        || matches!(conversation, ActiveConversation::AnonDm(_) | ActiveConversation::AnonGroup(_));
+    let outcome = if tor_send {
+        tokio::select! {
+            result = &mut sending => result,
+            _ = tokio::time::sleep(std::time::Duration::from_secs(12)) => {
+                let weak = weak.clone();
+                let client = ui_ctx.clone();
+                let pending = send_for_delivery.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if client.composer_session_is_current(pending.session_revision) {
+                        if let Some(w) = weak.upgrade() {
+                            mark_pending_waiting_for_tor(&w, &pending);
+                        }
+                    }
+                });
+                sending.await
+            }
+        }
+    } else {
+        sending.await
+    };
     if !ui_ctx.composer_session_is_current(session_revision) {
         return false;
     }
