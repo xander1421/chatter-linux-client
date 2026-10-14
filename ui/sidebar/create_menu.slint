@@ -1,5 +1,6 @@
 import { GlassSurface } from "../components/glass_surface.slint";
 import { Materials } from "../theme/materials.slint";
+import { Appearance } from "../theme/appearance.slint";
 // Create menu — what the chat list's '+' opens (owner decision 2026-09-26).
 //
 // CreateMenu: the small popup of New Chat / New Channel / New Section. On a
@@ -32,11 +33,18 @@ export component CreateMenu inherits Rectangle {
     callback new-channel();
     callback new-section();
 
+    property <bool> first-arrived: false;
+    property <bool> second-arrived: false;
+    property <bool> third-arrived: false;
+    Timer { interval: Appearance.reduce-motion ? 0ms : 24ms; running: root.show && !root.first-arrived; triggered => { root.first-arrived = true; } }
+    Timer { interval: Appearance.reduce-motion ? 0ms : 62ms; running: root.show && !root.second-arrived; triggered => { root.second-arrived = true; } }
+    Timer { interval: Appearance.reduce-motion ? 0ms : 100ms; running: root.show && !root.third-arrived; triggered => { root.third-arrived = true; } }
+
     // Logical close is immediate; the card settles back and the scrim fades
     // before the host unmounts it. Nothing is a live target meanwhile.
     in property <bool> show: true;
     opacity: root.show ? 1 : 0;
-    animate opacity { duration: Materials.menu-duration; easing: ease-out; }
+    animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
     visible: root.show || self.opacity > 0;
     // The one scrim, like every other modal surface; taps outside the card
     // close it and must not reach the list under it.
@@ -44,17 +52,25 @@ export component CreateMenu inherits Rectangle {
     TouchArea { enabled: root.show; clicked => { root.close(); } }
 
     GlassSurface {
-        enter-distance: 6px;
+        enter-distance: 0px;
         shown: root.show;
+        // Keep the card attached to the control that opened it: the phone FAB
+        // is below the card, while the two-pane header action is above it.
+        transform-origin: { x: self.width - 24px, y: root.card-y > root.height / 2 ? self.height : 0px };
+        transform-scale-x: root.show ? 100% : 22%;
+        transform-scale-y: root.show ? 100% : 16%;
+        animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; }
+        animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
 
         material-level: 3;
         elevation: 4;
 
         x: root.card-x;
-        y: (root.card-y) + self.entrance-offset;
+        y: root.card-y;
         width: root.card-width;
         height: root.card-height;
-        border-radius: Spacing.radius-xl;
+        border-radius: root.show ? Spacing.radius-xl : Spacing.fab-size / 2;
+        animate border-radius { duration: Materials.motion-standard; easing: Materials.spring; }
         // Eat taps on the card's own padding.
         TouchArea { }
 
@@ -63,14 +79,44 @@ export component CreateMenu inherits Rectangle {
         // subtree) and every row action checks `show` besides: MenuRow's
         // default action is unconditional.
         Rectangle {
-            visible: root.show;
+            visible: root.show || root.opacity > 0;
             menu := VerticalLayout {
                 padding-top: Spacing.xs;
                 padding-bottom: Spacing.xs;
-                MenuRow { icon: Icons.message-circle; label: "New Chat"; clicked => { if root.show { root.new-chat(); } } }
+                MenuRow {
+                    icon: Icons.message-circle; label: "New Chat";
+                    opacity: root.first-arrived ? 1 : 0;
+                    transform-scale-x: root.first-arrived ? 100% : 84%;
+                    transform-scale-y: root.first-arrived ? 100% : 84%;
+                    transform-origin: { x: self.width, y: self.height };
+                    animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
+                    animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; }
+                    animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
+                    clicked => { if root.show && root.first-arrived { root.new-chat(); } }
+                }
                 // Channels do not exist in Shield mode (sidebar.slint hides them).
-                if !AnonMode.enabled: MenuRow { icon: Icons.megaphone; label: "New Channel"; clicked => { if root.show { root.new-channel(); } } }
-                MenuRow { icon: Icons.folder; label: "New Section"; clicked => { if root.show { root.new-section(); } } }
+                if !AnonMode.enabled: MenuRow {
+                    icon: Icons.megaphone; label: "New Channel";
+                    opacity: root.second-arrived ? 1 : 0;
+                    transform-scale-x: root.second-arrived ? 100% : 84%;
+                    transform-scale-y: root.second-arrived ? 100% : 84%;
+                    transform-origin: { x: self.width, y: self.height };
+                    animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
+                    animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; }
+                    animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
+                    clicked => { if root.show && root.second-arrived { root.new-channel(); } }
+                }
+                MenuRow {
+                    icon: Icons.folder; label: "New Section";
+                    opacity: root.third-arrived ? 1 : 0;
+                    transform-scale-x: root.third-arrived ? 100% : 84%;
+                    transform-scale-y: root.third-arrived ? 100% : 84%;
+                    transform-origin: { x: self.width, y: self.height };
+                    animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
+                    animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; }
+                    animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
+                    clicked => { if root.show && root.third-arrived { root.new-section(); } }
+                }
             }
         }
     }

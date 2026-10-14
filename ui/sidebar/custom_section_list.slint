@@ -89,7 +89,7 @@ component CustomSectionHeader inherits Rectangle {
                         height: root.mobile-mode ? 14px : 10px;
                         colorize: Colors.text-muted;
                         transform-rotation: root.is-expanded ? 90deg : 0deg;
-                        animate transform-rotation { duration: Materials.feedback-duration; easing: ease-out; }
+                        animate transform-rotation { duration: Materials.motion-standard; easing: Materials.spring; }
                     }
                 }
 
@@ -226,6 +226,7 @@ export component CustomSectionList inherits Rectangle {
 
     callback section-toggle-expanded(/* section-id */ string);
     callback section-conversation-selected(/* conversation-id */ string, /* conversation-type */ ConversationKind);
+    callback section-conversation-pin-requested(/* conversation-id */ string, /* pinned */ bool);
     callback section-conversation-context-menu-requested(/* conversation-id */ string, /* conversation-type */ ConversationKind, /* section-id */ string, /* is-pinned */ bool, /* can-leave */ bool, /* can-delete */ bool, /* x */ length, /* y */ length);
     callback section-header-context-menu-requested(/* section-id */ string, /* sort-mode */ string, /* x */ length, /* y */ length);
     callback delete-section-clicked(/* section-id */ string);
@@ -257,21 +258,29 @@ export component CustomSectionList inherits Rectangle {
 
             // Section conversations (only when expanded). The model is this
             // section's own rows, already ordered by core.
-            if section.is-expanded: VerticalLayout {
-                padding-left: Spacing.xs;
-                padding-right: Spacing.xs;
-                spacing: Spacing.xxs;
+            Rectangle {
+                height: section.is-expanded ? section-rows.preferred-height : 0px;
+                clip: true;
+                animate height { duration: Materials.motion-standard; easing: Materials.spring; }
+
+                section-rows := VerticalLayout {
+                    width: parent.width;
+                    padding-left: Spacing.xs;
+                    padding-right: Spacing.xs;
+                    spacing: Spacing.xxs;
 
                 // A folder row is the main list's own row, so a chat looks
                 // the same filed or not; filing one used to shrink it to a
                 // one-line row with no photo, preview, time or presence.
-                for conv in section.conversations: ChatRow {
-                    data: conv;
-                    collapsed: root.collapsed;
-                    mobile-mode: root.mobile-mode;
-                    clicked => { root.section-conversation-selected(conv.conversation-id, conv.conversation-type); }
-                    context-menu-requested(x, y) => {
-                        root.section-conversation-context-menu-requested(conv.conversation-id, conv.conversation-type, section.section-id, conv.is-pinned, conv.can-leave, conv.can-delete, x, y);
+                    for conv in section.conversations: ChatRow {
+                        data: conv;
+                        collapsed: root.collapsed;
+                        mobile-mode: root.mobile-mode;
+                        clicked => { root.section-conversation-selected(conv.conversation-id, conv.conversation-type); }
+                        pin-requested(pinned) => { root.section-conversation-pin-requested(conv.conversation-id, pinned); }
+                        context-menu-requested(x, y) => {
+                            root.section-conversation-context-menu-requested(conv.conversation-id, conv.conversation-type, section.section-id, conv.is-pinned, conv.can-leave, conv.can-delete, x, y);
+                        }
                     }
                 }
             }

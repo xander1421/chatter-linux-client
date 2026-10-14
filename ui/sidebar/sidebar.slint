@@ -160,7 +160,7 @@ export component Sidebar inherits Rectangle {
     property <length> top-row-height: root.mobile-mode ? root.quick-link-height
         : root.touch ? Spacing.header-height-touch : Spacing.header-height;
     property <length> quick-link-text-size: root.touch ? Typography.base : Typography.sm2;
-    property <brush> quick-link-text-color: root.touch ? Colors.text-primary : Colors.text-secondary;
+    property <brush> quick-link-text-color: Colors.text-primary;
     property <length> quick-link-icon-size: root.touch ? 24px : 14px;
     // The header row's '+' and Shield on a touch two-pane: HeaderButton's
     // 48px shell and 26px glyph were the biggest things in a panel whose own
@@ -327,7 +327,9 @@ export component Sidebar inherits Rectangle {
 
                 if !AnonMode.enabled : Rectangle {
                     height: root.quick-link-height;
-                    background: saved-touch.has-hover ? Colors.surface-hover : transparent;
+                    background: saved-touch.pressed ? Colors.surface-control-hover
+                        : saved-touch.has-hover ? Colors.surface-hover : transparent;
+                    animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
                     accessible-role: button;
                     accessible-label: "Saved Messages";
                     if !root.collapsed: HorizontalLayout {
@@ -355,7 +357,9 @@ export component Sidebar inherits Rectangle {
                 // navigation systems running at once.
                 if !root.mobile-mode: Rectangle {
                     height: root.quick-link-height;
-                    background: friends-touch.has-hover ? Colors.surface-hover : transparent;
+                    background: friends-touch.pressed ? Colors.surface-control-hover
+                        : friends-touch.has-hover ? Colors.surface-hover : transparent;
+                    animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
                     accessible-role: button;
                     accessible-label: AnonMode.enabled ? "Add Contact" : "Friends";
                     if !root.collapsed: HorizontalLayout {
@@ -379,7 +383,9 @@ export component Sidebar inherits Rectangle {
                 // bar, and this row is the only way in.
                 if !root.mobile-mode: Rectangle {
                     height: root.quick-link-height;
-                    background: calls-touch.has-hover ? Colors.surface-hover : transparent;
+                    background: calls-touch.pressed ? Colors.surface-control-hover
+                        : calls-touch.has-hover ? Colors.surface-hover : transparent;
+                    animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
                     accessible-role: button;
                     accessible-label: root.missed-call-count > 0 ? "Calls, " + root.missed-call-count + " missed" : "Calls";
                     accessible-action-default => { root.calls-clicked(); }
@@ -443,7 +449,9 @@ export component Sidebar inherits Rectangle {
                     height: root.quick-link-height;
                     accessible-role: button;
                     accessible-label: root.total-pending-requests == 1 ? "1 request" : root.total-pending-requests + " requests";
-                    background: requests-touch.has-hover ? Colors.surface-hover : transparent;
+                    background: requests-touch.pressed ? Colors.surface-control-hover
+                        : requests-touch.has-hover ? Colors.surface-hover : transparent;
+                    animate background { duration: Materials.feedback-duration; easing: Materials.settle; }
 
                     if !root.collapsed: HorizontalLayout {
                         padding-left: root.quick-link-inset; padding-right: Spacing.sm; spacing: Spacing.sm; alignment: start;
@@ -558,6 +566,7 @@ export component Sidebar inherits Rectangle {
                             root.dm-selected(id);
                         }
                     }
+                    row-pin-requested(id, pinned) => { root.set-conversation-pinned(id, pinned); }
                     add-friend-clicked => { root.friends-clicked(); }
                     // FEAT-8: app.slint turns this into the join tab of
                     // CreateChannelModal.
@@ -596,6 +605,7 @@ export component Sidebar inherits Rectangle {
                     mobile-mode: root.touch;
                     section-toggle-expanded(id) => { root.section-toggle-expanded(id); }
                     section-conversation-selected(conv-id, conv-type) => { root.section-conversation-selected(conv-id, conv-type); }
+                    section-conversation-pin-requested(conv-id, pinned) => { root.set-conversation-pinned(conv-id, pinned); }
                     delete-section-clicked(id) => { root.delete-section-clicked(id); }
                     rename-section-clicked(id) => { root.rename-section-clicked(id); }
                     section-conversation-context-menu-requested(conv-id, conv-type, section-id, pinned, can-leave, can-delete, x, y) => {

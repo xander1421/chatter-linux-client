@@ -4,6 +4,7 @@
 // Neo states: flat default, highlight hover, inset active (selected).
 
 import { Colors } from "../theme/colors.slint";
+import { Materials } from "../theme/materials.slint";
 import { Appearance } from "../theme/appearance.slint";
 import { HoldArea } from "../components/hold_area.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -32,6 +33,9 @@ export component DMListItem inherits Rectangle {
     // Callbacks
     callback clicked();
     callback context-menu-requested(/* x */ length, /* y */ length);
+    callback swipe-down(length, length);
+    callback swipe-moved(length, length);
+    callback swipe-ended(bool);
 
     // Typing animation (0.0 to 1.0 cycling)
     // The dots fade through their background's alpha, not `opacity`: Slint
@@ -94,6 +98,14 @@ export component DMListItem inherits Rectangle {
     height: root.collapsed ? 48px : root.row-height;
     border-radius: Spacing.radius-md;
 
+    // The whole row compresses under the finger, then springs back from its
+    // own center. This keeps the avatar, text and badge moving as one surface.
+    transform-scale-x: touch.pressed ? 98% : 100%;
+    transform-scale-y: touch.pressed ? 96% : 100%;
+    animate transform-scale-x { duration: touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+    animate transform-scale-y { duration: touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+    animate background { duration: Materials.motion-standard; easing: Materials.glide; }
+
     // Neo 2.0 states: flat → highlight hover → inset selected.
     // Collapsed, the state fill belongs to the slot below, not to a
     // full-width plate across the rail.
@@ -103,7 +115,9 @@ export component DMListItem inherits Rectangle {
               : touch.has-hover ? Colors.row-hover
               : transparent;
 
-    if root.selected && !root.collapsed: Rectangle {
+    Rectangle {
+        opacity: root.selected && !root.collapsed ? 1 : 0;
+        animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
         x: 0px;
         width: 3px;
         height: parent.height;
@@ -250,7 +264,14 @@ export component DMListItem inherits Rectangle {
             }
 
             // Unread count badge
-            if root.unread-count > 0: HorizontalLayout {
+            HorizontalLayout {
+                visible: root.unread-count > 0 || self.opacity > 0;
+                opacity: root.unread-count > 0 ? 1 : 0;
+                transform-scale-x: root.unread-count > 0 ? 100% : 55%;
+                transform-scale-y: root.unread-count > 0 ? 100% : 55%;
+                animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
+                animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; }
+                animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
                 alignment: end;
 
                 Rectangle {
@@ -351,5 +372,8 @@ export component DMListItem inherits Rectangle {
             if (!self.hold-fired) { root.clicked(); }
         }
         held => { root.context-menu-requested(self.anchor-x, self.anchor-y); }
+        gesture-down(x, y) => { root.swipe-down(x, y); }
+        gesture-moved(x, y) => { root.swipe-moved(x, y); }
+        gesture-ended(cancelled) => { root.swipe-ended(cancelled); }
     }
 }

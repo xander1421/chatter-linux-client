@@ -338,11 +338,19 @@ fn update_sidebar_row(
         ActiveConversation::None => return true,
     };
     let model = window.get_chat_rows();
-    let mut rows: Vec<_> = model.iter().collect();
-    let Some(i) = rows.iter().position(|r| r.conversation_id.as_str() == key) else {
+    let Some(vec) = model
+        .as_any()
+        .downcast_ref::<slint::VecModel<crate::ChatRowData>>()
+    else {
         return false;
     };
-    let mut row = rows.remove(i);
+    let Some(i) = (0..vec.row_count()).find(|&i| {
+        vec.row_data(i)
+            .is_some_and(|r| r.conversation_id.as_str() == key)
+    }) else {
+        return false;
+    };
+    let mut row = vec.row_data(i).expect("located sidebar row");
     row.last_message = preview.into();
     row.timestamp = timestamp.into();
     if let Some(n) = unread {
@@ -350,10 +358,18 @@ fn update_sidebar_row(
     }
     let slot = chatter_core::ui::sidebar_data::chat_row_top_slot(
         row.is_pinned,
-        rows.iter().map(|r| r.is_pinned),
+        (0..vec.row_count())
+            .filter(|&index| index != i)
+            .filter_map(|index| vec.row_data(index).map(|r| r.is_pinned)),
     );
-    rows.insert(slot, row);
-    window.set_chat_rows(slint::ModelRc::new(slint::VecModel::from(rows)));
+    if i == slot {
+        vec.set_row_data(i, row);
+    } else {
+        // Preserve the model, so unaffected rows keep their item instances
+        // and the moved row alone gets its arrival motion in Slint.
+        vec.remove(i);
+        vec.insert(slot, row);
+    }
     true
 }
 
@@ -381,8 +397,41 @@ pub(crate) fn apply_chat_list(
     rows: Vec<chatter_core::ui::sidebar_data::ChatRowSendData>,
 ) {
     use crate::bin_ui::converters::ChatRowExt;
+    use slint::Model;
     let rows: Vec<_> = rows.into_iter().map(|r| r.to_slint()).collect();
-    window.set_chat_rows(slint::ModelRc::new(slint::VecModel::from(rows)));
+    let target_len = rows.len();
+    let model = window.get_chat_rows();
+    if let Some(vec) = model
+        .as_any()
+        .downcast_ref::<slint::VecModel<crate::ChatRowData>>()
+    {
+        // Apply the core snapshot by identity. Replacing the ModelRc made
+        // every row disappear and reappear for one changed preview.
+        for (target, row) in rows.into_iter().enumerate() {
+            let current = vec.row_data(target);
+            if current.as_ref().is_some_and(|old| {
+                old.conversation_id == row.conversation_id
+                    && old.conversation_type == row.conversation_type
+            }) {
+                vec.set_row_data(target, row);
+            } else if let Some(from) = (target + 1..vec.row_count()).find(|&index| {
+                vec.row_data(index).is_some_and(|old| {
+                    old.conversation_id == row.conversation_id
+                        && old.conversation_type == row.conversation_type
+                })
+            }) {
+                vec.remove(from);
+                vec.insert(target, row);
+            } else {
+                vec.insert(target, row);
+            }
+        }
+        while vec.row_count() > target_len {
+            vec.remove(vec.row_count() - 1);
+        }
+    } else {
+        window.set_chat_rows(slint::ModelRc::new(slint::VecModel::from(rows)));
+    }
     refresh_selection(window, ui_ctx);
     crate::bin_ui::features::auth::inbox::domain_handler::recompute_total_unread(window, ui_ctx);
 }

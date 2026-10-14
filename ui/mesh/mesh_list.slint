@@ -56,7 +56,7 @@ export component MeshList inherits Rectangle {
                                 height: 10px;
                                 colorize: Colors.text-muted;
                                 transform-rotation: root.expanded ? 90deg : 0deg;
-                                animate transform-rotation { duration: Materials.feedback-duration; easing: ease-out; }
+                                animate transform-rotation { duration: Materials.motion-standard; easing: Materials.spring; }
                             }
                         }
                         Text {
@@ -81,6 +81,10 @@ export component MeshList inherits Rectangle {
                         y: (parent.height - self.height) / 2;
                         border-radius: Spacing.radius-sm;
                         background: join-touch.has-hover ? Colors.surface-hover : transparent;
+                        transform-scale-x: join-touch.pressed ? 88% : 100%;
+                        transform-scale-y: join-touch.pressed ? 88% : 100%;
+                        animate transform-scale-x { duration: join-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+                        animate transform-scale-y { duration: join-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
                         Image {
                             source: Icons.plus;
                             width: 14px;
@@ -231,6 +235,7 @@ export component MeshList inherits Rectangle {
                 verified: item.verified;
                 selected: item.is-selected;
                 collapsed: root.collapsed;
+                touch: root.touch;
 
                 clicked => { MeshGlobal.conversation-selected(item.id); }
             }
