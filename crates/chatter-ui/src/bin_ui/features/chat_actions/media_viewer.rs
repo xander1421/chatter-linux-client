@@ -59,9 +59,13 @@ fn thumbnail(w: &MainWindow, id: &str) -> slint::Image {
     w.get_messages()
         .iter()
         .chain(w.get_thread_replies().iter())
-        .flat_map(|message| message.attachments.iter())
-        .find(|attachment| attachment.id == id && attachment.has_thumbnail)
-        .map(|attachment| attachment.thumbnail.clone())
+        .find_map(|message| {
+            message
+                .attachments
+                .iter()
+                .find(|attachment| attachment.id == id && attachment.has_thumbnail)
+                .map(|attachment| attachment.thumbnail.clone())
+        })
         .unwrap_or_default()
 }
 
