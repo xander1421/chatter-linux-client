@@ -1490,8 +1490,14 @@ export component MainWindow inherits Window {
     // modal, else background the task) lives in Rust so it is testable:
     // `bin_ui::features::back`. Slint only reports the press.
     callback back-pressed();
-    // Android: FLAG_SECURE while the codes are on screen (lib.rs binds it).
+    // Android: protect recovery codes and open secret chats from OS capture.
     callback secure-screen(bool);
+    private property <bool> secure-screen-required:
+        root.active-modal == "recovery-codes"
+        || (root.channel-id != "" &&
+            (root.conversation-kind == ConversationKind.anon-dm
+             || root.conversation-kind == ConversationKind.anon-group));
+    changed secure-screen-required => { root.secure-screen(root.secure-screen-required); }
     // The phone's chat pane closed (Back, header back, a bottom tab): nothing
     // is on screen any more, so no conversation may stay "active".
     callback chat-pane-closed();
@@ -1624,7 +1630,6 @@ export component MainWindow inherits Window {
         root.calls-more-menu-visible = false;
         root.cancel-composer-keyboard-handover();
         if root.active-modal != "" { VoiceRecording.cancel(); }
-        root.secure-screen(root.active-modal == "recovery-codes");
         // On open too: taking focus off the composer is what hides the soft
         // keyboard (a TextInput's FocusOut sends InputMethodRequest::Disable),
         // which otherwise stays up over the modal (F78). On close it is also
