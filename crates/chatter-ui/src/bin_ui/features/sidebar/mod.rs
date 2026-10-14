@@ -10,11 +10,45 @@ pub mod private_group;
 pub mod sections;
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI32, Ordering};
+use std::time::Duration;
 
 use chatter_core::client::ChatterClient;
 
 use crate::bin_ui::audio_state;
 use crate::{MainWindow, run_ui};
+
+static NEXT_ARRIVAL_SERIAL: AtomicI32 = AtomicI32::new(1);
+
+fn next_arrival_serial() -> i32 {
+    NEXT_ARRIVAL_SERIAL.fetch_add(1, Ordering::Relaxed)
+}
+
+/// Clear only the marked incarnation: a newer message may promote the same row
+/// before the prior animation's first frame has rendered.
+fn settle_arrivals(
+    model: slint::ModelRc<crate::ChatRowData>,
+    arrivals: Vec<(slint::SharedString, i32)>,
+) {
+    if arrivals.is_empty() {
+        return;
+    }
+    slint::Timer::single_shot(Duration::from_millis(16), move || {
+        use slint::Model;
+        for (id, serial) in arrivals {
+            if let Some(index) = (0..model.row_count()).find(|&i| {
+                model
+                    .row_data(i)
+                    .is_some_and(|row| row.conversation_id == id && row.arrival_serial == serial)
+            }) {
+                if let Some(mut row) = model.row_data(index) {
+                    row.arrival_serial = 0;
+                    model.set_row_data(index, row);
+                }
+            }
+        }
+    });
+}
 
 // Re-export public functions
 pub use channel::load_channel_into_ui;
@@ -153,26 +187,22 @@ pub(crate) fn refresh_section_selection(window: &MainWindow, ui_ctx: &Arc<Chatte
 
     let active = ui_ctx.active_conversation();
     let sections = window.get_custom_sections();
-    let updated: Vec<_> = sections
-        .iter()
-        .map(|mut section| {
-            let rows = section.conversations.clone();
-            let marked: Vec<_> = (0..rows.row_count())
-                .filter_map(|j| rows.row_data(j))
-                .map(|mut item| {
-                    item.is_selected = row_is_active(
-                        &active,
-                        item.conversation_type,
-                        item.conversation_id.as_str(),
-                    );
-                    item
-                })
-                .collect();
-            section.conversations = slint::ModelRc::new(slint::VecModel::from(marked));
-            section
-        })
-        .collect();
-    window.set_custom_sections(slint::ModelRc::new(slint::VecModel::from(updated)));
+    for section in sections.iter() {
+        let rows = section.conversations;
+        for j in 0..rows.row_count() {
+            if let Some(mut item) = rows.row_data(j) {
+                let selected = row_is_active(
+                    &active,
+                    item.conversation_type,
+                    item.conversation_id.as_str(),
+                );
+                if item.is_selected != selected {
+                    item.is_selected = selected;
+                    rows.set_row_data(j, item);
+                }
+            }
+        }
+    }
 }
 
 /// Does this chat-list or folder row point at the currently open conversation?
@@ -365,10 +395,11 @@ fn update_sidebar_row(
     if i == slot {
         vec.set_row_data(i, row);
     } else {
-        // Preserve the model, so unaffected rows keep their item instances
-        // and the moved row alone gets its arrival motion in Slint.
+        row.arrival_serial = next_arrival_serial();
+        let arrival = (row.conversation_id.clone(), row.arrival_serial);
         vec.remove(i);
         vec.insert(slot, row);
+        settle_arrivals(model.clone(), vec![arrival]);
     }
     true
 }
@@ -401,13 +432,15 @@ pub(crate) fn apply_chat_list(
     let rows: Vec<_> = rows.into_iter().map(|r| r.to_slint()).collect();
     let target_len = rows.len();
     let model = window.get_chat_rows();
+    let mut arrivals = Vec::new();
     if let Some(vec) = model
         .as_any()
         .downcast_ref::<slint::VecModel<crate::ChatRowData>>()
     {
         // Apply the core snapshot by identity. Replacing the ModelRc made
         // every row disappear and reappear for one changed preview.
-        for (target, row) in rows.into_iter().enumerate() {
+        let had_rows = vec.row_count() > 0;
+        for (target, mut row) in rows.into_iter().enumerate() {
             let current = vec.row_data(target);
             if current.as_ref().is_some_and(|old| {
                 old.conversation_id == row.conversation_id
@@ -420,9 +453,17 @@ pub(crate) fn apply_chat_list(
                         && old.conversation_type == row.conversation_type
                 })
             }) {
+                if from > target {
+                    row.arrival_serial = next_arrival_serial();
+                    arrivals.push((row.conversation_id.clone(), row.arrival_serial));
+                }
                 vec.remove(from);
                 vec.insert(target, row);
             } else {
+                if had_rows {
+                    row.arrival_serial = next_arrival_serial();
+                    arrivals.push((row.conversation_id.clone(), row.arrival_serial));
+                }
                 vec.insert(target, row);
             }
         }
@@ -432,6 +473,7 @@ pub(crate) fn apply_chat_list(
     } else {
         window.set_chat_rows(slint::ModelRc::new(slint::VecModel::from(rows)));
     }
+    settle_arrivals(window.get_chat_rows(), arrivals);
     refresh_selection(window, ui_ctx);
     crate::bin_ui::features::auth::inbox::domain_handler::recompute_total_unread(window, ui_ctx);
 }

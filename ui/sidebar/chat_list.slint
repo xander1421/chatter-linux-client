@@ -37,6 +37,7 @@ export struct ChatRowData {
     can-leave: bool,             // core: `can_leave_channel`; private groups always
     can-delete: bool,            // channel rows: core's `is_former_channel`
     is-selected: bool,           // Rust-computed selection flag; drives highlight
+    arrival-serial: int,         // Nonzero only for a newly inserted or promoted row
 }
 
 export component ChatRow inherits Rectangle {
@@ -58,8 +59,7 @@ export component ChatRow inherits Rectangle {
     property <bool> was-open: false;
     property <bool> swallow-click: false;
     property <length> drag-distance: 0px;
-    property <length> arrival-offset: 18px;
-    init => { root.arrival-offset = 0px; }
+    property <length> arrival-offset: root.data.arrival-serial > 0 ? 18px : 0px;
     animate arrival-offset { duration: Materials.motion-standard; easing: Materials.spring; }
     Timer {
         interval: 180ms;

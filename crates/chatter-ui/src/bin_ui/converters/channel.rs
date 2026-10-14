@@ -46,6 +46,7 @@ impl ChatRowExt for ChatRowSendData {
             can_leave: self.can_leave,
             can_delete: self.can_delete,
             is_selected: false,
+            arrival_serial: 0,
         }
     }
 }

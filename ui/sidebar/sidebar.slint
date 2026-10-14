@@ -310,20 +310,9 @@ export component Sidebar inherits Rectangle {
                 // the foot of this list; room for it, so it never covers the
                 // last row.
                 padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.fab-size + Spacing.md * 2
+                        + (root.update-banner-visible ? root.update-banner-height + Spacing.md : Spacing.none)
                     : (root.collapsed ? root.rail-button-count * root.rail-icon-size + (root.rail-button-count - 1) * Spacing.sm + Spacing.lg : Spacing.button-height)
                         + (root.update-banner-visible && !root.collapsed ? root.update-banner-height + Spacing.md : Spacing.none) + Spacing.md;
-
-                // On phones the update action belongs to the chat list, directly
-                // below the pinned search row and clear of the floating dock.
-                if root.mobile-mode && root.update-banner-visible: Rectangle {
-                    height: root.update-banner-height + Spacing.sm;
-                    UpdateBanner {
-                        x: Spacing.sm;
-                        y: Spacing.sm;
-                        width: parent.width - Spacing.sm * 2;
-                        height: root.update-banner-height;
-                    }
-                }
 
                 // QUICK LINKS (top navigation)
 
@@ -969,6 +958,15 @@ export component Sidebar inherits Rectangle {
     if !root.mobile-mode && !root.collapsed && root.update-banner-visible: UpdateBanner {
         x: Spacing.sm;
         y: root.height - self.height - Spacing.button-height - Spacing.md;
+        width: root.width - Spacing.sm * 2;
+        height: root.update-banner-height;
+    }
+
+    // Keep an update notice above the phone's floating action area. Adding it
+    // to the scroll layout moved every conversation when update state arrived.
+    if root.mobile-mode && root.update-banner-visible: UpdateBanner {
+        x: Spacing.sm;
+        y: root.height - root.bottom-inset - Spacing.fab-size - Spacing.md * 2 - self.height;
         width: root.width - Spacing.sm * 2;
         height: root.update-banner-height;
     }

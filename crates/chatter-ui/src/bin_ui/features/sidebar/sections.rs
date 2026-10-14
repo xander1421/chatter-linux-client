@@ -5,7 +5,7 @@
 
 use std::sync::Arc;
 
-use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::SectionId;
@@ -53,7 +53,7 @@ pub(crate) fn load_sections(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let send_data = build_section_data(&sections, ui_ctx);
             // On startup we're on the UI thread, so convert directly.
             let models: Vec<_> = send_data.into_iter().map(|s| s.to_slint()).collect();
-            window.set_custom_sections(ModelRc::new(VecModel::from(models)));
+            apply_sections(window, models);
         }
         Err(e) => {
             tracing::error!(error = %e, "Failed to load custom sections");
@@ -372,9 +372,67 @@ pub(crate) fn refresh_sections_ui(weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<C
         let ui_ctx = ui_ctx.clone();
         run_ui!(weak, |w| {
             let models: Vec<_> = send_data.into_iter().map(|s| s.to_slint()).collect();
-            w.set_custom_sections(ModelRc::new(VecModel::from(models)));
+            apply_sections(&w, models);
             super::refresh_section_selection(&w, &ui_ctx);
         });
+    }
+}
+
+/// Retain each section and its conversation model across badge/selection
+/// refreshes. Only a real section insertion or removal creates delegates.
+fn apply_sections(window: &MainWindow, sections: Vec<CustomSectionData>) {
+    let model = window.get_custom_sections();
+    let Some(vec) = model.as_any().downcast_ref::<VecModel<CustomSectionData>>() else {
+        window.set_custom_sections(ModelRc::new(VecModel::from(sections)));
+        return;
+    };
+    let target_len = sections.len();
+    for (target, mut section) in sections.into_iter().enumerate() {
+        let existing = (target..vec.row_count()).find(|&i| {
+            vec.row_data(i)
+                .is_some_and(|old| old.section_id == section.section_id)
+        });
+        if let Some(from) = existing {
+            let old = vec.row_data(from).expect("located section");
+            let rows = old.conversations.clone();
+            if let Some(row_vec) = rows.as_any().downcast_ref::<VecModel<ChatRowData>>() {
+                let new_rows: Vec<_> = section.conversations.iter().collect();
+                let row_len = new_rows.len();
+                for (slot, row) in new_rows.into_iter().enumerate() {
+                    if row_vec.row_data(slot).is_some_and(|old| {
+                        old.conversation_id == row.conversation_id
+                            && old.conversation_type == row.conversation_type
+                    }) {
+                        row_vec.set_row_data(slot, row);
+                    } else if let Some(from) = (slot + 1..row_vec.row_count()).find(|&i| {
+                        row_vec.row_data(i).is_some_and(|old| {
+                            old.conversation_id == row.conversation_id
+                                && old.conversation_type == row.conversation_type
+                        })
+                    }) {
+                        row_vec.remove(from);
+                        row_vec.insert(slot, row);
+                    } else {
+                        row_vec.insert(slot, row);
+                    }
+                }
+                while row_vec.row_count() > row_len {
+                    row_vec.remove(row_vec.row_count() - 1);
+                }
+                section.conversations = rows;
+            }
+            if from == target {
+                vec.set_row_data(target, section);
+            } else {
+                vec.remove(from);
+                vec.insert(target, section);
+            }
+        } else {
+            vec.insert(target, section);
+        }
+    }
+    while vec.row_count() > target_len {
+        vec.remove(vec.row_count() - 1);
     }
 }
 
