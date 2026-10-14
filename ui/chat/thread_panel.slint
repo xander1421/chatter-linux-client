@@ -13,8 +13,19 @@ import { Skeleton } from "../components/skeleton.slint";
 import { MessageItemData } from "message_list.slint";
 import { MessageItem } from "message_item.slint";
 import { ConversationKind } from "conversation_kind.slint";
+import { Materials } from "../theme/materials.slint";
+import { Appearance } from "../theme/appearance.slint";
 
 export component ThreadPanel inherits Rectangle {
+    property <bool> entered: false;
+    changed visible => { if (!root.visible) { root.entered = false; } }
+    Timer {
+        interval: 16ms;
+        running: root.visible && !root.entered;
+        triggered => { root.entered = true; }
+    }
+    property <float> panel-progress: root.visible && (Appearance.reduce-motion || root.entered) ? 1 : 0;
+    animate panel-progress { duration: Materials.motion-standard; easing: Materials.glide; }
     // Root message data
     in property <string> root-message-id;
     in property <string> root-sender-name;
@@ -71,15 +82,16 @@ export component ThreadPanel inherits Rectangle {
 
     // Left resize handle (draggable)
     Rectangle {
+        visible: !root.mobile;
         x: 0;
-        width: 6px;
+        width: 18px;
         height: 100%;
         background: resize-handle.has-hover || resize-handle.pressed ? Colors.primary.with-alpha(0.3) : transparent;
 
         // Visual indicator line
         Rectangle {
             x: 0;
-            width: 1px;
+            width: 2px;
             height: 100%;
             background: resize-handle.has-hover || resize-handle.pressed
                 ? Colors.primary
@@ -103,6 +115,10 @@ export component ThreadPanel inherits Rectangle {
     }
 
     VerticalLayout {
+        x: (1 - root.panel-progress) * (root.mobile ? 36px : 24px);
+        width: 100%;
+        height: 100%;
+        opacity: 0.72 + 0.28 * root.panel-progress;
         // Header — same height as the conversation header it sits beside, so
         // the two panes share one top row instead of stepping.
         GlassSurface {
@@ -187,10 +203,15 @@ export component ThreadPanel inherits Rectangle {
 
         // Root message preview (64px max)
         Rectangle {
+            x: (1 - root.panel-progress) * 12px;
             height: 64px;
             background: Colors.surface-hover;
+            transform-scale-x: root-preview-touch.pressed ? 98% : 100%;
+            transform-scale-y: root-preview-touch.pressed ? 96% : 100%;
+            animate transform-scale-x { duration: root-preview-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+            animate transform-scale-y { duration: root-preview-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
 
-            TouchArea {
+            root-preview-touch := TouchArea {
                 width: 100%;
                 height: 100%;
                 clicked => {
@@ -231,7 +252,7 @@ export component ThreadPanel inherits Rectangle {
         // Reply list area
         Rectangle {
             vertical-stretch: 1;
-            background: Colors.background;
+            background: Materials.ambient;
 
             // Loading state
             if root.loading: VerticalLayout {

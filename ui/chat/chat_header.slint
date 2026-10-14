@@ -14,11 +14,22 @@ import { JarvisGlobal } from "../jarvis/jarvis_global.slint";
 import { MeshGlobal } from "../mesh/mesh_global.slint";
 import { ConversationKind } from "conversation_kind.slint";
 import { MembershipGlobal } from "membership_global.slint";
+import { Materials } from "../theme/materials.slint";
+import { Appearance } from "../theme/appearance.slint";
 
 export component ChatHeader inherits GlassSurface {
     material-level: 2;
+    material-tint: Materials.regular.mix(Materials.thick, root.scroll-compression);
     elevation: 3;
     border-radius: self.height / 2;
+    property <float> scroll-compression: root.backdrop-paused ? 1 : 0;
+    animate scroll-compression { duration: Materials.motion-standard; easing: Materials.settle; }
+    property <int> typing-phase: 0;
+    Timer {
+        interval: 180ms;
+        running: root.typing-indicator != "" && !Appearance.reduce-motion;
+        triggered => { root.typing-phase = root.typing-phase == 2 ? 0 : root.typing-phase + 1; }
+    }
 
     // Properties from ChatHeaderData
     in property <string> channel-id: "";
@@ -169,7 +180,8 @@ export component ChatHeader inherits GlassSurface {
     // 52px is a 44px touch row plus 4px of air above and below; the old 56px was
     // that plus a spare row of nothing, repeated at the top of every
     // conversation.
-    height: root.header-height;
+    height: root.header-height - 4px * root.scroll-compression;
+    animate height { duration: Materials.motion-standard; easing: Materials.settle; }
     HorizontalLayout {
         // Constrain to the header width so the name elides instead of growing
         // the whole chat column past the screen (which clipped the composer's
@@ -307,17 +319,41 @@ export component ChatHeader inherits GlassSurface {
                         font-weight: Typography.semibold;
                         min-width: 0px;
                         overflow: elide;
+                        transform-origin: { x: 0px, y: self.height / 2 };
+                        transform-scale-x: 100% - 3% * root.scroll-compression;
+                        transform-scale-y: 100% - 3% * root.scroll-compression;
+                        animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.settle; }
+                        animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.settle; }
                     }
                     // Typing shares the title's bounded column, so long peer
                     // names yield to the call buttons instead of drawing over them.
-                    if root.typing-indicator != "" && !(JarvisGlobal.enabled && root.jarvis-thinking): Text {
-                        // The peer is already named above; preserve the status verb on narrow DMs.
-                        text: root.mobile && root.is-dm ? "Typing…" : root.typing-indicator;
-                        color: Colors.text-secondary;
-                        font-size: Typography.xs;
-                        font-italic: true;
+                    if root.typing-indicator != "" && !(JarvisGlobal.enabled && root.jarvis-thinking): HorizontalLayout {
+                        spacing: Spacing.xs;
                         min-width: 0px;
-                        overflow: elide;
+                        Text {
+                            text: root.mobile && root.is-dm ? "Typing" : root.typing-indicator;
+                            color: Colors.text-secondary;
+                            font-size: Typography.xs;
+                            font-italic: true;
+                            min-width: 0px;
+                            horizontal-stretch: 1;
+                            overflow: elide;
+                        }
+                        Rectangle {
+                            width: 21px;
+                            height: 12px;
+                            for dot in [0, 1, 2]: Rectangle {
+                                x: dot * 7px;
+                                y: Appearance.reduce-motion ? 5px : (dot == root.typing-phase ? 2px : 6px);
+                                width: 4px;
+                                height: 4px;
+                                border-radius: 2px;
+                                background: Colors.primary;
+                                opacity: Appearance.reduce-motion || dot == root.typing-phase ? 1 : 0.45;
+                                animate y { duration: Materials.motion-quick; easing: Materials.spring; }
+                                animate opacity { duration: Materials.motion-quick; easing: Materials.settle; }
+                            }
+                        }
                     }
                     // Secret chat (anon DM): device-bound and separate from
                     // the regular DM with the same person — say so under the

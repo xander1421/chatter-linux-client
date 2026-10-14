@@ -21,8 +21,21 @@ import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
+import { Materials } from "../theme/materials.slint";
+import { Appearance } from "../theme/appearance.slint";
 
 export component IdentityChangeBar inherits Rectangle {
+    property <bool> entered: false;
+    Timer {
+        interval: 16ms;
+        running: !root.entered;
+        triggered => { root.entered = true; }
+    }
+    transform-origin: { x: self.width / 2, y: 0px };
+    transform-scale-y: Appearance.reduce-motion || root.entered ? 100% : 88%;
+    opacity: Appearance.reduce-motion || root.entered ? 1 : 0;
+    animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
+    animate opacity { duration: Materials.motion-quick; easing: Materials.settle; }
     // Both strings are formatted by chatter-core.
     in property <string> title;
     in property <string> detail;
@@ -105,6 +118,10 @@ export component IdentityChangeBar inherits Rectangle {
                 background: accept-touch.has-hover
                     ? root.accent.with-alpha(0.28)
                     : root.accent.with-alpha(0.16);
+                transform-scale-x: accept-touch.pressed ? 96% : 100%;
+                transform-scale-y: accept-touch.pressed ? 94% : 100%;
+                animate transform-scale-x { duration: accept-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+                animate transform-scale-y { duration: accept-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
 
                 accept-label := Text {
                     // Deliberately not "OK" or "Continue": the user is pinning

@@ -12,8 +12,21 @@ import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
 import { MembershipGlobal } from "membership_global.slint";
+import { Materials } from "../theme/materials.slint";
+import { Appearance } from "../theme/appearance.slint";
 
 export component MembershipBar inherits Rectangle {
+    property <bool> entered: false;
+    Timer {
+        interval: 16ms;
+        running: !root.entered;
+        triggered => { root.entered = true; }
+    }
+    transform-origin: { x: self.width / 2, y: 0px };
+    transform-scale-y: Appearance.reduce-motion || root.entered ? 100% : 88%;
+    opacity: Appearance.reduce-motion || root.entered ? 1 : 0;
+    animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
+    animate opacity { duration: Materials.motion-quick; easing: Materials.settle; }
     in property <string> channel-id;
     property <bool> alert: MembershipGlobal.banner-severity == "alert";
     property <color> accent: root.alert ? Colors.error : Colors.warning;
@@ -65,13 +78,24 @@ export component MembershipBar inherits Rectangle {
                 accessible-label: MembershipGlobal.banner-title;
             }
 
-            if root.expanded: Text {
-                text: MembershipGlobal.banner-detail;
-                color: Colors.text-muted;
-                font-size: Typography.xs;
-                wrap: word-wrap;
-                accessible-role: text;
-                accessible-label: MembershipGlobal.banner-detail;
+            Rectangle {
+                width: 100%;
+                height: root.expanded ? detail-body.preferred-height : 0px;
+                clip: true;
+                background: transparent;
+                animate height { duration: Materials.motion-standard; easing: Materials.glide; }
+                detail-body := Text {
+                    width: 100%;
+                    visible: root.expanded || parent.height > 0px;
+                    text: MembershipGlobal.banner-detail;
+                    color: Colors.text-muted;
+                    font-size: Typography.xs;
+                    wrap: word-wrap;
+                    opacity: root.expanded ? 1 : 0;
+                    animate opacity { duration: Materials.motion-quick; easing: Materials.settle; }
+                    accessible-role: text;
+                    accessible-label: MembershipGlobal.banner-detail;
+                }
             }
 
             if root.expanded && MembershipGlobal.banner-can-acknowledge: HorizontalLayout {
@@ -81,6 +105,10 @@ export component MembershipBar inherits Rectangle {
                     height: Spacing.touch-target-min;
                     border-radius: Spacing.radius-sm;
                     background: resume-touch.has-hover ? root.accent.with-alpha(0.28) : root.accent.with-alpha(0.16);
+                    transform-scale-x: resume-touch.pressed ? 96% : 100%;
+                    transform-scale-y: resume-touch.pressed ? 94% : 100%;
+                    animate transform-scale-x { duration: resume-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+                    animate transform-scale-y { duration: resume-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
 
                     resume-label := Text {
                         text: "Resume sending";
@@ -110,6 +138,10 @@ export component MembershipBar inherits Rectangle {
                 height: Spacing.touch-target-min;
                 border-radius: Spacing.radius-sm;
                 background: details-touch.has-hover ? root.accent.with-alpha(0.28) : root.accent.with-alpha(0.16);
+                transform-scale-x: details-touch.pressed ? 96% : 100%;
+                transform-scale-y: details-touch.pressed ? 94% : 100%;
+                animate transform-scale-x { duration: details-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+                animate transform-scale-y { duration: details-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
 
                 details-label := Text {
                     text: root.expanded ? "Hide" : "Details";

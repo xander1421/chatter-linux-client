@@ -23,6 +23,20 @@ export component MentionAutocomplete inherits GlassSurface {
 
     // Popup visibility
     in property <bool> show: false;
+    property <bool> entered: false;
+    changed show => { if (!root.show) { root.entered = false; } }
+    Timer {
+        interval: 16ms;
+        running: root.show && !root.entered;
+        triggered => { root.entered = true; }
+    }
+    property <float> reveal: root.show && (Appearance.reduce-motion || root.entered) ? 1 : 0;
+    animate reveal { duration: Materials.motion-standard; easing: Materials.spring; }
+    transform-origin: { x: 32px, y: self.height };
+    transform-scale-x: 78% + 22% * root.reveal;
+    transform-scale-y: 72% + 28% * root.reveal;
+    opacity: root.show ? 1 : 0;
+    animate opacity { duration: Materials.motion-quick; easing: Materials.settle; }
 
     // Suggestions from Rust (max 8 shown)
     in property <[MentionSuggestion]> suggestions: [];
@@ -35,18 +49,18 @@ export component MentionAutocomplete inherits GlassSurface {
     callback close();
 
     // Only render when visible
-    visible: root.show;
-    opacity: root.show ? 1 : 0;
+    visible: root.show || self.opacity > 0;
 
     // Compact popup - responsive width, height based on suggestions
     in property <length> max-popup-width: 240px;
     width: root.max-popup-width;
-    height: Math.min(suggestions.length, 8) * Spacing.button-height * Appearance.text-grow + Spacing.sm * 2;
+    height: max(40px, Math.min(suggestions.length, 8) * Spacing.button-height * Appearance.text-grow) + Spacing.sm * 2;
 
     // Block clicks from passing through
     TouchArea {
         width: 100%;
         height: 100%;
+        enabled: root.show;
     }
 
     // Suggestions list
@@ -58,6 +72,11 @@ export component MentionAutocomplete inherits GlassSurface {
             height: Spacing.button-height * Appearance.text-grow;
             border-radius: Spacing.radius-sm;
             background: index == root.selected-index ? Colors.tint-strong : (item-area.pressed ? Materials.pressed : item-area.has-hover ? Materials.hover : transparent);
+            animate background { duration: Materials.motion-quick; easing: Materials.settle; }
+            transform-scale-x: item-area.pressed ? 97% : 100%;
+            transform-scale-y: item-area.pressed ? 94% : 100%;
+            animate transform-scale-x { duration: item-area.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+            animate transform-scale-y { duration: item-area.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
 
             HorizontalLayout {
                 padding-left: Spacing.sm;
@@ -155,6 +174,7 @@ export component MentionAutocomplete inherits GlassSurface {
             item-area := TouchArea {
                 width: 100%;
                 height: 100%;
+                enabled: root.show;
                 clicked => {
                     // Build display text based on type
                     if suggestion.mention-type == "channel" {

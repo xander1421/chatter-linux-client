@@ -1,5 +1,6 @@
 import { GlassSurface } from "../components/glass_surface.slint";
 import { Materials } from "../theme/materials.slint";
+import { Appearance } from "../theme/appearance.slint";
 // The chat header's ⋯ menu: Video call, Conversation settings and, on a
 // regular DM, Start secret chat (owner,
 // 2026-10-05: video call moved out of the header row into this menu, voice
@@ -31,23 +32,35 @@ export component ChatHeaderMenu inherits Rectangle {
     // Logical close is immediate; the card settles back and the scrim fades
     // before the host unmounts it. Nothing is a live target meanwhile.
     in property <bool> show: true;
+    property <bool> entered: false;
+    changed show => { if (!root.show) { root.entered = false; } }
+    Timer {
+        interval: 16ms;
+        running: root.show && !root.entered;
+        triggered => { root.entered = true; }
+    }
     opacity: root.show ? 1 : 0;
-    animate opacity { duration: Materials.menu-duration; easing: ease-out; }
+    animate opacity { duration: Materials.menu-duration; easing: Materials.glide; }
     visible: root.show || self.opacity > 0;
     // The one scrim, like every other modal surface.
     background: Materials.scrim;
     // Taps outside the card close it and must not reach the chat under it.
     TouchArea { enabled: root.show; clicked => { root.close(); } }
 
-    GlassSurface {
-        enter-distance: 6px;
-        shown: root.show;
+    menu-card := GlassSurface {
+        property <float> card-progress: root.show && (Appearance.reduce-motion || root.entered) ? 1 : 0;
+        animate card-progress { duration: Materials.motion-standard; easing: Materials.spring; }
+        transform-origin: { x: self.width - 20px, y: 0px };
+        transform-scale-x: 74% + 26% * self.card-progress;
+        transform-scale-y: 68% + 32% * self.card-progress;
+        opacity: root.show ? 1 : 0;
+        animate opacity { duration: Materials.motion-quick; easing: Materials.settle; }
 
         material-level: 3;
         elevation: 4;
 
         x: root.card-x;
-        y: (root.card-y) + self.entrance-offset;
+        y: root.card-y - 8px * (1 - self.card-progress);
         width: root.card-width;
         height: root.card-height;
         border-radius: Spacing.radius-xl;
