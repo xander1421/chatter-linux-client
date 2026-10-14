@@ -108,6 +108,7 @@ export component MessageComposer inherits GlassSurface {
     border-color: Materials.glass-edge;
 
     in property <bool> collapsed: false;
+    in property <bool> keyboard-open: false;
     visible: !root.collapsed;
     clip: VoiceRecording.active;
     in property <bool> picker-open: false;
@@ -171,6 +172,12 @@ export component MessageComposer inherits GlassSurface {
     // InputMethodRequest::Enable through the same path as tapping TextInput.
     public function focus-reply-input() {
         if !root.collapsed {
+            // Android Back can hide the IME while the TextInput keeps focus.
+            // A repeated focus() then sends no Enable request, so cycle focus
+            // only for that hidden-keyboard case.
+            if root.mobile && !root.keyboard-open && text-input.has-focus {
+                text-input.clear-focus();
+            }
             text-input.focus();
         }
     }

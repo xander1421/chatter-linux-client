@@ -174,6 +174,7 @@ export component ChatLayout inherits Rectangle {
     // Reply properties
     in property <bool> composer-is-replying: false;
     in property <int> reply-focus-serial: 0;
+    in property <bool> keyboard-open: false;
     changed reply-focus-serial => { composer.focus-reply-input(); }
     in property <string> composer-reply-to-sender: "";
     in property <string> composer-reply-to-sender-name: "";
@@ -551,6 +552,7 @@ export component ChatLayout inherits Rectangle {
         // Hidden while selecting messages: the selection bar owns the screen
         // then, and a live composer invited typing into a mode that ignores it.
         composer := MessageComposer {
+            keyboard-open: root.keyboard-open;
             collapsed: root.composer-notice != "" || root.selection-mode;
             picker-open: root.emoji-picker-visible || root.gif-picker-visible;
             width: 100%;
