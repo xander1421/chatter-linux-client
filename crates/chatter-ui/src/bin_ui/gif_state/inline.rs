@@ -2,7 +2,7 @@
 //!
 //! Manages animated GIF playback for message thumbnails in the chat view.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
 use std::time::Duration;
 
@@ -20,6 +20,9 @@ thread_local! {
     static INLINE_TIMER: RefCell<Option<Timer>> = const { RefCell::new(None) };
     /// Window weak reference for inline GIF updates.
     pub(super) static INLINE_WINDOW: RefCell<Option<Weak<MainWindow>>> = const { RefCell::new(None) };
+    /// Last message-list offset seen by the GIF timer. A changed offset means
+    /// the user is dragging or a fling is moving rows this frame.
+    static INLINE_LAST_SCROLL_POSITION: Cell<Option<f32>> = const { Cell::new(None) };
 }
 
 /// State for an inline animated GIF in message list.
@@ -255,6 +258,18 @@ fn tick_inline_gifs(elapsed_ms: u64) {
     else {
         return;
     };
+    // Replacing a GIF's attachment row schedules another full render while
+    // the message list is already re-laying out under the finger. Hold the
+    // current frame whenever its offset moves; playback resumes at rest.
+    let position = w.get_message_scroll_position() as f32;
+    let moved = INLINE_LAST_SCROLL_POSITION.with(|last| {
+        let moved = last.get().is_some_and(|previous| previous != position);
+        last.set(Some(position));
+        moved
+    });
+    if moved {
+        return;
+    }
     let messages = w.get_messages();
     let Some(rows) = rows_to_animate(
         w.get_message_first_visible_row(),
