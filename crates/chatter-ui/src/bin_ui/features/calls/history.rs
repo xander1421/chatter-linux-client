@@ -90,26 +90,11 @@ struct PreparedHistoryPage {
     avatars: Vec<Option<Pixels>>,
 }
 
-fn prepare_page(client: &ChatterClient, mut page: CallHistoryPage) -> PreparedHistoryPage {
-    use chatter_core::domain::message::ConversationType;
+fn prepare_page(_client: &ChatterClient, page: CallHistoryPage) -> PreparedHistoryPage {
     let avatars = page
         .rows
-        .iter_mut()
+        .iter()
         .map(|row| {
-            // A channel-backed group uses its configured icon, never an owner's
-            // profile. Anonymous groups have no stored group-icon field; they must
-            // not look up a channel with the same UUID or borrow a member avatar.
-            if ConversationType::from_str_value(&row.conversation_type).ok()
-                == Some(ConversationType::Channel)
-            {
-                row.avatar_bytes = row
-                    .conversation_id
-                    .parse()
-                    .ok()
-                    .and_then(|id| client.get_channel_local(&id))
-                    .filter(|channel| channel.conversation_type() == ConversationType::Channel)
-                    .and_then(|channel| channel.icon);
-            }
             row.avatar_bytes.as_deref().and_then(decode_cache::avatar)
         })
         .collect();
