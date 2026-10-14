@@ -33,20 +33,34 @@ export struct PendingAttachmentData {
     thumbnail: image,
 }
 
-// Tint-only bridge: Backdrop samples rectangular bounds, so the neck borrows
-// the glass tint while the two adjoining GlassSurfaces keep the optical blur.
+// A filled meniscus overlaps both bodies. Its broad foot and curved waist
+// stay visibly attached to the field without turning the droplets into a bar.
 component LiquidNeck inherits Path {
     fill: Materials.regular;
-    stroke: Appearance.glass-effects ? Materials.glass-edge : transparent;
-    stroke-width: 1phx;
     viewbox-width: 100;
     viewbox-height: 100;
-    MoveTo { x: 16; y: 0; }
-    CubicTo { control-1-x: 16; control-1-y: 36; control-2-x: 39; control-2-y: 29; x: 42; y: 50; }
-    CubicTo { control-1-x: 42; control-1-y: 72; control-2-x: 25; control-2-y: 75; x: 24; y: 100; }
-    LineTo { x: 76; y: 100; }
-    CubicTo { control-1-x: 75; control-1-y: 75; control-2-x: 58; control-2-y: 72; x: 58; y: 50; }
-    CubicTo { control-1-x: 61; control-1-y: 29; control-2-x: 84; control-2-y: 36; x: 84; y: 0; }
+    // Contain preserves a square viewbox and collapses a short neck to a thread.
+    fit: fill;
+    MoveTo { x: 20; y: 0; }
+    CubicTo { control-1-x: 20; control-1-y: 34; control-2-x: 32; control-2-y: 34; x: 32; y: 52; }
+    CubicTo { control-1-x: 32; control-1-y: 70; control-2-x: 15; control-2-y: 78; x: 15; y: 100; }
+    LineTo { x: 85; y: 100; }
+    CubicTo { control-1-x: 85; control-1-y: 78; control-2-x: 68; control-2-y: 70; x: 68; y: 52; }
+    CubicTo { control-1-x: 68; control-1-y: 34; control-2-x: 80; control-2-y: 34; x: 80; y: 0; }
+    Close { }
+}
+
+// A shallow crest hides the field's straight rim where each neck lands.
+// Its height follows spring speed, making a short ripple during merge-back.
+component LiquidRim inherits Path {
+    fill: Materials.regular;
+    viewbox-width: 100;
+    viewbox-height: 100;
+    // Contain preserves a square viewbox and collapses a short neck to a thread.
+    fit: fill;
+    MoveTo { x: 0; y: 100; }
+    CubicTo { control-1-x: 28; control-1-y: 100; control-2-x: 27; control-2-y: 15; x: 50; y: 15; }
+    CubicTo { control-1-x: 73; control-1-y: 15; control-2-x: 72; control-2-y: 100; x: 100; y: 100; }
     Close { }
 }
 
@@ -174,12 +188,39 @@ export component MessageComposer inherits GlassSurface {
     // participates without being committed; attachments also raise the controls.
     // A reply raises them too: its preview lives in the raised toolbar gap.
     property <bool> raised-actions: text != "" || text-input.preedit-text != "" || root.has-attachments || root.is-replying;
-    // One retargetable property drives the layout, surfaces, and neck. Slint's
-    // animated property keeps its current value when typing reverses mid-rise.
-    property <float> lift-progress: raised-actions ? 1 : 0;
-    animate lift-progress {
-        duration: Appearance.reduce-motion ? 0ms : 460ms;
-        easing: Appearance.reduce-motion ? linear : cubic-bezier(0.22, 1.10, 0.36, 1);
+    // A fixed-step damped spring keeps velocity when the target reverses.
+    // It runs only during motion; no path strings or heap objects are built per frame.
+    property <float> lift-progress: 0;
+    property <float> lift-velocity: 0;
+    property <float> lift-geometry: max(0, root.lift-progress);
+    property <float> impact-squash: max(0, root.lift-progress - 1);
+    changed raised-actions => {
+        if Appearance.reduce-motion {
+            root.lift-progress = root.raised-actions ? 1 : 0;
+            root.lift-velocity = 0;
+        } else {
+            liquid-tick.running = true;
+        }
+    }
+    liquid-tick := Timer {
+        interval: 16ms;
+        running: false;
+        triggered => {
+            let target = root.raised-actions ? 1 : 0;
+            if Appearance.reduce-motion {
+                root.lift-progress = target;
+                root.lift-velocity = 0;
+                self.running = false;
+                return;
+            }
+            root.lift-velocity = (root.lift-velocity + (target - root.lift-progress) * 0.080) * 0.76;
+            root.lift-progress += root.lift-velocity;
+            if abs(root.lift-velocity) < 0.0005 && abs(target - root.lift-progress) < 0.001 {
+                root.lift-progress = target;
+                root.lift-velocity = 0;
+                self.running = false;
+            }
+        }
     }
     property <float> surface-opacity: raised-actions ? 1 : 0;
     animate surface-opacity { duration: Appearance.reduce-motion ? 90ms : 0ms; easing: linear; }
@@ -208,7 +249,7 @@ export component MessageComposer inherits GlassSurface {
     // reply chip beside them, so large text cannot leave the chip taller
     // than its neighbours.
     property <length> top-shell-height: is-replying ? reply-row-height : action-shell-height;
-    property <length> raised-toolbar-height: lift-progress
+    property <length> raised-toolbar-height: lift-geometry
         * ((is-replying ? reply-row-height + Spacing.xs : 0px)
             + (has-attachments || !is-replying ? action-shell-height + Spacing.xs : 0px));
     property <length> lower-terminal-width: show-terminal-action ? Spacing.touch-target-min + Spacing.xs : 0px;
@@ -653,7 +694,7 @@ export component MessageComposer inherits GlassSurface {
             width: 100%;
             height: root.content-height + root.raised-toolbar-height + root.row-padding * 2;
             property <length> action-y: root.row-padding + (root.content-height - Spacing.touch-target-min) / 2
-                + root.lift-progress * ((root.top-shell-height - Spacing.touch-target-min) / 2
+                + root.lift-geometry * ((root.top-shell-height - Spacing.touch-target-min) / 2
                     - root.row-padding - (root.content-height - Spacing.touch-target-min) / 2);
             property <length> lower-action-y: root.row-padding + root.raised-toolbar-height + root.content-height - Spacing.touch-target-min;
 
@@ -663,9 +704,18 @@ export component MessageComposer inherits GlassSurface {
                 y: 0px;
                 visible: Appearance.reduce-motion ? root.surface-opacity > 0.001 : root.lift-progress > 0.001;
                 opacity: Appearance.reduce-motion ? root.surface-opacity : min(1, root.lift-progress * 2);
-                transform-scale-x: 100% - 5% * root.content-pressure;
+                transform-scale-x: 100% - 5% * root.content-pressure
+                    - min(14%, abs(root.lift-velocity) * 170%)
+                    + min(18%, root.impact-squash * 130%);
+                transform-scale-y: 100% + min(20%, abs(root.lift-velocity) * 230%)
+                    - min(16%, root.impact-squash * 115%);
                 width: Spacing.touch-target-min + root.row-padding * 2;
                 height: root.top-shell-height;
+                material-enabled: false;
+                background: Materials.regular;
+                border-width: Materials.glass-edge-width;
+                border-color: Materials.glass-edge;
+                border-radius: Spacing.radius-chrome;
                 material-level: root.material-level;
                 elevation: root.elevation;
                 backdrop-paused: root.backdrop-paused;
@@ -675,9 +725,18 @@ export component MessageComposer inherits GlassSurface {
                 x: parent.width - self.width;
                 visible: Appearance.reduce-motion ? root.surface-opacity > 0.001 : root.lift-progress > 0.001;
                 opacity: Appearance.reduce-motion ? root.surface-opacity : min(1, root.lift-progress * 2);
-                transform-scale-x: 100% - 5% * root.content-pressure;
+                transform-scale-x: 100% - 5% * root.content-pressure
+                    - min(14%, abs(root.lift-velocity) * 170%)
+                    + min(18%, root.impact-squash * 130%);
+                transform-scale-y: 100% + min(20%, abs(root.lift-velocity) * 230%)
+                    - min(16%, root.impact-squash * 115%);
                 width: Spacing.touch-target-min + root.row-padding * 2;
                 height: root.top-shell-height;
+                material-enabled: false;
+                background: Materials.regular;
+                border-width: Materials.glass-edge-width;
+                border-color: Materials.glass-edge;
+                border-radius: Spacing.radius-chrome;
                 material-level: root.material-level;
                 elevation: root.elevation;
                 backdrop-paused: root.backdrop-paused;
@@ -688,34 +747,54 @@ export component MessageComposer inherits GlassSurface {
                 y: root.raised-toolbar-height;
                 width: parent.width;
                 height: root.content-height + root.row-padding * 2;
+                material-enabled: false;
+                background: Materials.regular;
+                border-width: Materials.glass-edge-width;
+                border-color: Materials.glass-edge;
+                border-radius: Spacing.radius-chrome;
                 material-level: root.material-level;
                 elevation: root.elevation;
                 backdrop-paused: root.backdrop-paused;
+            }
+
+            LiquidRim {
+                x: left-action-surface.width / 2 - self.width / 2;
+                y: field-surface.y - self.height + 2px;
+                width: 72px;
+                height: 8px + min(7px, abs(root.lift-velocity) * 90px);
+                visible: !Appearance.reduce-motion && root.lift-progress > 0.001;
+            }
+            if root.show-attachment-action: LiquidRim {
+                x: parent.width - root.action-shell-height / 2 - self.width / 2;
+                y: field-surface.y - self.height + 2px;
+                width: 72px;
+                height: 8px + min(7px, abs(root.lift-velocity) * 90px);
+                visible: !Appearance.reduce-motion && root.lift-progress > 0.001;
             }
 
             // The waist remains visible in the four-pixel separation. It
             // stretches while the field pulls away, then settles to a meniscus.
             left-neck := LiquidNeck {
                 x: (left-action-surface.width - self.width) / 2;
-                y: root.top-shell-height - 2px;
-                width: min(left-action-surface.width, 44px);
-                height: max(0px, field-surface.y - self.y + 2px);
+                y: root.top-shell-height - 4px;
+                width: min(left-action-surface.width, 50px);
+                height: max(0px, field-surface.y - self.y + 5px);
                 visible: !Appearance.reduce-motion && root.lift-progress > 0.001 && self.height > 1px;
                 opacity: min(1, root.lift-progress * 2);
             }
             if root.show-attachment-action: right-neck := LiquidNeck {
                 x: parent.width - root.action-shell-height + (root.action-shell-height - self.width) / 2;
-                y: root.top-shell-height - 2px;
-                width: min(root.action-shell-height, 44px);
-                height: max(0px, field-surface.y - self.y + 2px);
+                y: root.top-shell-height - 4px;
+                width: min(root.action-shell-height, 50px);
+                height: max(0px, field-surface.y - self.y + 5px);
                 visible: !Appearance.reduce-motion && root.lift-progress > 0.001 && self.height > 1px;
                 opacity: min(1, root.lift-progress * 2);
             }
             if root.is-replying: reply-neck := LiquidNeck {
                 x: (parent.width - self.width) / 2;
                 y: (1 - root.reply-reveal) * root.raised-toolbar-height + root.reply-row-height - 2px;
-                width: 44px;
-                height: max(0px, field-surface.y - self.y + 2px);
+                width: 50px;
+                height: max(0px, field-surface.y - self.y + 5px);
                 visible: !Appearance.reduce-motion && self.height > 1px;
                 opacity: min(1, max(0, root.reply-reveal));
             }
@@ -724,8 +803,8 @@ export component MessageComposer inherits GlassSurface {
                 y: (root.is-replying ? root.reply-row-height + Spacing.xs : 0px)
                     + (1 - root.strip-reveal) * root.action-shell-height
                     + root.action-shell-height - 2px;
-                width: 44px;
-                height: max(0px, field-surface.y - self.y + 2px);
+                width: 50px;
+                height: max(0px, field-surface.y - self.y + 5px);
                 visible: !Appearance.reduce-motion && self.height > 1px;
                 opacity: min(1, max(0, root.strip-reveal));
             }
@@ -739,6 +818,10 @@ export component MessageComposer inherits GlassSurface {
                 opacity: min(1, max(0, root.reply-reveal));
                 border-radius: Spacing.radius-chrome;
                 clip: true;
+                material-enabled: false;
+                background: Materials.regular;
+                border-width: Materials.glass-edge-width;
+                border-color: Materials.glass-edge;
                 material-level: root.material-level;
                 elevation: root.elevation;
                 backdrop-paused: root.backdrop-paused;
@@ -841,6 +924,10 @@ export component MessageComposer inherits GlassSurface {
                 // cards are wells inside it, not a second card style.
                 border-radius: Spacing.radius-chrome;
                 clip: true;
+                material-enabled: false;
+                background: Materials.regular;
+                border-width: Materials.glass-edge-width;
+                border-color: Materials.glass-edge;
                 material-level: root.material-level;
                 elevation: root.elevation;
                 backdrop-paused: root.backdrop-paused;
@@ -1069,11 +1156,11 @@ export component MessageComposer inherits GlassSurface {
 
             // One native input below the toolbar beside Send; compact inline when empty.
             Rectangle {
-                x: root.row-padding + (1 - root.lift-progress) * (Spacing.touch-target-min + Spacing.xs);
+                x: root.row-padding + (1 - root.lift-geometry) * (Spacing.touch-target-min + Spacing.xs);
                 y: root.row-padding + root.raised-toolbar-height;
                 width: parent.width - root.row-padding * 2
-                    - (root.lift-progress * root.lower-terminal-width
-                        + (1 - root.lift-progress) * (Spacing.touch-target-min + Spacing.xs + root.trailing-actions-width));
+                    - (root.lift-geometry * root.lower-terminal-width
+                        + (1 - root.lift-geometry) * (Spacing.touch-target-min + Spacing.xs + root.trailing-actions-width));
                 height: root.content-height;
                 background: Colors.inset;
                 // Concentric with the shell: radius-chrome − chrome-inset.
@@ -1196,7 +1283,7 @@ export component MessageComposer inherits GlassSurface {
             // an edit changes text only.
             if root.show-attachment-action: Rectangle {
                 x: parent.width - root.row-padding - Spacing.touch-target-min
-                    - (1 - root.lift-progress) * (root.show-terminal-action ? Spacing.touch-target-min + Spacing.xs : 0px);
+                    - (1 - root.lift-geometry) * (root.show-terminal-action ? Spacing.touch-target-min + Spacing.xs : 0px);
                 y: parent.action-y;
                 width: Spacing.touch-target-min;
                 height: Spacing.touch-target-min;
