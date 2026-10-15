@@ -343,6 +343,8 @@ impl MessageService {
         if let Some(stored) = self.message_repo.get(&message.id)? {
             message.delivery_status = stored.delivery_status;
         }
+        self.sync_channel_receipt_targets(*channel_id, message.sent_at, auth_client)
+            .await;
         tracing::info!(
             channel_id = %channel_id,
             message_id = %message.id,

@@ -275,7 +275,8 @@ impl MessageReceiptRepository {
                     ON CONFLICT(conversation_id, conversation_type, author_id, sent_at, recipient_id, device_id)
                     DO UPDATE SET read_at=COALESCE(pending_message_receipts.read_at, excluded.read_at)",
                     params![conversation.to_string(), kind.as_str(), author.to_string(), timestamp, recipient.to_string(), device.0, received_at, read,
-                        kind == ConversationType::ServerDm && conversation == ChannelId::from(recipient)])?;
+                        (kind == ConversationType::ServerDm && conversation == ChannelId::from(recipient))
+                            || kind == ConversationType::Channel])?;
                 continue;
             }
             let id: Option<String> = tx.query_row(

@@ -5,6 +5,7 @@ use crate::domain::message::ConversationType;
 use crate::inbox::DomainEvent;
 use crate::storage::repositories::message_receipt_repo::{DeviceReceipt, MessageReceiptRepository};
 use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
+use std::collections::HashMap;
 
 /// Preserve acknowledged progress when queued UI events arrive out of order.
 pub fn advance_delivery_status<'a>(current: &'a str, incoming: &'a str) -> &'a str {
@@ -30,6 +31,52 @@ pub fn display_delivery_status<'a>(status: &'a str, failure_reason: Option<&str>
 }
 
 impl MessageService {
+    /// A channel receipt belongs to each message's author and all of that
+    /// author's devices, not every channel member. The sealed content retains
+    /// channel scope; the server only sees the same per-device deposit pattern
+    /// as a DM receipt.
+    pub async fn send_channel_receipt(
+        &self,
+        channel: ChannelId,
+        timestamps: &[u64],
+        read: bool,
+    ) -> Result<(), MessageError> {
+        use prost::Message as _;
+        let me = self.current_user_id()?;
+        let mut by_author: HashMap<UserId, Vec<u64>> = HashMap::new();
+        for &timestamp in timestamps {
+            if let Some(message) = self.message_repo.get_by_conversation_timestamp(&channel, timestamp)? {
+                if message.conversation_type == ConversationType::Channel {
+                    if let Some(author) = message.sender_id.filter(|author| *author != me) {
+                        by_author.entry(author).or_default().push(timestamp);
+                    }
+                }
+            }
+        }
+        let mut auth = self.auth_client();
+        let mut client = self.message_client();
+        for (author, stamps) in by_author {
+            let mut content = if read {
+                crate::services::gateway::build_read_receipt_content_with_channel(stamps, Some(&channel.to_string()))
+            } else {
+                crate::services::gateway::build_delivery_receipt_content_with_channel(stamps, Some(&channel.to_string()))
+            };
+            Self::pad_content_to_bucket(&mut content);
+            let outcome = self.deposit_sealed_to_all_devices(
+                &mut auth,
+                &mut client,
+                &author.to_string(),
+                &content.encode_to_vec(),
+                None,
+            ).await;
+            if outcome.delivered == 0 {
+                return Err(outcome.error.unwrap_or_else(|| MessageError::EncryptionFailed("channel receipt reached no author device".into())));
+            }
+            self.record_pairwise_send(&content, &outcome.deposits.iter().map(|&(device, server_ts)| (author, device, server_ts)).collect::<Vec<_>>(), None);
+        }
+        Ok(())
+    }
+
     /// Snapshot the actual peer devices targeted by a send, before transport.
     /// Exclude our linked devices: their read state travels via ReadSync.
     pub fn snapshot_receipt_targets(
@@ -164,14 +211,26 @@ impl MessageService {
         let Some(Content::SyncSent(sync)) = content.content.as_mut() else {
             return Ok(());
         };
-        let peer: UserId = sync
-            .destination_user_id
-            .parse()
-            .map_err(|_| MessageError::InvalidContent("invalid sync destination".into()))?;
+        let (conversation, kind) = if let Some(channel) = sync
+            .message
+            .as_ref()
+            .filter(|message| !message.channel_id.is_empty())
+        {
+            if !sync.destination_user_id.is_empty() {
+                return Err(MessageError::InvalidContent("channel sync has DM destination".into()));
+            }
+            (channel.channel_id.parse().map_err(|_| MessageError::InvalidContent("invalid sync channel".into()))?, ConversationType::Channel)
+        } else {
+            let peer: UserId = sync
+                .destination_user_id
+                .parse()
+                .map_err(|_| MessageError::InvalidContent("invalid sync destination".into()))?;
+            (ChannelId::from(peer), ConversationType::ServerDm)
+        };
         sync.receipt_targets = MessageReceiptRepository::new(self.database.clone())
             .targets_for_send(
-                ChannelId::from(peer),
-                ConversationType::ServerDm,
+                conversation,
+                kind,
                 self.current_user_id()?,
                 sync.timestamp,
             )?
@@ -182,6 +241,33 @@ impl MessageService {
             })
             .collect();
         Ok(())
+    }
+
+    /// Send the channel's original receipt target set only to our linked devices.
+    /// The channel message itself arrives through the sender-key stream; this
+    /// transcript supplies the send-time targets that stream cannot carry
+    /// without revealing them to every channel member.
+    pub(super) async fn sync_channel_receipt_targets(
+        &self,
+        channel: ChannelId,
+        sent_at: u64,
+        auth: &mut crate::network::grpc::auth_client::AuthClient,
+    ) {
+        use crate::proto::content_v1::{Content, DataMessage, SyncSent, content};
+        let sync = Content {
+            content: Some(content::Content::SyncSent(SyncSent {
+                destination_user_id: String::new(),
+                timestamp: sent_at,
+                message: Some(DataMessage {
+                    channel_id: channel.to_string(),
+                    timestamp: sent_at,
+                    ..Default::default()
+                }),
+                receipt_targets: Vec::new(),
+            })),
+            ..Default::default()
+        };
+        self.sync_to_own_devices(auth, sync).await;
     }
 
     pub fn message_receipts(

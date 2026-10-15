@@ -305,6 +305,12 @@ pub enum RouteResult {
 pub enum SealedSenderResult {
     /// Regular message stored successfully (no details needed for UI).
     MessageStored,
+    /// An own-device channel target transcript may have applied receipts that
+    /// arrived before it. Refresh the outgoing bubble from the stored aggregate.
+    ChannelReceiptTargetsSynced {
+        channel_id: ChannelId,
+        timestamp: u64,
+    },
     /// Data message received and stored — includes details for UI notification.
     DataMessageReceived {
         sender_id: UserId,

@@ -481,6 +481,40 @@ impl MessageGateway {
             )));
         }
 
+        // A channel send is already delivered to linked devices by the
+        // sender-key stream. Its own-device SyncSent carries only the original
+        // receipt targets; never re-file it as a DM or display a second bubble.
+        if let Some(message) = sync.message.as_ref().filter(|message| !message.channel_id.is_empty()) {
+            if !sync.destination_user_id.is_empty() || message.timestamp != sync.timestamp || sync.timestamp == 0 {
+                return Err(ServiceError::Validation("invalid channel receipt transcript".into()));
+            }
+            let channel: ChannelId = message.channel_id.parse().map_err(|_| {
+                ServiceError::Validation("invalid channel receipt transcript scope".into())
+            })?;
+            let targets = sync.receipt_targets.iter().map(|target| {
+                let user: UserId = target.user_id.parse().map_err(|_| {
+                    ServiceError::Validation("invalid channel receipt target".into())
+                })?;
+                if user == current_user || target.device_id == 0 || target.device_id > 127 {
+                    return Err(ServiceError::Validation("invalid channel receipt target".into()));
+                }
+                Ok((user, crate::domain::ids::DeviceId(target.device_id)))
+            }).collect::<Result<Vec<_>, ServiceError>>()?;
+            crate::storage::repositories::message_receipt_repo::MessageReceiptRepository::new(
+                self.settings_repo.database().clone(),
+            ).snapshot_for_send(
+                channel,
+                ConversationType::Channel,
+                current_user,
+                sync.timestamp,
+                &targets,
+            )?;
+            return Ok(SealedSenderResult::ChannelReceiptTargetsSynced {
+                channel_id: channel,
+                timestamp: sync.timestamp,
+            });
+        }
+
         let destination: UserId = sync.destination_user_id.parse().map_err(|e| {
             ServiceError::Validation(format!("SyncSent has invalid destination_user_id: {e}"))
         })?;

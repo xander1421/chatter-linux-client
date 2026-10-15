@@ -1224,6 +1224,7 @@ async fn try_parse_bootstrap_response(
                     );
                     None
                 }
+                crate::services::gateway::SealedSenderResult::ChannelReceiptTargetsSynced { .. } => None,
                 crate::services::gateway::SealedSenderResult::SenderKeyRequested { .. } => {
                     tracing::debug!(
                         peer_id = %peer_id,

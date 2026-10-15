@@ -1067,6 +1067,13 @@ async fn process_identified_sender_message(
             });
             stats.write().messages_processed += 1;
         }
+        Ok(SealedSenderResult::ChannelReceiptTargetsSynced { channel_id, timestamp }) => {
+            let _ = event_tx.send(InboxEvent::ChannelReceiptTargetsSynced { channel_id, timestamp });
+            let _ = event_tx.send(InboxEvent::MessageProcessed {
+                message_id: msg.message_guid.clone(),
+            });
+            stats.write().messages_processed += 1;
+        }
         Ok(SealedSenderResult::MessageStored) => {
             tracing::info!(
                 message_id = %msg.message_guid,
@@ -1886,6 +1893,13 @@ async fn process_sealed_sender_message(
         // Worth knowing about the orderer it feeds, though: `get_ready` and
         // `flush_stale` have no production callers, so anything it buffers is
         // never drained. That leaks UI events (and memory), not messages.
+        Ok(SealedSenderResult::ChannelReceiptTargetsSynced { channel_id, timestamp }) => {
+            let _ = event_tx.send(InboxEvent::ChannelReceiptTargetsSynced { channel_id, timestamp });
+            let _ = event_tx.send(InboxEvent::MessageProcessed {
+                message_id: msg.message_guid.clone(),
+            });
+            stats.write().messages_processed += 1;
+        }
         Ok(SealedSenderResult::MessageStored) => {
             let envelope_type = EnvelopeType::SealedSender;
 

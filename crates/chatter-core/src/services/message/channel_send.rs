@@ -751,6 +751,9 @@ impl MessageService {
                 if let Some(stored) = self.message_repo.get(&sent.id)? {
                     sent.delivery_status = stored.delivery_status;
                 }
+                let mut auth = self.auth_client();
+                self.sync_channel_receipt_targets(row.conversation_id, sent.sent_at, &mut auth)
+                    .await;
                 Ok(sent)
             }
             Err(error) => {
