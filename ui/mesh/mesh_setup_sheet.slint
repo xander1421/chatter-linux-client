@@ -47,7 +47,8 @@ export component MeshSetupSheet inherits Rectangle {
         title: "Mesh";
         modal-width: 540px;
         max-modal-height: 760px;
-        full-screen: root.touch;
+        // A sheet, not a full-screen page: fields in this full-screen page
+        // never took focus on Android (cause not traced; sheets work).
         fill-height: true;
         close => { root.close(); }
         Flickable {
