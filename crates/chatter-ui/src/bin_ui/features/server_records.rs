@@ -1,5 +1,5 @@
 //! Thin presentation glue for core-owned server record pages.
-use crate::{MainWindow, ServerRecordRow, ServerRecordsGlobal, run_ui};
+use crate::{MainWindow, NotificationViewRow, ServerRecordRow, ServerRecordsGlobal, run_ui};
 use chatter_core::client::ChatterClient;
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
 use std::sync::{
@@ -20,6 +20,7 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
                 g.set_kind(kind);
                 g.set_channel(channel);
                 g.set_rows(ModelRc::default());
+                g.set_notifications(ModelRc::default());
                 g.set_next("".into());
                 g.set_loading(false);
                 g.invoke_load(false);
@@ -91,6 +92,17 @@ fn request(
             g.set_loading(false);
             match result {
                 Ok(page) => {
+                    let mut notifications: Vec<NotificationViewRow> = if more {
+                        g.get_notifications().iter().collect()
+                    } else { vec![] };
+                    notifications.extend(page.notifications.into_iter().map(|r| NotificationViewRow {
+                        id: r.id.into(), title: r.title.into(), body: r.body.into(),
+                        kind: r.kind.into(), actor_id: r.actor_id.into(),
+                        channel_id: r.channel_id.into(), when: r.when.into(),
+                        avatar: r.avatar.as_deref().and_then(crate::bin_ui::converters::avatar_bytes_to_image).unwrap_or_default(),
+                        read: r.read, status: r.status.into(),
+                    }));
+                    g.set_notifications(ModelRc::new(VecModel::from(notifications)));
                     let mut rows: Vec<ServerRecordRow> = if more {
                         g.get_rows().iter().collect()
                     } else {

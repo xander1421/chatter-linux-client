@@ -2929,6 +2929,35 @@ export component MainWindow inherits Window {
             show: root.active-modal == "server-records";
             mobile-mode: root.compact-layout;
             close => { root.nav-pop(); }
+            open-notification(id, kind, target, status) => {
+                if id != "" { ServerRecordsGlobal.act(id, "Mark read"); }
+                if kind == "friend-request" && status == "Accepted" && target != "" {
+                    root.nav-pop();
+                    root.active-tab = "chats";
+                    root.mobile-show-chat = true;
+                    root.friends-start-dm(target);
+                } else if kind == "friend-request" {
+                    root.nav-pop();
+                    root.active-tab = "contacts";
+                    root.friends-modal-tab = "requests";
+                    root.friends-requests-sub-tab = "received";
+                } else if kind == "channel-invite" {
+                    root.nav-pop();
+                    root.active-tab = "contacts";
+                    root.friends-modal-tab = "requests";
+                    root.friends-requests-sub-tab = "channels";
+                } else if kind == "friend-accepted" && target != "" {
+                    root.nav-pop();
+                    root.active-tab = "chats";
+                    root.mobile-show-chat = true;
+                    root.friends-start-dm(target);
+                } else if (kind == "message" || kind == "mention" || kind == "reply" || kind == "reaction") && target != "" {
+                    root.nav-pop();
+                    root.active-tab = "chats";
+                    root.mobile-show-chat = true;
+                    root.channel-selected(target);
+                }
+            }
         }
 
         // Account menu — the "Profile" tab. A tab screen like Calls and Contacts:

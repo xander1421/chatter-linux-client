@@ -4,12 +4,15 @@ import { Colors } from "../theme/colors.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { ScrollView } from "std-widgets.slint";
+import { Avatar } from "../components/avatar.slint";
 
 export struct ServerRecordRow { id: string, title: string, body: string, primary: string, secondary: string }
+export struct NotificationViewRow { id: string, title: string, body: string, kind: string, actor-id: string, channel-id: string, avatar: image, when: string, read: bool, status: string }
 export global ServerRecordsGlobal {
     in-out property <string> kind;
     in-out property <string> channel;
     in-out property <[ServerRecordRow]> rows;
+    in-out property <[NotificationViewRow]> notifications;
     in-out property <string> next;
     in-out property <bool> loading;
     in-out property <string> error;
@@ -21,7 +24,13 @@ export global ServerRecordsGlobal {
 export component ServerRecordsScreen inherits Rectangle {
     in property <bool> mobile-mode;
     callback close();
+    callback open-notification(string, string, string, string);
     in property <bool> show: true;
+    Timer {
+        interval: 20s;
+        running: root.show && ServerRecordsGlobal.kind == "notifications";
+        triggered => { if !ServerRecordsGlobal.loading { ServerRecordsGlobal.load(false); } }
+    }
     Modal {
         show: root.show;
         title: ServerRecordsGlobal.kind == "notifications" ? "Notification inbox" : ServerRecordsGlobal.kind == "integrations" ? "Channel integrations" : "Channel call history";
@@ -34,7 +43,7 @@ export component ServerRecordsScreen inherits Rectangle {
             spacing: Spacing.md;
             HorizontalLayout {
                 spacing: Spacing.sm;
-                Button { text: "Refresh"; variant: "secondary"; disabled: ServerRecordsGlobal.loading; clicked => { ServerRecordsGlobal.load(false); } }
+                if ServerRecordsGlobal.kind != "notifications": Button { text: "Refresh"; variant: "secondary"; disabled: ServerRecordsGlobal.loading; clicked => { ServerRecordsGlobal.load(false); } }
                 if ServerRecordsGlobal.kind == "notifications": Button {
                     text: "Mark all read"; variant: "secondary"; disabled: ServerRecordsGlobal.loading;
                     clicked => { ServerRecordsGlobal.act("", "Mark all read"); }
@@ -52,10 +61,57 @@ export component ServerRecordsScreen inherits Rectangle {
                 text: ServerRecordsGlobal.error; wrap: word-wrap; color: Colors.error;
             }
             if ServerRecordsGlobal.loading: Text { text: "Loading…"; color: Colors.text-secondary; }
-            if !ServerRecordsGlobal.loading && ServerRecordsGlobal.error == "" && ServerRecordsGlobal.rows.length == 0: Text {
-                text: "No records yet"; color: Colors.text-secondary;
+            if !ServerRecordsGlobal.loading && ServerRecordsGlobal.error == "" && (ServerRecordsGlobal.kind == "notifications" ? ServerRecordsGlobal.notifications.length == 0 : ServerRecordsGlobal.rows.length == 0): Text {
+                text: ServerRecordsGlobal.kind == "notifications" ? "You're all caught up" : "No records yet"; color: Colors.text-secondary;
             }
-            list := ScrollView {
+            if ServerRecordsGlobal.kind == "notifications": inbox := ScrollView {
+                vertical-stretch: 1;
+                viewport-height: activity.preferred-height;
+                activity := VerticalLayout {
+                    alignment: start;
+                    spacing: 1px;
+                    for row in ServerRecordsGlobal.notifications: Rectangle {
+                        width: inbox.visible-width;
+                        height: 78px;
+                        background: row.read ? Colors.surface : Colors.surface-section;
+                        TouchArea { clicked => { root.open-notification(row.id, row.kind, (row.kind == "message" || row.kind == "mention" || row.kind == "reply" || row.kind == "reaction") ? row.channel-id : row.actor-id, row.status); } }
+                        HorizontalLayout {
+                            padding: Spacing.sm;
+                            spacing: Spacing.sm;
+                            if row.kind == "friend-request" || row.kind == "friend-accepted": Avatar {
+                                name: row.title; source: row.avatar; size: 42px;
+                            }
+                            if row.kind != "friend-request" && row.kind != "friend-accepted": Rectangle {
+                                width: 42px; height: 42px;
+                                border-radius: 21px;
+                                background: Colors.surface-control;
+                                Text {
+                                    text: row.kind == "channel-invite" ? "#" : row.kind == "mention" ? "@" : row.kind == "reply" ? "↩" : row.kind == "reaction" ? "♡" : row.kind == "message" ? "✉" : "•";
+                                    color: Colors.primary; font-size: Typography.base;
+                                    horizontal-alignment: center; vertical-alignment: center;
+                                }
+                            }
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: 2px;
+                                HorizontalLayout {
+                                    Text { text: row.title; color: Colors.text-primary; font-size: Typography.base; font-weight: row.read ? 400 : Typography.semibold; overflow: elide; horizontal-stretch: 1; }
+                                    Text { text: row.when; color: Colors.text-muted; font-size: Typography.sm; }
+                                }
+                                Text { text: row.body; color: Colors.text-secondary; font-size: Typography.sm; overflow: elide; }
+                                if row.status != "": Text { text: row.status; color: Colors.primary; font-size: Typography.sm; }
+                            }
+                            if !row.read: Rectangle { width: 8px; height: 8px; border-radius: 4px; background: Colors.primary; }
+                            Button {
+                                text: "×"; label: "Delete notification"; variant: "icon"; size: "small";
+                                disabled: ServerRecordsGlobal.loading;
+                                clicked => { ServerRecordsGlobal.act(row.id, "Delete"); }
+                            }
+                        }
+                    }
+                }
+            }
+            if ServerRecordsGlobal.kind != "notifications": list := ScrollView {
                 vertical-stretch: 1;
                 // The record texts take the list's width. Without it a
                 // repeated word-wrap Text was measured at ~0 width (one glyph
