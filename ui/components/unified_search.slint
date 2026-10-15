@@ -670,6 +670,9 @@ export component UnifiedSearch inherits Rectangle {
             Flickable {
                 vertical-stretch: 1;
                 min-height: 40px;
+                // Press a result immediately; the Flickable still takes over
+                // drags and cancels the row press when scrolling starts.
+                immediate-child-press: true;
                 viewport-width: self.width;
                 viewport-height: results-list.preferred-height;
                 results-list := VerticalLayout {
