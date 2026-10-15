@@ -1843,17 +1843,21 @@ export component MessageItem inherits Rectangle {
                         accessible-label: "Open thread: " + root.reply-count-text;
 
                         thread-layout := HorizontalLayout {
+                            height: parent.height;
                             spacing: Spacing.xs;
-                            padding: Spacing.xxs;
                             padding-left: Spacing.sm;
                             alignment: center;
 
-                            Image {
-                                width: 12px;
-                                height: 12px;
-                                source: Icons.message-circle;
-                                colorize: Colors.primary;
-                                y: (parent.height - self.height) / 2;
+                            // A y on a layout child fights the layout; centre
+                            // the icon on the text's line instead.
+                            VerticalLayout {
+                                alignment: center;
+                                Image {
+                                    width: 12px;
+                                    height: 12px;
+                                    source: Icons.message-circle;
+                                    colorize: Colors.primary;
+                                }
                             }
 
                             Text {
