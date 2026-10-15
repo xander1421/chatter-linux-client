@@ -167,6 +167,67 @@ export component MeshList inherits Rectangle {
         }
 
         // ── Join-a-cell input ──
+        if !root.collapsed && root.expanded: Rectangle {
+            height: root.touch ? Spacing.touch-target-min : 32px;
+            HorizontalLayout {
+                padding-left: Spacing.md;
+                padding-right: Spacing.sm;
+                spacing: Spacing.xs;
+                Text { text: "Mesh name"; color: Colors.text-muted; font-size: Typography.xs; vertical-alignment: center; }
+                name-input := TextInput {
+                    text: MeshGlobal.nickname;
+                    single-line: true;
+                    color: Colors.text-primary;
+                    font-size: Typography.xs;
+                    horizontal-stretch: 1;
+                    accepted => { MeshGlobal.set-nickname(self.text); }
+                }
+            }
+        }
+
+        if !root.collapsed && root.expanded: Rectangle {
+            height: 22px;
+            Text {
+                x: Spacing.md;
+                text: "Public to anyone nearby · names are self-asserted";
+                color: Colors.text-muted;
+                font-size: Typography.xxs;
+                overflow: elide;
+            }
+        }
+
+        if !root.collapsed && root.expanded: Rectangle {
+            height: root.touch ? Spacing.touch-target-min : 32px;
+            HorizontalLayout {
+                padding-left: Spacing.md;
+                padding-right: Spacing.sm;
+                spacing: Spacing.xs;
+                Text { text: "Join #"; color: Colors.text-muted; font-size: Typography.xs; vertical-alignment: center; }
+                channel-input := TextInput {
+                    single-line: true;
+                    color: Colors.text-primary;
+                    font-size: Typography.xs;
+                    horizontal-stretch: 1;
+                    accepted => { MeshGlobal.join-channel(self.text); self.text = ""; }
+                }
+            }
+        }
+
+        if !root.collapsed && root.expanded: VerticalLayout {
+            padding-left: Spacing.md;
+            for name in MeshGlobal.nearby-channels: Rectangle {
+                height: 26px;
+                Text {
+                    text: "Seen on mesh #" + name + " · tap to join";
+                    color: Colors.text-secondary;
+                    font-size: Typography.xs;
+                    vertical-alignment: center;
+                }
+                TouchArea { clicked => { MeshGlobal.join-channel(name); } }
+            }
+        }
+
+        // ── Join-a-cell input ──
         if !root.collapsed && root.joining: Rectangle {
             height: root.touch ? Spacing.touch-target-min + Spacing.xs : 34px;
             HorizontalLayout {
@@ -237,11 +298,16 @@ export component MeshList inherits Rectangle {
                 unread-count: item.unread-count;
                 reachable: item.reachable;
                 verified: item.verified;
+                muted: item.muted;
+                blocked: item.blocked;
                 selected: item.is-selected;
                 collapsed: root.collapsed;
                 touch: root.touch;
 
                 clicked => { MeshGlobal.conversation-selected(item.id); }
+                leave => { MeshGlobal.leave-channel(item.scope); }
+                toggle-mute => { MeshGlobal.toggle-channel-mute(item.scope); }
+                toggle-block => { MeshGlobal.toggle-peer-block(item.scope); }
             }
         }
 

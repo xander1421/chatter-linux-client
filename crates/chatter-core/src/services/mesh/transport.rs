@@ -66,7 +66,10 @@ pub enum BleCommand {
         envelope: CourierEnvelope,
     },
     /// Put a packet on every selected link.
-    Broadcast { packet: BitchatPacket, sign: bool },
+    Broadcast {
+        packet: BitchatPacket,
+        sign: bool,
+    },
     /// Put a packet on the links bound to one peer.
     Directed {
         peer: PeerId,
@@ -80,7 +83,19 @@ pub enum BleCommand {
         payload_type: NoisePayloadType,
     },
     /// Broadcast a public message into the mesh room.
-    PublicMessage { message_id: String, content: String },
+    PublicMessage {
+        message_id: String,
+        content: String,
+    },
+    /// Signed open-channel broadcast.
+    ChannelMessage {
+        message_id: String,
+        name: String,
+        content: String,
+    },
+    ChannelPresence {
+        name: String,
+    },
     /// Broadcast a file into the mesh room.
     ///
     /// The TLV arrives already built and already size-checked: the service reads

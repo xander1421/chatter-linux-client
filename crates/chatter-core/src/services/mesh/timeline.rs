@@ -94,6 +94,7 @@ fn conversation_from_stored(row: &StoredMeshConversation) -> Option<MeshConversa
     match row.kind.as_str() {
         "room" => Some(MeshConversation::Room),
         "geohash" => row.wire_id.clone().map(MeshConversation::Geohash),
+        "channel" => row.wire_id.clone().map(MeshConversation::Channel),
         "dm" => row
             .wire_id
             .as_deref()
@@ -110,6 +111,7 @@ fn stored_from_conversation(
     let (kind, wire_id) = match conversation {
         MeshConversation::Room => ("room", None),
         MeshConversation::Geohash(cell) => ("geohash", Some(cell.clone())),
+        MeshConversation::Channel(name) => ("channel", Some(name.clone())),
         MeshConversation::Dm(peer) => ("dm", Some(peer.to_string())),
     };
     StoredMeshConversation {
@@ -137,6 +139,7 @@ pub struct MeshTimeline {
     /// it a mesh DM's history sat on disk with nothing in the sidebar pointing
     /// at it until that peer was heard from again, which reads as lost data.
     open: Mutex<HashMap<ChannelId, Entry>>,
+    nearby_channels: Mutex<std::collections::BTreeMap<String, std::time::Instant>>,
     /// Durable mirror of `open`.
     directory: Arc<MeshConversationRepository>,
     /// Where each message this device sent has got to, in the mesh's own
@@ -161,6 +164,7 @@ impl MeshTimeline {
         let timeline = Self {
             messages,
             open: Mutex::new(HashMap::new()),
+            nearby_channels: Mutex::new(std::collections::BTreeMap::new()),
             directory,
             delivery,
             attachments,
@@ -443,6 +447,86 @@ impl MeshTimeline {
         }
     }
 
+    pub fn join_channel(&self, name: &str) {
+        self.nearby_channels.lock().remove(name);
+        self.register(&MeshConversation::Channel(name.to_string()), None);
+    }
+
+    pub fn leave_channel(&self, name: &str) {
+        let conversation = MeshConversation::Channel(name.to_string());
+        let id = conversation.conversation_id();
+        self.open.lock().remove(&id);
+        if let Err(error) = self.directory.remove(&id.to_string()) {
+            tracing::warn!(%error, "mesh: could not leave channel durably");
+        }
+    }
+
+    pub fn has_channel(&self, name: &str) -> bool {
+        self.open
+            .lock()
+            .contains_key(&MeshConversation::Channel(name.to_string()).conversation_id())
+    }
+
+    pub fn refresh_peer_nickname(&self, peer: &PeerId, nickname: &str) {
+        let conversation = MeshConversation::Dm(peer.clone());
+        let Some(label) = dm_label(&conversation, Some(nickname)) else {
+            return;
+        };
+        let changed = {
+            let mut open = self.open.lock();
+            if let Some(entry) = open.get_mut(&conversation.conversation_id()) {
+                if entry.label != label {
+                    entry.label = label.clone();
+                    true
+                } else {
+                    false
+                }
+            } else {
+                false
+            }
+        };
+        if changed {
+            self.persist_entry(&conversation, &label);
+        }
+    }
+
+    pub fn active_channels(&self) -> Vec<String> {
+        self.open
+            .lock()
+            .values()
+            .filter_map(|entry| {
+                if let MeshConversation::Channel(name) = &entry.conversation {
+                    Some(name.clone())
+                } else {
+                    None
+                }
+            })
+            .collect()
+    }
+
+    pub fn nearby_channels(&self) -> Vec<String> {
+        let mut nearby = self.nearby_channels.lock();
+        nearby.retain(|_, seen| seen.elapsed() < std::time::Duration::from_secs(180));
+        nearby.keys().cloned().collect()
+    }
+
+    pub fn observe_channel(&self, name: &str) {
+        if !self.has_channel(name) {
+            let mut nearby = self.nearby_channels.lock();
+            nearby.retain(|_, seen| seen.elapsed() < std::time::Duration::from_secs(180));
+            if nearby.len() >= 128 && !nearby.contains_key(name) {
+                if let Some(oldest) = nearby
+                    .iter()
+                    .min_by_key(|(_, seen)| *seen)
+                    .map(|(name, _)| name.clone())
+                {
+                    nearby.remove(&oldest);
+                }
+            }
+            nearby.insert(name.to_owned(), std::time::Instant::now());
+        }
+    }
+
     /// History for one mesh conversation, oldest first — ready to render.
     ///
     /// `before_sent_at` pages backwards through it, in the sender's nanosecond
@@ -557,6 +641,7 @@ impl MeshTimeline {
     /// the rest on disk, which is the worst outcome for the one operation whose
     /// entire purpose is leaving nothing behind.
     pub fn wipe(&self) -> Result<(), StorageError> {
+        self.nearby_channels.lock().clear();
         self.open.lock().clear();
 
         // Partial chunked transfers, before anything else. They have no
@@ -745,6 +830,7 @@ fn label_for(conversation: &MeshConversation, nickname: Option<&str>) -> String 
         // The cell is public alongside every message sent into it, so the user
         // should never have to guess which one they are speaking into.
         MeshConversation::Geohash(cell) => format!("#{cell}"),
+        MeshConversation::Channel(name) => format!("#{name}"),
         MeshConversation::Dm(peer) => {
             dm_label(conversation, nickname).unwrap_or_else(|| peer.as_str().to_string())
         }
@@ -771,6 +857,8 @@ fn dm_label(conversation: &MeshConversation, nickname: Option<&str>) -> Option<S
 pub struct MeshEvents {
     events: broadcast::Sender<MeshEvent>,
     timeline: Arc<MeshTimeline>,
+    muted_channels: Arc<Mutex<std::collections::HashSet<String>>>,
+    blocked_peers: Arc<Mutex<std::collections::HashSet<String>>>,
 }
 
 impl MeshEvents {
@@ -778,7 +866,55 @@ impl MeshEvents {
     #[must_use]
     pub fn new(capacity: usize, timeline: Arc<MeshTimeline>) -> Self {
         let (events, _) = broadcast::channel(capacity);
-        Self { events, timeline }
+        Self {
+            events,
+            timeline,
+            muted_channels: Arc::new(Mutex::new(Default::default())),
+            blocked_peers: Arc::new(Mutex::new(Default::default())),
+        }
+    }
+
+    pub fn set_channel_muted(&self, name: &str, muted: bool) {
+        let mut names = self.muted_channels.lock();
+        if muted {
+            names.insert(name.to_owned());
+        } else {
+            names.remove(name);
+        }
+    }
+
+    pub fn channel_muted(&self, name: &str) -> bool {
+        self.muted_channels.lock().contains(name)
+    }
+
+    pub fn set_peer_blocked(&self, peer: &PeerId, blocked: bool) {
+        let mut peers = self.blocked_peers.lock();
+        if blocked {
+            peers.insert(peer.as_str().to_owned());
+        } else {
+            peers.remove(peer.as_str());
+        }
+    }
+
+    pub fn peer_blocked(&self, peer: &PeerId) -> bool {
+        self.blocked_peers.lock().contains(peer.as_str())
+    }
+
+    pub fn clear_moderation(&self) {
+        self.muted_channels.lock().clear();
+        self.blocked_peers.lock().clear();
+    }
+
+    pub fn channel_joined(&self, name: &str) -> bool {
+        self.timeline.has_channel(name)
+    }
+
+    pub fn active_channels(&self) -> Vec<String> {
+        self.timeline.active_channels()
+    }
+
+    pub fn nearby_channels(&self) -> Vec<String> {
+        self.timeline.nearby_channels()
     }
 
     /// Store what needs storing, then tell everyone.
@@ -788,6 +924,16 @@ impl MeshEvents {
     /// goes out: the message did arrive, and dropping it from the live timeline
     /// as well would turn a storage problem into a lost message.
     pub fn send(&self, event: MeshEvent) {
+        if let MeshEvent::Message(message) = &event {
+            if !message.is_local && self.peer_blocked(&message.sender) {
+                return;
+            }
+            if let MeshConversation::Channel(name) = &message.conversation {
+                if !message.is_local && self.channel_muted(name) {
+                    return;
+                }
+            }
+        }
         match &event {
             MeshEvent::Message(message) => {
                 if let Err(error) = self.timeline.record(message) {
@@ -803,6 +949,13 @@ impl MeshEvents {
             } => self.timeline.record_delivery(message_id, *state),
             MeshEvent::GeohashJoined(cell) => self.timeline.note_geohash(cell),
             MeshEvent::GeohashLeft(cell) => self.timeline.forget_geohash(cell),
+            MeshEvent::ChannelObserved(name) => self.timeline.observe_channel(name),
+            MeshEvent::Peers(peers) => {
+                for peer in peers {
+                    self.timeline
+                        .refresh_peer_nickname(&peer.peer, &peer.nickname);
+                }
+            }
             _ => {}
         }
         // No subscribers is the normal state before a UI attaches, not an error.

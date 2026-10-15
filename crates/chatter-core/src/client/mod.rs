@@ -668,6 +668,98 @@ impl ChatterClient {
             .unwrap_or(false)
     }
 
+    #[cfg(feature = "mesh")]
+    pub fn mesh_nickname(&self) -> String {
+        self.mesh().nickname()
+    }
+
+    #[cfg(feature = "mesh")]
+    pub fn mesh_nearby_channels(&self) -> Vec<String> {
+        self.mesh().nearby_channels()
+    }
+
+    #[cfg(feature = "mesh")]
+    pub fn mesh_join_channel(
+        &self,
+        name: &str,
+    ) -> Result<String, crate::services::mesh::MeshError> {
+        self.mesh().join_channel(name)
+    }
+
+    #[cfg(feature = "mesh")]
+    pub fn mesh_leave_channel(&self, name: &str) -> Result<(), crate::services::mesh::MeshError> {
+        self.mesh().leave_channel(name)
+    }
+
+    #[cfg(feature = "mesh")]
+    pub fn mesh_channel_muted(&self, name: &str) -> bool {
+        self.mesh().channel_muted(name)
+    }
+
+    #[cfg(feature = "mesh")]
+    pub fn mesh_set_channel_muted(
+        &self,
+        name: &str,
+        muted: bool,
+    ) -> Result<(), crate::services::mesh::MeshError> {
+        use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
+        let name = chatter_mesh::channel::canonical_name(name).ok_or(
+            crate::services::mesh::MeshError::OutOfRange("invalid channel name"),
+        )?;
+        let settings = SettingsRepository::new(self.services.database.clone());
+        let mut names = settings
+            .get::<Vec<String>>(keys::MESH_MUTED_CHANNELS)?
+            .unwrap_or_default();
+        names.retain(|existing| existing != &name);
+        if muted {
+            names.push(name.clone());
+        }
+        settings.set(keys::MESH_MUTED_CHANNELS, &names)?;
+        self.mesh().set_channel_muted(&name, muted)
+    }
+
+    #[cfg(feature = "mesh")]
+    pub fn mesh_peer_blocked(&self, peer: &str) -> bool {
+        self.mesh()
+            .peer_blocked(&chatter_mesh::ids::PeerId::from_str(peer))
+    }
+
+    #[cfg(feature = "mesh")]
+    pub fn mesh_set_peer_blocked(
+        &self,
+        peer: &str,
+        blocked: bool,
+    ) -> Result<(), crate::services::mesh::MeshError> {
+        use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
+        let peer = chatter_mesh::ids::PeerId::from_str(peer);
+        let settings = SettingsRepository::new(self.services.database.clone());
+        let mut peers = settings
+            .get::<Vec<String>>(keys::MESH_BLOCKED_PEERS)?
+            .unwrap_or_default();
+        peers.retain(|existing| existing != peer.as_str());
+        if blocked {
+            peers.push(peer.as_str().to_owned());
+        }
+        settings.set(keys::MESH_BLOCKED_PEERS, &peers)?;
+        self.mesh().set_peer_blocked(&peer, blocked);
+        Ok(())
+    }
+
+    #[cfg(feature = "mesh")]
+    pub fn set_mesh_nickname(&self, name: &str) -> Result<(), crate::services::mesh::MeshError> {
+        use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
+        let name = name.trim();
+        if name.is_empty() || name.len() > 32 || name.chars().any(char::is_control) {
+            return Err(crate::services::mesh::MeshError::OutOfRange(
+                "mesh nickname must be 1-32 bytes without control characters",
+            ));
+        }
+        SettingsRepository::new(self.services.database.clone())
+            .set_string(keys::MESH_NICKNAME, name)?;
+        self.mesh().set_nickname(name.to_owned());
+        Ok(())
+    }
+
     /// Record the preference and act on it now.
     ///
     /// Both halves, deliberately: a toggle that persists without taking effect
@@ -817,7 +909,17 @@ impl ChatterClient {
     /// on this to leave a device clean of everything needs to know that.
     #[cfg(feature = "mesh")]
     pub fn mesh_panic_wipe(&self) -> Result<(), crate::services::mesh::MeshError> {
-        self.mesh().panic_wipe()
+        use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
+        let wiped = self.mesh().panic_wipe();
+        let settings = SettingsRepository::new(self.services.database.clone());
+        for key in [
+            keys::MESH_NICKNAME,
+            keys::MESH_MUTED_CHANNELS,
+            keys::MESH_BLOCKED_PEERS,
+        ] {
+            settings.delete(key)?;
+        }
+        wiped
     }
 
     /// Send into a mesh conversation, choosing the transport from the scope.
@@ -841,6 +943,10 @@ impl ChatterClient {
             }
             MeshConversation::Geohash(cell) => {
                 self.mesh().send_geohash(cell, text)?;
+                Ok(MeshDelivery::Broadcast)
+            }
+            MeshConversation::Channel(name) => {
+                self.mesh().send_channel(name, text)?;
                 Ok(MeshDelivery::Broadcast)
             }
             MeshConversation::Dm(peer) => self.mesh().send_dm(peer, text).await,
@@ -2053,7 +2159,8 @@ impl ChatterClient {
         recovery_codes_visible
             || self.anon_mode_enabled()
             || (chat_visible
-                && self.active_conversation_type()
+                && self
+                    .active_conversation_type()
                     .or(exiting_conversation_kind)
                     .is_some_and(|kind| kind.is_secret_chat()))
     }
@@ -3814,13 +3921,17 @@ impl ChatterClient {
         if !self.is_logged_in() {
             return None;
         }
-        self.services.notification_service.resolve_key(key, self.sidebar_row_keys())
+        self.services
+            .notification_service
+            .resolve_key(key, self.sidebar_row_keys())
     }
 
     /// `Some(false)` means an opaque tap belongs to a different account and
     /// must not be retained for a later sidebar refresh.
     pub fn notification_tap_belongs_to_current_account(&self, key: &str) -> Option<bool> {
-        self.services.notification_service.tap_belongs_to_current_account(key)
+        self.services
+            .notification_service
+            .tap_belongs_to_current_account(key)
     }
 
     /// A pending secret request opens Requests, not its chat row. Resolve the

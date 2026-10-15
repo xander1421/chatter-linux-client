@@ -145,6 +145,7 @@ impl SyncTypeFlags {
             | MessageType::Pong
             | MessageType::NostrCarrier
             | MessageType::VoiceFrame
+            | MessageType::AnnounceV2
             // Chunked transfers have no sync bit, and must not get one without a
             // design for it. Replaying a manifest out of the gossip archive would
             // offer a transfer whose sender is long gone and whose chunks nobody
@@ -155,7 +156,8 @@ impl SyncTypeFlags {
             // *files*, not a bit on this bitfield.
             | MessageType::FileManifest
             | MessageType::FileChunk
-            | MessageType::FileChunkRequest => return None,
+            | MessageType::FileChunkRequest
+            | MessageType::ChannelMessage => return None,
         })
     }
 

@@ -1,6 +1,7 @@
 //! What the mesh is configured to do.
 
 use chatter_mesh_nostr::relay::DEFAULT_RELAYS;
+use std::sync::{Arc, RwLock};
 
 /// Static configuration for [`MeshService`](super::MeshService).
 ///
@@ -14,6 +15,8 @@ pub struct MeshConfig {
     /// Unauthenticated by construction on public traffic — anyone can claim any
     /// nickname on a broadcast — so it is a display string, never an identity.
     pub nickname: String,
+    /// Current local choice shared with running radio and relay loops.
+    live_nickname: Arc<RwLock<Option<String>>>,
 
     /// Geohash cells to join on start.
     pub geohashes: Vec<String>,
@@ -43,6 +46,7 @@ impl Default for MeshConfig {
     fn default() -> Self {
         Self {
             nickname: "anon".to_string(),
+            live_nickname: Arc::new(RwLock::new(None)),
             geohashes: Vec::new(),
             relays: Vec::new(),
             bridge_enabled: false,
@@ -53,6 +57,17 @@ impl Default for MeshConfig {
 }
 
 impl MeshConfig {
+    pub fn nickname(&self) -> String {
+        self.live_nickname
+            .read()
+            .unwrap()
+            .clone()
+            .unwrap_or_else(|| self.nickname.clone())
+    }
+
+    pub fn set_nickname(&self, nickname: String) {
+        *self.live_nickname.write().unwrap() = Some(nickname);
+    }
     /// The relay set to actually use.
     #[must_use]
     pub fn relay_urls(&self) -> Vec<String> {

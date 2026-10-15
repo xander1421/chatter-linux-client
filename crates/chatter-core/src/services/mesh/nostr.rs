@@ -712,7 +712,7 @@ impl NostrRuntime {
             message,
             conversation,
             sender: sender.clone(),
-            nickname: self.config.nickname.clone(),
+            nickname: self.config.nickname(),
             is_local: true,
             sender_verified: true,
         })));

@@ -43,7 +43,7 @@ use slint::{ComponentHandle, ModelRc, VecModel};
 use chatter_core::client::ChatterClient;
 use chatter_core::services::mesh::{MeshConversation, MeshEvent};
 
-use crate::{run_ui, MainWindow, MeshConversationData, MeshGlobal};
+use crate::{MainWindow, MeshConversationData, MeshGlobal, run_ui};
 
 /// The mesh conversation currently open, if any.
 ///
@@ -120,6 +120,79 @@ pub(super) fn local_user_id(ui_ctx: &Arc<ChatterClient>) -> String {
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let global = window.global::<MeshGlobal>();
     global.set_enabled(true);
+    global.set_nickname(ui_ctx.mesh_nickname().into());
+    {
+        let weak = window.as_weak();
+        let ui_ctx = ui_ctx.clone();
+        global.on_toggle_channel_mute(move |name| {
+            let Some(w) = weak.upgrade() else { return };
+            let muted = !ui_ctx.mesh_channel_muted(name.as_str());
+            if ui_ctx.mesh_set_channel_muted(name.as_str(), muted).is_ok() {
+                refresh_rows(&w, &ui_ctx);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let ui_ctx = ui_ctx.clone();
+        global.on_toggle_peer_block(move |peer| {
+            let Some(w) = weak.upgrade() else { return };
+            if ui_ctx
+                .mesh_set_peer_blocked(peer.as_str(), !ui_ctx.mesh_peer_blocked(peer.as_str()))
+                .is_ok()
+            {
+                refresh_rows(&w, &ui_ctx);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let ui_ctx = ui_ctx.clone();
+        global.on_join_channel(move |name| {
+            let Some(w) = weak.upgrade() else { return };
+            match ui_ctx.mesh_join_channel(name.as_str()) {
+                Ok(_) => {
+                    w.global::<MeshGlobal>()
+                        .set_notice("Public channel joined.".into());
+                    refresh_rows(&w, &ui_ctx);
+                }
+                Err(error) => w
+                    .global::<MeshGlobal>()
+                    .set_notice(format!("Could not join channel: {error}").into()),
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let ui_ctx = ui_ctx.clone();
+        global.on_leave_channel(move |name| {
+            let Some(w) = weak.upgrade() else { return };
+            if let Err(error) = ui_ctx.mesh_leave_channel(name.as_str()) {
+                w.global::<MeshGlobal>().set_notice(format!("Could not leave channel: {error}").into());
+            } else {
+                if matches!(active(), Some(MeshConversation::Channel(ref open)) if open == name.as_str()) { clear_active(&w); }
+                refresh_rows(&w, &ui_ctx);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let ui_ctx = ui_ctx.clone();
+        global.on_set_nickname(move |name| {
+            let Some(w) = weak.upgrade() else { return };
+            match ui_ctx.set_mesh_nickname(name.as_str()) {
+                Ok(()) => {
+                    w.global::<MeshGlobal>()
+                        .set_nickname(ui_ctx.mesh_nickname().into());
+                    w.global::<MeshGlobal>()
+                        .set_notice("Mesh name updated. Everyone nearby can see it.".into());
+                }
+                Err(error) => w
+                    .global::<MeshGlobal>()
+                    .set_notice(format!("Could not set mesh name: {error}").into()),
+            }
+        });
+    }
 
     // Selection → open the conversation in the ordinary message list.
     {
@@ -198,6 +271,8 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 run_ui!(weak, |w| {
                     clear_active(&w);
                     refresh_rows(&w, &ui_ctx);
+                    w.global::<MeshGlobal>()
+                        .set_nickname(ui_ctx.mesh_nickname().into());
                     if let Err(error) = &wiped {
                         tracing::warn!(%error, "mesh: panic wipe incomplete");
                         w.global::<MeshGlobal>()
@@ -289,6 +364,14 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 pub fn refresh_rows(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let open = active();
     let rows = core_api::rows(ui_ctx);
+    let nearby: Vec<slint::SharedString> = ui_ctx
+        .mesh_nearby_channels()
+        .into_iter()
+        .map(Into::into)
+        .collect();
+    window
+        .global::<MeshGlobal>()
+        .set_nearby_channels(ModelRc::new(VecModel::from(nearby)));
 
     // The strip above the conversation shows live values (peer count,
     // reachability), so re-derive them from the same rows.
@@ -314,6 +397,8 @@ pub fn refresh_rows(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 unread_count: row.unread_count,
                 reachable: row.reachable,
                 verified: row.verified,
+                muted: row.muted,
+                blocked: row.blocked,
                 is_selected,
             }
         })
@@ -450,7 +535,7 @@ fn handle_event(event: MeshEvent, weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<C
                 refresh_rows(&w, &ui_ctx);
             });
         }
-        MeshEvent::GeohashJoined(_) | MeshEvent::GeohashLeft(_) => {
+        MeshEvent::GeohashJoined(_) | MeshEvent::GeohashLeft(_) | MeshEvent::ChannelObserved(_) => {
             let ui_ctx = ui_ctx.clone();
             run_ui!(weak, |w| refresh_rows(&w, &ui_ctx));
         }

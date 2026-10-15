@@ -21,11 +21,16 @@ export component MeshListItem inherits Rectangle {
     in property <int> unread-count: 0;
     in property <bool> reachable: false;
     in property <bool> verified: false;
+    in property <bool> muted: false;
+    in property <bool> blocked: false;
     in property <bool> selected: false;
     in property <bool> collapsed: false;
     in property <bool> touch: false;
 
     callback clicked();
+    callback leave();
+    callback toggle-mute();
+    callback toggle-block();
 
     // Secondary line: what this scope actually is. More useful than a message
     // preview would be, because the answer to "what am I speaking into" is the
@@ -33,10 +38,11 @@ export component MeshListItem inherits Rectangle {
     property <string> secondary:
         root.kind == "geohash" ? "public · " + root.scope
       : root.kind == "room" ? "everyone in radio range"
+      : root.kind == "channel" ? "public to nearby listeners"
       : root.reachable ? "encrypted, one to one"
       : "no route now — sends wait for a carrier";
 
-    property <image> glyph: root.kind == "geohash" ? Icons.hash
+    property <image> glyph: root.kind == "geohash" || root.kind == "channel" ? Icons.hash
                           : root.kind == "dm" ? Icons.message-circle
                           : Icons.radio;
 
@@ -64,6 +70,24 @@ export component MeshListItem inherits Rectangle {
         : root.reachable
         ? root.title + ", mesh direct message"
         : root.title + ", mesh direct message, no route right now";
+
+    touch := TouchArea {
+        mouse-cursor: pointer;
+        pointer-event(event) => {
+            if (event.kind == PointerEventKind.down) {
+                root.press-x = self.mouse-x;
+                root.press-y = self.mouse-y;
+                root.press-active = true;
+            } else if (event.kind == PointerEventKind.move
+                && (abs(self.mouse-x - root.press-x) > Spacing.sm
+                    || abs(self.mouse-y - root.press-y) > Spacing.sm)) {
+                root.press-active = false;
+            } else if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
+                root.press-active = false;
+            }
+        }
+        clicked => { root.clicked(); }
+    }
 
     if !root.collapsed: HorizontalLayout {
         padding-left: Spacing.sm;
@@ -102,19 +126,6 @@ export component MeshListItem inherits Rectangle {
                     overflow: elide;
                     horizontal-stretch: 1;
                 }
-                // The peer's announce signature verified against the key it
-                // advertises. Absent is the ordinary case, not a warning: a
-                // nickname alone is simply not an identity out here.
-                if root.kind == "dm" && root.verified: VerticalLayout {
-                    alignment: center;
-                    horizontal-stretch: 0;
-                    Image {
-                        source: Icons.lock;
-                        width: 11px;
-                        height: 11px;
-                        colorize: Colors.success;
-                    }
-                }
                 // Geohash cells are public and location-scoped. The glyph says
                 // so on every row, because the cell travels with every message.
                 if root.kind == "geohash": VerticalLayout {
@@ -150,6 +161,26 @@ export component MeshListItem inherits Rectangle {
                     font-size: Typography.xs;
                     overflow: elide;
                 }
+            }
+        }
+
+        // Nothing can carry to this peer at the moment. A clock rather than a
+        if root.kind == "channel": Rectangle {
+            width: 28px;
+            Text { text: "×"; color: Colors.text-muted; font-size: Typography.sm; vertical-alignment: center; }
+            TouchArea { clicked => { root.leave(); } }
+        }
+        if root.kind == "channel" || root.kind == "dm": Rectangle {
+            width: 42px;
+            Text {
+                text: root.kind == "channel" ? (root.muted ? "Unmute" : "Mute")
+                    : (root.blocked ? "Unblock" : "Block");
+                color: Colors.text-muted;
+                font-size: Typography.xxs;
+                vertical-alignment: center;
+            }
+            TouchArea {
+                clicked => { if root.kind == "channel" { root.toggle-mute(); } else { root.toggle-block(); } }
             }
         }
 
@@ -232,21 +263,4 @@ export component MeshListItem inherits Rectangle {
         }
     }
 
-    touch := TouchArea {
-        mouse-cursor: pointer;
-        pointer-event(event) => {
-            if (event.kind == PointerEventKind.down) {
-                root.press-x = self.mouse-x;
-                root.press-y = self.mouse-y;
-                root.press-active = true;
-            } else if (event.kind == PointerEventKind.move
-                && (abs(self.mouse-x - root.press-x) > Spacing.sm
-                    || abs(self.mouse-y - root.press-y) > Spacing.sm)) {
-                root.press-active = false;
-            } else if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
-                root.press-active = false;
-            }
-        }
-        clicked => { root.clicked(); }
-    }
 }
