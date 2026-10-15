@@ -191,7 +191,7 @@ export component ChannelSettingsModal inherits Rectangle {
         show: root.show-modal;
         title: root.is-private-group ? "Group Settings" : "Channel Settings";
         modal-width: 640px;
-        max-modal-height: 820px;
+        max-modal-height: max(240px, root.height - 48px);
         full-screen: root.narrow;
         plain-header: true;
         // Expand the card to the available height (capped at max-modal-height)

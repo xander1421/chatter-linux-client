@@ -3588,6 +3588,8 @@ export component MainWindow inherits Window {
         // and has to draw over it.
         if root.settings-open: SettingsScreen {
             z: -1;
+            width: parent.width;
+            height: parent.height;
             bottom-inset: root.compact-layout ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom : 0px;
             mobile-platform: root.is-mobile-platform;
             shield-toggled => { root.toggle-anon-mode(); }

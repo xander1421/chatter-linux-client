@@ -234,10 +234,11 @@ export component SettingsScreen inherits Rectangle {
     property <length> content-padding: compact-mode ? Spacing.md : Spacing.xl;
 
     VerticalLayout {
-
-
+        width: root.width;
+        height: root.height;
 
         HorizontalLayout {
+            horizontal-stretch: 1;
 
         // Sidebar navigation — hidden in compact mode — Neo surface
         if !compact-mode: GlassSurface {
@@ -310,7 +311,8 @@ export component SettingsScreen inherits Rectangle {
                                 : item.id == "privacy" ? Icons.shield
                                 : item.id == "notifications" ? Icons.bell
                                 : item.id == "encryption" ? Icons.lock
-                                : item.id == "ai" ? Icons.sparkles : Icons.moon;
+                                : item.id == "ai" ? Icons.sparkles
+                                : item.id == "about" ? Icons.info : Icons.moon;
                             width: Spacing.button-icon;
                             height: Spacing.button-icon;
                             colorize: active-section == item.id ? Colors.selected-indicator : Colors.text-secondary;
@@ -346,13 +348,17 @@ export component SettingsScreen inherits Rectangle {
         // Content area
         Rectangle {
             horizontal-stretch: 1;
+            vertical-stretch: 1;
             background: Colors.background;
 
             Flickable {
+                width: parent.width;
+                height: parent.height;
                 viewport-width: self.width;
                 viewport-height: content-layout.preferred-height;
 
                 content-layout := VerticalLayout {
+                    width: parent.width;
                     padding: root.content-padding;
                     padding-left: root.content-padding + Spacing.md * (1 - root.page-entry);
                     padding-top: root.content-padding + (root.compact-mode ? Spacing.touch-target-min + Spacing.sm : Spacing.none);
@@ -365,8 +371,11 @@ export component SettingsScreen inherits Rectangle {
                     // `if` children's height up, so `content-layout` reported
                     // ~0 and the page could not scroll to anything below the
                     // fold (Key Backup was stranded under the tab bar).
+                    HorizontalLayout {
+                        Rectangle { horizontal-stretch: 1; }
                     VerticalLayout {
-                        max-width: root.compact-mode ? root.width : 600px;
+                        width: min(root.compact-mode ? root.width : 600px,
+                            parent.width - root.content-padding * 2);
 
                         // Account section
                         if active-section == "account": VerticalLayout {
@@ -821,18 +830,13 @@ export component SettingsScreen inherits Rectangle {
                                     padding: Spacing.md;
                                     spacing: Spacing.sm;
 
-                                    Text {
-                                        text: "Message Backup";
-                                        color: Colors.text-primary;
-                                        font-size: Typography.sm;
-                                        font-weight: Typography.medium;
-                                    }
-
-                                    Text {
-                                        text: "Encrypted backup of your message history, conversations, and contacts. Neither the file nor the server copy can be read without your passphrase or PIN.";
-                                        color: Colors.text-muted;
-                                        font-size: Typography.xs;
-                                        wrap: word-wrap;
+                                    SettingsRow {
+                                        touch: root.mobile-platform;
+                                        icon: Icons.download;
+                                        title: "Message Backup";
+                                        detail: "Encrypted message history, conversations, and contacts. File backups need a passphrase; server backups need your PIN.";
+                                        clickable: false;
+                                        show-chevron: false;
                                     }
 
                                     if !root.file-backup-available: Text {
@@ -846,6 +850,13 @@ export component SettingsScreen inherits Rectangle {
                                         placeholder: "Backup passphrase (for file backup)";
                                         password: true;
                                         text <=> root.message-backup-passphrase;
+                                    }
+
+                                    if root.file-backup-available && root.message-backup-passphrase == "": Text {
+                                        text: "Enter a backup passphrase to enable file export and restore.";
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                        wrap: word-wrap;
                                     }
 
                                     if root.file-backup-available: HorizontalLayout {
@@ -877,6 +888,13 @@ export component SettingsScreen inherits Rectangle {
                                         placeholder: "PIN (for server backup)";
                                         password: true;
                                         text <=> root.message-backup-pin;
+                                    }
+
+                                    if root.message-backup-pin == "": Text {
+                                        text: "Enter your PIN to enable server backup and restore.";
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                        wrap: word-wrap;
                                     }
 
                                     HorizontalLayout {
@@ -1419,30 +1437,62 @@ export component SettingsScreen inherits Rectangle {
                                         wrap: word-wrap;
                                     }
 
-                                    HorizontalLayout {
-                                        spacing: Spacing.sm;
-                                        alignment: start;
-
-                                        Button {
-                                            touch: root.mobile-platform;
-                                            text: "Everyone";
-                                            variant: root.username-discoverable ? "primary" : "secondary";
-                                            clicked => {
-                                                if !root.username-discoverable {
-                                                    root.username-discoverable = true;
-                                                    root.username-discoverable-changed(true);
-                                                }
+                                    for opt in [
+                                        { discoverable: true, label: "Everyone" },
+                                        { discoverable: false, label: "Nobody" },
+                                    ]: Rectangle {
+                                        property <bool> selected: root.username-discoverable == opt.discoverable;
+                                        height: Spacing.touch-target-min;
+                                        border-radius: Spacing.radius-md;
+                                        background: username-touch.has-hover ? Colors.surface-hover : transparent;
+                                        accessible-role: button;
+                                        accessible-label: opt.label;
+                                        accessible-action-default => {
+                                            if !selected {
+                                                root.username-discoverable = opt.discoverable;
+                                                root.username-discoverable-changed(opt.discoverable);
                                             }
                                         }
 
-                                        Button {
-                                            touch: root.mobile-platform;
-                                            text: "Nobody";
-                                            variant: root.username-discoverable ? "secondary" : "primary";
+                                        HorizontalLayout {
+                                            padding-left: Spacing.sm;
+                                            padding-right: Spacing.sm;
+                                            spacing: Spacing.md;
+                                            alignment: start;
+
+                                            VerticalLayout {
+                                                alignment: center;
+                                                Rectangle {
+                                                    width: 18px;
+                                                    height: 18px;
+                                                    border-radius: 9px;
+                                                    border-width: Spacing.stroke;
+                                                    border-color: selected ? Colors.primary : Colors.text-muted;
+
+                                                    Rectangle {
+                                                        width: 8px;
+                                                        height: 8px;
+                                                        border-radius: 4px;
+                                                        background: selected ? Colors.primary : transparent;
+                                                    }
+                                                }
+                                            }
+
+                                            Text {
+                                                text: opt.label;
+                                                vertical-alignment: center;
+                                                color: selected ? Colors.text-primary : Colors.text-secondary;
+                                                font-size: Typography.sm;
+                                                font-weight: selected ? Typography.medium : Typography.normal;
+                                            }
+                                        }
+
+                                        username-touch := TouchArea {
+                                            mouse-cursor: pointer;
                                             clicked => {
-                                                if root.username-discoverable {
-                                                    root.username-discoverable = false;
-                                                    root.username-discoverable-changed(false);
+                                                if !selected {
+                                                    root.username-discoverable = opt.discoverable;
+                                                    root.username-discoverable-changed(opt.discoverable);
                                                 }
                                             }
                                         }
@@ -2924,6 +2974,8 @@ export component SettingsScreen inherits Rectangle {
                                 font-size: Typography.sm;
                             }
                         }
+                    }
+                        Rectangle { horizontal-stretch: 1; }
                     }
                 }
             }
