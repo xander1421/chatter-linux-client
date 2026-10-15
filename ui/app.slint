@@ -377,6 +377,7 @@ export component MainWindow inherits Window {
     in property <string> link-device-status: "Generate a QR to begin.";
     in property <string> link-device-error: "";
     in property <bool> link-device-active: false;
+    in property <bool> link-device-has-local-identity: false;
     callback link-device-start();
     callback link-device-cancel();
     callback link-device-copy();
@@ -1882,6 +1883,7 @@ export component MainWindow inherits Window {
                 status-text: root.link-device-status;
                 error: root.link-device-error;
                 linking: root.link-device-active;
+                has-local-identity: root.link-device-has-local-identity;
 
                 start => { root.link-device-start(); }
                 cancel => { root.link-device-cancel(); }

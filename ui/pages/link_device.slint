@@ -17,6 +17,7 @@ export component LinkDevicePage inherits Rectangle {
     in property <string> status-text: "Waiting for your other device…";
     in property <string> error: "";
     in property <bool> linking: false;
+    in property <bool> has-local-identity: false;
     // Touch density for the Shield header control.
     in property <bool> touch: false;
     property <float> arrival: 0;
@@ -74,8 +75,16 @@ export component LinkDevicePage inherits Rectangle {
                     }
 
                     Text {
-                        text: "On your already-signed-in device, open Settings › Active Sessions › View All › Link new device, then scan this code.";
+                        text: "On your already-signed-in device, open Settings › Linked devices › Manage devices › Link new device, then scan this code.";
                         color: Colors.text-secondary;
+                        font-size: Typography.sm;
+                        horizontal-alignment: center;
+                        wrap: word-wrap;
+                    }
+
+                    if root.has-local-identity: Text {
+                        text: "This device still holds another account's keys. Linking a different account will fail. Sign in to that account instead, or clear this app's data first.";
+                        color: Colors.error;
                         font-size: Typography.sm;
                         horizontal-alignment: center;
                         wrap: word-wrap;
