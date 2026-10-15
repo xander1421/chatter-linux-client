@@ -774,7 +774,13 @@ pub fn refresh_rows(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 id: row.id.into(),
                 kind: row.kind.into(),
                 binding_label: row.binding_label.into(),
-                title: row.title.into(),
+                // The sidebar row has its own lock glyph. Other surfaces keep
+                // the original title, including the private-chat header.
+                title: if row.kind == "private-channel" {
+                    row.title.trim_start_matches("🔒 ").into()
+                } else {
+                    row.title.into()
+                },
                 scope: row.scope.into(),
                 timestamp: row.timestamp.into(),
                 unread_count: row.unread_count,
