@@ -1521,14 +1521,16 @@ impl InboxEventProcessor {
                             }
                         });
 
-                        // Signal-style handshake: send OUR profile key now so
-                        // the friend learns it without waiting for a first
-                        // real message. The accepter sends their half from
-                        // the UI's accept-request handler; together both
-                        // sides learn each other's key with zero messages.
+                        // Reply with our profile key once we hold theirs.
+                        // The accepter sends on acceptance; sending before
+                        // their key arrives would expose this first DM to the
+                        // server as an identified send.
                         let ms = self.message_service.clone();
                         tokio::spawn(async move {
-                            if let Err(e) = ms.send_profile_key_handshake(&friend_id).await {
+                            if let Err(e) = ms
+                                .send_profile_key_handshake_if_sealed(&friend_id)
+                                .await
+                            {
                                 tracing::warn!(
                                     peer_id = %friend_id,
                                     error = %e,
@@ -1546,15 +1548,26 @@ impl InboxEventProcessor {
                 }
             }
 
-            // Pure profile-key handshake (see `store_data_message` /
-            // `send_profile_key_handshake`): the gateway already persisted
-            // the sender's profile key and created no message row. Fetch +
-            // decrypt their profile now — `get_user_profile` upserts it
-            // locally — and translate it into the same DomainEvent the
-            // server-managed profile stream emits, so the existing UI
-            // handler (sidebar / header / friends list refresh) just works.
+            // The gateway or DM inbox stored a new sender profile key.
+            // Refresh their profile and, for an accepted friend, return our
+            // key now that a sealed send can use theirs. A key already held
+            // does not emit this event for pure handshakes, so replies stop.
             InboxEvent::ProfileKeyReceived { sender_id } => {
                 self.spawn_peer_profile_refresh(*sender_id);
+                // The accepted-friend guard also handles a key arriving
+                // before FriendAccepted: that event will send once it has
+                // persisted the friendship.
+                let ms = self.message_service.clone();
+                let peer_id = *sender_id;
+                tokio::spawn(async move {
+                    if let Err(e) = ms.send_profile_key_handshake_if_sealed(&peer_id).await {
+                        tracing::warn!(
+                            peer_id = %peer_id,
+                            error = %e,
+                            "Incoming profile key: reply handshake not delivered"
+                        );
+                    }
+                });
             }
 
             // =================================================================

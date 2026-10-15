@@ -448,20 +448,18 @@ impl MessageService {
     /// Send a Signal-style profile-key handshake to a friend: an empty-body,
     /// no-attachment DataMessage whose only job is to carry our profile key.
     ///
-    /// Fired once on BOTH sides right after friend-accept (see
-    /// `inbox_processor`'s `FriendAccepted` handler and the UI's accept-request
-    /// wiring) so each peer's real display name + avatar appear immediately —
+    /// The accepter sends on friend-accept; the requester sends on acceptance
+    /// if it already holds the peer's key, or replies when that key arrives.
+    /// This lets each peer's real display name + avatar appear promptly —
     /// mirroring how the anon-DM init/accept messages piggyback the same
     /// key+encrypted-profile pair, instead of waiting for a first real
     /// message to carry it (`send_server_dm`'s `inject_profile_key_if_sharing`).
     /// The gateway recognizes the empty body and stores the key without
     /// creating a visible message (`store_data_message`).
     ///
-    /// Nothing else re-sends the key until a real message carries it, so one
-    /// lost send left the friend showing "User <id>". A failed send is retried
-    /// with backoff ([`PROFILE_KEY_RETRY`]) until the server accepts it, the
-    /// peer is no longer a friend, or the attempts run out. Not persisted: an
-    /// app restart mid-retry ends it.
+    /// A failed send is retried with backoff ([`PROFILE_KEY_RETRY`]) until the
+    /// server accepts it, the peer is no longer a friend, or attempts run out.
+    /// The retry is not persisted; an app restart mid-retry ends it.
     pub async fn send_profile_key_handshake(&self, peer_id: &UserId) -> Result<(), MessageError> {
         retry_while(
             PROFILE_KEY_RETRY,
@@ -484,6 +482,32 @@ impl MessageService {
             || self.is_accepted_friend(peer_id),
         )
         .await
+    }
+
+    /// The requester must wait for the accepter's key before sending its
+    /// handshake: otherwise the first send exposes the requester via Basic
+    /// auth just before the accepter's sealed-capable handshake arrives.
+    /// The incoming-key handler calls this again once the key is stored.
+    pub async fn send_profile_key_handshake_if_sealed(
+        &self,
+        peer_id: &UserId,
+    ) -> Result<(), MessageError> {
+        if !self.is_accepted_friend(peer_id) {
+            return Ok(());
+        }
+        let me = self.current_user_id()?;
+        if self
+            .user_repo
+            .get_friend_profile_key(&me, peer_id)?
+            .is_none()
+        {
+            tracing::info!(
+                peer_id = %peer_id,
+                "Deferring profile-key handshake until peer key arrives"
+            );
+            return Ok(());
+        }
+        self.send_profile_key_handshake(peer_id).await
     }
 
     /// Whether `peer_id` is an accepted friend, in either direction of the

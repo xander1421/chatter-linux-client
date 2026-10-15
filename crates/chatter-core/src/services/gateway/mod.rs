@@ -260,7 +260,11 @@ impl MessageGateway {
                 && data_message.attachments.is_empty()
                 && data_message.delete.is_none()
             {
-                return Ok(SealedSenderResult::ProfileKeyReceived { sender_id: sid });
+                return Ok(if profile_key_changed {
+                    SealedSenderResult::ProfileKeyReceived { sender_id: sid }
+                } else {
+                    SealedSenderResult::MessageStored
+                });
             }
 
             (ChannelId::from(sid), ConversationType::ServerDm)

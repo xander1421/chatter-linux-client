@@ -256,7 +256,10 @@ impl SyncEngine {
         for friend_id in result.users.accepted_requests.iter().copied() {
             let messages = Arc::clone(&self.messages);
             tokio::spawn(async move {
-                if let Err(e) = messages.send_profile_key_handshake(&friend_id).await {
+                if let Err(e) = messages
+                    .send_profile_key_handshake_if_sealed(&friend_id)
+                    .await
+                {
                     tracing::warn!(
                         error = %e,
                         "Sync-learned acceptance: profile-key handshake not delivered"
