@@ -267,9 +267,7 @@ impl MeshService {
         let (Some(_), Some(handshake_hash), Some(sender_nonce), Some(recipient_nonce)) =
             (mesh_static, transcript, sender_nonce, recipient_nonce)
         else {
-            return Err(MeshError::Binding(
-                "wait for an encrypted Chatter peer connection".into(),
-            ));
+            return Err(self.needs_session(peer));
         };
         if device_id == 0 {
             return Err(MeshError::Binding("no account device is active".into()));
@@ -340,9 +338,7 @@ impl MeshService {
         let nonce = self
             .state
             .with(|s| s.chatter_hello.local_nonce(peer))
-            .ok_or_else(|| {
-                MeshError::Binding("wait for an encrypted Chatter peer connection".into())
-            })?;
+            .ok_or_else(|| self.needs_session(peer))?;
         let qr = BindingQr {
             account_id: *account_id.0.as_bytes(),
             device_id,
@@ -495,6 +491,19 @@ impl MeshService {
         } else {
             Ok("Signal paused · verify identity")
         }
+    }
+
+    /// Sessions open lazily; ask the radio to open one and tell the caller
+    /// to retry once the encrypted link is up.
+    fn needs_session(&self, peer: &PeerId) -> MeshError {
+        self.open_session(peer);
+        MeshError::Binding("connecting securely to this peer, try again in a moment".into())
+    }
+
+    /// Start a Noise handshake with `peer` if no session exists, so actions
+    /// that need one (binding, invites) are ready by the time they are tapped.
+    pub fn open_session(&self, peer: &PeerId) {
+        let _ = self.ble.send(BleCommand::OpenSession { peer: peer.clone() });
     }
 
     pub fn set_signal_opt_in(
@@ -1066,9 +1075,7 @@ impl MeshService {
                     .get(peer)
                     .is_some_and(|hello| hello.capabilities & chatter_hello::QR_CHANNELS != 0)
         }) {
-            return Err(MeshError::Binding(
-                "wait for an encrypted Chatter peer connection".into(),
-            ));
+            return Err(self.needs_session(peer));
         }
         let mut state = self
             .private_channels

@@ -3012,6 +3012,13 @@ impl BleRuntime {
                     self.transmit(&packet, Some(&peer), None).await;
                 }
             }
+            BleCommand::OpenSession { peer } => {
+                if self.state.can_write_to(&peer)
+                    && !self.state.with(|state| state.sessions.has_session(&peer))
+                {
+                    self.start_handshake(&peer).await;
+                }
+            }
             BleCommand::SignalBundle { peer, bytes } => {
                 self.send_signal_bundle(&peer, &bytes).await
             }

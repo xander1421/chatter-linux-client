@@ -827,6 +827,7 @@ fn open_peer_sheet(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, peer_id: &s
     else {
         return;
     };
+    ui_ctx.mesh_open_session(peer_id);
     let global = window.global::<MeshGlobal>();
     global.set_sheet_peer_id(peer_id.into());
     global.set_sheet_peer_name(peer.nickname.into());

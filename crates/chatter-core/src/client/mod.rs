@@ -703,6 +703,12 @@ impl ChatterClient {
     }
 
     #[cfg(feature = "mesh")]
+    pub fn mesh_open_session(&self, peer: &str) {
+        self.mesh()
+            .open_session(&chatter_mesh::ids::PeerId::from_str(peer));
+    }
+
+    #[cfg(feature = "mesh")]
     pub fn mesh_binding_state(
         &self,
         peer: &str,
