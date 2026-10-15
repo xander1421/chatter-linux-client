@@ -263,6 +263,8 @@ pub enum LinkProgress {
 }
 
 /// Device linking service.
+static PLATFORM_DEVICE_LABEL: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+
 pub struct LinkDeviceService {
     grpc_pool: Arc<GrpcClientPool>,
     settings_repo: Arc<SettingsRepository>,
@@ -316,14 +318,30 @@ impl LinkDeviceService {
         }
     }
 
-    /// Name this install reports to the server (shown in Active Sessions),
-    /// e.g. "Android (0.1.0)". Link, login and register should all send it.
+    /// The platform's own description of this hardware, e.g.
+    /// "samsung SM-S938B · Android 16". Set once at startup by the platform
+    /// layer; manufacturer, model and OS version only — never the user-chosen
+    /// device name, which often carries a person's name and login/register
+    /// send this in clear.
+    pub fn set_platform_device_label(label: String) {
+        let label = label.trim().to_owned();
+        if !label.is_empty() {
+            let _ = PLATFORM_DEVICE_LABEL.set(label);
+        }
+    }
+
+    /// Name this install reports to the server (shown in Active Sessions):
+    /// the platform label when known, else e.g. "Android (0.1.0)".
+    /// Link, login and register all send it.
     pub fn current_device_name() -> String {
-        format!(
-            "{} ({})",
-            Self::current_device_info(),
-            env!("CARGO_PKG_VERSION")
-        )
+        match PLATFORM_DEVICE_LABEL.get() {
+            Some(label) => label.clone(),
+            None => format!(
+                "{} ({})",
+                Self::current_device_info(),
+                env!("CARGO_PKG_VERSION")
+            ),
+        }
     }
 
     /// True if a new-device flow is currently running.

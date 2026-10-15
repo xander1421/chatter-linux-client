@@ -374,3 +374,33 @@ fn set_messaging_signed_in(signed_in: bool) {
         tracing::warn!("Android messaging service lifecycle unavailable");
     }
 }
+
+/// "samsung SM-S938B · Android 16" from android.os.Build, for the device name
+/// other sessions see. Manufacturer, model and OS version only.
+pub fn device_label() -> Option<String> {
+    with_jni_env(|env| {
+        let mut field = |class: &'static jni::strings::JNIStr, name: &'static jni::strings::JNIStr| -> Result<String, String> {
+            let value = env
+                .get_static_field(class, name, jni::jni_sig!("Ljava/lang/String;"))
+                .and_then(|v| v.l())
+                .map_err(|e| e.to_string())?;
+            let s: String = env
+                .cast_local::<jni::objects::JString>(value)
+                .map_err(|e| e.to_string())?
+                .try_to_string(&env)
+                .map_err(|e| e.to_string())?
+                .into();
+            Ok(s)
+        };
+        let maker = field(jni::jni_str!("android/os/Build"), jni::jni_str!("MANUFACTURER"))?;
+        let model = field(jni::jni_str!("android/os/Build"), jni::jni_str!("MODEL"))?;
+        let release = field(jni::jni_str!("android/os/Build$VERSION"), jni::jni_str!("RELEASE"))?;
+        let device = if model.to_lowercase().starts_with(&maker.to_lowercase()) {
+            model
+        } else {
+            format!("{maker} {model}")
+        };
+        Ok(format!("{device} · Android {release}"))
+    })
+    .ok()
+}
