@@ -457,7 +457,7 @@ impl MessageGateway {
     ///
     /// This is the receive-side half of the F8 fix. Unlike `store_data_message`,
     /// which buckets a channel-free DM by the *sender's* id, this buckets by the
-    /// `SyncSent.destination_user_id` and attributes the message to *us* (the
+    /// `SyncSent.destination` and attributes the message to *us* (the
     /// current user) — so the message shows up on our linked device as our own
     /// outgoing message to the recipient, not as an inbound note-to-self.
     ///
@@ -471,6 +471,7 @@ impl MessageGateway {
         sealed_sender_id: UserId,
     ) -> Result<SealedSenderResult, crate::error::ServiceError> {
         use crate::error::ServiceError;
+        use crate::proto::content_v1::sync_sent::Destination;
 
         // NOT `Validation`. This is a settings-DB read: a failure here is our
         // disk or a login that has not happened yet, and the inbox ack policy
@@ -488,25 +489,42 @@ impl MessageGateway {
         // A channel send is already delivered to linked devices by the
         // sender-key stream. Its own-device SyncSent carries only the original
         // receipt targets; never re-file it as a DM or display a second bubble.
-        if let Some(message) = sync.message.as_ref().filter(|message| !message.channel_id.is_empty()) {
-            if !sync.destination_user_id.is_empty() || message.timestamp != sync.timestamp || sync.timestamp == 0 {
-                return Err(ServiceError::Validation("invalid channel receipt transcript".into()));
+        if let Some(Destination::DestinationChannelId(id)) = sync.destination.as_ref() {
+            let message = sync.message.as_ref().ok_or_else(|| {
+                ServiceError::Validation("missing channel receipt transcript message".into())
+            })?;
+            if message.channel_id != *id
+                || message.timestamp != sync.timestamp
+                || sync.timestamp == 0
+                || !message.body.is_empty()
+                || !message.attachments.is_empty()
+            {
+                return Err(ServiceError::Validation(
+                    "invalid channel receipt transcript".into(),
+                ));
             }
-            let channel: ChannelId = message.channel_id.parse().map_err(|_| {
+            let channel: ChannelId = id.parse().map_err(|_| {
                 ServiceError::Validation("invalid channel receipt transcript scope".into())
             })?;
-            let targets = sync.receipt_targets.iter().map(|target| {
-                let user: UserId = target.user_id.parse().map_err(|_| {
-                    ServiceError::Validation("invalid channel receipt target".into())
-                })?;
-                if user == current_user || target.device_id == 0 || target.device_id > 127 {
-                    return Err(ServiceError::Validation("invalid channel receipt target".into()));
-                }
-                Ok((user, crate::domain::ids::DeviceId(target.device_id)))
-            }).collect::<Result<Vec<_>, ServiceError>>()?;
+            let targets = sync
+                .receipt_targets
+                .iter()
+                .map(|target| {
+                    let user: UserId = target.user_id.parse().map_err(|_| {
+                        ServiceError::Validation("invalid channel receipt target".into())
+                    })?;
+                    if user == current_user || target.device_id == 0 || target.device_id > 127 {
+                        return Err(ServiceError::Validation(
+                            "invalid channel receipt target".into(),
+                        ));
+                    }
+                    Ok((user, crate::domain::ids::DeviceId(target.device_id)))
+                })
+                .collect::<Result<Vec<_>, ServiceError>>()?;
             crate::storage::repositories::message_receipt_repo::MessageReceiptRepository::new(
                 self.settings_repo.database().clone(),
-            ).snapshot_for_send(
+            )
+            .snapshot_for_send(
                 channel,
                 ConversationType::Channel,
                 current_user,
@@ -519,7 +537,12 @@ impl MessageGateway {
             });
         }
 
-        let destination: UserId = sync.destination_user_id.parse().map_err(|e| {
+        let Some(Destination::DestinationUserId(id)) = sync.destination.as_ref() else {
+            return Err(ServiceError::Validation(
+                "SyncSent has no destination".into(),
+            ));
+        };
+        let destination: UserId = id.parse().map_err(|e| {
             ServiceError::Validation(format!("SyncSent has invalid destination_user_id: {e}"))
         })?;
 
@@ -543,6 +566,11 @@ impl MessageGateway {
         let data_message = sync
             .message
             .ok_or_else(|| ServiceError::Validation("SyncSent carried no inner message".into()))?;
+        if !data_message.channel_id.is_empty() {
+            return Err(ServiceError::Validation(
+                "DM SyncSent carried channel message".into(),
+            ));
+        }
 
         // Our own timer change (or a message restating our timer) made on
         // another device: adopt it for the conversation with the recipient,

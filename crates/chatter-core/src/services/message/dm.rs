@@ -1028,7 +1028,7 @@ pub(super) fn sync_sent_copy(
     peer_id: &UserId,
     content: &crate::proto::content_v1::Content,
 ) -> Option<crate::proto::content_v1::Content> {
-    use crate::proto::content_v1::{Content, SyncSent, content};
+    use crate::proto::content_v1::{Content, SyncSent, content, sync_sent::Destination};
 
     let Some(content::Content::DataMessage(dm)) = &content.content else {
         return None;
@@ -1039,7 +1039,7 @@ pub(super) fn sync_sent_copy(
     (is_message && dm.delete.is_none()).then(|| Content {
         timestamp: content.timestamp,
         content: Some(content::Content::SyncSent(SyncSent {
-            destination_user_id: peer_id.to_string(),
+            destination: Some(Destination::DestinationUserId(peer_id.to_string())),
             timestamp: dm.timestamp,
             message: Some(dm.clone()),
             receipt_targets: Vec::new(),
@@ -1161,7 +1161,14 @@ mod sync_sent_copy_tests {
         let Some(content::Content::SyncSent(sync)) = copy.content else {
             panic!("not a SyncSent")
         };
-        assert_eq!(sync.destination_user_id, peer.to_string());
+        assert_eq!(
+            sync.destination,
+            Some(
+                crate::proto::content_v1::sync_sent::Destination::DestinationUserId(
+                    peer.to_string()
+                )
+            )
+        );
         assert_eq!(sync.message.unwrap().body, "hi");
 
         let empty = Content {

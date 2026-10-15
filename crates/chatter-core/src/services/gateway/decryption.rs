@@ -524,7 +524,7 @@ impl MessageGateway {
             if let Some(content::Content::SyncSent(sync)) = content_proto.content {
                 tracing::info!(
                     sender_id = %sender_id,
-                    destination = %sync.destination_user_id,
+                    destination = ?sync.destination,
                     "GATEWAY: Received SyncSent self-sync, filing as outgoing to destination"
                 );
                 return self.store_synced_sent_message(sync, sender_id).await;

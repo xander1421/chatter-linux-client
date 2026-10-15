@@ -45,7 +45,10 @@ impl MessageService {
         let me = self.current_user_id()?;
         let mut by_author: HashMap<UserId, Vec<u64>> = HashMap::new();
         for &timestamp in timestamps {
-            if let Some(message) = self.message_repo.get_by_conversation_timestamp(&channel, timestamp)? {
+            if let Some(message) = self
+                .message_repo
+                .get_by_conversation_timestamp(&channel, timestamp)?
+            {
                 if message.conversation_type == ConversationType::Channel {
                     if let Some(author) = message.sender_id.filter(|author| *author != me) {
                         by_author.entry(author).or_default().push(timestamp);
@@ -57,22 +60,42 @@ impl MessageService {
         let mut client = self.message_client();
         for (author, stamps) in by_author {
             let mut content = if read {
-                crate::services::gateway::build_read_receipt_content_with_channel(stamps, Some(&channel.to_string()))
+                crate::services::gateway::build_read_receipt_content_with_channel(
+                    stamps,
+                    Some(&channel.to_string()),
+                )
             } else {
-                crate::services::gateway::build_delivery_receipt_content_with_channel(stamps, Some(&channel.to_string()))
+                crate::services::gateway::build_delivery_receipt_content_with_channel(
+                    stamps,
+                    Some(&channel.to_string()),
+                )
             };
             Self::pad_content_to_bucket(&mut content);
-            let outcome = self.deposit_sealed_to_all_devices(
-                &mut auth,
-                &mut client,
-                &author.to_string(),
-                &content.encode_to_vec(),
-                None,
-            ).await;
+            let outcome = self
+                .deposit_sealed_to_all_devices(
+                    &mut auth,
+                    &mut client,
+                    &author.to_string(),
+                    &content.encode_to_vec(),
+                    None,
+                )
+                .await;
             if outcome.delivered == 0 {
-                return Err(outcome.error.unwrap_or_else(|| MessageError::EncryptionFailed("channel receipt reached no author device".into())));
+                return Err(outcome.error.unwrap_or_else(|| {
+                    MessageError::EncryptionFailed(
+                        "channel receipt reached no author device".into(),
+                    )
+                }));
             }
-            self.record_pairwise_send(&content, &outcome.deposits.iter().map(|&(device, server_ts)| (author, device, server_ts)).collect::<Vec<_>>(), None);
+            self.record_pairwise_send(
+                &content,
+                &outcome
+                    .deposits
+                    .iter()
+                    .map(|&(device, server_ts)| (author, device, server_ts))
+                    .collect::<Vec<_>>(),
+                None,
+            );
         }
         Ok(())
     }
@@ -207,33 +230,52 @@ impl MessageService {
         &self,
         content: &mut crate::proto::content_v1::Content,
     ) -> Result<(), MessageError> {
-        use crate::proto::content_v1::{SyncSentReceiptTarget, content::Content};
+        use crate::proto::content_v1::{
+            SyncSentReceiptTarget, content::Content, sync_sent::Destination,
+        };
         let Some(Content::SyncSent(sync)) = content.content.as_mut() else {
             return Ok(());
         };
-        let (conversation, kind) = if let Some(channel) = sync
-            .message
-            .as_ref()
-            .filter(|message| !message.channel_id.is_empty())
-        {
-            if !sync.destination_user_id.is_empty() {
-                return Err(MessageError::InvalidContent("channel sync has DM destination".into()));
+        let (conversation, kind) = match sync.destination.as_ref() {
+            Some(Destination::DestinationChannelId(id)) => {
+                let channel = sync
+                    .message
+                    .as_ref()
+                    .ok_or_else(|| MessageError::InvalidContent("missing sync message".into()))?;
+                if channel.channel_id != *id || channel.timestamp != sync.timestamp {
+                    return Err(MessageError::InvalidContent(
+                        "invalid channel sync scope".into(),
+                    ));
+                }
+                (
+                    id.parse()
+                        .map_err(|_| MessageError::InvalidContent("invalid sync channel".into()))?,
+                    ConversationType::Channel,
+                )
             }
-            (channel.channel_id.parse().map_err(|_| MessageError::InvalidContent("invalid sync channel".into()))?, ConversationType::Channel)
-        } else {
-            let peer: UserId = sync
-                .destination_user_id
-                .parse()
-                .map_err(|_| MessageError::InvalidContent("invalid sync destination".into()))?;
-            (ChannelId::from(peer), ConversationType::ServerDm)
+            Some(Destination::DestinationUserId(id)) => {
+                if sync
+                    .message
+                    .as_ref()
+                    .is_some_and(|message| !message.channel_id.is_empty())
+                {
+                    return Err(MessageError::InvalidContent(
+                        "DM sync has channel message".into(),
+                    ));
+                }
+                let peer: UserId = id
+                    .parse()
+                    .map_err(|_| MessageError::InvalidContent("invalid sync destination".into()))?;
+                (ChannelId::from(peer), ConversationType::ServerDm)
+            }
+            None => {
+                return Err(MessageError::InvalidContent(
+                    "missing sync destination".into(),
+                ));
+            }
         };
         sync.receipt_targets = MessageReceiptRepository::new(self.database.clone())
-            .targets_for_send(
-                conversation,
-                kind,
-                self.current_user_id()?,
-                sync.timestamp,
-            )?
+            .targets_for_send(conversation, kind, self.current_user_id()?, sync.timestamp)?
             .into_iter()
             .map(|(user, device)| SyncSentReceiptTarget {
                 user_id: user.to_string(),
@@ -253,10 +295,12 @@ impl MessageService {
         sent_at: u64,
         auth: &mut crate::network::grpc::auth_client::AuthClient,
     ) {
-        use crate::proto::content_v1::{Content, DataMessage, SyncSent, content};
+        use crate::proto::content_v1::{
+            Content, DataMessage, SyncSent, content, sync_sent::Destination,
+        };
         let sync = Content {
             content: Some(content::Content::SyncSent(SyncSent {
-                destination_user_id: String::new(),
+                destination: Some(Destination::DestinationChannelId(channel.to_string())),
                 timestamp: sent_at,
                 message: Some(DataMessage {
                     channel_id: channel.to_string(),
