@@ -413,6 +413,23 @@ impl BleRuntime {
         }
         self.maintain_prekeys(now_millis()).await;
 
+        // A crash may have stopped after libsignal wrote its ratchet but before
+        // the timeline and dedup marker were both durable. Restore the saved
+        // pre-decrypt state, then replay the exact retained carrier.
+        if let Ok(Some((owner, _))) = self.key_store.mesh_local_account_device() {
+            match self.binding_store.pending_mesh_receive_replays(&owner) {
+                Ok(pending) => {
+                    for (peer, _id, carrier, timestamp) in pending {
+                        self.process_signal_carrier(&carrier, &peer, timestamp, true)
+                            .await;
+                    }
+                }
+                Err(error) => {
+                    self.degraded(format!("mesh Signal receive recovery failed: {error}"))
+                }
+            }
+        }
+
         self.announce().await;
 
         let radio = Arc::clone(&self.radio);
@@ -1040,7 +1057,7 @@ impl BleRuntime {
             Some(MessageType::ChatterCarrier) => {
                 return self.on_signal_carrier(packet, claimed).await;
             }
-            Some(MessageType::CourierEnvelope) => self.on_courier_envelope(packet, claimed),
+            Some(MessageType::CourierEnvelope) => self.on_courier_envelope(packet, claimed).await,
             Some(MessageType::RequestSync) => self.on_request_sync(packet, claimed).await,
             Some(MessageType::FileTransfer) => self.on_file_transfer(packet, claimed),
             Some(MessageType::FileManifest) => self.on_file_manifest(packet, claimed),
@@ -1343,6 +1360,19 @@ impl BleRuntime {
             // A peer we have not synced with yet gets our public history.
             if let Ok(send) = self.gossip.initial_sync_to(claimed, now_s) {
                 self.dispatch_sync(send).await;
+            }
+            // A newly reachable verified peer can carry previously queued
+            // Signal ciphertext for some other verified recipient.
+            if let Ok(Some((owner, _))) = self.key_store.mesh_local_account_device()
+                && let Ok(pending) = self
+                    .binding_store
+                    .pending_mesh_courier_carriers(&owner, now_s)
+            {
+                for (recipient, carrier) in pending {
+                    if recipient != *claimed {
+                        self.send_signal_carrier(&recipient, carrier).await;
+                    }
+                }
             }
         }
 
@@ -2346,6 +2376,36 @@ impl BleRuntime {
     /// decryption. Relays see a bounded opaque packet and never handle account
     /// identity or Signal plaintext.
     async fn on_signal_carrier(&mut self, packet: &BitchatPacket, claimed: &PeerId) -> bool {
+        if packet.recipient_id.is_none()
+            || signal_mesh::CarrierFrame::decode(&packet.payload, now_secs()).is_none()
+        {
+            return false;
+        }
+        if !self.addressed_to_us(packet) {
+            return true;
+        }
+        let Ok(Some((owner, _))) = self.key_store.mesh_local_account_device() else {
+            return false;
+        };
+        let Ok(Some(signing)) = self.binding_store.verified_signing_key(&owner, claimed) else {
+            return false;
+        };
+        if !verify_packet(packet, &signing) {
+            return false;
+        }
+        self.process_signal_carrier(&packet.payload, claimed, packet.timestamp, false)
+            .await
+    }
+
+    /// The outer courier seal authenticates the sender's Noise static key;
+    /// direct E4 packets are signature-checked before entering this function.
+    async fn process_signal_carrier(
+        &mut self,
+        bytes: &[u8],
+        claimed: &PeerId,
+        timestamp: u64,
+        replay: bool,
+    ) -> bool {
         use libsignal_protocol::{DeviceId, ProtocolAddress};
         let minute = now_secs() / 60;
         if self.carrier_ingress.len() >= 1024 {
@@ -2366,27 +2426,19 @@ impl BleRuntime {
             return false;
         }
         entry.1 += 1;
-        let Some(frame) = signal_mesh::CarrierFrame::decode(&packet.payload, now_secs()) else {
+        let Some(frame) = signal_mesh::CarrierFrame::decode(bytes, now_secs()) else {
             return false;
         };
-        if packet.recipient_id.is_none() {
-            return false;
-        }
-        if !self.addressed_to_us(packet) {
-            return true;
-        }
         if self.events.peer_blocked(claimed) {
             return false;
         }
         let Ok(Some((owner, local_device))) = self.key_store.mesh_local_account_device() else {
             return false;
         };
-        let Ok(Some(signing)) = self.binding_store.verified_signing_key(&owner, claimed) else {
+        let Ok(Some(_signing)) = self.binding_store.verified_signing_key(&owner, claimed) else {
             return false;
         };
-        if !verify_packet(packet, &signing)
-            || self.binding_store.signal_opted_in(&owner, claimed).ok() != Some(true)
-        {
+        if self.binding_store.signal_opted_in(&owner, claimed).ok() != Some(true) {
             return false;
         }
         let Ok(PeerBinding::Verified {
@@ -2409,6 +2461,14 @@ impl BleRuntime {
         );
         let local = ProtocolAddress::new(owner.clone(), local_device);
         let _guard = self.signal_lock.lock();
+        if replay
+            && self
+                .binding_store
+                .abort_mesh_receive(&owner, claimed, &frame.message_id)
+                .is_err()
+        {
+            return false;
+        }
         match self
             .binding_store
             .mesh_received(&owner, claimed, &frame.message_id)
@@ -2455,6 +2515,22 @@ impl BleRuntime {
             Ok(Some(_)) => return true,
             Err(_) => return false,
         }
+        let session_address = format!("mesh:{owner}:{}:{}", remote.name(), remote.device_id());
+        if self
+            .binding_store
+            .begin_mesh_receive(
+                &owner,
+                claimed,
+                &frame.message_id,
+                bytes,
+                timestamp,
+                &session_address,
+                frame.ciphertext_type == 2,
+            )
+            .is_err()
+        {
+            return false;
+        }
         let mut store = crate::crypto::signal::SignalStore::for_mesh(
             self.key_store.clone(),
             self.binding_store.clone(),
@@ -2467,10 +2543,16 @@ impl BleRuntime {
             Ok(bytes) => bytes,
             Err(error) => {
                 tracing::warn!(target: "mesh::ble", peer=%claimed, %error, "mesh Signal decrypt rejected");
+                let _ = self
+                    .binding_store
+                    .abort_mesh_receive(&owner, claimed, &frame.message_id);
                 return false;
             }
         };
         let Some(plain) = signal_mesh::SignalPlaintext::decode(&plaintext, now_secs()) else {
+            let _ = self
+                .binding_store
+                .abort_mesh_receive(&owner, claimed, &frame.message_id);
             return false;
         };
         if plain.conversation_id != signal_mesh::conversation_id(&self.identity.peer_id(), claimed)
@@ -2478,31 +2560,55 @@ impl BleRuntime {
             || plain.recipient_device != u32::from(local_device)
             || plain.expires_at != frame.expires_at
         {
+            let _ = self
+                .binding_store
+                .abort_mesh_receive(&owner, claimed, &frame.message_id);
             return false;
         }
         if matches!(plain.kind, signal_mesh::PlainKind::Text)
             && (plain.message_id != frame.message_id || plain.text.is_empty())
         {
+            let _ = self
+                .binding_store
+                .abort_mesh_receive(&owner, claimed, &frame.message_id);
             return false;
         }
         let kind = match plain.kind {
             signal_mesh::PlainKind::Text => 1,
             signal_mesh::PlainKind::Delivered => 2,
         };
-        if self
-            .binding_store
-            .mark_mesh_received(&owner, claimed, &frame.message_id, kind, frame.expires_at)
-            .ok()
-            != Some(true)
-        {
-            return false;
-        }
         let wire_id = uuid::Uuid::from_bytes(plain.message_id)
             .to_string()
             .to_uppercase();
+        let signal_message = matches!(plain.kind, signal_mesh::PlainKind::Text)
+            .then(|| self.signal_dm_message(claimed, &wire_id, &plain.text, timestamp));
+        if signal_message
+            .as_ref()
+            .is_some_and(|message| self.events.persist_signal_received(message).is_err())
+        {
+            let _ = self
+                .binding_store
+                .abort_mesh_receive(&owner, claimed, &frame.message_id);
+            return false;
+        }
+        let delivery_id = mapping::wire_message_id(&wire_id).to_string();
+        let receipt_for = matches!(plain.kind, signal_mesh::PlainKind::Delivered)
+            .then_some((&plain.message_id, delivery_id.as_str()));
+        let Ok((true, acknowledged)) = self.binding_store.finish_mesh_receive(
+            &owner,
+            claimed,
+            &frame.message_id,
+            kind,
+            frame.expires_at,
+            receipt_for,
+        ) else {
+            return false;
+        };
+        if let Some(message) = signal_message {
+            self.events.publish_signal_received(message);
+        }
         let reply = match plain.kind {
             signal_mesh::PlainKind::Text => {
-                self.emit_dm(claimed, &wire_id, &plain.text, packet.timestamp);
                 let receipt_id = uuid::Uuid::new_v4();
                 let receipt = signal_mesh::SignalPlaintext {
                     kind: signal_mesh::PlainKind::Delivered,
@@ -2524,16 +2630,11 @@ impl BleRuntime {
                 .ok()
             }
             signal_mesh::PlainKind::Delivered => {
-                if self
-                    .binding_store
-                    .acknowledge_mesh_carrier(&owner, claimed, &plain.message_id)
-                    .ok()
-                    == Some(true)
-                {
-                    let _ = self.router.send(RouterCommand::Acked {
+                if acknowledged {
+                    self.events.send(MeshEvent::Delivery {
                         message_id: wire_id,
-                        peer: claimed.clone(),
-                        kind: AckKind::Delivered,
+                        peer: Some(claimed.clone()),
+                        state: super::events::MeshDelivery::Delivered,
                     });
                 }
                 None
@@ -2559,7 +2660,7 @@ impl BleRuntime {
         });
     }
 
-    fn on_courier_envelope(&mut self, packet: &BitchatPacket, claimed: &PeerId) {
+    async fn on_courier_envelope(&mut self, packet: &BitchatPacket, claimed: &PeerId) {
         let Ok(envelope) = CourierEnvelope::decode(&packet.payload) else {
             return;
         };
@@ -2569,6 +2670,17 @@ impl BleRuntime {
         if let Some((plaintext, sender_key)) =
             super::prekeys::open_envelope(&self.state, &envelope, &self.identity, now_millis())
         {
+            if let Some(carrier) = plaintext.strip_prefix(b"CSM1") {
+                let sender = PeerId::from_noise_key(&sender_key);
+                if let Ok(Some((owner, _))) = self.key_store.mesh_local_account_device()
+                    && self.binding_store.verified_noise_key(&owner, &sender).ok()
+                        == Some(Some(sender_key))
+                {
+                    self.process_signal_carrier(carrier, &sender, packet.timestamp, false)
+                        .await;
+                }
+                return;
+            }
             if let Some((NoisePayloadType::PrivateMessage, body)) = decode_noise_payload(&plaintext)
                 && let Ok(message) = PrivateMessagePacket::decode(body)
             {
@@ -2878,7 +2990,38 @@ impl BleRuntime {
     }
 
     async fn send_signal_carrier(&mut self, peer: &PeerId, bytes: Vec<u8>) {
-        if signal_mesh::CarrierFrame::decode(&bytes, now_secs()).is_none() {
+        let Some(frame) = signal_mesh::CarrierFrame::decode(&bytes, now_secs()) else {
+            return;
+        };
+        let Ok(Some((owner, _))) = self.key_store.mesh_local_account_device() else {
+            return;
+        };
+        if !matches!(
+            self.binding_store.state(&owner, peer),
+            Ok(PeerBinding::Verified { .. })
+        ) || self.binding_store.signal_opted_in(&owner, peer).ok() != Some(true)
+        {
+            return;
+        }
+        // Every offline copy contains the complete E4 carrier. Couriers only
+        // learn the rotating recipient tag and a bounded sealed ciphertext.
+        let compatible = self.state.with(|state| {
+            state.chatter_hello.get(peer).is_some_and(|hello| {
+                hello.compatible()
+                    && hello.capabilities & super::chatter_hello::SIGNAL_MESH != 0
+                    && hello.max_carrier_bytes >= signal_mesh::MAX_CARRIER as u32
+            })
+        });
+        if !self.state.can_write_to(peer) || !compatible {
+            if self
+                .binding_store
+                .queue_mesh_carrier(&owner, peer, &frame)
+                .is_err()
+            {
+                return;
+            }
+            self.courier_signal_carrier(peer, &bytes, frame.message_id, frame.expires_at)
+                .await;
             return;
         }
         let mut packet = self.build_packet(
@@ -2891,7 +3034,102 @@ impl BleRuntime {
             return;
         };
         packet.signature = Some(signature);
-        self.transmit(&packet, Some(peer), None).await;
+        if self.transmit(&packet, Some(peer), None).await {
+            self.events.send(MeshEvent::Delivery {
+                message_id: uuid::Uuid::from_bytes(frame.message_id)
+                    .to_string()
+                    .to_uppercase(),
+                peer: Some(peer.clone()),
+                state: super::events::MeshDelivery::Secure,
+            });
+        }
+    }
+
+    async fn courier_signal_carrier(
+        &mut self,
+        recipient: &PeerId,
+        bytes: &[u8],
+        id: [u8; 16],
+        expiry: u64,
+    ) {
+        use chatter_mesh::tlv::courier_envelope::{epoch_day, recipient_tag};
+        use chatter_mesh_store::courier::INITIAL_COPIES;
+        let Ok(Some((owner, _))) = self.key_store.mesh_local_account_device() else {
+            return;
+        };
+        let Ok(Some(recipient_key)) = self.binding_store.verified_noise_key(&owner, recipient)
+        else {
+            return;
+        };
+        let mut payload = Vec::with_capacity(4 + bytes.len());
+        payload.extend_from_slice(b"CSM1");
+        payload.extend_from_slice(bytes);
+        let Some((sealed, prekey_id)) = super::prekeys::seal_offline(
+            &self.state,
+            &payload,
+            &recipient_key,
+            &self.identity,
+            now_millis(),
+        ) else {
+            return;
+        };
+        let envelope = CourierEnvelope::new(
+            recipient_tag(&recipient_key, epoch_day(now_secs())),
+            expiry.saturating_mul(1_000),
+            sealed,
+            1,
+            prekey_id,
+        );
+        if envelope.encode().is_err() {
+            return;
+        }
+        let candidates: Vec<_> = self
+            .state
+            .peer_snapshots()
+            .into_iter()
+            .filter(|p| {
+                p.peer != *recipient
+                    && p.is_verified
+                    && p.is_connected
+                    && self.state.can_write_to(&p.peer)
+            })
+            .take(usize::from(INITIAL_COPIES))
+            .map(|p| p.peer)
+            .collect();
+        let mut handed = false;
+        for courier in candidates {
+            if self
+                .binding_store
+                .reserve_mesh_courier(&owner, recipient, &id, &courier)
+                .ok()
+                != Some(true)
+            {
+                continue;
+            }
+            let Ok(payload) = envelope.encode() else {
+                break;
+            };
+            let packet = self.build_packet(
+                MessageType::CourierEnvelope,
+                Some(&courier),
+                payload,
+                chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+            );
+            if self.transmit(&packet, Some(&courier), None).await {
+                handed = true;
+            } else {
+                let _ = self
+                    .binding_store
+                    .release_mesh_courier(&owner, recipient, &id, &courier);
+            }
+        }
+        if handed {
+            self.events.send(MeshEvent::Delivery {
+                message_id: uuid::Uuid::from_bytes(id).to_string().to_uppercase(),
+                peer: Some(recipient.clone()),
+                state: super::events::MeshDelivery::SignalRelayed,
+            });
+        }
     }
 
     async fn send_chatter_hello(&mut self, peer: &PeerId) {
@@ -3531,10 +3769,10 @@ impl BleRuntime {
         packet: &BitchatPacket,
         directed_peer: Option<&PeerId>,
         ingress_link: Option<&LinkId>,
-    ) {
+    ) -> bool {
         let padding = fragment::pads_ble_frame(packet.msg_type);
         let Ok(encoded) = codec::encode(packet, padding) else {
-            return;
+            return false;
         };
 
         // Split horizon has to be by *peer*, not only by link. Two devices can hold
@@ -3594,7 +3832,7 @@ impl BleRuntime {
                     now_secs(),
                 );
             });
-            return;
+            return false;
         }
 
         if plan.selected.is_empty() {
@@ -3608,7 +3846,7 @@ impl BleRuntime {
                 links = self.state.link_candidates().len(),
                 "nothing to write to; packet not sent"
             );
-            return;
+            return false;
         }
         tracing::debug!(
             target: "mesh::ble",
@@ -3644,6 +3882,7 @@ impl BleRuntime {
         //
         // The cost is that a one-frame packet waits up to one interval too. That is
         // the price of not having to decide per packet which ones are large.
+        let mut admitted_all = true;
         for link in plan.selected.iter() {
             for frame in &frames {
                 let admitted = self.state.with(|state| {
@@ -3658,6 +3897,7 @@ impl BleRuntime {
                 // and has to be said out loud — which is what `#[must_use]` on
                 // `WriteEnqueue` is for.
                 if !matches!(admitted, WriteEnqueue::Enqueued { .. }) {
+                    admitted_all = false;
                     tracing::warn!(
                         target: "mesh::ble",
                         link = %link,
@@ -3667,6 +3907,7 @@ impl BleRuntime {
                 }
             }
         }
+        admitted_all
     }
 
     async fn relay(&self, ingress: &LinkId, packet: &BitchatPacket, local: &PeerId) {
@@ -4186,6 +4427,35 @@ impl BleRuntime {
             is_local: false,
             sender_verified: verified,
         })));
+    }
+
+    fn signal_dm_message(
+        &self,
+        peer: &PeerId,
+        message_id: &str,
+        content: &str,
+        timestamp_ms: u64,
+    ) -> MeshMessage {
+        let nickname = self
+            .state
+            .with(|state| state.peers.nickname(peer, false).map(str::to_string))
+            .unwrap_or_else(|| peer.as_str().to_string());
+        let inbound = InboundMessage {
+            wire_id: message_id.to_string(),
+            conversation: MeshConversation::Dm(peer.clone()),
+            sender: peer.clone(),
+            nickname: nickname.clone(),
+            content: content.to_string(),
+            timestamp_ms,
+        };
+        MeshMessage {
+            message: inbound.to_domain(),
+            conversation: inbound.conversation,
+            sender: peer.clone(),
+            nickname,
+            is_local: false,
+            sender_verified: true,
+        }
     }
 
     fn addressed_to_us(&self, packet: &BitchatPacket) -> bool {

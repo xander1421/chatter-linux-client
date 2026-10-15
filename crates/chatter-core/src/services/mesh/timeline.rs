@@ -868,6 +868,22 @@ pub struct MeshEvents {
 }
 
 impl MeshEvents {
+    /// Signal receive must know the row reached SQLCipher before committing its
+    /// ratchet and dedup marker. A failed insert leaves the receive journal for
+    /// rollback/replay and never emits a delivery receipt.
+    pub fn persist_signal_received(&self, message: &MeshMessage) -> Result<(), StorageError> {
+        if self.peer_blocked(&message.sender) {
+            return Err(StorageError::InvalidData(
+                "blocked mesh Signal sender".into(),
+            ));
+        }
+        self.timeline.record(message)?;
+        Ok(())
+    }
+
+    pub fn publish_signal_received(&self, message: MeshMessage) {
+        let _ = self.events.send(MeshEvent::Message(Box::new(message)));
+    }
     /// A fan-out buffering `capacity` events, storing through `timeline`.
     #[must_use]
     pub fn new(capacity: usize, timeline: Arc<MeshTimeline>) -> Self {
@@ -896,8 +912,11 @@ impl MeshEvents {
 
     pub fn set_peer_muted(&self, peer: &PeerId, muted: bool) {
         let mut peers = self.muted_peers.lock();
-        if muted { peers.insert(peer.as_str().to_owned()); }
-        else { peers.remove(peer.as_str()); }
+        if muted {
+            peers.insert(peer.as_str().to_owned());
+        } else {
+            peers.remove(peer.as_str());
+        }
     }
 
     pub fn peer_muted(&self, peer: &PeerId) -> bool {

@@ -33,7 +33,7 @@ export component MeshContextBar inherits Rectangle {
         !MeshGlobal.mesh-on
             ? "The mesh is switched off, so nothing is sent or received over Bluetooth. Earlier messages are still here."
       : MeshGlobal.active-kind == "dm" && MeshGlobal.active-signal-enabled
-            ? "Signal setup needs a live key exchange. Messages then wait for a Bluetooth route; delivered means an encrypted receipt arrived."
+            ? "Signal setup needs a live key exchange. Queued stays here; relayed means a sealed copy entered a courier link, which may fail; delivered needs an encrypted receipt."
       : MeshGlobal.active-kind == "dm"
             ? (MeshGlobal.active-reachable
                 ? "Best-effort: sent means handed on, not arrived."

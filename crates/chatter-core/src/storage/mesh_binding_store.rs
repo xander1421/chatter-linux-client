@@ -206,6 +206,25 @@ impl MeshBindingStore {
         .transpose()
     }
 
+    /// Offline courier sealing uses the exact Noise static key covered by the
+    /// locally verified MP1 binding, never a fresh unverified announce.
+    pub fn verified_noise_key(
+        &self,
+        owner: &str,
+        peer: &PeerId,
+    ) -> Result<Option<[u8; 32]>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let key: Option<Vec<u8>> = conn.query_row(
+            "SELECT mesh_static FROM mesh_account_bindings WHERE owner_id=?1 AND peer_id=?2 AND state=1",
+            params![owner, peer.as_str()], |r| r.get(0),
+        ).optional()?;
+        key.map(|key| {
+            key.try_into()
+                .map_err(|_| StorageError::InvalidData("invalid verified mesh static key".into()))
+        })
+        .transpose()
+    }
+
     pub fn signal_opted_in(&self, owner: &str, peer: &PeerId) -> Result<bool, StorageError> {
         let conn = self.db.read_connection()?;
         let enabled: Option<i64> = conn
@@ -241,6 +260,10 @@ impl MeshBindingStore {
                 "DELETE FROM mesh_signal_outbox WHERE owner_id=?1 AND peer_id=?2",
                 params![owner, peer.as_str()],
             )?;
+            tx.execute(
+                "DELETE FROM mesh_signal_courier_handoffs WHERE owner_id=?1 AND peer_id=?2",
+                params![owner, peer.as_str()],
+            )?;
         }
         tx.commit()?;
         Ok(())
@@ -257,6 +280,10 @@ impl MeshBindingStore {
             .map_err(|_| StorageError::InvalidData("invalid mesh Signal carrier".into()))?;
         let mut conn = self.db.connection()?;
         let tx = conn.transaction()?;
+        if tx.query_row("SELECT 1 FROM mesh_signal_outbox WHERE owner_id=?1 AND peer_id=?2 AND message_id=?3",
+            params![owner, peer.as_str(), &frame.message_id[..]], |_| Ok(())).optional()?.is_some() {
+            return Ok(bytes);
+        }
         tx.execute(
             "DELETE FROM mesh_signal_outbox WHERE expires_at<strftime('%s','now')",
             [],
@@ -297,16 +324,77 @@ impl MeshBindingStore {
             .map_err(StorageError::Database)
     }
 
-    pub fn acknowledge_mesh_carrier(
+    /// At most 64 pending carriers are reconsidered when a new verified
+    /// courier connects. The handoff ledger below enforces four distinct
+    /// couriers across reconnects and restarts.
+    pub fn pending_mesh_courier_carriers(
+        &self,
+        owner: &str,
+        now: u64,
+    ) -> Result<Vec<(PeerId, Vec<u8>)>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let mut stmt = conn.prepare("SELECT o.peer_id,o.carrier FROM mesh_signal_outbox o
+            JOIN mesh_signal_opt_in i ON i.owner_id=o.owner_id AND i.peer_id=o.peer_id AND i.enabled=1
+            WHERE o.owner_id=?1 AND o.expires_at>=?2 AND
+            (SELECT COUNT(*) FROM mesh_signal_courier_handoffs h WHERE
+                h.owner_id=o.owner_id AND h.peer_id=o.peer_id AND h.message_id=o.message_id)<4
+            ORDER BY o.rowid LIMIT 64")?;
+        let rows = stmt.query_map(
+            params![owner, i64::try_from(now).unwrap_or(i64::MAX)],
+            |r| {
+                Ok((
+                    PeerId::from_str(&r.get::<_, String>(0)?),
+                    r.get::<_, Vec<u8>>(1)?,
+                ))
+            },
+        )?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StorageError::Database)
+    }
+
+    pub fn reserve_mesh_courier(
         &self,
         owner: &str,
         peer: &PeerId,
         id: &[u8; 16],
+        courier: &PeerId,
     ) -> Result<bool, StorageError> {
-        Ok(self.db.connection()?.execute(
-            "DELETE FROM mesh_signal_outbox WHERE owner_id=?1 AND peer_id=?2 AND message_id=?3",
+        let mut conn = self.db.connection()?;
+        let tx = conn.transaction()?;
+        let pending: i64 = tx.query_row("SELECT COUNT(*) FROM mesh_signal_outbox
+            WHERE owner_id=?1 AND peer_id=?2 AND message_id=?3 AND expires_at>=strftime('%s','now')",
+            params![owner, peer.as_str(), &id[..]], |r| r.get(0))?;
+        let count: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM mesh_signal_courier_handoffs
+            WHERE owner_id=?1 AND peer_id=?2 AND message_id=?3",
             params![owner, peer.as_str(), &id[..]],
-        )? == 1)
+            |r| r.get(0),
+        )?;
+        if pending == 0 || count >= 4 {
+            return Ok(false);
+        }
+        let inserted = tx.execute(
+            "INSERT OR IGNORE INTO mesh_signal_courier_handoffs
+            (owner_id,peer_id,message_id,courier_id) VALUES(?1,?2,?3,?4)",
+            params![owner, peer.as_str(), &id[..], courier.as_str()],
+        )? == 1;
+        tx.commit()?;
+        Ok(inserted)
+    }
+
+    pub fn release_mesh_courier(
+        &self,
+        owner: &str,
+        peer: &PeerId,
+        id: &[u8; 16],
+        courier: &PeerId,
+    ) -> Result<(), StorageError> {
+        self.db.connection()?.execute(
+            "DELETE FROM mesh_signal_courier_handoffs
+            WHERE owner_id=?1 AND peer_id=?2 AND message_id=?3 AND courier_id=?4",
+            params![owner, peer.as_str(), &id[..], courier.as_str()],
+        )?;
+        Ok(())
     }
 
     pub fn mesh_received(
@@ -322,20 +410,219 @@ impl MeshBindingStore {
         ).optional().map_err(StorageError::Database)
     }
 
-    pub fn mark_mesh_received(
+    /// Save the pre-decrypt ratchet and one-time-key state before libsignal can
+    /// mutate it. A pending row means recovery must restore this snapshot and
+    /// replay the retained carrier, even when the timeline insert succeeded.
+    pub fn begin_mesh_receive(
+        &self,
+        owner: &str,
+        peer: &PeerId,
+        id: &[u8; 16],
+        carrier: &[u8],
+        timestamp_ms: u64,
+        session_address: &str,
+        snapshot_prekeys: bool,
+    ) -> Result<(), StorageError> {
+        let mut conn = self.db.connection()?;
+        let tx = conn.transaction()?;
+        let pending: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM mesh_signal_receive_journal WHERE owner_id=?1",
+            [owner],
+            |r| r.get(0),
+        )?;
+        if pending != 0 {
+            return Err(StorageError::InvalidData(
+                "mesh Signal receive recovery is pending".into(),
+            ));
+        }
+        let old_session: Option<Vec<u8>> = tx
+            .query_row(
+                "SELECT record FROM sessions WHERE address=?1",
+                [session_address],
+                |r| r.get(0),
+            )
+            .optional()?;
+        tx.execute(
+            "INSERT INTO mesh_signal_receive_journal
+            (owner_id,peer_id,message_id,carrier,received_at_ms,session_address,old_session,snapshot_prekeys)
+            VALUES(?1,?2,?3,?4,?5,?6,?7,?8)",
+            params![
+                owner,
+                peer.as_str(),
+                &id[..],
+                carrier,
+                i64::try_from(timestamp_ms).unwrap_or(i64::MAX),
+                session_address,
+                old_session, i64::from(snapshot_prekeys)
+            ],
+        )?;
+        if snapshot_prekeys {
+            tx.execute(
+                "INSERT INTO mesh_signal_receive_prekeys
+            SELECT ?1,?2,?3,kind,key_id,record,used,expires_at FROM mesh_signal_prekeys
+            WHERE owner_id=?1",
+                params![owner, peer.as_str(), &id[..]],
+            )?;
+            tx.execute(
+                "INSERT INTO mesh_signal_receive_kyber_uses
+            SELECT ?1,?2,?3,kyber_id,ec_id,base_key,expires_at FROM mesh_signal_prekey_uses
+            WHERE owner_id=?1",
+                params![owner, peer.as_str(), &id[..]],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    /// Undo an interrupted receive in one SQLCipher transaction. The caller
+    /// serializes all mesh Signal ratchets with the shared signal lock.
+    pub fn abort_mesh_receive(
+        &self,
+        owner: &str,
+        peer: &PeerId,
+        id: &[u8; 16],
+    ) -> Result<(), StorageError> {
+        let mut conn = self.db.connection()?;
+        let tx = conn.transaction()?;
+        let old: Option<(String, Option<Vec<u8>>, i64)> = tx
+            .query_row(
+                "SELECT session_address,old_session,snapshot_prekeys FROM mesh_signal_receive_journal
+             WHERE owner_id=?1 AND peer_id=?2 AND message_id=?3",
+                params![owner, peer.as_str(), &id[..]],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?;
+        let Some((address, record, snapshot_prekeys)) = old else {
+            return Ok(());
+        };
+        match record {
+            Some(record) => {
+                tx.execute(
+                    "UPDATE sessions SET record=?2 WHERE address=?1",
+                    params![address, record],
+                )?;
+            }
+            None => {
+                tx.execute("DELETE FROM sessions WHERE address=?1", [address])?;
+            }
+        }
+        if snapshot_prekeys == 1 {
+            tx.execute("DELETE FROM mesh_signal_prekeys WHERE owner_id=?1", [owner])?;
+            tx.execute(
+                "INSERT INTO mesh_signal_prekeys
+            SELECT owner_id,kind,key_id,record,used,expires_at FROM mesh_signal_receive_prekeys
+            WHERE owner_id=?1 AND peer_id=?2 AND message_id=?3",
+                params![owner, peer.as_str(), &id[..]],
+            )?;
+            tx.execute(
+                "DELETE FROM mesh_signal_prekey_uses WHERE owner_id=?1",
+                [owner],
+            )?;
+            tx.execute(
+                "INSERT INTO mesh_signal_prekey_uses
+            SELECT owner_id,kyber_id,ec_id,base_key,expires_at FROM mesh_signal_receive_kyber_uses
+            WHERE owner_id=?1 AND peer_id=?2 AND message_id=?3",
+                params![owner, peer.as_str(), &id[..]],
+            )?;
+        }
+        Self::clear_receive_snapshot(&tx, owner, peer, id)?;
+        tx.commit()?;
+        Ok(())
+    }
+
+    fn clear_receive_snapshot(
+        tx: &rusqlite::Transaction<'_>,
+        owner: &str,
+        peer: &PeerId,
+        id: &[u8; 16],
+    ) -> Result<(), StorageError> {
+        for table in [
+            "mesh_signal_receive_prekeys",
+            "mesh_signal_receive_kyber_uses",
+            "mesh_signal_receive_journal",
+        ] {
+            tx.execute(
+                &format!("DELETE FROM {table} WHERE owner_id=?1 AND peer_id=?2 AND message_id=?3"),
+                params![owner, peer.as_str(), &id[..]],
+            )?;
+        }
+        Ok(())
+    }
+
+    /// Mark the decrypt complete only after the timeline row is durable. For
+    /// receipts, removal of the text outbox and its Delivered row is in this
+    /// same transaction as dedup and journal removal.
+    pub fn finish_mesh_receive(
         &self,
         owner: &str,
         peer: &PeerId,
         id: &[u8; 16],
         kind: i64,
         expires_at: u64,
-    ) -> Result<bool, StorageError> {
-        let conn = self.db.connection()?;
-        let inserted = conn.execute(
-            "INSERT OR IGNORE INTO mesh_signal_received(owner_id,peer_id,message_id,kind,expires_at) VALUES(?1,?2,?3,?4,?5)",
-            params![owner, peer.as_str(), &id[..], kind, i64::try_from(expires_at).unwrap_or(i64::MAX)],
-        )?;
-        Ok(inserted == 1)
+        receipt_for: Option<(&[u8; 16], &str)>,
+    ) -> Result<(bool, bool), StorageError> {
+        let mut conn = self.db.connection()?;
+        let tx = conn.transaction()?;
+        let inserted = tx.execute(
+            "INSERT OR IGNORE INTO mesh_signal_received
+            (owner_id,peer_id,message_id,kind,expires_at) VALUES(?1,?2,?3,?4,?5)",
+            params![
+                owner,
+                peer.as_str(),
+                &id[..],
+                kind,
+                i64::try_from(expires_at).unwrap_or(i64::MAX)
+            ],
+        )? == 1;
+        let mut acknowledged = false;
+        if let Some((message_id, delivery_id)) = receipt_for {
+            acknowledged = tx.execute(
+                "DELETE FROM mesh_signal_outbox WHERE owner_id=?1 AND peer_id=?2 AND message_id=?3",
+                params![owner, peer.as_str(), &message_id[..]],
+            )? == 1;
+            if acknowledged {
+                tx.execute("DELETE FROM mesh_signal_courier_handoffs WHERE owner_id=?1 AND peer_id=?2 AND message_id=?3",
+                    params![owner, peer.as_str(), &message_id[..]])?;
+                tx.execute(
+                    "INSERT INTO mesh_message_delivery(message_id,state,updated_at)
+                VALUES(?1,'delivered',?2) ON CONFLICT(message_id) DO UPDATE SET
+                state='delivered',updated_at=excluded.updated_at",
+                    params![delivery_id, chrono::Utc::now().to_rfc3339()],
+                )?;
+            }
+        }
+        Self::clear_receive_snapshot(&tx, owner, peer, id)?;
+        tx.commit()?;
+        Ok((inserted, acknowledged))
+    }
+
+    pub fn pending_mesh_receive_replays(
+        &self,
+        owner: &str,
+    ) -> Result<Vec<(PeerId, [u8; 16], Vec<u8>, u64)>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let mut stmt = conn.prepare("SELECT peer_id,message_id,carrier,received_at_ms FROM mesh_signal_receive_journal WHERE owner_id=?1 LIMIT 64")?;
+        let rows = stmt.query_map([owner], |r| {
+            Ok((
+                r.get::<_, String>(0)?,
+                r.get::<_, Vec<u8>>(1)?,
+                r.get::<_, Vec<u8>>(2)?,
+                r.get::<_, i64>(3)?,
+            ))
+        })?;
+        let mut out = Vec::new();
+        for row in rows {
+            let (peer, id, carrier, timestamp) = row?;
+            if let Ok(id) = <[u8; 16]>::try_from(id.as_slice()) {
+                out.push((
+                    PeerId::from_str(&peer),
+                    id,
+                    carrier,
+                    u64::try_from(timestamp).unwrap_or(0),
+                ));
+            }
+        }
+        Ok(out)
     }
 
     pub fn mark_key_changed(&self, owner: &str, peer: &PeerId) -> Result<(), StorageError> {
@@ -425,6 +712,10 @@ impl MeshBindingStore {
             "DELETE FROM mesh_signal_outbox WHERE owner_id=?1 AND expires_at<?2",
             params![owner, now],
         )?;
+        conn.execute("DELETE FROM mesh_signal_courier_handoffs WHERE owner_id=?1 AND NOT EXISTS (
+            SELECT 1 FROM mesh_signal_outbox o WHERE o.owner_id=mesh_signal_courier_handoffs.owner_id
+            AND o.peer_id=mesh_signal_courier_handoffs.peer_id
+            AND o.message_id=mesh_signal_courier_handoffs.message_id)", [owner])?;
         Ok(())
     }
 
@@ -756,6 +1047,10 @@ impl MeshBindingStore {
             "mesh_signal_received",
             "mesh_signal_outbox",
             "mesh_signal_opt_in",
+            "mesh_signal_courier_handoffs",
+            "mesh_signal_receive_journal",
+            "mesh_signal_receive_prekeys",
+            "mesh_signal_receive_kyber_uses",
         ] {
             tx.execute(&format!("DELETE FROM {table} WHERE owner_id=?1"), [owner])?;
         }
@@ -779,6 +1074,10 @@ impl MeshBindingStore {
             "mesh_signal_received",
             "mesh_signal_outbox",
             "mesh_signal_opt_in",
+            "mesh_signal_courier_handoffs",
+            "mesh_signal_receive_journal",
+            "mesh_signal_receive_prekeys",
+            "mesh_signal_receive_kyber_uses",
         ] {
             tx.execute(&format!("DELETE FROM {table}"), [])?;
         }
