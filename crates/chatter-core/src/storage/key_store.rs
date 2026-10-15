@@ -46,6 +46,36 @@ impl KeyStore {
         }
     }
 
+    /// Current account/device for the device-local mesh Signal path. These
+    /// settings are read together with the same SQLCipher connection.
+    #[cfg(feature = "mesh")]
+    pub fn mesh_local_account_device(&self) -> Result<Option<(String, u32)>, StorageError> {
+        use rusqlite::OptionalExtension;
+        let conn = self.db.read_connection()?;
+        let user: Option<Vec<u8>> = conn
+            .query_row(
+                "SELECT CAST(value AS BLOB) FROM settings WHERE key='auth.current_user_id'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let device: Option<Vec<u8>> = conn
+            .query_row(
+                "SELECT CAST(value AS BLOB) FROM settings WHERE key='auth.current_device_id'",
+                [],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let (Some(user), Some(device)) = (user, device) else {
+            return Ok(None);
+        };
+        let user: String = serde_json::from_slice(&user)
+            .map_err(|_| StorageError::InvalidData("invalid current account".into()))?;
+        let device: u32 = serde_json::from_slice(&device)
+            .map_err(|_| StorageError::InvalidData("invalid current device".into()))?;
+        Ok(Some((user, device)))
+    }
+
     /// Set the local identity.
     ///
     /// This should only be called once during device registration.
@@ -567,6 +597,28 @@ impl KeyStore {
         Ok(rows_affected > 0)
     }
 
+    /// Mesh sessions are local-only and can be destroyed on account removal.
+    /// The online ratchets have a different address format and are untouched.
+    pub fn delete_mesh_sessions(&self, owner: Option<&str>) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        match owner {
+            Some(owner) => {
+                let prefix = format!("mesh:{owner}:");
+                conn.execute(
+                    "DELETE FROM sessions WHERE substr(address, 1, length(?1)) = ?1",
+                    params![prefix],
+                )?;
+            }
+            None => {
+                conn.execute(
+                    "DELETE FROM sessions WHERE substr(address, 1, 5) = 'mesh:'",
+                    [],
+                )?;
+            }
+        }
+        Ok(())
+    }
+
     // `delete_sessions_for_user` is deliberately GONE. It was the §12 defect:
     // a peer device-roster change ran `DELETE FROM sessions WHERE address LIKE
     // 'user:%'`, destroying the archived ratchet states that let in-transit
@@ -580,7 +632,8 @@ impl KeyStore {
         let conn = self.db.connection()?;
         let mut stmt = conn.prepare(
             "SELECT DISTINCT substr(address, 1, instr(address, ':') - 1)
-             FROM sessions WHERE instr(address, ':') > 1 ORDER BY 1",
+             FROM sessions WHERE instr(address, ':') > 1
+               AND substr(address, 1, 5) <> 'mesh:' ORDER BY 1",
         )?;
         let rows = stmt.query_map([], |row| row.get(0))?;
         rows.collect::<Result<Vec<_>, _>>()

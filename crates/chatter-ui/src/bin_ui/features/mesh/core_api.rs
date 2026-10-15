@@ -211,6 +211,25 @@ pub fn share_identity(ui_ctx: &Arc<ChatterClient>, peer: &str) -> Result<(), Mes
     ui_ctx.mesh_share_identity(peer)
 }
 
+pub fn signal_opted_in(ui_ctx: &ChatterClient, peer: &str) -> Result<bool, MeshError> {
+    ui_ctx.mesh_signal_opted_in(peer)
+}
+
+pub fn signal_protection_label(
+    ui_ctx: &ChatterClient,
+    peer: &str,
+) -> Result<&'static str, MeshError> {
+    ui_ctx.mesh_signal_protection_label(peer)
+}
+
+pub fn set_signal_opt_in(
+    ui_ctx: &ChatterClient,
+    peer: &str,
+    enabled: bool,
+) -> Result<(), MeshError> {
+    ui_ctx.mesh_set_signal_opt_in(peer, enabled)
+}
+
 pub fn identity_qr_png(ui_ctx: &Arc<ChatterClient>, peer: &str) -> Result<Vec<u8>, MeshError> {
     ui_ctx.mesh_identity_qr_png(peer)
 }

@@ -183,6 +183,14 @@ fn apply_header(window: &MainWindow, ui_ctx: &ChatterClient, row: &MeshRow) {
     global.set_active_scope(row.scope.clone().into());
     global.set_active_reachable(row.reachable);
     global.set_active_verified(row.verified);
+    global.set_active_signal_enabled(
+        super::core_api::signal_opted_in(ui_ctx, row.scope.as_str()).unwrap_or(false),
+    );
+    global.set_active_protection_label(
+        super::core_api::signal_protection_label(ui_ctx, row.scope.as_str())
+            .unwrap_or("Noise (bitchat)")
+            .into(),
+    );
     global.set_notice("".into());
 }
 

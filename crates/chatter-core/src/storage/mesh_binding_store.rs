@@ -4,10 +4,12 @@
 use std::sync::Arc;
 
 use chatter_mesh::ids::PeerId;
+use prost::Message as _;
 use rusqlite::{OptionalExtension, params};
 
 use crate::error::StorageError;
 use crate::services::mesh::account_binding::{BindingV1, CLOCK_SKEW_SECS};
+use crate::services::mesh::signal_mesh::BundleFrame;
 use crate::storage::Database;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -148,7 +150,7 @@ impl MeshBindingStore {
     ) -> Result<Option<([u8; 16], Vec<u8>)>, StorageError> {
         let conn = self.db.read_connection()?;
         let row: Option<(Vec<u8>, Vec<u8>)> = conn.query_row(
-            "SELECT account_id,signal_identity FROM mesh_account_bindings WHERE owner_id=?1 AND peer_id=?2 AND method=1",
+            "SELECT account_id,signal_identity FROM mesh_account_bindings WHERE owner_id=?1 AND peer_id=?2",
             params![owner, peer.as_str()], |r| Ok((r.get(0)?, r.get(1)?)),
         ).optional()?;
         row.map(|(id, key)| {
@@ -160,12 +162,447 @@ impl MeshBindingStore {
         .transpose()
     }
 
+    /// Return the account identity only for a currently verified device.
+    /// A quarantined binding is never a source of Signal trust.
+    pub fn verified_identity(
+        &self,
+        owner: &str,
+        peer: &PeerId,
+    ) -> Result<Option<([u8; 16], u32, Vec<u8>)>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let row: Option<(Vec<u8>, i64, Vec<u8>)> = conn
+            .query_row(
+                "SELECT account_id,device_id,signal_identity FROM mesh_account_bindings
+             WHERE owner_id=?1 AND peer_id=?2 AND state=1",
+                params![owner, peer.as_str()],
+                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+            )
+            .optional()?;
+        row.map(|(account, device, key)| {
+            let account = account
+                .try_into()
+                .map_err(|_| StorageError::InvalidData("invalid mesh account ID".into()))?;
+            let device = u32::try_from(device)
+                .map_err(|_| StorageError::InvalidData("invalid mesh device ID".into()))?;
+            Ok((account, device, key))
+        })
+        .transpose()
+    }
+
+    pub fn verified_signing_key(
+        &self,
+        owner: &str,
+        peer: &PeerId,
+    ) -> Result<Option<[u8; 32]>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let key: Option<Vec<u8>> = conn.query_row(
+            "SELECT mesh_signing FROM mesh_account_bindings WHERE owner_id=?1 AND peer_id=?2 AND state=1",
+            params![owner, peer.as_str()], |r| r.get(0),
+        ).optional()?;
+        key.map(|key| {
+            key.try_into()
+                .map_err(|_| StorageError::InvalidData("invalid mesh signing key".into()))
+        })
+        .transpose()
+    }
+
+    pub fn signal_opted_in(&self, owner: &str, peer: &PeerId) -> Result<bool, StorageError> {
+        let conn = self.db.read_connection()?;
+        let enabled: Option<i64> = conn
+            .query_row(
+                "SELECT enabled FROM mesh_signal_opt_in WHERE owner_id=?1 AND peer_id=?2",
+                params![owner, peer.as_str()],
+                |r| r.get(0),
+            )
+            .optional()?;
+        Ok(enabled == Some(1))
+    }
+
+    pub fn set_signal_opt_in(
+        &self,
+        owner: &str,
+        peer: &PeerId,
+        enabled: bool,
+    ) -> Result<(), StorageError> {
+        if enabled && !matches!(self.state(owner, peer)?, PeerBinding::Verified { .. }) {
+            return Err(StorageError::InvalidData(
+                "verify peer before Signal mesh opt-in".into(),
+            ));
+        }
+        let mut conn = self.db.connection()?;
+        let tx = conn.transaction()?;
+        tx.execute(
+            "INSERT INTO mesh_signal_opt_in(owner_id,peer_id,enabled) VALUES(?1,?2,?3)
+             ON CONFLICT(owner_id,peer_id) DO UPDATE SET enabled=excluded.enabled",
+            params![owner, peer.as_str(), i64::from(enabled)],
+        )?;
+        if !enabled {
+            tx.execute(
+                "DELETE FROM mesh_signal_outbox WHERE owner_id=?1 AND peer_id=?2",
+                params![owner, peer.as_str()],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub fn queue_mesh_carrier(
+        &self,
+        owner: &str,
+        peer: &PeerId,
+        frame: &crate::services::mesh::signal_mesh::CarrierFrame,
+    ) -> Result<Vec<u8>, StorageError> {
+        let bytes = frame
+            .encode()
+            .map_err(|_| StorageError::InvalidData("invalid mesh Signal carrier".into()))?;
+        let mut conn = self.db.connection()?;
+        let tx = conn.transaction()?;
+        tx.execute(
+            "DELETE FROM mesh_signal_outbox WHERE expires_at<strftime('%s','now')",
+            [],
+        )?;
+        let pending: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM mesh_signal_outbox WHERE owner_id=?1 AND peer_id=?2",
+            params![owner, peer.as_str()],
+            |r| r.get(0),
+        )?;
+        if pending >= 64 {
+            return Err(StorageError::InvalidData(
+                "mesh Signal outbox is full".into(),
+            ));
+        }
+        tx.execute(
+            "INSERT INTO mesh_signal_outbox(owner_id,peer_id,message_id,carrier,expires_at) VALUES(?1,?2,?3,?4,?5)",
+            params![owner, peer.as_str(), &frame.message_id[..], &bytes, i64::try_from(frame.expires_at).unwrap_or(i64::MAX)],
+        )?;
+        tx.commit()?;
+        Ok(bytes)
+    }
+
+    pub fn pending_mesh_carriers(
+        &self,
+        owner: &str,
+        peer: &PeerId,
+        now: u64,
+    ) -> Result<Vec<Vec<u8>>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let mut stmt = conn.prepare(
+            "SELECT carrier FROM mesh_signal_outbox WHERE owner_id=?1 AND peer_id=?2 AND expires_at>=?3 ORDER BY rowid LIMIT 64",
+        )?;
+        let rows = stmt.query_map(
+            params![owner, peer.as_str(), i64::try_from(now).unwrap_or(i64::MAX)],
+            |r| r.get(0),
+        )?;
+        rows.collect::<Result<Vec<_>, _>>()
+            .map_err(StorageError::Database)
+    }
+
+    pub fn acknowledge_mesh_carrier(
+        &self,
+        owner: &str,
+        peer: &PeerId,
+        id: &[u8; 16],
+    ) -> Result<bool, StorageError> {
+        Ok(self.db.connection()?.execute(
+            "DELETE FROM mesh_signal_outbox WHERE owner_id=?1 AND peer_id=?2 AND message_id=?3",
+            params![owner, peer.as_str(), &id[..]],
+        )? == 1)
+    }
+
+    pub fn mesh_received(
+        &self,
+        owner: &str,
+        peer: &PeerId,
+        id: &[u8; 16],
+    ) -> Result<Option<i64>, StorageError> {
+        let conn = self.db.read_connection()?;
+        conn.query_row(
+            "SELECT kind FROM mesh_signal_received WHERE owner_id=?1 AND peer_id=?2 AND message_id=?3",
+            params![owner, peer.as_str(), &id[..]], |r| r.get(0),
+        ).optional().map_err(StorageError::Database)
+    }
+
+    pub fn mark_mesh_received(
+        &self,
+        owner: &str,
+        peer: &PeerId,
+        id: &[u8; 16],
+        kind: i64,
+        expires_at: u64,
+    ) -> Result<bool, StorageError> {
+        let conn = self.db.connection()?;
+        let inserted = conn.execute(
+            "INSERT OR IGNORE INTO mesh_signal_received(owner_id,peer_id,message_id,kind,expires_at) VALUES(?1,?2,?3,?4,?5)",
+            params![owner, peer.as_str(), &id[..], kind, i64::try_from(expires_at).unwrap_or(i64::MAX)],
+        )?;
+        Ok(inserted == 1)
+    }
+
     pub fn mark_key_changed(&self, owner: &str, peer: &PeerId) -> Result<(), StorageError> {
         self.db.connection()?.execute(
             "UPDATE mesh_account_bindings SET state=2 WHERE owner_id=?1 AND peer_id=?2",
             params![owner, peer.as_str()],
         )?;
         Ok(())
+    }
+
+    /// Kind 1 is a one-time EC key, 2 a signed EC key, 3 a Kyber key.
+    /// The Signal trait adapters use this local table instead of the online pool.
+    pub fn mesh_prekey(
+        &self,
+        owner: &str,
+        kind: i64,
+        id: u32,
+    ) -> Result<Option<Vec<u8>>, StorageError> {
+        self.db.read_connection()?.query_row(
+            "SELECT record FROM mesh_signal_prekeys WHERE owner_id=?1 AND kind=?2 AND key_id=?3 AND used=0 AND expires_at>=strftime('%s','now')",
+            params![owner, kind, id], |r| r.get(0),
+        ).optional().map_err(StorageError::Database)
+    }
+
+    pub fn save_mesh_prekey(
+        &self,
+        owner: &str,
+        kind: i64,
+        id: u32,
+        record: &[u8],
+    ) -> Result<(), StorageError> {
+        self.db.connection()?.execute(
+            "INSERT INTO mesh_signal_prekeys(owner_id,kind,key_id,record,expires_at) VALUES(?1,?2,?3,?4,strftime('%s','now')+90000)",
+            params![owner, kind, id, record],
+        )?;
+        Ok(())
+    }
+
+    pub fn consume_mesh_prekey(&self, owner: &str, id: u32) -> Result<(), StorageError> {
+        let changed = self.db.connection()?.execute(
+            "UPDATE mesh_signal_prekeys SET used=1,record=x'' WHERE owner_id=?1 AND kind=1 AND key_id=?2 AND used=0",
+            params![owner, id],
+        )?;
+        if changed != 1 {
+            return Err(StorageError::InvalidData(
+                "mesh one-time prekey already consumed".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn mark_mesh_kyber_used(
+        &self,
+        owner: &str,
+        kyber: u32,
+        ec: u32,
+        base: &[u8],
+    ) -> Result<(), StorageError> {
+        let changed = self.db.connection()?.execute(
+            "INSERT OR IGNORE INTO mesh_signal_prekey_uses(owner_id,kyber_id,ec_id,base_key,expires_at) VALUES(?1,?2,?3,?4,strftime('%s','now')+90000)",
+            params![owner, kyber, ec, base],
+        )?;
+        if changed != 1 {
+            return Err(StorageError::InvalidData(
+                "reused mesh Kyber base key".into(),
+            ));
+        }
+        Ok(())
+    }
+
+    pub fn prune_mesh_signal_material(&self, owner: &str, now: u64) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        let now = i64::try_from(now).unwrap_or(i64::MAX);
+        conn.execute(
+            "DELETE FROM mesh_signal_prekeys WHERE owner_id=?1 AND expires_at<?2",
+            params![owner, now],
+        )?;
+        conn.execute(
+            "DELETE FROM mesh_signal_prekey_uses WHERE owner_id=?1 AND expires_at<?2",
+            params![owner, now],
+        )?;
+        conn.execute(
+            "DELETE FROM mesh_signal_received WHERE owner_id=?1 AND expires_at<?2",
+            params![owner, now],
+        )?;
+        conn.execute(
+            "DELETE FROM mesh_signal_outbox WHERE owner_id=?1 AND expires_at<?2",
+            params![owner, now],
+        )?;
+        Ok(())
+    }
+
+    /// Accept a fresh live Noise bundle only for this exact verified account
+    /// device and identity. Replay registration and replacement are atomic.
+    pub fn receive_mesh_bundle(
+        &self,
+        owner: &str,
+        peer: &PeerId,
+        frame: &BundleFrame,
+        now: u64,
+    ) -> Result<bool, StorageError> {
+        if frame.expires_at < now
+            || frame.expires_at > now.saturating_add(720)
+            || frame.bundles.is_empty()
+            || frame.bundles.len() > 3
+        {
+            return Err(StorageError::InvalidData(
+                "expired or empty mesh Signal bundle".into(),
+            ));
+        }
+        let mut conn = self.db.connection()?;
+        let tx = conn.transaction()?;
+        let pinned: Option<(Vec<u8>, i64, Vec<u8>)> = tx.query_row(
+            "SELECT account_id,device_id,signal_identity FROM mesh_account_bindings WHERE owner_id=?1 AND peer_id=?2 AND state=1",
+            params![owner, peer.as_str()],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        ).optional()?;
+        let (account, device, identity) =
+            pinned.ok_or_else(|| StorageError::InvalidData("mesh peer is not verified".into()))?;
+        let device = u32::try_from(device)
+            .map_err(|_| StorageError::InvalidData("invalid mesh device".into()))?;
+        if account.len() != 16
+            || device == 0
+            || frame.bundles.iter().any(|bundle| {
+                bundle.device_id != device
+                    || bundle.identity_key != identity
+                    || bundle.registration_id == 0
+                    || bundle.registration_id > 16_383
+                    || bundle.signed_prekey.is_none()
+                    || bundle.kyber_prekey.is_none()
+                    || bundle.one_time_prekey.is_none()
+            })
+        {
+            return Err(StorageError::InvalidData(
+                "mesh Signal bundle identity mismatch".into(),
+            ));
+        }
+        let mut ec_ids = std::collections::BTreeSet::new();
+        let mut pq_ids = std::collections::BTreeSet::new();
+        for bundle in &frame.bundles {
+            let identity_key = libsignal_protocol::IdentityKey::decode(&bundle.identity_key)
+                .map_err(|_| StorageError::InvalidData("invalid mesh Signal identity".into()))?;
+            let signed = bundle
+                .signed_prekey
+                .as_ref()
+                .ok_or_else(|| StorageError::InvalidData("missing mesh signed prekey".into()))?;
+            let signed_key = libsignal_protocol::PublicKey::deserialize(&signed.public_key)
+                .map_err(|_| StorageError::InvalidData("invalid mesh signed prekey".into()))?;
+            let pq = bundle
+                .kyber_prekey
+                .as_ref()
+                .ok_or_else(|| StorageError::InvalidData("missing mesh PQ prekey".into()))?;
+            let ec = bundle
+                .one_time_prekey
+                .as_ref()
+                .ok_or_else(|| StorageError::InvalidData("missing mesh one-time prekey".into()))?;
+            if !ec_ids.insert(ec.id) || !pq_ids.insert(pq.id) {
+                return Err(StorageError::InvalidData(
+                    "reused mesh bundle prekey ID".into(),
+                ));
+            }
+            libsignal_protocol::PublicKey::deserialize(&ec.public_key)
+                .map_err(|_| StorageError::InvalidData("invalid mesh one-time prekey".into()))?;
+            let pq_key: libsignal_protocol::kem::Key<libsignal_protocol::kem::Public> =
+                libsignal_protocol::kem::Key::try_from(pq.public_key.as_slice())
+                    .map_err(|_| StorageError::InvalidData("invalid mesh PQ prekey".into()))?;
+            if !identity_key
+                .public_key()
+                .verify_signature(&signed_key.serialize(), &signed.signature)
+                || !identity_key
+                    .public_key()
+                    .verify_signature(&pq_key.serialize(), &pq.signature)
+            {
+                return Err(StorageError::InvalidData(
+                    "invalid mesh prekey signature".into(),
+                ));
+            }
+        }
+        tx.execute(
+            "DELETE FROM mesh_signal_bundle_replays WHERE expires_at<?1",
+            params![i64::try_from(now).unwrap_or(i64::MAX)],
+        )?;
+        let active: i64 = tx.query_row(
+            "SELECT COUNT(*) FROM mesh_signal_bundle_replays WHERE owner_id=?1 AND peer_id=?2",
+            params![owner, peer.as_str()],
+            |r| r.get(0),
+        )?;
+        if active >= 16 {
+            return Err(StorageError::InvalidData(
+                "mesh Signal bundle rate limit".into(),
+            ));
+        }
+        let fresh = tx.execute(
+            "INSERT OR IGNORE INTO mesh_signal_bundle_replays(owner_id,peer_id,bundle_id,expires_at) VALUES(?1,?2,?3,?4)",
+            params![owner, peer.as_str(), &frame.nonce[..], i64::try_from(frame.expires_at).unwrap_or(i64::MAX)],
+        )?;
+        if fresh == 0 {
+            return Ok(false);
+        }
+        tx.execute(
+            "DELETE FROM mesh_signal_remote_bundles WHERE owner_id=?1 AND peer_id=?2",
+            params![owner, peer.as_str()],
+        )?;
+        for (slot, bundle) in frame.bundles.iter().enumerate() {
+            tx.execute(
+                "INSERT INTO mesh_signal_remote_bundles(owner_id,peer_id,slot,bundle,expires_at) VALUES(?1,?2,?3,?4,?5)",
+                params![owner, peer.as_str(), slot as i64, bundle.encode_to_vec(), i64::try_from(frame.expires_at).unwrap_or(i64::MAX)],
+            )?;
+        }
+        tx.commit()?;
+        Ok(true)
+    }
+
+    pub fn local_mesh_bundle(
+        &self,
+        owner: &str,
+        peer: &PeerId,
+        now: u64,
+    ) -> Result<Option<Vec<u8>>, StorageError> {
+        let conn = self.db.read_connection()?;
+        conn.query_row(
+            "SELECT frame FROM mesh_signal_local_bundle WHERE owner_id=?1 AND peer_id=?2 AND expires_at>=?3",
+            params![owner, peer.as_str(), i64::try_from(now).unwrap_or(i64::MAX)], |r| r.get(0),
+        ).optional().map_err(StorageError::Database)
+    }
+
+    pub fn save_local_mesh_bundle(
+        &self,
+        owner: &str,
+        peer: &PeerId,
+        bytes: &[u8],
+        expires_at: u64,
+    ) -> Result<(), StorageError> {
+        self.db.connection()?.execute(
+            "INSERT INTO mesh_signal_local_bundle(owner_id,peer_id,frame,expires_at) VALUES(?1,?2,?3,?4)
+             ON CONFLICT(owner_id,peer_id) DO UPDATE SET frame=excluded.frame,expires_at=excluded.expires_at",
+            params![owner, peer.as_str(), bytes, i64::try_from(expires_at).unwrap_or(i64::MAX)],
+        )?;
+        Ok(())
+    }
+
+    /// Reserve one bundle before PQXDH; even a failed establishment cannot
+    /// silently reoffer the same one-time prekey to another initiation.
+    pub fn take_remote_mesh_bundle(
+        &self,
+        owner: &str,
+        peer: &PeerId,
+        now: u64,
+    ) -> Result<Option<crate::proto::chat_v1::SignalPreKeyBundle>, StorageError> {
+        let mut conn = self.db.connection()?;
+        let tx = conn.transaction()?;
+        let row: Option<(i64, Vec<u8>)> = tx.query_row(
+            "SELECT slot,bundle FROM mesh_signal_remote_bundles WHERE owner_id=?1 AND peer_id=?2 AND expires_at>=?3 AND used=0 ORDER BY slot LIMIT 1",
+            params![owner, peer.as_str(), i64::try_from(now).unwrap_or(i64::MAX)],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        ).optional()?;
+        let Some((slot, bytes)) = row else {
+            return Ok(None);
+        };
+        tx.execute(
+            "UPDATE mesh_signal_remote_bundles SET used=1 WHERE owner_id=?1 AND peer_id=?2 AND slot=?3",
+            params![owner, peer.as_str(), slot],
+        )?;
+        tx.commit()?;
+        crate::proto::chat_v1::SignalPreKeyBundle::decode(bytes.as_slice())
+            .map(Some)
+            .map_err(|_| StorageError::InvalidData("corrupt remote mesh bundle".into()))
     }
 
     /// Accept once and atomically record both replay token and trust decision.
@@ -190,6 +627,9 @@ impl MeshBindingStore {
             params![owner, peer.as_str()],
             |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?, r.get(5)?)),
         ).optional()?;
+        let old_account = old
+            .as_ref()
+            .and_then(|(account, _, _, _, _, _)| uuid::Uuid::from_slice(account).ok());
         if old.as_ref().is_some_and(|(_, _, _, _, _, generation)| {
             *generation < 0 || proof.generation < *generation as u64
         }) {
@@ -260,6 +700,29 @@ impl MeshBindingStore {
             "DELETE FROM mesh_binding_offers WHERE owner_id=?1 AND peer_id=?2",
             params![owner, peer.as_str()],
         )?;
+        tx.execute(
+            "DELETE FROM mesh_signal_remote_bundles WHERE owner_id=?1 AND peer_id=?2",
+            params![owner, peer.as_str()],
+        )?;
+        tx.execute(
+            "DELETE FROM mesh_signal_local_bundle WHERE owner_id=?1 AND peer_id=?2",
+            params![owner, peer.as_str()],
+        )?;
+        // A new or renewed binding must not inherit a ratchet from an old mesh
+        // key for this account. Keep this in the same transaction as the trust
+        // decision so a crash cannot leave a Verified row with an old session.
+        let prefix = format!("mesh:{owner}:{}:", uuid::Uuid::from_bytes(proof.account_id));
+        tx.execute(
+            "DELETE FROM sessions WHERE substr(address, 1, length(?1)) = ?1",
+            params![prefix],
+        )?;
+        if let Some(old_account) = old_account {
+            let old_prefix = format!("mesh:{owner}:{old_account}:");
+            tx.execute(
+                "DELETE FROM sessions WHERE substr(address, 1, length(?1)) = ?1",
+                params![old_prefix],
+            )?;
+        }
         tx.commit()?;
         if changed {
             Ok(PeerBinding::KeyChanged)
@@ -284,6 +747,18 @@ impl MeshBindingStore {
             [owner],
         )?;
         tx.execute("DELETE FROM mesh_binding_offers WHERE owner_id=?1", [owner])?;
+        for table in [
+            "mesh_signal_prekeys",
+            "mesh_signal_prekey_uses",
+            "mesh_signal_bundle_replays",
+            "mesh_signal_local_bundle",
+            "mesh_signal_remote_bundles",
+            "mesh_signal_received",
+            "mesh_signal_outbox",
+            "mesh_signal_opt_in",
+        ] {
+            tx.execute(&format!("DELETE FROM {table} WHERE owner_id=?1"), [owner])?;
+        }
         tx.commit()?;
         Ok(())
     }
@@ -295,6 +770,18 @@ impl MeshBindingStore {
         tx.execute("DELETE FROM mesh_binding_replays", [])?;
         tx.execute("DELETE FROM mesh_binding_offers", [])?;
         tx.execute("DELETE FROM mesh_hello_nonces", [])?;
+        for table in [
+            "mesh_signal_prekeys",
+            "mesh_signal_prekey_uses",
+            "mesh_signal_bundle_replays",
+            "mesh_signal_local_bundle",
+            "mesh_signal_remote_bundles",
+            "mesh_signal_received",
+            "mesh_signal_outbox",
+            "mesh_signal_opt_in",
+        ] {
+            tx.execute(&format!("DELETE FROM {table}"), [])?;
+        }
         tx.commit()?;
         Ok(())
     }

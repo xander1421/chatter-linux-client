@@ -555,13 +555,17 @@ impl ChatterClient {
     }
 
     #[cfg(feature = "mesh")]
-    pub fn mesh_peer_for_sender(&self, sender: &crate::domain::ids::UserId) -> Option<crate::services::mesh::MeshPeer> {
+    pub fn mesh_peer_for_sender(
+        &self,
+        sender: &crate::domain::ids::UserId,
+    ) -> Option<crate::services::mesh::MeshPeer> {
         self.mesh().peer_for_sender(sender)
     }
 
     #[cfg(feature = "mesh")]
     pub fn mesh_open_dm(&self, peer: &str) -> Result<String, crate::services::mesh::MeshError> {
-        self.mesh().open_dm(&chatter_mesh::ids::PeerId::from_str(peer))
+        self.mesh()
+            .open_dm(&chatter_mesh::ids::PeerId::from_str(peer))
     }
 
     /// Open mesh conversations, for the sidebar.
@@ -677,8 +681,12 @@ impl ChatterClient {
         let owner = self.session_current_user_id().ok_or_else(|| {
             crate::services::mesh::MeshError::Binding("sign in before verifying a contact".into())
         })?;
+        let device = self.sessions().current_device_id().ok_or_else(|| {
+            crate::services::mesh::MeshError::Binding("no account device is active".into())
+        })?;
         self.mesh().verify_binding(
             owner,
+            device,
             &chatter_mesh::ids::PeerId::from_str(peer),
             scanned_qr,
         )
@@ -695,6 +703,43 @@ impl ChatterClient {
         })?;
         self.mesh()
             .binding_state(owner, &chatter_mesh::ids::PeerId::from_str(peer))
+    }
+
+    #[cfg(feature = "mesh")]
+    pub fn mesh_signal_opted_in(
+        &self,
+        peer: &str,
+    ) -> Result<bool, crate::services::mesh::MeshError> {
+        let Some(owner) = self.session_current_user_id() else {
+            return Ok(false);
+        };
+        self.mesh()
+            .signal_opted_in(owner, &chatter_mesh::ids::PeerId::from_str(peer))
+    }
+
+    #[cfg(feature = "mesh")]
+    pub fn mesh_signal_protection_label(
+        &self,
+        peer: &str,
+    ) -> Result<&'static str, crate::services::mesh::MeshError> {
+        let Some(owner) = self.session_current_user_id() else {
+            return Ok("Noise (bitchat)");
+        };
+        self.mesh()
+            .signal_protection_label(owner, &chatter_mesh::ids::PeerId::from_str(peer))
+    }
+
+    #[cfg(feature = "mesh")]
+    pub fn mesh_set_signal_opt_in(
+        &self,
+        peer: &str,
+        enabled: bool,
+    ) -> Result<(), crate::services::mesh::MeshError> {
+        let owner = self.session_current_user_id().ok_or_else(|| {
+            crate::services::mesh::MeshError::Binding("sign in before selecting Signal mesh".into())
+        })?;
+        self.mesh()
+            .set_signal_opt_in(owner, &chatter_mesh::ids::PeerId::from_str(peer), enabled)
     }
 
     #[cfg(feature = "mesh")]
@@ -816,17 +861,26 @@ impl ChatterClient {
 
     #[cfg(feature = "mesh")]
     pub fn mesh_peer_muted(&self, peer: &str) -> bool {
-        self.mesh().peer_muted(&chatter_mesh::ids::PeerId::from_str(peer))
+        self.mesh()
+            .peer_muted(&chatter_mesh::ids::PeerId::from_str(peer))
     }
 
     #[cfg(feature = "mesh")]
-    pub fn mesh_set_peer_muted(&self, peer: &str, muted: bool) -> Result<(), crate::services::mesh::MeshError> {
+    pub fn mesh_set_peer_muted(
+        &self,
+        peer: &str,
+        muted: bool,
+    ) -> Result<(), crate::services::mesh::MeshError> {
         use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
         let peer = chatter_mesh::ids::PeerId::from_str(peer);
         let settings = SettingsRepository::new(self.services.database.clone());
-        let mut peers = settings.get::<Vec<String>>(keys::MESH_MUTED_PEERS)?.unwrap_or_default();
+        let mut peers = settings
+            .get::<Vec<String>>(keys::MESH_MUTED_PEERS)?
+            .unwrap_or_default();
         peers.retain(|existing| existing != peer.as_str());
-        if muted { peers.push(peer.as_str().to_owned()); }
+        if muted {
+            peers.push(peer.as_str().to_owned());
+        }
         settings.set(keys::MESH_MUTED_PEERS, &peers)?;
         self.mesh().set_peer_muted(&peer, muted);
         Ok(())
@@ -1058,7 +1112,20 @@ impl ChatterClient {
                 self.mesh().send_channel(name, text)?;
                 Ok(MeshDelivery::Broadcast)
             }
-            MeshConversation::Dm(peer) => self.mesh().send_dm(peer, text).await,
+            MeshConversation::Dm(peer) => {
+                if let Some(owner) = self.session_current_user_id()
+                    && self.mesh().signal_opted_in(owner, peer)?
+                {
+                    let device = self.sessions().current_device_id().ok_or_else(|| {
+                        crate::services::mesh::MeshError::Binding(
+                            "no account device is active".into(),
+                        )
+                    })?;
+                    self.mesh().send_signal_dm(owner, device, peer, text).await
+                } else {
+                    self.mesh().send_dm(peer, text).await
+                }
+            }
         }
     }
 

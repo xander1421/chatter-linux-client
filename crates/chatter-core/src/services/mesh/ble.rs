@@ -74,12 +74,16 @@ use super::file_stream::{
 };
 use super::mapping::{self, InboundMessage, MeshConversation, outbound_message};
 use super::router::{RouterCommand, RouterHandle};
+use super::signal_mesh::{self, BundleFrame};
 use super::state::{
     LinkStateInner, MeshState, NostrState, link_candidates_locked, now_millis, now_secs,
 };
 use super::timeline::MeshEvents;
 use super::transport::BleCommand;
-use crate::storage::mesh_binding_store::MeshBindingStore;
+use crate::storage::{
+    KeyStore,
+    mesh_binding_store::{MeshBindingStore, PeerBinding},
+};
 
 /// How often the loop wakes to run the parts that nothing else can schedule.
 const TICK: Duration = Duration::from_millis(500);
@@ -142,10 +146,13 @@ const CHUNK_PACING_QUEUE_BYTES: usize = PENDING_WRITE_BUFFER_CAP_BYTES / 4;
 const MANIFEST_REPEAT_SECS: u64 = 60;
 /// Bounds open-channel ingress including fragments on one radio link.
 const CHANNEL_INGRESS_PER_MINUTE: u32 = 60;
+const CARRIER_INGRESS_PER_MINUTE: u32 = 60;
 
 /// The radio loop.
 pub struct BleRuntime {
     binding_store: Arc<MeshBindingStore>,
+    key_store: Arc<KeyStore>,
+    signal_lock: Arc<parking_lot::Mutex<()>>,
     storage: Arc<dyn Storage>,
     sealer: Arc<dyn Sealer>,
     radio: Arc<dyn MeshLink>,
@@ -180,6 +187,7 @@ pub struct BleRuntime {
     last_throughput_report_ms: u64,
     /// Per-ingress budget for open channels, independent of outbound pacing.
     channel_ingress: std::collections::HashMap<String, (u64, u32)>,
+    carrier_ingress: std::collections::HashMap<String, (u64, u32)>,
     last_channel_presence_ms: u64,
 }
 
@@ -196,6 +204,8 @@ impl BleRuntime {
         storage: Arc<dyn Storage>,
         sealer: Arc<dyn Sealer>,
         binding_store: Arc<MeshBindingStore>,
+        key_store: Arc<KeyStore>,
+        signal_lock: Arc<parking_lot::Mutex<()>>,
     ) -> Self {
         let now = now_secs();
         let archive = GossipMessageArchive::new(Arc::new(storage.clone()));
@@ -208,6 +218,8 @@ impl BleRuntime {
         let couriers = CourierStore::new(storage.clone());
         Self {
             binding_store,
+            key_store,
+            signal_lock,
             storage,
             sealer,
             radio,
@@ -229,6 +241,7 @@ impl BleRuntime {
             frames_written: std::sync::atomic::AtomicU64::new(0),
             last_throughput_report_ms: 0,
             channel_ingress: std::collections::HashMap::new(),
+            carrier_ingress: std::collections::HashMap::new(),
             last_channel_presence_ms: 0,
         }
     }
@@ -1024,6 +1037,9 @@ impl BleRuntime {
             }
             Some(MessageType::NoiseHandshake) => self.on_handshake(link, packet, claimed).await,
             Some(MessageType::NoiseEncrypted) => self.on_encrypted(link, packet, claimed).await,
+            Some(MessageType::ChatterCarrier) => {
+                return self.on_signal_carrier(packet, claimed).await;
+            }
             Some(MessageType::CourierEnvelope) => self.on_courier_envelope(packet, claimed),
             Some(MessageType::RequestSync) => self.on_request_sync(packet, claimed).await,
             Some(MessageType::FileTransfer) => self.on_file_transfer(packet, claimed),
@@ -2177,6 +2193,9 @@ impl BleRuntime {
             .with(|state| state.links.mark_noise_authenticated(link, claimed));
 
         if let Some(hello) = ChatterHello::decode(&plaintext) {
+            let signal_capable = hello.capabilities & super::chatter_hello::SIGNAL_MESH != 0
+                && hello.compatible()
+                && hello.max_carrier_bytes >= signal_mesh::MAX_CARRIER as u32;
             match self
                 .binding_store
                 .note_hello(claimed, &hello.nonce, now_secs())
@@ -2192,6 +2211,44 @@ impl BleRuntime {
             self.state.with(|state| {
                 state.chatter_hello.accept(claimed, hello);
             });
+            if signal_capable {
+                if let Ok(Some((owner, device))) = self.key_store.mesh_local_account_device() {
+                    if let Some(static_key) = self
+                        .state
+                        .with(|state| state.sessions.remote_static(claimed))
+                    {
+                        let _ = self
+                            .binding_store
+                            .observe_live_key(&owner, claimed, &static_key);
+                    }
+                    if matches!(
+                        self.binding_store.state(&owner, claimed),
+                        Ok(PeerBinding::Verified { .. })
+                    ) {
+                        if let Ok(bytes) = signal_mesh::bundle_for_peer(
+                            &self.key_store,
+                            &self.binding_store,
+                            &owner,
+                            claimed,
+                            device,
+                            now_secs(),
+                        ) {
+                            self.send_signal_bundle(claimed, &bytes).await;
+                        }
+                        if self.binding_store.signal_opted_in(&owner, claimed).ok() == Some(true)
+                            && let Ok(pending) = self.binding_store.pending_mesh_carriers(
+                                &owner,
+                                claimed,
+                                now_secs(),
+                            )
+                        {
+                            for bytes in pending {
+                                self.send_signal_carrier(claimed, bytes).await;
+                            }
+                        }
+                    }
+                }
+            }
             self.emit_peers();
             return;
         }
@@ -2219,6 +2276,46 @@ impl BleRuntime {
             }
             return;
         }
+        if let Some(frame) = BundleFrame::decode(&plaintext, now_secs()) {
+            let Ok(Some((owner, device))) = self.key_store.mesh_local_account_device() else {
+                return;
+            };
+            let Some(static_key) = self
+                .state
+                .with(|state| state.sessions.remote_static(claimed))
+            else {
+                return;
+            };
+            if self
+                .binding_store
+                .observe_live_key(&owner, claimed, &static_key)
+                .is_err()
+            {
+                return;
+            }
+            match self
+                .binding_store
+                .receive_mesh_bundle(&owner, claimed, &frame, now_secs())
+            {
+                Ok(true) if frame.reply_requested => {
+                    if let Ok(bytes) = signal_mesh::bundle_for_peer(
+                        &self.key_store,
+                        &self.binding_store,
+                        &owner,
+                        claimed,
+                        device,
+                        now_secs(),
+                    ) {
+                        self.send_signal_bundle(claimed, &bytes).await;
+                    }
+                }
+                Ok(_) => {}
+                Err(error) => {
+                    tracing::warn!(target: "mesh::ble", peer=%claimed, %error, "rejected mesh Signal bundle")
+                }
+            }
+            return;
+        }
 
         let Some((payload_type, body)) = decode_noise_payload(&plaintext) else {
             return;
@@ -2243,6 +2340,211 @@ impl BleRuntime {
             // is the correct handling for a type this build does not implement.
             _ => {}
         }
+    }
+
+    /// Only the bound mesh signing key may submit a Signal carrier for local
+    /// decryption. Relays see a bounded opaque packet and never handle account
+    /// identity or Signal plaintext.
+    async fn on_signal_carrier(&mut self, packet: &BitchatPacket, claimed: &PeerId) -> bool {
+        use libsignal_protocol::{DeviceId, ProtocolAddress};
+        let minute = now_secs() / 60;
+        if self.carrier_ingress.len() >= 1024 {
+            self.carrier_ingress
+                .retain(|_, (seen, _)| seen.saturating_add(1) >= minute);
+            if self.carrier_ingress.len() >= 1024 {
+                return false;
+            }
+        }
+        let entry = self
+            .carrier_ingress
+            .entry(claimed.as_str().to_owned())
+            .or_insert((minute, 0));
+        if entry.0 != minute {
+            *entry = (minute, 0);
+        }
+        if entry.1 >= CARRIER_INGRESS_PER_MINUTE {
+            return false;
+        }
+        entry.1 += 1;
+        let Some(frame) = signal_mesh::CarrierFrame::decode(&packet.payload, now_secs()) else {
+            return false;
+        };
+        if packet.recipient_id.is_none() {
+            return false;
+        }
+        if !self.addressed_to_us(packet) {
+            return true;
+        }
+        if self.events.peer_blocked(claimed) {
+            return false;
+        }
+        let Ok(Some((owner, local_device))) = self.key_store.mesh_local_account_device() else {
+            return false;
+        };
+        let Ok(Some(signing)) = self.binding_store.verified_signing_key(&owner, claimed) else {
+            return false;
+        };
+        if !verify_packet(packet, &signing)
+            || self.binding_store.signal_opted_in(&owner, claimed).ok() != Some(true)
+        {
+            return false;
+        }
+        let Ok(PeerBinding::Verified {
+            account_id,
+            device_id,
+            ..
+        }) = self.binding_store.state(&owner, claimed)
+        else {
+            return false;
+        };
+        let Ok(local_device) = DeviceId::try_from(local_device) else {
+            return false;
+        };
+        let Ok(remote_device) = DeviceId::try_from(device_id) else {
+            return false;
+        };
+        let remote = ProtocolAddress::new(
+            uuid::Uuid::from_bytes(account_id).to_string(),
+            remote_device,
+        );
+        let local = ProtocolAddress::new(owner.clone(), local_device);
+        let _guard = self.signal_lock.lock();
+        match self
+            .binding_store
+            .mesh_received(&owner, claimed, &frame.message_id)
+        {
+            Ok(None) => {}
+            Ok(Some(1)) => {
+                // A resent ciphertext was already ratcheted. Generate a fresh
+                // encrypted receipt without asking libsignal to decrypt it twice.
+                let mut store = crate::crypto::signal::SignalStore::for_mesh(
+                    self.key_store.clone(),
+                    self.binding_store.clone(),
+                    owner.clone(),
+                    claimed.clone(),
+                );
+                let receipt_id = uuid::Uuid::new_v4();
+                let receipt = signal_mesh::SignalPlaintext {
+                    kind: signal_mesh::PlainKind::Delivered,
+                    conversation_id: signal_mesh::conversation_id(
+                        &self.identity.peer_id(),
+                        claimed,
+                    ),
+                    message_id: frame.message_id,
+                    sender_device: u32::from(local_device),
+                    recipient_device: device_id,
+                    expires_at: now_secs().saturating_add(24 * 3600),
+                    text: String::new(),
+                };
+                let reply = futures::executor::block_on(signal_mesh::encrypt(
+                    &mut store,
+                    &remote,
+                    &local,
+                    &receipt,
+                    *receipt_id.as_bytes(),
+                ))
+                .and_then(|frame| frame.encode())
+                .ok();
+                drop(store);
+                drop(_guard);
+                if let Some(reply) = reply {
+                    self.send_signal_carrier(claimed, reply).await;
+                }
+                return true;
+            }
+            Ok(Some(_)) => return true,
+            Err(_) => return false,
+        }
+        let mut store = crate::crypto::signal::SignalStore::for_mesh(
+            self.key_store.clone(),
+            self.binding_store.clone(),
+            owner.clone(),
+            claimed.clone(),
+        );
+        let plaintext = match futures::executor::block_on(signal_mesh::decrypt(
+            &mut store, &remote, &local, &frame,
+        )) {
+            Ok(bytes) => bytes,
+            Err(error) => {
+                tracing::warn!(target: "mesh::ble", peer=%claimed, %error, "mesh Signal decrypt rejected");
+                return false;
+            }
+        };
+        let Some(plain) = signal_mesh::SignalPlaintext::decode(&plaintext, now_secs()) else {
+            return false;
+        };
+        if plain.conversation_id != signal_mesh::conversation_id(&self.identity.peer_id(), claimed)
+            || plain.sender_device != device_id
+            || plain.recipient_device != u32::from(local_device)
+            || plain.expires_at != frame.expires_at
+        {
+            return false;
+        }
+        if matches!(plain.kind, signal_mesh::PlainKind::Text)
+            && (plain.message_id != frame.message_id || plain.text.is_empty())
+        {
+            return false;
+        }
+        let kind = match plain.kind {
+            signal_mesh::PlainKind::Text => 1,
+            signal_mesh::PlainKind::Delivered => 2,
+        };
+        if self
+            .binding_store
+            .mark_mesh_received(&owner, claimed, &frame.message_id, kind, frame.expires_at)
+            .ok()
+            != Some(true)
+        {
+            return false;
+        }
+        let wire_id = uuid::Uuid::from_bytes(plain.message_id)
+            .to_string()
+            .to_uppercase();
+        let reply = match plain.kind {
+            signal_mesh::PlainKind::Text => {
+                self.emit_dm(claimed, &wire_id, &plain.text, packet.timestamp);
+                let receipt_id = uuid::Uuid::new_v4();
+                let receipt = signal_mesh::SignalPlaintext {
+                    kind: signal_mesh::PlainKind::Delivered,
+                    conversation_id: plain.conversation_id,
+                    message_id: plain.message_id,
+                    sender_device: u32::from(local_device),
+                    recipient_device: device_id,
+                    expires_at: now_secs().saturating_add(24 * 3600),
+                    text: String::new(),
+                };
+                futures::executor::block_on(signal_mesh::encrypt(
+                    &mut store,
+                    &remote,
+                    &local,
+                    &receipt,
+                    *receipt_id.as_bytes(),
+                ))
+                .and_then(|frame| frame.encode())
+                .ok()
+            }
+            signal_mesh::PlainKind::Delivered => {
+                if self
+                    .binding_store
+                    .acknowledge_mesh_carrier(&owner, claimed, &plain.message_id)
+                    .ok()
+                    == Some(true)
+                {
+                    let _ = self.router.send(RouterCommand::Acked {
+                        message_id: wire_id,
+                        peer: claimed.clone(),
+                        kind: AckKind::Delivered,
+                    });
+                }
+                None
+            }
+        };
+        drop(store);
+        drop(_guard);
+        if let Some(reply) = reply {
+            self.send_signal_carrier(claimed, reply).await;
+        }
+        true
     }
 
     fn forward_ack(&self, peer: &PeerId, body: &[u8], kind: AckKind) {
@@ -2370,6 +2672,12 @@ impl BleRuntime {
                     );
                     self.transmit(&packet, Some(&peer), None).await;
                 }
+            }
+            BleCommand::SignalBundle { peer, bytes } => {
+                self.send_signal_bundle(&peer, &bytes).await
+            }
+            BleCommand::SignalCarrier { peer, bytes } => {
+                self.send_signal_carrier(&peer, bytes).await
             }
             BleCommand::Stop => {}
             BleCommand::Announce => self.announce().await,
@@ -2553,6 +2861,37 @@ impl BleRuntime {
         );
         self.transmit(&packet, Some(peer), None).await;
         self.rekey_if_due(peer).await;
+    }
+
+    async fn send_signal_bundle(&mut self, peer: &PeerId, bytes: &[u8]) {
+        let sealed = self.state.with(|state| state.sessions.encrypt(peer, bytes));
+        let Ok(ciphertext) = sealed else {
+            return;
+        };
+        let packet = self.build_packet(
+            MessageType::NoiseEncrypted,
+            Some(peer),
+            ciphertext,
+            chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+        );
+        self.transmit(&packet, Some(peer), None).await;
+    }
+
+    async fn send_signal_carrier(&mut self, peer: &PeerId, bytes: Vec<u8>) {
+        if signal_mesh::CarrierFrame::decode(&bytes, now_secs()).is_none() {
+            return;
+        }
+        let mut packet = self.build_packet(
+            MessageType::ChatterCarrier,
+            Some(peer),
+            bytes,
+            chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+        );
+        let Ok(signature) = sign_packet(&self.identity, &packet) else {
+            return;
+        };
+        packet.signature = Some(signature);
+        self.transmit(&packet, Some(peer), None).await;
     }
 
     async fn send_chatter_hello(&mut self, peer: &PeerId) {
@@ -4202,7 +4541,9 @@ mod tests {
             router,
             storage,
             Arc::new(NoopSealer),
-            Arc::new(MeshBindingStore::new(binding_db)),
+            Arc::new(MeshBindingStore::new(binding_db.clone())),
+            Arc::new(KeyStore::new(binding_db)),
+            Arc::new(parking_lot::Mutex::new(())),
         );
         (runtime, radio, state, timeline)
     }
