@@ -128,7 +128,6 @@ pub fn open_user_profile_in_conversation(
         // something anyone can look you up by.
         let username = ui_ctx
             .and_then(|ctx| ctx.full_username())
-            .or_else(|| user_state.get_user(user_id).map(|u| u.username.clone()))
             .filter(|u| !u.is_empty())
             .unwrap_or_default();
         let initials = initials_from_name(&display_name);

@@ -133,14 +133,13 @@ impl ChatterClient {
         self.users().get_profile_local(user_id).ok().flatten()
     }
 
-    /// A peer's handle, if this device actually knows it. The local user
-    /// directory fills `username` with the user id when the handle is unknown
-    /// (the server stores only a lookup hash), and that id must not be shown
-    /// as "@username".
+    /// A peer's complete handle, if this device actually knows it. The local
+    /// directory can contain a bare login nickname or a placeholder user id;
+    /// neither resolves through username lookup and neither belongs after `@`.
     pub fn known_username(&self, user_id: &crate::domain::ids::UserId) -> Option<String> {
         self.get_user_local(user_id)
             .map(|u| u.username)
-            .filter(|u| !u.is_empty() && u.parse::<uuid::Uuid>().is_err())
+            .filter(|u| crate::services::user::is_lookup_handle(u))
     }
 
     pub fn get_user_local(

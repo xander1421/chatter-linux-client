@@ -4330,9 +4330,14 @@ impl ChatterClient {
         let uid = membership.user_id;
         crate::domain::channel::MemberWithProfile {
             display_name: self.display_name(&uid),
-            // A peer's handle is often not known locally; none rather than
-            // the user id dressed up as one.
-            username: self.known_username(&uid).unwrap_or_default(),
+            // Our full handle lives in settings, while the user directory may
+            // only hold the nickname used at login. Peers show a handle only
+            // when the directory has its complete lookup form.
+            username: if self.session_current_user_id() == Some(uid) {
+                self.full_username().unwrap_or_default()
+            } else {
+                self.known_username(&uid).unwrap_or_default()
+            },
             avatar_bytes: self.user_avatar(&uid),
             moderation: crate::domain::channel::MemberModeration::default(),
             unverified: false,
