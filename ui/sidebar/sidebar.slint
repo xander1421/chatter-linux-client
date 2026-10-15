@@ -693,15 +693,17 @@ export component Sidebar inherits Rectangle {
             accessible-role: button;
             accessible-label: "Search";
             HorizontalLayout {
-                // The traffic lights own the leading edge of this row on macOS
-                // (0px elsewhere), so the search entry starts after them.
-                padding-left: root.quick-link-inset + root.traffic-lights-width;
+                // The phone's floating surface starts one `sm` inside the
+                // list. Cancel that inset so this slot keeps the same centre
+                // as Saved Messages and the conversation avatars below it.
+                // macOS traffic lights still reserve their titlebar space.
+                padding-left: root.quick-link-inset - parent.x + root.traffic-lights-width;
                 padding-right: Spacing.sm;
-                spacing: root.touch && !root.mobile-mode ? Spacing.xs : Spacing.sm;
+                spacing: Spacing.sm;
                 alignment: start;
-                // Search has one line, so the tablet does not need the avatar
-                // column's wide slot between its lens and label.
-                VerticalLayout { alignment: center; horizontal-stretch: 0; width: root.touch && !root.mobile-mode ? root.quick-link-icon-size : root.quick-link-slot;
+                // Use the same column on phones, tablets and desktop so the
+                // lens and label track the rows at every touch density.
+                VerticalLayout { alignment: center; horizontal-stretch: 0; width: root.quick-link-slot;
                     HorizontalLayout { alignment: center; Image { source: Icons.search; width: root.quick-link-icon-size; height: root.quick-link-icon-size; colorize: Colors.text-secondary; } }
                 }
                 Text { text: "Search"; color: root.quick-link-text-color; font-size: root.quick-link-text-size; vertical-alignment: center; }
