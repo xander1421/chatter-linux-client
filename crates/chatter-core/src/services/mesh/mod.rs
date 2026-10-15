@@ -1226,6 +1226,11 @@ impl MeshService {
                 bytes,
             })
             .map_err(|_| MeshError::NotRunning)?;
+        // The encrypted packet is broadcast over the radio, with no
+        // per-member acknowledgement. Keep the durable state in step with
+        // the live row emitted by `broadcast_private_channel`.
+        self.timeline
+            .record_delivery(&message_id, MeshDelivery::Broadcast);
         Ok(message_id)
     }
 

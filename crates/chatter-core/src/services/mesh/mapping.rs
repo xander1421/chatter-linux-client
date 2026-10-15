@@ -205,7 +205,7 @@ pub fn outbound_message(
     message.id = wire_message_id(wire_id);
 
     // A broadcast's delivery state is known the instant it is composed and never
-    // changes: nobody acknowledges a room or cell message, so there is no later
+    // changes: nobody acknowledges a room, cell, or channel message, so there is no later
     // event to correct it with. Setting it here is what stops the live row from
     // falling through to the converter's "own message with no status means sent"
     // default — which put the one-to-one word "sent" on a broadcast, and only
