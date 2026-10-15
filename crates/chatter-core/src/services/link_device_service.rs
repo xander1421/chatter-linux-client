@@ -37,6 +37,7 @@ use crate::events::EventBus;
 use crate::inbox::handlers::DomainEvent;
 use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::client_pool::GrpcClientPool;
+use crate::network::grpc::interceptors::AuthInterceptor;
 use crate::network::grpc::provisioning_client::{
     ProvisioningClient, ProvisioningPollResult, TransferArchivePoll,
 };
@@ -860,38 +861,9 @@ impl LinkDeviceService {
 
         let device_id = response.device_id;
 
-        // Server confirmed — NOW commit identity + auth state. Earlier
-        // failure modes (network, validation, server reject) leave the
-        // local key store unmodified so a retry starts from clean state.
-        // The overwrite guard above already refused a different identity, so
-        // an existing row here is this same keypair (a re-link after revoke).
-        if self.key_store.has_local_identity()? {
-            self.key_store.update_local_registration_id(registration_id)?;
-        } else {
-            self.key_store
-                .set_local_identity(registration_id, &identity_pair_serialized)?;
-        }
-
-        // Persist auth state.
-        self.settings_repo
-            .set_string(keys::CURRENT_USER_ID, &user_id.to_string())?;
-        self.settings_repo
-            .set(keys::CURRENT_DEVICE_ID, &device_id)?;
-        self.settings_repo
-            .set_bytes(keys::PROFILE_KEY, &profile_key)?;
-        self.settings_repo
-            .set_bytes(keys::DEVICE_AUTH_TOKEN, device_auth_token)?;
-        self.settings_repo
-            .set_bytes(keys::IDENTITY_KEY_PUBLIC, &identity_pub_full)?;
-        self.settings_repo
-            .set_string(keys::SVR_SALT_USERNAME, &provision.svr_salt_username)?;
-        self.settings_repo
-            .set_string(keys::FULL_USERNAME, &provision.full_username)?;
-        adopt_provisioned_settings(&self.settings_repo, &user_id, &provision)?;
-
-        // The server sends our display_name ENCRYPTED with our profile key.
-        // Decrypt with the key we just provisioned (line above) before
-        // persisting — never store ciphertext as our own name.
+        // The server sends our display name encrypted with the provisioned
+        // profile key. Decrypt before the local commit so its write is covered
+        // by the same server cleanup on failure.
         let display_name = response
             .user_profile
             .as_ref()
@@ -907,8 +879,67 @@ impl LinkDeviceService {
                     .ok()
                     .filter(|n| !n.is_empty())
             });
-        if let Some(ref name) = display_name {
-            self.settings_repo.set_string(keys::DISPLAY_NAME, name)?;
+
+        // Server confirmed — NOW commit identity + auth state. Earlier
+        // failure modes (network, validation, server reject) leave the
+        // local key store unmodified so a retry starts from clean state.
+        // The overwrite guard above already refused a different identity, so
+        // an existing row here is this same keypair (a re-link after revoke).
+        let local_commit = (|| -> Result<(), LinkDeviceError> {
+            if self.key_store.has_local_identity()? {
+                self.key_store
+                    .update_local_registration_id(registration_id)?;
+            } else {
+                self.key_store
+                    .set_local_identity(registration_id, &identity_pair_serialized)?;
+            }
+
+            self.settings_repo
+                .set_string(keys::CURRENT_USER_ID, &user_id.to_string())?;
+            self.settings_repo
+                .set(keys::CURRENT_DEVICE_ID, &device_id)?;
+            self.settings_repo
+                .set_bytes(keys::PROFILE_KEY, &profile_key)?;
+            self.settings_repo
+                .set_bytes(keys::DEVICE_AUTH_TOKEN, device_auth_token)?;
+            self.settings_repo
+                .set_bytes(keys::IDENTITY_KEY_PUBLIC, &identity_pub_full)?;
+            self.settings_repo
+                .set_string(keys::SVR_SALT_USERNAME, &provision.svr_salt_username)?;
+            self.settings_repo
+                .set_string(keys::FULL_USERNAME, &provision.full_username)?;
+            adopt_provisioned_settings(&self.settings_repo, &user_id, &provision)?;
+            if let Some(ref name) = display_name {
+                self.settings_repo.set_string(keys::DISPLAY_NAME, name)?;
+            }
+            Ok(())
+        })();
+
+        if let Err(original_error) = local_commit {
+            // Logout of the newly authenticated device retires its server row,
+            // prekeys and queued messages. Use a private interceptor so a
+            // failed local commit never authenticates the app as this device.
+            let cleanup_auth = AuthInterceptor::new();
+            let linked_credentials = DeviceCredentials::from_stored(
+                device_id,
+                *credentials.auth_token().as_bytes(),
+                *credentials.unidentified_access_key(),
+            );
+            cleanup_auth.set_basic(
+                linked_credentials.auth_username(&user_id.to_string()),
+                linked_credentials.auth_token_base64(),
+            );
+            let mut cleanup_client = AuthClient::new(self.grpc_pool.channel(), cleanup_auth);
+            match cleanup_client.logout(device_id).await {
+                Ok(()) => {
+                    tracing::info!(device_id, "Retired linked device after local commit failed")
+                }
+                Err(_) => tracing::error!(
+                    device_id,
+                    "Could not retire linked device after local commit failed"
+                ),
+            }
+            return Err(original_error);
         }
 
         // Configure auth interceptor for Basic auth.

@@ -45,6 +45,13 @@ export component SessionsModal inherits Rectangle {
     property <bool> narrow: root.width < 560px;
     // Revoke-all asks first: it logs out every other device at once.
     property <bool> confirm-revoke-all: false;
+    property <int> confirm-revoke-id: 0;
+    changed show-modal => {
+        if !self.show-modal {
+            self.confirm-revoke-id = 0;
+            self.confirm-revoke-all = false;
+        }
+    }
 
     Modal {
         show: root.show-modal;
@@ -287,6 +294,13 @@ export component SessionsModal inherits Rectangle {
                                         font-size: Typography.xs;
                                         wrap: word-wrap;
                                     }
+
+                                    if root.confirm-revoke-id == session.device-id: Text {
+                                        text: "Revoke this device? It must be linked again.";
+                                        color: Colors.error;
+                                        font-size: Typography.xs;
+                                        wrap: word-wrap;
+                                    }
                                 }
 
                                 // Revoke button (hidden for current session)
@@ -294,12 +308,25 @@ export component SessionsModal inherits Rectangle {
                                     alignment: center;
 
                                     Button {
-                                        text: "Revoke";
-                                        variant: "ghost";
+                                        text: root.confirm-revoke-id == session.device-id ? "Confirm" : "Revoke";
+                                        variant: root.confirm-revoke-id == session.device-id ? "destructive" : "ghost";
                                         disabled: root.revoking || root.loading;
                                         clicked => {
-                                            root.revoke-session(session.device-id);
+                                            if root.confirm-revoke-id == session.device-id {
+                                                root.confirm-revoke-id = 0;
+                                                root.revoke-session(session.device-id);
+                                            } else {
+                                                root.confirm-revoke-all = false;
+                                                root.confirm-revoke-id = session.device-id;
+                                            }
                                         }
+                                    }
+
+                                    if root.confirm-revoke-id == session.device-id: Button {
+                                        text: "Cancel";
+                                        variant: "ghost";
+                                        disabled: root.revoking || root.loading;
+                                        clicked => { root.confirm-revoke-id = 0; }
                                     }
                                 }
                             }
@@ -314,7 +341,10 @@ export component SessionsModal inherits Rectangle {
                 text: "Revoke all other sessions";
                 variant: "ghost";
                 disabled: root.revoking || root.loading;
-                clicked => { root.confirm-revoke-all = true; }
+                clicked => {
+                    root.confirm-revoke-id = 0;
+                    root.confirm-revoke-all = true;
+                }
             }
 
             if root.confirm-revoke-all: VerticalLayout {
