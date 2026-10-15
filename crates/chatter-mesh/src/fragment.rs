@@ -25,8 +25,13 @@ pub const DEFAULT_FRAGMENT_SIZE: usize = 469;
 /// `TransportConfig.bleMaxInFlightAssemblies`.
 pub const MAX_IN_FLIGHT_ASSEMBLIES: usize = 128;
 
-/// `TransportConfig.bleFragmentLifetimeSeconds`, measured from the first
-/// fragment of a stream — not from the most recent one.
+/// Recently completed streams retained so a late relayed fragment cannot open
+/// a new, doomed assembly for a packet already delivered.
+const MAX_COMPLETED_STREAMS: usize = 1024;
+
+/// `TransportConfig.bleFragmentLifetimeSeconds`. We measure inactivity since
+/// the last new fragment so a slowly paced stream can finish; the reference
+/// peers expire 30 seconds after the first fragment instead.
 pub const FRAGMENT_LIFETIME_SECS: u64 = 30;
 
 /// `FileTransferLimits.maxPayloadBytes` — the reassembly ceiling for everything
@@ -233,6 +238,7 @@ pub struct ExpiredStream {
 #[derive(Clone, Debug, Default)]
 pub struct FragmentAssembler {
     streams: HashMap<StreamKey, Assembly>,
+    completed: HashMap<StreamKey, u64>,
 }
 
 impl FragmentAssembler {
@@ -252,6 +258,7 @@ impl FragmentAssembler {
     /// Drops every in-flight reassembly.
     pub fn clear(&mut self) {
         self.streams.clear();
+        self.completed.clear();
     }
 
     /// Takes one fragment, returning the reassembled original bytes once the
@@ -270,6 +277,16 @@ impl FragmentAssembler {
             sender: packet.sender_id,
             id: header.fragment_id,
         };
+        // Fragments bypass packet deduplication. Once a stream completes, a
+        // delayed copy of any index must not start another partial assembly and
+        // later report a packet loss that never occurred. The short retention
+        // also allows a sender to retry the same packet after the window.
+        if let Some(completed_at) = self.completed.get(&key).copied() {
+            if now_unix_secs.saturating_sub(completed_at) <= FRAGMENT_LIFETIME_SECS {
+                return Ok(None);
+            }
+            self.completed.remove(&key);
+        }
         // No recipient field at all also means broadcast, per
         // `BLEFragmentHeader.isBroadcastFragment`.
         let is_broadcast = packet
@@ -292,12 +309,17 @@ impl FragmentAssembler {
         }
 
         let limit = assembly_limit(header.original_type);
-        let held: usize = self
+        let (held, replaced) = self
             .streams
             .get(&key)
-            .map(|assembly| assembly.chunks.values().map(Vec::len).sum())
-            .unwrap_or(0);
-        let projected = held.saturating_add(chunk.len());
+            .map(|assembly| {
+                (
+                    assembly.chunks.values().map(Vec::len).sum::<usize>(),
+                    assembly.chunks.get(&header.index).map_or(0, Vec::len),
+                )
+            })
+            .unwrap_or((0, 0));
+        let projected = held.saturating_sub(replaced).saturating_add(chunk.len());
         if projected > limit {
             self.streams.remove(&key);
             return Err(MeshError::LengthExceeded {
@@ -329,13 +351,23 @@ impl FragmentAssembler {
             return Ok(None);
         }
 
-        let mut reassembled = Vec::with_capacity(held + chunk.len());
+        let mut reassembled = Vec::with_capacity(projected);
         for index in 0..header.total {
             if let Some(piece) = assembly.chunks.get(&index) {
                 reassembled.extend_from_slice(piece);
             }
         }
         self.streams.remove(&key);
+        self.completed.insert(key, now_unix_secs);
+        if self.completed.len() > MAX_COMPLETED_STREAMS
+            && let Some(oldest) = self
+                .completed
+                .iter()
+                .min_by_key(|(_, completed_at)| *completed_at)
+                .map(|(key, _)| *key)
+        {
+            self.completed.remove(&oldest);
+        }
         Ok(Some(reassembled))
     }
 
@@ -367,6 +399,9 @@ impl FragmentAssembler {
     /// is a link that dropped, or a peer that stopped. Those want opposite fixes,
     /// and a count of expired streams cannot tell them apart.
     pub fn evict_expired(&mut self, now_unix_secs: u64) -> Vec<ExpiredStream> {
+        self.completed.retain(|_, completed_at| {
+            now_unix_secs.saturating_sub(*completed_at) <= FRAGMENT_LIFETIME_SECS
+        });
         let mut expired = Vec::new();
         self.streams.retain(|key, assembly| {
             if now_unix_secs.saturating_sub(assembly.last_fragment_at) <= FRAGMENT_LIFETIME_SECS {
