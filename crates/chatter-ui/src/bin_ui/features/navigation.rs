@@ -15,7 +15,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     wire_go_to_register(window);
     wire_go_to_login(window);
     wire_go_to_recovery(window);
-    wire_go_to_link_device(window);
+    wire_go_to_link_device(window, ui_ctx);
     wire_continue_without_account(window, ui_ctx);
     wire_welcome(window);
 }
@@ -83,12 +83,22 @@ fn wire_continue_without_account(window: &MainWindow, ui_ctx: &Arc<ChatterClient
     });
 }
 
-fn wire_go_to_link_device(window: &MainWindow) {
+fn wire_go_to_link_device(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
+    let ui_ctx = ui_ctx.clone();
     window.on_go_to_link_device(move || {
         if let Some(w) = weak_window.upgrade() {
             w.set_current_view("link-device".into());
-            w.set_link_device_error("".into());
+            match ui_ctx.link_device_has_local_identity() {
+                Ok(has_identity) => {
+                    w.set_link_device_has_local_identity(has_identity);
+                    w.set_link_device_error("".into());
+                }
+                Err(error) => {
+                    w.set_link_device_has_local_identity(false);
+                    w.set_link_device_error(format!("Could not check local identity: {error}").into());
+                }
+            }
             w.set_link_device_url("".into());
             w.set_link_device_status("Tap \"Generate QR\" to start.".into());
             w.set_link_device_active(false);

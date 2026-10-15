@@ -133,6 +133,11 @@ export component LinkDeviceApproveModal inherits Rectangle {
                 password: true;
                 text <=> root.password;
                 disabled: root.approving || !root.preview-ready;
+                accepted(value) => {
+                    if !root.approving && root.preview-ready && value != "" {
+                        root.approve(value);
+                    }
+                }
             }
 
             if status != "": Text {

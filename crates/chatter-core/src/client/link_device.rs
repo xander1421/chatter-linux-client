@@ -41,6 +41,11 @@ impl ChatterClient {
 
     // ── New-device flow ────────────────────────────────────────────────
 
+    /// Check for an existing identity before showing the new-device QR flow.
+    pub fn link_device_has_local_identity(&self) -> Result<bool, LinkDeviceError> {
+        self.link_device().has_local_identity()
+    }
+
     /// Run the entire new-device QR flow as a single stream of progress
     /// events. The UI's only job is to render `QrReady`, update status on
     /// `WaitingForApproval` / `Approved`, and switch view + run post-auth

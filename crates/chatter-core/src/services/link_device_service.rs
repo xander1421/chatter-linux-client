@@ -330,6 +330,14 @@ impl LinkDeviceService {
         self.active_uuid.lock().is_some()
     }
 
+    /// Whether this install already holds an identity that linking must not
+    /// overwrite with a different account's keys.
+    pub fn has_local_identity(&self) -> Result<bool, LinkDeviceError> {
+        Ok(IdentityKeyManager::new(self.key_store.clone())
+            .get_identity()?
+            .is_some())
+    }
+
     /// Cancel the in-flight new-device session if any. No-op if no session.
     /// The poll loop notices the server-side cancel on its next tick and
     /// emits [`LinkProgress::Cancelled`].
