@@ -832,6 +832,7 @@ impl MessageService {
                         "Mailbox send failed, retrying"
                     );
                 }
+                Err(MailboxError::Network(e)) => return Err(MessageError::Network(e)),
                 Err(e) => {
                     return Err(MessageError::DmError(format!(
                         "Failed to send to mailbox: {}",

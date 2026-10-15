@@ -50,6 +50,12 @@ pub(crate) struct PendingReceipt {
     timestamps: BTreeSet<u64>,
 }
 
+impl PendingReceipt {
+    pub(crate) fn is_read(&self) -> bool {
+        self.read
+    }
+}
+
 fn retryable_receipt_error(error: &ConversationError) -> bool {
     match error {
         ConversationError::Message(error) => error.permanent_send_failure_reason().is_none(),
