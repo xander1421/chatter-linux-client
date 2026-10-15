@@ -38,6 +38,8 @@ pub(super) fn wire_shield_before_login(window: &MainWindow, ui_ctx: &Arc<Chatter
                 w.set_register_error("".into());
                 w.set_link_device_error("".into());
                 if enable {
+                    #[cfg(target_os = "android")]
+                    crate::platform::android::activity::request_shield_background_network();
                     let ui_ctx = ui_ctx.clone();
                     crate::rt_handle().spawn(async move {
                         if let Err(e) = ui_ctx.connect().await {

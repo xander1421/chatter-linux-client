@@ -323,13 +323,10 @@ impl ChatterClient {
                     let mut config =
                         crate::network::streaming::PushListenerConfig::new(endpoint, topic.clone());
                     config.force_tor = secret;
-                    if secret {
-                        // The foreground inbox keeps delivering while the onion's
-                        // optional ntfy port is unavailable. Retry infrequently so
-                        // a missing port does not wake every Shield device each minute.
-                        config.reconnect_delay = std::time::Duration::from_secs(15 * 60);
-                        config.reconnect.max_delay = config.reconnect_delay;
-                    }
+                    // A sleeping phone can lose its SSE socket. Retry promptly
+                    // after network returns, with per-device jitter and the
+                    // listener's bounded exponential backoff (including 429).
+                    config.reconnect.jitter_ratio = 0.2;
                     let listener = crate::network::streaming::PushListener::new(config);
                     #[cfg(feature = "onion")]
                     let listener = listener.with_tor(tor.clone());
@@ -338,7 +335,7 @@ impl ChatterClient {
                     let owner = client.clone();
                     let route_topic = topic.clone();
                     let task=tasks.spawn(async move {
-                        let (_stop,shutdown)=tokio::sync::broadcast::channel(1);
+                        let (stop,shutdown)=tokio::sync::broadcast::channel(1);
                         // Cancellation drops this future and its Tor stream together.
                         let listen=listener.listen(shutdown);
                         tokio::pin!(listen);
@@ -357,6 +354,10 @@ impl ChatterClient {
                                 if let Some(provider)=owner.services.device_inbox_provider.get() { provider.wake(); }
                             }
                         } }
+                        // Keep a sender alive across every await. Otherwise
+                        // recv() reports Closed and the supervisor recreates
+                        // this subscription on its next two-second scan.
+                        drop(stop);
                     });
                     listeners.insert(topic, task);
                 }

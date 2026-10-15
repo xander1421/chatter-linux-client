@@ -158,6 +158,29 @@ pub fn set_secure(secure: bool) {
     }
 }
 
+/// Shield's foreground service keeps the CPU active, but Android Doze also
+/// gates the network. Ask for the user-controlled network exemption on enable.
+pub fn request_shield_background_network() {
+    let result = (|| -> Result<(), String> {
+        let act = activity()?;
+        with_jni_env(|env| {
+            let result = env.call_method(
+                act,
+                jni::jni_str!("requestShieldBackgroundNetwork"),
+                jni::jni_sig!("()V"),
+                &[],
+            );
+            if result.is_err() {
+                clear_exception(env);
+            }
+            result.map(|_| ()).map_err(|error| error.to_string())
+        })
+    })();
+    if result.is_err() {
+        tracing::warn!("Android Shield background network request unavailable");
+    }
+}
+
 /// Refresh-rate vote (`MainActivity.setUiMoving`): the vendored Android
 /// backend calls this when the UI starts moving and again once it is at rest
 /// (`AndroidPlatform::with_refresh_rate_vote`). Returns the panel's top rate
