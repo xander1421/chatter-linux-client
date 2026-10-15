@@ -416,8 +416,9 @@ pub(super) fn handle_user_profile_updated(
         == chatter_core::state::ActiveConversation::ServerDm { peer_id: user_id })
     .then(|| ui_ctx.display_name(&user_id).into());
     let user_id_str = user_id.to_string();
-    let display_name_slint: slint::SharedString = display_name.clone().into();
-    let initials = chatter_core::ui::chat_data::initials_from_name(&display_name);
+    let stored_name = ui_ctx.display_name(&user_id);
+    let display_name_slint: slint::SharedString = stored_name.clone().into();
+    let initials = chatter_core::ui::chat_data::initials_from_name(&stored_name);
     let client = ui_ctx.clone();
 
     // Decode the avatar to raw RGBA now (Send-safe); the non-Send `slint::Image`
@@ -457,6 +458,19 @@ pub(super) fn handle_user_profile_updated(
             }
         }
 
+        // Message rows and a currently open channel roster are snapshots.
+        // Resolve names from core, including after the app has been open for
+        // hours, instead of keeping the name captured when each row loaded.
+        let members = w.get_channel_settings_members();
+        for i in 0..members.row_count() {
+            if let Some(mut member) = members.row_data(i) {
+                if member.user_id == user_id_str {
+                    member.display_name = display_name_slint.clone();
+                    members.set_row_data(i, member);
+                }
+            }
+        }
+
         // A join notice may have been rendered before this profile was known.
         // Ask core for the stored notice and its current sender name so the
         // visible row catches up without changing the message on disk.
@@ -465,7 +479,13 @@ pub(super) fn handle_user_profile_updated(
             let Some(mut row) = messages.row_data(i) else {
                 continue;
             };
-            if !row.is_system || row.sender_id.as_str() != user_id_str.as_str() {
+            if row.sender_id.as_str() != user_id_str.as_str() {
+                continue;
+            }
+            if !row.is_system {
+                row.sender_name = display_name_slint.clone();
+                row.sender_initials = initials.clone().into();
+                messages.set_row_data(i, row);
                 continue;
             }
             let Ok(message_id) = row.message_id.parse() else {

@@ -736,20 +736,14 @@ pub async fn handle_domain_event(
                 avatar_bytes,
                 timestamp,
             );
-            crate::bin_ui::features::auth::initial_data::refresh_friends_list(
+            crate::bin_ui::features::auth::initial_data::refresh_friends_list_local(
                 window.clone(),
                 ui_ctx.clone(),
             );
-            // Rebuild the DM sidebar from core so the friend's decoded avatar
-            // (not just display_name/initials, which handle_user_profile_updated
-            // already patches in-place) renders too — covers the profile-key
-            // handshake path where this is the very first event either side
-            // sees about the other's real profile. On the UI thread: a Weak
-            // never upgrades on the runtime this handler runs on.
-            let ui_ctx = ui_ctx.clone();
-            crate::run_ui!(window, |w| {
-                crate::bin_ui::features::sidebar::refresh_chat_list(&w, &ui_ctx);
-            });
+            // Rebuild directly from the committed profile. A ListFriends
+            // response can lag this live event and overwrite its new name.
+            crate::bin_ui::features::sidebar::sections::refresh_sections_ui(window, ui_ctx);
+            crate::bin_ui::features::sidebar::rebuild_chat_list(window, ui_ctx);
         }
         // =========================================================================
         // Channel Lifecycle (INFRA-29)

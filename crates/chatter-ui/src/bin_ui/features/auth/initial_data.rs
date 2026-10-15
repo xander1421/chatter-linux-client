@@ -42,6 +42,16 @@ pub fn refresh_friends_list(window_weak: Weak<MainWindow>, ui_ctx: Arc<ChatterCl
     });
 }
 
+/// Repaint Contacts from the profile already committed by the event stream.
+/// A network friends refresh can return an older snapshot and overwrite the
+/// new name immediately after the live profile update.
+pub fn refresh_friends_list_local(window_weak: Weak<MainWindow>, ui_ctx: Arc<ChatterClient>) {
+    let owner = super::super::history_owner::SessionOwner::capture(&ui_ctx);
+    tokio::spawn(async move {
+        publish_friends(window_weak, ui_ctx.local_friend_tab_entries(), owner);
+    });
+}
+
 /// `true` when Contacts has nothing to show yet. A dropped window counts
 /// as empty so the caller still publishes the local rows.
 async fn friends_list_empty(window_weak: &Weak<MainWindow>) -> bool {

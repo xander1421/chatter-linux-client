@@ -341,6 +341,12 @@ fn apply_profile(
 
     let before = user_repo.get_profile(&profile.user_id).ok().flatten();
 
+    // A profile push may arrive before the friends sync has created this
+    // user. `profiles.user_id` has a foreign key to `users.id`.
+    if let Err(e) = user_repo.ensure_user_exists(&profile.user_id) {
+        tracing::warn!(error = %e, user_id = %profile.user_id, "Failed to create profile user");
+        return;
+    }
     if let Err(e) = user_repo.upsert_profile(&profile) {
         tracing::warn!(error = %e, user_id = %profile.user_id, "Failed to upsert profile");
         return;
