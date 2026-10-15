@@ -603,6 +603,12 @@ impl ChatterClient {
         self.mesh().conversation_for(id)
     }
 
+    /// The mesh sidebar's stored title for a conversation.
+    #[cfg(feature = "mesh")]
+    pub fn mesh_conversation_name(&self, id: &crate::domain::ids::ChannelId) -> Option<String> {
+        self.mesh().conversation_name(id)
+    }
+
     /// Stored history for one mesh conversation, oldest first.
     #[cfg(feature = "mesh")]
     pub fn mesh_history(

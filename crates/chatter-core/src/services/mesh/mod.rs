@@ -936,8 +936,13 @@ impl MeshService {
             .peers()
             .into_iter()
             .find(|p| mapping::peer_user_id(&p.peer) == *sender)
-            .map(|p| p.nickname)
-            .filter(|n| !n.is_empty())
+            .map(|p| {
+                if p.nickname.trim().is_empty() {
+                    format!("Peer {}", p.peer.as_str().chars().take(8).collect::<String>())
+                } else {
+                    p.nickname
+                }
+            })
             .or_else(|| self.timeline.remembered_sender_name(sender))
     }
 
@@ -998,6 +1003,12 @@ impl MeshService {
     pub fn conversation_for(&self, id: &str) -> Option<MeshConversation> {
         let id: ChannelId = id.parse().ok()?;
         self.timeline.conversation_for(&id)
+    }
+
+    /// The same title the mesh sidebar shows, without loading all conversations.
+    #[must_use]
+    pub fn conversation_name(&self, id: &ChannelId) -> Option<String> {
+        self.timeline.conversation_name(id)
     }
 
     /// History for one mesh conversation, oldest first.

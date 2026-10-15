@@ -94,18 +94,14 @@ impl MeshConversationRepository {
         Ok(())
     }
 
-    /// Remember the nickname a mesh sender last used, so history can still
-    /// name it after the peer has gone out of range. An empty nickname changes
-    /// nothing.
+    /// Remember the peer ID and its last nickname so history can still name a
+    /// sender after the peer has gone out of range.
     pub fn remember_sender(
         &self,
         sender_id: &str,
         peer_id: &str,
         nickname: &str,
     ) -> Result<(), StorageError> {
-        if nickname.is_empty() {
-            return Ok(());
-        }
         let conn = self.db.connection()?;
         conn.execute(
             r#"
@@ -113,7 +109,8 @@ impl MeshConversationRepository {
             VALUES (?1, ?2, ?3, ?4)
             ON CONFLICT(sender_id) DO UPDATE SET
                 peer_id = excluded.peer_id,
-                nickname = excluded.nickname,
+                nickname = CASE WHEN excluded.nickname = '' THEN mesh_sender_names.nickname
+                                ELSE excluded.nickname END,
                 updated_at = excluded.updated_at
             "#,
             params![sender_id, peer_id, nickname, Utc::now().to_rfc3339()],
@@ -146,6 +143,12 @@ impl MeshConversationRepository {
             Err(rusqlite::Error::QueryReturnedNoRows) => return Ok(None),
             Err(error) => return Err(error.into()),
         };
+        if nickname.trim().is_empty() {
+            return Ok(Some(format!(
+                "Peer {}",
+                peer_id.chars().take(8).collect::<String>()
+            )));
+        }
         if sharing > 1 {
             let suffix: String = peer_id
                 .chars()
