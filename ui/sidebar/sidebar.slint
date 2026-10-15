@@ -146,6 +146,7 @@ export component Sidebar inherits Rectangle {
     callback channel-invites-clicked();
     callback toggle-collapsed();
     callback settings-clicked();
+    callback mesh-setup-clicked();
     callback anon-mode-clicked();
     callback create-section-clicked();
     // The two-pane '+' in the header row: opens New Chat / New Channel /
@@ -636,6 +637,7 @@ export component Sidebar inherits Rectangle {
                     vertical-stretch: 0;
                     collapsed: root.collapsed;
                     touch: root.touch;
+                    setup-requested => { root.mesh-setup-clicked(); }
                 }
 
                 // 6b. CUSTOM SECTIONS — user-created folders, below the chat list and mesh

@@ -1,14 +1,4 @@
-// The mesh section of the sidebar.
-//
-// Reads `MeshGlobal` directly rather than taking properties, the same way the
-// sidebar reads `AnonMode` / `TorStatus` — the whole section is one runtime
-// flag away from not existing, and threading five properties through
-// `app.slint` for that would be worse.
-//
-// The caption line under the header is the feature's one standing claim: no
-// server, no internet, and a peer count in place of a connection dot. Zero
-// peers reads as "none nearby", never as an error.
-
+// Compact mesh conversations in the sidebar. Setup lives in MeshSetupSheet.
 import { Colors } from "../theme/colors.slint";
 import { Materials } from "../theme/materials.slint";
 import { Spacing } from "../theme/spacing.slint";
@@ -16,408 +6,147 @@ import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
 import { MeshGlobal } from "mesh_global.slint";
 import { MeshListItem } from "mesh_list_item.slint";
-import { NeoActionToggle } from "../components/neo_action_toggle.slint";
 
 export component MeshList inherits Rectangle {
     in property <bool> collapsed: false;
-    // Touch density: the wipe row and the join field are full touch targets.
     in property <bool> touch: false;
-
+    callback setup-requested();
     property <bool> expanded: true;
-    property <bool> joining: false;
-    property <bool> showing-nearby: false;
-    property <string> join-draft: "";
-    property <string> private-draft: "";
-    property <string> private-qr-draft: "";
-    property <bool> confirming-wipe: false;
+    property <string> status: !MeshGlobal.mesh-on ? "Off"
+        : !MeshGlobal.radio-running ? "Unavailable"
+        : MeshGlobal.peer-count == 0 ? "0 nearby"
+        : MeshGlobal.peer-count == 1 ? "1 nearby"
+        : MeshGlobal.peer-count + " nearby";
 
-    // Transparent on purpose: the sidebar tints its own surface (anon mode),
-    // and a section that repainted over that would fight it.
     VerticalLayout {
-        // ── Section header ──
-        // Same header rhythm as the sidebar's own sections — see sidebar.slint.
+        spacing: Spacing.xxs;
         if !root.collapsed: Rectangle {
-            height: Spacing.button-height + Spacing.md;
+            height: root.touch ? Spacing.touch-target-min : Spacing.button-height;
             HorizontalLayout {
-                padding-top: Spacing.md;
                 padding-left: Spacing.sm;
                 padding-right: Spacing.xs;
-
-                TouchArea {
+                spacing: Spacing.xs;
+                Rectangle {
                     horizontal-stretch: 1;
-                    mouse-cursor: pointer;
-                    clicked => { root.expanded = !root.expanded; }
+                    border-radius: Spacing.radius-md;
+                    background: header-touch.has-hover ? Colors.surface-hover : transparent;
+                    transform-scale-x: header-touch.pressed ? 98% : 100%;
+                    transform-scale-y: header-touch.pressed ? 96% : 100%;
+                    animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; }
+                    animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
                     HorizontalLayout {
-                        padding-left: Spacing.xxs;
-                        spacing: Spacing.xs;
-                        alignment: start;
-                        VerticalLayout {
-                            alignment: center;
-                            horizontal-stretch: 0;
-                            Image {
-                                source: Icons.chevron-right;
-                                width: 10px;
-                                height: 10px;
-                                colorize: Colors.text-muted;
-                                transform-rotation: root.expanded ? 90deg : 0deg;
-                                animate transform-rotation { duration: Materials.motion-standard; easing: Materials.spring; }
-                            }
+                        padding-left: Spacing.xs;
+                        spacing: Spacing.sm;
+                        alignment: center;
+                        Image {
+                            source: Icons.chevron-right;
+                            width: 11px; height: 11px;
+                            colorize: Colors.text-muted;
+                            transform-rotation: root.expanded ? 90deg : 0deg;
+                            animate transform-rotation { duration: Materials.motion-standard; easing: Materials.spring; }
                         }
                         Text {
                             text: "Mesh";
-                            color: Colors.text-muted;
-                            font-size: Typography.xs2;
+                            color: Colors.text-secondary;
+                            font-size: Typography.sm;
                             font-weight: 600;
-                            letter-spacing: 0.5px;
                             vertical-alignment: center;
+                            horizontal-stretch: 1;
+                        }
+                        Rectangle {
+                            width: min(105px, status-text.preferred-width + Spacing.md * 2);
+                            height: 24px;
+                            border-radius: self.height / 2;
+                            clip: true;
+                            background: MeshGlobal.mesh-on && MeshGlobal.radio-running ? Colors.surface-control : Colors.surface-hover;
+                            status-text := Text {
+                                text: root.status;
+                                color: MeshGlobal.mesh-on && !MeshGlobal.radio-running ? Colors.warning : Colors.text-secondary;
+                                font-size: Typography.xs;
+                                width: parent.width;
+                                height: parent.height;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                                overflow: elide;
+                            }
                         }
                     }
-                }
-
-                // Nearby peers and join actions.
-                Rectangle {
-                    width: Spacing.button-height;
-                    horizontal-stretch: 0;
-                    Rectangle {
-                        width: 24px;
-                        height: 24px;
-                        x: (parent.width - self.width) / 2;
-                        y: (parent.height - self.height) / 2;
-                        border-radius: Spacing.radius-sm;
-                        background: join-touch.has-hover ? Colors.surface-hover : transparent;
-                        transform-scale-x: join-touch.pressed ? 88% : 100%;
-                        transform-scale-y: join-touch.pressed ? 88% : 100%;
-                        animate transform-scale-x { duration: join-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
-                        animate transform-scale-y { duration: join-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
-                        Image {
-                            source: Icons.plus;
-                            width: 14px;
-                            height: 14px;
-                            x: (parent.width - self.width) / 2;
-                            y: (parent.height - self.height) / 2;
-                            colorize: join-touch.has-hover ? Colors.text-primary : Colors.text-muted;
-                        }
-                    }
-                    join-touch := TouchArea {
+                    header-touch := TouchArea {
                         mouse-cursor: pointer;
                         accessible-role: button;
-                        accessible-label: "Nearby mesh peers";
-                        clicked => {
-                            root.showing-nearby = !root.showing-nearby;
-                            root.expanded = true;
-                        }
+                        accessible-label: root.expanded ? "Collapse mesh conversations" : "Expand mesh conversations";
+                        clicked => { root.expanded = !root.expanded; }
                     }
                 }
-            }
-        }
-
-        // Status is informational; the switch below is the only radio control.
-        if !root.collapsed && root.expanded: Rectangle {
-            height: root.touch ? Spacing.touch-target-min : 30px;
-            clip: true;
-            border-radius: Spacing.radius-sm;
-            caption := HorizontalLayout {
-                padding-left: Spacing.md;
-                padding-right: Spacing.sm;
-                spacing: Spacing.xs;
-                alignment: start;
-
-                VerticalLayout {
-                    alignment: center;
-                    horizontal-stretch: 0;
+                Rectangle {
+                    width: root.touch ? Spacing.touch-target-min : Spacing.button-height;
+                    border-radius: Spacing.radius-md;
+                    background: setup-touch.has-hover ? Colors.surface-hover : transparent;
+                    transform-scale-x: setup-touch.pressed ? 90% : 100%;
+                    transform-scale-y: setup-touch.pressed ? 90% : 100%;
+                    animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; }
+                    animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
                     Image {
-                        source: Icons.radio;
-                        width: 11px;
-                        height: 11px;
-                        colorize: !MeshGlobal.mesh-on ? Colors.text-muted
-                            : !MeshGlobal.radio-running ? Colors.warning
-                            : MeshGlobal.peer-count > 0 ? Colors.primary
-                            : Colors.text-muted;
+                        source: Icons.settings;
+                        width: Spacing.button-icon;
+                        height: Spacing.button-icon;
+                        x: (parent.width - self.width) / 2;
+                        y: (parent.height - self.height) / 2;
+                        colorize: setup-touch.has-hover ? Colors.text-primary : Colors.text-muted;
                     }
-                }
-                // What the mesh needs, not what this device lacks: worded as a
-                // capability so it is not read as a status while the server is up.
-                Text {
-                    // Short enough for the 240px sidebar beside the peer count;
-                    // the long form ("Works without server or internet") elided
-                    // mid-sentence on every desktop frame.
-                    text: "Works offline · ";
-                    wrap: no-wrap;
-                    color: Colors.text-muted;
-                    font-size: Typography.xs;
-                    vertical-alignment: center;
-                    horizontal-stretch: 0;
-                    overflow: elide;
-                }
-                // Zero peers is normal and stays muted; a radio that is *off* is
-                // the one state here the user can act on, so it is the one
-                // allowed a warning colour.
-                // A switched-off mesh has no radio running either; that is the
-                // user's own choice, not Bluetooth being off (chat_header agrees).
-                property <bool> radio-down: MeshGlobal.mesh-on && !MeshGlobal.radio-running;
-                Text {
-                    text: !MeshGlobal.mesh-on ? "mesh off"
-                        : caption.radio-down
-                            ? (MeshGlobal.radio-down == "bluetooth-off" ? "Bluetooth off" : "mesh unavailable")
-                        : MeshGlobal.peer-count == 0 ? "none nearby"
-                        : MeshGlobal.peer-count == 1 ? "1 nearby"
-                        : MeshGlobal.peer-count + " nearby";
-                    color: caption.radio-down ? Colors.warning : Colors.text-muted;
-                    font-weight: caption.radio-down ? 600 : 400;
-                    font-size: Typography.xs;
-                    wrap: no-wrap;
-                    vertical-alignment: center;
-                    horizontal-stretch: 1;
-                    overflow: elide;
+                    setup-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        accessible-role: button;
+                        accessible-label: "Mesh setup";
+                        clicked => { root.setup-requested(); }
+                    }
                 }
             }
         }
-
-        if !root.collapsed && root.expanded: Rectangle {
+        if root.collapsed: Rectangle {
+            height: Spacing.touch-target-min;
+            border-radius: Spacing.radius-md;
+            background: rail-touch.has-hover ? Colors.surface-hover : transparent;
+            Image {
+                source: Icons.radio;
+                width: Spacing.button-icon;
+                height: Spacing.button-icon;
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                colorize: MeshGlobal.mesh-on ? Colors.primary : Colors.text-muted;
+            }
+            rail-touch := TouchArea {
+                mouse-cursor: pointer;
+                accessible-role: button;
+                accessible-label: "Mesh setup, " + root.status;
+                clicked => { root.setup-requested(); }
+            }
+        }
+        if !root.collapsed && root.expanded && !MeshGlobal.mesh-on: Rectangle {
             height: root.touch ? Spacing.touch-target-min : Spacing.button-height;
+            border-radius: Spacing.radius-md;
+            background: turn-on-touch.has-hover ? Colors.surface-control-hover : Colors.surface-control;
+            transform-scale-x: turn-on-touch.pressed ? 98% : 100%;
+            transform-scale-y: turn-on-touch.pressed ? 96% : 100%;
+            animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; }
+            animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
             HorizontalLayout {
                 padding-left: Spacing.md;
-                padding-right: Spacing.sm;
-                spacing: Spacing.sm;
-                Text {
-                    text: "Mesh on/off";
-                    color: Colors.text-secondary;
-                    font-size: Typography.xs;
-                    vertical-alignment: center;
-                    horizontal-stretch: 1;
-                }
-                VerticalLayout {
-                    alignment: center;
-                    horizontal-stretch: 0;
-                    NeoActionToggle {
-                        checked: MeshGlobal.mesh-on;
-                        accessible-text: "Mesh on/off";
-                        toggled(value) => { MeshGlobal.set-mesh-on(value); }
-                    }
-                }
+                padding-right: Spacing.md;
+                Text { text: "Turn on mesh"; color: Colors.text-primary; font-size: Typography.sm; font-weight: 600; vertical-alignment: center; horizontal-stretch: 1; }
+                Text { text: "Set up  ›"; color: Colors.primary; font-size: Typography.sm; vertical-alignment: center; }
+            }
+            turn-on-touch := TouchArea {
+                mouse-cursor: pointer;
+                accessible-role: button;
+                accessible-label: "Turn on mesh, open setup";
+                clicked => { root.setup-requested(); }
             }
         }
-
-        if !root.collapsed && root.expanded: Rectangle {
-            height: root.showing-nearby ? nearby-content.preferred-height : 0px;
-            clip: true;
-            opacity: root.showing-nearby ? 1 : 0;
-            animate height { duration: Materials.motion-standard; easing: Materials.spring; }
-            animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
-            nearby-content := VerticalLayout {
-            padding-left: Spacing.md;
-            padding-right: Spacing.sm;
-            spacing: Spacing.xxs;
-            Text {
-                text: "Nearby peers";
-                color: Colors.text-muted;
-                font-size: Typography.xs;
-                font-weight: 600;
-            }
-            Rectangle {
-                height: root.touch ? Spacing.touch-target-min : 32px;
-                Text { text: "Join geohash cell…"; color: Colors.text-secondary; font-size: Typography.xs; vertical-alignment: center; }
-                TouchArea { mouse-cursor: pointer; clicked => { root.joining = !root.joining; } }
-            }
-            if MeshGlobal.nearby-peers.length == 0: Text {
-                text: "No peers in range yet";
-                color: Colors.text-muted;
-                font-size: Typography.xs;
-            }
-            for peer in MeshGlobal.nearby-peers: Rectangle {
-                height: root.touch ? Spacing.touch-target-min : 38px;
-                border-radius: Spacing.radius-sm;
-                background: peer-touch.has-hover ? Colors.surface-hover : transparent;
-                HorizontalLayout {
-                    padding-left: Spacing.sm;
-                    padding-right: Spacing.sm;
-                    spacing: Spacing.xs;
-                    Text { text: peer.name; color: Colors.text-primary; font-size: Typography.sm; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
-                    Text { text: "self-asserted"; color: Colors.text-muted; font-size: Typography.xxs; vertical-alignment: center; }
-                }
-                peer-touch := TouchArea { mouse-cursor: pointer; clicked => { MeshGlobal.open-peer(peer.id); } }
-            }
-            }
-        }
-
-        // ── Join-a-cell input ──
-        if !root.collapsed && root.expanded: Rectangle {
-            height: root.touch ? 72px : 62px;
-            VerticalLayout {
-                padding-left: Spacing.md;
-                padding-right: Spacing.sm;
-                spacing: Spacing.xxs;
-                Text { text: "Mesh name"; color: Colors.text-muted; font-size: Typography.xs; }
-                Rectangle {
-                    height: root.touch ? 42px : 32px;
-                    background: Colors.inset;
-                    border-radius: Spacing.radius-sm;
-                    border-width: Spacing.stroke;
-                    border-color: name-input.has-focus ? Colors.primary : Colors.border;
-                    name-input := TextInput {
-                        x: Spacing.sm;
-                        y: (parent.height - self.height) / 2;
-                        width: parent.width - Spacing.sm * 2;
-                        height: 22px;
-                        text: MeshGlobal.nickname;
-                        single-line: true;
-                        color: Colors.text-primary;
-                        font-size: Typography.sm;
-                        accepted => { MeshGlobal.set-nickname(self.text); }
-                    }
-                }
-            }
-        }
-
-        if !root.collapsed && root.expanded: Rectangle {
-            height: 22px;
-            Text {
-                x: Spacing.md;
-                text: "Public to anyone nearby · names are self-asserted";
-                color: Colors.text-muted;
-                font-size: Typography.xxs;
-                overflow: elide;
-            }
-        }
-
-        if !root.collapsed && root.expanded: VerticalLayout {
-            padding-left: Spacing.md;
-            padding-right: Spacing.sm;
-            spacing: Spacing.xxs;
-            Text { text: "Private channel · enter a name to create"; color: Colors.text-muted; font-size: Typography.xs; }
-            Rectangle {
-                height: root.touch ? 42px : 32px; background: Colors.inset; border-radius: Spacing.radius-sm;
-                private-name := TextInput {
-                    x: Spacing.sm; y: Spacing.xs; width: parent.width - Spacing.sm * 2;
-                    height: parent.height - Spacing.xs * 2; single-line: true;
-                    color: Colors.text-primary; font-size: Typography.sm;
-                    text <=> root.private-draft;
-                    accepted => { MeshGlobal.create-private-channel(self.text); root.private-draft = ""; }
-                }
-            }
-            Text { text: "Scan or paste a private invite"; color: Colors.text-muted; font-size: Typography.xs; }
-            Rectangle {
-                height: root.touch ? 42px : 32px; background: Colors.inset; border-radius: Spacing.radius-sm;
-                private-qr := TextInput {
-                    x: Spacing.sm; y: Spacing.xs; width: parent.width - Spacing.sm * 2;
-                    height: parent.height - Spacing.xs * 2; single-line: true;
-                    color: Colors.text-primary; font-size: Typography.sm;
-                    text <=> root.private-qr-draft;
-                    accepted => { MeshGlobal.join-private-channel(self.text); root.private-qr-draft = ""; }
-                }
-            }
-            Rectangle {
-                height: Spacing.button-height;
-                Text { text: "Scan private invite QR"; color: Colors.text-secondary; font-size: Typography.xs; vertical-alignment: center; }
-                TouchArea { clicked => { MeshGlobal.open-private-scanner(); } }
-            }
-        }
-
-        if !root.collapsed && root.expanded: Rectangle {
-            height: root.touch ? 72px : 62px;
-            VerticalLayout {
-                padding-left: Spacing.md;
-                padding-right: Spacing.sm;
-                spacing: Spacing.xxs;
-                Text { text: "Join #"; color: Colors.text-muted; font-size: Typography.xs; }
-                Rectangle {
-                    height: root.touch ? 42px : 32px;
-                    background: Colors.inset;
-                    border-radius: Spacing.radius-sm;
-                    border-width: Spacing.stroke;
-                    border-color: channel-input.has-focus ? Colors.primary : Colors.border;
-                    channel-input := TextInput {
-                        x: Spacing.sm;
-                        y: (parent.height - self.height) / 2;
-                        width: parent.width - Spacing.sm * 2;
-                        height: 22px;
-                        single-line: true;
-                        text <=> root.join-draft;
-                        color: Colors.text-primary;
-                        font-size: Typography.sm;
-                        accepted => { MeshGlobal.join-channel(self.text); root.join-draft = ""; }
-                    }
-                }
-            }
-        }
-
-        if !root.collapsed && root.expanded: VerticalLayout {
-            padding-left: Spacing.md;
-            for name in MeshGlobal.nearby-channels: Rectangle {
-                height: 26px;
-                Text {
-                    text: "Seen on mesh #" + name + " · tap to join";
-                    color: Colors.text-secondary;
-                    font-size: Typography.xs;
-                    vertical-alignment: center;
-                }
-                TouchArea { clicked => { MeshGlobal.join-channel(name); root.join-draft = ""; } }
-            }
-        }
-
-        // ── Join-a-cell input ──
-        if !root.collapsed && root.joining: Rectangle {
-            height: root.touch ? Spacing.touch-target-min + Spacing.xs : 34px;
-            HorizontalLayout {
-                padding-left: Spacing.sm;
-                padding-right: Spacing.sm;
-                padding-bottom: Spacing.xs;
-
-                Rectangle {
-                    height: root.touch ? Spacing.touch-target-min : 28px;
-                    background: Colors.inset;
-                    border-radius: Spacing.radius-sm;
-                    border-width: Spacing.stroke;
-                    border-color: cell-input.has-focus ? Colors.primary : Colors.border;
-
-                    HorizontalLayout {
-                        padding-left: Spacing.sm;
-                        padding-right: Spacing.sm;
-                        spacing: Spacing.xs;
-
-                        VerticalLayout {
-                            alignment: center;
-                            horizontal-stretch: 0;
-                            Image {
-                                source: Icons.hash;
-                                width: 11px;
-                                height: 11px;
-                                colorize: Colors.text-muted;
-                            }
-                        }
-
-                        cell-input := TextInput {
-                            horizontal-stretch: 1;
-                            color: Colors.text-primary;
-                            font-size: Typography.xs;
-                            vertical-alignment: center;
-                            single-line: true;
-                            accepted => {
-                                MeshGlobal.join-geohash(self.text);
-                                self.text = "";
-                                root.joining = false;
-                            }
-                        }
-                    }
-
-                    if cell-input.text == "": Text {
-                        x: Spacing.sm + 11px + 4px;
-                        height: 100%;
-                        text: "geohash cell, e.g. u4pruy";
-                        color: Colors.text-muted;
-                        font-size: Typography.xs;
-                        vertical-alignment: center;
-                    }
-                }
-            }
-        }
-
-        // ── Rows ──
         if root.expanded: VerticalLayout {
             padding-left: Spacing.xs;
             padding-right: Spacing.xs;
             spacing: Spacing.xxs;
-
             for item in MeshGlobal.conversations: MeshListItem {
                 title: item.title;
                 kind: item.kind;
@@ -432,100 +161,22 @@ export component MeshList inherits Rectangle {
                 selected: item.is-selected;
                 collapsed: root.collapsed;
                 touch: root.touch;
-
                 clicked => { MeshGlobal.conversation-selected(item.id); }
                 leave => { MeshGlobal.leave-channel(item.scope); }
                 toggle-mute => { MeshGlobal.toggle-channel-mute(item.scope); }
                 toggle-block => { MeshGlobal.toggle-peer-block(item.scope); }
             }
         }
-
-        // Nothing at all yet — say what this is instead of leaving a blank gap.
-        if !root.collapsed && root.expanded && MeshGlobal.conversations.length == 0: Rectangle {
-            height: empty-text.preferred-height + 12px;
+        if !root.collapsed && root.expanded && MeshGlobal.mesh-on && MeshGlobal.conversations.length == 0: Rectangle {
+            height: empty-text.preferred-height + Spacing.md * 2;
             HorizontalLayout {
                 padding-left: Spacing.md;
-                padding-right: Spacing.sm;
-                padding-bottom: Spacing.sm;
+                padding-right: Spacing.md;
                 empty-text := Text {
-                    text: "Nothing here yet. Messages arrive over Bluetooth from whoever is nearby, and can be relayed onwards hours later.";
+                    text: "No mesh conversations yet. Open mesh setup to find nearby people or join a channel.";
                     color: Colors.text-muted;
-                    font-size: Typography.xxs;
+                    font-size: Typography.xs;
                     wrap: word-wrap;
-                }
-            }
-        }
-
-        // ── Panic wipe ── two taps, because it cannot be undone. Says exactly
-        // what goes and what stays: the chatter account is untouched.
-        if !root.collapsed && root.expanded && !root.confirming-wipe: Rectangle {
-            height: root.touch ? Spacing.touch-target-min : 22px;
-            clip: true;
-            HorizontalLayout {
-                padding-left: Spacing.md;
-                alignment: start;
-                // The hit box is the row, not the glyphs of a 12px label.
-                Rectangle {
-                    width: wipe-label.preferred-width + Spacing.sm * 2;
-                    accessible-role: button;
-                    accessible-label: "Wipe mesh data";
-                    accessible-action-default => { root.confirming-wipe = true; }
-                    wipe-label := Text {
-                        x: Spacing.sm;
-                        width: max(0px, parent.width - Spacing.sm * 2);
-                        height: parent.height;
-                        text: "Wipe mesh data…";
-                        wrap: no-wrap;
-                        overflow: elide;
-                        color: wipe-touch.has-hover ? Colors.error : Colors.text-muted;
-                        font-size: Typography.xxs;
-                        vertical-alignment: center;
-                    }
-                    wipe-touch := TouchArea {
-                        mouse-cursor: pointer;
-                        clicked => { root.confirming-wipe = true; }
-                    }
-                }
-            }
-        }
-        if !root.collapsed && root.expanded && root.confirming-wipe: Rectangle {
-            height: confirm-layout.preferred-height;
-            confirm-layout := VerticalLayout {
-                padding-left: Spacing.md;
-                padding-right: Spacing.sm;
-                padding-bottom: Spacing.sm;
-                spacing: Spacing.xs;
-                Text {
-                    text: "Erase the mesh identity, every mesh message, carried mail and favourites from this device? Your chatter account and its messages are not touched. This cannot be undone.";
-                    color: Colors.warning;
-                    font-size: Typography.xxs;
-                    wrap: word-wrap;
-                }
-                HorizontalLayout {
-                    spacing: Spacing.md;
-                    alignment: start;
-                    Text {
-                        text: "Wipe";
-                        color: Colors.error;
-                        font-size: Typography.xs;
-                        font-weight: 600;
-                        TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => {
-                                root.confirming-wipe = false;
-                                MeshGlobal.panic-wipe();
-                            }
-                        }
-                    }
-                    Text {
-                        text: "Cancel";
-                        color: Colors.text-muted;
-                        font-size: Typography.xs;
-                        TouchArea {
-                            mouse-cursor: pointer;
-                            clicked => { root.confirming-wipe = false; }
-                        }
-                    }
                 }
             }
         }

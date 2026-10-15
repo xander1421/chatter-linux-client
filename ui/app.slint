@@ -1,5 +1,6 @@
 import { GlassSurface } from "components/glass_surface.slint";
 import { MeshPeerSheet } from "mesh/mesh_peer_sheet.slint";
+import { MeshSetupSheet } from "mesh/mesh_setup_sheet.slint";
 import { Materials } from "theme/materials.slint";
 import { UpdateGlobal } from "update/update_global.slint";
 import { Appearance } from "theme/appearance.slint";
@@ -2128,6 +2129,9 @@ export component MainWindow inherits Window {
                     settings-clicked => {
                         root.active-tab = "profile";
                     }
+                    mesh-setup-clicked => {
+                        root.nav-push("mesh-setup");
+                    }
                     anon-mode-clicked => {
                         root.toggle-anon-mode();
                     }
@@ -2621,7 +2625,13 @@ export component MainWindow inherits Window {
             }
         }
 
-        // Create Channel Modal
+        if root.is-presented("mesh-setup"): MeshSetupSheet {
+            show-modal: root.active-modal == "mesh-setup";
+            touch: root.is-mobile-platform;
+            close => { root.nav-close("mesh-setup"); }
+        }
+
+        // Mesh peer details
         if root.is-presented("mesh-peer"): MeshPeerSheet {
             show-modal: root.active-modal == "mesh-peer";
             close => { root.nav-close("mesh-peer"); }

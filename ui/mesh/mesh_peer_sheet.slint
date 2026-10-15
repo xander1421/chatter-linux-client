@@ -45,12 +45,19 @@ export component MeshPeerSheet inherits Rectangle {
                 disabled: MeshGlobal.sheet-peer-id == "";
                 clicked => { MeshGlobal.show-binding-qr(MeshGlobal.sheet-peer-id); MeshGlobal.open-binding-scanner(MeshGlobal.sheet-peer-id); }
             }
-            if MeshGlobal.active-kind == "private-channel" && MeshGlobal.private-can-manage: Button {
-                text: "Invite to this private channel"; variant: "secondary";
-                clicked => { MeshGlobal.invite-private-channel(MeshGlobal.active-scope, MeshGlobal.sheet-peer-id); }
+            if MeshGlobal.active-kind == "private-channel" && MeshGlobal.private-can-manage: VerticalLayout {
+                spacing: Spacing.xs;
+                Text { text: "Private channel: " + MeshGlobal.active-title; color: Colors.text-primary; font-size: Typography.sm; font-weight: 600; wrap: word-wrap; }
+                Text { text: "Channel ID: " + MeshGlobal.active-scope; color: Colors.text-muted; font-size: Typography.xs; wrap: char-wrap; }
             }
             if MeshGlobal.active-kind == "private-channel" && MeshGlobal.private-can-manage: Button {
-                text: MeshGlobal.private-remove-pending == MeshGlobal.sheet-peer-id ? "Confirm remove and rotate key" : "Remove from this private channel";
+                text: "Invite to " + MeshGlobal.active-title; variant: "secondary";
+                clicked => { MeshGlobal.invite-private-channel(MeshGlobal.active-scope, MeshGlobal.sheet-peer-id); }
+            }
+            for member in MeshGlobal.private-removable-members: Button {
+                visible: MeshGlobal.active-kind == "private-channel" && MeshGlobal.private-can-manage && member == MeshGlobal.sheet-peer-id;
+                height: self.visible ? Spacing.button-height : 0px;
+                text: MeshGlobal.private-remove-pending == MeshGlobal.sheet-peer-id ? "Confirm remove and rotate key" : "Remove from " + MeshGlobal.active-title;
                 variant: "secondary";
                 clicked => {
                     if MeshGlobal.private-remove-pending == MeshGlobal.sheet-peer-id {
