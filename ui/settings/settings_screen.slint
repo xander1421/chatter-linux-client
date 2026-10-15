@@ -388,8 +388,7 @@ export component SettingsScreen inherits Rectangle {
                     HorizontalLayout {
                         Rectangle { horizontal-stretch: 1; }
                     VerticalLayout {
-                        width: min(root.compact-mode ? root.width : 600px,
-                            parent.width - root.content-padding * 2);
+                        width: min(root.compact-mode ? root.width : 600px, parent.width);
 
                         // Account section
                         if active-section == "account": VerticalLayout {
