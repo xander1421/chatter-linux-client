@@ -546,7 +546,17 @@ impl ChatterClient {
     /// Everyone currently visible on the radio.
     #[cfg(feature = "mesh")]
     pub fn mesh_peers(&self) -> Vec<crate::services::mesh::MeshPeer> {
-        self.mesh().peers()
+        let mut peers = self.mesh().peers();
+        // The mesh state has no owner account; the private binding is per owner.
+        if let Some(owner) = self.session_current_user_id() {
+            for peer in &mut peers {
+                peer.account_verified = matches!(
+                    self.mesh().binding_state(owner, &peer.peer),
+                    Ok(crate::storage::mesh_binding_store::PeerBinding::Verified { .. })
+                );
+            }
+        }
+        peers
     }
 
     #[cfg(feature = "mesh")]

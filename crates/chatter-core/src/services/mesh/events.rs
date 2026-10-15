@@ -110,7 +110,7 @@ pub struct MeshPeer {
     pub reachable: bool,
     /// Their announce signature verified.
     pub verified: bool,
-    /// Account binding verified privately. Always false until that protocol exists.
+    /// Private account binding verified for the current owner; filled by `Client::mesh_peers`.
     pub account_verified: bool,
     /// An established Noise session exists, so a DM can be encrypted right now.
     pub has_session: bool,
