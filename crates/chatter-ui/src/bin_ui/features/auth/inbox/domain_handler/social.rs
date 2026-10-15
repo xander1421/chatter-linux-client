@@ -395,7 +395,7 @@ fn update_dm_avatar(w: &MainWindow, channel_id: &str, bytes: &[u8]) {
 /// header, and profile modal in real-time.
 pub(super) fn handle_user_profile_updated(
     window: &Weak<MainWindow>,
-    ui_ctx: &ChatterClient,
+    ui_ctx: &Arc<ChatterClient>,
     user_id: UserId,
     display_name: String,
     status_message: Option<String>,
@@ -418,6 +418,7 @@ pub(super) fn handle_user_profile_updated(
     let user_id_str = user_id.to_string();
     let display_name_slint: slint::SharedString = display_name.clone().into();
     let initials = chatter_core::ui::chat_data::initials_from_name(&display_name);
+    let client = ui_ctx.clone();
 
     // Decode the avatar to raw RGBA now (Send-safe); the non-Send `slint::Image`
     // is built inside the event-loop closure below. This is the same in-place
@@ -454,6 +455,29 @@ pub(super) fn handle_user_profile_updated(
                     break;
                 }
             }
+        }
+
+        // A join notice may have been rendered before this profile was known.
+        // Ask core for the stored notice and its current sender name so the
+        // visible row catches up without changing the message on disk.
+        let messages = w.get_messages();
+        for i in 0..messages.row_count() {
+            let Some(mut row) = messages.row_data(i) else {
+                continue;
+            };
+            if !row.is_system || row.sender_id.as_str() != user_id_str.as_str() {
+                continue;
+            }
+            let Ok(message_id) = row.message_id.parse() else {
+                continue;
+            };
+            let Some((name, content)) = client.refreshed_join_notice(&message_id, &user_id) else {
+                continue;
+            };
+            row.sender_name = name.clone().into();
+            row.sender_initials = chatter_core::ui::initials_from_name(&name).into();
+            (row.content, row.rich_content) = crate::bin_ui::converters::body_fields(&content);
+            messages.set_row_data(i, row);
         }
 
         // 2. Chat header, when this peer's DM is the open conversation. Asked

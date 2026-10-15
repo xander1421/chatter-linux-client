@@ -265,6 +265,29 @@ impl ChatterClient {
             .unwrap_or_default()
     }
 
+    /// Re-resolve a stored join notice after its subject's profile arrives.
+    /// The notice stores the user ID, so a name unavailable at insertion time
+    /// does not become permanent text in the message history.
+    pub fn refreshed_join_notice(
+        &self,
+        message_id: &crate::domain::ids::MessageId,
+        user_id: &crate::domain::ids::UserId,
+    ) -> Option<(String, String)> {
+        use crate::domain::message::{MessageContent, SystemMessage};
+
+        let message = self.get_message_local(message_id)?;
+        let MessageContent::System(system @ SystemMessage::UserJoined(subject)) = &message.content
+        else {
+            return None;
+        };
+        if subject != user_id || message.sender_id != Some(*user_id) {
+            return None;
+        }
+        let name = self.message_sender_display_name(&message);
+        let content = format!("{} {}", name, system.description());
+        Some((name, content))
+    }
+
     /// [`Self::message_sender_display_name`] for a whole page, in order. Each
     /// distinct sender is resolved once, and every sender's directory name in
     /// a single query (`UserService::get_display_names`) — opening a
