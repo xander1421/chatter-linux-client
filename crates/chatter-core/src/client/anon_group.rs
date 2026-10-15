@@ -215,6 +215,7 @@ impl ChatterClient {
                     out.push(AnonGroupInviteCandidate {
                         user_id: peer,
                         display_name: self.display_name(&peer),
+                        username: self.known_username(&peer).unwrap_or_default(),
                         is_anonymous: false,
                     });
                 }
@@ -227,6 +228,7 @@ impl ChatterClient {
                     display_name: dm
                         .peer_display_name
                         .unwrap_or_else(|| self.fallback_display_name(&dm.peer_id)),
+                        username: String::new(),
                     is_anonymous: true,
                 });
             }
@@ -281,6 +283,8 @@ impl ChatterClient {
 pub struct AnonGroupInviteCandidate {
     pub user_id: crate::domain::ids::UserId,
     pub display_name: String,
+    /// Complete lookup handle for an identified friend, empty when unknown.
+    pub username: String,
     /// Reached through an anon DM rather than a server friendship.
     pub is_anonymous: bool,
 }
