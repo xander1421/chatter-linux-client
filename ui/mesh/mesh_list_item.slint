@@ -40,11 +40,13 @@ export component MeshListItem inherits Rectangle {
         root.kind == "geohash" ? "public · " + root.scope
       : root.kind == "room" ? "everyone in radio range"
       : root.kind == "channel" ? "public to nearby listeners"
+      : root.kind == "private-channel" ? "invited devices · encrypted"
       : root.binding-label == "Verified Chatter contact" ? "Verified Chatter contact"
       : root.reachable ? "encrypted · self-asserted name"
       : "no route now — sends wait for a carrier";
 
-    property <image> glyph: root.kind == "geohash" || root.kind == "channel" ? Icons.hash
+    property <image> glyph: root.kind == "private-channel" ? Icons.lock
+                          : root.kind == "geohash" || root.kind == "channel" ? Icons.hash
                           : root.kind == "dm" ? Icons.message-circle
                           : Icons.radio;
 
@@ -69,6 +71,10 @@ export component MeshListItem inherits Rectangle {
         ? root.title + ", public geohash channel, location-scoped"
         : root.kind == "room"
         ? root.title + ", public mesh room, everyone in radio range"
+        : root.kind == "channel"
+        ? root.title + ", public mesh channel, anyone nearby can read"
+        : root.kind == "private-channel"
+        ? root.title + ", private mesh channel, invited devices only"
         : root.reachable
         ? root.title + ", mesh direct message, " + root.binding-label
         : root.title + ", mesh direct message, no route right now, " + root.binding-label;

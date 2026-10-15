@@ -332,13 +332,15 @@ export component ChatLayout inherits Rectangle {
             ? root.privacy-line-exposed
           : MeshGlobal.active-kind == "room"
             || MeshGlobal.active-kind == "geohash"
-            || (root.conversation-kind == ConversationKind.channel && !root.private-channel);
+            || (MeshGlobal.active-kind != "private-channel" && root.conversation-kind == ConversationKind.channel && !root.private-channel);
         privacy-line: root.privacy-line-override != ""
             ? root.privacy-line-override
           : MeshGlobal.active-kind == "room"
             ? "Anyone in radio range can read this"
           : MeshGlobal.active-kind == "geohash"
             ? "Anyone in this cell can read this"
+          : MeshGlobal.active-kind == "private-channel"
+            ? "Invited devices · encrypted over mesh"
           : root.conversation-kind == ConversationKind.channel && !root.private-channel
             ? "Public channel — anyone can read this"
             : "Messages are end-to-end encrypted";

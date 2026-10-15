@@ -38,6 +38,8 @@ export component MeshContextBar inherits Rectangle {
             ? (MeshGlobal.active-reachable
                 ? "Best-effort: sent means handed on, not arrived."
                 : "No route right now. What you send is kept and offered to passing devices — it may arrive hours later.")
+      : MeshGlobal.active-kind == "private-channel"
+            ? "Invited devices only. Membership changes need the creator; offline members may miss an epoch key."
             : (MeshGlobal.peer-count == 0
                 ? "Nobody is in range. What you send waits to be carried, and may be read hours from now."
                 : "Best-effort: reaches whoever is in range now, and travels further as devices move.");
@@ -117,6 +119,24 @@ export component MeshContextBar inherits Rectangle {
                     clicked => {
                         MeshGlobal.notice = "";
                     }
+                }
+            }
+
+            if MeshGlobal.active-kind == "private-channel" && MeshGlobal.private-removable-members.length > 0: VerticalLayout {
+                spacing: Spacing.xxs;
+                Text { text: "Creator controls membership · tap to remove and rotate key";
+                    color: Colors.text-muted; font-size: Typography.xs; }
+                for member in MeshGlobal.private-removable-members: Rectangle {
+                    height: Spacing.button-height;
+                    Text { text: MeshGlobal.private-remove-pending == member ? "Tap again to remove " + member : member;
+                        color: Colors.text-secondary; font-size: Typography.xs;
+                        vertical-alignment: center; overflow: elide; }
+                    TouchArea { clicked => {
+                        if MeshGlobal.private-remove-pending == member {
+                            MeshGlobal.private-remove-pending = "";
+                            MeshGlobal.remove-private-member(MeshGlobal.active-scope, member);
+                        } else { MeshGlobal.private-remove-pending = member; }
+                    } }
                 }
             }
 

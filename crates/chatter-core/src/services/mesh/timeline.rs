@@ -95,6 +95,7 @@ fn conversation_from_stored(row: &StoredMeshConversation) -> Option<MeshConversa
         "room" => Some(MeshConversation::Room),
         "geohash" => row.wire_id.clone().map(MeshConversation::Geohash),
         "channel" => row.wire_id.clone().map(MeshConversation::Channel),
+        "private-channel" => row.wire_id.clone().map(MeshConversation::PrivateChannel),
         "dm" => row
             .wire_id
             .as_deref()
@@ -112,6 +113,7 @@ fn stored_from_conversation(
         MeshConversation::Room => ("room", None),
         MeshConversation::Geohash(cell) => ("geohash", Some(cell.clone())),
         MeshConversation::Channel(name) => ("channel", Some(name.clone())),
+        MeshConversation::PrivateChannel(id) => ("private-channel", Some(id.clone())),
         MeshConversation::Dm(peer) => ("dm", Some(peer.to_string())),
     };
     StoredMeshConversation {
@@ -457,6 +459,21 @@ impl MeshTimeline {
         self.register(&MeshConversation::Channel(name.to_string()), None);
     }
 
+    pub fn open_private_channel(&self, id: &str, name: &str) {
+        self.register(&MeshConversation::PrivateChannel(id.to_owned()), Some(name));
+    }
+
+    pub fn close_private_channel(&self, id: &str) {
+        let conversation = MeshConversation::PrivateChannel(id.to_owned());
+        self.open.lock().remove(&conversation.conversation_id());
+        if let Err(error) = self
+            .directory
+            .remove(&conversation.conversation_id().to_string())
+        {
+            tracing::warn!(%error, "mesh: could not close private channel");
+        }
+    }
+
     pub fn leave_channel(&self, name: &str) {
         let conversation = MeshConversation::Channel(name.to_string());
         let id = conversation.conversation_id();
@@ -789,7 +806,11 @@ impl MeshTimeline {
         let mut open = self.open.lock();
         match open.get_mut(&id) {
             Some(entry) => {
-                if let Some(label) = dm_label(conversation, nickname) {
+                if let Some(label) = dm_label(conversation, nickname).or_else(|| {
+                    matches!(conversation, MeshConversation::PrivateChannel(_))
+                        .then(|| nickname.map(|n| format!("🔒 {n}")))
+                        .flatten()
+                }) {
                     entry.label = label;
                 }
             }
@@ -836,6 +857,9 @@ fn label_for(conversation: &MeshConversation, nickname: Option<&str>) -> String 
         // should never have to guess which one they are speaking into.
         MeshConversation::Geohash(cell) => format!("#{cell}"),
         MeshConversation::Channel(name) => format!("#{name}"),
+        MeshConversation::PrivateChannel(_) => {
+            format!("🔒 {}", nickname.unwrap_or("Private channel"))
+        }
         MeshConversation::Dm(peer) => {
             dm_label(conversation, nickname).unwrap_or_else(|| peer.as_str().to_string())
         }
@@ -868,6 +892,9 @@ pub struct MeshEvents {
 }
 
 impl MeshEvents {
+    pub fn open_private_channel(&self, id: &str, name: &str) {
+        self.timeline.open_private_channel(id, name);
+    }
     /// Signal receive must know the row reached SQLCipher before committing its
     /// ratchet and dedup marker. A failed insert leaves the receive journal for
     /// rollback/replay and never emits a delivery receipt.

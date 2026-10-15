@@ -73,6 +73,7 @@ use super::file_stream::{
     TRANSFER_ABANDON_SECS, TransferId,
 };
 use super::mapping::{self, InboundMessage, MeshConversation, outbound_message};
+use super::private_channel::{Invite, Member, PrivateChannel, PrivateChannelStore};
 use super::router::{RouterCommand, RouterHandle};
 use super::signal_mesh::{self, BundleFrame};
 use super::state::{
@@ -151,6 +152,7 @@ const CARRIER_INGRESS_PER_MINUTE: u32 = 60;
 /// The radio loop.
 pub struct BleRuntime {
     binding_store: Arc<MeshBindingStore>,
+    private_channels: Arc<PrivateChannelStore>,
     key_store: Arc<KeyStore>,
     signal_lock: Arc<parking_lot::Mutex<()>>,
     storage: Arc<dyn Storage>,
@@ -187,6 +189,7 @@ pub struct BleRuntime {
     last_throughput_report_ms: u64,
     /// Per-ingress budget for open channels, independent of outbound pacing.
     channel_ingress: std::collections::HashMap<String, (u64, u32)>,
+    private_ingress: std::collections::HashMap<String, (u64, u32)>,
     carrier_ingress: std::collections::HashMap<String, (u64, u32)>,
     last_channel_presence_ms: u64,
 }
@@ -204,6 +207,7 @@ impl BleRuntime {
         storage: Arc<dyn Storage>,
         sealer: Arc<dyn Sealer>,
         binding_store: Arc<MeshBindingStore>,
+        private_channels: Arc<PrivateChannelStore>,
         key_store: Arc<KeyStore>,
         signal_lock: Arc<parking_lot::Mutex<()>>,
     ) -> Self {
@@ -218,6 +222,7 @@ impl BleRuntime {
         let couriers = CourierStore::new(storage.clone());
         Self {
             binding_store,
+            private_channels,
             key_store,
             signal_lock,
             storage,
@@ -241,6 +246,7 @@ impl BleRuntime {
             frames_written: std::sync::atomic::AtomicU64::new(0),
             last_throughput_report_ms: 0,
             channel_ingress: std::collections::HashMap::new(),
+            private_ingress: std::collections::HashMap::new(),
             carrier_ingress: std::collections::HashMap::new(),
             last_channel_presence_ms: 0,
         }
@@ -783,6 +789,41 @@ impl BleRuntime {
             }
             budget.1 += 1;
         }
+        let private_fragment = if packet.message_type() == Some(MessageType::Fragment) {
+            chatter_mesh::fragment::FragmentHeader::parse(&packet)
+                .ok()
+                .filter(|(header, _)| {
+                    header.original_type == MessageType::ChatterPrivateChannel.as_u8()
+                })
+        } else {
+            None
+        };
+        if packet.message_type() == Some(MessageType::ChatterPrivateChannel)
+            || private_fragment.is_some()
+        {
+            if packet.message_type() == Some(MessageType::ChatterPrivateChannel)
+                && packet.payload.len() > 1200
+            {
+                return;
+            }
+            if private_fragment
+                .as_ref()
+                .is_some_and(|(header, chunk)| header.total > 8 || chunk.len() > 512)
+            {
+                return;
+            }
+            let key = link.to_string();
+            self.private_ingress
+                .retain(|_, (start, _)| now_ms.saturating_sub(*start) < 60_000);
+            if self.private_ingress.len() >= 128 && !self.private_ingress.contains_key(&key) {
+                return;
+            }
+            let budget = self.private_ingress.entry(key).or_insert((now_ms, 0));
+            if budget.1 >= CHANNEL_INGRESS_PER_MINUTE {
+                return;
+            }
+            budget.1 += 1;
+        }
         let now_s = now_secs();
         let local = self.identity.peer_id();
         let claimed = PeerId::from_bytes(&packet.sender_id);
@@ -1032,6 +1073,9 @@ impl BleRuntime {
             Some(MessageType::Announce) => return self.on_announce(link, packet, claimed).await,
             Some(MessageType::Message) => self.on_public_message(packet, claimed),
             Some(MessageType::ChannelMessage) => return self.on_channel_message(packet, claimed),
+            Some(MessageType::ChatterPrivateChannel) => {
+                return self.on_private_channel_message(packet, claimed);
+            }
             Some(MessageType::Leave) => {
                 let verified = self.state.with(|state| {
                     state
@@ -1586,6 +1630,162 @@ impl BleRuntime {
             sender_verified: false,
         })));
         true
+    }
+
+    fn on_private_channel_message(&mut self, packet: &BitchatPacket, claimed: &PeerId) -> bool {
+        if !packet.is_broadcast() || packet.payload.len() > 1200 || packet.payload.len() < 88 {
+            return false;
+        }
+        let Ok(states) = self.private_channels.list() else {
+            return false;
+        };
+        let Some(state) = states
+            .into_iter()
+            .find(|s| s.has_route_tag(&packet.payload))
+        else {
+            // A nonmember may still relay the opaque packet.
+            return true;
+        };
+        let Some(signing_key) = state.member_key_for_packet(claimed, &packet.payload) else {
+            return false;
+        };
+        if !verify_packet(packet, &signing_key) {
+            return false;
+        }
+        if *claimed == self.identity.peer_id() && self.is_own_echo(packet) {
+            return true;
+        }
+        let Some((wire_id, content)) = state.decrypt(claimed, &packet.payload) else {
+            return false;
+        };
+        let conversation = MeshConversation::PrivateChannel(state.id);
+        let nickname = self
+            .state
+            .with(|s| s.peers.info(claimed).map(|p| p.nickname.clone()))
+            .unwrap_or_else(|| claimed.as_str().to_owned());
+        let inbound = InboundMessage {
+            wire_id,
+            conversation: conversation.clone(),
+            sender: claimed.clone(),
+            nickname: nickname.clone(),
+            content,
+            timestamp_ms: packet.timestamp,
+        };
+        self.events.send(MeshEvent::Message(Box::new(MeshMessage {
+            message: inbound.to_domain(),
+            conversation,
+            sender: claimed.clone(),
+            nickname,
+            is_local: *claimed == self.identity.peer_id(),
+            sender_verified: true,
+        })));
+        true
+    }
+
+    async fn on_private_join_request(&mut self, claimed: &PeerId, invite: Invite) {
+        if invite.creator != self.identity.peer_id().as_str() || invite.target != claimed.as_str() {
+            return;
+        }
+        let Ok(Some(mut state)) = self.private_channels.load(&invite.channel_id) else {
+            return;
+        };
+        if state.creator != invite.creator
+            || state.creator_key != invite.creator_key
+            || !state.pending_invites.iter().any(|issued| {
+                issued.nonce == invite.nonce
+                    && issued.target == invite.target
+                    && issued.signature == invite.signature
+            })
+        {
+            return;
+        }
+        let Some(signing_key) = self.state.with(|s| {
+            s.peers
+                .info(claimed)
+                .and_then(|p| p.signing_public_key.clone())
+        }) else {
+            return;
+        };
+        let member = Member {
+            peer: claimed.to_string(),
+            signing_key,
+        };
+        if state.rotate(&self.identity, Some(member), None).is_err() {
+            return;
+        }
+        state
+            .pending_invites
+            .retain(|issued| issued.nonce != invite.nonce);
+        if self.private_channels.save(&state).is_err() {
+            return;
+        }
+        let Ok(bytes) = state.update_bytes() else {
+            return;
+        };
+        for member in &state.members {
+            if member.peer != self.identity.peer_id().as_str() {
+                self.send_private_control(&PeerId::from_str(&member.peer), &bytes)
+                    .await;
+            }
+        }
+        self.events.send(MeshEvent::PrivateChannelChanged);
+    }
+
+    fn on_private_epoch(&mut self, claimed: &PeerId, mut update: PrivateChannel) {
+        if claimed.as_str() != update.creator
+            || update.member_key(&self.identity.peer_id()).is_none()
+            || !self.state.with(|s| {
+                s.peers
+                    .info(claimed)
+                    .and_then(|p| p.signing_public_key.as_ref())
+                    .is_some_and(|key| key.as_slice() == update.creator_key.as_slice())
+            })
+        {
+            return;
+        }
+        let valid = match self.private_channels.load(&update.id) {
+            Ok(Some(old)) => {
+                if update.epoch == old.epoch && update.signature != old.signature {
+                    self.events.send(MeshEvent::Degraded(
+                        "Conflicting private channel roster rejected.".into(),
+                    ));
+                }
+                if update.epoch > old.epoch.saturating_add(1) {
+                    self.events.send(MeshEvent::Degraded(
+                        "Private channel missed an epoch; earlier messages cannot be recovered."
+                            .into(),
+                    ));
+                }
+                let valid = old.creator == update.creator
+                    && old.creator_key == update.creator_key
+                    && update.epoch > old.epoch
+                    && (update.epoch > old.epoch.saturating_add(1)
+                        || old.chain_hash().ok().as_deref()
+                            == Some(update.previous_hash.as_slice()));
+                if valid {
+                    update.remember_previous(&old);
+                }
+                valid
+            }
+            Ok(None) => self
+                .private_channels
+                .pending(&update.id)
+                .ok()
+                .flatten()
+                .is_some_and(|invite| {
+                    invite.creator == update.creator
+                        && invite.creator_key == update.creator_key
+                        && invite.name == update.name
+                        && invite.target == self.identity.peer_id().as_str()
+                }),
+            Err(_) => false,
+        };
+        if !valid || self.private_channels.save(&update).is_err() {
+            return;
+        }
+        let _ = self.private_channels.clear_pending(&update.id);
+        self.events.open_private_channel(&update.id, &update.name);
+        self.events.send(MeshEvent::PrivateChannelChanged);
     }
 
     /// A file, image or voice note broadcast into the mesh room.
@@ -2185,6 +2385,16 @@ impl BleRuntime {
                 peer: claimed.clone(),
             });
             self.flush_pending_dms(claimed).await;
+            if let Ok(states) = self.private_channels.list() {
+                for state in states {
+                    if state.creator == self.identity.peer_id().as_str()
+                        && state.member_key(claimed).is_some()
+                        && let Ok(bytes) = state.update_bytes()
+                    {
+                        self.send_private_control(claimed, &bytes).await;
+                    }
+                }
+            }
             self.emit_peers();
         }
     }
@@ -2265,8 +2475,10 @@ impl BleRuntime {
                             now_secs(),
                         ) {
                             Ok(bytes) => self.send_signal_bundle(claimed, &bytes).await,
-                            Err(error) => tracing::warn!(target: "mesh::ble", peer = %claimed, %error,
-                                "mesh Signal bundle generation failed"),
+                            Err(error) => {
+                                tracing::warn!(target: "mesh::ble", peer = %claimed, %error,
+                                "mesh Signal bundle generation failed")
+                            }
                         }
                         if self.binding_store.signal_opted_in(&owner, claimed).ok() == Some(true)
                             && let Ok(pending) = self.binding_store.pending_mesh_carriers(
@@ -2327,9 +2539,9 @@ impl BleRuntime {
             {
                 return;
             }
-            let received = self
-                .binding_store
-                .receive_mesh_bundle(&owner, claimed, &frame, now_secs());
+            let received =
+                self.binding_store
+                    .receive_mesh_bundle(&owner, claimed, &frame, now_secs());
             tracing::info!(target: "mesh::ble", peer = %claimed, ok = received.is_ok(),
                 new = matches!(received, Ok(true)), "mesh Signal bundle received");
             match received {
@@ -2350,6 +2562,15 @@ impl BleRuntime {
                     tracing::warn!(target: "mesh::ble", peer=%claimed, %error, "rejected mesh Signal bundle")
                 }
             }
+            return;
+        }
+
+        if let Some(invite) = Invite::decode_request(&plaintext, now_secs()) {
+            self.on_private_join_request(claimed, invite).await;
+            return;
+        }
+        if let Some(update) = PrivateChannel::decode_update(&plaintext) {
+            self.on_private_epoch(claimed, update);
             return;
         }
 
@@ -2839,6 +3060,15 @@ impl BleRuntime {
                 content,
             } => self.broadcast_channel(&message_id, &name, &content).await,
             BleCommand::ChannelPresence { name } => self.broadcast_channel_presence(&name).await,
+            BleCommand::PrivateJoinRequest { creator, bytes } => {
+                self.send_private_control(&creator, &bytes).await
+            }
+            BleCommand::PrivateEpoch { peer, bytes } => {
+                self.send_private_control(&peer, &bytes).await
+            }
+            BleCommand::PrivateChannelMessage { channel_id, bytes } => {
+                self.broadcast_private_channel(&channel_id, bytes).await
+            }
             BleCommand::FileTransfer { message_id, file } => {
                 self.broadcast_file(&message_id, &file).await
             }
@@ -3254,6 +3484,49 @@ impl BleRuntime {
         );
         let packet = self.maybe_sign(packet, true);
         self.originate_broadcast(&packet).await;
+    }
+
+    async fn send_private_control(&mut self, peer: &PeerId, bytes: &[u8]) {
+        let Ok(ciphertext) = self.state.with(|s| s.sessions.encrypt(peer, bytes)) else {
+            // The creator resends its current epoch after the next Noise handshake.
+            return;
+        };
+        let packet = self.build_packet(
+            MessageType::NoiseEncrypted,
+            Some(peer),
+            ciphertext,
+            chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+        );
+        self.transmit(&packet, Some(peer), None).await;
+    }
+
+    async fn broadcast_private_channel(&mut self, id: &str, bytes: Vec<u8>) {
+        let Ok(Some(state)) = self.private_channels.load(id) else {
+            return;
+        };
+        let sender = self.identity.peer_id();
+        let Some((message_id, content)) = state.decrypt(&sender, &bytes) else {
+            return;
+        };
+        let packet = self.build_packet(
+            MessageType::ChatterPrivateChannel,
+            None,
+            bytes,
+            chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+        );
+        let packet = self.maybe_sign(packet, true);
+        self.state
+            .with(|s| s.self_broadcasts.record(&message_id, &packet, now_millis()));
+        self.originate_broadcast(&packet).await;
+        let conversation = MeshConversation::PrivateChannel(id.to_owned());
+        self.events.send(MeshEvent::Message(Box::new(MeshMessage {
+            message: outbound_message(&conversation, &message_id, &sender, &content, now_millis()),
+            conversation,
+            sender,
+            nickname: self.config.nickname(),
+            is_local: true,
+            sender_verified: true,
+        })));
     }
 
     /// Put a file on the air for the mesh room.
@@ -4837,6 +5110,7 @@ mod tests {
             storage,
             Arc::new(NoopSealer),
             Arc::new(MeshBindingStore::new(binding_db.clone())),
+            Arc::new(PrivateChannelStore::new(binding_db.clone())),
             Arc::new(KeyStore::new(binding_db)),
             Arc::new(parking_lot::Mutex::new(())),
         );

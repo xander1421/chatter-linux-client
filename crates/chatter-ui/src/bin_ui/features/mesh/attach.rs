@@ -13,7 +13,7 @@ use slint::ComponentHandle;
 
 use chatter_core::client::ChatterClient;
 
-use crate::{run_ui, MainWindow, MeshGlobal};
+use crate::{MainWindow, MeshGlobal, run_ui};
 
 /// Route the attach button into the mesh.
 ///
@@ -38,12 +38,15 @@ pub fn intercept_attachment(ui_ctx: &Arc<ChatterClient>, weak: slint::Weak<MainW
         return false;
     };
 
-    if matches!(conversation, MeshConversation::Dm(_)) {
+    if matches!(
+        conversation,
+        MeshConversation::Dm(_) | MeshConversation::PrivateChannel(_)
+    ) {
         if let Some(w) = weak.upgrade() {
             w.invoke_finish_attachment_picker(true);
         }
         run_ui!(weak, |w| w.global::<MeshGlobal>().set_notice(
-            "Files are not sent in a mesh direct message — the file packet is not encrypted."
+            "Files are not sent in private mesh conversations — the file packet is not encrypted."
                 .into()
         ));
         return true;

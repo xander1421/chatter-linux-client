@@ -222,6 +222,8 @@ pub enum MeshEvent {
     GeohashLeft(String),
     /// A signed channel message advertised a nearby public channel.
     ChannelObserved(String),
+    /// A private roster was accepted or a new channel appeared locally.
+    PrivateChannelChanged,
     /// Something went wrong that the user should know about but that did not
     /// stop the service.
     Degraded(String),

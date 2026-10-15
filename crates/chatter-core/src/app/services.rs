@@ -334,6 +334,11 @@ impl ServiceContainer {
                 binding_store: Arc::new(crate::storage::mesh_binding_store::MeshBindingStore::new(
                     infra.database.clone(),
                 )),
+                private_channels: Arc::new(
+                    crate::services::mesh::private_channel::PrivateChannelStore::new(
+                        infra.database.clone(),
+                    ),
+                ),
                 identity_store: Arc::new(crate::storage::MeshIdentityStore::new(
                     infra.database.clone(),
                 )),

@@ -99,6 +99,12 @@ pub fn clear_active(window: &MainWindow) {
     global.set_active_comparison_code("".into());
     global.set_binding_qr_visible(false);
     global.set_binding_scan_visible(false);
+    global.set_private_invite_visible(false);
+    global.set_private_remove_pending("".into());
+    global.set_private_can_manage(false);
+    global.set_private_removable_members(ModelRc::new(VecModel::from(
+        Vec::<slint::SharedString>::new(),
+    )));
     // The mesh set its own placeholder; leaving it would label a DM "everyone
     // in radio range".
     window.set_composer_placeholder("Type a message...".into());
@@ -133,6 +139,9 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let ui_ctx = ui_ctx.clone();
         global.on_open_peer(move |peer| {
             if let Some(w) = weak.upgrade() {
+                w.global::<MeshGlobal>().set_private_invite_visible(false);
+                w.global::<MeshGlobal>()
+                    .set_private_remove_pending("".into());
                 open_peer_sheet(&w, &ui_ctx, peer.as_str());
             }
         });
@@ -209,6 +218,101 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     .global::<MeshGlobal>()
                     .set_notice(format!("Could not join channel: {error}").into()),
             }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let ui_ctx = ui_ctx.clone();
+        global.on_create_private_channel(move |name| {
+            let Some(w) = weak.upgrade() else { return };
+            match ui_ctx.mesh_create_private_channel(name.as_str()) {
+                Ok(_) => { w.global::<MeshGlobal>().set_notice("Private channel created. Open it, then select a nearby peer to invite by QR.".into()); refresh_rows(&w, &ui_ctx); }
+                Err(error) => w.global::<MeshGlobal>().set_notice(error.to_string().into()),
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let ui_ctx = ui_ctx.clone();
+        global.on_join_private_channel(move |qr| {
+            let Some(w) = weak.upgrade() else { return };
+            match ui_ctx.mesh_join_private_channel(qr.as_str()) {
+                Ok(()) => w.global::<MeshGlobal>().set_notice("Admission requested over Noise. Waiting for the creator to send the channel key.".into()),
+                Err(error) => w.global::<MeshGlobal>().set_notice(error.to_string().into()),
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let ui_ctx = ui_ctx.clone();
+        global.on_invite_private_channel(move |id, peer| {
+            let Some(w) = weak.upgrade() else { return };
+            match ui_ctx.mesh_private_channel_invite_png(id.as_str(), peer.as_str()) {
+                Ok(png) => match image::load_from_memory(&png) {
+                    Ok(decoded) => {
+                        let rgba = decoded.to_rgba8();
+                        let (width, height) = rgba.dimensions();
+                        let mut pixels =
+                            slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(width, height);
+                        pixels.make_mut_bytes().copy_from_slice(&rgba.into_raw());
+                        let mesh = w.global::<MeshGlobal>();
+                        mesh.set_private_invite_image(slint::Image::from_rgba8(pixels));
+                        mesh.set_private_invite_visible(true);
+                    }
+                    Err(error) => w
+                        .global::<MeshGlobal>()
+                        .set_notice(error.to_string().into()),
+                },
+                Err(error) => w
+                    .global::<MeshGlobal>()
+                    .set_notice(error.to_string().into()),
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let ui_ctx = ui_ctx.clone();
+        global.on_remove_private_member(move |id, peer| {
+            let Some(w) = weak.upgrade() else { return };
+            match ui_ctx.mesh_remove_private_channel_member(id.as_str(), peer.as_str()) {
+                Ok(()) => {
+                    w.global::<MeshGlobal>().set_notice(
+                        "Member removed; a new key is sent to remaining members over Noise.".into(),
+                    );
+                    refresh_rows(&w, &ui_ctx);
+                }
+                Err(error) => w
+                    .global::<MeshGlobal>()
+                    .set_notice(error.to_string().into()),
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        global.on_open_private_scanner(move || {
+            #[cfg(target_os = "android")]
+            {
+                let weak = weak.clone();
+                crate::rt_handle().spawn(async move {
+                    let result = crate::platform::android::qr_scanner::scan().await;
+                    let _ = slint::invoke_from_event_loop(move || {
+                        let Some(w) = weak.upgrade() else { return };
+                        match result {
+                            crate::platform::android::qr_scanner::ScanOutcome::Scanned(qr) => w
+                                .global::<MeshGlobal>()
+                                .invoke_join_private_channel(qr.trim().into()),
+                            crate::platform::android::qr_scanner::ScanOutcome::CameraDenied => {
+                                w.global::<MeshGlobal>().set_notice(
+                                    "Camera access is required to scan the invite QR.".into(),
+                                )
+                            }
+                            crate::platform::android::qr_scanner::ScanOutcome::Cancelled => {}
+                        }
+                    });
+                });
+            }
+            #[cfg(not(target_os = "android"))]
+            let _ = &weak;
         });
     }
     {
@@ -619,14 +723,41 @@ pub fn refresh_rows(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             global.set_active_reachable(row.reachable);
             global.set_active_verified(row.verified);
             global.set_active_binding_label(row.binding_label.into());
-            global.set_active_signal_enabled(
-                core_api::signal_opted_in(ui_ctx, row.scope.as_str()).unwrap_or(false),
-            );
-            global.set_active_protection_label(
-                core_api::signal_protection_label(ui_ctx, row.scope.as_str())
-                    .unwrap_or("Noise (bitchat)")
-                    .into(),
-            );
+            if row.kind == "private-channel" {
+                global.set_private_can_manage(
+                    ui_ctx
+                        .mesh_private_channel_is_creator(row.scope.as_str())
+                        .unwrap_or(false),
+                );
+                window.set_member_count(
+                    ui_ctx
+                        .mesh_private_channel_member_count(row.scope.as_str())
+                        .unwrap_or(0) as i32,
+                );
+                global.set_active_signal_enabled(false);
+                global.set_active_protection_label("Private epoch key · invited devices".into());
+                let members: Vec<slint::SharedString> = ui_ctx
+                    .mesh_private_channel_removable_members(row.scope.as_str())
+                    .unwrap_or_default()
+                    .into_iter()
+                    .map(Into::into)
+                    .collect();
+                global.set_private_removable_members(ModelRc::new(VecModel::from(members)));
+            } else {
+                global.set_private_can_manage(false);
+                global.set_private_removable_members(ModelRc::new(VecModel::from(Vec::<
+                    slint::SharedString,
+                >::new(
+                ))));
+                global.set_active_signal_enabled(
+                    core_api::signal_opted_in(ui_ctx, row.scope.as_str()).unwrap_or(false),
+                );
+                global.set_active_protection_label(
+                    core_api::signal_protection_label(ui_ctx, row.scope.as_str())
+                        .unwrap_or("Noise (bitchat)")
+                        .into(),
+                );
+            }
             global.set_active_comparison_code(
                 core_api::comparison_code(ui_ctx, row.scope.as_str())
                     .unwrap_or_default()
@@ -846,7 +977,10 @@ fn handle_event(event: MeshEvent, weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<C
                 refresh_rows(&w, &ui_ctx);
             });
         }
-        MeshEvent::GeohashJoined(_) | MeshEvent::GeohashLeft(_) | MeshEvent::ChannelObserved(_) => {
+        MeshEvent::GeohashJoined(_)
+        | MeshEvent::GeohashLeft(_)
+        | MeshEvent::ChannelObserved(_)
+        | MeshEvent::PrivateChannelChanged => {
             let ui_ctx = ui_ctx.clone();
             run_ui!(weak, |w| refresh_rows(&w, &ui_ctx));
         }

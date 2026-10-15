@@ -113,6 +113,7 @@ mod v112_send_log_group_id;
 mod v113_mesh_account_binding;
 mod v114_mesh_signal;
 mod v115_mesh_signal_courier;
+mod v116_mesh_private_channels;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -453,4 +454,5 @@ pub fn default_migrations() -> MigrationRunner {
         .register(v113_mesh_account_binding::V113MeshAccountBinding)
         .register(v114_mesh_signal::V114MeshSignal)
         .register(v115_mesh_signal_courier::V115MeshSignalCourier)
+        .register(v116_mesh_private_channels::V116MeshPrivateChannels)
 }
