@@ -2984,7 +2984,10 @@ impl BleRuntime {
     async fn send_signal_bundle(&mut self, peer: &PeerId, bytes: &[u8]) {
         let sealed = self.state.with(|state| state.sessions.encrypt(peer, bytes));
         let Ok(ciphertext) = sealed else {
-            tracing::warn!(target: "mesh::ble", %peer, "mesh Signal bundle not sent: no Noise session");
+            // Sessions open lazily. The handshake's Chatter Hello re-offers
+            // the bundle for a verified peer, so opening one is enough.
+            tracing::info!(target: "mesh::ble", %peer, "mesh Signal bundle waits for a Noise session");
+            self.start_handshake(peer).await;
             return;
         };
         tracing::info!(target: "mesh::ble", %peer, bytes = bytes.len(), "mesh Signal bundle sent");

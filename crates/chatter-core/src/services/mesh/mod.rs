@@ -1427,12 +1427,29 @@ impl MeshService {
         if !futures::executor::block_on(SessionManager::has_session(&store, &remote))
             .map_err(|e| MeshError::Binding(format!("mesh Signal session check failed: {e}")))?
         {
-            let proto = self
+            let Some(proto) = self
                 .binding_store
                 .take_remote_mesh_bundle(&owner.to_string(), peer, now_secs())?
-                .ok_or_else(|| {
-                    MeshError::Binding("waiting for this verified peer's live PQXDH bundle".into())
-                })?;
+            else {
+                // Offer ours (opening a Noise session if needed); the peer's
+                // reply carries the bundle the next send will use.
+                if let Ok(bytes) = signal_mesh::bundle_for_peer(
+                    &self.key_store,
+                    &self.binding_store,
+                    &owner.to_string(),
+                    peer,
+                    local_device_id,
+                    now_secs(),
+                ) {
+                    let _ = self.ble.send(BleCommand::SignalBundle {
+                        peer: peer.clone(),
+                        bytes,
+                    });
+                }
+                return Err(MeshError::Binding(
+                    "waiting for this verified peer's live PQXDH bundle".into(),
+                ));
+            };
             let bundle = crate::services::signal::SignalService::convert_prekey_bundle(proto)
                 .map_err(|e| MeshError::Binding(format!("invalid mesh Signal bundle: {e}")))?;
             let mut identities = store.clone();
