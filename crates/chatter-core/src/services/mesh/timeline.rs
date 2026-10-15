@@ -434,6 +434,11 @@ impl MeshTimeline {
         self.register(&MeshConversation::Geohash(cell.to_string()), None);
     }
 
+    /// Keep a newly chosen peer visible before either side has sent a message.
+    pub fn open_dm(&self, peer: &PeerId, nickname: &str) {
+        self.register(&MeshConversation::Dm(peer.clone()), Some(nickname));
+    }
+
     /// Drop a geohash cell from the sidebar when it is left.
     ///
     /// Only the sidebar entry goes: the messages stay on disk, and rejoining the
@@ -858,6 +863,7 @@ pub struct MeshEvents {
     events: broadcast::Sender<MeshEvent>,
     timeline: Arc<MeshTimeline>,
     muted_channels: Arc<Mutex<std::collections::HashSet<String>>>,
+    muted_peers: Arc<Mutex<std::collections::HashSet<String>>>,
     blocked_peers: Arc<Mutex<std::collections::HashSet<String>>>,
 }
 
@@ -870,6 +876,7 @@ impl MeshEvents {
             events,
             timeline,
             muted_channels: Arc::new(Mutex::new(Default::default())),
+            muted_peers: Arc::new(Mutex::new(Default::default())),
             blocked_peers: Arc::new(Mutex::new(Default::default())),
         }
     }
@@ -887,6 +894,16 @@ impl MeshEvents {
         self.muted_channels.lock().contains(name)
     }
 
+    pub fn set_peer_muted(&self, peer: &PeerId, muted: bool) {
+        let mut peers = self.muted_peers.lock();
+        if muted { peers.insert(peer.as_str().to_owned()); }
+        else { peers.remove(peer.as_str()); }
+    }
+
+    pub fn peer_muted(&self, peer: &PeerId) -> bool {
+        self.muted_peers.lock().contains(peer.as_str())
+    }
+
     pub fn set_peer_blocked(&self, peer: &PeerId, blocked: bool) {
         let mut peers = self.blocked_peers.lock();
         if blocked {
@@ -902,6 +919,7 @@ impl MeshEvents {
 
     pub fn clear_moderation(&self) {
         self.muted_channels.lock().clear();
+        self.muted_peers.lock().clear();
         self.blocked_peers.lock().clear();
     }
 

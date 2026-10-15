@@ -111,6 +111,22 @@ export component MeshListItem inherits Rectangle {
             }
         }
 
+        // Keep moderation at the leading edge on phones. The floating create
+        // button occupies the trailing edge of the last visible row.
+        if root.kind == "channel" || root.kind == "dm": Rectangle {
+            width: root.touch ? 54px : 48px;
+            Text {
+                text: root.kind == "channel" ? (root.muted ? "Unmute" : "Mute")
+                    : (root.blocked ? "Unblock" : "Block");
+                color: Colors.text-muted;
+                font-size: Typography.xxs;
+                vertical-alignment: center;
+            }
+            TouchArea {
+                clicked => { if root.kind == "channel" { root.toggle-mute(); } else { root.toggle-block(); } }
+            }
+        }
+
         VerticalLayout {
             horizontal-stretch: 1;
             alignment: center;
@@ -183,19 +199,6 @@ export component MeshListItem inherits Rectangle {
             width: 28px;
             Text { text: "×"; color: Colors.text-muted; font-size: Typography.sm; vertical-alignment: center; }
             TouchArea { clicked => { root.leave(); } }
-        }
-        if root.kind == "channel" || root.kind == "dm": Rectangle {
-            width: 42px;
-            Text {
-                text: root.kind == "channel" ? (root.muted ? "Unmute" : "Mute")
-                    : (root.blocked ? "Unblock" : "Block");
-                color: Colors.text-muted;
-                font-size: Typography.xxs;
-                vertical-alignment: center;
-            }
-            TouchArea {
-                clicked => { if root.kind == "channel" { root.toggle-mute(); } else { root.toggle-block(); } }
-            }
         }
 
         // Nothing can carry to this peer at the moment. A clock rather than a

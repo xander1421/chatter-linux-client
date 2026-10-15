@@ -53,6 +53,11 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let Ok(user_id) = value.parse::<chatter_core::domain::ids::UserId>() else {
             return;
         };
+        #[cfg(feature = "mesh")]
+        if crate::bin_ui::features::mesh::active().is_some() {
+            crate::bin_ui::features::mesh::open_sender_sheet(&w, &client, &user_id);
+            return;
+        }
         super::modals::open_user_profile_in_conversation(
             &w,
             &user_id,

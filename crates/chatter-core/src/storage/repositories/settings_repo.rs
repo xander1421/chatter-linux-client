@@ -125,6 +125,7 @@ pub mod keys {
     pub const MESH_NICKNAME: &str = "mesh.nickname";
     pub const MESH_MUTED_CHANNELS: &str = "mesh.muted_channels";
     pub const MESH_BLOCKED_PEERS: &str = "mesh.blocked_peers";
+    pub const MESH_MUTED_PEERS: &str = "mesh.muted_peers";
 
     /// Group resends this device asked for — see `SolicitedResends`.
     pub const SOLICITED_RESENDS: &str = "message.solicited_resends";

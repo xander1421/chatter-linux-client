@@ -11,7 +11,6 @@
 
 import { Colors } from "../theme/colors.slint";
 import { Materials } from "../theme/materials.slint";
-import { Appearance } from "../theme/appearance.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
@@ -25,6 +24,8 @@ export component MeshList inherits Rectangle {
 
     property <bool> expanded: true;
     property <bool> joining: false;
+    property <bool> showing-nearby: false;
+    property <string> join-draft: "";
     property <bool> confirming-wipe: false;
 
     // Transparent on purpose: the sidebar tints its own surface (anon mode),
@@ -70,7 +71,7 @@ export component MeshList inherits Rectangle {
                     }
                 }
 
-                // Join a geohash cell.
+                // Nearby peers and join actions.
                 Rectangle {
                     width: Spacing.button-height;
                     horizontal-stretch: 0;
@@ -96,8 +97,10 @@ export component MeshList inherits Rectangle {
                     }
                     join-touch := TouchArea {
                         mouse-cursor: pointer;
+                        accessible-role: button;
+                        accessible-label: "Nearby mesh peers";
                         clicked => {
-                            root.joining = !root.joining;
+                            root.showing-nearby = !root.showing-nearby;
                             root.expanded = true;
                         }
                     }
@@ -107,8 +110,16 @@ export component MeshList inherits Rectangle {
 
         // ── The standing claim: serverless, and a peer count for connectivity ──
         if !root.collapsed && root.expanded: Rectangle {
-            height: 20px * Appearance.text-grow;
+            height: root.touch ? Spacing.touch-target-min : 30px;
             clip: true;
+            accessible-role: button;
+            accessible-label: MeshGlobal.mesh-on ? "Turn mesh off" : "Turn mesh on";
+            border-radius: Spacing.radius-sm;
+            background: status-touch.has-hover ? Colors.surface-hover : transparent;
+            transform-scale-x: status-touch.pressed ? 98% : 100%;
+            transform-scale-y: status-touch.pressed ? 94% : 100%;
+            animate transform-scale-x { duration: status-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
+            animate transform-scale-y { duration: status-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
             caption := HorizontalLayout {
                 padding-left: Spacing.md;
                 padding-right: Spacing.sm;
@@ -164,23 +175,81 @@ export component MeshList inherits Rectangle {
                     overflow: elide;
                 }
             }
+            status-touch := TouchArea {
+                mouse-cursor: pointer;
+                clicked => {
+                    MeshGlobal.set-mesh-on(!MeshGlobal.mesh-on);
+                }
+            }
+        }
+
+        if !root.collapsed && root.expanded: Rectangle {
+            height: root.showing-nearby ? nearby-content.preferred-height : 0px;
+            clip: true;
+            opacity: root.showing-nearby ? 1 : 0;
+            animate height { duration: Materials.motion-standard; easing: Materials.spring; }
+            animate opacity { duration: Materials.motion-quick; easing: Materials.glide; }
+            nearby-content := VerticalLayout {
+            padding-left: Spacing.md;
+            padding-right: Spacing.sm;
+            spacing: Spacing.xxs;
+            Text {
+                text: "Nearby peers";
+                color: Colors.text-muted;
+                font-size: Typography.xs;
+                font-weight: 600;
+            }
+            Rectangle {
+                height: root.touch ? Spacing.touch-target-min : 32px;
+                Text { text: "Join geohash cell…"; color: Colors.text-secondary; font-size: Typography.xs; vertical-alignment: center; }
+                TouchArea { mouse-cursor: pointer; clicked => { root.joining = !root.joining; } }
+            }
+            if MeshGlobal.nearby-peers.length == 0: Text {
+                text: "No peers in range yet";
+                color: Colors.text-muted;
+                font-size: Typography.xs;
+            }
+            for peer in MeshGlobal.nearby-peers: Rectangle {
+                height: root.touch ? Spacing.touch-target-min : 38px;
+                border-radius: Spacing.radius-sm;
+                background: peer-touch.has-hover ? Colors.surface-hover : transparent;
+                HorizontalLayout {
+                    padding-left: Spacing.sm;
+                    padding-right: Spacing.sm;
+                    spacing: Spacing.xs;
+                    Text { text: peer.name; color: Colors.text-primary; font-size: Typography.sm; vertical-alignment: center; horizontal-stretch: 1; overflow: elide; }
+                    Text { text: "self-asserted"; color: Colors.text-muted; font-size: Typography.xxs; vertical-alignment: center; }
+                }
+                peer-touch := TouchArea { mouse-cursor: pointer; clicked => { MeshGlobal.open-peer(peer.id); } }
+            }
+            }
         }
 
         // ── Join-a-cell input ──
         if !root.collapsed && root.expanded: Rectangle {
-            height: root.touch ? Spacing.touch-target-min : 32px;
-            HorizontalLayout {
+            height: root.touch ? 72px : 62px;
+            VerticalLayout {
                 padding-left: Spacing.md;
                 padding-right: Spacing.sm;
-                spacing: Spacing.xs;
-                Text { text: "Mesh name"; color: Colors.text-muted; font-size: Typography.xs; vertical-alignment: center; }
-                name-input := TextInput {
-                    text: MeshGlobal.nickname;
-                    single-line: true;
-                    color: Colors.text-primary;
-                    font-size: Typography.xs;
-                    horizontal-stretch: 1;
-                    accepted => { MeshGlobal.set-nickname(self.text); }
+                spacing: Spacing.xxs;
+                Text { text: "Mesh name"; color: Colors.text-muted; font-size: Typography.xs; }
+                Rectangle {
+                    height: root.touch ? 42px : 32px;
+                    background: Colors.inset;
+                    border-radius: Spacing.radius-sm;
+                    border-width: Spacing.stroke;
+                    border-color: name-input.has-focus ? Colors.primary : Colors.border;
+                    name-input := TextInput {
+                        x: Spacing.sm;
+                        y: (parent.height - self.height) / 2;
+                        width: parent.width - Spacing.sm * 2;
+                        height: 22px;
+                        text: MeshGlobal.nickname;
+                        single-line: true;
+                        color: Colors.text-primary;
+                        font-size: Typography.sm;
+                        accepted => { MeshGlobal.set-nickname(self.text); }
+                    }
                 }
             }
         }
@@ -197,18 +266,29 @@ export component MeshList inherits Rectangle {
         }
 
         if !root.collapsed && root.expanded: Rectangle {
-            height: root.touch ? Spacing.touch-target-min : 32px;
-            HorizontalLayout {
+            height: root.touch ? 72px : 62px;
+            VerticalLayout {
                 padding-left: Spacing.md;
                 padding-right: Spacing.sm;
-                spacing: Spacing.xs;
-                Text { text: "Join #"; color: Colors.text-muted; font-size: Typography.xs; vertical-alignment: center; }
-                channel-input := TextInput {
-                    single-line: true;
-                    color: Colors.text-primary;
-                    font-size: Typography.xs;
-                    horizontal-stretch: 1;
-                    accepted => { MeshGlobal.join-channel(self.text); self.text = ""; }
+                spacing: Spacing.xxs;
+                Text { text: "Join #"; color: Colors.text-muted; font-size: Typography.xs; }
+                Rectangle {
+                    height: root.touch ? 42px : 32px;
+                    background: Colors.inset;
+                    border-radius: Spacing.radius-sm;
+                    border-width: Spacing.stroke;
+                    border-color: channel-input.has-focus ? Colors.primary : Colors.border;
+                    channel-input := TextInput {
+                        x: Spacing.sm;
+                        y: (parent.height - self.height) / 2;
+                        width: parent.width - Spacing.sm * 2;
+                        height: 22px;
+                        single-line: true;
+                        text <=> root.join-draft;
+                        color: Colors.text-primary;
+                        font-size: Typography.sm;
+                        accepted => { MeshGlobal.join-channel(self.text); root.join-draft = ""; }
+                    }
                 }
             }
         }
@@ -223,7 +303,7 @@ export component MeshList inherits Rectangle {
                     font-size: Typography.xs;
                     vertical-alignment: center;
                 }
-                TouchArea { clicked => { MeshGlobal.join-channel(name); } }
+                TouchArea { clicked => { MeshGlobal.join-channel(name); root.join-draft = ""; } }
             }
         }
 

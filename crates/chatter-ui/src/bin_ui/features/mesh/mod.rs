@@ -43,7 +43,7 @@ use slint::{ComponentHandle, ModelRc, VecModel};
 use chatter_core::client::ChatterClient;
 use chatter_core::services::mesh::{MeshConversation, MeshEvent};
 
-use crate::{MainWindow, MeshConversationData, MeshGlobal, run_ui};
+use crate::{MainWindow, MeshConversationData, MeshPeerData, MeshGlobal, run_ui};
 
 /// The mesh conversation currently open, if any.
 ///
@@ -128,6 +128,40 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     {
         let weak = window.as_weak();
         let ui_ctx = ui_ctx.clone();
+        global.on_open_peer(move |peer| {
+            if let Some(w) = weak.upgrade() { open_peer_sheet(&w, &ui_ctx, peer.as_str()); }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let ui_ctx = ui_ctx.clone();
+        global.on_open_peer_dm(move |peer| {
+            let Some(w) = weak.upgrade() else { return };
+            match ui_ctx.mesh_open_dm(peer.as_str()) {
+                Ok(id) => {
+                    crate::bin_ui::features::back::pop(&w);
+                    refresh_rows(&w, &ui_ctx);
+                    conversation::open(&w, &ui_ctx, &id);
+                }
+                Err(error) => w.global::<MeshGlobal>().set_notice(format!("Could not open mesh DM: {error}").into()),
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let ui_ctx = ui_ctx.clone();
+        global.on_toggle_peer_mute(move |peer| {
+            let Some(w) = weak.upgrade() else { return };
+            let muted = !ui_ctx.mesh_peer_muted(peer.as_str());
+            match ui_ctx.mesh_set_peer_muted(peer.as_str(), muted) {
+                Ok(()) => w.global::<MeshGlobal>().set_sheet_peer_muted(muted),
+                Err(error) => w.global::<MeshGlobal>().set_notice(format!("Could not update mesh mute: {error}").into()),
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let ui_ctx = ui_ctx.clone();
         global.on_toggle_channel_mute(move |name| {
             let Some(w) = weak.upgrade() else { return };
             let muted = !ui_ctx.mesh_channel_muted(name.as_str());
@@ -146,6 +180,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 .is_ok()
             {
                 refresh_rows(&w, &ui_ctx);
+                w.global::<MeshGlobal>().set_sheet_peer_blocked(ui_ctx.mesh_peer_blocked(peer.as_str()));
             }
         });
     }
@@ -451,6 +486,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         }
                     }
                     push_status(&w, &ui_ctx);
+                    refresh_rows(&w, &ui_ctx);
                 });
             });
         });
@@ -466,6 +502,30 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 /// Called after anything that can change a row: a message, a peer change, a
 /// join, a leave, a selection.
 pub fn refresh_rows(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    use slint::Model;
+
+    let nearby: Vec<MeshPeerData> = ui_ctx.mesh_nearby_peers().into_iter().map(|peer| {
+        MeshPeerData {
+            id: peer.peer.as_str().into(),
+            name: peer.nickname.into(),
+            reachable: peer.reachable || peer.connected,
+            binding_label: ui_ctx.mesh_binding_state(peer.peer.as_str())
+                .map(|state| state.label()).unwrap_or("Mesh peer · self-asserted name").into(),
+        }
+    }).collect();
+    let global = window.global::<MeshGlobal>();
+    let previous = global.get_nearby_peers();
+    if previous.row_count() != nearby.len() || previous.iter().zip(&nearby).any(|(a, b)| {
+        a.id != b.id || a.name != b.name || a.reachable != b.reachable || a.binding_label != b.binding_label
+    }) {
+        global.set_nearby_peers(ModelRc::new(VecModel::from(nearby)));
+    }
+    let sheet_peer = global.get_sheet_peer_id();
+    if !sheet_peer.is_empty() {
+        global.set_sheet_binding_label(ui_ctx.mesh_binding_state(sheet_peer.as_str())
+            .map(|state| state.label()).unwrap_or("Mesh peer · self-asserted name").into());
+        global.set_sheet_comparison_code(ui_ctx.mesh_comparison_code(sheet_peer.as_str()).unwrap_or_default().into());
+    }
     let open = active();
     let rows = core_api::rows(ui_ctx);
     let nearby: Vec<slint::SharedString> = ui_ctx
@@ -518,6 +578,40 @@ pub fn refresh_rows(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     window
         .global::<MeshGlobal>()
         .set_conversations(ModelRc::new(VecModel::from(items)));
+}
+
+/// A mesh-derived sender id never enters server profile routing.
+pub fn open_sender_sheet(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, sender: &chatter_core::domain::ids::UserId) {
+    if let Some(peer) = ui_ctx.mesh_peer_for_sender(sender) {
+        open_peer_sheet(window, ui_ctx, peer.peer.as_str());
+    } else {
+        let global = window.global::<MeshGlobal>();
+        global.set_sheet_peer_id("".into());
+        global.set_sheet_peer_name(ui_ctx.mesh_sender_display_name(sender).unwrap_or_else(|| "Mesh peer".into()).into());
+        global.set_sheet_binding_label("Self-asserted · peer no longer nearby".into());
+        global.set_sheet_fingerprint("".into());
+        global.set_sheet_comparison_code("".into());
+        global.set_sheet_peer_blocked(false);
+        global.set_sheet_peer_muted(false);
+        global.set_binding_qr_visible(false);
+        crate::bin_ui::features::back::push(window, "mesh-peer");
+    }
+}
+
+fn open_peer_sheet(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, peer_id: &str) {
+    let Some(peer) = ui_ctx.mesh_peers().into_iter().find(|peer| peer.peer.as_str() == peer_id) else { return };
+    let global = window.global::<MeshGlobal>();
+    global.set_sheet_peer_id(peer_id.into());
+    global.set_sheet_peer_name(peer.nickname.into());
+    global.set_sheet_binding_label(ui_ctx.mesh_binding_state(peer_id)
+        .map(|state| state.label()).unwrap_or("Mesh peer · self-asserted name").into());
+    global.set_sheet_fingerprint(peer.fingerprint.unwrap_or_default().into());
+    global.set_sheet_comparison_code(ui_ctx.mesh_comparison_code(peer_id).unwrap_or_default().into());
+    global.set_sheet_peer_blocked(ui_ctx.mesh_peer_blocked(peer_id));
+    global.set_sheet_peer_muted(ui_ctx.mesh_peer_muted(peer_id));
+    global.set_binding_qr_visible(false);
+    global.set_binding_scan_visible(false);
+    crate::bin_ui::features::back::push(window, "mesh-peer");
 }
 
 /// Drop the selection highlight from every mesh row without asking core again.

@@ -712,6 +712,29 @@ impl MeshService {
         self.state.peers()
     }
 
+    /// Peers still in radio range, shaped and ordered by the core peer registry.
+    #[must_use]
+    pub fn nearby_peers(&self) -> Vec<MeshPeer> {
+        if !self.status().radio_running {
+            return Vec::new();
+        }
+        self.state.peers().into_iter().filter(|peer| peer.reachable || peer.connected).collect()
+    }
+
+    /// Resolve a message's local mesh sender id without consulting the server.
+    #[must_use]
+    pub fn peer_for_sender(&self, sender: &UserId) -> Option<MeshPeer> {
+        self.state.peers().into_iter().find(|peer| mapping::peer_user_id(&peer.peer) == *sender)
+    }
+
+    /// Create a durable DM row so it can be opened before the first message.
+    pub fn open_dm(&self, peer: &PeerId) -> Result<String, MeshError> {
+        let known = self.state.peers().into_iter().find(|known| known.peer == *peer)
+            .ok_or(MeshError::OutOfRange("unknown mesh peer"))?;
+        self.timeline.open_dm(peer, &known.nickname);
+        Ok(MeshConversation::Dm(peer.clone()).conversation_id().to_string())
+    }
+
     /// The nickname behind a mesh-derived `UserId`, if this device knows one.
     ///
     /// Mesh messages are stored with `mapping::peer_user_id(peer)` as their
@@ -882,6 +905,14 @@ impl MeshService {
 
     pub fn channel_muted(&self, name: &str) -> bool {
         self.events.channel_muted(name)
+    }
+
+    pub fn set_peer_muted(&self, peer: &PeerId, muted: bool) {
+        self.events.set_peer_muted(peer, muted);
+    }
+
+    pub fn peer_muted(&self, peer: &PeerId) -> bool {
+        self.events.peer_muted(peer)
     }
 
     pub fn set_peer_blocked(&self, peer: &PeerId, blocked: bool) {

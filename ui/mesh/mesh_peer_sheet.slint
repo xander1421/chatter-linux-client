@@ -1,0 +1,81 @@
+// Local mesh identity. No server account controls belong on this surface.
+import { Modal } from "../components/modal.slint";
+import { Button } from "../components/button.slint";
+import { MeshGlobal } from "mesh_global.slint";
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+
+export component MeshPeerSheet inherits Rectangle {
+    in property <bool> show-modal: false;
+    in-out property <string> qr-text: "";
+    callback close();
+    Modal {
+        show: root.show-modal;
+        title: "Mesh peer";
+        modal-width: 430px;
+        fill-height: true;
+        close => { root.close(); }
+        Flickable {
+            width: 100%;
+            height: 100%;
+            viewport-height: peer-content.preferred-height;
+            peer-content := VerticalLayout {
+            width: parent.width;
+            spacing: Spacing.md;
+            Text { text: MeshGlobal.sheet-peer-name; color: Colors.text-primary; font-size: Typography.lg; font-weight: 600; }
+            Text { text: MeshGlobal.sheet-binding-label; color: Colors.text-secondary; font-size: Typography.sm; }
+            Text { text: "Name is self-asserted until you verify in person."; color: Colors.text-muted; font-size: Typography.xs; wrap: word-wrap; }
+            Text { text: "Mesh fingerprint"; color: Colors.text-muted; font-size: Typography.xs; }
+            Text { text: MeshGlobal.sheet-fingerprint == "" ? "Waiting for encrypted link" : MeshGlobal.sheet-fingerprint;
+                color: Colors.text-primary; font-size: Typography.xs; wrap: char-wrap; }
+            if MeshGlobal.sheet-comparison-code != "": Text {
+                text: "Compare in person: " + MeshGlobal.sheet-comparison-code;
+                color: Colors.text-primary; font-size: Typography.sm; wrap: word-wrap;
+            }
+            Button { text: "Message over mesh"; variant: "primary";
+                disabled: MeshGlobal.sheet-peer-id == "";
+                clicked => { MeshGlobal.open-peer-dm(MeshGlobal.sheet-peer-id); }
+            }
+            Button { text: "Share my Chatter identity"; variant: "secondary";
+                disabled: MeshGlobal.sheet-peer-id == "";
+                clicked => { MeshGlobal.share-identity(MeshGlobal.sheet-peer-id); }
+            }
+            Button { text: "Verify in person (QR)"; variant: "secondary";
+                disabled: MeshGlobal.sheet-peer-id == "";
+                clicked => { MeshGlobal.show-binding-qr(MeshGlobal.sheet-peer-id); MeshGlobal.open-binding-scanner(MeshGlobal.sheet-peer-id); }
+            }
+            if MeshGlobal.binding-qr-visible: Image {
+                source: MeshGlobal.binding-qr-image; width: 180px; height: 180px; image-fit: contain;
+            }
+            if MeshGlobal.binding-qr-visible: Rectangle {
+                height: Spacing.touch-target-min;
+                border-radius: Spacing.radius-sm;
+                background: Colors.inset;
+                qr-input := TextInput {
+                    x: Spacing.sm; y: Spacing.xs;
+                    width: parent.width - Spacing.sm * 2; height: parent.height - Spacing.xs * 2;
+                    single-line: true; color: Colors.text-primary; font-size: Typography.sm;
+                    text <=> root.qr-text;
+                    accepted => { MeshGlobal.scan-binding-qr(MeshGlobal.sheet-peer-id, self.text); self.text = ""; }
+                }
+            }
+            if MeshGlobal.binding-qr-visible: Button { text: "Verify pasted QR"; variant: "secondary";
+                clicked => { MeshGlobal.scan-binding-qr(MeshGlobal.sheet-peer-id, root.qr-text); root.qr-text = ""; }
+            }
+            HorizontalLayout {
+                spacing: Spacing.sm;
+                Button { text: MeshGlobal.sheet-peer-muted ? "Unmute" : "Mute"; variant: "secondary";
+                    disabled: MeshGlobal.sheet-peer-id == "";
+                    clicked => { MeshGlobal.toggle-peer-mute(MeshGlobal.sheet-peer-id); }
+                }
+                Button { text: MeshGlobal.sheet-peer-blocked ? "Unblock" : "Block"; variant: "secondary";
+                    disabled: MeshGlobal.sheet-peer-id == "";
+                    clicked => { MeshGlobal.toggle-peer-block(MeshGlobal.sheet-peer-id); }
+                }
+            }
+            if MeshGlobal.notice != "": Text { text: MeshGlobal.notice; color: Colors.text-secondary; font-size: Typography.xs; wrap: word-wrap; }
+            }
+        }
+    }
+}

@@ -401,6 +401,11 @@ impl ServiceContainer {
                     service.set_peer_blocked(&chatter_mesh::ids::PeerId::from_str(&peer), true);
                 }
             }
+            if let Ok(Some(peers)) = settings.get::<Vec<String>>(keys::MESH_MUTED_PEERS) {
+                for peer in peers {
+                    service.set_peer_muted(&chatter_mesh::ids::PeerId::from_str(&peer), true);
+                }
+            }
             Arc::new(service)
         };
 

@@ -392,9 +392,12 @@ export component ChatHeader inherits GlassSurface {
                     }
                 }
                 name-touch := TouchArea {
-                    enabled: root.show-settings;
+                    enabled: root.show-settings || (root.is-mesh && MeshGlobal.active-kind == "dm");
                     mouse-cursor: pointer;
-                    clicked => { root.settings-clicked(); }
+                    clicked => {
+                        if root.is-mesh && MeshGlobal.active-kind == "dm" { MeshGlobal.open-peer(MeshGlobal.active-scope); }
+                        else { root.settings-clicked(); }
+                    }
                 }
             }
 

@@ -549,6 +549,21 @@ impl ChatterClient {
         self.mesh().peers()
     }
 
+    #[cfg(feature = "mesh")]
+    pub fn mesh_nearby_peers(&self) -> Vec<crate::services::mesh::MeshPeer> {
+        self.mesh().nearby_peers()
+    }
+
+    #[cfg(feature = "mesh")]
+    pub fn mesh_peer_for_sender(&self, sender: &crate::domain::ids::UserId) -> Option<crate::services::mesh::MeshPeer> {
+        self.mesh().peer_for_sender(sender)
+    }
+
+    #[cfg(feature = "mesh")]
+    pub fn mesh_open_dm(&self, peer: &str) -> Result<String, crate::services::mesh::MeshError> {
+        self.mesh().open_dm(&chatter_mesh::ids::PeerId::from_str(peer))
+    }
+
     /// Open mesh conversations, for the sidebar.
     #[cfg(feature = "mesh")]
     pub fn mesh_conversations(
@@ -800,6 +815,24 @@ impl ChatterClient {
     }
 
     #[cfg(feature = "mesh")]
+    pub fn mesh_peer_muted(&self, peer: &str) -> bool {
+        self.mesh().peer_muted(&chatter_mesh::ids::PeerId::from_str(peer))
+    }
+
+    #[cfg(feature = "mesh")]
+    pub fn mesh_set_peer_muted(&self, peer: &str, muted: bool) -> Result<(), crate::services::mesh::MeshError> {
+        use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
+        let peer = chatter_mesh::ids::PeerId::from_str(peer);
+        let settings = SettingsRepository::new(self.services.database.clone());
+        let mut peers = settings.get::<Vec<String>>(keys::MESH_MUTED_PEERS)?.unwrap_or_default();
+        peers.retain(|existing| existing != peer.as_str());
+        if muted { peers.push(peer.as_str().to_owned()); }
+        settings.set(keys::MESH_MUTED_PEERS, &peers)?;
+        self.mesh().set_peer_muted(&peer, muted);
+        Ok(())
+    }
+
+    #[cfg(feature = "mesh")]
     pub fn mesh_set_peer_blocked(
         &self,
         peer: &str,
@@ -990,6 +1023,7 @@ impl ChatterClient {
         for key in [
             keys::MESH_NICKNAME,
             keys::MESH_MUTED_CHANNELS,
+            keys::MESH_MUTED_PEERS,
             keys::MESH_BLOCKED_PEERS,
         ] {
             settings.delete(key)?;
