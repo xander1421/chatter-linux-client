@@ -2,17 +2,13 @@
 //!
 //! **Not a port.** Every other module in this directory reproduces a Swift or
 //! Kotlin type byte for byte; there is no bitchat original for these three. They
-//! exist because the single-packet path cannot deliver a large file *at all* on
-//! this radio, and the arithmetic is in
-//! [`crate::fragment`]'s `a_one_mebibyte_payload_cannot_reassemble_within_the_lifetime_window`:
-//! [`FRAGMENT_LIFETIME_SECS`] is measured from the *first* fragment of a stream,
-//! so an assembly 99% complete when it expires is discarded whatever its
-//! progress. A 1 MiB payload is ~2236 fragments, ~1.14 MiB on the wire once each
-//! pads to a 512-byte block, which is ~117 s at the optimistic 10 kB/s measured
-//! on this hardware. The window is 30 s. No amount of retrying a single packet
-//! fixes that: the fix has to be chunking *above* the fragmenter, so that each
-//! unit of retry is small enough to land inside one window, plus a way to ask
-//! for the units that did not.
+//! exist because a large single-packet transfer has no way to request missing
+//! fragments. A 1 MiB payload is ~2236 fragments, ~1.14 MiB on the wire at
+//! 514 bytes per unrouted fragment, or ~117 s at the optimistic 10 kB/s measured
+//! on this hardware. The assembler now expires a stream 30 s after its last
+//! progress, so a continuous stream may finish; one dropped fragment still makes
+//! the entire packet unusable. Chunking above the fragmenter bounds that loss
+//! and lets the receiver ask for only the missing chunks.
 //!
 //! One module for three packet types, which is a deliberate exception to this
 //! directory's one-type-per-module rule. The rule follows from provenance —
@@ -84,9 +80,11 @@ pub const TRANSFER_ID_LEN: usize = 8;
 /// Fixed header of a [`FileChunk`]: transfer id and chunk index.
 pub const CHUNK_HEADER_LEN: usize = TRANSFER_ID_LEN + 4;
 
-/// Bytes on the wire for one 512-byte BLE block. A fragment is padded out to
-/// this whether or not it fills it, so wire cost is counted in blocks.
-const WIRE_BLOCK_BYTES: usize = 512;
+/// Encoded unrouted fragment at the default chunk size: v2 header, sender,
+/// recipient, fragment header, and chunk. Broadcasts omit the recipient, but
+/// using the directed size keeps the ordinary lifetime estimate conservative.
+/// A source route adds bytes per hop; the send planner budgets those per packet.
+const WIRE_BLOCK_BYTES: usize = DEFAULT_FRAGMENT_SIZE + 16 + 8 + 8 + 13;
 
 /// The pessimistic end of the goodput measured on this hardware (Galaxy S25
 /// Ultra, Galaxy S9+, Linux/BlueZ), in bytes per second.
@@ -106,7 +104,7 @@ pub const OPTIMISTIC_GOODPUT_BYTES_PER_SEC: usize = 10_000;
 /// deriving from it would couple two decisions that change for different
 /// reasons. Derived instead from three things:
 ///
-/// - **It must reassemble inside one fragment lifetime.** 32 KiB is ~70
+/// - **It should reassemble within one fragment lifetime.** 32 KiB is ~70
 ///   fragments, ~36 kB of wire once padded, which is ~12 s at
 ///   [`PESSIMISTIC_GOODPUT_BYTES_PER_SEC`] against a 30 s window. See
 ///   [`fits_fragment_lifetime`], and the test that asserts the margin.
@@ -171,9 +169,8 @@ pub const MAX_REQUESTED_CHUNKS: usize = 64;
 
 /// Bytes actually put on the air to carry `payload_len` bytes of packet payload.
 ///
-/// Counts the signed envelope and rounds every fragment up to a 512-byte block,
-/// because that is what the radio charges for. Used to size everything above
-/// against the reassembly clock.
+/// Counts the signed envelope and charges each fragment its maximum encoded
+/// frame size. Used to size everything above against the reassembly clock.
 #[must_use]
 pub fn wire_bytes_for_payload(payload_len: usize) -> usize {
     // 16-byte v2 header + 8 sender + 64 signature. Broadcast omits the
@@ -645,7 +642,7 @@ mod tests {
         assert_eq!(
             wire_bytes_for_payload(encoded.len()),
             WIRE_BLOCK_BYTES,
-            "the whole request has to fit one 512-byte block"
+            "the whole request has to fit one BLE frame"
         );
     }
 

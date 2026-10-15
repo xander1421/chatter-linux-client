@@ -4160,6 +4160,7 @@ impl BleRuntime {
                     peer = %hex_encode(&expired.sender),
                     received = expired.received,
                     expected = expired.expected,
+                    original_type = expired.original_type,
                     is_broadcast = expired.is_broadcast,
                     lifetime_secs = chatter_mesh::fragment::FRAGMENT_LIFETIME_SECS,
                     "an incomplete reassembly expired; a packet was sent but never \
@@ -4676,6 +4677,12 @@ fn redundant_central_links_locked(state: &LinkStateInner, peer: &PeerId) -> Vec<
     central
         .into_iter()
         .skip(1)
+        // A fragment stream is pinned to the link chosen when it was planned.
+        // Closing that link after its first frame has gone out loses the tail if
+        // the keeper has a smaller MTU (rescue_link_writes cannot move it).
+        // Wait for the queued stream to drain; a later announce prunes the idle
+        // duplicate. This also preserves a queued non-fragment frame.
+        .filter(|(id, _)| state.writes.queued_count(id) == 0)
         .map(|(id, _)| id.clone())
         .collect()
 }
