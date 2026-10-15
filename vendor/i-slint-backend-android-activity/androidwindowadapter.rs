@@ -804,20 +804,39 @@ impl AndroidWindowAdapter {
         // `android_main`) on the first touch after a keystroke.
         let Some(text) = self.last_ime_text.borrow().clone() else { return };
         let cursor = self.last_ime_selection.get().1.min(text.len());
-        let mut key_event = KeyEvent::default();
-        key_event.text = text.as_str().into();
-        WindowInner::from_pub(&self.window).process_key_input(InternalKeyEvent {
-            event_type: KeyEventType::CommitComposition,
-            replacement_range: Some(i32::MIN..i32::MAX),
-            // Deliberately no cursor: the tap that triggered this commit is
-            // about to set the caret, and handing Slint the pre-tap offset here
-            // made it reassert that offset a frame later, dragging the caret
-            // back to the end of the text (§112o).
-            cursor_position: None,
-            anchor_position: None,
-            key_event,
-            ..Default::default()
-        });
+        // deliver_ime_state normally gives Slint the complete IME text as
+        // committed text, even while the IME still marks a composing region.
+        // Replacing identical text here fires TextInput.edited anyway. A tap
+        // on a search result then clears/rebuilds its rows between touch Down
+        // and Up, so the pressed row never receives a click (Samsung IME on
+        // Android 10 keeps that composing region active for every word).
+        // Only sync Slint when it actually has different text or preedit.
+        let slint_needs_commit = self
+            .ime_client
+            .borrow()
+            .as_ref()
+            .and_then(|c| c.upgrade())
+            .and_then(|c| c.downcast::<i_slint_core::items::TextInput>())
+            .is_some_and(|field| {
+                let field = field.as_pin_ref();
+                field.text().as_str() != text.as_str() || !field.preedit_text().is_empty()
+            });
+        if slint_needs_commit {
+            let mut key_event = KeyEvent::default();
+            key_event.text = text.as_str().into();
+            WindowInner::from_pub(&self.window).process_key_input(InternalKeyEvent {
+                event_type: KeyEventType::CommitComposition,
+                replacement_range: Some(i32::MIN..i32::MAX),
+                // Deliberately no cursor: the tap that triggered this commit is
+                // about to set the caret, and handing Slint the pre-tap offset here
+                // made it reassert that offset a frame later, dragging the caret
+                // back to the end of the text (§112o).
+                cursor_position: None,
+                anchor_position: None,
+                key_event,
+                ..Default::default()
+            });
+        }
         self.had_compose.set(false);
         *self.pending_self_echo.borrow_mut() = Some((text.clone(), cursor));
         self.stale_commit_cursor.set(Some(cursor));
