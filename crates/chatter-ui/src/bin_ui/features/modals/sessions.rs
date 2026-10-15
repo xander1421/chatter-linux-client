@@ -32,13 +32,17 @@ enum Action {
     Cancel(String),
 }
 
+fn sessions_visible(w: &MainWindow) -> bool {
+    w.get_active_modal() == "sessions" || w.get_settings_open()
+}
+
 /// One request owns all publications. Leaving/reopening the modal or starting
 /// another request invalidates it, as does logout/relogin (including same user).
 fn request(weak: slint::Weak<MainWindow>, client: Arc<ChatterClient>, action: Action) {
     let Some(w) = weak.upgrade() else {
         return;
     };
-    if w.get_active_modal() != "sessions" {
+    if !sessions_visible(&w) {
         return;
     }
     let owner = client.session_current_user_id();
@@ -142,7 +146,7 @@ fn request(weak: slint::Weak<MainWindow>, client: Arc<ChatterClient>, action: Ac
             };
             if client.session_current_user_id() != owner
                 || client.auth_state().get().session_revision != revision
-                || w.get_active_modal() != "sessions"
+                || !sessions_visible(&w)
                 || w.get_sessions_generation() != generation
             {
                 return;
