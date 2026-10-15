@@ -18,6 +18,7 @@ import { Icons } from "../theme/icons.slint";
 import { NotificationSound, NotificationDelivery } from "notification_sound.slint";
 import { AnonMode } from "../anon_mode/anon_mode_global.slint";
 import { UpdateGlobal } from "../update/update_global.slint";
+import { SessionInfo, PendingLinkInfo } from "../modals/sessions.slint";
 
 // A local AI provider found running on this machine.
 export struct LocalAIProviderData {
@@ -51,6 +52,13 @@ export component SettingsScreen inherits Rectangle {
     property <bool> file-backup-available: !root.mobile-platform;
     in property <image> avatar;
     in property <int> session-count: 0;
+    in property <[SessionInfo]> sessions: [];
+    in property <[PendingLinkInfo]> pending-links: [];
+    in property <bool> sessions-loaded: false;
+    in property <bool> sessions-loading: false;
+    in property <bool> sessions-revoking: false;
+    in property <string> sessions-error: "";
+    property <int> confirm-revoke-id: 0;
 
     // Change password form state
     in-out property <string> current-password: "";
@@ -143,6 +151,8 @@ export component SettingsScreen inherits Rectangle {
     property <bool> page-appearing: false;
     property <float> page-entry: 1;
     changed active-section => {
+        root.confirm-revoke-id = 0;
+        if root.active-section == "devices" { root.refresh-sessions(); }
         // Snap the new section a little toward its source, then let it glide
         // into the same content column. The timer separates the two frames.
         root.page-appearing = false;
@@ -176,6 +186,10 @@ export component SettingsScreen inherits Rectangle {
     callback edit-profile-clicked();
     callback change-password(string, string);  // current, new
     callback view-sessions-clicked();
+    callback refresh-sessions();
+    callback revoke-session(int);
+    callback cancel-pending-link(string);
+    callback link-new-device();
     callback logout-clicked();
     callback delete-account-clicked();
     callback delete-account-confirmed(string);  // password — fired only after explicit confirm
@@ -234,10 +248,11 @@ export component SettingsScreen inherits Rectangle {
     property <length> content-padding: compact-mode ? Spacing.md : Spacing.xl;
 
     VerticalLayout {
-
-
+        width: root.width;
+        height: root.height;
 
         HorizontalLayout {
+            horizontal-stretch: 1;
 
         // Sidebar navigation — hidden in compact mode — Neo surface
         if !compact-mode: GlassSurface {
@@ -310,7 +325,8 @@ export component SettingsScreen inherits Rectangle {
                                 : item.id == "privacy" ? Icons.shield
                                 : item.id == "notifications" ? Icons.bell
                                 : item.id == "encryption" ? Icons.lock
-                                : item.id == "ai" ? Icons.sparkles : Icons.moon;
+                                : item.id == "ai" ? Icons.sparkles
+                                : item.id == "about" ? Icons.info : Icons.moon;
                             width: Spacing.button-icon;
                             height: Spacing.button-icon;
                             colorize: active-section == item.id ? Colors.selected-indicator : Colors.text-secondary;
@@ -346,13 +362,17 @@ export component SettingsScreen inherits Rectangle {
         // Content area
         Rectangle {
             horizontal-stretch: 1;
+            vertical-stretch: 1;
             background: Colors.background;
 
             Flickable {
+                width: parent.width;
+                height: parent.height;
                 viewport-width: self.width;
                 viewport-height: content-layout.preferred-height;
 
                 content-layout := VerticalLayout {
+                    width: parent.width;
                     padding: root.content-padding;
                     padding-left: root.content-padding + Spacing.md * (1 - root.page-entry);
                     padding-top: root.content-padding + (root.compact-mode ? Spacing.touch-target-min + Spacing.sm : Spacing.none);
@@ -365,8 +385,10 @@ export component SettingsScreen inherits Rectangle {
                     // `if` children's height up, so `content-layout` reported
                     // ~0 and the page could not scroll to anything below the
                     // fold (Key Backup was stranded under the tab bar).
+                    HorizontalLayout {
+                        Rectangle { horizontal-stretch: 1; }
                     VerticalLayout {
-                        max-width: root.compact-mode ? root.width : 600px;
+                        width: min(root.compact-mode ? root.width : 600px, parent.width);
 
                         // Account section
                         if active-section == "account": VerticalLayout {
@@ -821,18 +843,13 @@ export component SettingsScreen inherits Rectangle {
                                     padding: Spacing.md;
                                     spacing: Spacing.sm;
 
-                                    Text {
-                                        text: "Message Backup";
-                                        color: Colors.text-primary;
-                                        font-size: Typography.sm;
-                                        font-weight: Typography.medium;
-                                    }
-
-                                    Text {
-                                        text: "Encrypted backup of your message history, conversations, and contacts. Neither the file nor the server copy can be read without your passphrase or PIN.";
-                                        color: Colors.text-muted;
-                                        font-size: Typography.xs;
-                                        wrap: word-wrap;
+                                    SettingsRow {
+                                        touch: root.mobile-platform;
+                                        icon: Icons.download;
+                                        title: "Message Backup";
+                                        detail: "Encrypted message history, conversations, and contacts. File backups need a passphrase; server backups need your PIN.";
+                                        clickable: false;
+                                        show-chevron: false;
                                     }
 
                                     if !root.file-backup-available: Text {
@@ -846,6 +863,13 @@ export component SettingsScreen inherits Rectangle {
                                         placeholder: "Backup passphrase (for file backup)";
                                         password: true;
                                         text <=> root.message-backup-passphrase;
+                                    }
+
+                                    if root.file-backup-available && root.message-backup-passphrase == "": Text {
+                                        text: "Enter a backup passphrase to enable file export and restore.";
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                        wrap: word-wrap;
                                     }
 
                                     if root.file-backup-available: HorizontalLayout {
@@ -877,6 +901,13 @@ export component SettingsScreen inherits Rectangle {
                                         placeholder: "PIN (for server backup)";
                                         password: true;
                                         text <=> root.message-backup-pin;
+                                    }
+
+                                    if root.message-backup-pin == "": Text {
+                                        text: "Enter your PIN to enable server backup and restore.";
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                        wrap: word-wrap;
                                     }
 
                                     HorizontalLayout {
@@ -1101,9 +1132,9 @@ export component SettingsScreen inherits Rectangle {
                             }
                         }
 
-                        // Linked devices section. The device list and "Link
-                        // new device" live in the sessions pane this opens, so
-                        // there is one place for both, not two.
+                        // Linked devices share the Sessions modal's model and
+                        // actions. Keep the full modal available for compact
+                        // screens and its revoke-all action.
                         if active-section == "devices": VerticalLayout {
                             spacing: Spacing.lg;
 
@@ -1188,6 +1219,151 @@ export component SettingsScreen inherits Rectangle {
                                         variant: "secondary";
                                         clicked => { root.view-sessions-clicked(); }
                                     }
+                                }
+                            }
+
+                            if !root.compact-mode: VerticalLayout {
+                                spacing: Spacing.sm;
+
+                                if root.sessions-loading: Text {
+                                    text: "Loading devices…";
+                                    color: Colors.text-secondary;
+                                    font-size: Typography.sm;
+                                }
+                                if root.sessions-error != "": Text {
+                                    text: root.sessions-error;
+                                    color: Colors.error;
+                                    font-size: Typography.sm;
+                                    wrap: word-wrap;
+                                }
+                                if root.sessions-loaded && root.sessions.length == 0 && !root.sessions-loading: Text {
+                                    text: "No active devices found";
+                                    color: Colors.text-muted;
+                                    font-size: Typography.sm;
+                                }
+
+                                for session in root.sessions: Rectangle {
+                                    background: Colors.surface-section;
+                                    border-radius: Spacing.radius-lg;
+                                    border-width: Elevation.rim-width;
+                                    border-color: Elevation.card-rim;
+
+                                    HorizontalLayout {
+                                        padding: Spacing.md;
+                                        spacing: Spacing.md;
+
+                                        Image {
+                                            source: session.is-mobile ? Icons.smartphone : Icons.monitor;
+                                            colorize: Colors.text-secondary;
+                                            width: Spacing.button-icon;
+                                            height: Spacing.button-icon;
+                                            vertical-alignment: center;
+                                        }
+
+                                        VerticalLayout {
+                                            horizontal-stretch: 1;
+                                            spacing: Spacing.xxs;
+
+                                            HorizontalLayout {
+                                                spacing: Spacing.sm;
+                                                Text {
+                                                    text: session.device-info;
+                                                    color: Colors.text-primary;
+                                                    font-size: Typography.sm;
+                                                    font-weight: Typography.medium;
+                                                    overflow: elide;
+                                                    horizontal-stretch: 1;
+                                                }
+                                                if session.is-current: Text {
+                                                    text: "This device";
+                                                    color: Colors.success;
+                                                    font-size: Typography.xs;
+                                                }
+                                            }
+                                            Text {
+                                                text: session.is-current ? "Active now" : "Last active: " + session.last-used;
+                                                color: Colors.text-muted;
+                                                font-size: Typography.xs;
+                                                wrap: word-wrap;
+                                            }
+                                            Text {
+                                                text: "Linked: " + session.created-at;
+                                                color: Colors.text-muted;
+                                                font-size: Typography.xs;
+                                            }
+                                            if root.confirm-revoke-id == session.device-id: Text {
+                                                text: "Revoke this device? It must be linked again.";
+                                                color: Colors.error;
+                                                font-size: Typography.xs;
+                                                wrap: word-wrap;
+                                            }
+                                        }
+
+                                        if !session.is-current: VerticalLayout {
+                                            alignment: center;
+                                            spacing: Spacing.xs;
+                                            Button {
+                                                touch: root.mobile-platform;
+                                                text: root.confirm-revoke-id == session.device-id ? "Confirm" : "Revoke";
+                                                variant: root.confirm-revoke-id == session.device-id ? "destructive" : "secondary";
+                                                disabled: root.sessions-revoking || root.sessions-loading;
+                                                clicked => {
+                                                    if root.confirm-revoke-id == session.device-id {
+                                                        root.confirm-revoke-id = 0;
+                                                        root.revoke-session(session.device-id);
+                                                    } else {
+                                                        root.confirm-revoke-id = session.device-id;
+                                                    }
+                                                }
+                                            }
+                                            if root.confirm-revoke-id == session.device-id: Button {
+                                                touch: root.mobile-platform;
+                                                text: "Cancel";
+                                                variant: "ghost";
+                                                clicked => { root.confirm-revoke-id = 0; }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                for link in root.pending-links: Rectangle {
+                                    background: Colors.surface-section;
+                                    border-radius: Spacing.radius-lg;
+                                    HorizontalLayout {
+                                        padding: Spacing.md;
+                                        spacing: Spacing.md;
+                                        VerticalLayout {
+                                            horizontal-stretch: 1;
+                                            spacing: Spacing.xxs;
+                                            Text {
+                                                text: link.device-name != "" ? link.device-name : "New device";
+                                                color: Colors.text-primary;
+                                                font-size: Typography.sm;
+                                                font-weight: Typography.medium;
+                                            }
+                                            Text {
+                                                text: "Approved, waiting to finish linking (until " + link.expires + ")";
+                                                color: Colors.text-muted;
+                                                font-size: Typography.xs;
+                                                wrap: word-wrap;
+                                            }
+                                        }
+                                        Button {
+                                            touch: root.mobile-platform;
+                                            text: "Cancel";
+                                            variant: "ghost";
+                                            disabled: root.sessions-revoking || root.sessions-loading;
+                                            clicked => { root.cancel-pending-link(link.uuid); }
+                                        }
+                                    }
+                                }
+
+                                Button {
+                                    touch: root.mobile-platform;
+                                    text: "Link new device";
+                                    variant: "primary";
+                                    disabled: root.sessions-revoking || root.sessions-loading;
+                                    clicked => { root.link-new-device(); }
                                 }
                             }
                         }
@@ -1419,30 +1595,62 @@ export component SettingsScreen inherits Rectangle {
                                         wrap: word-wrap;
                                     }
 
-                                    HorizontalLayout {
-                                        spacing: Spacing.sm;
-                                        alignment: start;
-
-                                        Button {
-                                            touch: root.mobile-platform;
-                                            text: "Everyone";
-                                            variant: root.username-discoverable ? "primary" : "secondary";
-                                            clicked => {
-                                                if !root.username-discoverable {
-                                                    root.username-discoverable = true;
-                                                    root.username-discoverable-changed(true);
-                                                }
+                                    for opt in [
+                                        { discoverable: true, label: "Everyone" },
+                                        { discoverable: false, label: "Nobody" },
+                                    ]: Rectangle {
+                                        property <bool> selected: root.username-discoverable == opt.discoverable;
+                                        height: Spacing.touch-target-min;
+                                        border-radius: Spacing.radius-md;
+                                        background: username-touch.has-hover ? Colors.surface-hover : transparent;
+                                        accessible-role: button;
+                                        accessible-label: opt.label;
+                                        accessible-action-default => {
+                                            if !selected {
+                                                root.username-discoverable = opt.discoverable;
+                                                root.username-discoverable-changed(opt.discoverable);
                                             }
                                         }
 
-                                        Button {
-                                            touch: root.mobile-platform;
-                                            text: "Nobody";
-                                            variant: root.username-discoverable ? "secondary" : "primary";
+                                        HorizontalLayout {
+                                            padding-left: Spacing.sm;
+                                            padding-right: Spacing.sm;
+                                            spacing: Spacing.md;
+                                            alignment: start;
+
+                                            VerticalLayout {
+                                                alignment: center;
+                                                Rectangle {
+                                                    width: 18px;
+                                                    height: 18px;
+                                                    border-radius: 9px;
+                                                    border-width: Spacing.stroke;
+                                                    border-color: selected ? Colors.primary : Colors.text-muted;
+
+                                                    Rectangle {
+                                                        width: 8px;
+                                                        height: 8px;
+                                                        border-radius: 4px;
+                                                        background: selected ? Colors.primary : transparent;
+                                                    }
+                                                }
+                                            }
+
+                                            Text {
+                                                text: opt.label;
+                                                vertical-alignment: center;
+                                                color: selected ? Colors.text-primary : Colors.text-secondary;
+                                                font-size: Typography.sm;
+                                                font-weight: selected ? Typography.medium : Typography.normal;
+                                            }
+                                        }
+
+                                        username-touch := TouchArea {
+                                            mouse-cursor: pointer;
                                             clicked => {
-                                                if root.username-discoverable {
-                                                    root.username-discoverable = false;
-                                                    root.username-discoverable-changed(false);
+                                                if !selected {
+                                                    root.username-discoverable = opt.discoverable;
+                                                    root.username-discoverable-changed(opt.discoverable);
                                                 }
                                             }
                                         }
@@ -2924,6 +3132,8 @@ export component SettingsScreen inherits Rectangle {
                                 font-size: Typography.sm;
                             }
                         }
+                    }
+                        Rectangle { horizontal-stretch: 1; }
                     }
                 }
             }

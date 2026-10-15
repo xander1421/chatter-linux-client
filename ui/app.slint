@@ -3625,12 +3625,20 @@ export component MainWindow inherits Window {
         // and has to draw over it.
         if root.settings-open: SettingsScreen {
             z: -1;
+            width: parent.width;
+            height: parent.height;
             bottom-inset: root.compact-layout ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom : 0px;
             mobile-platform: root.is-mobile-platform;
             shield-toggled => { root.toggle-anon-mode(); }
             display-name: root.settings-display-name;
             username: root.settings-username;
             session-count: root.settings-session-count;
+            sessions: root.sessions;
+            pending-links: root.sessions-pending-links;
+            sessions-loaded: root.sessions-loaded;
+            sessions-loading: root.sessions-loading;
+            sessions-revoking: root.sessions-revoking;
+            sessions-error: root.sessions-error;
             avatar: root.user-avatar-source;
             current-password <=> root.settings-current-password;
             new-password <=> root.settings-new-password;
@@ -3699,6 +3707,10 @@ export component MainWindow inherits Window {
             view-sessions-clicked => {
                 root.nav-push("sessions");
             }
+            refresh-sessions => { root.settings-view-sessions(); }
+            revoke-session(device-id) => { root.revoke-session(device-id); }
+            cancel-pending-link(uuid) => { root.cancel-pending-link(uuid); }
+            link-new-device => { root.link-approve-open(); }
             logout-clicked => {
                 root.settings-logout();
             }
