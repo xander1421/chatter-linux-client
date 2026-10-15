@@ -789,26 +789,9 @@ impl InboxEventProcessor {
                         sender_id = %sender_id,
                         "Fetching sender profile for channel message"
                     );
-                    let user_svc = self.user_service.clone();
-                    let sid = *sender_id;
-                    tokio::spawn(async move {
-                        match user_svc.get_user_profile(&sid).await {
-                            Ok(profile) => {
-                                tracing::debug!(
-                                    sender_id = %sid,
-                                    display_name = %profile.display_name,
-                                    "Fetched and cached sender profile"
-                                );
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    sender_id = %sid,
-                                    error = %e,
-                                    "Failed to fetch sender profile, will show UUID"
-                                );
-                            }
-                        }
-                    });
+                    // The fetch can finish after a join notice was rendered.
+                    // Emit the normal profile event so visible rows re-resolve.
+                    self.spawn_peer_profile_refresh(*sender_id);
                 }
 
                 // Read the message store_data_message already persisted. Its
