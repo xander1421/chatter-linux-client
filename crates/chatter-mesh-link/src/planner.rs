@@ -24,11 +24,13 @@ use crate::fanout::{FanoutRequest, FanoutSelection, LinkCandidate, select_links}
 use crate::link::LinkId;
 
 /// Bytes a fragment costs on top of its chunk: the 13-byte fragment header, the
-/// 8-byte sender and 8-byte recipient, and the 13-byte packet frame.
+/// 8-byte sender and 8-byte recipient, and the packet header.
 ///
-/// `BLEOutboundPacketPolicy.fragmentFrameOverhead`, kept in the same
-/// `13 + 8 + 8 + 13` form so it stays comparable to the Swift.
-pub const FRAGMENT_FRAME_OVERHEAD: usize = 13 + 8 + 8 + 13;
+/// Swift's `BLEOutboundPacketPolicy.fragmentFrameOverhead` counts a 13-byte
+/// header, but the encoded header is 14 bytes in v1 and 16 in v2
+/// (`chatter_mesh::codec`), so a full chunk overran the link limit by 1-3
+/// bytes and the radio refused it. Budget for the larger v2 header.
+pub const FRAGMENT_FRAME_OVERHEAD: usize = 13 + 8 + 8 + 16;
 
 /// Smallest chunk a fragment may carry, `BLEOutboundFragmentPlanner.minimumChunkSize`.
 ///
