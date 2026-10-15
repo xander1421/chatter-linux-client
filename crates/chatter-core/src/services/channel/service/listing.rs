@@ -2,7 +2,9 @@
 //!
 //! List, search, and archive methods for ChannelService.
 
-use crate::domain::channel::{Channel, ChannelType};
+use crate::domain::channel::{
+    Channel, ChannelType, MemberRole, Membership, NotificationPreference,
+};
 use crate::domain::ids::ChannelId;
 use crate::proto::chat_v1;
 use crate::services::current_user::CurrentUserProvider;
@@ -84,7 +86,7 @@ impl ChannelService {
         offset: u32,
         archived: Option<bool>,
     ) -> Result<Vec<Channel>, ChannelError> {
-        let _ = self.settings_repo.current_user_id()?;
+        let me = self.settings_repo.current_user_id()?;
 
         let mut channel_client = self.channel_client();
         let response = channel_client
@@ -96,6 +98,28 @@ impl ChannelService {
             let channel = proto_to_domain_channel(proto)?;
 
             self.channel_repo.upsert(&channel)?;
+
+            // The server lists only channels we are a member of, but omits
+            // rosters, and the sidebar lists channels by local membership. A
+            // channel created on a linked device would otherwise never appear
+            // here. Ignored when a richer row already exists.
+            let own = Membership {
+                channel_id: channel.id,
+                user_id: me,
+                role: if channel.owner_id == me {
+                    MemberRole::Owner
+                } else {
+                    MemberRole::Member
+                },
+                joined_at: channel.created_at,
+                last_read_message_id: None,
+                is_muted: false,
+                muted_until: None,
+                notification_preference: NotificationPreference::All,
+            };
+            if let Err(e) = self.channel_repo.insert_or_ignore_membership(&own) {
+                tracing::warn!(channel_id = %channel.id, error = %e, "Failed to record own membership");
+            }
 
             // Sync memberships from the proto response
             for proto_member in &proto.members {
@@ -231,4 +255,3 @@ impl ChannelService {
         Ok(members.into_iter().map(|m| m.user_id).collect())
     }
 }
-
