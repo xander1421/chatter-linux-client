@@ -180,6 +180,8 @@ impl ClientBuilder {
             ctx,
             services,
             tasks: Mutex::new(Vec::new()),
+            pending_receipts: Mutex::new(Vec::new()),
+            sent_receipts: Mutex::new(Vec::new()),
             started: AtomicBool::new(false),
             last_activity_ms: AtomicU64::new(0),
             push_shutdown: Mutex::new(None),
@@ -357,6 +359,9 @@ pub struct ChatterClient {
     ctx: AppContext,
     services: Arc<CoreServices>,
     tasks: Mutex<Vec<JoinHandle<()>>>,
+    /// Failed ephemeral receipts for this process and auth session only.
+    pub(crate) pending_receipts: Mutex<Vec<crate::services::conversation::PendingReceipt>>,
+    pub(crate) sent_receipts: Mutex<Vec<crate::services::conversation::PendingReceipt>>,
     started: AtomicBool,
     /// Epoch millis of last user activity (for idle detection).
     last_activity_ms: AtomicU64,
@@ -3219,6 +3224,7 @@ impl ChatterClient {
         let h_channel_send_retry = crate::services::message::spawn_channel_send_recovery(self);
         let h_dm_send_retry = crate::services::message::spawn_dm_send_recovery(self);
         let h_delete_batch_retry = crate::services::conversation::spawn_delete_batch_recovery(self);
+        let h_receipt_retry = crate::services::conversation::spawn_receipt_recovery(self);
         let h_channel_stream = self.ctx.start_channel_event_stream();
         // Live channel messages. This is the ONLY subscriber of the
         // server-managed channel message path: it re-subscribes on every
@@ -3342,6 +3348,7 @@ impl ChatterClient {
             h_skdm_retry,
             h_channel_stream,
             h_delete_batch_retry,
+            h_receipt_retry,
             h_saved_sync_retry,
             h_channel_send_retry,
             h_dm_send_retry,

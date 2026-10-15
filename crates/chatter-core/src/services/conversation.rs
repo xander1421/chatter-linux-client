@@ -13,6 +13,7 @@
 //!
 //! This eliminates the 4-way match blocks in the chat UI layer.
 
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use crate::client::ChatterClient;
@@ -39,6 +40,45 @@ pub enum ConversationError {
     Storage(#[from] crate::error::StorageError),
     #[error("{0}")]
     Other(String),
+}
+
+#[derive(Clone)]
+pub(crate) struct PendingReceipt {
+    conversation: ActiveConversation,
+    read: bool,
+    revision: u64,
+    timestamps: BTreeSet<u64>,
+}
+
+fn retryable_receipt_error(error: &ConversationError) -> bool {
+    match error {
+        ConversationError::Message(error) => error.permanent_send_failure_reason().is_none(),
+        // The Shield mailbox currently stringifies transport errors at its boundary.
+        ConversationError::AnonDm(crate::services::AnonDmError::MessageError(_)) => true,
+        _ => false,
+    }
+}
+
+fn record_sent_receipt(client: &ChatterClient, entry: &PendingReceipt) {
+    let mut sent = client.sent_receipts.lock();
+    sent.retain(|item| item.revision == entry.revision);
+    if let Some(existing) = sent
+        .iter_mut()
+        .find(|item| item.conversation == entry.conversation && item.read == entry.read)
+    {
+        existing.timestamps.extend(entry.timestamps.iter().copied());
+        // Reopened chats load only the newest page. Keep recent timestamps so
+        // this session's receipt cache stays bounded during long runs.
+        while existing.timestamps.len() > 256 {
+            existing.timestamps.pop_first();
+        }
+    } else {
+        let mut entry = entry.clone();
+        while entry.timestamps.len() > 256 {
+            entry.timestamps.pop_first();
+        }
+        sent.push(entry);
+    }
 }
 
 /// Re-shape stored attachments into send inputs that reuse the CDN blob they
@@ -1709,6 +1749,10 @@ impl ConversationHandle {
     // ========================================================================
 
     pub async fn send_read_receipt(&self, timestamps: &[u64]) -> ConversationResult {
+        self.send_receipt_with_recovery(timestamps, true).await
+    }
+
+    async fn send_read_receipt_once(&self, timestamps: &[u64]) -> ConversationResult {
         if timestamps.is_empty() {
             return Ok(());
         }
@@ -1730,7 +1774,7 @@ impl ConversationHandle {
                 .anon_dms()
                 .send_read_receipt(dm_id, timestamps.to_vec())
                 .await
-                .map_err(|e| ConversationError::Other(e.to_string())),
+                .map_err(ConversationError::AnonDm),
             // Groups don't track per-user read state to preserve sender anonymity.
             ActiveConversation::AnonGroup(_) => Ok(()),
             ActiveConversation::None => Err(ConversationError::NoConversation),
@@ -1745,6 +1789,10 @@ impl ConversationHandle {
     }
 
     pub async fn send_delivery_receipt(&self, timestamps: &[u64]) -> ConversationResult {
+        self.send_receipt_with_recovery(timestamps, false).await
+    }
+
+    async fn send_delivery_receipt_once(&self, timestamps: &[u64]) -> ConversationResult {
         if timestamps.is_empty() {
             return Ok(());
         }
@@ -1754,7 +1802,7 @@ impl ConversationHandle {
                 .anon_dms()
                 .send_delivery_receipt(dm_id, timestamps.to_vec())
                 .await
-                .map_err(|e| ConversationError::Other(e.to_string())),
+                .map_err(ConversationError::AnonDm),
             // Groups don't track per-user delivery state to preserve sender anonymity.
             ActiveConversation::AnonGroup(_) => Ok(()),
             ActiveConversation::None => Err(ConversationError::NoConversation),
@@ -1766,6 +1814,84 @@ impl ConversationHandle {
                 self.dispatch_content(content).await
             }
         }
+    }
+
+    async fn send_receipt_with_recovery(
+        &self,
+        timestamps: &[u64],
+        read: bool,
+    ) -> ConversationResult {
+        if timestamps.is_empty() || matches!(self.conversation, ActiveConversation::AnonGroup(_)) {
+            return Ok(());
+        }
+        if read
+            && (!self.client.chat_state().is_app_visible()
+                || !self.client.read_receipts_enabled().unwrap_or(true))
+        {
+            return Ok(());
+        }
+        let auth = self.client.auth_state().get();
+        let unsent: Vec<u64> = {
+            let sent = self.client.sent_receipts.lock();
+            let previous = sent.iter().find(|entry| {
+                entry.conversation == self.conversation
+                    && entry.read == read
+                    && entry.revision == auth.session_revision
+            });
+            timestamps
+                .iter()
+                .copied()
+                .filter(|timestamp| {
+                    !previous.is_some_and(|entry| entry.timestamps.contains(timestamp))
+                })
+                .collect()
+        };
+        if unsent.is_empty() {
+            return Ok(());
+        }
+        let result = if read {
+            self.send_read_receipt_once(&unsent).await
+        } else {
+            self.send_delivery_receipt_once(&unsent).await
+        };
+        let current = self.client.auth_state().get();
+        if auth.current_user_id.is_none() || auth.session_revision != current.session_revision {
+            return result;
+        }
+        if result.is_ok() {
+            record_sent_receipt(
+                &self.client,
+                &PendingReceipt {
+                    conversation: self.conversation,
+                    read,
+                    revision: auth.session_revision,
+                    timestamps: unsent.iter().copied().collect(),
+                },
+            );
+        }
+        let mut pending = self.client.pending_receipts.lock();
+        if let Some(entry) = pending.iter_mut().find(|entry| {
+            entry.conversation == self.conversation
+                && entry.read == read
+                && entry.revision == auth.session_revision
+        }) {
+            if result.as_ref().err().is_some_and(retryable_receipt_error) {
+                entry.timestamps.extend(unsent.iter().copied());
+            } else if result.is_ok() {
+                for timestamp in &unsent {
+                    entry.timestamps.remove(timestamp);
+                }
+            }
+        } else if result.as_ref().err().is_some_and(retryable_receipt_error) {
+            pending.push(PendingReceipt {
+                conversation: self.conversation,
+                read,
+                revision: auth.session_revision,
+                timestamps: unsent.iter().copied().collect(),
+            });
+        }
+        pending.retain(|entry| !entry.timestamps.is_empty());
+        result
     }
 
     /// A persisted incoming message is read only while its conversation is on
@@ -2372,6 +2498,82 @@ impl ConversationHandle {
             _ => Err(ConversationError::NoConversation),
         }
     }
+}
+
+/// Retry only failed, session-local receipt timestamps. The outgoing message
+/// journals use the same connection subscription plus a short fallback tick:
+/// the tick matters when a gRPC failure precedes the reachability monitor.
+pub(crate) fn spawn_receipt_recovery(client: &Arc<ChatterClient>) -> tokio::task::JoinHandle<()> {
+    let weak = Arc::downgrade(client);
+    let mut connectivity = client.offline_state().subscribe();
+    tokio::spawn(async move {
+        let mut ticker = tokio::time::interval(std::time::Duration::from_secs(5));
+        ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        // The first tick has no pending receipts; later sends use the next tick.
+        loop {
+            tokio::select! {
+                _ = ticker.tick() => {},
+                _ = connectivity.recv() => {},
+            }
+            let Some(client) = weak.upgrade() else { break };
+            let auth = client.auth_state().get();
+            let Some(_) = auth.current_user_id else {
+                client.pending_receipts.lock().clear();
+                client.sent_receipts.lock().clear();
+                continue;
+            };
+            let entries = {
+                let mut pending = client.pending_receipts.lock();
+                pending.retain(|entry| entry.revision == auth.session_revision);
+                if !client.read_receipts_enabled().unwrap_or(true) {
+                    pending.retain(|entry| !entry.read);
+                }
+                pending.clone()
+            };
+            if !client.offline_state().connection_state().is_connected() {
+                continue;
+            }
+            for entry in entries {
+                if client.auth_state().get().session_revision != entry.revision {
+                    break;
+                }
+                if entry.read && !client.chat_state().is_app_visible() {
+                    continue;
+                }
+                let timestamps: Vec<_> = entry.timestamps.iter().copied().collect();
+                let handle = ConversationHandle::new(entry.conversation, client.clone());
+                let result = if entry.read {
+                    handle.send_read_receipt_once(&timestamps).await
+                } else {
+                    handle.send_delivery_receipt_once(&timestamps).await
+                };
+                if client.auth_state().get().session_revision != entry.revision {
+                    break;
+                }
+                if result.is_ok()
+                    || result
+                        .as_ref()
+                        .err()
+                        .is_some_and(|error| !retryable_receipt_error(error))
+                {
+                    if result.is_ok() {
+                        record_sent_receipt(&client, &entry);
+                    }
+                    let mut pending = client.pending_receipts.lock();
+                    if let Some(current) = pending.iter_mut().find(|current| {
+                        current.conversation == entry.conversation
+                            && current.read == entry.read
+                            && current.revision == entry.revision
+                    }) {
+                        for timestamp in &timestamps {
+                            current.timestamps.remove(timestamp);
+                        }
+                    }
+                    pending.retain(|current| !current.timestamps.is_empty());
+                }
+            }
+        }
+    })
 }
 
 /// Lifecycle-owned recovery; at most four due ORIGINAL batches per tick, with
