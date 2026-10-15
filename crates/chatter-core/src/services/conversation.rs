@@ -620,6 +620,17 @@ impl ConversationHandle {
         if !self.client.typing_indicators_enabled().unwrap_or(true) {
             return Ok(());
         }
+        if matches!(
+            self.conversation,
+            ActiveConversation::ServerDm { .. } | ActiveConversation::Channel(_)
+        ) && !self
+            .client
+            .offline_state()
+            .connection_state()
+            .is_connected()
+        {
+            return Ok(());
+        }
         match &self.conversation {
             ActiveConversation::AnonDm(id) => {
                 self.client
@@ -1839,6 +1850,22 @@ impl ConversationHandle {
         }
         let auth = self.client.auth_state().get();
         let shield = self.client.anon_mode_enabled();
+        // A chat reopen may load the same page while a failed receipt is
+        // already queued. Let recovery own that timestamp instead of sending
+        // another immediate deposit around its backoff.
+        let queued = self
+            .client
+            .pending_receipts
+            .lock()
+            .iter()
+            .find(|entry| {
+                entry.conversation == self.conversation
+                    && entry.read == read
+                    && entry.revision == auth.session_revision
+                    && entry.shield == shield
+            })
+            .map(|entry| entry.timestamps.clone())
+            .unwrap_or_default();
         let unsent: Vec<u64> = {
             let sent = self.client.sent_receipts.lock();
             let previous = sent.iter().find(|entry| {
@@ -1850,7 +1877,8 @@ impl ConversationHandle {
                 .iter()
                 .copied()
                 .filter(|timestamp| {
-                    !previous.is_some_and(|entry| entry.timestamps.contains(timestamp))
+                    !queued.contains(timestamp)
+                        && !previous.is_some_and(|entry| entry.timestamps.contains(timestamp))
                 })
                 .collect()
         };
@@ -2517,9 +2545,15 @@ impl ConversationHandle {
 pub(crate) fn spawn_receipt_recovery(client: &Arc<ChatterClient>) -> tokio::task::JoinHandle<()> {
     let weak = Arc::downgrade(client);
     let mut connectivity = client.offline_state().subscribe();
+    let initially_connected = client.offline_state().connection_state().is_connected();
+    let initial_revision = client.auth_state().get().session_revision;
     tokio::spawn(async move {
         let mut ticker = tokio::time::interval(std::time::Duration::from_secs(5));
         ticker.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
+        let mut retry_delay = std::time::Duration::from_secs(5);
+        let mut retry_after = tokio::time::Instant::now();
+        let mut was_connected = initially_connected;
+        let mut last_revision = initial_revision;
         // The first tick has no pending receipts; later sends use the next tick.
         loop {
             tokio::select! {
@@ -2527,7 +2561,19 @@ pub(crate) fn spawn_receipt_recovery(client: &Arc<ChatterClient>) -> tokio::task
                 _ = connectivity.recv() => {},
             }
             let Some(client) = weak.upgrade() else { break };
+            let connected = client.offline_state().connection_state().is_connected();
+            if connected && !was_connected {
+                // A real reconnect should flush pending receipts promptly.
+                retry_after = tokio::time::Instant::now();
+                retry_delay = std::time::Duration::from_secs(5);
+            }
+            was_connected = connected;
             let auth = client.auth_state().get();
+            if auth.session_revision != last_revision {
+                last_revision = auth.session_revision;
+                retry_after = tokio::time::Instant::now();
+                retry_delay = std::time::Duration::from_secs(5);
+            }
             let Some(_) = auth.current_user_id else {
                 client.pending_receipts.lock().clear();
                 client.sent_receipts.lock().clear();
@@ -2545,7 +2591,7 @@ pub(crate) fn spawn_receipt_recovery(client: &Arc<ChatterClient>) -> tokio::task
                 }
                 pending.clone()
             };
-            if !client.offline_state().connection_state().is_connected() {
+            if !connected || tokio::time::Instant::now() < retry_after {
                 continue;
             }
             for entry in entries {
@@ -2570,6 +2616,16 @@ pub(crate) fn spawn_receipt_recovery(client: &Arc<ChatterClient>) -> tokio::task
                 if client.auth_state().get().session_revision != entry.revision {
                     break;
                 }
+                let server_unreachable = matches!(
+                    &result,
+                    Err(ConversationError::Message(
+                        crate::services::MessageError::Network(
+                            crate::error::NetworkError::Unavailable
+                                | crate::error::NetworkError::ConnectionFailed(_)
+                                | crate::error::NetworkError::Timeout
+                        )
+                    ))
+                );
                 if result.is_ok()
                     || result
                         .as_ref()
@@ -2591,6 +2647,18 @@ pub(crate) fn spawn_receipt_recovery(client: &Arc<ChatterClient>) -> tokio::task
                         }
                     }
                     pending.retain(|current| !current.timestamps.is_empty());
+                }
+                if server_unreachable {
+                    // One failed RPC is enough evidence that the server is down.
+                    // Keep all pending entries, including this one, for a later
+                    // tick instead of depositing each receipt into the outage.
+                    retry_after = tokio::time::Instant::now() + retry_delay;
+                    retry_delay = (retry_delay * 2).min(std::time::Duration::from_secs(60));
+                    break;
+                }
+                if result.is_ok() {
+                    retry_delay = std::time::Duration::from_secs(5);
+                    retry_after = tokio::time::Instant::now();
                 }
             }
         }
