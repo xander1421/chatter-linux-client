@@ -4,7 +4,6 @@
 //! of friend request changes, profile updates, and presence changes.
 
 use std::sync::Arc;
-use std::time::Duration;
 use std::time::Instant;
 
 use tokio::sync::broadcast;
@@ -75,13 +74,6 @@ pub async fn spawn_user_events_stream(
                     // cost one RPC per friend, so they share
                     // `refresh_profile_if_stale`'s interval.
                     refresh_friend_requests(&grpc_pool, &event_tx).await;
-                    // A request answered on another device may not produce a
-                    // status event on this stream. Reconcile the server's
-                    // pending lists while connected so both accept and decline
-                    // clear this device's badge without a restart.
-                    let mut request_refresh = tokio::time::interval(Duration::from_secs(30));
-                    request_refresh.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Skip);
-                    request_refresh.tick().await; // the subscribe refresh ran above
                     if let Some(me) = current_user_id {
                         let due = last_profile_refresh
                             .map_or(true, |t: Instant| t.elapsed() >= PROFILE_REFRESH_INTERVAL);
@@ -101,28 +93,17 @@ pub async fn spawn_user_events_stream(
                         }
                     }
 
-                    // Preserve the stream's silence deadline across request
-                    // refresh ticks; otherwise each tick would restart the
-                    // heartbeat timeout on an unresponsive stream.
-                    let mut last_stream_item = Instant::now();
                     loop {
                         tokio::select! {
-                            _ = request_refresh.tick() => {
-                                refresh_friend_requests(&grpc_pool, &event_tx).await;
-                            }
                             _ = shutdown_rx.changed() => {
                                 if *shutdown_rx.borrow() {
                                     tracing::debug!("User events stream received shutdown signal");
                                     return;
                                 }
                             }
-                            event = heartbeat::next_or_silent(
-                                &mut stream,
-                                heartbeat::STREAM_SILENCE_LIMIT.saturating_sub(last_stream_item.elapsed()),
-                            ) => {
+                            event = heartbeat::next_or_silent(&mut stream, heartbeat::STREAM_SILENCE_LIMIT) => {
                                 match event {
                                     Next::Item(Ok(user_event)) => {
-                                        last_stream_item = Instant::now();
                                         handle_user_event(
                                             user_event,
                                             &grpc_pool,
