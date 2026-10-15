@@ -241,6 +241,13 @@ fn android_main(app: i_slint_backend_android_activity::AndroidApp) {
     let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
     let app_state = rt.block_on(app_init());
     let _guard = rt.enter();
+    let app_state = match app_state {
+        Ok(state) => state,
+        Err(message) => {
+            show_startup_error(&message);
+            return;
+        }
+    };
     let _ = visibility_client.set(app_state.ui_ctx.clone());
     let _ = ANDROID_CLIENT.set(app_state.ui_ctx.clone());
     let _ = visibility_window.set(slint::ComponentHandle::as_weak(&app_state.window));
@@ -305,8 +312,9 @@ pub fn mirror_anon_mode_build(window: &MainWindow) {
 
 /// Phase 1: Async initialization (runs inside block_on — reactor is active).
 /// Creates client, gRPC channels, window, and wires callbacks.
-/// Returns state for the sync event loop phase.
-pub async fn app_init() -> AppState {
+/// Returns state for the sync event loop phase, or a message to show when
+/// client initialization fails before the normal window can be created.
+pub async fn app_init() -> Result<AppState, String> {
     let startup_started = std::time::Instant::now();
     let _ = STARTUP_STARTED.set(startup_started);
     let _ = RT_HANDLE.set(tokio::runtime::Handle::current());
@@ -444,8 +452,7 @@ pub async fn app_init() -> AppState {
         Ok(c) => c,
         Err(e) => {
             tracing::error!("Failed to initialize application: {}", e);
-            eprintln!("Failed to initialize application");
-            std::process::exit(1);
+            return Err(e.to_string());
         }
     };
     // Overlap Tor directory/guard work with UI/login. This never contacts the
@@ -801,13 +808,23 @@ pub async fn app_init() -> AppState {
         elapsed_ms = startup_started.elapsed().as_millis(),
         "startup: UI initialized"
     );
-    AppState {
+    Ok(AppState {
         window,
         ui_ctx: client,
         shutdown_token,
         #[cfg(target_os = "linux")]
         _tray_handle: tray_handle,
-    }
+    })
+}
+
+fn show_startup_error(message: &str) {
+    use slint::ComponentHandle;
+
+    let window = StartupErrorWindow::new().expect("Failed to create startup error window");
+    window.set_error_message(message.into());
+    #[cfg(target_os = "android")]
+    crate::platform::android::activity::clear_launch_cover_after_first_frame(window.window());
+    window.run().expect("Failed to run startup error window");
 }
 
 /// Register a throwaway development account on first launch so a dev build lands
@@ -953,6 +970,8 @@ fn app_run(state: AppState) {
 /// Desktop entry point. Runs init then event loop inside tokio::main's block_on.
 /// On desktop, tokio worker threads keep the reactor alive while window.run() blocks.
 pub async fn app_main() {
-    let state = app_init().await;
-    app_run(state);
+    match app_init().await {
+        Ok(state) => app_run(state),
+        Err(message) => show_startup_error(&message),
+    }
 }

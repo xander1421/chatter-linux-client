@@ -1,0 +1,39 @@
+import { Colors } from "theme/colors.slint";
+import { Typography } from "theme/typography.slint";
+
+// This window must work before the client and its normal UI are initialized.
+export component StartupErrorWindow inherits Window {
+    title: "Chatter can't start";
+    min-width: 320px;
+    min-height: 240px;
+    preferred-width: 560px;
+    preferred-height: 360px;
+    default-font-family: Typography.font-family;
+    in property <string> error-message;
+    background: Colors.background;
+
+    VerticalLayout {
+        padding-left: 24px;
+        padding-right: 24px;
+        padding-top: root.safe-area-insets.top + 24px;
+        padding-bottom: root.safe-area-insets.bottom + 24px;
+        spacing: 20px;
+        alignment: center;
+
+        Text {
+            text: "Chatter can't start";
+            color: Colors.text-primary;
+            font-size: Typography.xl;
+            font-weight: 700;
+            wrap: word-wrap;
+            horizontal-alignment: center;
+        }
+        Text {
+            text: root.error-message;
+            color: Colors.text-secondary;
+            font-size: Typography.sm;
+            wrap: word-wrap;
+            horizontal-alignment: center;
+        }
+    }
+}
