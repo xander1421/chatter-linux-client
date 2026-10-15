@@ -421,7 +421,7 @@ impl PushListener {
         if !response.status().is_success() {
             return Err(PushError::Status(response.status().as_u16()).into());
         }
-        tracing::debug!("Connected to ntfy SSE stream");
+        tracing::info!("Connected to ntfy SSE stream");
         use futures::StreamExt;
         let stream = response.bytes_stream().map(|r| {
             r.map_err(|_| Box::new(PushError::Stream) as Box<dyn std::error::Error + Send + Sync>)
@@ -560,7 +560,7 @@ impl PushListener {
         if !response.status().is_success() {
             return Err(PushError::Status(response.status().as_u16()).into());
         }
-        tracing::debug!(phase = "sse_stream", "anonymous ntfy wake connected");
+        tracing::info!(phase = "sse_stream", "anonymous ntfy wake connected");
         // Hyper has no redirect-following machinery here: a 3xx is an error.
         let stream = response.into_body().into_data_stream().map(|r| {
             r.map_err(|_| Box::new(PushError::Stream) as Box<dyn std::error::Error + Send + Sync>)
@@ -609,7 +609,7 @@ impl PushListener {
                 }
 
                 if let Some(event) = self.parse_sse_event(&event_text) {
-                    tracing::debug!("Push wake event received");
+                    tracing::info!("Push wake event received");
 
                     // Broadcast to wake up stream manager / show notification
                     let _ = self.wake_tx.send(event);

@@ -13,7 +13,9 @@ import android.os.Build
 import android.os.Bundle
 import android.os.Handler
 import android.os.Looper
+import android.os.PowerManager
 import android.provider.OpenableColumns
+import android.provider.Settings
 import android.text.Selection
 import android.util.Log
 import android.view.ActionMode
@@ -228,6 +230,28 @@ class MainActivity : GameActivity() {
         else window.clearFlags(WindowManager.LayoutParams.FLAG_SECURE)
         if (wasSecure != secureScreenRequested) {
             android.util.Log.d("ChatterScreen", "FLAG_SECURE ${if (secureScreenRequested) "set" else "cleared"}")
+        }
+    }
+
+    /** Ask Android to keep Shield's Tor network access available during Doze.
+     * The user controls this exemption; a denial leaves Tor fail-closed.
+     */
+    @Suppress("unused")
+    fun requestShieldBackgroundNetwork() {
+        runOnUiThread {
+            val power = getSystemService(PowerManager::class.java)
+            if (power?.isIgnoringBatteryOptimizations(packageName) == true) {
+                Log.i("ChatterShield", "Background network exemption active")
+                return@runOnUiThread
+            }
+            try {
+                Log.i("ChatterShield", "Requesting background network exemption")
+                startActivity(Intent(Settings.ACTION_REQUEST_IGNORE_BATTERY_OPTIMIZATIONS).apply {
+                    data = Uri.parse("package:$packageName")
+                })
+            } catch (_: Exception) {
+                Log.w("ChatterShield", "Background network exemption request unavailable")
+            }
         }
     }
 

@@ -93,6 +93,8 @@ fn wire_submit_pin(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     if result == chatter_core::services::link_device_service::PinVerification::Match
                     {
                         ui_ctx.set_anon_mode_enabled(true);
+                        #[cfg(target_os = "android")]
+                        crate::platform::android::activity::request_shield_background_network();
                         w.invoke_refresh_screen_protection();
                         w.global::<AnonMode>().set_enabled(true);
                         w.set_composer_gifs_available(ui_ctx.gif_picker_available());

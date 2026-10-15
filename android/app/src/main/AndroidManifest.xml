@@ -11,6 +11,9 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <!-- Shield's Tor directory and hidden-service sockets need network access
+         while locked; a CPU wake lock alone does not bypass Doze. -->
+    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
     <!-- Full-screen incoming-call notification (ring UI when locked). -->
     <uses-permission android:name="android.permission.USE_FULL_SCREEN_INTENT" />
