@@ -2,6 +2,7 @@ import { Materials } from "../theme/materials.slint";
 // Register page component with multi-step onboarding flow
 
 import { Colors } from "../theme/colors.slint";
+import { Icons } from "../theme/icons.slint";
 import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Button } from "../components/button.slint";
@@ -212,47 +213,49 @@ export component RegisterPage inherits Rectangle {
                                 alignment: center;
                                 spacing: Spacing.sm;
 
-                                Rectangle {
-                                    accessible-role: button;
-                                    accessible-label: "Edit profile photo";
-                                    width: 96px;
-                                    height: 96px;
-                                    background: transparent;
-                                    transform-scale-x: avatar-touch.pressed ? 94% : 100%;
-                                    transform-scale-y: avatar-touch.pressed ? 94% : 100%;
-                                    animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
-                                    animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
-
-                                    Avatar {
-                                        size: 96px;
-                                        source: root.avatar-source;
-                                        name: root.display-name;
-                                        fallback-text: "?";
-                                        fallback-bg: root.avatar-color;
-                                        fallback-fg: Colors.on-action;
-                                    }
-
+                                HorizontalLayout {
+                                    alignment: center;
                                     Rectangle {
-                                        x: parent.width - self.width;
-                                        y: parent.height - self.height;
-                                        width: 30px;
-                                        height: 30px;
-                                        border-radius: 15px;
-                                        background: Colors.action-fill;
-                                        border-width: Spacing.stroke;
-                                        border-color: Colors.surface;
-                                        Text {
-                                            text: "✎";
-                                            color: Colors.on-action;
-                                            font-size: Typography.sm;
-                                            horizontal-alignment: center;
-                                            vertical-alignment: center;
-                                        }
-                                    }
+                                        accessible-role: button;
+                                        accessible-label: "Edit profile photo";
+                                        width: 96px;
+                                        height: 96px;
+                                        background: transparent;
+                                        transform-scale-x: avatar-touch.pressed ? 94% : 100%;
+                                        transform-scale-y: avatar-touch.pressed ? 94% : 100%;
+                                        animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
+                                        animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
 
-                                    avatar-touch := TouchArea {
-                                        enabled: !root.loading;
-                                        clicked => { root.avatar-menu-open = !root.avatar-menu-open; }
+                                        Avatar {
+                                            size: 96px;
+                                            source: root.avatar-source;
+                                            name: root.display-name;
+                                            fallback-text: "?";
+                                            fallback-bg: root.avatar-color;
+                                            fallback-fg: Colors.on-action;
+                                        }
+
+                                        Rectangle {
+                                            x: parent.width - self.width;
+                                            y: parent.height - self.height;
+                                            width: 30px;
+                                            height: 30px;
+                                            border-radius: 15px;
+                                            background: Colors.action-fill;
+                                            border-width: Spacing.stroke;
+                                            border-color: Colors.surface;
+                                            Image {
+                                                source: Icons.edit;
+                                                width: 16px;
+                                                height: 16px;
+                                                colorize: Colors.on-action;
+                                            }
+                                        }
+
+                                        avatar-touch := TouchArea {
+                                            enabled: !root.loading;
+                                            clicked => { root.avatar-menu-open = !root.avatar-menu-open; }
+                                        }
                                     }
                                 }
 
