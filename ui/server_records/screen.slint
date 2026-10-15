@@ -74,7 +74,7 @@ export component ServerRecordsScreen inherits Rectangle {
                         width: inbox.visible-width;
                         height: 78px;
                         background: row.read ? Colors.surface : Colors.surface-section;
-                        TouchArea { clicked => { root.open-notification(row.id, row.kind, (row.kind == "message" || row.kind == "mention" || row.kind == "reply" || row.kind == "reaction") ? row.channel-id : row.actor-id, row.status); } }
+                        TouchArea { clicked => { root.open-notification(row.id, row.kind, (row.kind == "message" || row.kind == "mention" || row.kind == "reply" || row.kind == "reaction" || row.kind == "channel-invite") ? row.channel-id : row.actor-id, row.status); } }
                         HorizontalLayout {
                             padding: Spacing.sm;
                             spacing: Spacing.sm;

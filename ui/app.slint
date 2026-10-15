@@ -2941,6 +2941,11 @@ export component MainWindow inherits Window {
                     root.active-tab = "contacts";
                     root.friends-modal-tab = "requests";
                     root.friends-requests-sub-tab = "received";
+                } else if kind == "channel-invite" && status == "Joined" && target != "" {
+                    root.nav-pop();
+                    root.active-tab = "chats";
+                    root.mobile-show-chat = true;
+                    root.channel-selected(target);
                 } else if kind == "channel-invite" {
                     root.nav-pop();
                     root.active-tab = "contacts";
