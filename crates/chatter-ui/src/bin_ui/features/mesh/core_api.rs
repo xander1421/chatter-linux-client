@@ -195,7 +195,14 @@ pub fn rows(ui_ctx: &Arc<ChatterClient>) -> Vec<MeshRow> {
                 kind: kind_of(&scope),
                 binding_label,
                 scope: scope_of(&scope),
-                title: conversation.name,
+                // The mesh row already draws a lock glyph. Keep the stored
+                // label untouched for other surfaces, but avoid a second lock
+                // emoji in this row's title.
+                title: if matches!(&scope, MeshConversation::PrivateChannel(_)) {
+                    conversation.name.trim_start_matches("🔒 ").to_string()
+                } else {
+                    conversation.name
+                },
                 timestamp: conversation
                     .last_message_at
                     .map(chatter_core::ui::format_timestamp)
