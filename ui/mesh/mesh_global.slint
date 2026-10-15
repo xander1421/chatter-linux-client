@@ -43,6 +43,11 @@ export struct MeshPeerData {
     binding-label: string,
 }
 
+export struct PrivateChannelMemberData {
+    peer-id: string,
+    display-name: string,
+}
+
 export global MeshGlobal {
     // The `mesh` Cargo feature is built in. Everything mesh hangs off this.
     in-out property <bool> enabled: false;
@@ -83,7 +88,7 @@ export global MeshGlobal {
     callback remove-private-member(string, string);
     in-out property <image> private-invite-image;
     in-out property <bool> private-invite-visible: false;
-    in-out property <[string]> private-removable-members: [];
+    in-out property <[PrivateChannelMemberData]> private-removable-members: [];
     in-out property <string> private-remove-pending: "";
     in-out property <bool> private-can-manage: false;
 

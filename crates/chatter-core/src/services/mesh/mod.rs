@@ -111,6 +111,12 @@ use transport::{BleCommand, NostrCommand};
 /// rendering should not lose messages because of it.
 const EVENT_CAPACITY: usize = 512;
 
+/// A member the channel creator can remove, with the name shown in the roster.
+pub struct PrivateChannelMember {
+    pub peer_id: String,
+    pub display_name: String,
+}
+
 /// Everything [`MeshService`] needs from the rest of the client.
 pub struct MeshDeps {
     /// Account key access is used only after a user selects a peer to share with.
@@ -1156,7 +1162,10 @@ impl MeshService {
         Ok(())
     }
 
-    pub fn private_channel_removable_members(&self, id: &str) -> Result<Vec<String>, MeshError> {
+    pub fn private_channel_removable_members(
+        &self,
+        id: &str,
+    ) -> Result<Vec<PrivateChannelMember>, MeshError> {
         let state = self
             .private_channels
             .load(id)?
@@ -1168,7 +1177,22 @@ impl MeshService {
             .members
             .iter()
             .filter(|member| member.peer != state.creator)
-            .map(|member| member.peer.clone())
+            .map(|member| {
+                let peer = PeerId::from_str(&member.peer);
+                let known_name = self.nickname_for(&peer);
+                let display_name = if known_name != member.peer && !known_name.trim().is_empty() {
+                    known_name
+                } else {
+                    self.timeline
+                        .remembered_sender_name(&mapping::peer_user_id(&peer))
+                        .filter(|name| !name.trim().is_empty())
+                        .unwrap_or_else(|| member.peer.chars().take(16).collect())
+                };
+                PrivateChannelMember {
+                    peer_id: member.peer.clone(),
+                    display_name,
+                }
+            })
             .collect())
     }
 

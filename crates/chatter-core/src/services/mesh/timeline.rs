@@ -251,7 +251,8 @@ impl MeshTimeline {
 
         // A message proves the conversation exists. Only a message we received
         // carries a nickname worth labelling a DM with.
-        let nickname = (!event.is_local).then(|| event.nickname.as_str());
+        let nickname = (!event.is_local && matches!(&event.conversation, MeshConversation::Dm(_)))
+            .then(|| event.nickname.as_str());
         self.register(&event.conversation, nickname);
 
         // And names its sender for as long as the row exists, not just while

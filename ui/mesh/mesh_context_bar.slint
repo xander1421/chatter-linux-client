@@ -128,14 +128,14 @@ export component MeshContextBar inherits Rectangle {
                     color: Colors.text-muted; font-size: Typography.xs; }
                 for member in MeshGlobal.private-removable-members: Rectangle {
                     height: Spacing.button-height;
-                    Text { text: MeshGlobal.private-remove-pending == member ? "Tap again to remove " + member : member;
+                    Text { text: MeshGlobal.private-remove-pending == member.peer-id ? "Tap again to remove " + member.display-name : member.display-name;
                         color: Colors.text-secondary; font-size: Typography.xs;
                         vertical-alignment: center; overflow: elide; }
                     TouchArea { clicked => {
-                        if MeshGlobal.private-remove-pending == member {
+                        if MeshGlobal.private-remove-pending == member.peer-id {
                             MeshGlobal.private-remove-pending = "";
-                            MeshGlobal.remove-private-member(MeshGlobal.active-scope, member);
-                        } else { MeshGlobal.private-remove-pending = member; }
+                            MeshGlobal.remove-private-member(MeshGlobal.active-scope, member.peer-id);
+                        } else { MeshGlobal.private-remove-pending = member.peer-id; }
                     } }
                 }
             }

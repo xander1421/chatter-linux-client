@@ -874,7 +874,7 @@ impl ChatterClient {
     pub fn mesh_private_channel_removable_members(
         &self,
         id: &str,
-    ) -> Result<Vec<String>, crate::services::mesh::MeshError> {
+    ) -> Result<Vec<crate::services::mesh::PrivateChannelMember>, crate::services::mesh::MeshError> {
         self.mesh().private_channel_removable_members(id)
     }
 
