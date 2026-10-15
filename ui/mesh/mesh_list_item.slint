@@ -21,6 +21,7 @@ export component MeshListItem inherits Rectangle {
     in property <int> unread-count: 0;
     in property <bool> reachable: false;
     in property <bool> verified: false;
+    in property <string> binding-label: "";
     in property <bool> selected: false;
     in property <bool> collapsed: false;
     in property <bool> touch: false;
@@ -33,7 +34,8 @@ export component MeshListItem inherits Rectangle {
     property <string> secondary:
         root.kind == "geohash" ? "public · " + root.scope
       : root.kind == "room" ? "everyone in radio range"
-      : root.reachable ? "encrypted, one to one"
+      : root.binding-label == "Verified Chatter contact" ? "Verified Chatter contact"
+      : root.reachable ? "encrypted · self-asserted name"
       : "no route now — sends wait for a carrier";
 
     property <image> glyph: root.kind == "geohash" ? Icons.hash
@@ -62,8 +64,8 @@ export component MeshListItem inherits Rectangle {
         : root.kind == "room"
         ? root.title + ", public mesh room, everyone in radio range"
         : root.reachable
-        ? root.title + ", mesh direct message"
-        : root.title + ", mesh direct message, no route right now";
+        ? root.title + ", mesh direct message, " + root.binding-label
+        : root.title + ", mesh direct message, no route right now, " + root.binding-label;
 
     if !root.collapsed: HorizontalLayout {
         padding-left: Spacing.sm;
@@ -102,10 +104,9 @@ export component MeshListItem inherits Rectangle {
                     overflow: elide;
                     horizontal-stretch: 1;
                 }
-                // The peer's announce signature verified against the key it
-                // advertises. Absent is the ordinary case, not a warning: a
-                // nickname alone is simply not an identity out here.
-                if root.kind == "dm" && root.verified: VerticalLayout {
+                // Account verification requires a pinned Signal key or a
+                // live, in-person QR check; an announce signature is weaker.
+                if root.kind == "dm" && root.binding-label == "Verified Chatter contact": VerticalLayout {
                     alignment: center;
                     horizontal-stretch: 0;
                     Image {

@@ -613,6 +613,81 @@ impl ChatterClient {
         crate::services::mesh::mapping::peer_user_id(&self.mesh().local_peer())
     }
 
+    #[cfg(feature = "mesh")]
+    pub fn mesh_share_identity(&self, peer: &str) -> Result<(), crate::services::mesh::MeshError> {
+        let owner = self.session_current_user_id().ok_or_else(|| {
+            crate::services::mesh::MeshError::Binding("sign in before sharing your identity".into())
+        })?;
+        let device = self.sessions().current_device_id().ok_or_else(|| {
+            crate::services::mesh::MeshError::Binding("no account device is active".into())
+        })?;
+        self.mesh()
+            .share_identity(&chatter_mesh::ids::PeerId::from_str(peer), owner, device)
+    }
+
+    #[cfg(feature = "mesh")]
+    pub fn mesh_identity_qr(&self, peer: &str) -> Result<String, crate::services::mesh::MeshError> {
+        let owner = self.session_current_user_id().ok_or_else(|| {
+            crate::services::mesh::MeshError::Binding("sign in before sharing your identity".into())
+        })?;
+        let device = self.sessions().current_device_id().ok_or_else(|| {
+            crate::services::mesh::MeshError::Binding("no account device is active".into())
+        })?;
+        self.mesh()
+            .identity_qr(&chatter_mesh::ids::PeerId::from_str(peer), owner, device)
+    }
+
+    #[cfg(feature = "mesh")]
+    pub fn mesh_identity_qr_png(
+        &self,
+        peer: &str,
+    ) -> Result<Vec<u8>, crate::services::mesh::MeshError> {
+        let owner = self.session_current_user_id().ok_or_else(|| {
+            crate::services::mesh::MeshError::Binding("sign in before sharing your identity".into())
+        })?;
+        let device = self.sessions().current_device_id().ok_or_else(|| {
+            crate::services::mesh::MeshError::Binding("no account device is active".into())
+        })?;
+        self.mesh()
+            .identity_qr_png(&chatter_mesh::ids::PeerId::from_str(peer), owner, device)
+    }
+
+    #[cfg(feature = "mesh")]
+    pub fn mesh_verify_binding(
+        &self,
+        peer: &str,
+        scanned_qr: Option<&str>,
+    ) -> Result<crate::storage::mesh_binding_store::PeerBinding, crate::services::mesh::MeshError>
+    {
+        let owner = self.session_current_user_id().ok_or_else(|| {
+            crate::services::mesh::MeshError::Binding("sign in before verifying a contact".into())
+        })?;
+        self.mesh().verify_binding(
+            owner,
+            &chatter_mesh::ids::PeerId::from_str(peer),
+            scanned_qr,
+        )
+    }
+
+    #[cfg(feature = "mesh")]
+    pub fn mesh_binding_state(
+        &self,
+        peer: &str,
+    ) -> Result<crate::storage::mesh_binding_store::PeerBinding, crate::services::mesh::MeshError>
+    {
+        let owner = self.session_current_user_id().ok_or_else(|| {
+            crate::services::mesh::MeshError::Binding("sign in to view account bindings".into())
+        })?;
+        self.mesh()
+            .binding_state(owner, &chatter_mesh::ids::PeerId::from_str(peer))
+    }
+
+    #[cfg(feature = "mesh")]
+    pub fn mesh_comparison_code(&self, peer: &str) -> Option<String> {
+        self.mesh()
+            .comparison_code(&chatter_mesh::ids::PeerId::from_str(peer))
+    }
+
     /// The nickname behind a mesh sender id, or `None` if no known peer matches.
     ///
     /// Only meaningful for messages that came off the mesh. The ordinary
@@ -2053,7 +2128,8 @@ impl ChatterClient {
         recovery_codes_visible
             || self.anon_mode_enabled()
             || (chat_visible
-                && self.active_conversation_type()
+                && self
+                    .active_conversation_type()
                     .or(exiting_conversation_kind)
                     .is_some_and(|kind| kind.is_secret_chat()))
     }
@@ -3814,13 +3890,17 @@ impl ChatterClient {
         if !self.is_logged_in() {
             return None;
         }
-        self.services.notification_service.resolve_key(key, self.sidebar_row_keys())
+        self.services
+            .notification_service
+            .resolve_key(key, self.sidebar_row_keys())
     }
 
     /// `Some(false)` means an opaque tap belongs to a different account and
     /// must not be retained for a later sidebar refresh.
     pub fn notification_tap_belongs_to_current_account(&self, key: &str) -> Option<bool> {
-        self.services.notification_service.tap_belongs_to_current_account(key)
+        self.services
+            .notification_service
+            .tap_belongs_to_current_account(key)
     }
 
     /// A pending secret request opens Requests, not its chat row. Resolve the
@@ -4254,6 +4334,8 @@ impl ChatterClient {
         &self,
         password: &str,
     ) -> Result<(), crate::services::account_service::AccountError> {
+        #[cfg(feature = "mesh")]
+        let former_owner = self.session_current_user_id();
         let auth = self.auth();
         let account = crate::services::account_service::AccountService::new(
             self.services.grpc_pool.clone(),
@@ -4261,6 +4343,12 @@ impl ChatterClient {
             auth.auth_interceptor.clone(),
         );
         account.delete_acct(password).await?;
+        #[cfg(feature = "mesh")]
+        if let Some(owner) = former_owner {
+            self.mesh()
+                .remove_account_bindings(owner)
+                .map_err(crate::services::account_service::AccountError::Storage)?;
+        }
         self.clear_composer_session();
         Ok(())
     }

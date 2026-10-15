@@ -32,6 +32,8 @@ export struct MeshConversationData {
     // DM rows only: the peer's announce signature verified. Nicknames on
     // public traffic are unauthenticated and never set this.
     verified: bool,
+    // Account verification is separate from a signed mesh nickname.
+    binding-label: string,
     is-selected: bool,
 }
 
@@ -63,6 +65,8 @@ export global MeshGlobal {
     // needs no standing caveat: the header already says how many are there.
     out property <bool> context-strip-needed:
         MeshGlobal.notice != ""
+        || MeshGlobal.binding-qr-visible
+        || MeshGlobal.active-kind == "dm"
         || !MeshGlobal.mesh-on
         || !MeshGlobal.radio-running
         || (MeshGlobal.active-kind == "dm" && !MeshGlobal.active-reachable)
@@ -104,6 +108,16 @@ export global MeshGlobal {
     in-out property <string> active-kind: "";
     in-out property <string> active-title: "";
     in-out property <string> active-scope: "";
+    in-out property <string> active-binding-label: "Mesh peer · self-asserted name";
+    in-out property <string> active-comparison-code: "";
+    in-out property <image> binding-qr-image;
+    in-out property <bool> binding-qr-visible: false;
+    in-out property <bool> binding-scan-visible: false;
+    callback share-identity(string);
+    callback show-binding-qr(string);
+    callback scan-binding-qr(string, string);
+    callback verify-known-contact(string);
+    callback open-binding-scanner(string);
     in-out property <bool> active-reachable: false;
     in-out property <bool> active-verified: false;
 

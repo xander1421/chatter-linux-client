@@ -53,6 +53,7 @@ pub struct HandshakeStep {
 pub struct SessionManager {
     handshakes: BTreeMap<PeerId, (NoiseHandshake, HandshakeRole)>,
     sessions: BTreeMap<PeerId, NoiseSession>,
+    handshake_hashes: BTreeMap<PeerId, [u8; 32]>,
     /// Per session: when it last carried a message, and whether a use found
     /// it idle past [`IDLE_REKEY_AFTER`] (a rekey is then due).
     activity: BTreeMap<PeerId, (Instant, bool)>,
@@ -80,6 +81,10 @@ impl SessionManager {
     #[must_use]
     pub fn remote_static(&self, peer: &PeerId) -> Option<[u8; 32]> {
         self.sessions.get(peer).map(NoiseSession::remote_static)
+    }
+
+    pub fn handshake_hash(&self, peer: &PeerId) -> Option<[u8; 32]> {
+        self.handshake_hashes.get(peer).copied()
     }
 
     /// The peer's fingerprint, once a session exists.
@@ -215,6 +220,9 @@ impl SessionManager {
         peer: &PeerId,
         handshake: NoiseHandshake,
     ) -> Result<[u8; 32], NoiseError> {
+        let hash = handshake
+            .handshake_hash()
+            .ok_or(NoiseError::WrongState("missing final handshake hash"))?;
         let session = handshake.into_session()?;
         let remote = session.remote_static();
         if PeerId::from_noise_key(&remote) != *peer {
@@ -227,6 +235,7 @@ impl SessionManager {
             ));
         }
         self.sessions.insert(peer.clone(), session);
+        self.handshake_hashes.insert(peer.clone(), hash);
         self.activity.insert(peer.clone(), (Instant::now(), false));
         Ok(remote)
     }
@@ -302,6 +311,7 @@ impl SessionManager {
     pub fn forget(&mut self, peer: &PeerId) {
         self.handshakes.remove(peer);
         self.sessions.remove(peer);
+        self.handshake_hashes.remove(peer);
         self.activity.remove(peer);
     }
 
@@ -309,6 +319,7 @@ impl SessionManager {
     pub fn clear(&mut self) {
         self.handshakes.clear();
         self.sessions.clear();
+        self.handshake_hashes.clear();
         self.activity.clear();
     }
 }

@@ -330,6 +330,10 @@ impl ServiceContainer {
             let (mesh_storage, mesh_sealer) =
                 crate::storage::mesh_store::sealed_store(infra.database.clone(), &db_path);
             let deps = MeshDeps {
+                key_store: infra.key_store.clone(),
+                binding_store: Arc::new(crate::storage::mesh_binding_store::MeshBindingStore::new(
+                    infra.database.clone(),
+                )),
                 identity_store: Arc::new(crate::storage::MeshIdentityStore::new(
                     infra.database.clone(),
                 )),

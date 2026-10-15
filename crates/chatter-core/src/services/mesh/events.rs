@@ -98,6 +98,8 @@ impl MeshDelivery {
 /// One peer as the mesh currently sees it.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct MeshPeer {
+    /// Valid versioned Hello received inside this peer's current Noise session.
+    pub chatter_capable: bool,
     pub peer: PeerId,
     pub nickname: String,
     /// A live link binding exists right now.

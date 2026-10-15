@@ -7,6 +7,8 @@ pub mod cache;
 pub mod database;
 pub mod key_store;
 #[cfg(feature = "mesh")]
+pub mod mesh_binding_store;
+#[cfg(feature = "mesh")]
 pub mod mesh_identity_store;
 #[cfg(feature = "mesh")]
 pub mod mesh_store;

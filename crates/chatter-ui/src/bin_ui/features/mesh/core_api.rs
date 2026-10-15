@@ -77,6 +77,7 @@ pub struct MeshRow {
     /// DM rows only: the peer's announce signature verified. Nicknames on
     /// public traffic are unauthenticated and never set this.
     pub verified: bool,
+    pub binding_label: &'static str,
 }
 
 /// Which glyph and which wording a scope gets. Pure presentation over a core
@@ -173,9 +174,17 @@ pub fn rows(ui_ctx: &Arc<ChatterClient>) -> Vec<MeshRow> {
                     .unwrap_or((false, false)),
                 _ => (false, false),
             };
+            let binding_label = match &scope {
+                MeshConversation::Dm(peer) => ui_ctx
+                    .mesh_binding_state(peer.as_str())
+                    .map(|state| state.label())
+                    .unwrap_or("Mesh peer · self-asserted name"),
+                _ => "",
+            };
             Some(MeshRow {
                 id: conversation.id,
                 kind: kind_of(&scope),
+                binding_label,
                 scope: scope_of(&scope),
                 title: conversation.name,
                 timestamp: conversation
@@ -189,6 +198,33 @@ pub fn rows(ui_ctx: &Arc<ChatterClient>) -> Vec<MeshRow> {
             })
         })
         .collect()
+}
+
+pub fn share_identity(ui_ctx: &Arc<ChatterClient>, peer: &str) -> Result<(), MeshError> {
+    ui_ctx.mesh_share_identity(peer)
+}
+
+pub fn identity_qr_png(ui_ctx: &Arc<ChatterClient>, peer: &str) -> Result<Vec<u8>, MeshError> {
+    ui_ctx.mesh_identity_qr_png(peer)
+}
+
+pub fn verify_binding(
+    ui_ctx: &Arc<ChatterClient>,
+    peer: &str,
+    qr: &str,
+) -> Result<chatter_core::storage::mesh_binding_store::PeerBinding, MeshError> {
+    ui_ctx.mesh_verify_binding(peer, Some(qr))
+}
+
+pub fn verify_known_contact(
+    ui_ctx: &Arc<ChatterClient>,
+    peer: &str,
+) -> Result<chatter_core::storage::mesh_binding_store::PeerBinding, MeshError> {
+    ui_ctx.mesh_verify_binding(peer, None)
+}
+
+pub fn comparison_code(ui_ctx: &Arc<ChatterClient>, peer: &str) -> Option<String> {
+    ui_ctx.mesh_comparison_code(peer)
 }
 
 /// History for one mesh conversation, oldest first.
