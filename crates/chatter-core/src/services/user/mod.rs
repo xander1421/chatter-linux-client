@@ -1798,16 +1798,13 @@ impl UserService {
             ));
         }
 
-        // Check if already a friend
+        // Check if already a friend. A local Pending is not checked: a
+        // recipient's decline is never sent back, so it can be stale, and the
+        // server rejects a request that really is still pending.
         if let Ok(Some(existing)) = self.user_repo.get_friendship(&current_user, &friend_id) {
             if existing.status == FriendshipStatus::Accepted {
                 return Err(UserError::InvalidInput(
                     "Already friends with this user".to_string(),
-                ));
-            }
-            if existing.status == FriendshipStatus::Pending {
-                return Err(UserError::InvalidInput(
-                    "Friend request already pending".to_string(),
                 ));
             }
         }
