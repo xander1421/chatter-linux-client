@@ -54,6 +54,11 @@ pub fn now_secs() -> u64 {
 
 /// The mutable half, behind the lock.
 pub struct LinkStateInner {
+    /// Chatter capability learned from encrypted, post-handshake hello frames.
+    pub chatter_hello: super::chatter_hello::HelloPeers,
+    /// Live transcript-bound proofs await an explicit trust decision in core.
+    pub pending_bindings: BTreeMap<PeerId, super::account_binding::BindingV1>,
+    pub binding_offers: BTreeSet<PeerId>,
     pub links: LinkStateStore,
     pub peers: PeerRegistry,
     pub ingress: IngressRegistry,
@@ -116,6 +121,9 @@ impl Default for LinkStateInner {
             self_broadcasts: SelfBroadcastTracker::new(),
             spool: DirectedRelaySpool::new(),
             sessions: SessionManager::new(),
+            chatter_hello: super::chatter_hello::HelloPeers::default(),
+            pending_bindings: BTreeMap::new(),
+            binding_offers: BTreeSet::new(),
             prekeys: super::prekeys::PrekeyState::default(),
             max_write: BTreeMap::new(),
             address_of: BTreeMap::new(),
@@ -240,6 +248,7 @@ impl MeshState {
             let mut peers: Vec<MeshPeer> = records
                 .into_iter()
                 .map(|record| MeshPeer {
+                    chatter_capable: state.chatter_hello.get(&record.peer).is_some(),
                     connected: !state.links.links_to(&record.peer).is_empty(),
                     reachable: state.peers.is_reachable(&record.peer, now),
                     verified: record.verified_nickname,

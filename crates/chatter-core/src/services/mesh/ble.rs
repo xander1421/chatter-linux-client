@@ -64,6 +64,8 @@ use chatter_mesh_store::storage::{Storage, StorageKey};
 use chatter_mesh_store::sync::{GossipSyncManager, SyncConfig};
 use tokio::sync::mpsc::UnboundedReceiver;
 
+use super::account_binding::BindingV1;
+use super::chatter_hello::ChatterHello;
 use super::config::MeshConfig;
 use super::events::{MeshEvent, MeshMessage};
 use super::file_stream::{
@@ -77,6 +79,7 @@ use super::state::{
 };
 use super::timeline::MeshEvents;
 use super::transport::BleCommand;
+use crate::storage::mesh_binding_store::MeshBindingStore;
 
 /// How often the loop wakes to run the parts that nothing else can schedule.
 const TICK: Duration = Duration::from_millis(500);
@@ -141,6 +144,7 @@ const CHANNEL_INGRESS_PER_MINUTE: u32 = 60;
 
 /// The radio loop.
 pub struct BleRuntime {
+    binding_store: Arc<MeshBindingStore>,
     storage: Arc<dyn Storage>,
     sealer: Arc<dyn Sealer>,
     radio: Arc<dyn MeshLink>,
@@ -190,6 +194,7 @@ impl BleRuntime {
         router: Arc<RouterHandle>,
         storage: Arc<dyn Storage>,
         sealer: Arc<dyn Sealer>,
+        binding_store: Arc<MeshBindingStore>,
     ) -> Self {
         let now = now_secs();
         let archive = GossipMessageArchive::new(Arc::new(storage.clone()));
@@ -201,6 +206,7 @@ impl BleRuntime {
         );
         let couriers = CourierStore::new(storage.clone());
         Self {
+            binding_store,
             storage,
             sealer,
             radio,
@@ -424,6 +430,8 @@ impl BleRuntime {
         self.state.with(|state| {
             state.radio_running = false;
             state.sessions.clear();
+            state.chatter_hello.clear_live();
+            state.pending_bindings.clear();
         });
         self.emit_status();
     }
@@ -2098,11 +2106,18 @@ impl BleRuntime {
         }
 
         if step.established.is_some() {
+            self.state.with(|state| {
+                state.chatter_hello.forget_live(claimed);
+                state.pending_bindings.remove(claimed);
+            });
             // The handshake authenticated `claimed`'s static key (the session
             // manager refuses one that does not derive the ID), and it finished
             // on this link: that is the per-link proof courier handover needs.
             self.state
                 .with(|state| state.links.mark_noise_authenticated(link, claimed));
+            // The mesh runtime exists only after the user enabled discovery.
+            // Keep capability negotiation inside this authenticated Noise link.
+            self.send_chatter_hello(claimed).await;
             // A session is the only signal strong enough for the router to send
             // without retaining, so this is the moment retained mail can go.
             let _ = self.router.send(RouterCommand::PeerAvailable {
@@ -2145,6 +2160,50 @@ impl BleRuntime {
         // The link carried traffic only this peer's session key could produce.
         self.state
             .with(|state| state.links.mark_noise_authenticated(link, claimed));
+
+        if let Some(hello) = ChatterHello::decode(&plaintext) {
+            match self
+                .binding_store
+                .note_hello(claimed, &hello.nonce, now_secs())
+            {
+                Ok(true) => {}
+                Ok(false) => return,
+                Err(error) => {
+                    tracing::warn!(target: "mesh::ble", peer = %claimed, %error,
+                        "cannot persist Chatter Hello nonce");
+                    return;
+                }
+            }
+            self.state.with(|state| {
+                state.chatter_hello.accept(claimed, hello);
+            });
+            self.emit_peers();
+            return;
+        }
+        if let Some(proof) = BindingV1::decode(&plaintext) {
+            let valid = self.state.with(|state| {
+                let Some(static_key) = state.sessions.remote_static(claimed) else {
+                    return false;
+                };
+                let Some(transcript) = state.sessions.handshake_hash(claimed) else {
+                    return false;
+                };
+                let Some(local) = state.chatter_hello.local_nonce(claimed) else {
+                    return false;
+                };
+                let Some(remote) = state.chatter_hello.get(claimed).map(|h| h.nonce) else {
+                    return false;
+                };
+                proof.verify_live(&static_key, &transcript, &local, &remote, now_secs())
+            });
+            if valid {
+                self.state.with(|state| {
+                    state.pending_bindings.insert(claimed.clone(), proof);
+                });
+                self.emit_peers();
+            }
+            return;
+        }
 
         let Some((payload_type, body)) = decode_noise_payload(&plaintext) else {
             return;
@@ -2283,6 +2342,20 @@ impl BleRuntime {
 
     async fn on_command(&mut self, command: BleCommand) {
         match command {
+            BleCommand::BindingProof { peer, bytes } => {
+                let sealed = self
+                    .state
+                    .with(|state| state.sessions.encrypt(&peer, &bytes));
+                if let Ok(ciphertext) = sealed {
+                    let packet = self.build_packet(
+                        MessageType::NoiseEncrypted,
+                        Some(&peer),
+                        ciphertext,
+                        chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+                    );
+                    self.transmit(&packet, Some(&peer), None).await;
+                }
+            }
             BleCommand::Stop => {}
             BleCommand::Announce => self.announce().await,
             BleCommand::Broadcast { packet, sign } => {
@@ -2432,6 +2505,31 @@ impl BleRuntime {
         );
         self.transmit(&packet, Some(peer), None).await;
         self.rekey_if_due(peer).await;
+    }
+
+    async fn send_chatter_hello(&mut self, peer: &PeerId) {
+        let mut nonce = [0u8; 16];
+        if getrandom::fill(&mut nonce).is_err() {
+            return;
+        }
+        self.state
+            .with(|state| state.chatter_hello.set_local_nonce(peer, nonce));
+        let Some(payload) = ChatterHello::new(nonce).encode() else {
+            return;
+        };
+        let sealed = self
+            .state
+            .with(|state| state.sessions.encrypt(peer, &payload));
+        let Ok(ciphertext) = sealed else {
+            return;
+        };
+        let packet = self.build_packet(
+            MessageType::NoiseEncrypted,
+            Some(peer),
+            ciphertext,
+            chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+        );
+        self.transmit(&packet, Some(peer), None).await;
     }
 
     /// Broadcast a public message into the mesh room.
@@ -3968,6 +4066,18 @@ mod tests {
             events: events.clone(),
             bridge_enabled: false,
         }));
+        let binding_dir = tempfile::tempdir().expect("binding store temp dir");
+        let binding_db = Arc::new(
+            crate::storage::Database::open(
+                &binding_dir.path().join("mesh_bindings.db"),
+                "testpass",
+            )
+            .expect("binding store database"),
+        );
+        binding_db
+            .run_migrations()
+            .expect("binding store migrations");
+        crate::test_tempdir::hold(binding_dir);
         let runtime = BleRuntime::new(
             Arc::clone(&radio) as Arc<dyn MeshLink>,
             Arc::clone(&state),
@@ -3978,6 +4088,7 @@ mod tests {
             router,
             storage,
             Arc::new(NoopSealer),
+            Arc::new(MeshBindingStore::new(binding_db)),
         );
         (runtime, radio, state, timeline)
     }

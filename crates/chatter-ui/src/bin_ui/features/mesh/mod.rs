@@ -92,6 +92,10 @@ pub fn clear_active(window: &MainWindow) {
     global.set_active_scope("".into());
     global.set_active_reachable(false);
     global.set_active_verified(false);
+    global.set_active_binding_label("Mesh peer · self-asserted name".into());
+    global.set_active_comparison_code("".into());
+    global.set_binding_qr_visible(false);
+    global.set_binding_scan_visible(false);
     // The mesh set its own placeholder; leaving it would label a DM "everyone
     // in radio range".
     window.set_composer_placeholder("Type a message...".into());
@@ -191,6 +195,106 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     .global::<MeshGlobal>()
                     .set_notice(format!("Could not set mesh name: {error}").into()),
             }
+        });
+    }
+
+    {
+        let weak = window.as_weak();
+        let ui_ctx = ui_ctx.clone();
+        global.on_share_identity(move |peer| {
+            let Some(w) = weak.upgrade() else { return };
+            match core_api::share_identity(&ui_ctx, peer.as_str()) {
+                Ok(()) => {
+                    w.global::<MeshGlobal>().set_notice("Account proof sent over this peer's encrypted Noise link. They still need to verify it.".into());
+                    refresh_rows(&w, &ui_ctx);
+                }
+                Err(error) => w.global::<MeshGlobal>().set_notice(error.to_string().into()),
+            }
+        });
+    }
+
+    {
+        let weak = window.as_weak();
+        let ui_ctx = ui_ctx.clone();
+        global.on_show_binding_qr(move |peer| {
+            let Some(w) = weak.upgrade() else { return };
+            match core_api::identity_qr_png(&ui_ctx, peer.as_str()) {
+                Ok(png) => match image::load_from_memory(&png) {
+                    Ok(decoded) => {
+                        let rgba = decoded.to_rgba8();
+                        let (width, height) = rgba.dimensions();
+                        let mut pixels =
+                            slint::SharedPixelBuffer::<slint::Rgba8Pixel>::new(width, height);
+                        pixels.make_mut_bytes().copy_from_slice(&rgba.into_raw());
+                        let global = w.global::<MeshGlobal>();
+                        global.set_binding_qr_image(slint::Image::from_rgba8(pixels));
+                        global.set_binding_qr_visible(true);
+                    }
+                    Err(error) => w
+                        .global::<MeshGlobal>()
+                        .set_notice(format!("Could not show QR: {error}").into()),
+                },
+                Err(error) => w
+                    .global::<MeshGlobal>()
+                    .set_notice(error.to_string().into()),
+            }
+        });
+    }
+
+    {
+        let weak = window.as_weak();
+        let ui_ctx = ui_ctx.clone();
+        global.on_scan_binding_qr(move |peer, qr| {
+            let Some(w) = weak.upgrade() else { return };
+            let status = match core_api::verify_binding(&ui_ctx, peer.as_str(), qr.as_str()) {
+                Ok(state) => state.label().to_string(),
+                Err(error) => error.to_string(),
+            };
+            w.global::<MeshGlobal>().set_notice(status.into());
+            refresh_rows(&w, &ui_ctx);
+        });
+    }
+
+    {
+        let weak = window.as_weak();
+        let ui_ctx = ui_ctx.clone();
+        global.on_verify_known_contact(move |peer| {
+            let Some(w) = weak.upgrade() else { return };
+            let status = match core_api::verify_known_contact(&ui_ctx, peer.as_str()) {
+                Ok(state) => state.label().to_string(),
+                Err(error) => error.to_string(),
+            };
+            w.global::<MeshGlobal>().set_notice(status.into());
+            refresh_rows(&w, &ui_ctx);
+        });
+    }
+
+    {
+        let weak = window.as_weak();
+        global.on_open_binding_scanner(move |peer| {
+            #[cfg(target_os = "android")]
+            {
+                let weak = weak.clone();
+                crate::rt_handle().spawn(async move {
+                    let result = crate::platform::android::qr_scanner::scan().await;
+                    let _ = slint::invoke_from_event_loop(move || {
+                        let Some(w) = weak.upgrade() else { return };
+                        match result {
+                            crate::platform::android::qr_scanner::ScanOutcome::Scanned(qr) => w
+                                .global::<MeshGlobal>()
+                                .invoke_scan_binding_qr(peer, qr.trim().into()),
+                            crate::platform::android::qr_scanner::ScanOutcome::CameraDenied => {
+                                w.global::<MeshGlobal>().set_notice(
+                                    "Camera access is required to scan this peer's QR.".into(),
+                                )
+                            }
+                            crate::platform::android::qr_scanner::ScanOutcome::Cancelled => {}
+                        }
+                    });
+                });
+            }
+            #[cfg(not(target_os = "android"))]
+            let _ = (&weak, peer); // The inline field accepts a pasted QR on desktop.
         });
     }
 
@@ -381,6 +485,12 @@ pub fn refresh_rows(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             global.set_active_title(row.title.clone().into());
             global.set_active_reachable(row.reachable);
             global.set_active_verified(row.verified);
+            global.set_active_binding_label(row.binding_label.into());
+            global.set_active_comparison_code(
+                core_api::comparison_code(ui_ctx, row.scope.as_str())
+                    .unwrap_or_default()
+                    .into(),
+            );
         }
     }
 
@@ -391,6 +501,7 @@ pub fn refresh_rows(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             MeshConversationData {
                 id: row.id.into(),
                 kind: row.kind.into(),
+                binding_label: row.binding_label.into(),
                 title: row.title.into(),
                 scope: row.scope.into(),
                 timestamp: row.timestamp.into(),

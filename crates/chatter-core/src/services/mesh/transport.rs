@@ -54,6 +54,8 @@ use super::state::{MeshState, NostrState, now_secs, recipient_pubkey};
 /// carry it", which is exactly what the trait says acceptance means.
 #[derive(Debug)]
 pub enum BleCommand {
+    /// An account proof prepared after explicit local consent.
+    BindingProof { peer: PeerId, bytes: Vec<u8> },
     /// Encrypt and send a private message, handshaking first if necessary.
     PrivateMessage {
         peer: PeerId,
