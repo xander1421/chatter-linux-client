@@ -3160,6 +3160,13 @@ impl ChatterClient {
             self.auth_state().get().current_user_id.is_some(),
         );
 
+        // A device named under an older build ("Android (0.1.0)") takes the
+        // current label once, so Active sessions tells phones apart.
+        {
+            let client = Arc::clone(self);
+            tokio::spawn(async move { client.refresh_device_name().await });
+        }
+
         // ── Infrastructure init ─────────────────────────────────────
         self.ctx.init_device_inbox_provider();
         self.ctx.init_group_fanout();

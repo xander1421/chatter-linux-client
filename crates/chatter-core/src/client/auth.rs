@@ -247,6 +247,23 @@ impl ChatterClient {
         }
     }
 
+    /// Send this device's current name once per label change (see
+    /// `LinkDeviceService::current_device_name`). Best-effort.
+    pub(crate) async fn refresh_device_name(&self) {
+        let name = crate::services::link_device_service::LinkDeviceService::current_device_name();
+        let settings = &self.auth().settings_repo;
+        if settings.get_string(keys::DEVICE_NAME_SENT).ok().flatten().as_deref() == Some(name.as_str()) {
+            return;
+        }
+        let Some(mut auth_client) = self.auth().try_auth_client() else { return };
+        match self.devices().name_this_device(&mut auth_client, &name).await {
+            Ok(()) => {
+                let _ = settings.set_string(keys::DEVICE_NAME_SENT, &name);
+            }
+            Err(e) => tracing::warn!(error = %e, "could not refresh this device's name"),
+        }
+    }
+
     /// Accept a NEW Signal identity key after key recovery has been ruled out.
     ///
     /// **Destructive and irreversible.** It abandons every existing session,

@@ -36,7 +36,8 @@ pub struct Session {
 /// Phone or tablet, from the name `LinkDeviceService::current_device_name`
 /// gives it ("Android (0.1.0)", "iOS (0.1.0)"). Picks the Active Sessions icon.
 fn is_mobile_device_name(name: &str) -> bool {
-    name.starts_with("Android") || name.starts_with("iOS")
+    // "samsung SM-S938B · Android 16" carries the OS after the model.
+    name.contains("Android") || name.contains("iOS")
 }
 
 /// Session management errors.
