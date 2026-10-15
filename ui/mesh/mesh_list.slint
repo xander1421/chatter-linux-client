@@ -109,17 +109,11 @@ export component MeshList inherits Rectangle {
             }
         }
 
-        // Status opens Nearby. The radio control is a separate, labelled switch
-        // so a casual tap on the count cannot turn mesh off.
+        // Status is informational; the switch below is the only radio control.
         if !root.collapsed && root.expanded: Rectangle {
             height: root.touch ? Spacing.touch-target-min : 30px;
             clip: true;
             border-radius: Spacing.radius-sm;
-            background: status-touch.has-hover ? Colors.surface-hover : transparent;
-            transform-scale-x: status-touch.pressed ? 98% : 100%;
-            transform-scale-y: status-touch.pressed ? 94% : 100%;
-            animate transform-scale-x { duration: status-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
-            animate transform-scale-y { duration: status-touch.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
             caption := HorizontalLayout {
                 padding-left: Spacing.md;
                 padding-right: Spacing.sm;
@@ -173,14 +167,6 @@ export component MeshList inherits Rectangle {
                     vertical-alignment: center;
                     horizontal-stretch: 1;
                     overflow: elide;
-                }
-            }
-            status-touch := TouchArea {
-                mouse-cursor: pointer;
-                accessible-role: button;
-                accessible-label: "Show nearby mesh peers";
-                clicked => {
-                    root.showing-nearby = true;
                 }
             }
         }

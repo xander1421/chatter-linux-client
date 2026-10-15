@@ -248,8 +248,11 @@ export component MessageComposer inherits GlassSurface {
     // A damped neck spring pulls the droplets upward against gravity. Keeping
     // velocity across target changes lets a send reverse the same moving drop.
     // One tick is a tenth of the shared quick duration, including speed scale.
+    // A draft can already be present when this component is created. Start at
+    // its settled position; `changed raised-actions` only handles later edits.
     private property <float> lift-progress: 0;
     private property <float> lift-velocity: 0;
+    init => { root.lift-progress = root.raised-actions ? 1 : 0; }
     property <float> lift-geometry: min(1.08, max(0, root.lift-progress));
     // The contour can overshoot; hit targets and the field stop at their
     // aligned endpoints so the neck never pulls a glyph across the input.

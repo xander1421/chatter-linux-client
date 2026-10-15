@@ -26,9 +26,6 @@ pub fn open(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, id: &str) {
         return;
     };
 
-    #[cfg(target_os = "android")]
-    window.global::<MeshGlobal>().invoke_set_mesh_on(true);
-
     super::set_active(Some(row.conversation.clone()));
 
     // Nothing server-backed is on screen any more. Leaving a stale
