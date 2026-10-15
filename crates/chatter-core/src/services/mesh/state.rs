@@ -243,6 +243,7 @@ impl MeshState {
                     connected: !state.links.links_to(&record.peer).is_empty(),
                     reachable: state.peers.is_reachable(&record.peer, now),
                     verified: record.verified_nickname,
+                    account_verified: false,
                     has_session: state.sessions.has_session(&record.peer),
                     fingerprint: record
                         .noise_public_key

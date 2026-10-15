@@ -310,6 +310,18 @@ impl MeshService {
         self.sealer_unavailable.clone()
     }
 
+    /// Self-asserted name. No identity or account verification is implied.
+    pub fn nickname(&self) -> String {
+        self.config.nickname()
+    }
+
+    pub fn set_nickname(&self, nickname: String) {
+        self.config.set_nickname(nickname);
+        if self.is_running() {
+            let _ = self.ble.send(BleCommand::Announce);
+        }
+    }
+
     /// Start the radio and the relay pool.
     ///
     /// Both halves are optional and independent: a build with no radio still
@@ -567,6 +579,76 @@ impl MeshService {
         Ok(message_id)
     }
 
+    pub fn join_channel(&self, name: &str) -> Result<String, MeshError> {
+        let name = chatter_mesh::channel::canonical_name(name).ok_or(MeshError::OutOfRange(
+            "channel name must be 1-32 ASCII letters, digits or hyphens",
+        ))?;
+        if !self.timeline.has_channel(&name) && self.timeline.active_channels().len() >= 8 {
+            return Err(MeshError::OutOfRange(
+                "at most eight mesh channels can be active",
+            ));
+        }
+        self.timeline.join_channel(&name);
+        let _ = self
+            .ble
+            .send(BleCommand::ChannelPresence { name: name.clone() });
+        Ok(name)
+    }
+
+    pub fn nearby_channels(&self) -> Vec<String> {
+        self.timeline.nearby_channels()
+    }
+
+    pub fn set_channel_muted(&self, name: &str, muted: bool) -> Result<(), MeshError> {
+        let name = chatter_mesh::channel::canonical_name(name)
+            .ok_or(MeshError::OutOfRange("invalid channel name"))?;
+        self.events.set_channel_muted(&name, muted);
+        Ok(())
+    }
+
+    pub fn channel_muted(&self, name: &str) -> bool {
+        self.events.channel_muted(name)
+    }
+
+    pub fn set_peer_blocked(&self, peer: &PeerId, blocked: bool) {
+        self.events.set_peer_blocked(peer, blocked);
+    }
+
+    pub fn peer_blocked(&self, peer: &PeerId) -> bool {
+        self.events.peer_blocked(peer)
+    }
+
+    pub fn leave_channel(&self, name: &str) -> Result<(), MeshError> {
+        let name = chatter_mesh::channel::canonical_name(name)
+            .ok_or(MeshError::OutOfRange("invalid channel name"))?;
+        self.timeline.leave_channel(&name);
+        Ok(())
+    }
+
+    pub fn send_channel(&self, name: &str, text: &str) -> Result<String, MeshError> {
+        let name = chatter_mesh::channel::canonical_name(name)
+            .ok_or(MeshError::OutOfRange("invalid channel name"))?;
+        if !self.timeline.has_channel(&name) {
+            return Err(MeshError::OutOfRange("join the channel before sending"));
+        }
+        let content = Self::require_content(text)?;
+        if chatter_mesh::channel::encode(&name, &content).is_none() {
+            return Err(MeshError::OutOfRange("channel text exceeds 256 bytes"));
+        }
+        if !self.has_radio {
+            return Err(MeshError::NoRadio);
+        }
+        let message_id = new_message_id();
+        self.ble
+            .send(BleCommand::ChannelMessage {
+                message_id: message_id.clone(),
+                name,
+                content,
+            })
+            .map_err(|_| MeshError::WorkerGone)?;
+        Ok(message_id)
+    }
+
     /// Put a file on the air for the public mesh room.
     ///
     /// Returns the wire message ID; the row itself arrives on the event stream as
@@ -783,7 +865,7 @@ impl MeshService {
                 cell: cell.to_string(),
                 message_id: message_id.clone(),
                 content,
-                nickname: self.config.nickname.clone(),
+                nickname: self.config.nickname(),
             })
             .map_err(|_| MeshError::WorkerGone)?;
         self.timeline
@@ -797,6 +879,9 @@ impl MeshService {
     /// whole decision the UI needs: [`MeshDelivery::Secure`] means nothing was
     /// retained, everything else means a copy is held and will be retried.
     pub async fn send_dm(&self, peer: &PeerId, text: &str) -> Result<MeshDelivery, MeshError> {
+        if self.events.peer_blocked(peer) {
+            return Err(MeshError::OutOfRange("peer is locally blocked"));
+        }
         let content = Self::require_content(text)?;
         if !self.can_route_to(peer) {
             return Err(MeshError::Unroutable(peer.as_str().to_string()));
@@ -823,7 +908,7 @@ impl MeshService {
             message,
             conversation,
             sender: self.identity.peer_id(),
-            nickname: self.config.nickname.clone(),
+            nickname: self.config.nickname(),
             is_local: true,
             sender_verified: true,
         })));
@@ -953,6 +1038,8 @@ impl MeshService {
     /// doing those under a destroyed identity would be the one moment this
     /// service could not describe itself.
     pub fn panic_wipe(&self) -> Result<(), MeshError> {
+        self.config.set_nickname("anon".to_owned());
+        self.events.clear_moderation();
         let mut first_error: Option<MeshError> = None;
         let fail = |error: MeshError, slot: &mut Option<MeshError>| {
             if slot.is_none() {

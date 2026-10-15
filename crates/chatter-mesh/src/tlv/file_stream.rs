@@ -23,19 +23,13 @@
 //! constants across modules in a directory that has deliberately never done
 //! that.
 //!
-//! # Message types, and a real collision risk
+//! # Message types
 //!
-//! [`MessageType::FileManifest`] = `0x2A`, [`MessageType::FileChunk`] = `0x2B`,
-//! [`MessageType::FileChunkRequest`] = `0x2C`. Tags `0x22`–`0x29` are taken by
-//! bitchat; `0x2A` and beyond are unused *today*.
+//! [`MessageType::FileManifest`] = `0xE0`, [`MessageType::FileChunk`] = `0xE1`,
+//! [`MessageType::FileChunkRequest`] = `0xE2`. These are Chatter extension tags.
 //!
-//! **If upstream bitchat later claims `0x2A`, two different protocols share a
-//! tag.** The mitigation is weak but real: an unknown type is relayed rather
-//! than rejected, and each of these packets is signature-verified and
-//! structurally validated before it does anything, so a collision degrades to
-//! "peers ignore each other's version" rather than mis-parsing one as the other.
-//! That is not the same as safe. The tag choice must be revisited before anyone
-//! calls this stable.
+//! Upstream has reserved `0x2A`/`0x2B` and assigned `0x2C` to `announceV2`.
+//! These extension tags remain provisional until allocated with upstream.
 //!
 //! # Why chunk TLVs are not added to `BitchatFilePacket`
 //!

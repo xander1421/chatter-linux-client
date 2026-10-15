@@ -136,6 +136,8 @@ const CHUNK_PACING_QUEUE_BYTES: usize = PENDING_WRITE_BUFFER_CAP_BYTES / 4;
 /// request/response to fetch it with. Sixty seconds is roughly the announce
 /// cadence: the same reasoning, and the same cost, as saying "I'm here" again.
 const MANIFEST_REPEAT_SECS: u64 = 60;
+/// Bounds open-channel ingress including fragments on one radio link.
+const CHANNEL_INGRESS_PER_MINUTE: u32 = 60;
 
 /// The radio loop.
 pub struct BleRuntime {
@@ -171,6 +173,9 @@ pub struct BleRuntime {
     frames_written: std::sync::atomic::AtomicU64,
     /// When the last throughput report went out.
     last_throughput_report_ms: u64,
+    /// Per-ingress budget for open channels, independent of outbound pacing.
+    channel_ingress: std::collections::HashMap<String, (u64, u32)>,
+    last_channel_presence_ms: u64,
 }
 
 impl BleRuntime {
@@ -216,6 +221,8 @@ impl BleRuntime {
             files_out: std::collections::BTreeMap::new(),
             frames_written: std::sync::atomic::AtomicU64::new(0),
             last_throughput_report_ms: 0,
+            channel_ingress: std::collections::HashMap::new(),
+            last_channel_presence_ms: 0,
         }
     }
 
@@ -691,6 +698,44 @@ impl BleRuntime {
 
     async fn on_packet(&mut self, link: &LinkId, packet: BitchatPacket) {
         let now_ms = now_millis();
+        let channel_fragment = if packet.message_type() == Some(MessageType::Fragment) {
+            chatter_mesh::fragment::FragmentHeader::parse(&packet)
+                .ok()
+                .filter(|(header, _)| header.original_type == MessageType::ChannelMessage.as_u8())
+        } else {
+            None
+        };
+        if packet.message_type() == Some(MessageType::ChannelMessage) || channel_fragment.is_some()
+        {
+            if packet.message_type() == Some(MessageType::ChannelMessage)
+                && packet.payload.len() > 290
+            {
+                return;
+            }
+            if channel_fragment
+                .as_ref()
+                .is_some_and(|(header, _)| header.total > 8)
+            {
+                return;
+            }
+            if channel_fragment
+                .as_ref()
+                .is_some_and(|(_, chunk)| chunk.len() > 512)
+            {
+                return;
+            }
+            let key = link.to_string();
+            self.channel_ingress
+                .retain(|_, (start, _)| now_ms.saturating_sub(*start) < 60_000);
+            if self.channel_ingress.len() >= 128 && !self.channel_ingress.contains_key(&key) {
+                return;
+            }
+            let budget = self.channel_ingress.entry(key).or_insert((now_ms, 0));
+            if budget.1 >= CHANNEL_INGRESS_PER_MINUTE {
+                return;
+            }
+            budget.1 += 1;
+        }
         let now_s = now_secs();
         let local = self.identity.peer_id();
         let claimed = PeerId::from_bytes(&packet.sender_id);
@@ -939,6 +984,7 @@ impl BleRuntime {
         match packet.message_type() {
             Some(MessageType::Announce) => return self.on_announce(link, packet, claimed).await,
             Some(MessageType::Message) => self.on_public_message(packet, claimed),
+            Some(MessageType::ChannelMessage) => return self.on_channel_message(packet, claimed),
             Some(MessageType::Leave) => {
                 let verified = self.state.with(|state| {
                     state
@@ -1281,6 +1327,9 @@ impl BleRuntime {
     }
 
     fn on_public_message(&mut self, packet: &BitchatPacket, claimed: &PeerId) {
+        if self.events.peer_blocked(claimed) {
+            return;
+        }
         // A `Message` addressed to one recipient is a legacy private message. We
         // do not carry those — private traffic is Noise-encrypted — and showing
         // it as public chat would put a message meant for one person in the room.
@@ -1348,11 +1397,7 @@ impl BleRuntime {
             return;
         }
         let (signing_key, nickname, verified) = if is_self {
-            (
-                self.identity.signing_public(),
-                self.config.nickname.clone(),
-                true,
-            )
+            (self.identity.signing_public(), self.config.nickname(), true)
         } else {
             let known = self.state.with(|state| {
                 state.peers.info(&sender).map(|peer| {
@@ -1413,6 +1458,68 @@ impl BleRuntime {
         })));
     }
 
+    fn on_channel_message(&mut self, packet: &BitchatPacket, claimed: &PeerId) -> bool {
+        if !packet.is_broadcast() {
+            return false;
+        }
+        let presence = chatter_mesh::channel::decode_presence(&packet.payload);
+        let message = chatter_mesh::channel::decode(&packet.payload);
+        let Some(name) = presence
+            .clone()
+            .or_else(|| message.as_ref().map(|(name, _)| name.clone()))
+        else {
+            return false;
+        };
+        let is_self = *claimed == self.identity.peer_id();
+        let (key, nickname) = if is_self {
+            (self.identity.signing_public(), self.config.nickname())
+        } else {
+            let Some((key, nickname)) = self.state.with(|state| {
+                state.peers.info(claimed).and_then(|peer| {
+                    let key = peer.signing_public_key.as_ref()?;
+                    Some((
+                        <[u8; 32]>::try_from(key.as_slice()).ok()?,
+                        peer.nickname.clone(),
+                    ))
+                })
+            }) else {
+                return false;
+            };
+            (key, nickname)
+        };
+        if !verify_packet(packet, &key) {
+            return false;
+        }
+        self.events.send(MeshEvent::ChannelObserved(name.clone()));
+        let Some((_, content)) = message else {
+            return true;
+        };
+        if !self.events.channel_joined(&name)
+            || self.events.channel_muted(&name)
+            || self.events.peer_blocked(claimed)
+            || (is_self && self.is_own_echo(packet))
+        {
+            return true;
+        }
+        let inbound = InboundMessage {
+            wire_id: MessageDeduplicator::dedup_key(packet),
+            conversation: MeshConversation::Channel(name),
+            sender: claimed.clone(),
+            nickname: nickname.clone(),
+            content,
+            timestamp_ms: packet.timestamp,
+        };
+        self.events.send(MeshEvent::Message(Box::new(MeshMessage {
+            message: inbound.to_domain(),
+            conversation: inbound.conversation,
+            sender: claimed.clone(),
+            nickname,
+            is_local: is_self,
+            sender_verified: false,
+        })));
+        true
+    }
+
     /// A file, image or voice note broadcast into the mesh room.
     ///
     /// Every gate below is [`on_public_message`](Self::on_public_message)'s, and
@@ -1469,11 +1576,7 @@ impl BleRuntime {
         let (signing_key, nickname, verified) = if is_self {
             // Verified against our own key, because we are deliberately not in
             // our own peer registry — see `on_announce`.
-            (
-                self.identity.signing_public(),
-                self.config.nickname.clone(),
-                true,
-            )
+            (self.identity.signing_public(), self.config.nickname(), true)
         } else {
             let known = self.state.with(|state| {
                 state.peers.info(&sender).map(|peer| {
@@ -2011,6 +2114,9 @@ impl BleRuntime {
     }
 
     async fn on_encrypted(&mut self, link: &LinkId, packet: &BitchatPacket, claimed: &PeerId) {
+        if self.events.peer_blocked(claimed) {
+            return;
+        }
         // Only accept encrypted traffic addressed to us; a directed packet for
         // somebody else is relayed, not opened.
         if !self.addressed_to_us(packet) {
@@ -2213,6 +2319,12 @@ impl BleRuntime {
                 message_id,
                 content,
             } => self.broadcast_public(&message_id, &content).await,
+            BleCommand::ChannelMessage {
+                message_id,
+                name,
+                content,
+            } => self.broadcast_channel(&message_id, &name, &content).await,
+            BleCommand::ChannelPresence { name } => self.broadcast_channel_presence(&name).await,
             BleCommand::FileTransfer { message_id, file } => {
                 self.broadcast_file(&message_id, &file).await
             }
@@ -2325,7 +2437,7 @@ impl BleRuntime {
     /// Broadcast a public message into the mesh room.
     pub async fn broadcast_public(&mut self, message_id: &str, content: &str) {
         let now_ms = now_millis();
-        let nickname = self.config.nickname.clone();
+        let nickname = self.config.nickname();
         // The payload of a public message is the message text and nothing else
         // (`BLEService.swift:504`: `payload: Data(content.utf8)`). There is no
         // room on the wire for a message ID, a timestamp or a sender name:
@@ -2362,6 +2474,47 @@ impl BleRuntime {
         })));
     }
 
+    async fn broadcast_channel(&mut self, message_id: &str, name: &str, content: &str) {
+        let Some(payload) = chatter_mesh::channel::encode(name, content) else {
+            return;
+        };
+        let now_ms = now_millis();
+        let packet = self.build_packet(
+            MessageType::ChannelMessage,
+            None,
+            payload,
+            chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+        );
+        let packet = self.maybe_sign(packet, true);
+        self.state
+            .with(|state| state.self_broadcasts.record(message_id, &packet, now_ms));
+        self.originate_broadcast(&packet).await;
+        let conversation = MeshConversation::Channel(name.to_owned());
+        let sender = self.identity.peer_id();
+        self.events.send(MeshEvent::Message(Box::new(MeshMessage {
+            message: outbound_message(&conversation, message_id, &sender, content, now_ms),
+            conversation,
+            sender,
+            nickname: self.config.nickname(),
+            is_local: true,
+            sender_verified: false,
+        })));
+    }
+
+    async fn broadcast_channel_presence(&mut self, name: &str) {
+        let Some(payload) = chatter_mesh::channel::encode_presence(name) else {
+            return;
+        };
+        let packet = self.build_packet(
+            MessageType::ChannelMessage,
+            None,
+            payload,
+            chatter_mesh::relay::MESSAGE_TTL_DEFAULT,
+        );
+        let packet = self.maybe_sign(packet, true);
+        self.originate_broadcast(&packet).await;
+    }
+
     /// Put a file on the air for the mesh room.
     ///
     /// The counterpart of [`broadcast_public`](Self::broadcast_public), and
@@ -2370,7 +2523,7 @@ impl BleRuntime {
     /// the local copy *is* the message.
     pub async fn broadcast_file(&mut self, message_id: &str, file: &BitchatFilePacket) {
         let now_ms = now_millis();
-        let nickname = self.config.nickname.clone();
+        let nickname = self.config.nickname();
         let payload = match file.encode() {
             Ok(payload) => payload,
             Err(error) => {
@@ -2462,7 +2615,7 @@ impl BleRuntime {
     ) {
         let now_ms = now_millis();
         let now_s = now_secs();
-        let nickname = self.config.nickname.clone();
+        let nickname = self.config.nickname();
         let transfer_id = manifest.transfer_id;
 
         // Our own copy first, and a failure here aborts the send.
@@ -2754,7 +2907,7 @@ impl BleRuntime {
         if !passed {
             return;
         }
-        let nickname = self.config.nickname.clone();
+        let nickname = self.config.nickname();
         let mut capabilities = PeerCapabilities::from_bits(0);
         if self.config.bridge_geohash.is_some() {
             capabilities.insert(PeerCapabilities::BRIDGE);
@@ -2803,6 +2956,12 @@ impl BleRuntime {
 
         self.state.with(|state| state.last_announce_ms = now_ms);
         self.originate_broadcast(&packet).await;
+        if now_ms.saturating_sub(self.last_channel_presence_ms) >= 60_000 {
+            self.last_channel_presence_ms = now_ms;
+            for name in self.events.active_channels() {
+                self.broadcast_channel_presence(&name).await;
+            }
+        }
     }
 
     /// Every *other* link bound to the peer a packet arrived on.
@@ -7136,7 +7295,7 @@ mod tests {
     #[tokio::test]
     async fn a_small_file_still_rides_one_packet_and_a_large_one_streams() {
         // The interop guarantee. Real bitchat speaks `FileTransfer` and knows
-        // nothing about 0x2A–0x2C, so everything small must keep going out the way
+        // nothing about our 0xE0–0xE2 extension, so everything small must keep going out the way
         // P8 sent it. Chunking is an extension for the sizes that path cannot
         // carry, selected by size — not a replacement.
         let (mut runtime, radio, state, _timeline) = runtime_parts();

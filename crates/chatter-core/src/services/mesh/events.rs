@@ -108,6 +108,8 @@ pub struct MeshPeer {
     pub reachable: bool,
     /// Their announce signature verified.
     pub verified: bool,
+    /// Account binding verified privately. Always false until that protocol exists.
+    pub account_verified: bool,
     /// An established Noise session exists, so a DM can be encrypted right now.
     pub has_session: bool,
     /// SHA-256 of their Noise static key, lowercase hex — the thing users
@@ -210,6 +212,8 @@ pub enum MeshEvent {
     GeohashJoined(String),
     /// A geohash channel was left.
     GeohashLeft(String),
+    /// A signed channel message advertised a nearby public channel.
+    ChannelObserved(String),
     /// Something went wrong that the user should know about but that did not
     /// stop the service.
     Degraded(String),

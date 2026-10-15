@@ -74,9 +74,11 @@ pub struct MeshRow {
     /// DM rows only: some transport can carry to this peer right now. False is
     /// not an error — it means what you send is held and offered to couriers.
     pub reachable: bool,
-    /// DM rows only: the peer's announce signature verified. Nicknames on
-    /// public traffic are unauthenticated and never set this.
+    /// Reserved for a private account-binding proof. A signed announce is not
+    /// proof that its self-asserted nickname belongs to a Chatter account.
     pub verified: bool,
+    pub muted: bool,
+    pub blocked: bool,
 }
 
 /// Which glyph and which wording a scope gets. Pure presentation over a core
@@ -86,6 +88,7 @@ pub fn kind_of(conversation: &MeshConversation) -> &'static str {
     match conversation {
         MeshConversation::Room => "room",
         MeshConversation::Geohash(_) => "geohash",
+        MeshConversation::Channel(_) => "channel",
         MeshConversation::Dm(_) => "dm",
     }
 }
@@ -96,6 +99,7 @@ pub fn scope_of(conversation: &MeshConversation) -> String {
     match conversation {
         MeshConversation::Room => String::new(),
         MeshConversation::Geohash(cell) => cell.clone(),
+        MeshConversation::Channel(name) => name.clone(),
         MeshConversation::Dm(peer) => peer.as_str().to_string(),
     }
 }
@@ -169,7 +173,7 @@ pub fn rows(ui_ctx: &Arc<ChatterClient>) -> Vec<MeshRow> {
                 MeshConversation::Dm(peer) => peers
                     .iter()
                     .find(|known| known.peer == *peer)
-                    .map(|known| (known.connected || known.reachable, known.verified))
+                    .map(|known| (known.connected || known.reachable, known.account_verified))
                     .unwrap_or((false, false)),
                 _ => (false, false),
             };
@@ -185,6 +189,8 @@ pub fn rows(ui_ctx: &Arc<ChatterClient>) -> Vec<MeshRow> {
                 unread_count: i32::try_from(conversation.unread_count).unwrap_or(i32::MAX),
                 reachable,
                 verified,
+                muted: matches!(&scope, MeshConversation::Channel(name) if ui_ctx.mesh_channel_muted(name)),
+                blocked: matches!(&scope, MeshConversation::Dm(peer) if ui_ctx.mesh_peer_blocked(peer.as_str())),
                 conversation: scope,
             })
         })

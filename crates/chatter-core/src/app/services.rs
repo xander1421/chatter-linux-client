@@ -372,10 +372,32 @@ impl ServiceContainer {
                 relay_connector: None,
                 radio_factory: None,
             };
-            Arc::new(
-                MeshService::new(deps, MeshConfig::default())
-                    .map_err(|e| ContextError::Mesh(e.to_string()))?,
-            )
+            let mut config = MeshConfig::default();
+            if let Ok(Some(nickname)) =
+                crate::storage::repositories::settings_repo::SettingsRepository::new(
+                    infra.database.clone(),
+                )
+                .get_string(crate::storage::repositories::settings_repo::keys::MESH_NICKNAME)
+            {
+                config.nickname = nickname;
+            }
+            let service =
+                MeshService::new(deps, config).map_err(|e| ContextError::Mesh(e.to_string()))?;
+            let settings = crate::storage::repositories::settings_repo::SettingsRepository::new(
+                infra.database.clone(),
+            );
+            use crate::storage::repositories::settings_repo::keys;
+            if let Ok(Some(names)) = settings.get::<Vec<String>>(keys::MESH_MUTED_CHANNELS) {
+                for name in names {
+                    let _ = service.set_channel_muted(&name, true);
+                }
+            }
+            if let Ok(Some(peers)) = settings.get::<Vec<String>>(keys::MESH_BLOCKED_PEERS) {
+                for peer in peers {
+                    service.set_peer_blocked(&chatter_mesh::ids::PeerId::from_str(&peer), true);
+                }
+            }
+            Arc::new(service)
         };
 
         #[cfg(feature = "jarvis")]

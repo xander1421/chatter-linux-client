@@ -32,6 +32,7 @@ use super::events::MeshDelivery;
 const ROOM_KEY: &str = "chatter-mesh:room";
 /// Namespace prefix for a geohash channel conversation.
 const GEOHASH_KEY: &str = "chatter-mesh:geohash:";
+const CHANNEL_KEY: &str = "chatter-mesh:channel:";
 /// Namespace prefix for a 1:1 mesh conversation.
 const DM_KEY: &str = "chatter-mesh:dm:";
 /// Namespace prefix for a mesh peer's derived account ID.
@@ -55,6 +56,8 @@ pub enum MeshConversation {
     Room,
     /// A public geohash channel, addressed by its cell.
     Geohash(String),
+    /// Open named BLE channel. The canonical slug is public on the wire.
+    Channel(String),
     /// A 1:1 conversation with one peer, over Noise or over a gift wrap.
     Dm(PeerId),
 }
@@ -66,6 +69,7 @@ impl MeshConversation {
         match self {
             Self::Room => ChannelId::from_uuid(derive(ROOM_KEY)),
             Self::Geohash(cell) => ChannelId::from_uuid(derive(&format!("{GEOHASH_KEY}{cell}"))),
+            Self::Channel(name) => ChannelId::from_uuid(derive(&format!("{CHANNEL_KEY}{name}"))),
             Self::Dm(peer) => ChannelId::from_uuid(derive(&format!("{DM_KEY}{}", peer.as_str()))),
         }
     }
@@ -74,7 +78,7 @@ impl MeshConversation {
     #[must_use]
     pub fn conversation_type(&self) -> ConversationType {
         match self {
-            Self::Room | Self::Geohash(_) => ConversationType::Mesh,
+            Self::Room | Self::Geohash(_) | Self::Channel(_) => ConversationType::Mesh,
             Self::Dm(_) => ConversationType::MeshDm,
         }
     }
@@ -82,7 +86,7 @@ impl MeshConversation {
     /// Whether this scope is public (broadcast) rather than 1:1.
     #[must_use]
     pub fn is_public(&self) -> bool {
-        matches!(self, Self::Room | Self::Geohash(_))
+        matches!(self, Self::Room | Self::Geohash(_) | Self::Channel(_))
     }
 
     /// The geohash cell, when this scope has one.
@@ -207,7 +211,7 @@ pub fn outbound_message(
     // storing, because there it would mean something else — see V060.
     if matches!(
         conversation,
-        MeshConversation::Room | MeshConversation::Geohash(_)
+        MeshConversation::Room | MeshConversation::Geohash(_) | MeshConversation::Channel(_)
     ) {
         message.delivery_status = MeshDelivery::Broadcast.as_str().to_string();
     }

@@ -29,9 +29,10 @@ export struct MeshConversationData {
     // DM rows only: a transport can carry to this peer right now. False does
     // not mean the message is lost — it means it waits for a carrier.
     reachable: bool,
-    // DM rows only: the peer's announce signature verified. Nicknames on
-    // public traffic are unauthenticated and never set this.
+    // Reserved for a future private account-binding proof.
     verified: bool,
+    muted: bool,
+    blocked: bool,
     is-selected: bool,
 }
 
@@ -49,6 +50,13 @@ export global MeshGlobal {
     // needs no new surface — it says "Bluetooth off", which is now true because
     // the user turned it off.
     in-out property <bool> mesh-on: false;
+    in-out property <string> nickname: "anon";
+    callback set-nickname(string);
+    in-out property <[string]> nearby-channels: [];
+    callback join-channel(string);
+    callback leave-channel(string);
+    callback toggle-channel-mute(string);
+    callback toggle-peer-block(string);
 
     // Set the switch. Persists the preference and starts or stops the radio.
     callback set-mesh-on(bool);
