@@ -31,8 +31,8 @@ export component LiveVoiceWaveform inherits Rectangle {
         y: 0;
         width: parent.width;
         height: parent.height;
-        spacing: min(8px, max(2px, (self.width - 60px) / 19));
-        alignment: center;
+        spacing: 2px;
+        alignment: space-between;
         for level in VoiceRecording.live-levels: VerticalLayout {
             width: 3px;
             height: parent.height;
@@ -54,9 +54,15 @@ export component LiveVoiceWaveform inherits Rectangle {
 
 export component RecordingPulse inherits Rectangle {
     width: 9px;
-    height: 9px;
-    border-radius: Spacing.radius-full;
-    background: Colors.error;
-    opacity: VoiceRecording.busy ? 0.45 : VoiceRecording.pulse-bright ? 1.0 : 0.55;
-    animate opacity { duration: Appearance.reduce-motion ? 0ms : Materials.motion-standard; easing: Materials.settle; }
+    height: 40px;
+    background: transparent;
+    Rectangle {
+        width: 9px;
+        height: 9px;
+        y: (parent.height - self.height) / 2;
+        border-radius: Spacing.radius-full;
+        background: Colors.error;
+        opacity: VoiceRecording.busy ? 0.45 : VoiceRecording.pulse-bright ? 1.0 : 0.55;
+        animate opacity { duration: Appearance.reduce-motion ? 0ms : Materials.motion-standard; easing: Materials.settle; }
+    }
 }
