@@ -584,6 +584,9 @@ impl MessageService {
                     continue;
                 }
             };
+            if !self.queued_read_receipt_allowed(&content) {
+                continue;
+            }
             let bubble = queued_bubble_timestamp(&content);
 
             let result = match self
@@ -621,6 +624,25 @@ impl MessageService {
             "PENDING_MESSAGES: Complete"
         );
         flush
+    }
+
+    /// A read preference changed while the mailbox was bootstrapping must
+    /// still take effect before its queued receipt goes on the wire.
+    pub(crate) fn queued_read_receipt_allowed(
+        &self,
+        content: &crate::proto::content_v1::Content,
+    ) -> bool {
+        let Some(crate::proto::content_v1::content::Content::Receipt(receipt)) = &content.content
+        else {
+            return true;
+        };
+        if receipt.r#type != crate::proto::content_v1::receipt_message::Type::Read as i32 {
+            return true;
+        }
+        self.settings_repo
+            .get_bool(crate::storage::repositories::settings_repo::keys::SEND_READ_RECEIPTS)
+            .map(|enabled| enabled.unwrap_or(true))
+            .unwrap_or(false)
     }
 
     /// Replace every session with `peer_id` and re-establish fresh ones.
@@ -779,14 +801,24 @@ impl MessageService {
                 tokio::time::sleep(delay).await;
             }
 
-            match mailbox_manager
-                .send_to_mailbox(
-                    public_key,
-                    encrypted_envelope.clone(),
-                    EnvelopeType::SealedSender,
-                )
-                .await
-            {
+            let deposit = if self.shield_mode.load(std::sync::atomic::Ordering::Acquire) {
+                mailbox_manager
+                    .send_to_secret_mailbox(
+                        public_key,
+                        encrypted_envelope.clone(),
+                        EnvelopeType::SealedSender,
+                    )
+                    .await
+            } else {
+                mailbox_manager
+                    .send_to_mailbox(
+                        public_key,
+                        encrypted_envelope.clone(),
+                        EnvelopeType::SealedSender,
+                    )
+                    .await
+            };
+            match deposit {
                 Ok(()) => return Ok(()),
                 Err(MailboxError::Network(net_err))
                     if net_err.is_retryable() && attempt + 1 < MAX_ATTEMPTS =>
@@ -1021,12 +1053,12 @@ pub(super) fn sync_sent_copy(
     })
 }
 
-/// Typing indicators and receipts: worth nothing late, so never queued.
+/// Typing indicators are stale after a bootstrap; receipts still describe the
+/// peer's message and must survive until the private mailbox is ready.
 pub(super) fn is_ephemeral_content(content: &crate::proto::content_v1::Content) -> bool {
     matches!(
         &content.content,
         Some(crate::proto::content_v1::content::Content::Typing(_))
-            | Some(crate::proto::content_v1::content::Content::Receipt(_))
     )
 }
 

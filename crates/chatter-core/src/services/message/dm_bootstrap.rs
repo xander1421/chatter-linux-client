@@ -9,6 +9,7 @@ use prost::Message as ProstMessage;
 
 use crate::domain::ids::{AttachmentId, ChannelId, UserId};
 use crate::mailbox::dm::{DmBootstrap, release_bootstrap_lock, try_acquire_bootstrap_lock};
+use crate::network::grpc::AnonymousMailboxClient;
 use crate::network::grpc::auth_client::AuthClient;
 use crate::network::grpc::client_pool::GrpcClientPool;
 use crate::proto::chat_v1::{SealedDelivery, SealedDeviceMessage, SealedSenderMessage};
@@ -18,6 +19,19 @@ use crate::util::time::TimestampNanos;
 use super::{MessageError, MessageService};
 
 impl MessageService {
+    fn bootstrap_mailbox_client(
+        &self,
+        grpc_pool: &GrpcClientPool,
+    ) -> Result<AnonymousMailboxClient, MessageError> {
+        if self.shield_mode.load(std::sync::atomic::Ordering::Acquire) {
+            grpc_pool
+                .secret_mailbox_client()
+                .map_err(MessageError::Network)
+        } else {
+            Ok(grpc_pool.anonymous_mailbox_client())
+        }
+    }
+
     /// Handle DM bootstrap when conversation is not ready.
     #[allow(clippy::too_many_arguments)]
     pub(super) async fn handle_dm_bootstrap(
@@ -29,11 +43,13 @@ impl MessageService {
         attachment_ids: Option<Vec<AttachmentId>>,
         channel_id: Option<ChannelId>,
     ) -> Result<(), MessageError> {
-        // Check if this is an ephemeral message (typing indicator, receipt) that should be dropped
+        // Typing is stale by the time a mailbox is ready. A receipt is still
+        // meaningful then, so it must take the same queued bootstrap path as
+        // other content.
         if super::dm::is_ephemeral_content(&content) {
             tracing::debug!(
                 peer_id = %peer_id,
-                "Dropping ephemeral message (typing/receipt) - bootstrap not complete"
+                "Dropping typing indicator - bootstrap not complete"
             );
             return Err(MessageError::BootstrapInitiated);
         }
@@ -102,7 +118,7 @@ impl MessageService {
 
         crate::services::gateway::submission::mark_submission_started()?;
         let dm_bootstrap = DmBootstrap::new(self.database.clone());
-        let mut anon_mailbox_client = grpc_pool.anonymous_mailbox_client();
+        let mut anon_mailbox_client = self.bootstrap_mailbox_client(grpc_pool)?;
 
         match dm_bootstrap
             .initiate_dm(*peer_id, &mut anon_mailbox_client)
@@ -214,7 +230,7 @@ impl MessageService {
         let devices = self.bootstrap_devices(&mut auth_client, peer_id).await?;
         crate::services::gateway::submission::mark_submission_started()?;
         let dm_bootstrap = DmBootstrap::new(self.database.clone());
-        let mut anon_mailbox_client = grpc_pool.anonymous_mailbox_client();
+        let mut anon_mailbox_client = self.bootstrap_mailbox_client(grpc_pool)?;
 
         match dm_bootstrap
             .initiate_dm(*peer_id, &mut anon_mailbox_client)
@@ -506,8 +522,15 @@ impl MessageService {
 
             // Send to peer's device inbox via anonymous client (no AuthInterceptor)
             // to avoid dual-auth rejection — GRA-436
-            match grpc_pool
-                .anonymous_message_client()
+            let mut message_client = if self.shield_mode.load(std::sync::atomic::Ordering::Acquire)
+            {
+                grpc_pool
+                    .secret_message_client()
+                    .map_err(MessageError::Network)?
+            } else {
+                grpc_pool.anonymous_message_client()
+            };
+            match message_client
                 .send_with_anonymous_credential(
                     &uuid::Uuid::new_v4().to_string(),
                     &peer_id_str,
@@ -629,8 +652,9 @@ impl MessageService {
     ) -> Result<(), MessageError> {
         let our_user_id = self.settings_repo.current_user_id()?;
         let payload = if our_user_id.as_uuid() < peer_id.as_uuid() {
+            let mut mailbox_client = self.bootstrap_mailbox_client(grpc_pool)?;
             DmBootstrap::new(self.database.clone())
-                .initiate_dm(*peer_id, &mut grpc_pool.anonymous_mailbox_client())
+                .initiate_dm(*peer_id, &mut mailbox_client)
                 .await
                 .map_err(|e| {
                     MessageError::DmError(format!("re-announce for device {peer_device_id}: {e}"))

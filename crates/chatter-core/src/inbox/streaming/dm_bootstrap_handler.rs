@@ -253,6 +253,7 @@ pub fn spawn_dm_bootstrap_handler_with_receiver(
 
                             let database = database.clone();
                             let grpc_pool = grpc_pool.clone();
+                            let message_service = message_service.clone();
                             let in_progress_clone = in_progress.clone();
                             let turn = peer_turn(&peer_turns, sender_id).await;
 
@@ -261,6 +262,7 @@ pub fn spawn_dm_bootstrap_handler_with_receiver(
                                 if let Err(e) = handle_bootstrap_request_async(
                                     database,
                                     grpc_pool,
+                                    message_service,
                                     sender_id,
                                     sender_device_id,
                                 )
@@ -329,6 +331,7 @@ async fn peer_turn(turns: &Mutex<HashMap<UserId, Arc<Mutex<()>>>>, peer: UserId)
 async fn handle_bootstrap_request_async(
     database: Arc<Database>,
     grpc_pool: Arc<GrpcClientPool>,
+    message_service: Arc<MessageService>,
     peer_id: UserId,
     // The device that sent the REQUEST — the one waiting for our MESSAGE.
     peer_device_id: u32,
@@ -355,7 +358,16 @@ async fn handle_bootstrap_request_async(
 
     // Create DmBootstrap and initiate
     let dm_bootstrap = DmBootstrap::new(database.clone());
-    let mut anon_mailbox_client = AnonymousMailboxClient::new(channel.clone());
+    let mut anon_mailbox_client = if message_service
+        .shield_mode
+        .load(std::sync::atomic::Ordering::Acquire)
+    {
+        grpc_pool
+            .secret_mailbox_client()
+            .map_err(|e| format!("Shield bootstrap needs Tor: {e}"))?
+    } else {
+        grpc_pool.anonymous_mailbox_client()
+    };
 
     let bootstrap_result = dm_bootstrap
         .initiate_dm(peer_id, &mut anon_mailbox_client)
@@ -394,7 +406,16 @@ async fn handle_bootstrap_request_async(
 
     // Send to peer's device inbox via anonymous client (no AuthInterceptor)
     // to avoid dual-auth rejection — GRA-436
-    let mut anon_client = grpc_pool.anonymous_message_client();
+    let mut anon_client = if message_service
+        .shield_mode
+        .load(std::sync::atomic::Ordering::Acquire)
+    {
+        grpc_pool
+            .secret_message_client()
+            .map_err(|e| format!("Shield bootstrap needs Tor: {e}"))?
+    } else {
+        grpc_pool.anonymous_message_client()
+    };
 
     let sealed_msg = SealedSenderMessage {
         sealed_body: sealed_ciphertext,
@@ -465,7 +486,16 @@ async fn handle_bootstrap_async(
 
     // Anonymous mailbox client for mailbox creation (tokens come from the
     // pre-fetched batch, never requested here)
-    let mut anon_mailbox_client = AnonymousMailboxClient::new(channel.clone());
+    let mut anon_mailbox_client = if message_service
+        .shield_mode
+        .load(std::sync::atomic::Ordering::Acquire)
+    {
+        grpc_pool
+            .secret_mailbox_client()
+            .map_err(|e| format!("Shield bootstrap needs Tor: {e}"))?
+    } else {
+        grpc_pool.anonymous_mailbox_client()
+    };
 
     // A concurrent send may hold the lock across its REQUEST; taking the
     // MESSAGE over it beats `handle_incoming_bootstrap` dropping it.
@@ -514,7 +544,7 @@ async fn handle_bootstrap_async(
         our_device_id,
         &signal_service,
         &mut auth_client,
-        channel.clone(),
+        &mut anon_mailbox_client,
     )
     .await?;
 
@@ -641,8 +671,32 @@ pub(crate) async fn send_pending_messages_after_bootstrap(
         }
     };
 
-    let mut anon_mailbox_client = AnonymousMailboxClient::new(channel);
+    let mut anon_mailbox_client = if message_service
+        .shield_mode
+        .load(std::sync::atomic::Ordering::Acquire)
+    {
+        match message_service.grpc_pool.secret_mailbox_client() {
+            Ok(client) => client,
+            Err(error) => {
+                for (decoded, _) in queued {
+                    flush.record(
+                        decoded.as_ref().and_then(queued_bubble_timestamp),
+                        Err(format!("Shield mailbox needs Tor: {error}")),
+                    );
+                }
+                return Some(flush);
+            }
+        }
+    } else {
+        AnonymousMailboxClient::new(channel)
+    };
     for (decoded, content) in queued {
+        if decoded
+            .as_ref()
+            .is_some_and(|content| !message_service.queued_read_receipt_allowed(content))
+        {
+            continue;
+        }
         // Receipt targets before transport, exactly as `send_dm_content`
         // records them: the peer device's Receipt names this DataMessage
         // timestamp and is applied only against a snapshot that has it.
@@ -798,7 +852,7 @@ async fn send_bootstrap_response_with_envelope(
     our_device_id: u32,
     signal_service: &SignalService,
     auth_client: &mut AuthClient,
-    channel: crate::network::grpc::transport::GrpcTransport,
+    anon_client: &mut AnonymousMailboxClient,
 ) -> Result<(), String> {
     let peer_id = response.peer_id;
 
@@ -845,8 +899,6 @@ async fn send_bootstrap_response_with_envelope(
 
     // Send to peer's ephemeral mailbox (anonymous send, no auth required)
     // Uses anonymous client to avoid leaking device identity on anonymous endpoint
-    let mut anon_client = AnonymousMailboxClient::new(channel);
-
     anon_client
         .send_to_ephemeral_mailbox(
             response.peer_mailbox_public_key.to_vec(),
