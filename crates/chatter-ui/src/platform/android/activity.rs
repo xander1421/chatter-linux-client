@@ -138,6 +138,11 @@ pub extern "system" fn Java_com_chatter_client_MainActivity_nativeInitWebrtc(
 /// Receives only the core-owned decision, recomputed at navigation and mode
 /// transitions and when the Activity resumes.
 pub fn set_secure(secure: bool) {
+    // QA preview builds only: device testing drives the app over adb and needs
+    // screenshots of recovery, secret-chat and invite screens. A release build
+    // (no debug_assertions) always honours core's decision.
+    let secure = secure
+        && !(cfg!(debug_assertions) && option_env!("CHATTER_QA_ALLOW_CAPTURE") == Some("1"));
     let result = (|| -> Result<(), String> {
         let act = activity()?;
         with_jni_env(|env| {
