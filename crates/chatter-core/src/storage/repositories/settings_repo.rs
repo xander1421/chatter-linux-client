@@ -43,8 +43,6 @@ pub mod keys {
     pub const CURRENT_DEVICE_ID: &str = "auth.current_device_id";
     /// Device authentication token (32 bytes, base64 encoded)
     pub const DEVICE_AUTH_TOKEN: &str = "auth.device_token";
-    /// Last device name sent with RenameDevice (plain label, not secret).
-    pub const DEVICE_NAME_SENT: &str = "auth.device_name_sent";
     /// Recovery codes awaiting explicit acknowledgment. The SQLCipher settings
     /// database keeps the one-time plaintext available across app restarts.
     pub const UNACKNOWLEDGED_RECOVERY_CODES_PREFIX: &str = "auth.unacknowledged_recovery_codes.";
