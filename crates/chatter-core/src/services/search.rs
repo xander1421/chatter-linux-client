@@ -17,6 +17,16 @@ impl crate::client::ChatterClient {
         conversation_id: &crate::domain::ids::ChannelId,
         conversation_type: &crate::domain::message::ConversationType,
     ) -> String {
+        #[cfg(feature = "mesh")]
+        if matches!(
+            conversation_type,
+            crate::domain::message::ConversationType::Mesh
+                | crate::domain::message::ConversationType::MeshDm
+        ) {
+            return self
+                .mesh_conversation_name(conversation_id)
+                .unwrap_or_else(|| "Mesh chat".to_string());
+        }
         if *conversation_type == crate::domain::message::ConversationType::AnonDm {
             let id = crate::domain::anon_dm::AnonDmId::from_uuid(*conversation_id.as_uuid());
             if let Some(dm) = self.get_anon_dm_conversation(&id) {
@@ -55,6 +65,24 @@ impl crate::client::ChatterClient {
     /// with a readable self label and DM fallback for sealed sender rows.
     pub fn search_sender_display_name(&self, msg: &crate::domain::message::Message) -> String {
         use crate::domain::message::ConversationType;
+        #[cfg(feature = "mesh")]
+        if matches!(
+            msg.conversation_type,
+            ConversationType::Mesh | ConversationType::MeshDm
+        ) {
+            return msg
+                .sender_id
+                .as_ref()
+                .map(|sender| {
+                    if *sender == self.mesh_local_user_id() {
+                        "You".to_string()
+                    } else {
+                        self.mesh_sender_display_name(sender)
+                            .unwrap_or_else(|| "Unknown peer".to_string())
+                    }
+                })
+                .unwrap_or_else(|| "Unknown peer".to_string());
+        }
         if msg.sender_id.is_some() && msg.sender_id == self.session_current_user_id() {
             return "You".to_string();
         }

@@ -651,6 +651,12 @@ impl MeshTimeline {
             .map(|entry| entry.conversation.clone())
     }
 
+    /// The persisted sidebar label for an open mesh conversation.
+    #[must_use]
+    pub fn conversation_name(&self, id: &ChannelId) -> Option<String> {
+        self.open.lock().get(id).map(|entry| entry.label.clone())
+    }
+
     /// Panic wipe: destroy every mesh message and forget every conversation.
     ///
     /// Deletes by conversation *type*, not by walking the open directory.
