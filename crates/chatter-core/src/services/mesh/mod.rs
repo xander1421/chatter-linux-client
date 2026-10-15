@@ -512,6 +512,28 @@ impl MeshService {
         }
         self.binding_store
             .set_signal_opt_in(&owner.to_string(), peer, enabled)?;
+        // Offer our bundle now; the peer replies with theirs. Otherwise the
+        // exchange waits for the next Chatter Hello on a fresh Noise session.
+        if enabled && let Ok(Some((_, device))) = self.key_store.mesh_local_account_device() {
+            match signal_mesh::bundle_for_peer(
+                &self.key_store,
+                &self.binding_store,
+                &owner.to_string(),
+                peer,
+                device,
+                now_secs(),
+            ) {
+                Ok(bytes) => {
+                    let _ = self.ble.send(BleCommand::SignalBundle {
+                        peer: peer.clone(),
+                        bytes,
+                    });
+                }
+                Err(error) => {
+                    tracing::warn!(target: "mesh", %error, "mesh Signal bundle generation failed")
+                }
+            }
+        }
         Ok(())
     }
 

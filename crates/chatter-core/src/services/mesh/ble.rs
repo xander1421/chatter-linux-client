@@ -2241,6 +2241,7 @@ impl BleRuntime {
             self.state.with(|state| {
                 state.chatter_hello.accept(claimed, hello);
             });
+            tracing::info!(target: "mesh::ble", peer = %claimed, signal_capable, "Chatter Hello accepted");
             if signal_capable {
                 if let Ok(Some((owner, device))) = self.key_store.mesh_local_account_device() {
                     if let Some(static_key) = self
@@ -2255,7 +2256,7 @@ impl BleRuntime {
                         self.binding_store.state(&owner, claimed),
                         Ok(PeerBinding::Verified { .. })
                     ) {
-                        if let Ok(bytes) = signal_mesh::bundle_for_peer(
+                        match signal_mesh::bundle_for_peer(
                             &self.key_store,
                             &self.binding_store,
                             &owner,
@@ -2263,7 +2264,9 @@ impl BleRuntime {
                             device,
                             now_secs(),
                         ) {
-                            self.send_signal_bundle(claimed, &bytes).await;
+                            Ok(bytes) => self.send_signal_bundle(claimed, &bytes).await,
+                            Err(error) => tracing::warn!(target: "mesh::ble", peer = %claimed, %error,
+                                "mesh Signal bundle generation failed"),
                         }
                         if self.binding_store.signal_opted_in(&owner, claimed).ok() == Some(true)
                             && let Ok(pending) = self.binding_store.pending_mesh_carriers(
@@ -2308,6 +2311,7 @@ impl BleRuntime {
         }
         if let Some(frame) = BundleFrame::decode(&plaintext, now_secs()) {
             let Ok(Some((owner, device))) = self.key_store.mesh_local_account_device() else {
+                tracing::warn!(target: "mesh::ble", peer = %claimed, "mesh Signal bundle dropped: no local account");
                 return;
             };
             let Some(static_key) = self
@@ -2323,10 +2327,12 @@ impl BleRuntime {
             {
                 return;
             }
-            match self
+            let received = self
                 .binding_store
-                .receive_mesh_bundle(&owner, claimed, &frame, now_secs())
-            {
+                .receive_mesh_bundle(&owner, claimed, &frame, now_secs());
+            tracing::info!(target: "mesh::ble", peer = %claimed, ok = received.is_ok(),
+                new = matches!(received, Ok(true)), "mesh Signal bundle received");
+            match received {
                 Ok(true) if frame.reply_requested => {
                     if let Ok(bytes) = signal_mesh::bundle_for_peer(
                         &self.key_store,
@@ -2978,8 +2984,10 @@ impl BleRuntime {
     async fn send_signal_bundle(&mut self, peer: &PeerId, bytes: &[u8]) {
         let sealed = self.state.with(|state| state.sessions.encrypt(peer, bytes));
         let Ok(ciphertext) = sealed else {
+            tracing::warn!(target: "mesh::ble", %peer, "mesh Signal bundle not sent: no Noise session");
             return;
         };
+        tracing::info!(target: "mesh::ble", %peer, bytes = bytes.len(), "mesh Signal bundle sent");
         let packet = self.build_packet(
             MessageType::NoiseEncrypted,
             Some(peer),
