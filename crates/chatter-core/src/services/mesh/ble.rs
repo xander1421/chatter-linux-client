@@ -3033,6 +3033,13 @@ impl BleRuntime {
             }
             self.courier_signal_carrier(peer, &bytes, frame.message_id, frame.expires_at)
                 .await;
+            // In range but no Chatter Hello yet (sessions open lazily, e.g.
+            // after a restart): open one. The hello flushes queued carriers.
+            if self.state.can_write_to(peer)
+                && !self.state.with(|state| state.sessions.has_session(peer))
+            {
+                self.start_handshake(peer).await;
+            }
             return;
         }
         let mut packet = self.build_packet(
