@@ -47,6 +47,7 @@ pub(crate) struct PendingReceipt {
     conversation: ActiveConversation,
     read: bool,
     revision: u64,
+    shield: bool,
     timestamps: BTreeSet<u64>,
 }
 
@@ -1837,6 +1838,7 @@ impl ConversationHandle {
             return Ok(());
         }
         let auth = self.client.auth_state().get();
+        let shield = self.client.anon_mode_enabled();
         let unsent: Vec<u64> = {
             let sent = self.client.sent_receipts.lock();
             let previous = sent.iter().find(|entry| {
@@ -1871,6 +1873,7 @@ impl ConversationHandle {
                     conversation: self.conversation,
                     read,
                     revision: auth.session_revision,
+                    shield,
                     timestamps: unsent.iter().copied().collect(),
                 },
             );
@@ -1880,6 +1883,7 @@ impl ConversationHandle {
             entry.conversation == self.conversation
                 && entry.read == read
                 && entry.revision == auth.session_revision
+                && entry.shield == shield
         }) {
             if result.as_ref().err().is_some_and(retryable_receipt_error) {
                 entry.timestamps.extend(unsent.iter().copied());
@@ -1893,6 +1897,7 @@ impl ConversationHandle {
                 conversation: self.conversation,
                 read,
                 revision: auth.session_revision,
+                shield,
                 timestamps: unsent.iter().copied().collect(),
             });
         }
@@ -2530,7 +2535,11 @@ pub(crate) fn spawn_receipt_recovery(client: &Arc<ChatterClient>) -> tokio::task
             };
             let entries = {
                 let mut pending = client.pending_receipts.lock();
-                pending.retain(|entry| entry.revision == auth.session_revision);
+                pending.retain(|entry| {
+                    entry.revision == auth.session_revision
+                        && (!matches!(entry.conversation, ActiveConversation::ServerDm { .. })
+                            || entry.shield == client.anon_mode_enabled())
+                });
                 if !client.read_receipts_enabled().unwrap_or(true) {
                     pending.retain(|entry| !entry.read);
                 }
@@ -2542,6 +2551,11 @@ pub(crate) fn spawn_receipt_recovery(client: &Arc<ChatterClient>) -> tokio::task
             for entry in entries {
                 if client.auth_state().get().session_revision != entry.revision {
                     break;
+                }
+                if matches!(entry.conversation, ActiveConversation::ServerDm { .. })
+                    && entry.shield != client.anon_mode_enabled()
+                {
+                    continue;
                 }
                 if entry.read && !client.chat_state().is_app_visible() {
                     continue;
@@ -2570,6 +2584,7 @@ pub(crate) fn spawn_receipt_recovery(client: &Arc<ChatterClient>) -> tokio::task
                         current.conversation == entry.conversation
                             && current.read == entry.read
                             && current.revision == entry.revision
+                            && current.shield == entry.shield
                     }) {
                         for timestamp in &timestamps {
                             current.timestamps.remove(timestamp);
