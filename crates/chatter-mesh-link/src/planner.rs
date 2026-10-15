@@ -17,20 +17,24 @@ use std::collections::BTreeMap;
 
 use chatter_mesh::dedup::MessageDeduplicator;
 use chatter_mesh::ids::PeerId;
-use chatter_mesh::packet::{BROADCAST_RECIPIENT, BitchatPacket, MessageType};
+use chatter_mesh::packet::{BROADCAST_RECIPIENT, BitchatPacket, MessageType, SENDER_ID_LEN};
 use chatter_mesh::relay::MESSAGE_TTL_DEFAULT;
 
 use crate::fanout::{FanoutRequest, FanoutSelection, LinkCandidate, select_links};
 use crate::link::LinkId;
 
 /// Bytes a fragment costs on top of its chunk: the 13-byte fragment header, the
-/// 8-byte sender and 8-byte recipient, and the packet header.
+/// 8-byte sender and 8-byte recipient, and the packet header. A source route
+/// adds one count byte and eight bytes per hop; `plan` accounts for those from
+/// the packet because they vary per send.
 ///
 /// Swift's `BLEOutboundPacketPolicy.fragmentFrameOverhead` counts a 13-byte
 /// header, but the encoded header is 14 bytes in v1 and 16 in v2
 /// (`chatter_mesh::codec`), so a full chunk overran the link limit by 1-3
 /// bytes and the radio refused it. Budget for the larger v2 header.
-pub const FRAGMENT_FRAME_OVERHEAD: usize = 13 + 8 + 8 + 16;
+pub const FRAGMENT_FRAME_OVERHEAD: usize = chatter_mesh::fragment::FRAGMENT_HEADER_LEN
+    + SENDER_ID_LEN * 2
+    + chatter_mesh::codec::V2_HEADER_SIZE;
 
 /// Smallest chunk a fragment may carry, `BLEOutboundFragmentPlanner.minimumChunkSize`.
 ///
@@ -183,7 +187,17 @@ pub fn plan(req: &OutboundPlanRequest<'_>) -> OutboundPlan {
     if let Some(limit) = over_mtu {
         return OutboundPlan {
             directed_peer,
-            fragment_chunk_size: Some(fragment_chunk_size(limit)),
+            fragment_chunk_size: Some(
+                fragment_chunk_size(limit)
+                    .saturating_sub(
+                        packet
+                            .route
+                            .as_ref()
+                            .filter(|route| !route.is_empty())
+                            .map_or(0, |route| 1 + route.len() * SENDER_ID_LEN),
+                    )
+                    .max(MIN_FRAGMENT_CHUNK),
+            ),
             selected,
             should_spool_directed: false,
         };

@@ -200,6 +200,8 @@ struct StreamKey {
 struct Assembly {
     /// `total` from the fragment that opened the stream.
     total: u16,
+    /// Type of the packet being reassembled, for loss attribution.
+    original_type: u8,
     /// When the stream opened. Drives expiry.
     started_at: u64,
     /// Whether this stream reassembles a broadcast packet. Only broadcast
@@ -221,6 +223,8 @@ pub struct ExpiredStream {
     pub received: u16,
     /// `total` from the fragment that opened the stream.
     pub expected: u16,
+    /// Original message type carried by the fragments.
+    pub original_type: u8,
     /// Whether a targeted REQUEST_SYNC could have recovered it.
     pub is_broadcast: bool,
 }
@@ -278,6 +282,7 @@ impl FragmentAssembler {
                 key,
                 Assembly {
                     total: header.total,
+                    original_type: header.original_type,
                     started_at: now_unix_secs,
                     is_broadcast,
                     last_fragment_at: now_unix_secs,
@@ -371,6 +376,7 @@ impl FragmentAssembler {
                 sender: key.sender,
                 received: assembly.chunks.len() as u16,
                 expected: assembly.total,
+                original_type: assembly.original_type,
                 is_broadcast: assembly.is_broadcast,
             });
             false
