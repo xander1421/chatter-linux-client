@@ -352,6 +352,12 @@ pub enum InboxEvent {
         /// Authenticated sender device, never a device claimed inside the receipt.
         sender_device_id: u32,
     },
+    /// A linked device received the original channel receipt targets; any
+    /// earlier peer receipt may have just changed the outgoing aggregate.
+    ChannelReceiptTargetsSynced {
+        channel_id: ChannelId,
+        timestamp: u64,
+    },
     /// Channel unread count was updated.
     ChannelUnreadCountUpdated {
         /// Channel ID.

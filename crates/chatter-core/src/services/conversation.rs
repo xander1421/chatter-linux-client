@@ -1796,6 +1796,10 @@ impl ConversationHandle {
             // Groups don't track per-user read state to preserve sender anonymity.
             ActiveConversation::AnonGroup(_) => Ok(()),
             ActiveConversation::None => Err(ConversationError::NoConversation),
+            ActiveConversation::Channel(channel) => self.client.messages()
+                .send_channel_receipt(*channel, timestamps, true)
+                .await
+                .map_err(ConversationError::Message),
             _ => {
                 let content = crate::services::gateway::build_read_receipt_content_with_channel(
                     timestamps.to_vec(),
@@ -1824,6 +1828,10 @@ impl ConversationHandle {
             // Groups don't track per-user delivery state to preserve sender anonymity.
             ActiveConversation::AnonGroup(_) => Ok(()),
             ActiveConversation::None => Err(ConversationError::NoConversation),
+            ActiveConversation::Channel(channel) => self.client.messages()
+                .send_channel_receipt(*channel, timestamps, false)
+                .await
+                .map_err(ConversationError::Message),
             _ => {
                 let content = crate::services::gateway::build_delivery_receipt_content_with_channel(
                     timestamps.to_vec(),

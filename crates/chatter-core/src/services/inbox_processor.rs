@@ -1390,6 +1390,23 @@ impl InboxEventProcessor {
                 }
             }
 
+            InboxEvent::ChannelReceiptTargetsSynced { channel_id, timestamp } => {
+                if let (Ok(me), Ok(Some(message))) = (
+                    self.message_service.current_user_id(),
+                    self.message_service.message_repo.get_by_conversation_timestamp(channel_id, *timestamp),
+                ) {
+                    if message.sender_id == Some(me)
+                        && message.conversation_type == crate::domain::message::ConversationType::Channel
+                    {
+                        self.event_bus.emit_domain(DomainEvent::MessageDeliveryChanged {
+                            message_id: message.id,
+                            channel_id: *channel_id,
+                            status: message.delivery_status,
+                        });
+                    }
+                }
+            }
+
             // =================================================================
             // Typing indicators — bridge inbox events to TypingStarted/Stopped
             // domain events (consumed by events/handlers.rs → chat state → UI).

@@ -292,6 +292,7 @@ async fn process_sealed_sender_group_message(
     };
 
     match outcome {
+        SealedSenderResult::ChannelReceiptTargetsSynced { .. } => {}
         SealedSenderResult::MessageStored => {
             tracing::debug!(
                 group_id = %group_id,
