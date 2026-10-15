@@ -1919,6 +1919,7 @@ dependencies = [
 name = "chatter-core"
 version = "0.1.0"
 dependencies = [
+ "ab_glyph",
  "aes",
  "aes-gcm",
  "anyhow",
