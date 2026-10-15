@@ -1411,19 +1411,9 @@ impl LinkDeviceService {
             approved_by_self: true,
         });
 
-        // OS toast — quietly best-effort, don't fail the approval if the
-        // platform notification daemon is missing.
-        let title = "New device linked";
-        let body = match &req.device_name {
-            Some(name) if !name.is_empty() => format!("Linked: {name}"),
-            _ => "A new device just joined your account.".to_string(),
-        };
-        if let Err(e) = self
-            .notifications
-            .show_message(title, &body, NotificationPriority::Normal)
-        {
-            tracing::warn!(error = %e, "DeviceLinked OS notification failed");
-        }
+        // No OS toast here: the approve screen confirms it, and the server's
+        // DeviceLinked fan-out reaches this device too — a second toast here
+        // posted two notifications for one link.
 
         Ok(ApprovedDevice {
             uuid: req.uuid,

@@ -666,7 +666,7 @@ pub fn spawn_notification_listener(
                             format!("\"{}\" is now linked to your account.", name)
                         }
                         (_, Some(info)) if !info.is_empty() => {
-                            format!("A {} was just linked to your account.", info)
+                            format!("{} was just linked to your account.", info)
                         }
                         _ => "A new device was just linked to your account.".to_string(),
                     };
