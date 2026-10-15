@@ -362,11 +362,13 @@ export component MainWindow inherits Window {
     in property <string> register-error: "";
     in property <image> register-avatar-source;
     in property <bool> register-has-avatar: false;
-    in-out property <int> register-selected-default-idx: -1;
+    in-out property <int> register-selected-default-idx: 0;
+    in-out property <color> register-avatar-color: Colors.avatar-teal;
     in property <int> register-password-strength: 0;
     in property <int> register-pin-strength: 0;
     callback register-select-avatar();
     callback register-select-default-avatar(int);
+    callback register-remove-avatar();
     pure callback register-username-validation(string) -> string;
     callback register-password-changed(string);
     callback register-pin-changed(string);
@@ -1844,6 +1846,7 @@ export component MainWindow inherits Window {
                 avatar-source: root.register-avatar-source;
                 has-avatar: root.register-has-avatar;
                 selected-default-idx <=> root.register-selected-default-idx;
+                avatar-color <=> root.register-avatar-color;
                 password-strength: root.register-password-strength;
                 pin-strength: root.register-pin-strength;
                 server-unreachable: root.server-unreachable;
@@ -1867,6 +1870,7 @@ export component MainWindow inherits Window {
                 select-default-avatar(idx) => {
                     root.register-select-default-avatar(idx);
                 }
+                remove-avatar => { root.register-remove-avatar(); }
                 go-to-login => {
                     root.go-to-login();
                 }

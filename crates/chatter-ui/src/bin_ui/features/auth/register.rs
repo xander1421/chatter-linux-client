@@ -13,21 +13,6 @@ fn selected_avatar() -> &'static Mutex<Option<Vec<u8>>> {
     INSTANCE.get_or_init(|| Mutex::new(None))
 }
 
-const DEFAULT_AVATARS: &[&[u8]] = &[
-    include_bytes!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../assets/avatars/pepe.jpg"
-    )),
-    include_bytes!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../assets/avatars/doge.jpg"
-    )),
-    include_bytes!(concat!(
-        env!("CARGO_MANIFEST_DIR"),
-        "/../../assets/avatars/wojak.jpg"
-    )),
-];
-
 use super::initial_data::load_initial_data;
 use crate::MainWindow;
 
@@ -43,38 +28,28 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     window.on_register_select_default_avatar({
         let weak = weak_window.clone();
         move |idx| {
-            let idx = idx as usize;
-            if idx < DEFAULT_AVATARS.len() {
-                let bytes = DEFAULT_AVATARS[idx].to_vec();
+            if (0..3).contains(&idx) {
                 if let Ok(mut g) = selected_avatar().lock() {
-                    *g = Some(bytes.clone());
+                    *g = None;
                 }
+                if let Some(w) = weak.upgrade() {
+                    w.set_register_has_avatar(false);
+                    w.set_register_avatar_source(slint::Image::default());
+                    w.set_register_selected_default_idx(idx);
+                }
+            }
+        }
+    });
 
-                let weak = weak.clone();
-                // Move image decoding to background thread
-                std::thread::spawn(move || {
-                    // Decode image off UI thread
-                    let decoded = image::load_from_memory(&bytes).ok().map(|img| {
-                        let rgba = img.to_rgba8();
-                        let (w_img, h_img) = rgba.dimensions();
-                        (rgba.into_raw(), w_img, h_img)
-                    });
-
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_register_has_avatar(true);
-                            w.set_register_selected_default_idx(idx as i32);
-
-                            if let Some((pixels, width, height)) = decoded {
-                                w.set_register_avatar_source(
-                                    crate::bin_ui::slint_conversions::rgba_to_slint_image(
-                                        &pixels, width, height,
-                                    ),
-                                );
-                            }
-                        }
-                    });
-                });
+    window.on_register_remove_avatar({
+        let weak = weak_window.clone();
+        move || {
+            if let Ok(mut g) = selected_avatar().lock() {
+                *g = None;
+            }
+            if let Some(w) = weak.upgrade() {
+                w.set_register_has_avatar(false);
+                w.set_register_avatar_source(slint::Image::default());
             }
         }
     });
@@ -112,9 +87,6 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     if let Some(path) = picked {
                         match std::fs::read(&path) {
                             Ok(bytes) => {
-                                // Store bytes for registration
-                                if let Ok(mut g) = selected_avatar().lock() { *g = Some(bytes.clone()); }
-
                                 // Decode image BEFORE invoke_from_event_loop (already in tokio::spawn)
                                 let decoded = image::load_from_memory(&bytes).ok().map(|img| {
                                     let rgba = img.to_rgba8();
@@ -125,11 +97,9 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 // Update UI preview
                                 let _ = slint::invoke_from_event_loop(move || {
                                     if let Some(w) = weak.upgrade() {
-                                        // Reset default index
-                                        w.set_register_selected_default_idx(-1);
-
                                         // Create slint::Image from pre-decoded pixels
                                         if let Some((pixels, width, height)) = decoded {
+                                            if let Ok(mut g) = selected_avatar().lock() { *g = Some(bytes); }
                                             w.set_register_avatar_source(crate::bin_ui::slint_conversions::rgba_to_slint_image(&pixels, width, height,));
                                             w.set_register_has_avatar(true);
                                         } else {
@@ -211,17 +181,18 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 }
             }
 
-            // Prepare avatar bytes synchronously
+            // Prepare the uploaded avatar from the current name and color.
             let avatar_bytes = {
                 let user_avatar = selected_avatar().lock().ok().and_then(|g| g.clone());
                 if let Some(bytes) = user_avatar {
                     bytes
                 } else {
-                    let random_idx = std::time::SystemTime::now()
-                        .duration_since(std::time::UNIX_EPOCH)
-                        .unwrap()
-                        .as_millis() as usize % DEFAULT_AVATARS.len();
-                    DEFAULT_AVATARS[random_idx].to_vec()
+                    let color = weak_window.upgrade()
+                        .map(|w| w.get_register_avatar_color())
+                        .unwrap_or_else(|| slint::Color::from_rgb_u8(15, 118, 110));
+                    chatter_core::ui::registration_avatar(
+                        &display_name, [color.red(), color.green(), color.blue()]
+                    ).unwrap_or_default()
                 }
             };
 

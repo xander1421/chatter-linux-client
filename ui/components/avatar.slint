@@ -24,6 +24,7 @@ export component Avatar inherits Rectangle {
     // Colored background for letter-based fallback avatars.
     // When set (non-transparent), overrides default surface color for the fallback circle.
     in property <color> fallback-bg: transparent;
+    in property <color> fallback-fg: Colors.text-primary;
 
     accessible-role: image;
     accessible-label: root.name != "" ? "Avatar for " + root.name
@@ -51,8 +52,9 @@ export component Avatar inherits Rectangle {
         if root.source.width <= 0: Text {
             width: 100%;
             height: 100%;
-            text: root.name != "" ? AvatarText.initials(root.name) : root.fallback-text;
-            color: Colors.text-primary;
+            text: root.name != "" && AvatarText.initials(root.name) != ""
+                ? AvatarText.initials(root.name) : root.fallback-text;
+            color: root.fallback-fg;
             font-size: root.size * 0.4;
             font-weight: Typography.semibold;
             horizontal-alignment: center;

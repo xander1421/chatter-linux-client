@@ -25,7 +25,9 @@ export component RegisterPage inherits Rectangle {
     in property <string> error: "";
     in property <image> avatar-source;
     in property <bool> has-avatar: false;
-    in property <int> selected-default-idx: -1;
+    in property <int> selected-default-idx: 0;
+    in-out property <color> avatar-color: Colors.avatar-teal;
+    property <bool> avatar-menu-open: false;
     // Touch density for the Shield header control.
     in property <bool> touch: false;
     
@@ -69,6 +71,7 @@ export component RegisterPage inherits Rectangle {
     callback pin-changed(string);
     callback select-avatar();
     callback select-default-avatar(int);
+    callback remove-avatar();
     callback go-to-login();
     callback continue-without-account();
 
@@ -137,16 +140,14 @@ export component RegisterPage inherits Rectangle {
         }
 
         flick := Flickable {
-            viewport-height: content.preferred-height;
+            viewport-height: max(self.height, content.preferred-height);
             interactive: content.preferred-height > self.height;
 
             content := VerticalLayout {
                 padding: Spacing.lg;
                 spacing: Spacing.none;
-                // Centre the card (see login.slint).
+                alignment: center;
                 cross-axis-alignment: center;
-
-                Rectangle { height: Spacing.xl; }
 
                 Rectangle {
                     width: min(480px, flick.width - 2 * Spacing.lg);
@@ -206,71 +207,111 @@ export component RegisterPage inherits Rectangle {
                                 horizontal-alignment: center;
                             }
 
-                            // Avatar selection
-                            HorizontalLayout {
+                            // The preview uses the shared Avatar initials renderer.
+                            VerticalLayout {
                                 alignment: center;
-                                spacing: Spacing.md;
+                                spacing: Spacing.sm;
 
                                 Rectangle {
                                     accessible-role: button;
-                                    accessible-label: "Upload custom avatar";
-                                    width: 80px;
-                                    height: 80px;
-                                    border-radius: 40px;
-                                    background: Colors.surface-hover;
-                                    clip: true;
+                                    accessible-label: "Edit profile photo";
+                                    width: 96px;
+                                    height: 96px;
+                                    background: transparent;
                                     transform-scale-x: avatar-touch.pressed ? 94% : 100%;
                                     transform-scale-y: avatar-touch.pressed ? 94% : 100%;
                                     animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
                                     animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
 
                                     Avatar {
-                                        size: 80px;
-                                        source: root.has-avatar ? root.avatar-source : @image-url("../../assets/icon-256.png");
-                                        fallback-text: "+";
+                                        size: 96px;
+                                        source: root.avatar-source;
+                                        name: root.display-name;
+                                        fallback-text: "?";
+                                        fallback-bg: root.avatar-color;
+                                        fallback-fg: Colors.on-action;
+                                    }
+
+                                    Rectangle {
+                                        x: parent.width - self.width;
+                                        y: parent.height - self.height;
+                                        width: 30px;
+                                        height: 30px;
+                                        border-radius: 15px;
+                                        background: Colors.action-fill;
+                                        border-width: Spacing.stroke;
+                                        border-color: Colors.surface;
+                                        Text {
+                                            text: "✎";
+                                            color: Colors.on-action;
+                                            font-size: Typography.sm;
+                                            horizontal-alignment: center;
+                                            vertical-alignment: center;
+                                        }
                                     }
 
                                     avatar-touch := TouchArea {
                                         enabled: !root.loading;
-                                        clicked => { root.select-avatar(); }
+                                        clicked => { root.avatar-menu-open = !root.avatar-menu-open; }
                                     }
                                 }
 
-                                // Default avatar color presets
-                                for preset[i] in [
-                                    { color: Colors.primary, letter: "A" },
-                                    { color: Colors.info, letter: "B" },
-                                    { color: Colors.group-accent, letter: "C" },
-                                ]: Rectangle {
-                                    accessible-role: button;
-                                    accessible-label: "Default avatar " + preset.letter;
-                                    width: 44px;
-                                    height: 44px;
-                                    border-radius: 22px;
-                                    background: preset.color;
-                                    // Selected state. text-primary, not the usual
-                                    // Colors.primary: preset A IS primary.
-                                    border-width: root.selected-default-idx == i ? Spacing.stroke : 0px;
-                                    border-color: Colors.text-primary;
-                                    transform-scale-x: preset-touch.pressed ? 90% : root.selected-default-idx == i ? 108% : 100%;
-                                    transform-scale-y: preset-touch.pressed ? 90% : root.selected-default-idx == i ? 108% : 100%;
-                                    animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; }
-                                    animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
-
-                                    Text {
-                                        text: preset.letter;
-                                        color: Colors.text-primary;
-                                        font-size: Typography.lg;
-                                        font-weight: Typography.semibold;
-                                        horizontal-alignment: center;
-                                        vertical-alignment: center;
-                                        width: 100%;
-                                        height: 100%;
+                                if root.avatar-menu-open: HorizontalLayout {
+                                    alignment: center;
+                                    spacing: Spacing.md;
+                                    Button {
+                                        text: "Choose photo";
+                                        variant: "secondary";
+                                        clicked => { root.avatar-menu-open = false; root.select-avatar(); }
                                     }
+                                    if root.has-avatar: Button {
+                                        text: "Remove photo";
+                                        variant: "secondary";
+                                        clicked => { root.avatar-menu-open = false; root.remove-avatar(); }
+                                    }
+                                }
+                            }
 
-                                    preset-touch := TouchArea {
-                                        enabled: !root.loading;
-                                        clicked => { root.select-default-avatar(i); }
+                            VerticalLayout {
+                                alignment: center;
+                                spacing: Spacing.xs;
+                                Text {
+                                    text: "Initials color";
+                                    color: Colors.text-muted;
+                                    font-size: Typography.xs;
+                                    horizontal-alignment: center;
+                                }
+                                HorizontalLayout {
+                                    alignment: center;
+                                    spacing: Spacing.md;
+                                    for preset[i] in [
+                                    { color: Colors.avatar-teal, label: "Teal" },
+                                    { color: Colors.avatar-blue, label: "Blue" },
+                                    { color: Colors.avatar-purple, label: "Purple" },
+                                    ]: Rectangle {
+                                        accessible-role: button;
+                                        accessible-label: preset.label + " avatar color" + (root.selected-default-idx == i ? ", selected" : "");
+                                        width: Spacing.touch-target-min;
+                                        height: Spacing.touch-target-min;
+                                        border-radius: self.width / 2;
+                                        background: transparent;
+                                        border-width: root.selected-default-idx == i ? Spacing.stroke : 0px;
+                                        border-color: Colors.text-primary;
+                                        Rectangle {
+                                            x: (parent.width - self.width) / 2;
+                                            y: (parent.height - self.height) / 2;
+                                            width: 34px;
+                                            height: 34px;
+                                            border-radius: self.width / 2;
+                                            background: preset.color;
+                                        }
+                                        TouchArea {
+                                            enabled: !root.loading;
+                                            clicked => {
+                                                root.avatar-color = preset.color;
+                                                root.select-default-avatar(i);
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -538,8 +579,6 @@ export component RegisterPage inherits Rectangle {
                     }
                 }
 
-                // Bottom spacer
-                Rectangle { height: Spacing.xl; }
             }
         }
     }
