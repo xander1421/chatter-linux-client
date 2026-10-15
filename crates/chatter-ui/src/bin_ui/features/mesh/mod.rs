@@ -103,7 +103,7 @@ pub fn clear_active(window: &MainWindow) {
     global.set_private_remove_pending("".into());
     global.set_private_can_manage(false);
     global.set_private_removable_members(ModelRc::new(VecModel::from(
-        Vec::<slint::SharedString>::new(),
+        Vec::<crate::PrivateChannelMemberData>::new(),
     )));
     // The mesh set its own placeholder; leaving it would label a DM "everyone
     // in radio range".
@@ -744,17 +744,20 @@ pub fn refresh_rows(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 );
                 global.set_active_signal_enabled(false);
                 global.set_active_protection_label("Private epoch key · invited devices".into());
-                let members: Vec<slint::SharedString> = ui_ctx
+                let members: Vec<crate::PrivateChannelMemberData> = ui_ctx
                     .mesh_private_channel_removable_members(row.scope.as_str())
                     .unwrap_or_default()
                     .into_iter()
-                    .map(Into::into)
+                    .map(|member| crate::PrivateChannelMemberData {
+                        peer_id: member.peer_id.into(),
+                        display_name: member.display_name.into(),
+                    })
                     .collect();
                 global.set_private_removable_members(ModelRc::new(VecModel::from(members)));
             } else {
                 global.set_private_can_manage(false);
                 global.set_private_removable_members(ModelRc::new(VecModel::from(Vec::<
-                    slint::SharedString,
+                    crate::PrivateChannelMemberData,
                 >::new(
                 ))));
                 global.set_active_signal_enabled(
