@@ -90,6 +90,7 @@ pub fn kind_of(conversation: &MeshConversation) -> &'static str {
         MeshConversation::Room => "room",
         MeshConversation::Geohash(_) => "geohash",
         MeshConversation::Channel(_) => "channel",
+        MeshConversation::PrivateChannel(_) => "private-channel",
         MeshConversation::Dm(_) => "dm",
     }
 }
@@ -101,6 +102,7 @@ pub fn scope_of(conversation: &MeshConversation) -> String {
         MeshConversation::Room => String::new(),
         MeshConversation::Geohash(cell) => cell.clone(),
         MeshConversation::Channel(name) => name.clone(),
+        MeshConversation::PrivateChannel(id) => id.clone(),
         MeshConversation::Dm(peer) => peer.as_str().to_string(),
     }
 }

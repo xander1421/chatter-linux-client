@@ -27,9 +27,8 @@ impl ChatterHello {
     pub fn new(nonce: [u8; 16]) -> Self {
         Self {
             versions: vec![HELLO_VERSION],
-            // The Signal bit is private to an established Noise peer. QR
-            // channels remain disabled until their own send path exists.
-            capabilities: SIGNAL_MESH,
+            // Advertise only inside Noise; neither capability reaches announces.
+            capabilities: SIGNAL_MESH | QR_CHANNELS,
             max_carrier_bytes: 4 * 1024,
             nonce,
         }

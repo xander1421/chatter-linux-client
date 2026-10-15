@@ -111,6 +111,18 @@ pub enum BleCommand {
     ChannelPresence {
         name: String,
     },
+    PrivateJoinRequest {
+        creator: PeerId,
+        bytes: Vec<u8>,
+    },
+    PrivateEpoch {
+        peer: PeerId,
+        bytes: Vec<u8>,
+    },
+    PrivateChannelMessage {
+        channel_id: String,
+        bytes: Vec<u8>,
+    },
     /// Broadcast a file into the mesh room.
     ///
     /// The TLV arrives already built and already size-checked: the service reads

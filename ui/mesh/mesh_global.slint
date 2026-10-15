@@ -15,14 +15,12 @@ export struct MeshConversationData {
     // Stable conversation id (the `ChannelId` core derived for this scope).
     // This is the key handed back on selection.
     id: string,
-    // "room" | "geohash" | "dm". Decides the glyph and the wording; the UI
+    // "room" | "geohash" | "channel" | "private-channel" | "dm".
     // never sniffs the id to work this out.
     kind: string,
     // Display title: "Mesh room", "#u4pruy", or a peer's nickname.
     title: string,
-    // The scope published alongside every message: the geohash cell for
-    // "geohash", the peer id for "dm", empty for the room. Shown verbatim so
-    // the user always knows what they are speaking into.
+    // Core's local scope identifier; private channel ids are never broadcast.
     scope: string,
     timestamp: string,
     unread-count: int,
@@ -77,6 +75,16 @@ export global MeshGlobal {
     callback leave-channel(string);
     callback toggle-channel-mute(string);
     callback toggle-peer-block(string);
+    callback create-private-channel(string);
+    callback join-private-channel(string);
+    callback open-private-scanner();
+    callback invite-private-channel(string, string);
+    callback remove-private-member(string, string);
+    in-out property <image> private-invite-image;
+    in-out property <bool> private-invite-visible: false;
+    in-out property <[string]> private-removable-members: [];
+    in-out property <string> private-remove-pending: "";
+    in-out property <bool> private-can-manage: false;
 
     // Set the switch. Persists the preference and starts or stops the radio.
     callback set-mesh-on(bool);
@@ -92,6 +100,7 @@ export global MeshGlobal {
     out property <bool> context-strip-needed:
         MeshGlobal.notice != ""
         || MeshGlobal.binding-qr-visible
+        || MeshGlobal.active-kind == "private-channel"
         || (MeshGlobal.active-kind == "dm" && (!MeshGlobal.active-verified || MeshGlobal.identity-panel-open))
         || !MeshGlobal.mesh-on
         || !MeshGlobal.radio-running

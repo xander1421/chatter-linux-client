@@ -302,7 +302,7 @@ export component MessageComposer inherits GlassSurface {
         duration: Materials.motion-standard;
         easing: Materials.spring;
     }
-    property <bool> show-attachment-action: !root.is-editing && (MeshGlobal.active-id == "" || MeshGlobal.active-kind != "dm");
+    property <bool> show-attachment-action: !root.is-editing && (MeshGlobal.active-id == "" || (MeshGlobal.active-kind != "dm" && MeshGlobal.active-kind != "private-channel"));
     property <bool> show-terminal-action: root.can-send || (!root.is-editing && MeshGlobal.active-id == "");
     property <length> action-shell-height: Spacing.touch-target-min + row-padding * 2;
     property <length> attachment-chip-height: Spacing.touch-target-min;

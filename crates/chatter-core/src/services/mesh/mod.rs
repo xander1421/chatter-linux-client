@@ -44,6 +44,7 @@ pub mod mapping;
 pub(crate) mod mock;
 pub mod nostr;
 pub mod prekeys;
+pub mod private_channel;
 pub mod radio;
 pub mod router;
 pub mod session;
@@ -88,6 +89,7 @@ use crate::storage::mesh_binding_store::{BindingMethod, MeshBindingStore, PeerBi
 use crate::storage::mesh_identity_store::MeshIdentityStore;
 use crate::storage::repositories::MessageRepository;
 use account_binding::{BindingQr, BindingV1, PROOF_TTL_SECS};
+use private_channel::{PrivateChannel, PrivateChannelStore};
 
 pub use config::MeshConfig;
 pub use error::MeshError;
@@ -114,6 +116,7 @@ pub struct MeshDeps {
     /// Account key access is used only after a user selects a peer to share with.
     pub key_store: Arc<KeyStore>,
     pub binding_store: Arc<MeshBindingStore>,
+    pub private_channels: Arc<PrivateChannelStore>,
     /// The mesh keypair store. Owns the only long-term secret this service has.
     pub identity_store: Arc<MeshIdentityStore>,
     /// Durable, already-sealed storage for the store-and-forward stack.
@@ -203,6 +206,7 @@ impl<T> CommandBus<T> {
 pub struct MeshService {
     key_store: Arc<KeyStore>,
     binding_store: Arc<MeshBindingStore>,
+    private_channels: Arc<PrivateChannelStore>,
     signal_lock: Arc<Mutex<()>>,
     identity: Arc<MeshIdentity>,
     /// Retained so a panic wipe can destroy the keypair, not merely the mail.
@@ -645,6 +649,11 @@ impl MeshService {
             deps.deliveries,
             deps.attachments,
         ));
+        for channel in deps.private_channels.list()? {
+            if channel.member_key(&identity.peer_id()).is_some() {
+                timeline.open_private_channel(&channel.id, &channel.name);
+            }
+        }
         let events = MeshEvents::new(EVENT_CAPACITY, Arc::clone(&timeline));
 
         // The receivers for the first channel are dropped: nothing runs until
@@ -687,6 +696,7 @@ impl MeshService {
         Ok(Self {
             key_store: deps.key_store,
             binding_store: deps.binding_store,
+            private_channels: deps.private_channels,
             signal_lock: Arc::new(Mutex::new(())),
             identity,
             config,
@@ -767,6 +777,7 @@ impl MeshService {
                 self.storage.clone(),
                 Arc::clone(&self.sealer),
                 Arc::clone(&self.binding_store),
+                Arc::clone(&self.private_channels),
                 Arc::clone(&self.key_store),
                 Arc::clone(&self.signal_lock),
             );
@@ -1036,6 +1047,155 @@ impl MeshService {
             .ble
             .send(BleCommand::ChannelPresence { name: name.clone() });
         Ok(name)
+    }
+
+    /// Create a local, creator-managed channel. No name or roster is broadcast.
+    pub fn create_private_channel(&self, name: &str) -> Result<String, MeshError> {
+        let state = PrivateChannel::create(name, &self.identity)?;
+        self.private_channels.save(&state)?;
+        self.timeline.open_private_channel(&state.id, &state.name);
+        Ok(state.id)
+    }
+
+    /// Produce a short-lived QR for the selected nearby peer. Only that peer
+    /// may redeem it over the current authenticated Noise session.
+    pub fn private_channel_invite(&self, id: &str, peer: &PeerId) -> Result<String, MeshError> {
+        if !self.state.with(|s| {
+            s.sessions.has_session(peer)
+                && s.chatter_hello
+                    .get(peer)
+                    .is_some_and(|hello| hello.capabilities & chatter_hello::QR_CHANNELS != 0)
+        }) {
+            return Err(MeshError::Binding(
+                "wait for an encrypted Chatter peer connection".into(),
+            ));
+        }
+        let mut state = self
+            .private_channels
+            .load(id)?
+            .ok_or_else(|| MeshError::Binding("unknown private channel".into()))?;
+        let text = state.invite(&self.identity, peer, now_secs())?;
+        self.private_channels.save(&state)?;
+        Ok(text)
+    }
+
+    pub fn private_channel_invite_png(
+        &self,
+        id: &str,
+        peer: &PeerId,
+    ) -> Result<Vec<u8>, MeshError> {
+        use image::{ImageEncoder, Luma};
+        let text = self.private_channel_invite(id, peer)?;
+        let qr = qrcode::QrCode::new(text.as_bytes())
+            .map_err(|e| MeshError::Binding(format!("could not encode private channel QR: {e}")))?;
+        let image = qr.render::<Luma<u8>>().quiet_zone(true).build();
+        let scaled =
+            image::imageops::resize(&image, 512, 512, image::imageops::FilterType::Nearest);
+        let mut bytes = Vec::new();
+        image::codecs::png::PngEncoder::new(&mut bytes)
+            .write_image(scaled.as_raw(), 512, 512, image::ExtendedColorType::L8)
+            .map_err(|e| MeshError::Binding(format!("could not render private channel QR: {e}")))?;
+        Ok(bytes)
+    }
+
+    pub fn join_private_channel(&self, qr: &str) -> Result<(), MeshError> {
+        let invite = private_channel::Invite::from_text(qr, now_secs())
+            .ok_or_else(|| MeshError::Binding("invalid or expired private channel QR".into()))?;
+        if invite.target != self.identity.peer_id().as_str() {
+            return Err(MeshError::Binding(
+                "this QR was issued to another device".into(),
+            ));
+        }
+        let creator = PeerId::from_str(&invite.creator);
+        if !self.state.with(|s| {
+            s.sessions.has_session(&creator)
+                && s.chatter_hello
+                    .get(&creator)
+                    .is_some_and(|hello| hello.capabilities & chatter_hello::QR_CHANNELS != 0)
+        }) {
+            return Err(MeshError::Binding(
+                "connect to the creator as a Chatter mesh peer before scanning".into(),
+            ));
+        }
+        self.private_channels.save_pending(&invite)?;
+        self.ble
+            .send(BleCommand::PrivateJoinRequest {
+                creator,
+                bytes: invite
+                    .request_bytes()
+                    .ok_or_else(|| MeshError::Binding("invalid private channel QR".into()))?,
+            })
+            .map_err(|_| MeshError::NotRunning)
+    }
+
+    pub fn remove_private_channel_member(&self, id: &str, peer: &PeerId) -> Result<(), MeshError> {
+        let mut state = self
+            .private_channels
+            .load(id)?
+            .ok_or_else(|| MeshError::Binding("unknown private channel".into()))?;
+        state.rotate(&self.identity, None, Some(peer))?;
+        self.private_channels.save(&state)?;
+        let bytes = state.update_bytes()?;
+        for member in &state.members {
+            if member.peer != self.identity.peer_id().as_str() {
+                self.ble
+                    .send(BleCommand::PrivateEpoch {
+                        peer: PeerId::from_str(&member.peer),
+                        bytes: bytes.clone(),
+                    })
+                    .map_err(|_| MeshError::NotRunning)?;
+            }
+        }
+        Ok(())
+    }
+
+    pub fn private_channel_removable_members(&self, id: &str) -> Result<Vec<String>, MeshError> {
+        let state = self
+            .private_channels
+            .load(id)?
+            .ok_or_else(|| MeshError::Binding("unknown private channel".into()))?;
+        if state.creator != self.identity.peer_id().as_str() {
+            return Ok(Vec::new());
+        }
+        Ok(state
+            .members
+            .iter()
+            .filter(|member| member.peer != state.creator)
+            .map(|member| member.peer.clone())
+            .collect())
+    }
+
+    pub fn private_channel_member_count(&self, id: &str) -> Result<usize, MeshError> {
+        let state = self
+            .private_channels
+            .load(id)?
+            .ok_or_else(|| MeshError::Binding("unknown private channel".into()))?;
+        Ok(state.members.len())
+    }
+
+    pub fn private_channel_is_creator(&self, id: &str) -> Result<bool, MeshError> {
+        let state = self
+            .private_channels
+            .load(id)?
+            .ok_or_else(|| MeshError::Binding("unknown private channel".into()))?;
+        Ok(state.creator == self.identity.peer_id().as_str())
+    }
+
+    pub fn send_private_channel(&self, id: &str, text: &str) -> Result<String, MeshError> {
+        let state = self
+            .private_channels
+            .load(id)?
+            .ok_or_else(|| MeshError::Binding("unknown private channel".into()))?;
+        let bytes = state.encrypt(&self.identity.peer_id(), text)?;
+        let message_id =
+            uuid::Uuid::from_bytes(bytes[32..48].try_into().expect("fixed frame")).to_string();
+        self.ble
+            .send(BleCommand::PrivateChannelMessage {
+                channel_id: id.into(),
+                bytes,
+            })
+            .map_err(|_| MeshError::NotRunning)?;
+        Ok(message_id)
     }
 
     pub fn nearby_channels(&self) -> Vec<String> {
@@ -1427,9 +1587,9 @@ impl MeshService {
         if !futures::executor::block_on(SessionManager::has_session(&store, &remote))
             .map_err(|e| MeshError::Binding(format!("mesh Signal session check failed: {e}")))?
         {
-            let Some(proto) = self
-                .binding_store
-                .take_remote_mesh_bundle(&owner.to_string(), peer, now_secs())?
+            let Some(proto) =
+                self.binding_store
+                    .take_remote_mesh_bundle(&owner.to_string(), peer, now_secs())?
             else {
                 // Offer ours (opening a Noise session if needed); the peer's
                 // reply carries the bundle the next send will use.
@@ -1665,6 +1825,9 @@ impl MeshService {
         if let Err(error) = self.binding_store.wipe_all() {
             fail(error.into(), &mut first_error);
         }
+        if let Err(error) = self.private_channels.wipe() {
+            fail(error, &mut first_error);
+        }
         if let Err(error) = self.key_store.delete_mesh_sessions(None) {
             fail(error.into(), &mut first_error);
         }
@@ -1763,6 +1926,13 @@ mod tests {
         let nostr_state = Arc::new(NostrState::new());
         let timeline = timeline::temp_timeline();
         let identity_store = timeline::temp_identity_store();
+        let dir = tempfile::tempdir().expect("mesh stores temp dir");
+        let db = Arc::new(
+            crate::storage::Database::open(&dir.path().join("mesh_stores.db"), "testpass")
+                .expect("mesh stores database"),
+        );
+        db.run_migrations().expect("mesh stores migrations");
+        crate::test_tempdir::hold(dir);
         let events = MeshEvents::new(EVENT_CAPACITY, Arc::clone(&timeline));
         let (ble_bus, ble_rx) = CommandBus::new();
         let (nostr_bus, nostr_rx) = CommandBus::new();
@@ -1788,6 +1958,10 @@ mod tests {
         }));
 
         MeshService {
+            key_store: Arc::new(KeyStore::new(db.clone())),
+            binding_store: Arc::new(MeshBindingStore::new(db.clone())),
+            private_channels: Arc::new(PrivateChannelStore::new(db)),
+            signal_lock: Arc::new(Mutex::new(())),
             // The test sealer is a no-op that always succeeds, so there is
             // nothing to report.
             sealer_unavailable: None,

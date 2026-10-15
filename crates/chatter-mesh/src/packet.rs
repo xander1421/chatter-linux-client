@@ -199,6 +199,8 @@ pub enum MessageType {
     ChannelMessage = 0xE3,
     /// Versioned opaque Signal-over-mesh carrier. Account data is inside Signal.
     ChatterCarrier = 0xE4,
+    /// Opaque, signed private-channel ciphertext. No name or roster on air.
+    ChatterPrivateChannel = 0xE5,
 }
 
 impl MessageType {
@@ -228,6 +230,7 @@ impl MessageType {
             0xE2 => Self::FileChunkRequest,
             0xE3 => Self::ChannelMessage,
             0xE4 => Self::ChatterCarrier,
+            0xE5 => Self::ChatterPrivateChannel,
             _ => return None,
         })
     }

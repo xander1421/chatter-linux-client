@@ -149,10 +149,15 @@ fn apply_header(window: &MainWindow, ui_ctx: &ChatterClient, row: &MeshRow) {
     };
     crate::bin_ui::converters::set_conversation_kind(window, ui_ctx, &conversation_type, false);
     window.set_is_dm(row.kind == "dm");
-    // Not "N members": a mesh scope has no membership, only whoever happens to
-    // be in range. The strip below the header owns that number so there is one
-    // count on screen rather than two that can disagree.
-    window.set_member_count(0);
+    // Public scopes have no membership. A private channel gets its signed
+    // roster count from core, where admission and rotation are enforced.
+    window.set_member_count(if row.kind == "private-channel" {
+        ui_ctx
+            .mesh_private_channel_member_count(&row.scope)
+            .unwrap_or(0) as i32
+    } else {
+        0
+    });
     window.set_topic("".into());
     window.set_header_presence_status("offline".into());
     window.set_channel_avatar_source(slint::Image::default());
@@ -164,6 +169,7 @@ fn apply_header(window: &MainWindow, ui_ctx: &ChatterClient, row: &MeshRow) {
         match row.kind {
             "geohash" => format!("Message #{} — public to this area", row.scope),
             "room" => "Message everyone in radio range".to_string(),
+            "private-channel" => format!("Message invited devices in {}", row.title),
             _ => format!("Message {} over the mesh", row.title),
         }
         .into(),
@@ -186,14 +192,25 @@ fn apply_header(window: &MainWindow, ui_ctx: &ChatterClient, row: &MeshRow) {
     global.set_identity_panel_open(false);
     global.set_binding_qr_visible(false);
     global.set_binding_scan_visible(false);
-    global.set_active_signal_enabled(
-        super::core_api::signal_opted_in(ui_ctx, row.scope.as_str()).unwrap_or(false),
+    global.set_private_invite_visible(false);
+    global.set_private_remove_pending("".into());
+    global.set_private_can_manage(
+        row.kind == "private-channel"
+            && ui_ctx
+                .mesh_private_channel_is_creator(&row.scope)
+                .unwrap_or(false),
     );
-    global.set_active_protection_label(
+    global.set_active_signal_enabled(
+        row.kind == "dm"
+            && super::core_api::signal_opted_in(ui_ctx, row.scope.as_str()).unwrap_or(false),
+    );
+    global.set_active_protection_label(if row.kind == "private-channel" {
+        "Private epoch key · invited devices".into()
+    } else {
         super::core_api::signal_protection_label(ui_ctx, row.scope.as_str())
             .unwrap_or("Noise (bitchat)")
-            .into(),
-    );
+            .into()
+    });
     global.set_notice("".into());
 }
 

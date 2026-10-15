@@ -27,6 +27,8 @@ export component MeshList inherits Rectangle {
     property <bool> joining: false;
     property <bool> showing-nearby: false;
     property <string> join-draft: "";
+    property <string> private-draft: "";
+    property <string> private-qr-draft: "";
     property <bool> confirming-wipe: false;
 
     // Transparent on purpose: the sidebar tints its own surface (anon mode),
@@ -289,6 +291,39 @@ export component MeshList inherits Rectangle {
                 color: Colors.text-muted;
                 font-size: Typography.xxs;
                 overflow: elide;
+            }
+        }
+
+        if !root.collapsed && root.expanded: VerticalLayout {
+            padding-left: Spacing.md;
+            padding-right: Spacing.sm;
+            spacing: Spacing.xxs;
+            Text { text: "Private channel · enter a name to create"; color: Colors.text-muted; font-size: Typography.xs; }
+            Rectangle {
+                height: root.touch ? 42px : 32px; background: Colors.inset; border-radius: Spacing.radius-sm;
+                private-name := TextInput {
+                    x: Spacing.sm; y: Spacing.xs; width: parent.width - Spacing.sm * 2;
+                    height: parent.height - Spacing.xs * 2; single-line: true;
+                    color: Colors.text-primary; font-size: Typography.sm;
+                    text <=> root.private-draft;
+                    accepted => { MeshGlobal.create-private-channel(self.text); root.private-draft = ""; }
+                }
+            }
+            Text { text: "Scan or paste a private invite"; color: Colors.text-muted; font-size: Typography.xs; }
+            Rectangle {
+                height: root.touch ? 42px : 32px; background: Colors.inset; border-radius: Spacing.radius-sm;
+                private-qr := TextInput {
+                    x: Spacing.sm; y: Spacing.xs; width: parent.width - Spacing.sm * 2;
+                    height: parent.height - Spacing.xs * 2; single-line: true;
+                    color: Colors.text-primary; font-size: Typography.sm;
+                    text <=> root.private-qr-draft;
+                    accepted => { MeshGlobal.join-private-channel(self.text); root.private-qr-draft = ""; }
+                }
+            }
+            Rectangle {
+                height: Spacing.button-height;
+                Text { text: "Scan private invite QR"; color: Colors.text-secondary; font-size: Typography.xs; vertical-alignment: center; }
+                TouchArea { clicked => { MeshGlobal.open-private-scanner(); } }
             }
         }
 

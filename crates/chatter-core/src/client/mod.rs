@@ -824,6 +824,66 @@ impl ChatterClient {
     }
 
     #[cfg(feature = "mesh")]
+    pub fn mesh_create_private_channel(
+        &self,
+        name: &str,
+    ) -> Result<String, crate::services::mesh::MeshError> {
+        self.mesh().create_private_channel(name)
+    }
+
+    #[cfg(feature = "mesh")]
+    pub fn mesh_private_channel_invite_png(
+        &self,
+        id: &str,
+        peer: &str,
+    ) -> Result<Vec<u8>, crate::services::mesh::MeshError> {
+        self.mesh()
+            .private_channel_invite_png(id, &chatter_mesh::ids::PeerId::from_str(peer))
+    }
+
+    #[cfg(feature = "mesh")]
+    pub fn mesh_join_private_channel(
+        &self,
+        qr: &str,
+    ) -> Result<(), crate::services::mesh::MeshError> {
+        self.mesh().join_private_channel(qr)
+    }
+
+    #[cfg(feature = "mesh")]
+    pub fn mesh_remove_private_channel_member(
+        &self,
+        id: &str,
+        peer: &str,
+    ) -> Result<(), crate::services::mesh::MeshError> {
+        self.mesh()
+            .remove_private_channel_member(id, &chatter_mesh::ids::PeerId::from_str(peer))
+    }
+
+    #[cfg(feature = "mesh")]
+    pub fn mesh_private_channel_removable_members(
+        &self,
+        id: &str,
+    ) -> Result<Vec<String>, crate::services::mesh::MeshError> {
+        self.mesh().private_channel_removable_members(id)
+    }
+
+    #[cfg(feature = "mesh")]
+    pub fn mesh_private_channel_member_count(
+        &self,
+        id: &str,
+    ) -> Result<usize, crate::services::mesh::MeshError> {
+        self.mesh().private_channel_member_count(id)
+    }
+
+    #[cfg(feature = "mesh")]
+    pub fn mesh_private_channel_is_creator(
+        &self,
+        id: &str,
+    ) -> Result<bool, crate::services::mesh::MeshError> {
+        self.mesh().private_channel_is_creator(id)
+    }
+
+    #[cfg(feature = "mesh")]
     pub fn mesh_join_channel(
         &self,
         name: &str,
@@ -1120,6 +1180,10 @@ impl ChatterClient {
             }
             MeshConversation::Channel(name) => {
                 self.mesh().send_channel(name, text)?;
+                Ok(MeshDelivery::Broadcast)
+            }
+            MeshConversation::PrivateChannel(id) => {
+                self.mesh().send_private_channel(id, text)?;
                 Ok(MeshDelivery::Broadcast)
             }
             MeshConversation::Dm(peer) => {

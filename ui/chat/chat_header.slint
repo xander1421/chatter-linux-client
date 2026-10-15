@@ -132,7 +132,8 @@ export component ChatHeader inherits GlassSurface {
     property <bool> tight: root.width < 420px;
     property <bool> mesh-radio-down: !MeshGlobal.radio-running;
     property <string> mesh-standing:
-        MeshGlobal.active-kind == "geohash"
+        MeshGlobal.active-kind == "private-channel" ? "Private mesh · invited devices"
+      : MeshGlobal.active-kind == "geohash"
             ? (MeshGlobal.relay-count == 0
                 ? "Public cell · no relay"
               : MeshGlobal.relay-count == 1
