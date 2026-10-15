@@ -13,14 +13,47 @@ component SetupField inherits VerticalLayout {
     in property <string> label: "";
     in property <string> hint: "";
     in-out property <string> value: "";
+    in property <bool> touch: false;
     callback submitted(string);
+    callback dragged(length);
     spacing: Spacing.xs;
     Text { text: root.label; color: Colors.text-secondary; font-size: Typography.sm; font-weight: 600; }
-    Input {
-        control-height: Spacing.touch-target-min;
-        placeholder: root.hint;
-        text <=> root.value;
-        accepted(text) => { root.submitted(text); }
+    Rectangle {
+        height: Spacing.touch-target-min;
+        field := Input {
+            width: 100%;
+            control-height: Spacing.touch-target-min;
+            placeholder: root.hint;
+            text <=> root.value;
+            accepted(text) => { root.submitted(text); }
+        }
+        // A single-line TextInput owns drags that begin over its text, so the
+        // enclosing Flickable never sees them. On touch, this layer gives a
+        // tap back to the input and a vertical drag to the sheet.
+        if root.touch: TouchArea {
+            property <length> last-y: 0px;
+            property <length> down-y: 0px;
+            property <bool> tracking: false;
+            property <bool> panned: false;
+            pointer-event(event) => {
+                if event.kind == PointerEventKind.down {
+                    self.last-y = self.mouse-y + self.absolute-position.y;
+                    self.down-y = self.last-y;
+                    self.tracking = true;
+                    self.panned = false;
+                } else if event.kind == PointerEventKind.move && self.tracking {
+                    let pointer-y = self.mouse-y + self.absolute-position.y;
+                    if abs(pointer-y - self.down-y) > Spacing.xs {
+                        self.panned = true;
+                    }
+                    if self.panned { root.dragged(pointer-y - self.last-y); }
+                    self.last-y = pointer-y;
+                } else if event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel {
+                    self.tracking = false;
+                }
+            }
+            clicked => { if !self.panned { field.focus(); } }
+        }
     }
 }
 
@@ -34,6 +67,10 @@ export component MeshSetupSheet inherits Rectangle {
     property <string> invite-draft: "";
     property <string> cell-draft: "";
     property <bool> confirming-wipe: false;
+    function scroll-field(delta: length) {
+        sheet-scroll.viewport-y = min(0px, max(sheet-scroll.height - sheet-scroll.viewport-height,
+            sheet-scroll.viewport-y + delta));
+    }
     function create-private-once() {
         if root.private-draft != "" {
             let name = root.private-draft;
@@ -51,7 +88,7 @@ export component MeshSetupSheet inherits Rectangle {
         // never took focus on Android (cause not traced; sheets work).
         fill-height: true;
         close => { root.close(); }
-        Flickable {
+        sheet-scroll := Flickable {
             width: 100%; height: 100%;
             viewport-height: setup-content.preferred-height;
             setup-content := VerticalLayout {
@@ -123,7 +160,9 @@ export component MeshSetupSheet inherits Rectangle {
                         spacing: Spacing.sm;
                         Text { text: "IDENTITY"; color: Colors.text-muted; font-size: Typography.xs; font-weight: 600; letter-spacing: 0.5px; }
                         Text { text: "Your mesh name is public to anyone nearby. Names are self-asserted."; color: Colors.text-secondary; font-size: Typography.sm; wrap: word-wrap; }
-                        SetupField { label: "Mesh name"; hint: "Name shown nearby"; value <=> root.name-draft; submitted(value) => { MeshGlobal.set-nickname(value); } }
+                        SetupField { label: "Mesh name"; hint: "Name shown nearby"; value <=> root.name-draft;
+                            touch: root.touch; dragged(delta) => { root.scroll-field(delta); }
+                            submitted(value) => { MeshGlobal.set-nickname(value); } }
                         Button { text: "Save mesh name"; variant: "secondary"; touch: root.touch; clicked => { MeshGlobal.set-nickname(root.name-draft); } }
                     }
                 }
@@ -136,6 +175,7 @@ export component MeshSetupSheet inherits Rectangle {
                         spacing: Spacing.md;
                         Text { text: "CHANNELS"; color: Colors.text-muted; font-size: Typography.xs; font-weight: 600; letter-spacing: 0.5px; }
                         SetupField { label: "Join public #channel"; hint: "Channel name"; value <=> root.public-draft;
+                            touch: root.touch; dragged(delta) => { root.scroll-field(delta); }
                             submitted(value) => { MeshGlobal.join-channel(value); root.public-draft = ""; } }
                         Button { text: "Join public channel"; variant: "secondary"; touch: root.touch;
                             clicked => { MeshGlobal.join-channel(root.public-draft); root.public-draft = ""; } }
@@ -144,11 +184,13 @@ export component MeshSetupSheet inherits Rectangle {
                             clicked => { MeshGlobal.join-channel(name); }
                         }
                         SetupField { label: "Create private channel"; hint: "Private channel name"; value <=> root.private-draft;
+                            touch: root.touch; dragged(delta) => { root.scroll-field(delta); }
                             submitted(value) => { root.create-private-once(); } }
                         Button { text: "Create private channel"; variant: "secondary"; touch: root.touch;
                             disabled: root.private-draft == "";
                             clicked => { root.create-private-once(); } }
                         SetupField { label: "Join private channel"; hint: "Paste private invite"; value <=> root.invite-draft;
+                            touch: root.touch; dragged(delta) => { root.scroll-field(delta); }
                             submitted(value) => { MeshGlobal.join-private-channel(value); root.invite-draft = ""; } }
                         HorizontalLayout {
                             spacing: Spacing.sm;
@@ -158,6 +200,7 @@ export component MeshSetupSheet inherits Rectangle {
                                 clicked => { MeshGlobal.open-private-scanner(); } }
                         }
                         SetupField { label: "Join geohash cell"; hint: "e.g. u4pruy"; value <=> root.cell-draft;
+                            touch: root.touch; dragged(delta) => { root.scroll-field(delta); }
                             submitted(value) => { MeshGlobal.join-geohash(value); root.cell-draft = ""; } }
                         Button { text: "Join cell"; variant: "secondary"; touch: root.touch;
                             clicked => { MeshGlobal.join-geohash(root.cell-draft); root.cell-draft = ""; } }

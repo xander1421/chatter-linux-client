@@ -143,9 +143,9 @@ export component MeshContextBar inherits Rectangle {
             if MeshGlobal.active-kind == "dm" && (!MeshGlobal.active-verified || MeshGlobal.identity-panel-open): VerticalLayout {
                 spacing: Spacing.xs;
                 HorizontalLayout {
-                    if !MeshGlobal.active-verified: Text {
+                    if !MeshGlobal.active-verified || MeshGlobal.identity-panel-open: Text {
                         text: MeshGlobal.active-binding-label;
-                        color: Colors.text-muted;
+                        color: MeshGlobal.active-verified ? Colors.success : Colors.text-muted;
                         font-size: Typography.xs;
                         horizontal-stretch: 1;
                     }

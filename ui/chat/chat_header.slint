@@ -351,7 +351,7 @@ export component ChatHeader inherits GlassSurface {
                             colorize: Colors.success;
                             vertical-alignment: center;
                         }
-                        Text {
+                        if !MeshGlobal.identity-panel-open: Text {
                             text: root.mesh-tight ? "Verified" : MeshGlobal.active-binding-label;
                             color: Colors.success;
                             font-size: Typography.xs;
