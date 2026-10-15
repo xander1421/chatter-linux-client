@@ -540,6 +540,14 @@ impl ChatterClient {
                                 _ if received.total <= 100 => "No longer pending",
                                 _ => "Status unavailable",
                             }.into();
+                            row.body = match row.status.as_str() {
+                                "Pending" => "Sent you a friend request",
+                                "Accepted" => "You accepted this request",
+                                "Declined" => "You declined this request",
+                                "Blocked" => "This request is blocked",
+                                "No longer pending" => "This request is no longer active",
+                                _ => "Friend request",
+                            }.into();
                         }
                     }
                 }
