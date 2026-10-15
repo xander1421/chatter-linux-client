@@ -191,16 +191,6 @@ impl MessageRouter {
             self.transports[index].send_private(content, to, message_id);
         }
 
-        if link == LinkState::Secure {
-            // Branch 1. A live link that can complete an encrypted delivery now is
-            // a strong enough delivery signal to trust outright: retain nothing,
-            // spend no courier slots.
-            return SendOutcome {
-                link,
-                events: Vec::new(),
-            };
-        }
-
         // Anything transmitted counts as one attempt. Branch 4 transmitted nothing,
         // so it must not be charged — otherwise a message that never left the device
         // burns through the cap while sitting still.
@@ -241,7 +231,7 @@ impl MessageRouter {
             }
             // Branch 4. Nothing can carry it; couriers are the only hope.
             LinkState::Unreachable => true,
-            // Handled by the early return above.
+            // A queued BLE write can still fail after routing; keep it until ACK.
             LinkState::Secure => false,
         };
 

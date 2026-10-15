@@ -441,6 +441,48 @@ impl Default for NotificationService {
     }
 }
 
+/// Notify for incoming mesh DMs after the mesh timeline has persisted the row.
+/// Message IDs suppress duplicate radio/courier arrivals during this session.
+#[cfg(feature = "mesh")]
+pub fn spawn_mesh_notification_listener(
+    mut events: tokio::sync::broadcast::Receiver<crate::services::mesh::MeshEvent>,
+    notifications: std::sync::Arc<NotificationService>,
+) -> tokio::task::JoinHandle<()> {
+    use crate::services::mesh::{MeshConversation, MeshEvent};
+
+    tokio::spawn(async move {
+        let mut recent = std::collections::VecDeque::new();
+        loop {
+            let event = match events.recv().await {
+                Ok(event) => event,
+                Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => continue,
+                Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
+            };
+            let MeshEvent::Message(message) = event else {
+                continue;
+            };
+            if message.is_local || !matches!(&message.conversation, MeshConversation::Dm(_)) {
+                continue;
+            }
+            let id = message.message.id.to_string();
+            if recent.contains(&id) {
+                continue;
+            }
+            recent.push_back(id);
+            if recent.len() > 256 {
+                recent.pop_front();
+            }
+            if let Err(error) = notifications.show_message(
+                "Chatter",
+                "New mesh message",
+                crate::domain::notification::NotificationPriority::Normal,
+            ) {
+                tracing::warn!(%error, "Could not show mesh DM notification");
+            }
+        }
+    })
+}
+
 /// Spawn a task that listens to the domain event bus and dispatches user-
 /// visible notifications via `NotificationService`.
 ///

@@ -487,7 +487,7 @@ impl OutboxStore {
     /// Decide what to do with everything retained for one peer.
     ///
     /// Expired mail is dropped first, whatever the link is. Then, per
-    /// [`LinkState`]: a secure link clears the copy, an insecure one keeps it
+    /// [`LinkState`]: a secure link keeps the copy until an ACK, an insecure one keeps it
     /// without charging an attempt, a merely reachable one keeps it and charges
     /// one, and no route at all leaves it untouched.
     pub fn flush(&mut self, peer: &PeerId, link: LinkState, now_unix_secs: u64) -> FlushPlan {
@@ -509,8 +509,10 @@ impl OutboxStore {
 
             match link {
                 LinkState::Secure => {
-                    // The only signal strong enough to stop retaining.
-                    plan.send.push(message);
+                    // A secure session does not prove that the queued radio write
+                    // survived a disconnect. Only the recipient's ACK does.
+                    plan.send.push(message.clone());
+                    remaining.push(message);
                 }
                 LinkState::Insecure => {
                     // Sent over a live link, so no attempt is charged. See the
@@ -540,11 +542,11 @@ impl OutboxStore {
             self.outbox.insert(peer.clone(), remaining);
         }
         // A drop always changes the queue. So does a send, but only under the two
-        // link states that alter retained state: `Secure` stops retaining and
-        // `Reachable` charges an attempt. `Insecure` and `Unreachable` leave the
+        // link states that alter retained state: `Reachable` charges an attempt.
+        // `Secure`, `Insecure` and `Unreachable` leave the
         // queue byte-identical, and a flush over them owes storage nothing.
         let mutated = !plan.dropped.is_empty()
-            || (!plan.send.is_empty() && matches!(link, LinkState::Secure | LinkState::Reachable));
+            || (!plan.send.is_empty() && matches!(link, LinkState::Reachable));
         if mutated {
             self.dirty = true;
         }

@@ -29,6 +29,16 @@ impl ChatterClient {
             self.notifications().clone(),
         );
         self.tasks.lock().push(handle);
+
+        #[cfg(feature = "mesh")]
+        {
+            let mesh_handle =
+                crate::services::notification_service::spawn_mesh_notification_listener(
+                    self.mesh_subscribe(),
+                    self.notifications().clone(),
+                );
+            self.tasks.lock().push(mesh_handle);
+        }
     }
 
     /// Spawn the auth-gated notification streams: the gRPC message-notification

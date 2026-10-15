@@ -35,12 +35,11 @@ pub struct MeshMessage {
 /// Delivery progress for a message this device sent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MeshDelivery {
-    /// Handed to a live link with an established Noise session. Nothing is
-    /// retained.
+    /// Queued to a live link with an established Noise session; retained until ACK.
     Secure,
-    /// Sent over a live link with no session yet, and retained.
+    /// A live link exists, but the DM waits for a Noise handshake.
     Insecure,
-    /// The peer was reachable but not connected. Sent and retained.
+    /// The peer was recently reachable, but no live secure delivery is known.
     Reachable,
     /// Nothing could carry it. Retained, and offered to couriers.
     Unreachable,
@@ -71,16 +70,17 @@ impl MeshDelivery {
     /// the server vocabulary in `Message::delivery_status` — the mesh's "sent"
     /// and the server's "sent" are not the same claim.
     ///
-    /// The three states that collapse to `"sent"` differ only in *how* the
-    /// message left this device, which is not something a reader can act on.
+    /// A queued DM without a Noise session stays "waiting" until encryption
+    /// can happen; reachability alone makes no delivery claim.
     /// The distinctions that survive are the ones with consequences: it has not
     /// left yet, something else is carrying it, it never arrived, or there was
     /// never a recipient to arrive at.
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
-            // Handed to a live link. It has left this device.
-            Self::Secure | Self::Insecure | Self::Reachable => "sent",
+            // Queued for a live link with an established Noise session.
+            Self::Secure => "sent",
+            Self::Insecure | Self::Reachable => "waiting",
             // Nothing could carry it; it is retained and offered to couriers.
             Self::Unreachable => "waiting",
             // A courier or a relay drop took a sealed copy.

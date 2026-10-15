@@ -83,6 +83,7 @@ use crate::storage::mesh_binding_store::MeshBindingStore;
 
 /// How often the loop wakes to run the parts that nothing else can schedule.
 const TICK: Duration = Duration::from_millis(500);
+const DM_HANDSHAKE_RETRY_MS: u64 = 5_000;
 
 /// How long between frames on one link — the transmit rate, in one number.
 ///
@@ -644,10 +645,17 @@ impl BleRuntime {
     async fn on_disconnected(&mut self, link: &LinkId) {
         let now = now_millis();
         let peer = self.state.with(|state| {
+            let (moved, discarded) = rescue_link_writes(state, link, None);
             let peer = state.links.link_down(link);
             state.max_write.remove(link);
             state.assembler.discard(link);
-            state.writes.discard_all(link);
+            if moved > 0 || !discarded.is_empty() {
+                tracing::info!(target: "mesh::ble", %link, moved, discarded = discarded.len(),
+                    "link closed with queued frames");
+            }
+            if let Some(peer) = &peer {
+                state.dm_handshake_at_ms.remove(peer);
+            }
             if let Some(address) = state.address_of.remove(link) {
                 state.connecting.remove(&address);
                 state.scheduler.note_disconnected(&address, now);
@@ -661,6 +669,7 @@ impl BleRuntime {
         self.emit_status();
         if let Some(peer) = peer {
             tracing::debug!(target: "mesh::ble", peer = %peer, "link down");
+            self.retry_pending_dm_handshake(&peer).await;
         }
     }
 
@@ -1174,7 +1183,7 @@ impl BleRuntime {
             DIRECT_ANNOUNCE_TTL,
         );
 
-        let (is_new, link_authenticated, first_sighting, reconnected, bound_peer) =
+        let (is_new, newly_bound, link_authenticated, first_sighting, reconnected, bound_peer) =
             self.state.with(|state| {
                 // Whether this announce means the peer is *reachable on a link of
                 // its own*, which is not the same as "we heard from it".
@@ -1214,7 +1223,10 @@ impl BleRuntime {
                 // Rebinding still runs afterwards, and is still fully guarded: on a
                 // link we just bound it refuses as `SamePeer`, and on a contested one
                 // `bind_if_unbound` was the no-op instead.
-                state.links.bind_if_unbound(link, claimed);
+                let newly_bound = matches!(
+                    state.links.bind_if_unbound(link, claimed),
+                    chatter_mesh_link::registry::BindOutcome::Bound
+                );
                 if let Some(direct) = direct.as_ref() {
                     state
                         .links
@@ -1227,6 +1239,7 @@ impl BleRuntime {
                 let authenticated = state.links.is_noise_authenticated(link, claimed);
                 (
                     update.is_new_peer || update.was_disconnected,
+                    newly_bound,
                     authenticated,
                     update.is_new_peer,
                     update.was_disconnected,
@@ -1305,7 +1318,8 @@ impl BleRuntime {
             }
         }
 
-        if is_new {
+        self.retry_pending_dm_handshake(claimed).await;
+        if is_new || newly_bound {
             // Push anything retained for them, and offer them mail for others.
             let _ = self.router.send(RouterCommand::PeerAvailable {
                 peer: claimed.clone(),
@@ -2107,6 +2121,7 @@ impl BleRuntime {
 
         if step.established.is_some() {
             self.state.with(|state| {
+                state.dm_handshake_at_ms.remove(claimed);
                 state.chatter_hello.forget_live(claimed);
                 state.pending_bindings.remove(claimed);
             });
@@ -2435,16 +2450,24 @@ impl BleRuntime {
                 // No session yet. Hold the message and start a handshake: the
                 // router has already retained a copy, so nothing is lost if the
                 // handshake never completes.
-                self.state.with(|state| {
-                    state.pending_dms.entry(peer.clone()).or_default().push(
-                        super::state::PendingDm {
+                let first = self.state.with(|state| {
+                    let pending = state.pending_dms.entry(peer.clone()).or_default();
+                    let first = pending.is_empty();
+                    if !pending
+                        .iter()
+                        .any(|message| message.message_id == message_id)
+                    {
+                        pending.push(super::state::PendingDm {
                             message_id: message_id.to_string(),
                             content: content.to_string(),
                             queued_at_ms: now_millis(),
-                        },
-                    );
+                        });
+                    }
+                    first
                 });
-                self.start_handshake(peer).await;
+                if first {
+                    self.start_handshake(peer).await;
+                }
             }
         }
     }
@@ -2470,6 +2493,9 @@ impl BleRuntime {
         let Ok(opening) = opening else {
             return;
         };
+        self.state.with(|state| {
+            state.dm_handshake_at_ms.insert(peer.clone(), now_millis());
+        });
         let packet = self.build_packet(
             MessageType::NoiseHandshake,
             Some(peer),
@@ -2486,6 +2512,28 @@ impl BleRuntime {
         for message in pending {
             self.send_private(peer, &message.message_id, &message.content)
                 .await;
+        }
+    }
+
+    async fn retry_pending_dm_handshake(&mut self, peer: &PeerId) {
+        let now = now_millis();
+        let due = self.state.with(|state| {
+            !state.sessions.has_session(peer)
+                && state
+                    .pending_dms
+                    .get(peer)
+                    .is_some_and(|pending| !pending.is_empty())
+                && state
+                    .links
+                    .links_to(peer)
+                    .iter()
+                    .any(|link| state.links.is_writable(link))
+                && now.saturating_sub(*state.dm_handshake_at_ms.get(peer).unwrap_or(&0))
+                    >= DM_HANDSHAKE_RETRY_MS
+        });
+        if due {
+            tracing::info!(target: "mesh::ble", %peer, "retrying DM Noise handshake");
+            self.start_handshake(peer).await;
         }
     }
 
@@ -3325,6 +3373,12 @@ impl BleRuntime {
     async fn on_tick(&mut self) {
         let now_ms = now_millis();
         let now_s = now_secs();
+        let pending_peers = self
+            .state
+            .with(|state| state.pending_dms.keys().cloned().collect::<Vec<_>>());
+        for peer in pending_peers {
+            self.retry_pending_dm_handshake(&peer).await;
+        }
 
         self.flush_deferred_announce(now_ms).await;
 
@@ -3686,7 +3740,26 @@ impl BleRuntime {
                     // `discard_all`; this covers the window where frames were
                     // queued before the event arrived, which is exactly when a
                     // transfer is in flight.
-                    let discarded_types = self.state.with(|state| state.writes.discard_all(&link));
+                    let (moved, discarded_types) = self.state.with(|state| {
+                        let result = rescue_link_writes(state, &link, Some(write.clone()));
+                        if matches!(&error, chatter_mesh_link::LinkError::LinkGone(_)) {
+                            let peer = state.links.link_down(&link);
+                            state.max_write.remove(&link);
+                            state.assembler.discard(&link);
+                            state.links.clear_noise_authentication(&link);
+                            if let Some(address) = state.address_of.remove(&link) {
+                                state.connecting.remove(&address);
+                                state.scheduler.note_disconnected(&address, now_millis());
+                            }
+                            if let Some(peer) = peer {
+                                state.dm_handshake_at_ms.remove(&peer);
+                            }
+                        }
+                        result
+                    });
+                    if matches!(&error, chatter_mesh_link::LinkError::LinkGone(_)) {
+                        let _ = self.radio.disconnect(&link).await;
+                    }
                     // Counted per type rather than listed: a stalled transfer
                     // discards dozens of fragments at once and the shape is the
                     // information, not the sequence.
@@ -3708,10 +3781,10 @@ impl BleRuntime {
                         %error,
                         bytes = write.bytes.len(),
                         msg_type = ?write.bytes.get(1),
+                        moved_to_sibling = moved,
                         also_discarded = discarded_types.len(),
                         also_discarded_types = ?by_type,
-                        "a frame was dropped and the link's queue with it: the radio \
-                         refused it and it cannot be retried"
+                        "radio refused a frame; queued writes moved to a sibling or left for outbox retry"
                     );
                 }
             }
@@ -3821,6 +3894,47 @@ impl BleRuntime {
         tracing::warn!(target: "mesh::ble", "{message}");
         self.events.send(MeshEvent::Degraded(message));
     }
+}
+
+/// Preserve a dead link's bounded queue on another writable ACL to the same peer.
+/// A missing sibling leaves DMs in the durable router outbox for reconnect retry.
+fn rescue_link_writes(
+    state: &mut LinkStateInner,
+    link: &LinkId,
+    failed: Option<chatter_mesh_link::backpressure::PendingWrite>,
+) -> (usize, Vec<u8>) {
+    let mut writes = state.writes.take_all(link);
+    if let Some(failed) = failed {
+        writes.insert(0, failed);
+    }
+    if writes.is_empty() {
+        return (0, Vec::new());
+    }
+    let peer = state.links.peer_for(link).cloned();
+    if let Some(peer) = peer {
+        let bytes: usize = writes.iter().map(|write| write.bytes.len()).sum();
+        if let Some(sibling) = state.links.links_to(&peer).into_iter().find(|candidate| {
+            candidate != link
+                && state.links.is_writable(candidate)
+                && state
+                    .max_write
+                    .get(candidate)
+                    .is_some_and(|max| writes.iter().all(|write| write.bytes.len() <= *max))
+                && state.writes.queued_bytes(candidate).saturating_add(bytes)
+                    <= PENDING_WRITE_BUFFER_CAP_BYTES
+        }) {
+            let count = writes.len();
+            state.writes.prepend(&sibling, writes);
+            return (count, Vec::new());
+        }
+    }
+    (
+        0,
+        writes
+            .iter()
+            .filter_map(|write| write.bytes.get(1).copied())
+            .collect(),
+    )
 }
 
 /// Every *other* link bound to the peer `ingress` is bound to.

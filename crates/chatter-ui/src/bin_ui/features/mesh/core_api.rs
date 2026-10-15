@@ -114,8 +114,9 @@ pub fn scope_of(conversation: &MeshConversation) -> String {
 #[must_use]
 pub fn delivery_label(state: MeshDelivery) -> &'static str {
     match state {
-        // Handed to a live link. It has left this device.
-        MeshDelivery::Secure | MeshDelivery::Insecure | MeshDelivery::Reachable => "sent",
+        // Queued for a live link with an established Noise session.
+        MeshDelivery::Secure => "sent",
+        MeshDelivery::Insecure | MeshDelivery::Reachable => "waiting",
         // Nothing could carry it; it is retained and offered to couriers.
         MeshDelivery::Unreachable => "waiting",
         // A courier or a relay drop took a sealed copy.

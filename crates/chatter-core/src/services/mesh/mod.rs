@@ -1181,8 +1181,8 @@ impl MeshService {
     /// Send a private message, letting the router choose the transport.
     ///
     /// The returned [`MeshDelivery`] is the branch the router took, which is the
-    /// whole decision the UI needs: [`MeshDelivery::Secure`] means nothing was
-    /// retained, everything else means a copy is held and will be retried.
+    /// whole decision the UI needs. Every DM remains in the outbox until the
+    /// recipient acknowledges it, including one queued to a secure BLE link.
     pub async fn send_dm(&self, peer: &PeerId, text: &str) -> Result<MeshDelivery, MeshError> {
         if self.events.peer_blocked(peer) {
             return Err(MeshError::OutOfRange("peer is locally blocked"));
