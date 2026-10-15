@@ -407,7 +407,7 @@ export component MainWindow inherits Window {
     // Set when the codes came from Settings › Regenerate: Continue returns to
     // Settings instead of carrying on into registration's onboarding.
     in-out property <bool> recovery-codes-regenerated: false;
-    callback recovery-codes-confirmed();
+    callback recovery-codes-confirmed() -> bool;
     callback recovery-codes-copy-all();
 
     // Sealed sender onboarding explainer (shown after recovery codes).
@@ -2871,14 +2871,15 @@ export component MainWindow inherits Window {
             codes: root.recovery-codes;
 
             confirmed => {
-                if root.recovery-codes-regenerated {
-                    root.recovery-codes-regenerated = false;
-                    root.nav-close("recovery-codes");
-                } else {
-                    // After recovery codes, show the sealed-sender explainer.
-                    root.nav-close("recovery-codes");
-                    root.nav-push("sealed-sender-intro");
-                    root.recovery-codes-confirmed();
+                if root.recovery-codes-confirmed() {
+                    if root.recovery-codes-regenerated {
+                        root.recovery-codes-regenerated = false;
+                        root.nav-close("recovery-codes");
+                    } else {
+                        // After recovery codes, show the sealed-sender explainer.
+                        root.nav-close("recovery-codes");
+                        root.nav-push("sealed-sender-intro");
+                    }
                 }
             }
             copy-all => {

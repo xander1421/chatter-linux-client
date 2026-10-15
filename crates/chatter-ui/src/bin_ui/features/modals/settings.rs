@@ -665,15 +665,18 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
 
     // Recovery codes confirmed (after registration)
     let weak_window = window.as_weak();
+    let ui_ctx_confirm = ui_ctx.clone();
     window.on_recovery_codes_confirmed(move || {
-        let weak = weak_window.clone();
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(w) = weak.upgrade() {
-                // Modal is already set to "none" by the Slint callback
-                // Just ensure we're in main view
+        if let Err(error) = ui_ctx_confirm.acknowledge_recovery_codes() {
+            tracing::error!(%error, "Could not acknowledge recovery codes");
+            return false;
+        }
+        if let Some(w) = weak_window.upgrade() {
+            if !w.get_recovery_codes_regenerated() {
                 w.set_current_view("main".into());
             }
-        });
+        }
+        true
     });
 
     // Sealed sender onboarding explainer confirmed (after recovery codes).

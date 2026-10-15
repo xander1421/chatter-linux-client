@@ -320,6 +320,13 @@ pub struct LoginResult {
     pub recovery_codes: Option<Vec<String>>,
 }
 
+/// One-time codes retained in this device's encrypted settings until saved.
+#[derive(serde::Serialize, serde::Deserialize)]
+pub struct PendingRecoveryCodes {
+    pub codes: Vec<String>,
+    pub regenerated: bool,
+}
+
 /// Authentication service.
 ///
 /// Orchestrates login, registration, and logout flows by coordinating
@@ -1324,6 +1331,21 @@ impl AuthService {
             .parse()
             .map_err(|_| AuthError::RegistrationFailed("invalid user_id format".to_string()))?;
 
+        // Persist the one-time server response before the rest of registration
+        // setup, so an interrupted setup can still display these same codes.
+        let recovery_codes = if result.recovery_codes.is_empty() {
+            None
+        } else {
+            self.settings_repo.set(
+                &keys::unacknowledged_recovery_codes_key(user_id),
+                &PendingRecoveryCodes {
+                    codes: result.recovery_codes.clone(),
+                    regenerated: false,
+                },
+            )?;
+            Some(result.recovery_codes.clone())
+        };
+
         // Persist auth state (device_id is server-assigned)
         self.settings_repo
             .set_string(keys::CURRENT_USER_ID, &user_id.to_string())?;
@@ -1421,13 +1443,6 @@ impl AuthService {
             presence: PresenceStatus::Online,
         };
         self.user_repo.upsert_profile(&profile)?;
-
-        // Capture recovery codes from server (shown once to user, never stored)
-        let recovery_codes = if result.recovery_codes.is_empty() {
-            None
-        } else {
-            Some(result.recovery_codes.clone())
-        };
 
         Ok(LoginResult {
             user_id,

@@ -3,7 +3,7 @@
 use std::sync::Arc;
 
 use super::{ChatterClient, ClientError, RecoveryResult};
-use crate::services::auth_service::LoginResult;
+use crate::services::auth_service::{LoginResult, PendingRecoveryCodes};
 use crate::services::key_recovery::KeyRecoveryNeed;
 use crate::storage::repositories::settings_repo::keys;
 
@@ -20,6 +20,32 @@ impl ClientError {
 }
 
 impl ChatterClient {
+    /// Codes issued to this device that the user has not confirmed saving.
+    /// The settings database is encrypted at rest; callers must never log them.
+    pub fn unacknowledged_recovery_codes(
+        &self,
+    ) -> Result<Option<PendingRecoveryCodes>, ClientError> {
+        let Some((user_id, _)) = self.current_user() else {
+            return Ok(None);
+        };
+        self.auth()
+            .settings_repo
+            .get(&keys::unacknowledged_recovery_codes_key(user_id))
+            .map_err(|e| ClientError::Auth(e.into()))
+    }
+
+    /// Forget the locally retained codes after the user confirms saving them.
+    pub fn acknowledge_recovery_codes(&self) -> Result<(), ClientError> {
+        let (user_id, _) = self.current_user().ok_or(ClientError::Auth(
+            crate::services::auth_service::AuthError::NotLoggedIn,
+        ))?;
+        self.auth()
+            .settings_repo
+            .delete(&keys::unacknowledged_recovery_codes_key(user_id))
+            .map(|_| ())
+            .map_err(|e| ClientError::Auth(e.into()))
+    }
+
     pub(super) fn install_session_recovery(self: &Arc<Self>) {
         let weak = Arc::downgrade(self);
         self.auth()
@@ -487,10 +513,25 @@ impl ChatterClient {
             .auth()
             .try_auth_client()
             .ok_or_else(|| ClientError::NotConnected)?;
-        self.auth()
+        let codes = self
+            .auth()
             .regenerate_recovery_codes(&mut auth_client, password)
             .await
-            .map_err(ClientError::Auth)
+            .map_err(ClientError::Auth)?;
+        let (user_id, _) = self.current_user().ok_or(ClientError::Auth(
+            crate::services::auth_service::AuthError::NotLoggedIn,
+        ))?;
+        self.auth()
+            .settings_repo
+            .set(
+                &keys::unacknowledged_recovery_codes_key(user_id),
+                &PendingRecoveryCodes {
+                    codes: codes.clone(),
+                    regenerated: true,
+                },
+            )
+            .map_err(|e| ClientError::Auth(e.into()))?;
+        Ok(codes)
     }
 
     /// Create an SVR encrypted backup after registration.

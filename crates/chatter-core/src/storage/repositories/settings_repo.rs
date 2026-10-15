@@ -43,6 +43,13 @@ pub mod keys {
     pub const CURRENT_DEVICE_ID: &str = "auth.current_device_id";
     /// Device authentication token (32 bytes, base64 encoded)
     pub const DEVICE_AUTH_TOKEN: &str = "auth.device_token";
+    /// Recovery codes awaiting explicit acknowledgment. The SQLCipher settings
+    /// database keeps the one-time plaintext available across app restarts.
+    pub const UNACKNOWLEDGED_RECOVERY_CODES_PREFIX: &str = "auth.unacknowledged_recovery_codes.";
+
+    pub fn unacknowledged_recovery_codes_key(user_id: crate::domain::ids::UserId) -> String {
+        format!("{UNACKNOWLEDGED_RECOVERY_CODES_PREFIX}{}", user_id.0)
+    }
     /// Prefix of the per-account trusted-device token (server OPEN-ITEMS
     /// §134, OWASP "device cookie"): `auth.trusted_device_token.{login
     /// identifier}`. Kept across logout on purpose — it is what lets this

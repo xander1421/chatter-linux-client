@@ -242,6 +242,12 @@ pub fn handle_back(window: &MainWindow) -> bool {
         return true;
     }
 
+    // Recovery codes remain in the encrypted local database until Continue.
+    // Keep their screen present while the user is deciding where to save them.
+    if window.get_active_modal().as_str() == "recovery-codes" {
+        return true;
+    }
+
     if pop(window) {
         return true;
     }

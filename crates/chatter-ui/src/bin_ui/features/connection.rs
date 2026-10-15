@@ -97,6 +97,22 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     // themselves. Core's call, not ours.
     window.set_account_free_surfaces(ui_ctx.has_account_free_surfaces());
     window.set_is_signed_in(ui_ctx.is_logged_in());
+    if ui_ctx.is_logged_in() {
+        match ui_ctx.unacknowledged_recovery_codes() {
+            Ok(Some(pending)) if !pending.codes.is_empty() => {
+                let model: Vec<slint::SharedString> = pending
+                    .codes
+                    .iter()
+                    .map(|code| code.as_str().into())
+                    .collect();
+                window.set_recovery_codes(slint::ModelRc::new(slint::VecModel::from(model)));
+                window.set_recovery_codes_regenerated(pending.regenerated);
+                crate::bin_ui::features::back::push(window, "recovery-codes");
+            }
+            Ok(_) => {}
+            Err(error) => tracing::error!(%error, "Could not load pending recovery codes"),
+        }
+    }
 
     let weak = window.as_weak();
     let ui_ctx_for_task = ui_ctx.clone();
