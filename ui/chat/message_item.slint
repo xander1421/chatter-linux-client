@@ -1581,7 +1581,9 @@ export component MessageItem inherits Rectangle {
                                         // broadcast: a room or cell message has no
                                         // recipient to acknowledge it, so there is
                                         // never anything to upgrade it to.
-                                        text: root.delivery-status == "carried" ? "carried"
+                                        text: root.delivery-status == "queued" ? "queued"
+                                            : root.delivery-status == "relayed" ? "relayed"
+                                            : root.delivery-status == "carried" ? "carried"
                                             : root.delivery-status == "waiting" ? "waiting"
                                             : root.delivery-status == "undelivered" ? "not delivered"
                                             : root.delivery-status == "delivered" ? "delivered"
@@ -1592,7 +1594,11 @@ export component MessageItem inherits Rectangle {
                                         font-size: Typography.xs;
                                         font-italic: true;
                                         accessible-role: text;
-                                        accessible-label: root.delivery-status == "carried"
+                                        accessible-label: root.delivery-status == "queued"
+                                                ? "Signal ciphertext queued on this device; no route has accepted it"
+                                            : root.delivery-status == "relayed"
+                                                ? "Sealed Signal ciphertext queued onto a courier link; recipient has not acknowledged it"
+                                            : root.delivery-status == "carried"
                                                 ? "Handed to a passing device; may arrive later"
                                             : root.delivery-status == "waiting"
                                                 ? "Held on this device until something can carry it"

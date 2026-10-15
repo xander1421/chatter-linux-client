@@ -35,6 +35,10 @@ pub struct MeshMessage {
 /// Delivery progress for a message this device sent.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum MeshDelivery {
+    /// Signal ciphertext is durable locally; no route has accepted it yet.
+    SignalQueued,
+    /// A sealed Signal carrier was handed to at least one mesh courier.
+    SignalRelayed,
     /// Queued to a live link with an established Noise session; retained until ACK.
     Secure,
     /// A live link exists, but the DM waits for a Noise handshake.
@@ -78,6 +82,8 @@ impl MeshDelivery {
     #[must_use]
     pub fn as_str(self) -> &'static str {
         match self {
+            Self::SignalQueued => "queued",
+            Self::SignalRelayed => "relayed",
             // Queued for a live link with an established Noise session.
             Self::Secure => "sent",
             Self::Insecure | Self::Reachable => "waiting",

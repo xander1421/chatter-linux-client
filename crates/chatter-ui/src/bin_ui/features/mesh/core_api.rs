@@ -114,6 +114,8 @@ pub fn scope_of(conversation: &MeshConversation) -> String {
 #[must_use]
 pub fn delivery_label(state: MeshDelivery) -> &'static str {
     match state {
+        MeshDelivery::SignalQueued => "queued",
+        MeshDelivery::SignalRelayed => "relayed",
         // Queued for a live link with an established Noise session.
         MeshDelivery::Secure => "sent",
         MeshDelivery::Insecure | MeshDelivery::Reachable => "waiting",

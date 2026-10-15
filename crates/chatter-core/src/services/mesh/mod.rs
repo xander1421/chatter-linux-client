@@ -1387,14 +1387,6 @@ impl MeshService {
         if !self.has_radio {
             return Err(MeshError::NoRadio);
         }
-        let live_signal_route = self.state.is_connected(peer)
-            && self.state.with(|s| {
-                s.chatter_hello.get(peer).is_some_and(|hello| {
-                    hello.compatible()
-                        && hello.capabilities & chatter_hello::SIGNAL_MESH != 0
-                        && hello.max_carrier_bytes >= signal_mesh::MAX_CARRIER as u32
-                })
-            });
         let _guard = self.signal_lock.lock();
         if !self
             .binding_store
@@ -1454,19 +1446,7 @@ impl MeshService {
         let bytes = self
             .binding_store
             .queue_mesh_carrier(&owner.to_string(), peer, &frame)?;
-        let delivery = if live_signal_route
-            && self
-                .ble
-                .send(BleCommand::SignalCarrier {
-                    peer: peer.clone(),
-                    bytes,
-                })
-                .is_ok()
-        {
-            MeshDelivery::Secure
-        } else {
-            MeshDelivery::Unreachable
-        };
+        let delivery = MeshDelivery::SignalQueued;
         let conversation = MeshConversation::Dm(peer.clone());
         let message = mapping::outbound_message(
             &conversation,
@@ -1483,7 +1463,18 @@ impl MeshService {
             is_local: true,
             sender_verified: true,
         })));
-        self.timeline.record_delivery(&message_id, delivery);
+        self.events.send(MeshEvent::Delivery {
+            message_id,
+            peer: Some(peer.clone()),
+            state: delivery,
+        });
+        // Submission happens after the durable queued row and its UI event.
+        // The runtime reports a courier handoff separately; only the
+        // encrypted Signal receipt can advance this row to Delivered.
+        let _ = self.ble.send(BleCommand::SignalCarrier {
+            peer: peer.clone(),
+            bytes,
+        });
         Ok(delivery)
     }
 
