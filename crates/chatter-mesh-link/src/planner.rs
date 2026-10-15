@@ -731,7 +731,7 @@ mod tests {
         );
         assert_eq!(fragment_chunk_size(100), MIN_FRAGMENT_CHUNK);
         assert_eq!(fragment_chunk_size(512), 512 - FRAGMENT_FRAME_OVERHEAD);
-        assert_eq!(FRAGMENT_FRAME_OVERHEAD, 42);
+        assert_eq!(FRAGMENT_FRAME_OVERHEAD, 45);
     }
 
     // ---- plan: spooling ------------------------------------------------
