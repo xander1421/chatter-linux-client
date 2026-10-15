@@ -12,7 +12,7 @@ export component MeshList inherits Rectangle {
     in property <bool> touch: false;
     callback setup-requested();
     property <bool> expanded: true;
-    property <string> status: !MeshGlobal.mesh-on ? "Off"
+    property <string> status: !MeshGlobal.mesh-on ? "Radio stopped"
         : !MeshGlobal.radio-running ? "Unavailable"
         : MeshGlobal.peer-count == 0 ? "0 nearby"
         : MeshGlobal.peer-count == 1 ? "1 nearby"
@@ -55,32 +55,41 @@ export component MeshList inherits Rectangle {
                             vertical-alignment: center;
                             horizontal-stretch: 1;
                         }
-                        VerticalLayout {
-                        alignment: center;
-                        Rectangle {
-                            width: min(105px, status-text.preferred-width + Spacing.md * 2);
-                            height: 24px;
-                            border-radius: self.height / 2;
-                            clip: true;
-                            background: MeshGlobal.mesh-on && MeshGlobal.radio-running ? Colors.surface-control : Colors.surface-hover;
-                            status-text := Text {
-                                text: root.status;
-                                color: MeshGlobal.mesh-on && !MeshGlobal.radio-running ? Colors.warning : Colors.text-secondary;
-                                font-size: Typography.xs;
-                                width: parent.width;
-                                height: parent.height;
-                                horizontal-alignment: center;
-                                vertical-alignment: center;
-                                overflow: elide;
-                            }
-                        }
-                        }
                     }
                     header-touch := TouchArea {
                         mouse-cursor: pointer;
                         accessible-role: button;
                         accessible-label: root.expanded ? "Collapse mesh conversations" : "Expand mesh conversations";
                         clicked => { root.expanded = !root.expanded; }
+                    }
+                }
+                // The status is read-only and outside every switch hit target.
+                Text {
+                    text: root.status;
+                    color: MeshGlobal.mesh-on && !MeshGlobal.radio-running ? Colors.warning : Colors.text-secondary;
+                    font-size: Typography.xs;
+                    vertical-alignment: center;
+                    overflow: elide;
+                    max-width: 78px;
+                }
+                Rectangle {
+                    width: root.touch ? Spacing.touch-target-min : Spacing.button-height;
+                    height: root.touch ? Spacing.touch-target-min : Spacing.button-height;
+                    border-radius: Spacing.radius-md;
+                    background: switch-touch.has-hover ? Colors.surface-control-hover : Colors.surface-control;
+                    Text {
+                        text: MeshGlobal.mesh-on ? "On" : "Off";
+                        color: MeshGlobal.mesh-on ? Colors.primary : Colors.text-primary;
+                        font-size: Typography.xs;
+                        font-weight: 600;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                    switch-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        accessible-role: button;
+                        accessible-label: MeshGlobal.mesh-on ? "Turn mesh off" : "Turn mesh on";
+                        clicked => { MeshGlobal.set-mesh-on(!MeshGlobal.mesh-on); }
                     }
                 }
                 Rectangle {
