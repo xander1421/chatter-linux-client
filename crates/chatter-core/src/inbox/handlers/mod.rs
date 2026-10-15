@@ -562,7 +562,6 @@ pub enum DomainEvent {
     /// Someone answered an invitation.
     ChannelInviteResponded {
         channel_id: ChannelId,
-        inviter_id: UserId,
         accepted: bool,
     },
 

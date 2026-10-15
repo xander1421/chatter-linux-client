@@ -881,8 +881,8 @@ impl EventHandlers {
             DomainEvent::ChannelInviteReceived { channel_id, inviter_id, .. } => {
                 trace!(?channel_id, ?inviter_id, "Channel invitation received");
             }
-            DomainEvent::ChannelInviteResponded { channel_id, inviter_id, accepted } => {
-                trace!(?channel_id, ?inviter_id, accepted, "Channel invitation answered");
+            DomainEvent::ChannelInviteResponded { channel_id, accepted } => {
+                trace!(?channel_id, accepted, "Channel invitation answered");
             }
             DomainEvent::ChannelOperationFailed { channel_id, ref operation_id, ref code, ref message } => {
                 // Saga compensation: the server rolled the operation back and

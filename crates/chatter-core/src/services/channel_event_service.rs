@@ -423,16 +423,12 @@ impl ChannelEventService {
             }
 
             Event::InvitationResponse(response) => {
-                let Ok(inviter_uuid) = response.inviter_id.parse::<uuid::Uuid>() else {
-                    tracing::error!("Invitation response with unparseable inviter id");
-                    return;
-                };
+                self.announced_invites.lock().remove(&channel_id);
                 let _ = self
                     .event_bus
                     .domain_sender()
                     .send(DomainEvent::ChannelInviteResponded {
                         channel_id,
-                        inviter_id: UserId::from(inviter_uuid),
                         accepted: response.accepted,
                     });
                 tracing::info!(
@@ -605,6 +601,7 @@ impl ChannelEventService {
             channel_id,
             SystemMessage::UserJoined(*user_id),
             Some(*user_id),
+            event_ts,
         );
         if !self.message_repo.insert_or_ignore(&message)? {
             return Ok(None);
@@ -818,6 +815,7 @@ impl ChannelEventService {
             &channel.id,
             SystemMessage::ChannelDeleted,
             Some(channel.owner_id),
+            0,
         );
         if !self.message_repo.insert_or_ignore(&message)? {
             return Ok(());
@@ -863,7 +861,7 @@ impl ChannelEventService {
             }
         };
         let id = member_notice_id(channel_id, to, "owner", event_ts);
-        let message = self.create_system_message(id, channel_id, content, Some(*from));
+        let message = self.create_system_message(id, channel_id, content, Some(*from), event_ts);
         match self.message_repo.insert_or_ignore(&message) {
             Ok(true) => {
                 if let Err(e) = self
@@ -920,7 +918,7 @@ impl ChannelEventService {
             ),
         };
         let id = member_notice_id(channel_id, user_id, "removed", event_ts);
-        let message = self.create_system_message(id, channel_id, content, Some(subject));
+        let message = self.create_system_message(id, channel_id, content, Some(subject), event_ts);
 
         // Remove membership from local storage. Already gone is fine: our own
         // leave deletes it first, and a roster never fetched has no row.
@@ -1052,8 +1050,16 @@ impl ChannelEventService {
         channel_id: &ChannelId,
         content: SystemMessage,
         subject: Option<UserId>,
+        event_ts: u64,
     ) -> Message {
-        let now = Utc::now();
+        // Membership logs and roster catch-up carry the occurrence time in
+        // nanoseconds. Filing a missed notice at sync time would put it after
+        // newer chat messages and make it the sidebar's latest preview.
+        let occurred_at = i64::try_from(event_ts)
+            .ok()
+            .filter(|ts| *ts > 0)
+            .map(chrono::DateTime::from_timestamp_nanos)
+            .unwrap_or_else(Utc::now);
         // `sender_id` drives the UI's name lookup — the converter formats
         // system messages as `"{sender_name} {description}"`, e.g.
         // "Alice joined the channel". Set it to the user the event is
@@ -1083,9 +1089,9 @@ impl ChannelEventService {
             is_edited: false,
             is_deleted: false,
             is_read: false,
-            sent_at: now.timestamp_nanos_opt().unwrap_or(0) as u64,
-            created_at: now,
-            updated_at: now,
+            sent_at: occurred_at.timestamp_nanos_opt().unwrap_or(0) as u64,
+            created_at: occurred_at,
+            updated_at: occurred_at,
             edited_at: None,
             reaction_counts: Vec::new(),
             current_user_reactions: Vec::new(),
