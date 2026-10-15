@@ -147,12 +147,32 @@ impl ChatterClient {
             match existing.status {
                 AnonDmStatus::Pending
                     if existing.is_unsent_request() || existing.is_uncertain_request() => {}
-                AnonDmStatus::Active | AnonDmStatus::Pending => return Ok(existing),
+                AnonDmStatus::Active => return Ok(existing),
+                AnonDmStatus::Pending => {}
                 AnonDmStatus::Blocked => return Err(SecretChatError::Blocked),
                 AnonDmStatus::Declined => {}
             }
         }
-        Ok(self.start_anon_dm(peer, None).await?)
+        let mut dm = self.start_anon_dm(peer, None).await?;
+        // This entry point has a known friend on this device. Keep that local
+        // card on the conversation so both the pending sidebar row and the
+        // header can render it before the peer sends their own profile.
+        let name = self.display_name(&peer);
+        let name = (name != self.fallback_display_name(&peer)).then_some(name);
+        let avatar = self
+            .get_profile_local(&peer)
+            .and_then(|profile| profile.avatar_bytes);
+        if dm.peer_display_name.is_none() && name.is_some()
+            || dm.peer_avatar.is_none() && avatar.is_some()
+        {
+            dm.peer_display_name = dm.peer_display_name.or(name);
+            dm.peer_avatar = dm.peer_avatar.or(avatar);
+            self.anon_dms()
+                .anon_dm_repo()
+                .update_conversation(&dm)
+                .map_err(AnonDmError::from)?;
+        }
+        Ok(dm)
     }
 
     fn secret_chat_peer_check(&self, peer: &UserId) -> Result<(), SecretChatError> {

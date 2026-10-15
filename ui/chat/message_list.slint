@@ -53,6 +53,9 @@ export component MessageList inherits Rectangle {
     // A virtualized row seek can briefly report a bottom-sized viewport before
     // the unread row is measured. Keep the opening anchor until user input.
     private property <bool> opening-on-unread: false;
+    // The opening unread tail was already visible. A later keyboard resize
+    // must not turn those same loaded rows into a "new messages" pill.
+    private property <bool> seen-opening-tail: false;
     arrival-ready := Timer {
         interval: 1ms;
         running: false;
@@ -132,6 +135,7 @@ export component MessageList inherits Rectangle {
             root.observed-last-message-id = "";
             root.ready-for-arrivals = false;
             root.opening-on-unread = false;
+            root.seen-opening-tail = false;
             arrival-ready.running = false;
             root.arrival-start-index = -1;
             root.arrival-end-index = -1;
@@ -501,6 +505,12 @@ export component MessageList inherits Rectangle {
             property <bool> unread-tail-in-view: root.opening-on-unread
                 && root.jump-measured && root.jump-row < 0
                 && self.bottom-gap() <= root.bottom-inset + Spacing.md + Spacing.touch-target-min;
+            changed unread-tail-in-view => {
+                if (self.unread-tail-in-view) {
+                    root.seen-opening-tail = true;
+                    root.unread-count = 0;
+                }
+            }
 
             // Where the viewport came to rest.
             function read-position() {
@@ -549,6 +559,7 @@ export component MessageList inherits Rectangle {
             // pursued, the user has taken over.
             flicked => {
                 root.opening-on-unread = false;
+                root.seen-opening-tail = false;
                 root.following-tail = false;
                 root.scrolling = true;
                 root.load-more-armed = true;
@@ -977,7 +988,8 @@ export component MessageList inherits Rectangle {
         // conversation opened on an unread boundary — the affordance that says
         // how much is below you and takes you there in one tap.
         GlassSurface {
-            private property <bool> hide-pill: root.is-at-bottom || list.unread-tail-in-view;
+            private property <bool> hide-pill: root.is-at-bottom || list.unread-tail-in-view
+                || (root.seen-opening-tail && root.unread-count == 0);
             elevation: 3;
             x: root.width - self.width - 16px;
             y: root.height - root.bottom-inset - 60px;
