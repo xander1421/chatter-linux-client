@@ -1577,10 +1577,9 @@ export component MessageItem inherits Rectangle {
                                     // "delivered" are hours apart, and two ticks
                                     // would claim an arrival nobody has confirmed.
                                     if root.is-own && root.mesh-delivery: Text {
-                                        // "sent" is deliberately not reused for a
-                                        // broadcast: a room or cell message has no
-                                        // recipient to acknowledge it, so there is
-                                        // never anything to upgrade it to.
+                                        // "sent" is not reused for a radio
+                                        // broadcast, including a private channel
+                                        // packet: there is no recipient ACK.
                                         text: root.delivery-status == "queued" ? "queued"
                                             : root.delivery-status == "relayed" ? "relayed"
                                             : root.delivery-status == "carried" ? "carried"
@@ -1609,7 +1608,7 @@ export component MessageItem inherits Rectangle {
                                             : root.delivery-status == "read"
                                                 ? "Read by the peer"
                                             : root.delivery-status == "broadcast"
-                                                ? "Went out to whoever is in range; nobody acknowledges a broadcast"
+                                                ? "Put on the air without recipient acknowledgement"
                                             : "Handed to a live link; not yet acknowledged";
                                     }
 

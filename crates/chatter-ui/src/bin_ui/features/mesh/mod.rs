@@ -11,9 +11,9 @@
 //!
 //! - **No server, no internet.** Stated in the sidebar caption and again in the
 //!   strip above an open mesh conversation, rather than left to be inferred.
-//! - **Peer count, not a connection dot.** `MeshStatus::connected_peers` drives
-//!   both. Zero renders as "none nearby" in muted text — a normal state of a
-//!   mesh, never an error.
+//! - **Peer count, not a connection dot.** The nearby list from core drives
+//!   the count too. Zero renders as "none nearby" in muted text — a normal
+//!   state of a mesh, never an error.
 //! - **The geohash cell is public and location-scoped.** It is published with
 //!   every message, so it is shown verbatim on the row, in the strip, and in
 //!   the composer placeholder.
@@ -684,6 +684,10 @@ pub fn refresh_rows(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         })
         .collect();
     let global = window.global::<MeshGlobal>();
+    // Count the same core-selected peers shown in the setup sheet. Transport
+    // status counts only connected peers, while this list also includes peers
+    // still reachable through the mesh after their direct link drops.
+    global.set_peer_count(i32::try_from(nearby.len()).unwrap_or(i32::MAX));
     let previous = global.get_nearby_peers();
     if previous.row_count() != nearby.len()
         || previous.iter().zip(&nearby).any(|(a, b)| {
@@ -903,7 +907,6 @@ fn apply_status(
     global.set_running(core_api::service_running(ui_ctx));
     global.set_radio_running(status.radio_running);
     global.set_radio_down(core_api::radio_down_label(&status).into());
-    global.set_peer_count(i32::try_from(status.connected_peers).unwrap_or(i32::MAX));
     global.set_relay_count(i32::try_from(status.connected_relays).unwrap_or(i32::MAX));
 
     // A running mesh is the whole of what makes the app usable without an
@@ -979,9 +982,7 @@ fn handle_event(event: MeshEvent, weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<C
             ));
         }
         MeshEvent::Peers(_) => {
-            // The count itself comes from `status()`, which is the same number
-            // the rest of the mesh reasons about; the peer list only tells us
-            // it is time to ask again.
+            // Refresh the count and rows from the same nearby list.
             let ui_ctx = ui_ctx.clone();
             run_ui!(weak, |w| {
                 push_status(&w, &ui_ctx);

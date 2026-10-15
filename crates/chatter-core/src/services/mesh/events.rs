@@ -55,7 +55,7 @@ pub enum MeshDelivery {
     Read,
     /// It left the outbox without ever being acknowledged.
     Dropped,
-    /// Put on the air for the room or a cell.
+    /// Put on the air for a room, cell, or channel.
     ///
     /// Every other variant describes a one-to-one delivery. A broadcast has no
     /// per-recipient notion at all: nobody acknowledges it, so there is no
