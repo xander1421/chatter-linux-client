@@ -494,6 +494,14 @@ export component MessageList inherits Rectangle {
                     - (self.height - root.bottom-inset);
             }
 
+            // Opening on the unread divider deliberately leaves is-at-bottom
+            // false. Once that row has been measured and the seek has settled,
+            // the pill is unnecessary if the newest messages are already in
+            // view (including a conversation too short to scroll).
+            property <bool> unread-tail-in-view: root.opening-on-unread
+                && root.jump-measured && root.jump-row < 0
+                && self.bottom-gap() <= root.bottom-inset + Spacing.md + Spacing.touch-target-min;
+
             // Where the viewport came to rest.
             function read-position() {
                 // Keyboard reveal and row remeasurement can update viewport-y
@@ -969,6 +977,7 @@ export component MessageList inherits Rectangle {
         // conversation opened on an unread boundary — the affordance that says
         // how much is below you and takes you there in one tap.
         GlassSurface {
+            private property <bool> hide-pill: root.is-at-bottom || list.unread-tail-in-view;
             elevation: 3;
             x: root.width - self.width - 16px;
             y: root.height - root.bottom-inset - 60px;
@@ -982,10 +991,10 @@ export component MessageList inherits Rectangle {
                 ? root.unread-count + " new messages, jump to newest"
                 : "Scroll to bottom";
 
-            opacity: root.is-at-bottom ? 0 : 1;
-            visible: !root.is-at-bottom || self.opacity > 0;
-            transform-scale-x: root.is-at-bottom ? 72% : (scroll-btn.pressed ? 93% : 100%);
-            transform-scale-y: root.is-at-bottom ? 72% : (scroll-btn.pressed ? 93% : 100%);
+            opacity: self.hide-pill ? 0 : 1;
+            visible: !self.hide-pill || self.opacity > 0;
+            transform-scale-x: self.hide-pill ? 72% : (scroll-btn.pressed ? 93% : 100%);
+            transform-scale-y: self.hide-pill ? 72% : (scroll-btn.pressed ? 93% : 100%);
             animate opacity { duration: Materials.motion-standard; easing: Materials.glide; }
             animate transform-scale-x { duration: scroll-btn.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
             animate transform-scale-y { duration: scroll-btn.pressed ? Materials.motion-quick : Materials.motion-standard; easing: Materials.spring; }
@@ -1026,7 +1035,7 @@ export component MessageList inherits Rectangle {
             }
 
             scroll-btn := TouchArea {
-                enabled: !root.is-at-bottom;
+                enabled: !parent.hide-pill;
                 clicked => {
                     root.opening-on-unread = false;
                     if (root.unread-index >= 0 && list.is-below(root.unread-index)) {
