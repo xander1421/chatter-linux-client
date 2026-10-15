@@ -97,6 +97,21 @@ impl KeyStore {
         Ok(())
     }
 
+    /// Re-linking a device that still holds this same identity (its session
+    /// was revoked): keep the keypair, take the new registration id that the
+    /// fresh prekeys were generated under. Errors if no identity row exists.
+    pub fn update_local_registration_id(&self, registration_id: u32) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        let rows = conn.execute(
+            "UPDATE local_identity SET registration_id = ?1 WHERE id = 1",
+            params![registration_id],
+        )?;
+        if rows != 1 {
+            return Err(StorageError::InvalidData("no local identity to update".into()));
+        }
+        Ok(())
+    }
+
     /// Check if a local identity exists.
     pub fn has_local_identity(&self) -> Result<bool, StorageError> {
         let conn = self.db.connection()?;

@@ -863,8 +863,14 @@ impl LinkDeviceService {
         // Server confirmed — NOW commit identity + auth state. Earlier
         // failure modes (network, validation, server reject) leave the
         // local key store unmodified so a retry starts from clean state.
-        self.key_store
-            .set_local_identity(registration_id, &identity_pair_serialized)?;
+        // The overwrite guard above already refused a different identity, so
+        // an existing row here is this same keypair (a re-link after revoke).
+        if self.key_store.has_local_identity()? {
+            self.key_store.update_local_registration_id(registration_id)?;
+        } else {
+            self.key_store
+                .set_local_identity(registration_id, &identity_pair_serialized)?;
+        }
 
         // Persist auth state.
         self.settings_repo
