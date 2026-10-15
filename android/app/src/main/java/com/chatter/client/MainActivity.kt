@@ -18,6 +18,7 @@ import android.provider.OpenableColumns
 import android.provider.Settings
 import android.text.Selection
 import android.util.Log
+import android.widget.Toast
 import android.view.ActionMode
 import android.view.KeyEvent
 import android.view.Surface
@@ -659,6 +660,16 @@ class MainActivity : GameActivity() {
             // SAF returns content:// URIs with transient read grants. Copy each
             // into our cache dir so Rust gets plain filesystem paths it can read.
             val paths = uris.mapNotNull { copyToCache(it) }
+            // A pick that cannot be read (provider error, a stale media entry
+            // whose file is gone) otherwise vanished without a word.
+            if (paths.size < uris.size) {
+                val failed = uris.size - paths.size
+                Toast.makeText(
+                    this,
+                    if (failed == 1) "Couldn't read that file" else "Couldn't read $failed files",
+                    Toast.LENGTH_SHORT,
+                ).show()
+            }
             nativeOnFilesPicked(paths.toTypedArray())
         }
 
