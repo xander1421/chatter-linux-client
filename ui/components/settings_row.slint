@@ -19,8 +19,9 @@ export component SettingsRow inherits Rectangle {
     in property <bool> touch: false;
     callback clicked();
 
-    min-height: root.touch ? Spacing.list-row-height-touch : Spacing.button-height;
-    preferred-height: max(self.min-height, row-content.preferred-height);
+    height: max(root.touch ? Spacing.list-row-height-touch : Spacing.button-height,
+        row-content.preferred-height);
+    vertical-stretch: 0;
     border-radius: Spacing.radius-md;
     background: row-touch.pressed ? Colors.surface-control-hover
         : row-touch.has-hover && root.clickable ? Colors.row-hover : transparent;
@@ -108,6 +109,8 @@ export component SettingsRow inherits Rectangle {
         border-radius: root.border-radius;
     }
     row-touch := TouchArea {
+        width: 100%;
+        height: 100%;
         enabled: root.clickable;
         mouse-cursor: root.clickable ? pointer : default;
         clicked => { if root.clickable { root.clicked(); } }
