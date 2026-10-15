@@ -137,11 +137,7 @@ pub fn invite_candidate_to_slint(
     crate::PrivateGroupFriend {
         user_id: c.user_id.to_string().into(),
         display_name: c.display_name.into(),
-        username: if c.is_anonymous {
-            "(anonymous)".into()
-        } else {
-            "".into()
-        },
+        username: c.username.into(),
         selected: false,
         role: "member".into(),
         avatar_source: avatar

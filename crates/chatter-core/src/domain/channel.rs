@@ -244,7 +244,7 @@ pub struct Membership {
 pub struct MemberWithProfile {
     pub membership: Membership,
     pub display_name: String,
-    /// The member's handle, empty when this device does not know it.
+    /// The member's full `nickname.discriminator` handle, empty when unknown.
     pub username: String,
     /// Decrypted avatar bytes from the member's server profile, if known.
     pub avatar_bytes: Option<Vec<u8>>,
