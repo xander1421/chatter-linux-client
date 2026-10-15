@@ -183,6 +183,9 @@ fn apply_header(window: &MainWindow, ui_ctx: &ChatterClient, row: &MeshRow) {
     global.set_active_scope(row.scope.clone().into());
     global.set_active_reachable(row.reachable);
     global.set_active_verified(row.verified);
+    global.set_identity_panel_open(false);
+    global.set_binding_qr_visible(false);
+    global.set_binding_scan_visible(false);
     global.set_notice("".into());
 }
 

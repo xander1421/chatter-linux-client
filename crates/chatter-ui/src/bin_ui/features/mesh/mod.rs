@@ -93,6 +93,7 @@ pub fn clear_active(window: &MainWindow) {
     global.set_active_reachable(false);
     global.set_active_verified(false);
     global.set_active_binding_label("Mesh peer · self-asserted name".into());
+    global.set_identity_panel_open(false);
     global.set_active_comparison_code("".into());
     global.set_binding_qr_visible(false);
     global.set_binding_scan_visible(false);
@@ -282,6 +283,13 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         global.on_scan_binding_qr(move |peer, qr| {
             let Some(w) = weak.upgrade() else { return };
             let status = match core_api::verify_binding(&ui_ctx, peer.as_str(), qr.as_str()) {
+                Ok(state) if state.label() == "Verified Chatter contact" => {
+                    let mesh = w.global::<MeshGlobal>();
+                    mesh.set_identity_panel_open(false);
+                    mesh.set_binding_qr_visible(false);
+                    mesh.set_binding_scan_visible(false);
+                    String::new()
+                }
                 Ok(state) => state.label().to_string(),
                 Err(error) => error.to_string(),
             };
@@ -296,6 +304,13 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         global.on_verify_known_contact(move |peer| {
             let Some(w) = weak.upgrade() else { return };
             let status = match core_api::verify_known_contact(&ui_ctx, peer.as_str()) {
+                Ok(state) if state.label() == "Verified Chatter contact" => {
+                    let mesh = w.global::<MeshGlobal>();
+                    mesh.set_identity_panel_open(false);
+                    mesh.set_binding_qr_visible(false);
+                    mesh.set_binding_scan_visible(false);
+                    String::new()
+                }
                 Ok(state) => state.label().to_string(),
                 Err(error) => error.to_string(),
             };

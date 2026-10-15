@@ -92,7 +92,7 @@ export global MeshGlobal {
     out property <bool> context-strip-needed:
         MeshGlobal.notice != ""
         || MeshGlobal.binding-qr-visible
-        || MeshGlobal.active-kind == "dm"
+        || (MeshGlobal.active-kind == "dm" && (!MeshGlobal.active-verified || MeshGlobal.identity-panel-open))
         || !MeshGlobal.mesh-on
         || !MeshGlobal.radio-running
         || (MeshGlobal.active-kind == "dm" && !MeshGlobal.active-reachable)
@@ -135,6 +135,9 @@ export global MeshGlobal {
     in-out property <string> active-title: "";
     in-out property <string> active-scope: "";
     in-out property <string> active-binding-label: "Mesh peer · self-asserted name";
+    // Header Identity control opens the detail panel. Reset when a DM changes
+    // or verification succeeds so a verified chat returns to its compact state.
+    in-out property <bool> identity-panel-open: false;
     in-out property <string> active-comparison-code: "";
     in-out property <image> binding-qr-image;
     in-out property <bool> binding-qr-visible: false;

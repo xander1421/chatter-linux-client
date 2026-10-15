@@ -16,6 +16,7 @@ import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
 import { MeshGlobal } from "mesh_global.slint";
 import { MeshListItem } from "mesh_list_item.slint";
+import { NeoActionToggle } from "../components/neo_action_toggle.slint";
 
 export component MeshList inherits Rectangle {
     in property <bool> collapsed: false;
@@ -108,12 +109,11 @@ export component MeshList inherits Rectangle {
             }
         }
 
-        // ── The standing claim: serverless, and a peer count for connectivity ──
+        // Status opens Nearby. The radio control is a separate, labelled switch
+        // so a casual tap on the count cannot turn mesh off.
         if !root.collapsed && root.expanded: Rectangle {
             height: root.touch ? Spacing.touch-target-min : 30px;
             clip: true;
-            accessible-role: button;
-            accessible-label: MeshGlobal.mesh-on ? "Turn mesh off" : "Turn mesh on";
             border-radius: Spacing.radius-sm;
             background: status-touch.has-hover ? Colors.surface-hover : transparent;
             transform-scale-x: status-touch.pressed ? 98% : 100%;
@@ -177,8 +177,35 @@ export component MeshList inherits Rectangle {
             }
             status-touch := TouchArea {
                 mouse-cursor: pointer;
+                accessible-role: button;
+                accessible-label: "Show nearby mesh peers";
                 clicked => {
-                    MeshGlobal.set-mesh-on(!MeshGlobal.mesh-on);
+                    root.showing-nearby = true;
+                }
+            }
+        }
+
+        if !root.collapsed && root.expanded: Rectangle {
+            height: root.touch ? Spacing.touch-target-min : Spacing.button-height;
+            HorizontalLayout {
+                padding-left: Spacing.md;
+                padding-right: Spacing.sm;
+                spacing: Spacing.sm;
+                Text {
+                    text: "Mesh on/off";
+                    color: Colors.text-secondary;
+                    font-size: Typography.xs;
+                    vertical-alignment: center;
+                    horizontal-stretch: 1;
+                }
+                VerticalLayout {
+                    alignment: center;
+                    horizontal-stretch: 0;
+                    NeoActionToggle {
+                        checked: MeshGlobal.mesh-on;
+                        accessible-text: "Mesh on/off";
+                        toggled(value) => { MeshGlobal.set-mesh-on(value); }
+                    }
                 }
             }
         }

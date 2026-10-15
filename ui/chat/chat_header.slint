@@ -319,13 +319,70 @@ export component ChatHeader inherits GlassSurface {
                 VerticalLayout {
                     width: 100%;
                     alignment: center;
-                    Text {
-                        text: root.channel-name;
-                        color: name-touch.has-hover ? Colors.primary : Colors.text-primary;
-                        font-size: root.header-title-size;
-                        font-weight: Typography.semibold;
+                    Rectangle {
+                        height: root.header-title-size + Spacing.xs;
                         min-width: 0px;
-                        overflow: elide;
+                        Text {
+                            width: 100%;
+                            text: root.channel-name;
+                            color: name-touch.has-hover ? Colors.primary : Colors.text-primary;
+                            font-size: root.header-title-size;
+                            font-weight: Typography.semibold;
+                            overflow: elide;
+                            vertical-alignment: center;
+                        }
+                        name-touch := TouchArea {
+                            enabled: root.show-settings || (root.is-mesh && MeshGlobal.active-kind == "dm");
+                            mouse-cursor: pointer;
+                            clicked => {
+                                if root.is-mesh && MeshGlobal.active-kind == "dm" { MeshGlobal.open-peer(MeshGlobal.active-scope); }
+                                else { root.settings-clicked(); }
+                            }
+                        }
+                    }
+                    if has-channel && root.is-mesh && MeshGlobal.active-kind == "dm" && MeshGlobal.active-verified: HorizontalLayout {
+                        spacing: Spacing.xs;
+                        min-width: 0px;
+                        Image {
+                            source: Icons.lock;
+                            width: 11px;
+                            height: 11px;
+                            colorize: Colors.success;
+                            vertical-alignment: center;
+                        }
+                        Text {
+                            text: root.mesh-tight ? "Verified" : MeshGlobal.active-binding-label;
+                            color: Colors.success;
+                            font-size: Typography.xs;
+                            min-width: 0px;
+                            horizontal-stretch: 1;
+                            overflow: elide;
+                        }
+                        Rectangle {
+                            width: 58px;
+                            height: 20px;
+                            border-radius: Spacing.radius-sm;
+                            background: identity-touch.has-hover ? Colors.surface-hover : transparent;
+                            transform-scale-x: identity-touch.pressed ? 94% : 100%;
+                            transform-scale-y: identity-touch.pressed ? 94% : 100%;
+                            animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; }
+                            animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
+                            Text {
+                                text: MeshGlobal.identity-panel-open ? "Close" : "Identity";
+                                color: Colors.text-secondary;
+                                font-size: Typography.xs;
+                                horizontal-alignment: center;
+                                vertical-alignment: center;
+                            }
+                            identity-touch := TouchArea {
+                                y: -Spacing.sm;
+                                height: Spacing.button-height;
+                                mouse-cursor: pointer;
+                                accessible-role: button;
+                                accessible-label: MeshGlobal.identity-panel-open ? "Close mesh identity" : "Open mesh identity";
+                                clicked => { MeshGlobal.identity-panel-open = !MeshGlobal.identity-panel-open; }
+                            }
+                        }
                     }
                     // Typing shares the title's bounded column, so long peer
                     // names yield to the call buttons instead of drawing over them.
@@ -389,14 +446,6 @@ export component ChatHeader inherits GlassSurface {
                         color: Colors.text-muted;
                         font-size: Typography.xs;
                         overflow: elide;
-                    }
-                }
-                name-touch := TouchArea {
-                    enabled: root.show-settings || (root.is-mesh && MeshGlobal.active-kind == "dm");
-                    mouse-cursor: pointer;
-                    clicked => {
-                        if root.is-mesh && MeshGlobal.active-kind == "dm" { MeshGlobal.open-peer(MeshGlobal.active-scope); }
-                        else { root.settings-clicked(); }
                     }
                 }
             }

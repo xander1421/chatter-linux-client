@@ -23,10 +23,9 @@ import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
 import { MeshGlobal } from "mesh_global.slint";
+import { Materials } from "../theme/materials.slint";
 
 export component MeshContextBar inherits Rectangle {
-    property <bool> binding-expanded: false;
-
     property <bool> radio-down: !MeshGlobal.radio-running;
 
     // What "sent" means here, which is not what it means anywhere else.
@@ -119,43 +118,47 @@ export component MeshContextBar inherits Rectangle {
                 }
             }
 
-            if MeshGlobal.active-kind == "dm": VerticalLayout {
+            if MeshGlobal.active-kind == "dm" && (!MeshGlobal.active-verified || MeshGlobal.identity-panel-open): VerticalLayout {
                 spacing: Spacing.xs;
                 HorizontalLayout {
-                    Text {
+                    if !MeshGlobal.active-verified: Text {
                         text: MeshGlobal.active-binding-label;
-                        color: MeshGlobal.active-binding-label == "Verified Chatter contact" ? Colors.success : Colors.text-muted;
+                        color: Colors.text-muted;
                         font-size: Typography.xs;
                         horizontal-stretch: 1;
                     }
-                    Rectangle {
+                    if !MeshGlobal.active-verified: Rectangle {
                         width: 72px;
                         height: Spacing.touch-target-min;
                         border-radius: Spacing.radius-sm;
                         background: identity-touch.has-hover ? Colors.surface-hover : transparent;
-                        Text { text: root.binding-expanded ? "Close" : "Identity";
+                        transform-scale-x: identity-touch.pressed ? 94% : 100%;
+                        transform-scale-y: identity-touch.pressed ? 94% : 100%;
+                        animate transform-scale-x { duration: Materials.motion-standard; easing: Materials.spring; }
+                        animate transform-scale-y { duration: Materials.motion-standard; easing: Materials.spring; }
+                        Text { text: MeshGlobal.identity-panel-open ? "Close" : "Identity";
                             color: Colors.text-primary; font-size: Typography.xs;
                             horizontal-alignment: center; vertical-alignment: center; }
                         identity-touch := TouchArea {
                             mouse-cursor: pointer;
-                            clicked => { root.binding-expanded = !root.binding-expanded; }
+                            clicked => { MeshGlobal.identity-panel-open = !MeshGlobal.identity-panel-open; }
                         }
                     }
                 }
-                if root.binding-expanded: Text {
+                if MeshGlobal.identity-panel-open: Text {
                     text: "Sharing links your mesh presence to your Chatter account for this person only.";
                     color: Colors.text-muted;
                     font-size: Typography.xs;
                     wrap: word-wrap;
                 }
-                if root.binding-expanded && MeshGlobal.active-comparison-code != "": Text {
+                if MeshGlobal.identity-panel-open && MeshGlobal.active-comparison-code != "": Text {
                     text: "Compare this live code on both screens: " + MeshGlobal.active-comparison-code;
                     color: Colors.text-primary;
                     font-size: Typography.xs;
                     font-weight: 600;
                     wrap: word-wrap;
                 }
-                if root.binding-expanded: HorizontalLayout {
+                if MeshGlobal.identity-panel-open: HorizontalLayout {
                     spacing: Spacing.sm;
                     Rectangle {
                         width: 130px;
@@ -197,7 +200,7 @@ export component MeshContextBar inherits Rectangle {
                         }
                     }
                 }
-                if root.binding-expanded: Rectangle {
+                if MeshGlobal.identity-panel-open: Rectangle {
                     width: 175px;
                     height: Spacing.touch-target-min;
                     border-radius: Spacing.radius-sm;
@@ -209,13 +212,13 @@ export component MeshContextBar inherits Rectangle {
                         clicked => { MeshGlobal.verify-known-contact(MeshGlobal.active-scope); }
                     }
                 }
-                if root.binding-expanded && MeshGlobal.binding-qr-visible: VerticalLayout {
+                if MeshGlobal.identity-panel-open && MeshGlobal.binding-qr-visible: VerticalLayout {
                     spacing: Spacing.xs;
                     Image { source: MeshGlobal.binding-qr-image; width: 180px; height: 180px; image-fit: contain; }
                     Text { text: "Ask this person to scan this QR while both devices are connected nearby.";
                         color: Colors.text-muted; font-size: Typography.xs; wrap: word-wrap; }
                 }
-                if root.binding-expanded && MeshGlobal.binding-scan-visible: Rectangle {
+                if MeshGlobal.identity-panel-open && MeshGlobal.binding-scan-visible: Rectangle {
                     height: Spacing.touch-target-min;
                     background: Colors.inset;
                     border-radius: Spacing.radius-sm;
