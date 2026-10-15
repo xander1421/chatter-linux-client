@@ -15,7 +15,36 @@ pub struct RecordRow {
 #[derive(Default)]
 pub struct RecordPage {
     pub rows: Vec<RecordRow>,
+    pub notifications: Vec<NotificationRow>,
     pub next: String,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct NotificationRow {
+    pub id: String,
+    pub title: String,
+    pub body: String,
+    pub actor_id: String,
+    pub avatar: Option<Vec<u8>>,
+    pub channel_id: String,
+    pub kind: String,
+    pub when: String,
+    pub read: bool,
+    pub status: String,
+}
+
+fn relative_time(timestamp: u64) -> String {
+    let now = chrono::Utc::now().timestamp().max(0) as u64;
+    let seconds = now.saturating_sub(timestamp / 1_000_000_000);
+    match seconds {
+        0..=59 => "Now".into(),
+        60..=3599 => format!("{}m", seconds / 60),
+        3600..=86399 => format!("{}h", seconds / 3600),
+        86400..=604799 => format!("{}d", seconds / 86400),
+        _ => chrono::DateTime::from_timestamp((timestamp / 1_000_000_000) as i64, 0)
+            .map(|t| t.format("%d %b %Y").to_string())
+            .unwrap_or_default(),
+    }
 }
 
 fn offset(cursor: &str) -> Result<i32, NetworkError> {
@@ -44,27 +73,29 @@ pub async fn page(
                 .list_notifications(false, vec![], 50, start)
                 .await?;
             let end = start.saturating_add(response.notifications.len() as i32);
+            let notifications = response.notifications.into_iter().map(|n| {
+                let kind = match crate::proto::chat_v1::NotificationType::try_from(n.r#type) {
+                    Ok(crate::proto::chat_v1::NotificationType::FriendRequest) => "friend-request",
+                    Ok(crate::proto::chat_v1::NotificationType::FriendAccepted) => "friend-accepted",
+                    Ok(crate::proto::chat_v1::NotificationType::ChannelInvite) => "channel-invite",
+                    Ok(crate::proto::chat_v1::NotificationType::Message) => "message",
+                    Ok(crate::proto::chat_v1::NotificationType::Mention) => "mention",
+                    Ok(crate::proto::chat_v1::NotificationType::Reply) => "reply",
+                    Ok(crate::proto::chat_v1::NotificationType::Reaction) => "reaction",
+                    _ => "other",
+                };
+                NotificationRow { id: n.id, title: n.title, body: n.body,
+                    actor_id: n.actor_id, avatar: None, channel_id: n.channel_id,
+                    kind: kind.into(), when: relative_time(n.created_at), read: n.read,
+                    status: String::new() }
+            }).collect();
             Ok(RecordPage {
                 next: if end < response.total_count && end > start {
                     end.to_string()
                 } else {
                     String::new()
                 },
-                rows: response
-                    .notifications
-                    .into_iter()
-                    .map(|n| RecordRow {
-                        id: n.id,
-                        title: n.title,
-                        body: n.body,
-                        primary: if n.read {
-                            String::new()
-                        } else {
-                            "Mark read".into()
-                        },
-                        secondary: "Delete".into(),
-                    })
-                    .collect(),
+                rows: Vec::new(), notifications,
             })
         }
         "integrations" => {
@@ -112,6 +143,7 @@ pub async fn page(
             Ok(RecordPage {
                 rows,
                 next: response.next_page_token,
+                ..Default::default()
             })
         }
         "calls" => {
@@ -149,6 +181,7 @@ pub async fn page(
                         }
                     })
                     .collect(),
+                ..Default::default()
             })
         }
         _ => Err(NetworkError::InvalidRequest(
