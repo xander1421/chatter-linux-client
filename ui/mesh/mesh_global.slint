@@ -62,6 +62,7 @@ export global MeshGlobal {
     in-out property <[string]> nearby-channels: [];
     in-out property <[MeshPeerData]> nearby-peers: [];
     callback open-peer(string);
+    callback open-setup();
     callback open-peer-dm(string);
     in-out property <string> sheet-peer-id: "";
     in-out property <string> sheet-peer-name: "";

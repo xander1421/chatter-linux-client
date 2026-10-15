@@ -1,6 +1,7 @@
 // Mesh controls live in one place; the conversation list remains a list.
 import { Modal } from "../components/modal.slint";
 import { Button } from "../components/button.slint";
+import { Input } from "../components/input.slint";
 import { NeoActionToggle } from "../components/neo_action_toggle.slint";
 import { MeshGlobal } from "mesh_global.slint";
 import { Colors } from "../theme/colors.slint";
@@ -15,34 +16,11 @@ component SetupField inherits VerticalLayout {
     callback submitted(string);
     spacing: Spacing.xs;
     Text { text: root.label; color: Colors.text-secondary; font-size: Typography.sm; font-weight: 600; }
-    Rectangle {
-        height: Spacing.touch-target-min;
-        border-radius: Spacing.radius-md;
-        background: Colors.surface-control;
-        border-width: Spacing.stroke;
-        border-color: field.has-focus ? Colors.primary : transparent;
-        animate border-color { duration: Materials.motion-quick; easing: Materials.settle; }
-        field := TextInput {
-            x: Spacing.md;
-            y: (parent.height - self.height) / 2;
-            width: parent.width - Spacing.md * 2;
-            height: 28px;
-            text <=> root.value;
-            single-line: true;
-            color: Colors.text-primary;
-            font-size: Typography.sm;
-            accepted => { root.submitted(self.text); }
-        }
-        if root.value == "": Text {
-            x: Spacing.md;
-            width: parent.width - Spacing.md * 2;
-            height: parent.height;
-            text: root.hint;
-            color: Colors.text-muted;
-            font-size: Typography.sm;
-            vertical-alignment: center;
-            overflow: elide;
-        }
+    Input {
+        control-height: Spacing.touch-target-min;
+        placeholder: root.hint;
+        text <=> root.value;
+        accepted(text) => { root.submitted(text); }
     }
 }
 
@@ -88,12 +66,10 @@ export component MeshSetupSheet inherits Rectangle {
                 }
 
                 Rectangle {
-                    height: radio-content.preferred-height + Spacing.lg * 2;
                     border-radius: Spacing.radius-lg;
                     background: Colors.surface-section;
-                    radio-content := VerticalLayout {
-                        x: Spacing.lg; y: Spacing.lg;
-                        width: parent.width - Spacing.lg * 2;
+                    VerticalLayout {
+                        padding: Spacing.lg;
                         spacing: Spacing.sm;
                         Text { text: "RADIO"; color: Colors.text-muted; font-size: Typography.xs; font-weight: 600; letter-spacing: 0.5px; }
                         HorizontalLayout {
@@ -139,11 +115,10 @@ export component MeshSetupSheet inherits Rectangle {
                 }
 
                 Rectangle {
-                    height: identity-content.preferred-height + Spacing.lg * 2;
                     border-radius: Spacing.radius-lg;
                     background: Colors.surface-section;
-                    identity-content := VerticalLayout {
-                        x: Spacing.lg; y: Spacing.lg; width: parent.width - Spacing.lg * 2;
+                    VerticalLayout {
+                        padding: Spacing.lg;
                         spacing: Spacing.sm;
                         Text { text: "IDENTITY"; color: Colors.text-muted; font-size: Typography.xs; font-weight: 600; letter-spacing: 0.5px; }
                         Text { text: "Your mesh name is public to anyone nearby. Names are self-asserted."; color: Colors.text-secondary; font-size: Typography.sm; wrap: word-wrap; }
@@ -153,11 +128,10 @@ export component MeshSetupSheet inherits Rectangle {
                 }
 
                 Rectangle {
-                    height: channel-content.preferred-height + Spacing.lg * 2;
                     border-radius: Spacing.radius-lg;
                     background: Colors.surface-section;
-                    channel-content := VerticalLayout {
-                        x: Spacing.lg; y: Spacing.lg; width: parent.width - Spacing.lg * 2;
+                    VerticalLayout {
+                        padding: Spacing.lg;
                         spacing: Spacing.md;
                         Text { text: "CHANNELS"; color: Colors.text-muted; font-size: Typography.xs; font-weight: 600; letter-spacing: 0.5px; }
                         SetupField { label: "Join public #channel"; hint: "Channel name"; value <=> root.public-draft;
@@ -190,11 +164,10 @@ export component MeshSetupSheet inherits Rectangle {
                 }
 
                 Rectangle {
-                    height: danger-content.preferred-height + Spacing.lg * 2;
                     border-radius: Spacing.radius-lg;
                     background: Colors.surface-section;
-                    danger-content := VerticalLayout {
-                        x: Spacing.lg; y: Spacing.lg; width: parent.width - Spacing.lg * 2;
+                    VerticalLayout {
+                        padding: Spacing.lg;
                         spacing: Spacing.sm;
                         Text { text: "DANGER ZONE"; color: Colors.danger; font-size: Typography.xs; font-weight: 600; letter-spacing: 0.5px; }
                         Text { text: "Erase this device's mesh identity, messages, carried mail and favourites. Your Chatter account stays intact.";

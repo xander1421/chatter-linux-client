@@ -491,6 +491,13 @@ export component ChatHeader inherits GlassSurface {
                     font-weight: root.mesh-radio-down ? 600 : 400;
                     vertical-alignment: center;
                     horizontal-stretch: 0;
+                    // Nearby peers (and a private channel's Invite) live in mesh setup.
+                    TouchArea {
+                        mouse-cursor: pointer;
+                        accessible-role: button;
+                        accessible-label: "Mesh setup, " + root.mesh-peers;
+                        clicked => { MeshGlobal.open-setup(); }
+                    }
                 }
             }
         }

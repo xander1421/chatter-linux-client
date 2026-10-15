@@ -37,13 +37,15 @@ export component MeshList inherits Rectangle {
                     HorizontalLayout {
                         padding-left: Spacing.xs;
                         spacing: Spacing.sm;
-                        alignment: center;
-                        Image {
-                            source: Icons.chevron-right;
-                            width: 11px; height: 11px;
-                            colorize: Colors.text-muted;
-                            transform-rotation: root.expanded ? 90deg : 0deg;
-                            animate transform-rotation { duration: Materials.motion-standard; easing: Materials.spring; }
+                        VerticalLayout {
+                            alignment: center;
+                            Image {
+                                source: Icons.chevron-right;
+                                width: 11px; height: 11px;
+                                colorize: Colors.text-muted;
+                                transform-rotation: root.expanded ? 90deg : 0deg;
+                                animate transform-rotation { duration: Materials.motion-standard; easing: Materials.spring; }
+                            }
                         }
                         Text {
                             text: "Mesh";
@@ -53,6 +55,8 @@ export component MeshList inherits Rectangle {
                             vertical-alignment: center;
                             horizontal-stretch: 1;
                         }
+                        VerticalLayout {
+                        alignment: center;
                         Rectangle {
                             width: min(105px, status-text.preferred-width + Spacing.md * 2);
                             height: 24px;
@@ -69,6 +73,7 @@ export component MeshList inherits Rectangle {
                                 vertical-alignment: center;
                                 overflow: elide;
                             }
+                        }
                         }
                     }
                     header-touch := TouchArea {
@@ -164,7 +169,6 @@ export component MeshList inherits Rectangle {
                 clicked => { MeshGlobal.conversation-selected(item.id); }
                 leave => { MeshGlobal.leave-channel(item.scope); }
                 toggle-mute => { MeshGlobal.toggle-channel-mute(item.scope); }
-                toggle-block => { MeshGlobal.toggle-peer-block(item.scope); }
             }
         }
         if !root.collapsed && root.expanded && MeshGlobal.mesh-on && MeshGlobal.conversations.length == 0: Rectangle {

@@ -233,6 +233,14 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     }
     {
         let weak = window.as_weak();
+        global.on_open_setup(move || {
+            if let Some(w) = weak.upgrade() {
+                w.invoke_nav_push("mesh-setup".into());
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
         let ui_ctx = ui_ctx.clone();
         global.on_join_private_channel(move |qr| {
             let Some(w) = weak.upgrade() else { return };
