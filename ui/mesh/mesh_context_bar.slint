@@ -32,6 +32,8 @@ export component MeshContextBar inherits Rectangle {
     property <string> delivery-line:
         !MeshGlobal.mesh-on
             ? "The mesh is switched off, so nothing is sent or received over Bluetooth. Earlier messages are still here."
+      : MeshGlobal.active-kind == "dm" && MeshGlobal.active-signal-enabled
+            ? "Signal setup needs a live key exchange. Messages then wait for a Bluetooth route; delivered means an encrypted receipt arrived."
       : MeshGlobal.active-kind == "dm"
             ? (MeshGlobal.active-reachable
                 ? "Best-effort: sent means handed on, not arrived."
@@ -143,6 +145,28 @@ export component MeshContextBar inherits Rectangle {
                             mouse-cursor: pointer;
                             clicked => { MeshGlobal.identity-panel-open = !MeshGlobal.identity-panel-open; }
                         }
+                    }
+                }
+                Text {
+                    text: MeshGlobal.active-protection-label;
+                    color: MeshGlobal.active-signal-enabled ? Colors.success : Colors.text-muted;
+                    font-size: Typography.xs;
+                }
+                if MeshGlobal.active-verified: Rectangle {
+                    width: 190px;
+                    height: Spacing.touch-target-min;
+                    border-radius: Spacing.radius-sm;
+                    background: signal-touch.has-hover ? Colors.surface-hover : Colors.inset;
+                    Text {
+                        text: MeshGlobal.active-signal-enabled ? "Use Noise (bitchat)" : "Use Signal on this mesh DM";
+                        color: Colors.text-primary;
+                        font-size: Typography.xs;
+                        horizontal-alignment: center;
+                        vertical-alignment: center;
+                    }
+                    signal-touch := TouchArea {
+                        mouse-cursor: pointer;
+                        clicked => { MeshGlobal.toggle-signal-mesh(MeshGlobal.active-scope); }
                     }
                 }
                 if MeshGlobal.identity-panel-open: Text {

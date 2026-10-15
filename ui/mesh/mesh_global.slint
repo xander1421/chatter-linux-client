@@ -138,6 +138,9 @@ export global MeshGlobal {
     // Header Identity control opens the detail panel. Reset when a DM changes
     // or verification succeeds so a verified chat returns to its compact state.
     in-out property <bool> identity-panel-open: false;
+    in-out property <string> active-protection-label: "Noise (bitchat)";
+    in-out property <bool> active-signal-enabled: false;
+    callback toggle-signal-mesh(string);
     in-out property <string> active-comparison-code: "";
     in-out property <image> binding-qr-image;
     in-out property <bool> binding-qr-visible: false;

@@ -47,6 +47,7 @@ pub mod prekeys;
 pub mod radio;
 pub mod router;
 pub mod session;
+pub mod signal_mesh;
 pub mod state;
 pub mod timeline;
 #[cfg(feature = "onion")]
@@ -78,6 +79,7 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::task::JoinHandle;
 use uuid::Uuid;
 
+use crate::crypto::signal::store::SignalStore;
 use crate::domain::UnifiedConversation;
 use crate::domain::ids::{ChannelId, UserId};
 use crate::domain::message::Message;
@@ -201,6 +203,7 @@ impl<T> CommandBus<T> {
 pub struct MeshService {
     key_store: Arc<KeyStore>,
     binding_store: Arc<MeshBindingStore>,
+    signal_lock: Arc<Mutex<()>>,
     identity: Arc<MeshIdentity>,
     /// Retained so a panic wipe can destroy the keypair, not merely the mail.
     identity_store: Arc<MeshIdentityStore>,
@@ -432,8 +435,91 @@ impl MeshService {
         Ok(stored)
     }
 
+    /// Resolve a Signal target only through the live, persisted verification gate.
+    /// Every later ratchet operation repeats this check inside `SignalStore`.
+    pub fn verified_signal_target(
+        &self,
+        owner: UserId,
+        peer: &PeerId,
+    ) -> Result<(SignalStore, libsignal_protocol::ProtocolAddress), MeshError> {
+        use libsignal_protocol::{DeviceId, ProtocolAddress};
+        let PeerBinding::Verified {
+            account_id,
+            device_id,
+            ..
+        } = self.binding_state(owner, peer)?
+        else {
+            return Err(MeshError::Binding(
+                "verify this Chatter contact before Signal mesh messaging".into(),
+            ));
+        };
+        let address = ProtocolAddress::new(
+            uuid::Uuid::from_bytes(account_id).to_string(),
+            DeviceId::try_from(device_id)
+                .map_err(|_| MeshError::Binding("invalid verified device ID".into()))?,
+        );
+        Ok((
+            SignalStore::for_mesh(
+                self.key_store.clone(),
+                self.binding_store.clone(),
+                owner.to_string(),
+                peer.clone(),
+            ),
+            address,
+        ))
+    }
+
+    pub fn signal_opted_in(&self, owner: UserId, peer: &PeerId) -> Result<bool, MeshError> {
+        Ok(self
+            .binding_store
+            .signal_opted_in(&owner.to_string(), peer)?)
+    }
+
+    pub fn signal_protection_label(
+        &self,
+        owner: UserId,
+        peer: &PeerId,
+    ) -> Result<&'static str, MeshError> {
+        if !self.signal_opted_in(owner, peer)? {
+            return Ok("Noise (bitchat)");
+        }
+        if matches!(
+            self.binding_state(owner, peer)?,
+            PeerBinding::Verified { .. }
+        ) {
+            Ok("Signal-protected")
+        } else {
+            Ok("Signal paused · verify identity")
+        }
+    }
+
+    pub fn set_signal_opt_in(
+        &self,
+        owner: UserId,
+        peer: &PeerId,
+        enabled: bool,
+    ) -> Result<(), MeshError> {
+        let _signal_guard = self.signal_lock.lock();
+        if enabled
+            && !matches!(
+                self.binding_state(owner, peer)?,
+                PeerBinding::Verified { .. }
+            )
+        {
+            return Err(MeshError::Binding(
+                "verify this Chatter contact first".into(),
+            ));
+        }
+        self.binding_store
+            .set_signal_opt_in(&owner.to_string(), peer, enabled)?;
+        Ok(())
+    }
+
     pub fn remove_account_bindings(&self, owner: UserId) -> Result<(), crate::error::StorageError> {
+        let _signal_guard = self.signal_lock.lock();
         self.binding_store.wipe_owner(&owner.to_string())?;
+        self.key_store
+            .delete_mesh_sessions(Some(&owner.to_string()))?;
         self.state.with(|s| {
             s.pending_bindings.clear();
             s.binding_offers.clear();
@@ -446,6 +532,7 @@ impl MeshService {
     pub fn verify_binding(
         &self,
         owner: UserId,
+        local_device_id: u32,
         peer: &PeerId,
         scanned_qr: Option<&str>,
     ) -> Result<PeerBinding, MeshError> {
@@ -488,6 +575,7 @@ impl MeshService {
                 "live account proof is no longer valid".into(),
             ));
         }
+        let _signal_guard = self.signal_lock.lock();
         let result = self.binding_store.accept(
             &owner.to_string(),
             peer,
@@ -499,6 +587,26 @@ impl MeshService {
         self.state.with(|s| {
             s.pending_bindings.remove(peer);
         });
+        if matches!(result, PeerBinding::Verified { .. }) {
+            match signal_mesh::bundle_for_peer(
+                &self.key_store,
+                &self.binding_store,
+                &owner.to_string(),
+                peer,
+                local_device_id,
+                now_secs(),
+            ) {
+                Ok(bytes) => {
+                    let _ = self.ble.send(BleCommand::SignalBundle {
+                        peer: peer.clone(),
+                        bytes,
+                    });
+                }
+                Err(error) => {
+                    tracing::warn!(target: "mesh", %error, "mesh Signal bundle generation failed")
+                }
+            }
+        }
         Ok(result)
     }
     /// Load the identity and wire the stack. Does not touch the radio or the
@@ -557,6 +665,7 @@ impl MeshService {
         Ok(Self {
             key_store: deps.key_store,
             binding_store: deps.binding_store,
+            signal_lock: Arc::new(Mutex::new(())),
             identity,
             config,
             state,
@@ -636,6 +745,8 @@ impl MeshService {
                 self.storage.clone(),
                 Arc::clone(&self.sealer),
                 Arc::clone(&self.binding_store),
+                Arc::clone(&self.key_store),
+                Arc::clone(&self.signal_lock),
             );
             tasks.push(tokio::spawn(runtime.run(ble_rx)));
         } else {
@@ -718,21 +829,34 @@ impl MeshService {
         if !self.status().radio_running {
             return Vec::new();
         }
-        self.state.peers().into_iter().filter(|peer| peer.reachable || peer.connected).collect()
+        self.state
+            .peers()
+            .into_iter()
+            .filter(|peer| peer.reachable || peer.connected)
+            .collect()
     }
 
     /// Resolve a message's local mesh sender id without consulting the server.
     #[must_use]
     pub fn peer_for_sender(&self, sender: &UserId) -> Option<MeshPeer> {
-        self.state.peers().into_iter().find(|peer| mapping::peer_user_id(&peer.peer) == *sender)
+        self.state
+            .peers()
+            .into_iter()
+            .find(|peer| mapping::peer_user_id(&peer.peer) == *sender)
     }
 
     /// Create a durable DM row so it can be opened before the first message.
     pub fn open_dm(&self, peer: &PeerId) -> Result<String, MeshError> {
-        let known = self.state.peers().into_iter().find(|known| known.peer == *peer)
+        let known = self
+            .state
+            .peers()
+            .into_iter()
+            .find(|known| known.peer == *peer)
             .ok_or(MeshError::OutOfRange("unknown mesh peer"))?;
         self.timeline.open_dm(peer, &known.nickname);
-        Ok(MeshConversation::Dm(peer.clone()).conversation_id().to_string())
+        Ok(MeshConversation::Dm(peer.clone())
+            .conversation_id()
+            .to_string())
     }
 
     /// The nickname behind a mesh-derived `UserId`, if this device knows one.
@@ -1239,6 +1363,130 @@ impl MeshService {
         Ok(delivery)
     }
 
+    /// Send a text-only DM over an independent, verified mesh Signal ratchet.
+    /// A bounded carrier is queued locally and retried on the next compatible
+    /// BLE link. It never touches Tor-only secret chats or the Noise DM router.
+    pub async fn send_signal_dm(
+        &self,
+        owner: UserId,
+        local_device_id: u32,
+        peer: &PeerId,
+        text: &str,
+    ) -> Result<MeshDelivery, MeshError> {
+        use crate::crypto::signal::SessionManager;
+        use libsignal_protocol::{DeviceId, ProtocolAddress};
+        use rand::TryRngCore;
+
+        if self.events.peer_blocked(peer) {
+            return Err(MeshError::OutOfRange("peer is locally blocked"));
+        }
+        let content = Self::require_content(text)?;
+        if content.len() > signal_mesh::MAX_TEXT {
+            return Err(MeshError::OutOfRange("mesh Signal text exceeds 2048 bytes"));
+        }
+        if !self.has_radio {
+            return Err(MeshError::NoRadio);
+        }
+        let live_signal_route = self.state.is_connected(peer)
+            && self.state.with(|s| {
+                s.chatter_hello.get(peer).is_some_and(|hello| {
+                    hello.compatible()
+                        && hello.capabilities & chatter_hello::SIGNAL_MESH != 0
+                        && hello.max_carrier_bytes >= signal_mesh::MAX_CARRIER as u32
+                })
+            });
+        let _guard = self.signal_lock.lock();
+        if !self
+            .binding_store
+            .signal_opted_in(&owner.to_string(), peer)?
+        {
+            return Err(MeshError::Binding(
+                "enable Signal for this mesh conversation first".into(),
+            ));
+        }
+        let (mut store, remote) = self.verified_signal_target(owner, peer)?;
+        let local = ProtocolAddress::new(
+            owner.to_string(),
+            DeviceId::try_from(local_device_id)
+                .map_err(|_| MeshError::Binding("invalid local device ID".into()))?,
+        );
+        if !futures::executor::block_on(SessionManager::has_session(&store, &remote))
+            .map_err(|e| MeshError::Binding(format!("mesh Signal session check failed: {e}")))?
+        {
+            let proto = self
+                .binding_store
+                .take_remote_mesh_bundle(&owner.to_string(), peer, now_secs())?
+                .ok_or_else(|| {
+                    MeshError::Binding("waiting for this verified peer's live PQXDH bundle".into())
+                })?;
+            let bundle = crate::services::signal::SignalService::convert_prekey_bundle(proto)
+                .map_err(|e| MeshError::Binding(format!("invalid mesh Signal bundle: {e}")))?;
+            let mut identities = store.clone();
+            let mut rng = rand::rngs::OsRng.unwrap_err();
+            futures::executor::block_on(SessionManager::establish_session(
+                &remote,
+                &local,
+                &mut store,
+                &mut identities,
+                &bundle,
+                &mut rng,
+            ))
+            .map_err(|e| MeshError::Binding(format!("mesh PQXDH failed: {e}")))?;
+        }
+        let id = Uuid::new_v4();
+        let message_id = id.to_string().to_uppercase();
+        let plaintext = signal_mesh::SignalPlaintext {
+            kind: signal_mesh::PlainKind::Text,
+            conversation_id: signal_mesh::conversation_id(&self.identity.peer_id(), peer),
+            message_id: *id.as_bytes(),
+            sender_device: local_device_id,
+            recipient_device: remote.device_id().into(),
+            expires_at: now_secs().saturating_add(24 * 3600),
+            text: content.clone(),
+        };
+        let frame = futures::executor::block_on(signal_mesh::encrypt(
+            &mut store,
+            &remote,
+            &local,
+            &plaintext,
+            *id.as_bytes(),
+        ))?;
+        let bytes = self
+            .binding_store
+            .queue_mesh_carrier(&owner.to_string(), peer, &frame)?;
+        let delivery = if live_signal_route
+            && self
+                .ble
+                .send(BleCommand::SignalCarrier {
+                    peer: peer.clone(),
+                    bytes,
+                })
+                .is_ok()
+        {
+            MeshDelivery::Secure
+        } else {
+            MeshDelivery::Unreachable
+        };
+        let conversation = MeshConversation::Dm(peer.clone());
+        let message = mapping::outbound_message(
+            &conversation,
+            &message_id,
+            &self.identity.peer_id(),
+            &content,
+            now_millis(),
+        );
+        self.events.send(MeshEvent::Message(Box::new(MeshMessage {
+            message,
+            conversation,
+            sender: self.identity.peer_id(),
+            nickname: self.config.nickname(),
+            is_local: true,
+            sender_verified: true,
+        })));
+        self.timeline.record_delivery(&message_id, delivery);
+        Ok(delivery)
+    }
+
     /// Acknowledge that a message has been read.
     ///
     /// Routed over the same first-reachable rule the router uses, because a
@@ -1347,6 +1595,7 @@ impl MeshService {
     /// doing those under a destroyed identity would be the one moment this
     /// service could not describe itself.
     pub fn panic_wipe(&self) -> Result<(), MeshError> {
+        let _signal_guard = self.signal_lock.lock();
         self.config.set_nickname("anon".to_owned());
         self.events.clear_moderation();
         let mut first_error: Option<MeshError> = None;
@@ -1384,6 +1633,9 @@ impl MeshService {
             fail(error.into(), &mut first_error);
         }
         if let Err(error) = self.binding_store.wipe_all() {
+            fail(error.into(), &mut first_error);
+        }
+        if let Err(error) = self.key_store.delete_mesh_sessions(None) {
             fail(error.into(), &mut first_error);
         }
 

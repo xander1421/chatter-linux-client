@@ -197,6 +197,8 @@ pub enum MessageType {
     FileChunkRequest = 0xE2,
     /// Chatter versioned, signed open-channel text.
     ChannelMessage = 0xE3,
+    /// Versioned opaque Signal-over-mesh carrier. Account data is inside Signal.
+    ChatterCarrier = 0xE4,
 }
 
 impl MessageType {
@@ -225,6 +227,7 @@ impl MessageType {
             0xE1 => Self::FileChunk,
             0xE2 => Self::FileChunkRequest,
             0xE3 => Self::ChannelMessage,
+            0xE4 => Self::ChatterCarrier,
             _ => return None,
         })
     }

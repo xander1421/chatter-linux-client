@@ -157,7 +157,8 @@ impl SyncTypeFlags {
             | MessageType::FileManifest
             | MessageType::FileChunk
             | MessageType::FileChunkRequest
-            | MessageType::ChannelMessage => return None,
+            | MessageType::ChannelMessage
+            | MessageType::ChatterCarrier => return None,
         })
     }
 

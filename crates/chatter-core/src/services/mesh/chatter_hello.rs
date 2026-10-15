@@ -27,10 +27,10 @@ impl ChatterHello {
     pub fn new(nonce: [u8; 16]) -> Self {
         Self {
             versions: vec![HELLO_VERSION],
-            // Phase 1 negotiates identity only. Neither Signal transport nor
-            // QR channels may be advertised until their send paths exist.
-            capabilities: 0,
-            max_carrier_bytes: 16 * 1024,
+            // The Signal bit is private to an established Noise peer. QR
+            // channels remain disabled until their own send path exists.
+            capabilities: SIGNAL_MESH,
+            max_carrier_bytes: 4 * 1024,
             nonce,
         }
     }
