@@ -512,52 +512,55 @@ public class SlintAndroidJavaHelper {
                             mActivity.runOnUiThread(new Runnable() {
                                 @Override
                                 public void run() {
-                                    Rect windowRect = get_view_rect();
-                                    Rect safeAreaRect = get_safe_area();
-
-                                    // This is only an approximation, because SDK level < 30 doesn't provide
-                                    // a way to get the keyboard area directly.
-                                    Rect visibleRect = new Rect();
-                                    mActivity.getWindow().getDecorView().getRootView()
-                                            .getWindowVisibleDisplayFrame(visibleRect);
-                                    int keyboardBottom = windowRect.bottom - visibleRect.bottom;
-                                    int keyboardLeft = windowRect.left - visibleRect.left;
-                                    int keyboardTop = windowRect.top - visibleRect.top;
-                                    int keyboardRight = windowRect.right - visibleRect.right;
-                                    int max = Math.max(keyboardBottom, Math.max(keyboardLeft,
-                                            Math.max(keyboardTop, keyboardRight)));
-
-                                    // only take the largest value (it's probably always going to be bottom)
-                                    if (max == keyboardBottom) {
-                                        keyboardTop = 0;
-                                        keyboardLeft = 0;
-                                        keyboardRight = 0;
-                                    } else if (max == keyboardLeft) {
-                                        keyboardTop = 0;
-                                        keyboardRight = 0;
-                                        keyboardBottom = 0;
-                                    } else if (max == keyboardTop) {
-                                        keyboardLeft = 0;
-                                        keyboardRight = 0;
-                                        keyboardBottom = 0;
-                                    } else {
-                                        keyboardTop = 0;
-                                        keyboardLeft = 0;
-                                        keyboardBottom = 0;
-                                    }
-
-                                    SlintAndroidJavaHelper.setInsets(
-                                            InsetsRecovery.nextSequence(), 0, windowRect.top, windowRect.left,
-                                            windowRect.bottom, windowRect.right,
-                                            safeAreaRect.top, safeAreaRect.left,
-                                            safeAreaRect.bottom, safeAreaRect.right,
-                                            keyboardTop, keyboardLeft,
-                                            keyboardBottom, keyboardRight);
+                                    dispatchLegacyInsets();
                                 }
                             });
                         }
                     });
         }
+    }
+
+    private void dispatchLegacyInsets() {
+        Rect windowRect = get_view_rect();
+        Rect safeAreaRect = get_safe_area();
+
+        // SDK < 30 has no direct IME bounds; estimate them from the visible frame.
+        Rect visibleRect = new Rect();
+        mActivity.getWindow().getDecorView().getRootView()
+                .getWindowVisibleDisplayFrame(visibleRect);
+        int keyboardBottom = windowRect.bottom - visibleRect.bottom;
+        int keyboardLeft = windowRect.left - visibleRect.left;
+        int keyboardTop = windowRect.top - visibleRect.top;
+        int keyboardRight = windowRect.right - visibleRect.right;
+        int max = Math.max(keyboardBottom, Math.max(keyboardLeft,
+                Math.max(keyboardTop, keyboardRight)));
+
+        // Only the largest edge is likely to be the keyboard.
+        if (max == keyboardBottom) {
+            keyboardTop = 0;
+            keyboardLeft = 0;
+            keyboardRight = 0;
+        } else if (max == keyboardLeft) {
+            keyboardTop = 0;
+            keyboardRight = 0;
+            keyboardBottom = 0;
+        } else if (max == keyboardTop) {
+            keyboardLeft = 0;
+            keyboardRight = 0;
+            keyboardBottom = 0;
+        } else {
+            keyboardTop = 0;
+            keyboardLeft = 0;
+            keyboardBottom = 0;
+        }
+
+        SlintAndroidJavaHelper.setInsets(
+                InsetsRecovery.nextSequence(), 0, windowRect.top, windowRect.left,
+                windowRect.bottom, windowRect.right,
+                safeAreaRect.top, safeAreaRect.left,
+                safeAreaRect.bottom, safeAreaRect.right,
+                keyboardTop, keyboardLeft,
+                keyboardBottom, keyboardRight);
     }
 
     private WindowInsets dispatchInsets(WindowInsets insets) {
@@ -586,6 +589,8 @@ public class SlintAndroidJavaHelper {
         mActivity.runOnUiThread(() -> {
             if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && mInsetsRecovery != null) {
                 mInsetsRecovery.returnToWindow();
+            } else if (Build.VERSION.SDK_INT < Build.VERSION_CODES.R) {
+                dispatchLegacyInsets();
             }
         });
     }

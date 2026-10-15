@@ -1605,8 +1605,20 @@ impl AndroidWindowAdapter {
         window_origin: PhysicalPosition,
         window_size: PhysicalSize,
         safe_area: PhysicalEdges,
-        keyboard: PhysicalEdges,
+        mut keyboard: PhysicalEdges,
     ) {
+        let native_height = self.size().height;
+        if !authoritative_geometry && native_height > 0 {
+            // Before API 30 Java estimates the IME from the visible display frame,
+            // while GameActivity's adjustResize may already have removed it from
+            // the native surface. Keep only the portion that overlaps that surface.
+            // API 30+ uses WindowMetrics and an unresized edge-to-edge window.
+            let resized_height = window_size.height.saturating_sub(native_height);
+            keyboard.bottom = keyboard
+                .bottom
+                .saturating_sub(resized_height.min(i32::MAX as u32) as i32)
+                .max(0);
+        }
         crate::inset_dispatch::publish_window_insets(
             &self.window, authoritative_geometry, window_origin, window_size, safe_area, keyboard,
         );
