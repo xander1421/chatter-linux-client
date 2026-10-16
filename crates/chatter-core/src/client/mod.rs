@@ -3499,6 +3499,7 @@ impl ChatterClient {
             options,
         )
         .await
+        .map_err(|(error, _)| error)
     }
 
     async fn send_message_attempt(
@@ -3509,7 +3510,8 @@ impl ChatterClient {
         pending_attachments: &[PendingAttachment],
         quote: Option<QuoteIntent>,
         options: Option<SendOptions>,
-    ) -> Result<SendResult, SendError> {
+    ) -> Result<SendResult, (SendError, Option<String>)> {
+        let text = text.trim();
         let session = crate::services::gateway::submission::SendSession::capture(self.auth_state());
         let key = self.retain_send_attempt(
             attempt,
@@ -3518,7 +3520,8 @@ impl ChatterClient {
             pending_attachments,
             quote.as_ref(),
             options.as_ref(),
-        )?;
+        )
+        .map_err(|error| (error, None))?;
         let (outcome, started, original_row) = crate::services::gateway::submission::SEND_SESSION
             .scope(
                 session,
@@ -3546,14 +3549,15 @@ impl ChatterClient {
                     if self
                         .messages()
                         .terminal_channel_send(message)
-                        .map_err(|_| SendError::DeliveryUnconfirmed)?
+                        .map_err(|_| (SendError::DeliveryUnconfirmed, original_row.clone()))?
                     {
                         self.finish_send_attempt(
                             &key,
                             attempt,
                             Some(message.id.to_string()),
                             true,
-                        )?;
+                        )
+                        .map_err(|error| (error, original_row.clone()))?;
                         return Ok(result);
                     }
                 }
@@ -3565,7 +3569,8 @@ impl ChatterClient {
                 if !confirmed && !started {
                     // Local preparation failed before the boundary. The stored
                     // failed bubble remains retryable; no remote send exists.
-                    self.finish_send_attempt(&key, attempt, None, true)?;
+                    self.finish_send_attempt(&key, attempt, None, true)
+                        .map_err(|error| (error, original_row.clone()))?;
                     return Ok(result);
                 }
                 // Normal mode returns a friend DM it could not confirm as a
@@ -3582,7 +3587,8 @@ impl ChatterClient {
                             // row it just settled `failed` as an orphan
                             // `sending`. Show what it stored.
                             self.messages()
-                                .get_message_local(&message.id)?
+                                .get_message_local(&message.id)
+                                .map_err(|error| (error.into(), original_row.clone()))?
                                 .unwrap_or_else(|| message.clone())
                         } else {
                             self.messages()
@@ -3591,10 +3597,11 @@ impl ChatterClient {
                                     "sending",
                                     Some("Delivery unconfirmed"),
                                 )
-                                .map_err(|_| SendError::DeliveryUnconfirmed)?
+                                .map_err(|_| (SendError::DeliveryUnconfirmed, original_row.clone()))?
                         };
                     }
                 }
+                let stored_row = original_row.clone();
                 self.finish_send_attempt(
                     &key,
                     attempt,
@@ -3607,18 +3614,21 @@ impl ChatterClient {
                     },
                     confirmed,
                 )
-                .map_err(|_| SendError::DeliveryUnconfirmed)?;
+                .map_err(|_| (SendError::DeliveryUnconfirmed, stored_row))?;
                 Ok(result)
             }
-            Err(error) => Err(send_attempt::settle_failure(
-                &self.services.database,
-                &key,
-                attempt,
-                started,
-                original_row,
-                error,
-            )
-            .map_err(|_| SendError::DeliveryUnconfirmed)?),
+            Err(error) => {
+                let error = send_attempt::settle_failure(
+                    &self.services.database,
+                    &key,
+                    attempt,
+                    started,
+                    original_row.clone(),
+                    error,
+                )
+                .unwrap_or(SendError::DeliveryUnconfirmed);
+                Err((error, original_row))
+            }
         }
     }
 
@@ -3727,7 +3737,7 @@ impl ChatterClient {
     ) -> Result<crate::client::messaging::SendMessageUiResult, SendError> {
         use crate::client::messaging::SendMessageUiResult;
 
-        let mut result = self
+        let mut result = match self
             .send_message_attempt(
                 attempt,
                 conversation,
@@ -3736,7 +3746,31 @@ impl ChatterClient {
                 quote,
                 options,
             )
-            .await?;
+            .await
+        {
+            Ok(result) => result,
+            Err((error, row_id)) => {
+                let stored = row_id.as_deref()
+                    .and_then(|id| id.parse().ok())
+                    .and_then(|id| self.get_message_local(&id));
+                let Some(message) = stored else {
+                    return Err(if row_id.is_some() {
+                        SendError::DeliveryUnconfirmed
+                    } else {
+                        error
+                    });
+                };
+                crate::services::gateway::SendResult {
+                    sent_at: message.sent_at,
+                    attachment_ids: message.attachments.clone(),
+                    message: Some(message),
+                    gif_attachment_ids: Vec::new(),
+                    bootstrap_initiated: false,
+                    anon_message_id: None,
+                    send_error: None,
+                }
+            }
+        };
 
         // No receipt does not prove non-delivery. Keep the original row
         // pending, with retry locked by its durable attempt journal.

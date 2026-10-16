@@ -26,13 +26,13 @@ pub(crate) const BOOTSTRAP_PLACEHOLDER: &str = "Setting up secure channel...";
 
 /// The row a send occupies in the open list while it is on the wire.
 ///
-/// The composer is cleared the instant send is tapped and the message is not
-/// stored until the round trip returns — a window of up to 10s + 30s per
-/// attachment. This row is the evidence that something is happening: the text
-/// and the staged files as they will look, with `delivery-status` "sending",
+/// The composer is cleared the instant send is tapped. Core may store the
+/// message before the network round trip returns, so this row bridges that
+/// interval with the text and staged files as they will look. Its
+/// `delivery-status` is "sending",
 /// which the bubble draws as the word plus a thin progress line. It claims
-/// nothing about arrival; a send that fails removes it and puts the draft
-/// back, and a send that lands replaces it in place with the stored message.
+/// nothing about arrival; a failure with no stored row removes it and puts
+/// the draft back, while a stored row replaces it in place with its status.
 ///
 /// It used to be a label in the composer. That label grew the composer by a
 /// row on every send and shrank it again on the append, and on a phone that
