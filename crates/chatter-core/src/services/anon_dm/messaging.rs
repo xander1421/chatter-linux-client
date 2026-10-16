@@ -239,6 +239,98 @@ impl AnonDmService {
         Ok((message_id, sent_at))
     }
 
+    /// Resubmit a proven failed outgoing row with its original receiver identity.
+    /// Only the mailbox layer may submit this content; a new composed send would
+    /// allocate a different timestamp and could produce a second message.
+    pub(crate) async fn retry_failed_message(&self, message: &Message) -> Result<(), AnonDmError> {
+        let conversation_id = AnonDmId::from_uuid(*message.conversation_id.as_uuid());
+        let text = message.as_text().unwrap_or("");
+        let attachments = message
+            .attachments
+            .iter()
+            .map(|id| {
+                self.attachment_repo
+                    .get(id)?
+                    .and_then(|attachment| attachment.to_pointer())
+                    .ok_or_else(|| {
+                        AnonDmError::MessageError("Missing original attachment pointer".into())
+                    })
+            })
+            .collect::<Result<Vec<_>, _>>()?;
+        let quote = message.reply_to.map(|reply_to| -> Result<_, AnonDmError> {
+            // Secret sends store a timestamp-derived reply ID, so looking up
+            // that ID directly need not find the original parent's random ID.
+            let parent_sent_at = if let Some(parent) = self.message_repo.get(&reply_to)? {
+                parent.sent_at
+            } else {
+                let db = self.settings_repo.database();
+                let conn = db.read_connection()?;
+                let mut stmt = conn.prepare(
+                    "SELECT sent_at FROM messages WHERE conversation_id=?1 AND conversation_type=?2 AND sent_at<=?3",
+                ).map_err(crate::error::StorageError::Database)?;
+                let rows = stmt.query_map(
+                    rusqlite::params![message.conversation_id.to_string(), message.conversation_type.as_str(), message.sent_at as i64],
+                    |row| row.get::<_, i64>(0),
+                ).map_err(crate::error::StorageError::Database)?;
+                let mut found = None;
+                for row in rows {
+                    let sent_at = row.map_err(crate::error::StorageError::Database)? as u64;
+                    if MessageId::from_timestamp(sent_at) == reply_to {
+                        found = Some(sent_at);
+                        break;
+                    }
+                }
+                found.ok_or_else(|| AnonDmError::MessageError("Missing original reply target".into()))?
+            };
+            let attachments = message
+                .reply_to_thumbnail
+                .as_ref()
+                .map(|thumbnail| {
+                    vec![content_v1::QuotedAttachment {
+                        content_type: message.reply_to_thumbnail_mime.clone().unwrap_or_default(),
+                        file_name: String::new(),
+                        thumbnail: thumbnail.clone(),
+                    }]
+                })
+                .unwrap_or_default();
+            Ok(crate::services::gateway::shared::build_quote_with_attachments(
+                &message.reply_to_author_id.map(|id| id.to_string()).unwrap_or_default(),
+                parent_sent_at,
+                message.reply_to_text.as_deref().unwrap_or(""),
+                attachments,
+            ))
+        }).transpose()?;
+        let mut inner_content =
+            build_data_message_content_with_quote(text, attachments, quote, message.sent_at);
+        let ephemeral_repo = crate::storage::repositories::ephemeral_repo::EphemeralRepository::new(
+            self.settings_repo.database().clone(),
+        );
+        let original_ttl = ephemeral_repo
+            .get(&message.id)?
+            .map(|armed| armed.ttl.as_secs() as u32);
+        let mut timer =
+            crate::services::disappearing::anon_dm_state(&self.settings_repo, &conversation_id);
+        timer.seconds = original_ttl.unwrap_or(0);
+        // The original timer version is not stored on the row. Preserve its
+        // per-message TTL without announcing a possibly newer conversation timer.
+        timer.version = 0;
+        timer.enabled_until = 0;
+        timer.activation_seconds = 0;
+        if let Some(content_v1::content::Content::DataMessage(data)) =
+            inner_content.content.as_mut()
+        {
+            crate::services::disappearing::stamp_timer(data, timer);
+        }
+        if let Some(ttl) = original_ttl {
+            ephemeral_repo.insert_armed(&message.id, ttl)?;
+        }
+        if !message.attachments.is_empty() {
+            crate::mailbox::timing::TimingObfuscation::with_defaults()
+                .delay_for_attachment_decorrelation().await;
+        }
+        self.send_message(&conversation_id, inner_content).await
+    }
+
     /// Send a presence update to the peer.
     ///
     /// Presence updates are ephemeral - they're silently dropped if:

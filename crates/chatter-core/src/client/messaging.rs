@@ -238,7 +238,14 @@ impl ChatterClient {
         let message = self.get_message_local(message_id)?;
         let me = self.session_current_user_id()?;
         (message.sender_id == Some(me)
-            && matches!(message.delivery_status.as_str(), "failed" | "parked")
+            && match message.conversation_type {
+                ConversationType::Channel | ConversationType::ServerDm =>
+                    matches!(message.delivery_status.as_str(), "failed" | "parked"),
+                ConversationType::AnonDm => message.delivery_status == "failed"
+                    && message.failure_reason.as_deref() == Some("Message not submitted"),
+                ConversationType::AnonGroup | ConversationType::SavedMessages
+                    | ConversationType::Mesh | ConversationType::MeshDm => false,
+            }
             && !message.is_deleted)
             .then_some(message.sent_at)
     }
