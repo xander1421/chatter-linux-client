@@ -4092,12 +4092,18 @@ impl ChatterClient {
             loop {
                 match src.recv().await {
                     Ok(DomainEvent::MessageReceived { message })
-                        if message.conversation_type == ConversationType::ServerDm =>
+                        if matches!(message.conversation_type, ConversationType::ServerDm | ConversationType::AnonDm) =>
                     {
                         let peer = crate::domain::ids::UserId::from_uuid(
                             *message.conversation_id.as_uuid(),
                         );
-                        let now = crate::services::disappearing::server_dm_timer(&settings, &peer);
+                        let now = if message.conversation_type == ConversationType::AnonDm {
+                            let id = crate::domain::anon_dm::AnonDmId::from_uuid(*message.conversation_id.as_uuid());
+                            crate::services::disappearing::anon_dm_state(&settings, &id)
+                                .effective_seconds(crate::util::time::TimestampNanos::now().as_u64())
+                        } else {
+                            crate::services::disappearing::server_dm_timer(&settings, &peer)
+                        };
                         let notice = matches!(
                             message.content,
                             MessageContent::System(SystemMessage::DisappearingTimerChanged { .. })

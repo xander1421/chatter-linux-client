@@ -189,6 +189,25 @@ impl AnonDmService {
             }
         }
 
+        let mut timer_events = Vec::new();
+        if let Some(ContentType::DataMessage(data)) = &inner_content.content {
+            if let Some(stated) = crate::services::disappearing::stated_timer(data) {
+                if let Some(notice) = crate::services::disappearing::adopt_anon_dm_timer(
+                    &self.settings_repo,
+                    &self.message_repo,
+                    conversation_id,
+                    sender_id,
+                    stated,
+                    inner_content.timestamp,
+                )? {
+                    timer_events.push(DomainEvent::MessageReceived { message: notice });
+                }
+            }
+            if crate::services::disappearing::is_timer_update(data) {
+                return Ok(timer_events);
+            }
+        }
+
         // DM deletes allow both participants; the common group dispatcher
         // intentionally remains author-only. Emit the stored target's identity.
         if let Some(ContentType::DataMessage(data)) = &inner_content.content {
@@ -229,7 +248,21 @@ impl AnonDmService {
                     }
                     _ => true,
                 });
-                return Ok(events);
+                if let Some(ContentType::DataMessage(data)) = &inner_content.content {
+                    if data.ephemeral && data.ephemeral_ttl_seconds > 0 {
+                        let ephemeral =
+                            crate::storage::repositories::ephemeral_repo::EphemeralRepository::new(
+                                self.settings_repo.database().clone(),
+                            );
+                        for event in &events {
+                            if let DomainEvent::MessageReceived { message } = event {
+                                ephemeral.insert_armed(&message.id, data.ephemeral_ttl_seconds)?;
+                            }
+                        }
+                    }
+                }
+                timer_events.extend(events);
+                return Ok(timer_events);
             }
             CommonDispatchOutcome::Dropped => return Ok(vec![]),
             CommonDispatchOutcome::NotHandled => {}

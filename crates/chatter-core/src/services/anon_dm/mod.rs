@@ -21,6 +21,8 @@ mod messaging;
 mod processing;
 mod queries;
 
+pub const SECRET_CHAT_SCREENSHOT_BLOCKING_ENABLED: bool = false;
+
 pub use blocking::PeerEnd;
 
 use std::sync::Arc;

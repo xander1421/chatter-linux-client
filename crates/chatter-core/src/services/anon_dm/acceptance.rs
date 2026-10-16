@@ -309,6 +309,12 @@ impl AnonDmService {
         dm.peer_display_name = peer_display_name;
         dm.peer_avatar = peer_avatar;
         self.anon_dm_repo.insert_conversation(&dm)?;
+        crate::services::disappearing::initialize_anon_dm_timer(
+            &self.settings_repo, &self.message_repo,
+            &conversation_id,
+            &sender_id,
+            TimestampNanos::now().as_u64(),
+        )?;
 
         // Store the intro message if present
         if let Some(text) = intro_message {
@@ -350,6 +356,10 @@ impl AnonDmService {
                     failure_reason: None,
                 };
                 self.message_repo.insert(&msg)?;
+                crate::storage::repositories::ephemeral_repo::EphemeralRepository::new(
+                    self.settings_repo.database().clone(),
+                )
+                .insert_armed(&msg.id, crate::services::disappearing::SECRET_CHAT_DEFAULT_SECONDS)?;
             }
         }
 
@@ -379,6 +389,12 @@ impl AnonDmService {
 
         // Store the conversation
         self.anon_dm_repo.insert_conversation(dm)?;
+        crate::services::disappearing::initialize_anon_dm_timer(
+            &self.settings_repo, &self.message_repo,
+            &dm.id,
+            &dm.peer_id,
+            TimestampNanos::now().as_u64(),
+        )?;
 
         tracing::info!(
             conversation_id = %dm.id,

@@ -21,8 +21,38 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         .global::<DisappearingGlobal>()
         .set_options(ModelRc::new(VecModel::from(options())));
     wire_set_dm_window(window, ui_ctx);
+    wire_secret_timer(window, ui_ctx);
     wire_refresh(window, ui_ctx);
     wire_expired(window, ui_ctx);
+}
+
+fn wire_secret_timer(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let weak = window.as_weak();
+    let ctx = ui_ctx.clone();
+    window.on_secret_timer_set(move |seconds| {
+        let Ok(seconds) = u32::try_from(seconds) else {
+            return;
+        };
+        let ActiveConversation::AnonDm(id) = ctx.chat_state().active_conversation() else {
+            return;
+        };
+        let (ctx, weak) = (ctx.clone(), weak.clone());
+        tokio::spawn(async move {
+            let result = ctx
+                .set_disappearing_timer(ActiveConversation::AnonDm(id), seconds)
+                .await;
+            let _ = slint::invoke_from_event_loop(move || {
+                let Some(w) = weak.upgrade() else { return };
+                refresh_header(&w, &ctx);
+                if let Err(e) = result {
+                    tracing::warn!(error = %e, "secret-chat timer change failed");
+                    w.set_toast_message("Could not announce timer change".into());
+                    w.set_toast_variant("error".into());
+                    w.set_toast_visible(true);
+                }
+            });
+        });
+    });
 }
 
 /// Drop the bubbles of messages core's reaper has just deleted.

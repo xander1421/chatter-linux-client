@@ -20,6 +20,7 @@ export component ChatHeaderMenu inherits Rectangle {
     in property <bool> show-pinned;
     // Regular DM only, when core can start a secret chat with the peer.
     in property <bool> show-secret-chat;
+    in property <bool> show-disappearing;
     callback pinned();
     out property <length> card-width: min(288px, root.width - 2 * Spacing.sm);
     out property <length> card-height: menu.preferred-height;
@@ -28,6 +29,7 @@ export component ChatHeaderMenu inherits Rectangle {
     callback video-call();
     callback settings();
     callback secret-chat();
+    callback disappearing();
 
     // Logical close is immediate; the card settles back and the scrim fades
     // before the host unmounts it. Nothing is a live target meanwhile.
@@ -85,6 +87,7 @@ export component ChatHeaderMenu inherits Rectangle {
                 if root.show-video-call: MenuRow { icon: Icons.video; label: "Video call"; clicked => { if root.show { root.video-call(); } } }
                 if root.show-settings: MenuRow { icon: Icons.settings; label: "Conversation settings"; clicked => { if root.show { root.settings(); } } }
                 if root.show-secret-chat: MenuRow { icon: Icons.lock; label: "Start secret chat"; clicked => { if root.show { root.secret-chat(); } } }
+                if root.show-disappearing: MenuRow { icon: Icons.clock; label: "Disappearing messages"; clicked => { if root.show { root.disappearing(); } } }
             }
         }
     }

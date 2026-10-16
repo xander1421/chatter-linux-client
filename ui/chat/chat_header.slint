@@ -160,7 +160,7 @@ export component ChatHeader inherits GlassSurface {
     // menu) and Conversation settings, so it is there when either is.
     // Saved always has its pinned list (the only row its menu has), so the
     // overflow is reachable there before the first pin.
-    property <bool> show-more: root.show-calls || root.show-settings || root.has-any-pinned || root.can-open-pinned-list;
+    property <bool> show-more: root.show-calls || root.show-settings || root.is-anon-dm || root.has-any-pinned || root.can-open-pinned-list;
 
     // "Touch input", plumbed from ChatLayout. The 52px/28px/18px set below is
     // mouse density; on a phone this is the bar you navigate the whole app from

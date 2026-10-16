@@ -157,6 +157,12 @@ impl AnonDmService {
         // Create conversation locally
         let dm = AnonDm::new_initiated(peer_id);
         self.anon_dm_repo.insert_conversation(&dm)?;
+        crate::services::disappearing::initialize_anon_dm_timer(
+            &self.settings_repo, &self.message_repo,
+            &dm.id,
+            &current_user,
+            TimestampNanos::now().as_u64(),
+        )?;
 
         let sent = async {
             // Create our mailbox for this conversation
@@ -318,6 +324,12 @@ impl AnonDmService {
         // Create conversation locally
         let dm = AnonDm::new_initiated(peer_id);
         self.anon_dm_repo.insert_conversation(&dm)?;
+        crate::services::disappearing::initialize_anon_dm_timer(
+            &self.settings_repo, &self.message_repo,
+            &dm.id,
+            &current_user,
+            TimestampNanos::now().as_u64(),
+        )?;
 
         let sent = async {
             // Create our mailbox for this conversation
@@ -504,6 +516,7 @@ impl AnonDmService {
             timestamp: TimestampNanos::now().as_u64(),
             encrypted_display_name,
             avatar,
+            disappearing_seconds: crate::services::disappearing::SECRET_CHAT_DEFAULT_SECONDS,
         };
 
         let content = Content {

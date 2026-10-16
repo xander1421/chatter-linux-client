@@ -17,20 +17,20 @@
 //! ```text
 //! | version (1) | conversation_id (16) | sender_id (16) | sender_device_id (4) | mailbox_pk (32) |
 //! | identity_key (33) | delivery_token (12) | name_len (1) | sender_display_name (variable, max 64) |
-//! | intro_len (2) | intro_message (variable) | avatar_len (4) | sender_avatar (variable, max 1000000) |
+//! | intro_len (2) | intro_message (variable) | avatar_len (4) | sender_avatar (variable, max 1000000) | disappearing_seconds (4) |
 //! ```
 //!
-//! Total fixed size: 1 + 16 + 16 + 4 + 32 + 33 + 12 + 1 + 2 + 4 = 121 bytes + display_name + intro + avatar
+//! Total fixed size: 125 bytes + display_name + intro + avatar.
 
 use super::UserId;
 use super::anon_dm::AnonDmId;
 
 /// Current version of the init message format.
-pub const INIT_MESSAGE_VERSION: u8 = 6;
+pub const INIT_MESSAGE_VERSION: u8 = 7;
 
 /// Minimum size of init message (without display_name, intro, or avatar).
 /// avatar_len is u32 (4 bytes) to support up to 1MB avatars.
-pub const MIN_INIT_SIZE: usize = 1 + 16 + 16 + 4 + 32 + 33 + 12 + 1 + 2 + 4; // 121 bytes
+pub const MIN_INIT_SIZE: usize = 1 + 16 + 16 + 4 + 32 + 33 + 12 + 1 + 2 + 4 + 4;
 
 /// Maximum intro message length.
 pub const MAX_INTRO_LENGTH: usize = 500;
@@ -72,6 +72,8 @@ pub struct AnonDmInitMessage {
     pub intro_message: String,
     /// Optional sender avatar (max 1MB).
     pub sender_avatar: Option<Vec<u8>>,
+    /// Initiator's proposed disappearing timer; fixed to one day for a new chat.
+    pub disappearing_seconds: u32,
 }
 
 /// Error parsing an init message.
@@ -131,6 +133,7 @@ impl AnonDmInitMessage {
             sender_display_name: sender_display_name.into(),
             intro_message: intro_message.into(),
             sender_avatar,
+            disappearing_seconds: crate::services::disappearing::SECRET_CHAT_DEFAULT_SECONDS,
         }
     }
 
@@ -184,6 +187,7 @@ impl AnonDmInitMessage {
             .map_err(|_| InitMessageError::AvatarTooLarge(avatar_bytes.len(), MAX_AVATAR_SIZE))?;
         bytes.extend_from_slice(&avatar_len.to_be_bytes());
         bytes.extend_from_slice(avatar_bytes);
+        bytes.extend_from_slice(&self.disappearing_seconds.to_be_bytes());
 
         Ok(bytes)
     }
@@ -285,6 +289,12 @@ impl AnonDmInitMessage {
         ]) as usize;
         offset += 4;
 
+        if bytes.len() < offset + avatar_len + 4 {
+            return Err(InitMessageError::TooShort(
+                bytes.len(),
+                offset + avatar_len + 4,
+            ));
+        }
         let sender_avatar = if avatar_len > 0 {
             if avatar_len > MAX_AVATAR_SIZE {
                 return Err(InitMessageError::AvatarTooLarge(
@@ -299,6 +309,14 @@ impl AnonDmInitMessage {
         } else {
             None
         };
+        offset += avatar_len;
+        let disappearing_seconds =
+            u32::from_be_bytes(bytes[offset..offset + 4].try_into().unwrap());
+        if disappearing_seconds != crate::services::disappearing::SECRET_CHAT_DEFAULT_SECONDS {
+            return Err(InitMessageError::InvalidData(
+                "unsupported secret-chat timer proposal".into(),
+            ));
+        }
 
         Ok(Self {
             conversation_id,
@@ -310,6 +328,7 @@ impl AnonDmInitMessage {
             sender_display_name,
             intro_message,
             sender_avatar,
+            disappearing_seconds,
         })
     }
 

@@ -1796,7 +1796,9 @@ impl ConversationHandle {
             // Groups don't track per-user read state to preserve sender anonymity.
             ActiveConversation::AnonGroup(_) => Ok(()),
             ActiveConversation::None => Err(ConversationError::NoConversation),
-            ActiveConversation::Channel(channel) => self.client.messages()
+            ActiveConversation::Channel(channel) => self
+                .client
+                .messages()
                 .send_channel_receipt(*channel, timestamps, true)
                 .await
                 .map_err(ConversationError::Message),
@@ -1828,7 +1830,9 @@ impl ConversationHandle {
             // Groups don't track per-user delivery state to preserve sender anonymity.
             ActiveConversation::AnonGroup(_) => Ok(()),
             ActiveConversation::None => Err(ConversationError::NoConversation),
-            ActiveConversation::Channel(channel) => self.client.messages()
+            ActiveConversation::Channel(channel) => self
+                .client
+                .messages()
                 .send_channel_receipt(*channel, timestamps, false)
                 .await
                 .map_err(ConversationError::Message),
@@ -2246,7 +2250,9 @@ impl ConversationHandle {
     pub async fn delete_conversation(&self) -> ConversationResult {
         match &self.conversation {
             // A secret chat ends for both sides (Telegram-style).
-            ActiveConversation::AnonDm(id) => Ok(self.client.anon_dms().end_conversation(id).await?),
+            ActiveConversation::AnonDm(id) => {
+                Ok(self.client.anon_dms().end_conversation(id).await?)
+            }
             ActiveConversation::ServerDm { peer_id } => {
                 // Channel-free DM: no channel/membership row to cascade —
                 // delete the local message history directly, then the
@@ -2321,8 +2327,7 @@ impl ConversationHandle {
     /// This conversation's disappearing-messages timer in seconds (`0` = off).
     ///
     /// Friend DMs hold it per conversation (`services::disappearing`); a
-    /// channel's is its server-held `config.ttl`. Anonymous conversations have
-    /// no timer.
+    /// channel's is its server-held `config.ttl`.
     pub fn disappearing_timer(&self) -> u32 {
         match &self.conversation {
             ActiveConversation::ServerDm { peer_id } => {
@@ -2331,6 +2336,11 @@ impl ConversationHandle {
                     peer_id,
                 )
             }
+            ActiveConversation::AnonDm(id) => crate::services::disappearing::anon_dm_state(
+                &self.client.anon_dms().settings_repo,
+                id,
+            )
+            .effective_seconds(crate::util::time::TimestampNanos::now().as_u64()),
             ActiveConversation::Channel(channel_id) => self
                 .client
                 .channels()
@@ -2353,6 +2363,10 @@ impl ConversationHandle {
                     peer_id,
                 )
             }
+            ActiveConversation::AnonDm(id) => crate::services::disappearing::anon_dm_state(
+                &self.client.anon_dms().settings_repo,
+                id,
+            ),
             _ => crate::services::disappearing::DmTimer {
                 seconds: self.disappearing_timer(),
                 version: crate::services::disappearing::INITIAL_TIMER_VERSION,
@@ -2386,18 +2400,19 @@ impl ConversationHandle {
         Ok(())
     }
 
-    /// Whether this user can change the timer here: friend DMs only. A
-    /// channel's timer is fixed when it is created (the server refuses to
-    /// change it after), and anonymous conversations do not carry one.
+    /// Friend and secret DMs let either participant change the timer. A
+    /// channel's timer is fixed when it is created.
     pub fn can_set_disappearing_timer(&self) -> bool {
-        matches!(self.conversation, ActiveConversation::ServerDm { .. })
+        matches!(
+            self.conversation,
+            ActiveConversation::ServerDm { .. } | ActiveConversation::AnonDm(_)
+        )
     }
 
     /// Set this conversation's disappearing-messages timer (`0` = off).
     ///
-    /// Friend DM: Signal semantics — adopted locally, a "You set disappearing
-    /// messages to …" notice is filed and shown, and the friend is sent a
-    /// timer-update so both sides expire messages on the same timer.
+    /// Friend and secret DMs adopt locally and send an encrypted timer update
+    /// to the peer; secret chats also display the change as a system notice.
     ///
     /// Channel: writes the local copy of the channel's ttl only. The server
     /// holds the real value and refuses to change it after creation, so this
@@ -2405,6 +2420,42 @@ impl ConversationHandle {
     /// `can_set_disappearing_timer` is false for channels.
     pub async fn set_disappearing_timer(&self, seconds: u32) -> ConversationResult {
         match &self.conversation {
+            ActiveConversation::AnonDm(id) => {
+                let service = self.client.anon_dms();
+                let ready = service.get_conversation(id)
+                    .map_err(|e| ConversationError::Other(e.to_string()))?
+                    .is_some_and(|dm| dm.is_ready());
+                if !ready {
+                    return Err(ConversationError::Other("secret chat is not active yet".into()));
+                }
+                let me = service
+                    .current_user_id()
+                    .map_err(|e| ConversationError::Other(e.to_string()))?;
+                let sent_at = crate::util::time::TimestampNanos::now().as_u64();
+                let Some((notice, timer)) = crate::services::disappearing::change_anon_dm_timer(
+                    &service.settings_repo,
+                    &service.message_repo,
+                    id,
+                    &me,
+                    seconds,
+                    sent_at,
+                )
+                .map_err(|e| ConversationError::Other(e.to_string()))?
+                else {
+                    return Ok(());
+                };
+                self.client.event_bus().emit_domain(
+                    crate::inbox::handlers::DomainEvent::MessageReceived { message: notice },
+                );
+                service
+                    .send_message(
+                        id,
+                        crate::services::disappearing::timer_update_content(timer, sent_at),
+                    )
+                    .await
+                    .map_err(|e| ConversationError::Other(e.to_string()))?;
+                Ok(())
+            }
             ActiveConversation::ServerDm { peer_id } => {
                 let notice = self
                     .client
@@ -2427,11 +2478,9 @@ impl ConversationHandle {
                     .set_default_ttl(channel_id, ttl)
                     .map_err(|e| ConversationError::Other(e.to_string()))
             }
-            ActiveConversation::AnonDm(_) | ActiveConversation::AnonGroup(_) => {
-                Err(ConversationError::Other(
-                    "disappearing messages are not available in anonymous conversations".into(),
-                ))
-            }
+            ActiveConversation::AnonGroup(_) => Err(ConversationError::Other(
+                "disappearing messages are not available in anonymous conversations".into(),
+            )),
             ActiveConversation::None => Err(ConversationError::NoConversation),
         }
     }

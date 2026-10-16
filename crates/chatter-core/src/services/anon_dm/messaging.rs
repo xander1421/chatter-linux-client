@@ -114,8 +114,15 @@ impl AnonDmService {
 
         // Create DataMessage content with attachments and optional quote
         let sent_at = TimestampNanos::now().as_u64();
-        let inner_content =
+        let mut inner_content =
             build_data_message_content_with_quote(text, attachments, quote.clone(), sent_at);
+        let timer =
+            crate::services::disappearing::anon_dm_state(&self.settings_repo, conversation_id);
+        if let Some(content_v1::content::Content::DataMessage(data)) =
+            inner_content.content.as_mut()
+        {
+            crate::services::disappearing::stamp_timer(data, timer);
+        }
 
         // Store message locally
         let channel_id: ChannelId = (*conversation_id).into();
@@ -187,6 +194,12 @@ impl AnonDmService {
             failure_reason: None,
         };
         self.message_repo.insert_outgoing(&message)?;
+        if timer.effective_seconds(sent_at) > 0 {
+            crate::storage::repositories::ephemeral_repo::EphemeralRepository::new(
+                self.settings_repo.database().clone(),
+            )
+            .insert_armed(&message_id, timer.seconds)?;
+        }
         crate::services::gateway::submission::bind_original_row(message_id.to_string())?;
         tracing::info!(
             conversation_id = %conversation_id,
@@ -374,7 +387,6 @@ impl AnonDmService {
             )),
         };
 
-
         // Send via mailbox
         let message = self
             .send_to_anon_mailbox(&dm, &peer_mailbox_pk, content)
@@ -487,8 +499,7 @@ impl AnonDmService {
                 let mailbox = dm
                     .peer_mailbox_pk
                     .ok_or(AnonDmError::ConversationNotReady(*conversation_id))?;
-                self.send_ephemeral_message(&dm, &mailbox, content)
-                    .await
+                self.send_ephemeral_message(&dm, &mailbox, content).await
             },
         )
         .await

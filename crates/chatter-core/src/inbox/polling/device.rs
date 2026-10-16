@@ -2095,7 +2095,8 @@ fn dispatch_secret_chat_bootstrap(
     event_tx: &broadcast::Sender<InboxEvent>,
 ) {
     let event = match inner {
-        content::Content::AnonDmRequest(request) => InboxEvent::AnonDmRequest {
+        content::Content::AnonDmRequest(request)
+            if request.disappearing_seconds == crate::services::disappearing::SECRET_CHAT_DEFAULT_SECONDS => InboxEvent::AnonDmRequest {
             peer_id: sender_id,
             sender_device_id,
             conversation_id: request.conversation_id,

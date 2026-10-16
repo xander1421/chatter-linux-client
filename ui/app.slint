@@ -28,6 +28,7 @@ import { WelcomePage } from "pages/welcome.slint";
 // Import main layout components
 import { Sidebar, ChatRowData, CustomSectionData } from "sidebar/sidebar.slint";
 import { ChatLayout, MessageItemData, MessageAttachmentData, PendingAttachmentData, ReactionEntry } from "chat/chat_layout.slint";
+import { SecretTimerModal } from "chat/secret_timer_modal.slint";
 import { ThreadPanel } from "chat/thread_panel.slint";
 import { ConversationKind } from "chat/conversation_kind.slint";
 import { ReactionPicker } from "chat/reaction_picker.slint";
@@ -1292,6 +1293,7 @@ export component MainWindow inherits Window {
     // Asked of core when the menu opens (`can_start_secret_chat`).
     callback chat-menu-can-start-secret-chat() -> bool;
     callback chat-menu-start-secret-chat();
+    callback secret-timer-set(int);
     callback profile-add-friend();
     callback profile-remove-friend();
     callback profile-block-user();
@@ -3439,6 +3441,7 @@ export component MainWindow inherits Window {
             show-video-call: root.chat-menu-video;
             show-settings: root.chat-menu-settings;
             show-secret-chat: root.chat-menu-secret-chat;
+            show-disappearing: root.conversation-kind == ConversationKind.anon-dm;
             show-pinned: root.pinned-total-count > 0
                 || root.conversation-kind == ConversationKind.saved-messages;
             pinned => { root.nav-close("chat-menu"); root.pinned-show-clicked(); }
@@ -3457,6 +3460,13 @@ export component MainWindow inherits Window {
                 root.nav-close("chat-menu");
                 root.chat-menu-start-secret-chat();
             }
+            disappearing => { root.nav-close("chat-menu"); root.nav-push("secret-timer"); }
+        }
+
+        if root.is-presented("secret-timer"): SecretTimerModal {
+            show-modal: root.active-modal == "secret-timer";
+            close => { root.nav-close("secret-timer"); }
+            choose(seconds) => { root.secret-timer-set(seconds); root.nav-close("secret-timer"); }
         }
 
         if root.is-presented("new-chat"): NewChatPicker {

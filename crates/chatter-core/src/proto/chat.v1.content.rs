@@ -1328,6 +1328,9 @@ pub struct AnonDmRequest {
     pub encrypted_display_name: ::core::option::Option<::prost::alloc::vec::Vec<u8>>,
     #[prost(message, optional, tag="7")]
     pub avatar: ::core::option::Option<AttachmentPointer>,
+    /// Proposed timer inside the encrypted secret-chat request.
+    #[prost(uint32, tag="8")]
+    pub disappearing_seconds: u32,
 }
 #[derive(Clone, PartialEq, Eq, Hash, ::prost::Message)]
 pub struct AnonDmAccept {

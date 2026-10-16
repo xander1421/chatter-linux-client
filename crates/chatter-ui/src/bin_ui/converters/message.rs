@@ -387,7 +387,18 @@ pub fn message_to_display_data_with_replies(
 
     // Extract content and system flag
     let (content, is_system) = match &msg.content {
-        MessageContent::System(sys) => (format!("{} {}", sender_name, sys.description()), true),
+        MessageContent::System(sys) => {
+            let description = if msg.conversation_type == chatter_core::domain::message::ConversationType::AnonDm {
+                match sys {
+                    chatter_core::domain::message::SystemMessage::DisappearingTimerChanged { seconds: 0 } =>
+                        "turned off disappearing messages".to_string(),
+                    chatter_core::domain::message::SystemMessage::DisappearingTimerChanged { seconds } =>
+                        format!("set disappearing messages to {} after read", chatter_core::services::disappearing::timer_label(*seconds)),
+                    _ => sys.description(),
+                }
+            } else { sys.description() };
+            (format!("{} {}", sender_name, description), true)
+        },
         _ => (msg.as_text().unwrap_or("").to_string(), false),
     };
 
