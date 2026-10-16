@@ -14,6 +14,7 @@ import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
 import { EmptyState } from "../components/empty_state.slint";
+import { AnonMode } from "../anon_mode/anon_mode_global.slint";
 import { ChatListSkeleton } from "../components/skeleton.slint";
 import { DMListItem } from "dm_list_item.slint";
 import { ChannelListItem } from "channel_list_item.slint";
@@ -247,7 +248,7 @@ export component ChatList inherits VerticalLayout {
         }
         // FEAT-8: the first controls a brand-new account sees. Joining a
         // channel is the other way in, so the empty list offers it too.
-        HorizontalLayout {
+        if !AnonMode.enabled: HorizontalLayout {
             height: Spacing.touch-target-min;
             alignment: center;
             Text {
