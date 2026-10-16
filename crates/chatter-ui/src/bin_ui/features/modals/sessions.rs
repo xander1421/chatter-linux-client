@@ -22,6 +22,7 @@ pub(crate) fn session_to_slint(s: Session) -> SessionInfo {
         created_at: chatter_core::ui::format_timestamp(s.created_at).into(),
         is_current: s.is_current,
         is_mobile: s.is_mobile,
+        can_revoke: s.can_revoke,
     }
 }
 

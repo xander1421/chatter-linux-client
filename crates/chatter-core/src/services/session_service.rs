@@ -31,6 +31,10 @@ pub struct Session {
     /// Phone or tablet (named "Android …" / "iOS …" by
     /// `LinkDeviceService::current_device_name`), for the row's icon.
     pub is_mobile: bool,
+    /// Another device that may be signed out from here: not this one and not
+    /// the primary (device 1), which the server refuses to revoke
+    /// (`internal/services/auth/service/devices.go`).
+    pub can_revoke: bool,
 }
 
 /// Phone or tablet, from the name `LinkDeviceService::current_device_name`
@@ -168,6 +172,7 @@ impl SessionService {
                     created_at: DateTime::from_timestamp_nanos(s.created_at as i64),
                     last_used: DateTime::from_timestamp_nanos(s.last_used as i64),
                     is_current: s.is_current_session,
+                    can_revoke: !s.is_current_session && s.device_id != 1,
                 }
             })
             .collect();

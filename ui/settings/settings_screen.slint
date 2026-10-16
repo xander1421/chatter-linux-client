@@ -1299,7 +1299,7 @@ export component SettingsScreen inherits Rectangle {
                                             }
                                         }
 
-                                        if !session.is-current: VerticalLayout {
+                                        if session.can-revoke: VerticalLayout {
                                             alignment: center;
                                             spacing: Spacing.xs;
                                             Button {

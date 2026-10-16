@@ -17,6 +17,7 @@ export struct SessionInfo {
     created-at: string,
     is-current: bool,
     is-mobile: bool,  // phone/tablet icon instead of the laptop one
+    can-revoke: bool, // not this device and not the primary
 }
 
 // A link this account approved that the new device has not finished yet.
@@ -304,7 +305,7 @@ export component SessionsModal inherits Rectangle {
                                 }
 
                                 // Revoke button (hidden for current session)
-                                if !session.is-current: HorizontalLayout {
+                                if session.can-revoke: HorizontalLayout {
                                     alignment: center;
 
                                     Button {
