@@ -30,6 +30,7 @@ import { Sidebar, ChatRowData, CustomSectionData } from "sidebar/sidebar.slint";
 import { ChatLayout, MessageItemData, MessageAttachmentData, PendingAttachmentData, ReactionEntry } from "chat/chat_layout.slint";
 import { SecretTimerModal } from "chat/secret_timer_modal.slint";
 import { ThreadPanel } from "chat/thread_panel.slint";
+import { MeshGlobal } from "mesh/mesh_global.slint";
 import { ConversationKind } from "chat/conversation_kind.slint";
 import { ReactionPicker } from "chat/reaction_picker.slint";
 import { MessageContextMenu, MessageMenuActions } from "chat/message_context_menu.slint";
@@ -690,6 +691,10 @@ export component MainWindow inherits Window {
     private property <length> context-menu-anchor-bottom: 0px;
     private property <length> context-menu-anchor-left: 0px;
     private property <length> context-menu-anchor-right: 0px;
+    private property <MessageItemData> context-menu-preview-message;
+    private property <length> context-menu-preview-row-x: 0px;
+    private property <length> context-menu-preview-row-y: 0px;
+    private property <length> context-menu-preview-row-width: 0px;
     // All callbacks use (sender_id, timestamp_ns) for Signal-style lookups
     callback reply-message(string, string);
     callback edit-message(string, string);
@@ -2431,6 +2436,10 @@ export component MainWindow inherits Window {
                         }
                         thread-clicked(id) => { root.thread-clicked(id); }
                         more-clicked(sender-id, timestamp-ns, x, y) => {
+                            root.context-menu-preview-message = self.menu-preview-message;
+                            root.context-menu-preview-row-x = self.menu-preview-row-x;
+                            root.context-menu-preview-row-y = self.menu-preview-row-y;
+                            root.context-menu-preview-row-width = self.menu-preview-row-width;
                             root.context-menu-content-top = self.content-top;
                             root.context-menu-anchor-top = self.menu-anchor-top;
                             root.context-menu-anchor-bottom = self.menu-anchor-bottom;
@@ -2530,6 +2539,10 @@ export component MainWindow inherits Window {
                         }
                         audio-seek(id, pos) => { root.audio-seek(id, pos); }
                         more-clicked(sender-id, timestamp-ns, x, y) => {
+                            root.context-menu-preview-message = self.menu-preview-message;
+                            root.context-menu-preview-row-x = self.menu-preview-row-x;
+                            root.context-menu-preview-row-y = self.menu-preview-row-y;
+                            root.context-menu-preview-row-width = self.menu-preview-row-width;
                             // The panel's own header is the menu's ceiling.
                             root.context-menu-content-top = self.absolute-position.y;
                             root.context-menu-anchor-top = self.menu-anchor-top;
@@ -4131,6 +4144,17 @@ export component MainWindow inherits Window {
                 ? root.context-menu-anchor-bottom - root.safe-area-top : 0px;
             anchor-left: root.context-menu-anchor-left;
             anchor-right: root.context-menu-anchor-right;
+            preview-message: root.context-menu-preview-message;
+            preview-row-x: root.context-menu-preview-row-x;
+            preview-row-y: root.context-menu-preview-row-y - root.safe-area-top;
+            preview-row-width: root.context-menu-preview-row-width;
+            preview-is-dm: root.is-dm;
+            preview-is-anonymous: root.conversation-kind == ConversationKind.anon-dm || root.conversation-kind == ConversationKind.anon-group;
+            preview-is-mesh: MeshGlobal.active-id != "";
+            preview-playing-attachment-id: root.current-playing-attachment-id;
+            preview-media-playing: root.is-media-playing;
+            preview-audio-progress: root.audio-progress;
+            preview-audio-elapsed: root.audio-elapsed;
             retry-clicked(id) => { root.message-clicked(id); }
             info-clicked(id) => { MessageInfo.open(id); }
             can-thread: root.conversation-kind == ConversationKind.channel;

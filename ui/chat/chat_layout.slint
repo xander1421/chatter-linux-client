@@ -63,6 +63,10 @@ export component ChatLayout inherits Rectangle {
     out property <length> menu-anchor-bottom: message-list.menu-anchor-bottom;
     out property <length> menu-anchor-left: message-list.menu-anchor-left;
     out property <length> menu-anchor-right: message-list.menu-anchor-right;
+    out property <MessageItemData> menu-preview-message: message-list.menu-preview-message;
+    out property <length> menu-preview-row-x: message-list.menu-preview-row-x;
+    out property <length> menu-preview-row-y: message-list.menu-preview-row-y;
+    out property <length> menu-preview-row-width: message-list.menu-preview-row-width;
 
     // Jarvis AI thinking state
     in-out property <bool> jarvis-thinking: false;

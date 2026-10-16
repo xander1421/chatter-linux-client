@@ -49,6 +49,10 @@ export component MessageList inherits Rectangle {
     out property <length> menu-anchor-bottom: 0px;
     out property <length> menu-anchor-left: 0px;
     out property <length> menu-anchor-right: 0px;
+    out property <MessageItemData> menu-preview-message;
+    out property <length> menu-preview-row-x: 0px;
+    out property <length> menu-preview-row-y: 0px;
+    out property <length> menu-preview-row-width: 0px;
     private property <int> observed-message-count: 0;
     private property <string> observed-last-message-id: "";
     private property <bool> ready-for-arrivals: false;
@@ -960,6 +964,10 @@ export component MessageList inherits Rectangle {
                     }
 
                     more-clicked(sender-id, timestamp-ns, x, y) => {
+                        root.menu-preview-message = item;
+                        root.menu-preview-row-x = message-bubble.absolute-position.x;
+                        root.menu-preview-row-y = message-bubble.absolute-position.y;
+                        root.menu-preview-row-width = message-bubble.width;
                         root.menu-anchor-top = message-bubble.menu-anchor-top;
                         root.menu-anchor-bottom = message-bubble.menu-anchor-bottom;
                         root.menu-anchor-left = message-bubble.menu-anchor-left;

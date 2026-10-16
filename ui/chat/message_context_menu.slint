@@ -17,6 +17,8 @@ import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { Icons } from "../theme/icons.slint";
 import { QuickReactions } from "types.slint";
+import { MessageItemData } from "types.slint";
+import { MessageItem } from "message_item.slint";
 
 // Action flags for this hold. Core fills them before the menu is shown;
 // this file only renders them.
@@ -189,6 +191,19 @@ export component MessageContextMenu inherits Rectangle {
     in property <length> anchor-bottom: 0px;
     in property <length> anchor-left: 0px;
     in property <length> anchor-right: 0px;
+    // Snapshot the row with the anchor. The virtual list can recycle it while
+    // the menu is open, so the lifted copy must use the captured data/geometry.
+    in property <MessageItemData> preview-message;
+    in property <length> preview-row-x: 0px;
+    in property <length> preview-row-y: 0px;
+    in property <length> preview-row-width: 0px;
+    in property <bool> preview-is-dm: false;
+    in property <bool> preview-is-anonymous: false;
+    in property <bool> preview-is-mesh: false;
+    in property <string> preview-playing-attachment-id: "";
+    in property <bool> preview-media-playing: false;
+    in property <float> preview-audio-progress: 0.0;
+    in property <string> preview-audio-elapsed: "0:00";
     private property <bool> has-bubble-anchor: root.anchor-bottom > root.anchor-top
         && root.anchor-right > root.anchor-left;
     private property <length> visible-bubble-top: max(root.content-top, min(root.height, root.anchor-top));
@@ -248,37 +263,79 @@ export component MessageContextMenu inherits Rectangle {
     height: 100%;
     background: transparent;
 
-    // Leave the pressed bubble clear while dimming the rest of the chat.
-    // Bounds are captured at press time because virtualized rows may recycle
-    // before the asynchronous menu lookup finishes.
-    if !root.bubble-in-view: Rectangle {
+    // One uninterrupted wash also covers messages that scroll under the
+    // floating header. Repaint the pressed row over it at its original size.
+    Rectangle {
         width: 100%;
         height: 100%;
         background: Materials.scrim;
     }
-    if root.bubble-in-view: Rectangle {
-        width: 100%;
-        height: root.visible-bubble-top;
-        background: Materials.scrim;
-    }
-    if root.bubble-in-view: Rectangle {
-        y: root.visible-bubble-bottom;
+
+    if root.bubble-in-view && root.preview-message.message-id != "": Rectangle {
+        y: root.content-top;
         width: 100%;
         height: max(0px, root.height - self.y);
-        background: Materials.scrim;
-    }
-    if root.bubble-in-view: Rectangle {
-        y: root.visible-bubble-top;
-        width: root.visible-bubble-left;
-        height: max(0px, root.visible-bubble-bottom - self.y);
-        background: Materials.scrim;
-    }
-    if root.bubble-in-view: Rectangle {
-        x: root.visible-bubble-right;
-        y: root.visible-bubble-top;
-        width: max(0px, root.width - self.x);
-        height: max(0px, root.visible-bubble-bottom - self.y);
-        background: Materials.scrim;
+        clip: true;
+
+        MessageItem {
+            x: root.preview-row-x;
+            y: root.preview-row-y - parent.y;
+            width: root.preview-row-width;
+            message-id: root.preview-message.message-id;
+            sender-id: root.preview-message.sender-id;
+            timestamp-ns: root.preview-message.timestamp-ns;
+            sender-name: root.preview-message.sender-name;
+            sender-initials: root.preview-message.sender-initials;
+            sender-avatar-source: root.preview-message.sender-avatar-source;
+            has-avatar: root.preview-message.has-avatar;
+            content: root.preview-message.content;
+            rich-content: root.preview-message.rich-content;
+            timestamp: root.preview-message.timestamp;
+            is-own: root.preview-message.is-own;
+            is-edited: root.preview-message.is-edited;
+            is-pinned: root.preview-message.is-pinned;
+            is-deleted: root.preview-message.is-deleted;
+            is-system: root.preview-message.is-system;
+            is-ai: root.preview-message.is-ai;
+            is-dm: root.preview-is-dm;
+            is-anonymous: root.preview-is-anonymous;
+            can-thread: root.can-thread;
+            is-mesh: root.preview-is-mesh;
+            is-call: root.preview-message.is-call;
+            call-type: root.preview-message.call-type;
+            call-duration: root.preview-message.call-duration;
+            has-attachments: root.preview-message.has-attachments;
+            attachment-count: root.preview-message.attachment-count;
+            attachments: root.preview-message.attachments;
+            current-playing-attachment-id: root.preview-playing-attachment-id;
+            is-media-playing: root.preview-media-playing;
+            audio-progress: root.preview-audio-progress;
+            audio-elapsed: root.preview-audio-elapsed;
+            has-reactions: root.preview-message.has-reactions;
+            reaction-summary: root.preview-message.reaction-summary;
+            reactions: root.preview-message.reactions;
+            reply-count: root.preview-message.reply-count;
+            reply-count-text: root.preview-message.reply-count-text;
+            is-thread-reply: root.preview-message.is-thread-reply;
+            is-reply: root.preview-message.is-reply;
+            reply-to-not-found: root.preview-message.reply-to-not-found;
+            reply-to-message-id: root.preview-message.reply-to-message-id;
+            reply-to-sender-name: root.preview-message.reply-to-sender-name;
+            reply-to-preview: root.preview-message.reply-to-preview;
+            reply-to-category: root.preview-message.reply-to-category;
+            reply-to-attachment-id: root.preview-message.reply-to-attachment-id;
+            reply-to-duration: root.preview-message.reply-to-duration;
+            reply-to-filename: root.preview-message.reply-to-filename;
+            reply-to-waveform: root.preview-message.reply-to-waveform;
+            reply-to-has-thumbnail: root.preview-message.reply-to-has-thumbnail;
+            reply-to-thumbnail: root.preview-message.reply-to-thumbnail;
+            reply-to-thumbnail-width: root.preview-message.reply-to-thumbnail-width;
+            reply-to-thumbnail-height: root.preview-message.reply-to-thumbnail-height;
+            show-sender: root.preview-message.show-sender;
+            delivery-status: root.preview-message.delivery-status;
+            failure-reason: root.preview-message.failure-reason;
+            menu-open: true;
+        }
     }
 
     // Backdrop touch area to close menu
