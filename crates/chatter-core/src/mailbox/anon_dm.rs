@@ -166,6 +166,7 @@ impl AnonDmPoller {
         );
 
         let mut results = Vec::with_capacity(mailbox_keys.len());
+        let mut first_error = None;
 
         for (conversation_id, _, _) in &mailbox_keys {
             match self.poll_mailbox(conversation_id, client, None).await {
@@ -180,12 +181,22 @@ impl AnonDmPoller {
                     results.push(result);
                 }
                 Err(e) => {
-                    tracing::debug!(
-                        conversation_id = %conversation_id,
+                    tracing::warn!(
                         error = %e,
                         "Failed to poll anonymous DM mailbox"
                     );
+                    if first_error.is_none() {
+                        first_error = Some(e);
+                    }
                 }
+            }
+        }
+
+        // A failed single-mailbox poll must reach the provider so it can
+        // discard a stale Tor connection and retry on the next cycle.
+        if results.is_empty() {
+            if let Some(error) = first_error {
+                return Err(error);
             }
         }
 

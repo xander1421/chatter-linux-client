@@ -889,6 +889,17 @@ impl DeviceInboxProvider {
                         // Random delay before anon DM polling
                         timing.delay_between_batch_items().await;
 
+                        // Report each secret cycle before cover traffic or Tor
+                        // calls, which can use the whole deadline.
+                        let mailbox_count = match anon_poller.get_active_mailbox_keys() {
+                            Ok(keys) => keys.len(),
+                            Err(error) => {
+                                tracing::warn!(%error, "Secret chat mailbox lookup failed");
+                                return;
+                            }
+                        };
+                        tracing::info!(mailbox_count, "Secret chat polling cycle");
+
                         // Keep secret-chat cover traffic off the direct mailbox
                         // client's mutex so it cannot stall the next inbox cycle.
                         if should_dummy_poll() {
@@ -906,17 +917,6 @@ impl DeviceInboxProvider {
                                 return;
                             }
                         }
-
-                        // Check how many mailboxes we have to poll
-                        let mailbox_count = anon_poller
-                            .get_active_mailbox_keys()
-                            .map(|keys| keys.len())
-                            .unwrap_or(0);
-
-                        tracing::trace!(
-                            mailbox_count = mailbox_count,
-                            "[ANON_DM] Polling anonymous DM mailboxes"
-                        );
 
                         // Anonymous DMs are secret chats: poll them over Tor only
                         // (no auth headers, challenge-response). No Tor route → skip.
@@ -1041,9 +1041,11 @@ impl DeviceInboxProvider {
                                 }
                                 Ok(Err(e)) => {
                                     tracing::warn!(error = %e, "Failed to poll anonymous DM mailboxes");
+                                    grpc_pool.disconnect_secret();
                                 }
                                 Err(_) => {
                                     tracing::warn!("Anonymous DM Tor polling exceeded 95-second budget");
+                                    grpc_pool.disconnect_secret();
                                 }
                             }
                         }
