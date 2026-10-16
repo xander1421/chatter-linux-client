@@ -121,12 +121,18 @@ pub async fn page(
                     Ok(crate::proto::chat_v1::NotificationType::Reply) => "reply",
                     Ok(crate::proto::chat_v1::NotificationType::Reaction) => "reaction",
                     Ok(crate::proto::chat_v1::NotificationType::DeviceLinked) => "device-linked",
+                    // Some server rows use a generic type for acceptance
+                    // notifications. Classify their explicit title so the
+                    // actor gets the same avatar treatment as requests.
+                    _ if n.title == "Friend request accepted" && !n.actor_id.is_empty() => "friend-accepted",
                     _ => "other",
                 };
                 let (body, device_id) = if kind == "device-linked" {
                     device_linked_details(&n.body, &n.metadata)
                 } else { (n.body, 0) };
-                let (title, body) = if kind == "friend-accepted" && n.actor_id.is_empty() {
+                let (title, body) = if kind == "friend-accepted" && n.title == "Friend request accepted" {
+                    (body, "Your friend request was accepted".to_owned())
+                } else if kind == "friend-accepted" && n.actor_id.is_empty() {
                     if let Some((name, message)) = body.split_once(" · ") {
                         if message == "Your friend request was accepted" {
                             (name.to_owned(), message.to_owned())
