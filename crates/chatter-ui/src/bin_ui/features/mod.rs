@@ -66,6 +66,7 @@ pub fn wire_all(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     connection::wire(window, ui_ctx);
     unified_search::wire(window, ui_ctx);
     update::wire(window, ui_ctx);
+    #[cfg(not(target_os = "android"))]
     ui_ctx.start_notification_listener();
     server_records::wire(window, ui_ctx);
 

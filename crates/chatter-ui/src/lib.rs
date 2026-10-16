@@ -29,6 +29,164 @@ static RT_HANDLE: std::sync::OnceLock<tokio::runtime::Handle> = std::sync::OnceL
 #[cfg(target_os = "android")]
 static ANDROID_CLIENT: std::sync::OnceLock<std::sync::Arc<chatter_core::client::ChatterClient>> =
     std::sync::OnceLock::new();
+#[cfg(target_os = "android")]
+static ANDROID_RUNTIME: std::sync::OnceLock<tokio::runtime::Runtime> = std::sync::OnceLock::new();
+#[cfg(target_os = "android")]
+static ANDROID_CORE_LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+#[cfg(target_os = "android")]
+static ANDROID_CONNECTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+#[cfg(target_os = "android")]
+static ANDROID_SERVICES_READY: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+#[cfg(target_os = "android")]
+static ANDROID_HEADLESS_CONTEXT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+
+#[cfg(target_os = "android")]
+fn android_runtime() -> &'static tokio::runtime::Runtime {
+    ANDROID_RUNTIME.get_or_init(|| tokio::runtime::Runtime::new().expect("Android Tokio runtime"))
+}
+
+/// Called on a Java-attached Service thread. The application global ref stays
+/// alive for the process; native GameActivity glue may initialize the same
+/// ndk-context later when the user opens the window.
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_chatter_client_MessagingService_nativeStartHeadless(
+    mut env: jni::EnvUnowned<'_>,
+    _this: jni::objects::JObject,
+    context: jni::objects::JObject,
+) -> jni::sys::jboolean {
+    let initialized = env
+        .with_env(|env| -> jni::errors::Result<bool> {
+            if ANDROID_HEADLESS_CONTEXT.get().is_some() {
+                return Ok(true);
+            }
+            if !ndk_context::is_initialized() {
+                let app = env
+                    .call_method(
+                        &context,
+                        jni::jni_str!("getApplicationContext"),
+                        jni::jni_sig!("()Landroid/content/Context;"),
+                        &[],
+                    )?
+                    .l()?;
+                let app = env.new_global_ref(app)?;
+                let vm = env.get_java_vm()?;
+                // SAFETY: both pointers belong to this process and the global
+                // ref is intentionally retained for the process lifetime.
+                unsafe {
+                    ndk_context::initialize_android_context(
+                        vm.get_raw().cast(),
+                        app.into_raw().cast(),
+                    );
+                }
+            }
+            let path = env
+                .call_method(
+                    &context,
+                    jni::jni_str!("getFilesDir"),
+                    jni::jni_sig!("()Ljava/io/File;"),
+                    &[],
+                )?
+                .l()?;
+            let path = env
+                .call_method(
+                    &path,
+                    jni::jni_str!("getAbsolutePath"),
+                    jni::jni_sig!("()Ljava/lang/String;"),
+                    &[],
+                )?
+                .l()?;
+            let path = env.cast_local::<jni::objects::JString>(path)?;
+            let path: String = env.get_string(&path)?.into();
+            let _ = ANDROID_DATA_DIR.set(path);
+            let _ = ANDROID_HEADLESS_CONTEXT.set(());
+            Ok(true)
+        })
+        .resolve::<jni::errors::LogErrorAndDefault>();
+    if !initialized {
+        return 0;
+    }
+    crate::platform::android::keystore::init();
+    let runtime = android_runtime();
+    let _ = RT_HANDLE.set(runtime.handle().clone());
+    let result = runtime.block_on(async { android_core(false).await });
+    match result {
+        Ok(_) => 1,
+        Err(error) => {
+            tracing::warn!("Headless messaging startup failed: {error}");
+            0
+        }
+    }
+}
+
+#[cfg(target_os = "android")]
+async fn android_core(
+    allow_signed_out: bool,
+) -> Result<(std::sync::Arc<chatter_core::client::ChatterClient>, bool), String> {
+    let _lock = ANDROID_CORE_LOCK.lock().await;
+    if let Some(client) = ANDROID_CLIENT.get() {
+        if !allow_signed_out && !client.is_logged_in() {
+            return Err("No signed-in session".into());
+        }
+        if client.is_logged_in()
+            && !ANDROID_SERVICES_READY.load(std::sync::atomic::Ordering::Acquire)
+        {
+            match client.start().await {
+                Ok(()) => ANDROID_SERVICES_READY.store(true, std::sync::atomic::Ordering::Release),
+                Err(error) if !allow_signed_out => return Err(error.to_string()),
+                Err(error) => tracing::warn!("Could not start services: {error}"),
+            }
+        }
+        return Ok((
+            client.clone(),
+            ANDROID_CONNECTED.load(std::sync::atomic::Ordering::Acquire),
+        ));
+    }
+    let data_dir = ANDROID_DATA_DIR
+        .get()
+        .cloned()
+        .unwrap_or_else(|| "/data/data/com.chatter.client/files".to_owned());
+    let sink = std::sync::Arc::new(crate::platform::android::AndroidNotifications::new());
+    if let Err(error) = sink.init_channel() {
+        tracing::warn!("Notification channel: {error}");
+    }
+    let client = chatter_core::client::ChatterClient::builder()
+        .data_dir(data_dir)
+        .notification_sink(sink)
+        .build()
+        .map_err(|e| e.to_string())?;
+    client.restore_session();
+    if !client.is_logged_in() && !allow_signed_out {
+        return Err("No restored signed-in session".into());
+    }
+    client.prewarm_tor();
+    crate::platform::android::call_actions::register_call_client(client.clone());
+    crate::platform::android::notification_route::register_client(client.clone());
+    client.start_notification_listener();
+    let connected = client
+        .startup_connect(std::time::Duration::from_secs(5))
+        .await;
+    if client.is_logged_in() {
+        match client.start().await {
+            Ok(()) => ANDROID_SERVICES_READY.store(true, std::sync::atomic::Ordering::Release),
+            Err(error) => tracing::warn!("Could not start services: {error}"),
+        }
+        client.start_authed_notification_streams();
+    }
+    #[cfg(feature = "mesh")]
+    if client.mesh_enabled() {
+        if let Err(error) = client.start_mesh().await {
+            tracing::warn!("mesh: failed to start: {error}");
+        }
+    }
+    ANDROID_CONNECTED.store(connected, std::sync::atomic::Ordering::Release);
+    let _ = ANDROID_CLIENT.set(client.clone());
+    if !allow_signed_out && !ANDROID_SERVICES_READY.load(std::sync::atomic::Ordering::Acquire) {
+        return Err("Messaging services did not start".into());
+    }
+    Ok((client, connected))
+}
 
 #[cfg(target_os = "android")]
 #[unsafe(no_mangle)]
@@ -107,16 +265,34 @@ pub(crate) fn record_startup_frame(state: &slint::RenderingState) {
         if let Ok(mut open) = CHAT_OPEN_FRAME.lock() {
             if let Some(frame) = open.as_mut() {
                 if frame.slide_pending {
-                    tracing::info!(kind = frame.kind, stage = "first_slide_frame", elapsed_ms = frame.started.elapsed().as_millis(), "conversation_open");
+                    tracing::info!(
+                        kind = frame.kind,
+                        stage = "first_slide_frame",
+                        elapsed_ms = frame.started.elapsed().as_millis(),
+                        "conversation_open"
+                    );
                     frame.slide_pending = false;
                 }
                 if frame.content_pending {
-                    tracing::info!(kind = frame.kind, stage = "first_content_frame", rows = frame.rows, images = frame.images, elapsed_ms = frame.started.elapsed().as_millis(), "conversation_open");
+                    tracing::info!(
+                        kind = frame.kind,
+                        stage = "first_content_frame",
+                        rows = frame.rows,
+                        images = frame.images,
+                        elapsed_ms = frame.started.elapsed().as_millis(),
+                        "conversation_open"
+                    );
                     frame.content_pending = false;
                     after_content = frame.after_content.take();
                 }
                 if frame.images_pending {
-                    tracing::info!(kind = frame.kind, stage = "first_images_frame", images = frame.images, elapsed_ms = frame.started.elapsed().as_millis(), "conversation_open");
+                    tracing::info!(
+                        kind = frame.kind,
+                        stage = "first_images_frame",
+                        images = frame.images,
+                        elapsed_ms = frame.started.elapsed().as_millis(),
+                        "conversation_open"
+                    );
                     frame.images_pending = false;
                 }
             }
@@ -149,7 +325,7 @@ pub fn init_rt_handle(handle: tokio::runtime::Handle) {
 }
 
 /// Android: the app's internal data directory (`Context.getFilesDir()`),
-/// resolved from `AndroidApp::internal_data_path()` at `android_main` entry.
+/// resolved from `AndroidApp` or the Service's Context at startup.
 /// Used by `app_init` to tell `ChatterClient` where to open the DB.
 #[cfg(target_os = "android")]
 static ANDROID_DATA_DIR: std::sync::OnceLock<String> = std::sync::OnceLock::new();
@@ -232,7 +408,9 @@ fn android_main(app: i_slint_backend_android_activity::AndroidApp) {
     // wrapper must be in place before `app_init` builds the client.
     crate::platform::android::keystore::init();
     if let Some(label) = crate::platform::android::activity::device_label() {
-        chatter_core::services::link_device_service::LinkDeviceService::set_platform_device_label(label);
+        chatter_core::services::link_device_service::LinkDeviceService::set_platform_device_label(
+            label,
+        );
     }
     crate::platform::android::video_thumbnail::init();
 
@@ -241,7 +419,7 @@ fn android_main(app: i_slint_backend_android_activity::AndroidApp) {
     //   Phase 2: leave block_on, enter runtime ctx, run Slint event loop.
     // Running `window.run()` inside `block_on` would stall the I/O reactor
     // and kill any in-flight gRPC streams bound to it.
-    let rt = tokio::runtime::Runtime::new().expect("Failed to create tokio runtime");
+    let rt = android_runtime();
     let app_state = rt.block_on(app_init());
     let _guard = rt.enter();
     let app_state = match app_state {
@@ -252,7 +430,6 @@ fn android_main(app: i_slint_backend_android_activity::AndroidApp) {
         }
     };
     let _ = visibility_client.set(app_state.ui_ctx.clone());
-    let _ = ANDROID_CLIENT.set(app_state.ui_ctx.clone());
     let _ = visibility_window.set(slint::ComponentHandle::as_weak(&app_state.window));
 
     // Safe-area insets (status bar, nav bar, IME) are now bound in `app.slint`
@@ -351,7 +528,10 @@ pub async fn app_init() -> Result<AppState, String> {
     // Debug builds keep full event values for development; release builds
     // never format event values (identifiers, errors, message text).
     let (full_layer, redacted_layer) = if cfg!(debug_assertions) {
-        (Some(tracing_subscriber::fmt::layer().with_filter(normal_filter)), None)
+        (
+            Some(tracing_subscriber::fmt::layer().with_filter(normal_filter)),
+            None,
+        )
     } else {
         (
             None,
@@ -362,11 +542,11 @@ pub async fn app_init() -> Result<AppState, String> {
             ),
         )
     };
-    tracing_subscriber::registry()
+    let _ = tracing_subscriber::registry()
         .with(full_layer)
         .with(redacted_layer)
         .with(stage_trace)
-        .init();
+        .try_init();
 
     tracing::info!("Chatter Client v0.1.0 ({})", std::env::consts::OS);
 
@@ -430,27 +610,13 @@ pub async fn app_init() -> Result<AppState, String> {
         tracing::info!("Slint OpenGL ES backend selected for hardware-accelerated video");
     }
 
+    #[cfg(target_os = "android")]
+    let (client, connected) = android_core(true).await?;
+
+    #[cfg(not(target_os = "android"))]
     #[allow(unused_mut)]
     let mut builder = chatter_core::client::ChatterClient::builder();
-    #[cfg(target_os = "android")]
-    {
-        // Prefer the real `Context.getFilesDir()` path set by `android_main`.
-        // Fall back to the hardcoded sandboxed path only when the OnceLock
-        // is somehow unset (should never happen in a real app lifecycle).
-        let data_dir = ANDROID_DATA_DIR
-            .get()
-            .cloned()
-            .unwrap_or_else(|| "/data/data/com.chatter.client/files".to_string());
-        builder = builder.data_dir(data_dir);
-
-        let android_sink =
-            std::sync::Arc::new(crate::platform::android::AndroidNotifications::new());
-        if android_sink.init_channel().is_err() {
-            // Non-fatal — notifications just won't fire.
-            eprintln!("Failed to init Android notification channel");
-        }
-        builder = builder.notification_sink(android_sink);
-    }
+    #[cfg(not(target_os = "android"))]
     let client = match builder.build() {
         Ok(c) => c,
         Err(e) => {
@@ -460,23 +626,22 @@ pub async fn app_init() -> Result<AppState, String> {
     };
     // Overlap Tor directory/guard work with UI/login. This never contacts the
     // Chatter service, including when signed out on the Shield sign-in screen.
+    #[cfg(not(target_os = "android"))]
     client.prewarm_tor();
     let ui_ctx = client.clone();
 
     // Let incoming-call notification actions (Accept/Decline) reach the client.
-    #[cfg(target_os = "android")]
-    crate::platform::android::call_actions::register_call_client(client.clone());
-    #[cfg(target_os = "android")]
-    crate::platform::android::notification_route::register_client(client.clone());
-
     // Restore a saved device-auth session before the first RPC runs.
+    #[cfg(not(target_os = "android"))]
     ui_ctx.restore_session();
 
     // Server contact at startup — chatter-core decides: signed in, it connects
     // (bounded, because nothing is drawn until `app_init` returns) and starts
     // the reachability monitor; signed out, it contacts nothing until a
     // sign-in action, so choosing Shield on the sign-in screen leaks nothing.
+    #[cfg(not(target_os = "android"))]
     const BOOT_CONNECT_BUDGET: std::time::Duration = std::time::Duration::from_secs(5);
+    #[cfg(not(target_os = "android"))]
     let connected = client.startup_connect(BOOT_CONNECT_BUDGET).await;
 
     let window = MainWindow::new().expect("Failed to create window");
@@ -520,11 +685,10 @@ pub async fn app_init() -> Result<AppState, String> {
                     && w.get_active_tab() == "chats"
                     && w.get_chat_content_visible();
                 let recovery_visible = w.get_active_modal() == "recovery-codes";
-                let exiting_kind = (w.get_compact_layout() && !w.get_mobile_show_chat()
+                let exiting_kind = (w.get_compact_layout()
+                    && !w.get_mobile_show_chat()
                     && w.get_chat_content_visible())
-                    .then(|| {
-                        crate::bin_ui::converters::conversation_type(w.get_conversation_kind())
-                    });
+                .then(|| crate::bin_ui::converters::conversation_type(w.get_conversation_kind()));
                 crate::platform::android::activity::set_secure(
                     protection_client.requires_screen_protection(
                         chat_visible,
@@ -598,15 +762,18 @@ pub async fn app_init() -> Result<AppState, String> {
         // radio never comes up at all this session — not that it starts and is
         // then stopped, which would advertise this device to everyone in range
         // for as long as startup takes.
-        if client.mesh_enabled() {
-            match client.start_mesh().await {
-                Ok(()) => tracing::info!("mesh: started"),
-                Err(error) => {
-                    tracing::warn!("mesh: failed to start, continuing without it: {error}")
+        #[cfg(not(target_os = "android"))]
+        {
+            if client.mesh_enabled() {
+                match client.start_mesh().await {
+                    Ok(()) => tracing::info!("mesh: started"),
+                    Err(error) => {
+                        tracing::warn!("mesh: failed to start, continuing without it: {error}")
+                    }
                 }
+            } else {
+                tracing::info!("mesh: off by preference; the radio was not started");
             }
-        } else {
-            tracing::info!("mesh: off by preference; the radio was not started");
         }
         window
             .global::<MeshGlobal>()
@@ -660,6 +827,7 @@ pub async fn app_init() -> Result<AppState, String> {
                 "Starting in offline mode — gRPC calls will retry when server becomes available"
             );
         }
+        #[cfg(not(target_os = "android"))]
         if let Err(e) = client.start().await {
             tracing::warn!(
                 "Could not start services: {} (some features may not work)",
