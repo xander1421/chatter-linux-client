@@ -12,7 +12,7 @@ use chatter_core::domain::ids::AttachmentId;
 
 use crate::MainWindow;
 
-/// Download attachments and handle GIF/image processing.
+/// Fetch media previews, then auto-download small images and process them.
 ///
 /// This is the single entry point for all channel types.
 /// Takes resolved `Attachment` domain objects (not proto types).
@@ -41,14 +41,6 @@ pub async fn download_attachments(
             .map(|t| !t.is_empty())
             .unwrap_or(false);
 
-        tracing::info!(
-            cdn_key = %cdn_key,
-            filename = %filename,
-            content_type = %mime,
-            conversation_id = %conversation_id,
-            "Auto-downloading attachment"
-        );
-
         // Verify attachment record exists
         if ui_ctx.get_attachment_metadata(&att_id).is_none() {
             tracing::error!(
@@ -71,7 +63,7 @@ pub async fn download_attachments(
         if (is_image || is_video) && !has_thumbnail {
             if let Some(thumb_bytes) = ui_ctx.ensure_attachment_thumbnail(&att_id).await {
                 let weak = weak_window.clone();
-                let cdn_key_p = cdn_key.clone();
+                let att_id_p = att_id.to_string();
                 let conv = conversation_id.clone();
                 let ui_p = ui_ctx.clone();
                 let _ = slint::invoke_from_event_loop(move || {
@@ -79,7 +71,7 @@ pub async fn download_attachments(
                         match crate::bin_ui::slint_conversions::memory_to_slint_image(&thumb_bytes)
                         {
                             Ok(image) => update_attachment_thumbnail(
-                                &window, &ui_p, &cdn_key_p, image, &conv,
+                                &window, &ui_p, &att_id_p, image, &conv,
                             ),
                             Err(e) => {
                                 tracing::debug!(error = ?e, "Failed to decode sidecar thumbnail for preview")
@@ -89,6 +81,18 @@ pub async fn download_attachments(
                 });
             }
         }
+
+        if !att.should_auto_download() {
+            continue;
+        }
+
+        tracing::info!(
+            cdn_key = %cdn_key,
+            filename = %filename,
+            content_type = %mime,
+            conversation_id = %conversation_id,
+            "Auto-downloading image attachment"
+        );
 
         // Download encrypted content to filesystem
         match ui_ctx.download_attachment_to_filesystem(&att_id).await {

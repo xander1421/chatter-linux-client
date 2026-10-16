@@ -126,10 +126,10 @@ pub(super) fn handle_message_received(
     // above), never counted up on the UI thread.
     let badges = ui_ctx.unread_badges(&sidebar_conversation);
 
-    // Trigger attachment auto-download in background (fetchable = has CDN url + key).
+    // Fetch media thumbnail sidecars, then auto-download small images.
     let downloadable: Vec<_> = resolved_attachments
         .iter()
-        .filter(|a| a.is_downloadable())
+        .filter(|a| a.needs_download())
         .cloned()
         .collect();
 

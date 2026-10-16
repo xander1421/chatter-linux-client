@@ -145,6 +145,24 @@ impl AttachmentService {
                 AttachmentError::DecryptionError(format!("Failed to get image dimensions: {:?}", e))
             })?;
 
+        // Older senders and failed sidecar uploads leave no durable preview.
+        // Once the original is downloaded, derive one locally so reopening the
+        // conversation does not bring the placeholder back.
+        if let Ok(Some(mut attachment)) = self.attachment_repo.get(attachment_id) {
+            if attachment.metadata.thumbnail.as_ref().is_none_or(Vec::is_empty) {
+                if let Ok((thumbnail, thumb_width, thumb_height)) =
+                    ImageProcessor::generate_thumbnail_from_memory(&image_bytes)
+                {
+                    attachment.metadata.thumbnail = Some(thumbnail);
+                    attachment.metadata.thumbnail_width = Some(thumb_width);
+                    attachment.metadata.thumbnail_height = Some(thumb_height);
+                    if let Err(e) = self.attachment_repo.update(&attachment) {
+                        tracing::debug!(error = %e, "Failed to cache downloaded image preview");
+                    }
+                }
+            }
+        }
+
         tracing::debug!(
             width = width,
             height = height,
