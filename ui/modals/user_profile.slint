@@ -186,7 +186,7 @@ export component UserProfileModal inherits Rectangle {
         // insets are not plumbed into modals, so leave room for the Android
         // status + navigation bars rather than running off-screen.
         max-modal-height: max(240px, root.height - 96px);
-        fill-height: true;
+        fill-height: root.mobile-mode;
         full-screen: root.mobile-mode;
         bottom-inset: root.mobile-mode ? 0px : root.bottom-inset;
 
@@ -195,6 +195,7 @@ export component UserProfileModal inherits Rectangle {
         }
 
         Rectangle {
+            preferred-height: profile-header.height + page.preferred-height;
 
             // ── Top bar ───────────────────────────────────────────────
             // Same rule `Modal` applies, hand-placed only because this screen
@@ -240,6 +241,7 @@ export component UserProfileModal inherits Rectangle {
                 height: parent.height - self.y;
                 viewport-width: self.width;
                 viewport-height: page.preferred-height;
+                interactive: self.viewport-height > self.height;
 
                 // Lazy paging: ask for the next page while there is still a
                 // screenful of runway, so the grid never visibly runs out.
@@ -829,10 +831,11 @@ export component UserProfileModal inherits Rectangle {
                             // box was sized from the unwrapped text height, so the
                             // wrapped number ran out of it over the buttons below.
                             Rectangle {
+                                height: safety-number-content.preferred-height;
                                 background: Colors.inset;
                                 border-radius: Spacing.radius-md;
 
-                                VerticalLayout {
+                                safety-number-content := VerticalLayout {
                                     padding: Spacing.md;
 
                                     safety-number-text := Text {
@@ -864,7 +867,7 @@ export component UserProfileModal inherits Rectangle {
                     if root.can-start-secret-chat && !root.scoped-member && !root.is-self && !root.is-blocked: HorizontalLayout {
                         padding-left: Spacing.md;
                         padding-right: Spacing.md;
-                        padding-top: Spacing.lg;
+                        padding-top: Spacing.sm;
 
                         Button {
                             text: "Start secret chat";
@@ -875,26 +878,14 @@ export component UserProfileModal inherits Rectangle {
                         }
                     }
 
-                    // ── Friend / block row ────────────────────────────
-                    if !root.scoped-member && !root.is-self && !root.is-blocked: HorizontalLayout {
+                    // ── Add friend ────────────────────────────────────
+                    if !root.scoped-member && !root.is-self && !root.is-blocked && !root.is-friend && !AnonMode.enabled: HorizontalLayout {
                         padding-left: Spacing.md;
                         padding-right: Spacing.md;
-                        padding-top: Spacing.lg;
-                        spacing: Spacing.sm;
-
-                        if root.is-friend: Button {
-                            text: root.loading ? "" : "Remove Friend";
-                            variant: "destructive";
-                            horizontal-stretch: 1;
-                            loading: root.loading;
-                            clicked => {
-                                if !root.loading { root.confirm-block = false; root.confirm-remove = true; }
-                            }
-                        }
 
                         // Core refuses friend requests in Anon Mode (they
                         // reveal the real identity), so the button is not shown.
-                        if !root.is-friend && !AnonMode.enabled: Button {
+                        Button {
                             text: root.loading ? "" : "Add Friend";
                             variant: "secondary";
                             horizontal-stretch: 1;
@@ -902,13 +893,6 @@ export component UserProfileModal inherits Rectangle {
                             clicked => {
                                 if !root.loading { root.add-friend(); }
                             }
-                        }
-
-                        Button {
-                            text: "Block";
-                            variant: "destructive";
-                            horizontal-stretch: 1;
-                            clicked => { root.confirm-remove = false; root.confirm-block = true; }
                         }
                     }
 
@@ -1147,6 +1131,54 @@ export component UserProfileModal inherits Rectangle {
                             text: "Loading…";
                             color: Colors.text-muted;
                             font-size: Typography.xs;
+                        }
+                    }
+
+                    // Destructive actions belong below the profile and shared
+                    // content, as quiet text rows instead of primary buttons.
+                    if !root.scoped-member && !root.is-self && !root.is-blocked: VerticalLayout {
+                        padding-left: Spacing.md;
+                        padding-right: Spacing.md;
+                        spacing: Spacing.none;
+
+                        if root.is-friend: Rectangle {
+                            height: Spacing.touch-target-min;
+                            background: remove-touch.has-hover ? Colors.surface-hover : transparent;
+                            accessible-role: button;
+                            accessible-label: "Remove Friend";
+                            accessible-enabled: !root.loading;
+                            accessible-action-default => {
+                                if !root.loading { root.confirm-block = false; root.confirm-remove = true; }
+                            }
+                            Text {
+                                text: "Remove Friend";
+                                color: Colors.error-hover;
+                                font-size: Typography.sm;
+                                vertical-alignment: center;
+                            }
+                            remove-touch := TouchArea {
+                                enabled: !root.loading;
+                                mouse-cursor: pointer;
+                                clicked => { root.confirm-block = false; root.confirm-remove = true; }
+                            }
+                        }
+
+                        Rectangle {
+                            height: Spacing.touch-target-min;
+                            background: block-touch.has-hover ? Colors.surface-hover : transparent;
+                            accessible-role: button;
+                            accessible-label: "Block";
+                            accessible-action-default => { root.confirm-remove = false; root.confirm-block = true; }
+                            Text {
+                                text: "Block";
+                                color: Colors.error-hover;
+                                font-size: Typography.sm;
+                                vertical-alignment: center;
+                            }
+                            block-touch := TouchArea {
+                                mouse-cursor: pointer;
+                                clicked => { root.confirm-remove = false; root.confirm-block = true; }
+                            }
                         }
                     }
 

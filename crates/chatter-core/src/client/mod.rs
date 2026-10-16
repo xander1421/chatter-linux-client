@@ -1474,11 +1474,14 @@ impl ChatterClient {
         &self,
         peer_user_id: &crate::domain::ids::UserId,
     ) -> Result<(), ClientError> {
+        tracing::info!("Marking peer safety number as verified");
         let safety_number = self.get_safety_number(peer_user_id).await?;
         self.services
             .signal_service
             .set_peer_verified(&peer_user_id.to_string(), &safety_number, true)
-            .map_err(|e| ClientError::Validation(e.to_string()))
+            .map_err(|e| ClientError::Validation(e.to_string()))?;
+        tracing::info!("Peer safety number marked as verified");
+        Ok(())
     }
 
     /// Mark a peer as unverified.

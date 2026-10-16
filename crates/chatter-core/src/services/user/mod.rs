@@ -1450,7 +1450,15 @@ impl UserService {
             .map_err(|e| UserError::InvalidInput(format!("invalid username: {e}")))?;
         let mut user_client = self.user_client();
         match user_client.lookup_username(hash).await? {
-            Some(id_str) => Ok(id_str.parse().ok()),
+            Some(id_str) => {
+                let user_id = id_str.parse().ok();
+                if let Some(id) = user_id.as_ref() {
+                    if let Err(e) = self.user_repo.set_known_username(id, username) {
+                        tracing::warn!(error = %e, "Could not remember looked-up peer handle");
+                    }
+                }
+                Ok(user_id)
+            }
             None => Ok(None),
         }
     }
@@ -1735,6 +1743,9 @@ impl UserService {
         let user_id = owner_id.parse::<UserId>().map_err(|_| {
             UserError::InvalidInput(format!("Invalid user ID in username link: {owner_id}"))
         })?;
+        if let Err(e) = self.user_repo.set_known_username(&user_id, &username) {
+            tracing::warn!(error = %e, "Could not remember linked peer handle");
+        }
         Ok((username, user_id))
     }
 

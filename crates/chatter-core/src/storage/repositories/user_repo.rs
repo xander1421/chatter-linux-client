@@ -70,6 +70,18 @@ impl UserRepository {
         Ok(())
     }
 
+    /// Remember a complete handle learned from a successful exact lookup or
+    /// a decrypted username link. Other user fields stay untouched.
+    pub fn set_known_username(&self, user_id: &UserId, username: &str) -> Result<(), StorageError> {
+        self.ensure_user_exists(user_id)?;
+        let conn = self.db.connection()?;
+        conn.execute(
+            "UPDATE users SET username = ?1 WHERE id = ?2",
+            params![username, user_id.to_string()],
+        )?;
+        Ok(())
+    }
+
     /// Get a user by ID.
     pub fn get(&self, id: &UserId) -> Result<Option<User>, StorageError> {
         let conn = self.db.connection()?;
