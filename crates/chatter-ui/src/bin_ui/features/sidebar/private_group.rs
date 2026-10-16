@@ -51,7 +51,9 @@ pub fn load_private_group_messages(
         };
 
         // Get member count for header display
-        let member_count = ui_ctx.get_anon_group_members(&group_id).len() as i32;
+        let members = ui_ctx.get_anon_group_members(&group_id);
+        let member_count = members.iter().filter(|m| m.mailbox_pk.is_some()).count() as i32;
+        let invited_count = members.iter().filter(|m| m.mailbox_pk.is_none()).count() as i32;
 
         // Get current user ID for is_own calculation
         let current_user_id = auth_state.get().current_user_id;
@@ -107,6 +109,7 @@ pub fn load_private_group_messages(
             );
             w.set_is_dm(false);
             w.set_member_count(member_count);
+            w.set_invited_count(invited_count);
             w.set_topic("".into());
             w.set_header_presence_status("offline".into());
             w.set_channel_has_avatar(false);
@@ -239,7 +242,9 @@ async fn load_private_group_messages_internal(
         }
     };
 
-    let member_count = ui_ctx.get_anon_group_members(&group_id).len() as i32;
+    let members = ui_ctx.get_anon_group_members(&group_id);
+    let member_count = members.iter().filter(|m| m.mailbox_pk.is_some()).count() as i32;
+    let invited_count = members.iter().filter(|m| m.mailbox_pk.is_none()).count() as i32;
 
     let current_user_id_str = auth_state
         .get()
@@ -286,6 +291,7 @@ async fn load_private_group_messages_internal(
         );
         w.set_is_dm(false);
         w.set_member_count(member_count);
+        w.set_invited_count(invited_count);
         w.set_topic("".into());
         w.set_header_presence_status("offline".into());
         w.set_channel_has_avatar(false);

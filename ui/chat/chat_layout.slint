@@ -44,6 +44,7 @@ export component ChatLayout inherits Rectangle {
     in property <bool> is-dm: false;  // When true, show minimal message UI (no avatars/names)
     in property <bool> can-forward: false;
     in property <int> member-count: 0;
+    in property <int> invited-count: 0;
     in property <string> topic: "";
     in property <string> typing-indicator: "";
     in property <string> presence-status: "offline";
@@ -436,6 +437,7 @@ export component ChatLayout inherits Rectangle {
             conversation-kind: root.conversation-kind;
             private-channel: root.private-channel;
             member-count: root.member-count;
+            invited-count: root.invited-count;
             read-only: root.conversation-read-only;
             can-call: root.header-can-call;
             can-invite: root.header-can-invite;

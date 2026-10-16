@@ -490,6 +490,7 @@ export component MainWindow inherits Window {
     in property <bool> privacy-line-exposed: false;
     in-out property <bool> is-dm: false;  // True for DM conversations (hides avatars/names in messages)
     in property <int> member-count: 0;
+    in property <int> invited-count: 0;
     in property <string> topic: "";
     in property <string> typing-indicator: "";
     in property <string> header-presence-status: "offline";
@@ -2311,6 +2312,7 @@ export component MainWindow inherits Window {
                         can-forward: root.chat-can-forward;
                         is-anonymous: root.conversation-kind == ConversationKind.anon-dm || root.conversation-kind == ConversationKind.anon-group;
                         member-count: root.member-count;
+                        invited-count: root.invited-count;
                         topic: root.topic;
                         typing-indicator: root.typing-indicator;
                         presence-status: root.header-presence-status;

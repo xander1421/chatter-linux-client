@@ -369,6 +369,7 @@ pub async fn process_device_message(
     message_gateway: &Arc<MessageGateway>,
     message_repo: &Arc<MessageRepository>,
     channel_repo: &Arc<ChannelRepository>,
+    anon_group_repo: &crate::storage::repositories::AnonGroupRepository,
     ephemeral_repo: &Arc<EphemeralRepository>,
     group_coordinator: &Arc<GroupCoordinator>,
     domain_tx: Option<&broadcast::Sender<DomainEvent>>,
@@ -516,6 +517,7 @@ pub async fn process_device_message(
         message_gateway,
         message_repo,
         channel_repo,
+        anon_group_repo,
         domain_tx,
         retry_budget,
     )
@@ -1067,8 +1069,14 @@ async fn process_identified_sender_message(
             });
             stats.write().messages_processed += 1;
         }
-        Ok(SealedSenderResult::ChannelReceiptTargetsSynced { channel_id, timestamp }) => {
-            let _ = event_tx.send(InboxEvent::ChannelReceiptTargetsSynced { channel_id, timestamp });
+        Ok(SealedSenderResult::ChannelReceiptTargetsSynced {
+            channel_id,
+            timestamp,
+        }) => {
+            let _ = event_tx.send(InboxEvent::ChannelReceiptTargetsSynced {
+                channel_id,
+                timestamp,
+            });
             let _ = event_tx.send(InboxEvent::MessageProcessed {
                 message_id: msg.message_guid.clone(),
             });
@@ -1493,6 +1501,7 @@ async fn process_sealed_sender_message(
     message_gateway: &Arc<MessageGateway>,
     message_repo: &Arc<MessageRepository>,
     channel_repo: &Arc<ChannelRepository>,
+    anon_group_repo: &crate::storage::repositories::AnonGroupRepository,
     domain_tx: Option<&broadcast::Sender<DomainEvent>>,
     retry_budget: &crate::inbox::ack_policy::RetryBudget,
 ) -> crate::inbox::ack_policy::AckDecision {
@@ -1670,7 +1679,16 @@ async fn process_sealed_sender_message(
             content,
         }) => {
             if let Some(inner) = content.content {
-                dispatch_secret_chat_bootstrap(inner, sender_id, sender_device_id, event_tx);
+                if let Err(error) = dispatch_secret_chat_bootstrap(
+                    inner,
+                    sender_id,
+                    sender_device_id,
+                    event_tx,
+                    anon_group_repo,
+                ) {
+                    tracing::error!(%error, "Failed to retain device inbox group invitation");
+                    return AckDecision::Retain;
+                }
             }
             stats.write().messages_processed += 1;
         }
@@ -1893,8 +1911,14 @@ async fn process_sealed_sender_message(
         // Worth knowing about the orderer it feeds, though: `get_ready` and
         // `flush_stale` have no production callers, so anything it buffers is
         // never drained. That leaks UI events (and memory), not messages.
-        Ok(SealedSenderResult::ChannelReceiptTargetsSynced { channel_id, timestamp }) => {
-            let _ = event_tx.send(InboxEvent::ChannelReceiptTargetsSynced { channel_id, timestamp });
+        Ok(SealedSenderResult::ChannelReceiptTargetsSynced {
+            channel_id,
+            timestamp,
+        }) => {
+            let _ = event_tx.send(InboxEvent::ChannelReceiptTargetsSynced {
+                channel_id,
+                timestamp,
+            });
             let _ = event_tx.send(InboxEvent::MessageProcessed {
                 message_id: msg.message_guid.clone(),
             });
@@ -2093,20 +2117,25 @@ fn dispatch_secret_chat_bootstrap(
     sender_id: UserId,
     sender_device_id: u32,
     event_tx: &broadcast::Sender<InboxEvent>,
-) {
+    anon_group_repo: &crate::storage::repositories::AnonGroupRepository,
+) -> Result<(), crate::error::StorageError> {
     let event = match inner {
         content::Content::AnonDmRequest(request)
-            if request.disappearing_seconds == crate::services::disappearing::SECRET_CHAT_DEFAULT_SECONDS => InboxEvent::AnonDmRequest {
-            peer_id: sender_id,
-            sender_device_id,
-            conversation_id: request.conversation_id,
-            initiator_mailbox_pk: request.initiator_mailbox_pk,
-            intro_message: (!request.intro_message.is_empty()).then_some(request.intro_message),
-            profile_key: request.profile_key,
-            encrypted_display_name: request.encrypted_display_name,
-            avatar: request.avatar,
-            timestamp: request.timestamp,
-        },
+            if request.disappearing_seconds
+                == crate::services::disappearing::SECRET_CHAT_DEFAULT_SECONDS =>
+        {
+            InboxEvent::AnonDmRequest {
+                peer_id: sender_id,
+                sender_device_id,
+                conversation_id: request.conversation_id,
+                initiator_mailbox_pk: request.initiator_mailbox_pk,
+                intro_message: (!request.intro_message.is_empty()).then_some(request.intro_message),
+                profile_key: request.profile_key,
+                encrypted_display_name: request.encrypted_display_name,
+                avatar: request.avatar,
+                timestamp: request.timestamp,
+            }
+        }
         content::Content::AnonGroupInvite(invite) => InboxEvent::AnonGroupInvite {
             peer_id: sender_id,
             sender_device_id,
@@ -2118,9 +2147,48 @@ fn dispatch_secret_chat_bootstrap(
             encrypted_display_name: invite.encrypted_display_name,
             avatar: invite.avatar,
         },
-        _ => return,
+        _ => return Ok(()),
     };
+    if let InboxEvent::AnonGroupInvite {
+        peer_id,
+        sender_device_id,
+        group_id,
+        group_name,
+        inviter_mailbox_pk,
+        profile_key,
+        encrypted_display_name,
+        ..
+    } = &event
+    {
+        if let (Some(group_id), Ok(mailbox_pk)) = (
+            crate::domain::anon_group::AnonGroupId::try_from_slice(group_id),
+            <[u8; 32]>::try_from(inviter_mailbox_pk.as_slice()),
+        ) {
+            let key = profile_key
+                .as_ref()
+                .and_then(|key| <[u8; 32]>::try_from(key.as_slice()).ok());
+            let name =
+                key.as_ref()
+                    .zip(encrypted_display_name.as_ref())
+                    .and_then(|(key, encrypted)| {
+                        crate::crypto::profile_crypto::decrypt_display_name(key, encrypted).ok()
+                    });
+            anon_group_repo.save_pending_invite(
+                &crate::storage::repositories::anon_group_repo::PendingAnonGroupInvite {
+                    group_id,
+                    group_name: group_name.clone(),
+                    inviter_id: *peer_id,
+                    inviter_device_id: *sender_device_id,
+                    inviter_mailbox_pk: mailbox_pk,
+                    profile_key: key,
+                    inviter_display_name: name,
+                    inviter_avatar: None,
+                },
+            )?;
+        }
+    }
     let _ = event_tx.send(event);
+    Ok(())
 }
 
 /// Parses the Content proto inner type and emits appropriate channel events.

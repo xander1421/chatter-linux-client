@@ -1391,19 +1391,26 @@ impl InboxEventProcessor {
                 }
             }
 
-            InboxEvent::ChannelReceiptTargetsSynced { channel_id, timestamp } => {
+            InboxEvent::ChannelReceiptTargetsSynced {
+                channel_id,
+                timestamp,
+            } => {
                 if let (Ok(me), Ok(Some(message))) = (
                     self.message_service.current_user_id(),
-                    self.message_service.message_repo.get_by_conversation_timestamp(channel_id, *timestamp),
+                    self.message_service
+                        .message_repo
+                        .get_by_conversation_timestamp(channel_id, *timestamp),
                 ) {
                     if message.sender_id == Some(me)
-                        && message.conversation_type == crate::domain::message::ConversationType::Channel
+                        && message.conversation_type
+                            == crate::domain::message::ConversationType::Channel
                     {
-                        self.event_bus.emit_domain(DomainEvent::MessageDeliveryChanged {
-                            message_id: message.id,
-                            channel_id: *channel_id,
-                            status: message.delivery_status,
-                        });
+                        self.event_bus
+                            .emit_domain(DomainEvent::MessageDeliveryChanged {
+                                message_id: message.id,
+                                channel_id: *channel_id,
+                                status: message.delivery_status,
+                            });
                     }
                 }
             }
@@ -1545,9 +1552,8 @@ impl InboxEventProcessor {
                         // server as an identified send.
                         let ms = self.message_service.clone();
                         tokio::spawn(async move {
-                            if let Err(e) = ms
-                                .send_profile_key_handshake_if_sealed(&friend_id)
-                                .await
+                            if let Err(e) =
+                                ms.send_profile_key_handshake_if_sealed(&friend_id).await
                             {
                                 tracing::warn!(
                                     peer_id = %friend_id,
@@ -1696,25 +1702,60 @@ impl InboxEventProcessor {
             "Decrypted inviter profile for group invite"
         );
 
-        // Fetch the inviter's avatar over Tor, then show the invite dialog.
+        // Persist before the source envelope is acknowledged. Avatar retrieval is optional.
         let anon_service = self.anon_group_service.clone();
         let event_bus = self.event_bus.clone();
         let avatar = avatar.clone();
         let group_name = group_name.to_string();
+        let invite = crate::storage::repositories::anon_group_repo::PendingAnonGroupInvite {
+            group_id: anon_group_id,
+            group_name: group_name.clone(),
+            inviter_id: peer_id,
+            inviter_device_id: sender_device_id,
+            inviter_mailbox_pk: mailbox_pk,
+            profile_key: profile_key_arr,
+            inviter_display_name: inviter_display_name.clone(),
+            inviter_avatar: None,
+        };
+        if let Err(error) = anon_service.save_pending_invite(&invite) {
+            tracing::error!(%error, "Failed to persist anonymous group invitation");
+            return;
+        }
+        event_bus.emit_domain(DomainEvent::AnonGroupInviteReceived {
+            group_id: anon_group_id,
+            group_name: group_name.clone(),
+            inviter_id: peer_id,
+            inviter_device_id: sender_device_id,
+            inviter_mailbox_pk: mailbox_pk,
+            profile_key: profile_key_arr,
+            inviter_display_name: inviter_display_name.clone(),
+            inviter_avatar: None,
+        });
         tokio::spawn(async move {
-            let inviter_avatar = anon_service
-                .resolve_member_avatar(avatar.as_ref(), None)
-                .await;
-            event_bus.emit_domain(DomainEvent::AnonGroupInviteReceived {
-                group_id: anon_group_id,
-                group_name,
-                inviter_id: peer_id,
-                inviter_device_id: sender_device_id,
-                inviter_mailbox_pk: mailbox_pk,
-                profile_key: profile_key_arr,
-                inviter_display_name,
-                inviter_avatar,
-            });
+            if avatar.is_some() {
+                if let Ok(Some(inviter_avatar)) = tokio::time::timeout(
+                    std::time::Duration::from_secs(15),
+                    anon_service.resolve_member_avatar(avatar.as_ref(), None),
+                )
+                .await
+                {
+                    if anon_service
+                        .update_pending_invite_avatar(&invite.group_id, &inviter_avatar)
+                        .is_ok()
+                    {
+                        event_bus.emit_domain(DomainEvent::AnonGroupInviteReceived {
+                            group_id: anon_group_id,
+                            group_name,
+                            inviter_id: peer_id,
+                            inviter_device_id: sender_device_id,
+                            inviter_mailbox_pk: mailbox_pk,
+                            profile_key: profile_key_arr,
+                            inviter_display_name,
+                            inviter_avatar: Some(inviter_avatar),
+                        });
+                    }
+                }
+            }
         });
     }
 

@@ -140,11 +140,14 @@ export component PrivateGroupListItem inherits Rectangle {
         // timestamp and badge sit on the right edge like every DM row's do.
         alignment: stretch;
 
-        Avatar {
-            size: root.mobile-mode ? Spacing.row-avatar-touch : Spacing.row-avatar-desktop;
-            source: root.avatar-source;
-            name: root.name;
-            anonymous: true;
+        VerticalLayout {
+            alignment: center;
+            Avatar {
+                size: root.mobile-mode ? Spacing.row-avatar-touch : Spacing.row-avatar-desktop;
+                source: root.avatar-source;
+                name: root.name;
+                anonymous: true;
+            }
         }
 
         // Text content
@@ -168,21 +171,6 @@ export component PrivateGroupListItem inherits Rectangle {
                     horizontal-stretch: 1;
                 }
 
-                // Member count badge
-                if root.member-count > 0: Rectangle {
-                    width: member-text.preferred-width + 8px;
-                    height: Spacing.badge-sm;
-                    border-radius: self.height / 2;
-                    background: Colors.text-muted.with-alpha(0.2);
-
-                    member-text := Text {
-                        text: root.member-count;
-                        color: Colors.text-muted;
-                        font-size: Typography.xs;
-                        horizontal-alignment: center;
-                        vertical-alignment: center;
-                    }
-                }
             }
 
             // Typing indicator or last message preview

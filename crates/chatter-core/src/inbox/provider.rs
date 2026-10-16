@@ -73,7 +73,9 @@ impl Drop for ResponsivePollGuard {
 
 impl PollHints {
     fn set_visible(&self, visible: bool) {
-        let was_visible = self.visible.swap(visible, std::sync::atomic::Ordering::AcqRel);
+        let was_visible = self
+            .visible
+            .swap(visible, std::sync::atomic::Ordering::AcqRel);
         if visible && !was_visible {
             self.foreground_wake.notify_one();
         }
@@ -707,6 +709,9 @@ impl DeviceInboxProvider {
                             &message_gateway,
                             &message_repo,
                             &channel_repo,
+                            &crate::storage::repositories::AnonGroupRepository::new(
+                                database.clone(),
+                            ),
                             &ephemeral_repo,
                             &group_coordinator,
                             domain_tx.as_ref(),
@@ -987,6 +992,7 @@ impl DeviceInboxProvider {
                                             &is_blocked,
                                             &bound_device,
                                             &message_repo,
+                                            &crate::storage::repositories::AnonGroupRepository::new(database.clone()),
                                             domain_tx.as_ref(),
                                         )
                                         .await;
