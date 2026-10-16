@@ -301,6 +301,16 @@ impl AnonDmService {
         {
             return Err(AnonDmError::ConversationExists(sender_id));
         }
+        // A new request id from a peer cannot open a second secret chat.
+        // The original request is still usable by its id, including when it
+        // is pending, blocked, or already active.
+        if self
+            .anon_dm_repo
+            .get_live_conversation_by_peer(&sender_id)?
+            .is_some()
+        {
+            return Err(AnonDmError::ConversationExists(sender_id));
+        }
 
         // Create conversation as incoming request
         let mut dm = AnonDm::from_request(conversation_id, sender_id, sender_mailbox_pk);
@@ -384,6 +394,14 @@ impl AnonDmService {
                 conversation_id = %dm.id,
                 "Conversation already exists from ECIES init"
             );
+            return Ok(false);
+        }
+        if self
+            .anon_dm_repo
+            .get_live_conversation_by_peer(&dm.peer_id)?
+            .is_some()
+        {
+            tracing::info!(peer = %dm.peer_id, "Ignored new secret-chat request from existing peer");
             return Ok(false);
         }
 

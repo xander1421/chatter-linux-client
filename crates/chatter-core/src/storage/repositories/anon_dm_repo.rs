@@ -111,7 +111,7 @@ impl AnonDmRepository {
     }
 
     /// The live secret chat with `peer_id`: Active first, then Blocked, then
-    /// a pending request, newest first within each. A Declined chat is never
+    /// a pending request, preferring message history within each status. A Declined chat is never
     /// it. One peer can hold several rows (a declined request next to a new
     /// one, a chat per peer device, requests crossing), so this is a
     /// deterministic pick for peer-level questions ("is there a chat with
@@ -126,7 +126,7 @@ impl AnonDmRepository {
              (SELECT MAX(created_at) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_deleted = 0) as last_message_at, \
              (SELECT COUNT(*) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_read = 0 AND is_deleted = 0) as unread_count, peer_device_id, request_state \
              FROM anon_dm_conversations WHERE peer_id = ?1 AND status IN (?2, ?3, ?4) \
-             ORDER BY CASE status WHEN ?2 THEN 0 WHEN ?3 THEN 1 ELSE 2 END, created_at DESC, id DESC LIMIT 1",
+             ORDER BY CASE status WHEN ?2 THEN 0 WHEN ?3 THEN 1 ELSE 2 END, last_message_at DESC NULLS LAST, created_at DESC, id DESC LIMIT 1",
         )?;
         stmt.query_row(
             params![

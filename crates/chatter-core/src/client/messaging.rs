@@ -861,10 +861,13 @@ impl ChatterClient {
         // friend DM with the same person: the row kind is what the UI marks
         // as secret. Their traffic rides the onion channel in either mode.
         let mut out: Vec<ChatRowSendData> = self.list_regular_dm_sidebar();
+        // Old requests can coexist with an accepted chat in local storage.
+        // Keep the accepted chat as the peer's one visible secret-chat row.
+        let mut shown_secret_peers = std::collections::HashSet::new();
 
         // Anon DMs — active conversations.
         for dm in self.list_anon_dm_conversations() {
-            if dm.status == AnonDmStatus::Pending {
+            if dm.status != AnonDmStatus::Active || !shown_secret_peers.insert(dm.peer_id) {
                 continue;
             }
             let display_name = dm
@@ -885,11 +888,7 @@ impl ChatterClient {
                 user_id: dm.peer_id.to_string(),
                 initials: initials_from_name(&display_name),
                 avatar_bytes: dm.peer_avatar.clone(),
-                presence_status: if dm.status == AnonDmStatus::Active {
-                    "online".to_string()
-                } else {
-                    "offline".to_string()
-                },
+                presence_status: "online".to_string(),
                 last_message,
                 timestamp,
                 unread_count: dm.unread_count,
@@ -900,6 +899,9 @@ impl ChatterClient {
 
         // Anon DMs — incoming message requests awaiting acceptance.
         for dm in self.list_anon_dm_message_requests() {
+            if !shown_secret_peers.insert(dm.peer_id) {
+                continue;
+            }
             let peer_name = dm
                 .peer_display_name
                 .clone()
@@ -930,6 +932,9 @@ impl ChatterClient {
 
         // Anon DMs — outgoing requests we sent, awaiting acceptance.
         for dm in self.list_anon_dm_outgoing_requests() {
+            if !shown_secret_peers.insert(dm.peer_id) {
+                continue;
+            }
             let peer_name = dm
                 .peer_display_name
                 .clone()
