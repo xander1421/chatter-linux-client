@@ -98,7 +98,7 @@ pub extern "system" fn Java_com_chatter_client_MessagingService_nativeStartHeadl
                 )?
                 .l()?;
             let path = env.cast_local::<jni::objects::JString>(path)?;
-            let path: String = env.get_string(&path)?.into();
+            let path = path.try_to_string(&env)?;
             let _ = ANDROID_DATA_DIR.set(path);
             let _ = ANDROID_HEADLESS_CONTEXT.set(());
             Ok(true)
