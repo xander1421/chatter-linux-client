@@ -3091,6 +3091,9 @@ export component MainWindow inherits Window {
 
         // Friends Modal
         if root.active-tab == "contacts": FriendsModal {
+            init => {
+                if (root.friends-modal-tab == "find") { root.friends-modal-switch-tab("find"); }
+            }
             z: -1;
             mobile-mode: root.compact-layout;
             // A tab's root screen: the tab bar navigates, no back chevron.

@@ -71,7 +71,19 @@ fn wire_switch_tab(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             "blocked" => {
                 private_requests::refresh_blocked_users(weak.clone(), &ui_ctx);
             }
-            _ => {} // "find" is input-driven, nothing to preload
+            "find" => {
+                let Some(w) = weak.upgrade() else { return };
+                let private_mode = ui_ctx.anon_mode_enabled();
+                match ui_ctx.current_friend_code(private_mode) {
+                    Ok(code) => w.set_friends_my_code(code.into()),
+                    Err(error) => {
+                        w.set_friends_my_code("".into());
+                        tracing::warn!("Could not load current friend code: {}", error);
+                    }
+                }
+                w.set_friends_show_qr(false);
+            }
+            _ => {}
         }
     });
 }

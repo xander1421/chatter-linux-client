@@ -213,18 +213,28 @@ impl ChatterClient {
         }
     }
 
+    /// Return the code represented by the account's current stored identity.
+    /// This reads existing key material and does not change the delivery token.
+    pub fn current_friend_code(
+        &self,
+        private_mode: bool,
+    ) -> Result<String, crate::services::UserError> {
+        if private_mode {
+            if !self.anon_mode_enabled() {
+                return Err(crate::services::UserError::RequiresAnonMode);
+            }
+            self.users().current_private_friend_code()
+        } else {
+            self.users().current_friend_code()
+        }
+    }
+
     pub fn generate_friend_code(&self) -> Result<String, crate::services::UserError> {
-        self.users().generate_friend_code()
+        self.current_friend_code(false)
     }
 
     pub fn generate_private_friend_code(&self) -> Result<String, crate::services::UserError> {
-        // Anon contact setup is only safe in shield mode — otherwise the code
-        // generation/redemption and the resulting conversation run over the
-        // identified/direct path, leaking what anon DM exists to hide.
-        if !self.anon_mode_enabled() {
-            return Err(crate::services::UserError::RequiresAnonMode);
-        }
-        self.users().generate_private_friend_code()
+        self.current_friend_code(true)
     }
 
     pub fn generate_friend_qr(&self, size: u32) -> Result<Vec<u8>, crate::services::UserError> {

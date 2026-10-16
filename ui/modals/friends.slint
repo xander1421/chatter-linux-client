@@ -105,6 +105,9 @@ export component FriendsModal inherits Rectangle {
     // Shield decides which code this account generates. Redeeming a code is
     // routed by its format in core; private codes work with Shield off too.
     property <bool> effective-private-mode: AnonMode.enabled;
+    changed effective-private-mode => {
+        if (root.active-tab == "find") { root.switch-tab("find"); }
+    }
 
     // Callbacks
     callback close();
@@ -574,6 +577,7 @@ export component FriendsModal inherits Rectangle {
                                     text: "Your code:";
                                     color: Colors.text-secondary;
                                     font-size: Typography.xs;
+                                    height: self.preferred-height;
                                 }
 
                                 Rectangle {

@@ -1497,9 +1497,13 @@ impl UserService {
     /// This code can be shared or encoded as a QR code. It only contains
     /// the user ID - no username is exposed. Profile key is exchanged
     /// via E2E message after connection is established.
-    pub fn generate_friend_code(&self) -> Result<String, UserError> {
+    pub fn current_friend_code(&self) -> Result<String, UserError> {
         let current_user = self.settings_repo.current_user_id()?;
         Ok(format!("chatter://connect/{}", current_user))
+    }
+
+    pub fn generate_friend_code(&self) -> Result<String, UserError> {
+        self.current_friend_code()
     }
 
     /// Generate a QR code image (PNG) containing the friend code URL.
@@ -1572,7 +1576,7 @@ impl UserService {
     /// This code contains your identity key. Only share with people you want
     /// to be able to contact you privately. The code can be regenerated with
     /// a new profile key to invalidate old delivery tokens.
-    pub fn generate_private_friend_code(&self) -> Result<String, UserError> {
+    pub fn current_private_friend_code(&self) -> Result<String, UserError> {
         use crate::domain::PrivateFriendCode;
 
         let current_user = self.settings_repo.current_user_id()?;
@@ -1614,6 +1618,10 @@ impl UserService {
         let code = PrivateFriendCode::new(current_user, identity_key, delivery_token);
 
         Ok(code.to_url())
+    }
+
+    pub fn generate_private_friend_code(&self) -> Result<String, UserError> {
+        self.current_private_friend_code()
     }
 
     /// Generate a QR code for private friend code.
