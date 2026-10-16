@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, SharedString};
 
-use chatter_core::client::{ChatterClient, FriendCodeConnection};
+use chatter_core::client::{ChatterClient, FriendCodeConnection, FriendCodeConnectionError};
 
 // refresh_sent_requests removed — core emits FriendRequestsUpdated after
 // every send/respond/remove and the dispatcher refreshes the sidebar.
@@ -391,8 +391,41 @@ pub(crate) fn wire_connect_via_friend_code(window: &MainWindow, ui_ctx: &Arc<Cha
                         }
                     });
                 }
+                Err(FriendCodeConnectionError::ExistingSecretChat(id)) => {
+                    tracing::info!(%id, "Friend code points to an existing secret chat");
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_friends_loading(false);
+                            w.set_friends_code_input("".into());
+                            w.set_friends_request_note("".into());
+                            w.set_friends_code_status(
+                                "You already have a secret chat with them.".into(),
+                            );
+                            crate::bin_ui::features::back::reset_to_chats(&w);
+                            w.invoke_dm_selected(id.to_string().into());
+                        }
+                    });
+                }
                 Err(error) => {
-                    tracing::error!("Failed to connect via friend code: {}", error);
+                    if matches!(
+                        error,
+                        FriendCodeConnectionError::InvalidCode
+                            | FriendCodeConnectionError::UsernameInsteadOfCode
+                            | FriendCodeConnectionError::ServerCodeInShield
+                            | FriendCodeConnectionError::FriendRequest(
+                                chatter_core::services::UserError::InvalidInput(_)
+                            )
+                            | FriendCodeConnectionError::FriendRequest(
+                                chatter_core::services::UserError::UserNotFound(_)
+                            )
+                            | FriendCodeConnectionError::SecretChat(
+                                chatter_core::services::anon_dm::AnonDmError::CannotMessageSelf
+                            )
+                    ) {
+                        tracing::info!("Friend code input rejected: {}", error);
+                    } else {
+                        tracing::error!("Failed to connect via friend code: {}", error);
+                    }
                     let message = error.user_message();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
