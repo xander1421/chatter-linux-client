@@ -12,7 +12,6 @@ use chatter_core::client::ChatterClient;
 use chatter_core::domain::anon_dm::AnonDmId;
 use chatter_core::domain::anon_group::AnonGroupId;
 use chatter_core::domain::ids::UserId;
-use chatter_core::domain::message::SystemMessage;
 
 // =========================================================================
 // Anonymous DM Lifecycle Events
@@ -181,22 +180,19 @@ pub(super) fn handle_group_updated(
 }
 
 // =========================================================================
-// Anonymous Group Membership Events (system-message synthesis)
+// Anonymous Group Membership Events
 //
-// Join events synthesize a live line while core persists the notice. Leave
-// and kick events reload their already-persisted notices from core.
+// Core persists membership notices with their event timestamps before these
+// handlers run. Reload the open chat so live and reopened history agree.
 // =========================================================================
 
 pub(super) fn handle_group_member_joined(
     window: &Weak<MainWindow>,
     ui_ctx: &Arc<ChatterClient>,
     group_id: AnonGroupId,
-    user_id: UserId,
+    _user_id: UserId,
 ) {
-    let message =
-        ui_ctx.anon_group_system_message(group_id, user_id, SystemMessage::UserJoined(user_id));
-    super::messaging::handle_message_received(window, ui_ctx, message);
-    refresh_active_group_counts(window, ui_ctx, group_id);
+    refresh_group_membership_notice(window, ui_ctx, group_id);
 }
 
 pub(super) fn handle_group_member_left(
@@ -205,22 +201,7 @@ pub(super) fn handle_group_member_left(
     group_id: AnonGroupId,
     _user_id: UserId,
 ) {
-    refresh_active_group_counts(window, ui_ctx, group_id);
-    // Core persisted the verified leave notice. Reload from storage so the
-    // open chat and sidebar use the same line and timestamp after reopening.
-    let (weak, ui_ctx) = (window.clone(), ui_ctx.clone());
-    let _ = slint::invoke_from_event_loop(move || {
-        if let Some(w) = weak.upgrade() {
-            crate::bin_ui::features::sidebar::refresh_chat_list(&w, &ui_ctx);
-            if ui_ctx.active_conversation().matches_anon_group(&group_id) {
-                crate::bin_ui::features::sidebar::private_group::load_private_group_messages(
-                    &w,
-                    &ui_ctx,
-                    &group_id.to_string(),
-                );
-            }
-        }
-    });
+    refresh_group_membership_notice(window, ui_ctx, group_id);
 }
 
 pub(super) fn handle_group_member_kicked(
@@ -230,8 +211,15 @@ pub(super) fn handle_group_member_kicked(
     _user_id: UserId,
     _kicked_by: UserId,
 ) {
-    // Core stored the verified notice and retained a removed user's history.
-    // Reload from storage so the line is also present after reopening.
+    // Core retained a removed user's history, including the verified notice.
+    refresh_group_membership_notice(window, ui_ctx, group_id);
+}
+
+fn refresh_group_membership_notice(
+    window: &Weak<MainWindow>,
+    ui_ctx: &Arc<ChatterClient>,
+    group_id: AnonGroupId,
+) {
     refresh_active_group_counts(window, ui_ctx, group_id);
     let (weak, ui_ctx) = (window.clone(), ui_ctx.clone());
     let _ = slint::invoke_from_event_loop(move || {
