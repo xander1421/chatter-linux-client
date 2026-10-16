@@ -19,7 +19,6 @@ use std::sync::{Arc, OnceLock};
 use std::task::{Context, Poll};
 
 use std::time::{Duration, Instant};
-use std::time::SystemTime;
 
 use arti_client::{DataStream, HasKind, TorClient, TorClientConfig};
 use http::Uri;
@@ -273,35 +272,31 @@ fn wake_directory(client: &TorClient<PreferredRuntime>) {
 
 pub(crate) async fn ensure_fresh_directory(client: &TorClient<PreferredRuntime>) -> Result<(), std::io::Error> {
     let dir = client.dirmgr().map_err(|_| io_err("onion directory unavailable"))?;
-    let is_fresh = || {
-        dir.netdir(Timeliness::Strict)
-            .map(|netdir| netdir.lifetime().fresh_until() > SystemTime::now())
-            .unwrap_or(false)
-    };
-    if is_fresh() {
+    if dir.netdir(Timeliness::Strict).is_ok() {
         return Ok(());
     }
     wake_directory(client);
-    tracing::info!(phase = "directory_refresh", "onion consensus stale; waiting for refresh");
+    // Arti normally builds circuits with Timely, which explicitly tolerates a
+    // consensus slightly past fresh-until. Waiting for Strict on every channel
+    // multiplies a directory outage into a 20s stall for every concurrent dial.
+    if dir.netdir(Timeliness::Timely).is_ok() {
+        tracing::info!(phase = "directory_refresh", "onion consensus outside strict window; using timely directory");
+        return Ok(());
+    }
+    tracing::info!(phase = "directory_refresh", "onion consensus unavailable; waiting for refresh");
     let result = tokio::time::timeout(Duration::from_secs(20), async {
         loop {
-            if is_fresh() {
+            if dir.netdir(Timeliness::Timely).is_ok() {
                 return;
             }
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
     }).await;
     if result.is_err() {
-        // Freshness is advisory until valid-until. The updater keeps running;
-        // a still-valid consensus can make progress while downloads recover.
-        if dir.netdir(Timeliness::Timely).is_ok() {
-            tracing::warn!(phase = "directory_refresh", "onion consensus remains stale; dialling with timely directory");
-            return Ok(());
-        }
         tracing::warn!(phase = "directory_refresh", "onion consensus unavailable after refresh");
         return Err(io_err("onion directory refresh timed out"));
     }
-    tracing::info!(phase = "directory_refresh", "onion consensus refreshed");
+    tracing::info!(phase = "directory_refresh", "onion directory available after refresh");
     Ok(())
 }
 
