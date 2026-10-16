@@ -963,6 +963,9 @@ export component MainWindow inherits Window {
     in property <[FriendRequestData]> friends-sent-requests: [];
     in property <[FriendRequestData]> friends-private-requests: [];
     in property <[FriendRequestData]> friends-group-invites: [];
+    in-out property <string> group-invite-decision: "";
+    in-out property <string> group-invite-error-id: "";
+    in-out property <string> group-invite-error: "";
     in property <[FriendRequestData]> friends-channel-invites: [];
     in property <[BlockedUserData]> friends-blocked-users: [];
     in property <bool> friends-loading: false;
@@ -3113,6 +3116,9 @@ export component MainWindow inherits Window {
             private-requests: root.friends-private-requests;
             private-request-decision: root.private-request-decision;
             group-invites: root.friends-group-invites;
+            group-invite-decision: root.group-invite-decision;
+            group-invite-error-id: root.group-invite-error-id;
+            group-invite-error: root.group-invite-error;
             channel-invites: root.friends-channel-invites;
             blocked-users: root.friends-blocked-users;
             loading: root.friends-loading;

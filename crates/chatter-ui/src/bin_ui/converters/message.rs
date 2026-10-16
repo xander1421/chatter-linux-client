@@ -394,9 +394,9 @@ pub fn message_to_display_data_with_replies(
                         "turned off disappearing messages".to_string(),
                     chatter_core::domain::message::SystemMessage::DisappearingTimerChanged { seconds } =>
                         format!("set disappearing messages to {} after read", chatter_core::services::disappearing::timer_label(*seconds)),
-                    _ => sys.description(),
+                    _ => sys.description_for(&msg.conversation_type),
                 }
-            } else { sys.description() };
+            } else { sys.description_for(&msg.conversation_type) };
             (format!("{} {}", sender_name, description), true)
         },
         _ => (msg.as_text().unwrap_or("").to_string(), false),

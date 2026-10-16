@@ -604,22 +604,25 @@ export component CreateChannelModal inherits Rectangle {
                                     spacing: Spacing.sm;
 
                                     // Checkbox
-                                    Rectangle {
+                                    VerticalLayout {
                                         width: 20px;
-                                        height: 20px;
-                                        border-radius: 4px;
-                                        border-width: Spacing.stroke;
-                                        border-color: friend.selected ? Colors.action-fill : Colors.text-muted;
-                                        background: friend.selected ? Colors.action-fill : transparent;
-                                        y: (parent.height - self.height) / 2;
+                                        alignment: center;
+                                        Rectangle {
+                                            width: 20px;
+                                            height: 20px;
+                                            border-radius: 4px;
+                                            border-width: Spacing.stroke;
+                                            border-color: friend.selected ? Colors.action-fill : Colors.text-muted;
+                                            background: friend.selected ? Colors.action-fill : transparent;
 
-                                        if friend.selected: Image {
-                                            source: Icons.check;
-                                            width: 12px;
-                                            height: 12px;
-                                            x: (parent.width - self.width) / 2;
-                                            y: (parent.height - self.height) / 2;
-                                            colorize: Colors.on-action;
+                                            if friend.selected: Image {
+                                                source: Icons.check;
+                                                width: 12px;
+                                                height: 12px;
+                                                x: (parent.width - self.width) / 2;
+                                                y: (parent.height - self.height) / 2;
+                                                colorize: Colors.on-action;
+                                            }
                                         }
                                     }
 

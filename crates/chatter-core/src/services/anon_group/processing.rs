@@ -215,6 +215,15 @@ impl AnonGroupService {
         let mut events = Vec::new();
         match &inner_content.content {
             Some(ContentType::AnonGroupMemberList(list)) => {
+                // The first roster bootstraps a new joiner's history. Later
+                // rosters can announce newly confirmed members to existing peers.
+                let had_roster = self.anon_group_repo.has_applied_roster(group_id)?;
+                let confirmed_before: std::collections::HashSet<UserId> = self
+                    .get_members(group_id)?
+                    .into_iter()
+                    .filter(|member| member.mailbox_pk.is_some())
+                    .map(|member| member.user_id)
+                    .collect();
                 // Sender authorization (owner only) lives in handle_member_list,
                 // the one function every transport routes through.
                 let members = list.members.clone();
@@ -241,6 +250,27 @@ impl AnonGroupService {
                     group_id: *group_id,
                     members,
                 });
+                if had_roster {
+                    for member in self.get_members(group_id)? {
+                        if member.mailbox_pk.is_some()
+                            && !confirmed_before.contains(&member.user_id)
+                        {
+                            self.store_system_message(
+                                group_id,
+                                Some(member.user_id),
+                                crate::domain::message::SystemMessage::UserJoined(member.user_id),
+                                list.timestamp,
+                            )?;
+                            events.push(DomainEvent::AnonGroupMemberJoined {
+                                group_id: *group_id,
+                                user_id: member.user_id,
+                                profile_key: member.profile_key,
+                                display_name: member.display_name,
+                                avatar: member.avatar,
+                            });
+                        }
+                    }
+                }
                 // Posts that raced this list in are delivered now.
                 events.extend(self.release_held_posts(group_id));
 

@@ -1843,7 +1843,16 @@ impl InboxEventProcessor {
             {
                 // The joiner is in our roster now: their posts that beat
                 // this ack in are delivered.
-                Ok(()) => {
+                Ok(joined) => {
+                    if joined {
+                        event_bus.emit_domain(DomainEvent::AnonGroupMemberJoined {
+                            group_id: anon_group_id,
+                            user_id: peer_id_clone,
+                            profile_key: profile_key_arr,
+                            display_name: None,
+                            avatar: None,
+                        });
+                    }
                     for event in anon_service.release_held_posts(&anon_group_id) {
                         event_bus.emit_domain(event);
                     }

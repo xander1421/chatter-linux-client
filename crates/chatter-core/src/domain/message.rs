@@ -518,7 +518,9 @@ impl Message {
                 };
                 return format!("{}\u{1F4DE} {}", pin, what);
             }
-            MessageContent::System(system) => return format!("{}{}", pin, system.description()),
+            MessageContent::System(system) => {
+                return format!("{}{}", pin, system.description_for(&self.conversation_type));
+            }
             _ => {}
         }
         let body = if !text.is_empty() {
@@ -790,6 +792,16 @@ pub enum SystemMessage {
 }
 
 impl SystemMessage {
+    /// Describe a membership notice in its conversation's terms.
+    #[must_use]
+    pub fn description_for(&self, conversation_type: &ConversationType) -> String {
+        if *conversation_type == ConversationType::AnonGroup && matches!(self, Self::UserJoined(_)) {
+            "joined the group".to_string()
+        } else {
+            self.description()
+        }
+    }
+
     /// Get a human-readable description of the system message.
     #[must_use]
     pub fn description(&self) -> String {

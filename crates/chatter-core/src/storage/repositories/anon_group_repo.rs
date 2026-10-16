@@ -404,6 +404,17 @@ impl AnonGroupRepository {
         Ok(true)
     }
 
+    /// Whether an owner roster has already initialized this local group.
+    pub fn has_applied_roster(&self, group: &AnonGroupId) -> Result<bool, StorageError> {
+        let conn = self.db.read_connection()?;
+        let roster_at: i64 = conn.query_row(
+            "SELECT COALESCE((SELECT roster_at FROM anon_group_order WHERE group_id = ?1), 0)",
+            [group.to_string()],
+            |row| row.get(0),
+        )?;
+        Ok(roster_at > 0)
+    }
+
     /// Apply one owner-authenticated snapshot atomically with its ordering state.
     /// A fresh snapshot is not evidence of a fresh invitation: only admission
     /// minted by an explicit invitation may supersede a removal tombstone.

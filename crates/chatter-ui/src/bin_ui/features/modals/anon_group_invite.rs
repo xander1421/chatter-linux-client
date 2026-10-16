@@ -79,6 +79,14 @@ pub fn wire_group_invite_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClie
             let Ok(group_id) = group_id_str.parse() else {
                 return;
             };
+            if let Some(w) = weak.upgrade() {
+                if !w.get_group_invite_decision().is_empty() {
+                    return;
+                }
+                w.set_group_invite_decision(format!("join:{group_id_str}").into());
+                w.set_group_invite_error_id("".into());
+                w.set_group_invite_error("".into());
+            }
             let weak = weak.clone();
             let ui_ctx = ui_ctx.clone();
             tokio::spawn(async move {
@@ -86,8 +94,27 @@ pub fn wire_group_invite_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClie
                     Ok(_) => {
                         refresh_group_invites(&weak, &ui_ctx);
                         crate::bin_ui::features::sidebar::rebuild_chat_list(&weak, &ui_ctx);
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(w) = weak.upgrade() {
+                                w.set_group_invite_decision("".into());
+                                if w.get_active_tab() == "contacts" {
+                                    w.set_active_tab("chats".into());
+                                    w.set_mobile_show_chat(true);
+                                    w.invoke_private_group_selected(group_id.to_string().into());
+                                }
+                            }
+                        });
                     }
-                    Err(error) => tracing::error!(%error, "Failed to accept group invitation"),
+                    Err(error) => {
+                        tracing::error!(%error, "Failed to accept group invitation");
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(w) = weak.upgrade() {
+                                w.set_group_invite_decision("".into());
+                                w.set_group_invite_error_id(group_id_str);
+                                w.set_group_invite_error(error.to_string().into());
+                            }
+                        });
+                    }
                 }
             });
         });
@@ -99,10 +126,32 @@ pub fn wire_group_invite_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClie
             let Ok(group_id) = group_id_str.parse() else {
                 return;
             };
-            if let Err(error) = ui_ctx.decline_pending_anon_group_invite(&group_id) {
-                tracing::error!(%error, "Failed to decline group invitation");
+            if let Some(w) = weak.upgrade() {
+                if !w.get_group_invite_decision().is_empty() {
+                    return;
+                }
+                w.set_group_invite_decision(format!("decline:{group_id_str}").into());
+                w.set_group_invite_error_id("".into());
+                w.set_group_invite_error("".into());
             }
-            refresh_group_invites(&weak, &ui_ctx);
+            let weak = weak.clone();
+            let ui_ctx = ui_ctx.clone();
+            tokio::spawn(async move {
+                let result = ui_ctx.decline_pending_anon_group_invite(&group_id);
+                if result.is_ok() {
+                    refresh_group_invites(&weak, &ui_ctx);
+                }
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak.upgrade() {
+                        w.set_group_invite_decision("".into());
+                        if let Err(error) = result {
+                            tracing::error!(%error, "Failed to decline group invitation");
+                            w.set_group_invite_error_id(group_id_str);
+                            w.set_group_invite_error(error.to_string().into());
+                        }
+                    }
+                });
+            });
         });
     }
 }

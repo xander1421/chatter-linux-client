@@ -291,7 +291,7 @@ impl ChatterClient {
             return None;
         }
         let name = self.message_sender_display_name(&message);
-        let content = format!("{} {}", name, system.description());
+        let content = format!("{} {}", name, system.description_for(&message.conversation_type));
         Some((name, content))
     }
 

@@ -562,7 +562,7 @@ impl AnonGroupService {
         display_name: Option<String>,
         avatar: Option<Vec<u8>>,
         timestamp: u64,
-    ) -> Result<(), AnonGroupError> {
+    ) -> Result<bool, AnonGroupError> {
         // 1. Verify the group exists and we're the owner/admin
         let group = self
             .anon_group_repo
@@ -573,7 +573,7 @@ impl AnonGroupService {
             // SECURITY: If we're not owner/admin, we don't handle JoinAcks.
             // Regular members learn about new members via MemberList broadcasts from the owner.
             tracing::warn!("Rejected JoinAck for a secret group - not owner/admin");
-            return Ok(());
+            return Ok(false);
         }
 
         let member = AnonGroupMember {
@@ -590,7 +590,7 @@ impl AnonGroupService {
             .anon_group_repo
             .apply_ordered_join_ack(&member, timestamp)?
         {
-            return Ok(());
+            return Ok(false);
         }
 
         // 4. Drain any messages queued for this member while mailbox_pk was
@@ -605,13 +605,20 @@ impl AnonGroupService {
             );
         }
 
+        self.store_system_message(
+            &group_id,
+            Some(joiner_id),
+            crate::domain::message::SystemMessage::UserJoined(joiner_id),
+            timestamp,
+        )?;
+
         // 5. Broadcast updated member list to all confirmed members
         if group.is_owner() {
             self.broadcast_member_list(&group_id).await?;
         }
 
         tracing::info!("Member joined group with mailbox key");
-        Ok(())
+        Ok(true)
     }
 
     /// Broadcast the current member list to all confirmed members.

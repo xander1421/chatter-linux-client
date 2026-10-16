@@ -442,7 +442,15 @@ impl AnonGroupService {
         };
         self.anon_group_repo.add_member(&inviter_member)?;
 
-        // 5. Send JoinAck to inviter's anonymous mailbox
+        // 5. Record our join once, even if the acknowledgment needs a retry.
+        self.store_system_message(
+            &group_id,
+            Some(current_user),
+            crate::domain::message::SystemMessage::UserJoined(current_user),
+            TimestampNanos::now().as_u64(),
+        )?;
+
+        // 6. Send JoinAck to inviter's anonymous mailbox
         self.send_join_ack(
             &inviter_id,
             group_id,

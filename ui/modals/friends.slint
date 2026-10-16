@@ -94,6 +94,9 @@ export component FriendsModal inherits Rectangle {
     // Loading states
     in property <bool> loading: false;
     in property <string> private-request-decision: "";
+    in property <string> group-invite-decision: "";
+    in property <string> group-invite-error-id: "";
+    in property <string> group-invite-error: "";
 
     // Friend code (privacy-first discovery)
     in-out property <string> my-code: "";
@@ -1338,7 +1341,7 @@ export component FriendsModal inherits Rectangle {
                                     spacing: Spacing.xs;
 
                                     for invite in root.group-invites: Rectangle {
-                                        height: 72px;
+                                        height: root.group-invite-error-id == invite.user-id && root.group-invite-error != "" ? 96px : 72px;
                                         background: gi-touch.has-hover ? Colors.surface-hover : transparent;
                                         border-radius: Spacing.radius-md;
 
@@ -1380,6 +1383,12 @@ export component FriendsModal inherits Rectangle {
                                                     color: Colors.text-muted;
                                                     font-size: Typography.xs;
                                                 }
+                                                if root.group-invite-error-id == invite.user-id && root.group-invite-error != "": Text {
+                                                    text: root.group-invite-error;
+                                                    color: Colors.error;
+                                                    font-size: Typography.xs;
+                                                    wrap: word-wrap;
+                                                }
                                             }
 
                                             HorizontalLayout {
@@ -1389,6 +1398,8 @@ export component FriendsModal inherits Rectangle {
                                                 Button {
                                                     text: "Join";
                                                     variant: "primary";
+                                                    disabled: root.group-invite-decision != "";
+                                                    loading: root.group-invite-decision == "join:" + invite.user-id;
 
                                                     clicked => {
                                                         root.accept-group-invite(invite.user-id);
@@ -1398,6 +1409,8 @@ export component FriendsModal inherits Rectangle {
                                                 Button {
                                                     text: "Decline";
                                                     variant: "ghost";
+                                                    disabled: root.group-invite-decision != "";
+                                                    loading: root.group-invite-decision == "decline:" + invite.user-id;
 
                                                     clicked => {
                                                         root.decline-group-invite(invite.user-id);
