@@ -3393,6 +3393,7 @@ impl ChatterClient {
         let h_ephemeral_reaper = {
             let db = self.services.database.clone();
             let expired = self.expired_messages.clone();
+            let notifications = self.services.notification_service.clone();
             let interval_secs = std::env::var("CHATTER_EPHEMERAL_REAP_SECS")
                 .ok()
                 .and_then(|s| s.parse::<u64>().ok())
@@ -3408,6 +3409,9 @@ impl ChatterClient {
                             tracing::info!(
                                 count = gone.len(),
                                 "ephemeral reaper: removed expired local messages"
+                            );
+                            notifications.remove_message_notifications(
+                                &gone.iter().map(|message| message.id).collect::<Vec<_>>(),
                             );
                             let _ = expired.send(gone);
                         }

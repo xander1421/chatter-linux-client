@@ -2634,7 +2634,7 @@ impl UnifiedMessageRepository {
     ) -> Result<Vec<ChannelId>, StorageError> {
         let conn = self.db.connection()?;
         let tx = conn.unchecked_transaction()?;
-        let mut changed = Vec::new();
+        let mut read_conversations = Vec::new();
         let mut horizons: HashMap<(ChannelId, ConversationType), u64> = HashMap::new();
         for (conversation_id, sender_id, sent_at) in reads {
             if sender_id == self_user_id || *sent_at > i64::MAX as u64 {
@@ -2651,14 +2651,25 @@ impl UnifiedMessageRepository {
                 .or_insert(*sent_at);
         }
         for ((conversation_id, kind), sent_at) in horizons {
+            let previous: Option<i64> = tx
+                .query_row(
+                    "SELECT sent_at FROM conversation_read_horizons WHERE conversation_type = ?1 AND conversation_id = ?2",
+                    params![kind.as_str(), conversation_id.to_string()],
+                    |row| row.get(0),
+                )
+                .optional()?;
             let rows = Self::advance_read_horizon(&tx, &conversation_id, &kind, sent_at)?;
-            if rows > 0 && !changed.contains(&conversation_id) {
-                changed.push(conversation_id);
+            // The horizon can move before its messages arrive. A notification
+            // for this conversation is stale even when no local row flipped.
+            if (previous.is_none_or(|old| sent_at > old as u64) || rows > 0)
+                && !read_conversations.contains(&conversation_id)
+            {
+                read_conversations.push(conversation_id);
             }
         }
         super::ephemeral_repo::start_read_countdowns(&tx)?;
         tx.commit()?;
-        Ok(changed)
+        Ok(read_conversations)
     }
 
     /// Update delivery status by timestamp with automatic conversation lookup.

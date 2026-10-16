@@ -17,6 +17,7 @@
 //! generic one: no sender, no text, no emoji, whatever the detail level. See
 //! [`is_private_notification`].
 
+use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::Mutex;
 
@@ -72,6 +73,15 @@ pub struct NotificationService {
     sink: Arc<dyn NotificationSink>,
     detail_level: std::sync::RwLock<NotificationDetailLevel>,
     account_keys: Option<AccountNotificationKeys>,
+    message_notifications: Mutex<HashMap<String, Vec<MessageNotification>>>,
+}
+
+struct MessageNotification {
+    id: crate::domain::ids::MessageId,
+    sender_name: Option<String>,
+    message_preview: Option<String>,
+    private: bool,
+    priority: NotificationPriority,
 }
 
 struct AccountNotificationKeys {
@@ -87,6 +97,7 @@ impl NotificationService {
             sink,
             detail_level: std::sync::RwLock::new(NotificationDetailLevel::None),
             account_keys: None,
+            message_notifications: Mutex::new(HashMap::new()),
         }
     }
 
@@ -192,9 +203,28 @@ impl NotificationService {
         private: bool,
         priority: NotificationPriority,
     ) -> Result<(), SystemError> {
+        let (title, body) = self.message_text(sender_name, message_preview, private);
+        let key = self.current_key(conversation_id)?;
+        let mut notifications = self
+            .message_notifications
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        self.deliver(|sink| sink.show_conversation(&key, &title, &body, priority))?;
+        // Requests and reactions replace this conversation's OS notification.
+        // Its earlier message entries can no longer be restored.
+        notifications.remove(&key);
+        Ok(())
+    }
+
+    fn message_text(
+        &self,
+        sender_name: Option<&str>,
+        message_preview: Option<&str>,
+        private: bool,
+    ) -> (String, String) {
         let level = self.detail_level();
 
-        let (title, body) = match (level, private) {
+        match (level, private) {
             // Sealed sender / secret chat: nothing but "New message", ever
             (_, true) => ("Chatter".to_string(), "New message".to_string()),
             // None: maximum privacy
@@ -211,10 +241,73 @@ impl NotificationService {
                 sender_name.unwrap_or("Someone").to_string(),
                 message_preview.unwrap_or("New message").to_string(),
             ),
-        };
+        }
+    }
 
+    /// Post an incoming message and retain enough state to restore the
+    /// preceding notification if this message disappears. Display text is
+    /// filtered against the current privacy setting each time it is posted.
+    pub fn show_tracked_message_notification(
+        &self,
+        message_id: crate::domain::ids::MessageId,
+        conversation_id: &crate::domain::ids::ChannelId,
+        sender_name: Option<&str>,
+        message_preview: Option<&str>,
+        private: bool,
+        priority: NotificationPriority,
+    ) -> Result<(), SystemError> {
         let key = self.current_key(conversation_id)?;
-        self.deliver(|sink| sink.show_conversation(&key, &title, &body, priority))
+        let mut notifications = self
+            .message_notifications
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        let (title, body) = self.message_text(sender_name, message_preview, private);
+        self.deliver(|sink| sink.show_conversation(&key, &title, &body, priority))?;
+        let entries = notifications.entry(key).or_default();
+        entries.retain(|entry| entry.id != message_id);
+        entries.push(MessageNotification {
+            id: message_id,
+            sender_name: sender_name.map(str::to_owned),
+            message_preview: message_preview.map(str::to_owned),
+            private,
+            priority,
+        });
+        Ok(())
+    }
+
+    /// Remove deleted or expired messages from whichever conversations posted
+    /// them. A prior message remains visible when the newest one is removed.
+    pub fn remove_message_notifications(&self, message_ids: &[crate::domain::ids::MessageId]) {
+        let mut notifications = self
+            .message_notifications
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        for (key, entries) in notifications.iter_mut() {
+            let was_latest = entries
+                .last()
+                .is_some_and(|entry| message_ids.contains(&entry.id));
+            let old_len = entries.len();
+            entries.retain(|entry| !message_ids.contains(&entry.id));
+            if entries.len() == old_len || !was_latest {
+                continue;
+            }
+            let result = if let Some(entry) = entries.last() {
+                let (title, body) = self.message_text(
+                    entry.sender_name.as_deref(),
+                    entry.message_preview.as_deref(),
+                    entry.private,
+                );
+                self.deliver(|sink| {
+                    sink.show_conversation(key, &title, &body, entry.priority)
+                })
+            } else {
+                self.deliver(|sink| sink.cancel_conversation(key))
+            };
+            if let Err(error) = result {
+                tracing::warn!(%error, "Could not update notification for removed message");
+            }
+        }
+        notifications.retain(|_, entries| !entries.is_empty());
     }
 
     /// Dismiss `conversation_id`'s notification (it was read).
@@ -223,7 +316,13 @@ impl NotificationService {
         conversation_id: &crate::domain::ids::ChannelId,
     ) -> Result<(), SystemError> {
         let key = self.current_key(conversation_id)?;
-        self.deliver(|sink| sink.cancel_conversation(&key))
+        let mut notifications = self
+            .message_notifications
+            .lock()
+            .unwrap_or_else(|e| e.into_inner());
+        self.deliver(|sink| sink.cancel_conversation(&key))?;
+        notifications.remove(&key);
+        Ok(())
     }
 
     /// Show a notification from a domain Notification object.
@@ -553,7 +652,8 @@ pub fn spawn_notification_listener(
                     });
                     let preview = message.as_text();
 
-                    let _ = notification_service.show_message_notification(
+                    let _ = notification_service.show_tracked_message_notification(
+                        message.id,
                         &message.conversation_id,
                         sender_name.as_deref(),
                         preview,
@@ -643,6 +743,11 @@ pub fn spawn_notification_listener(
                     for id in conversation_ids {
                         let _ = notification_service.cancel_conversation(id);
                     }
+                }
+
+                DomainEvent::MessageDeleted { message_id, .. } => {
+                    notification_service
+                        .remove_message_notifications(std::slice::from_ref(message_id));
                 }
 
                 // ================================================================

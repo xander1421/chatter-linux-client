@@ -868,7 +868,7 @@ impl MessageService {
     }
 
     /// Apply a `ReadSync` from another of our devices. Returns the
-    /// conversations in which something was newly read. Sends nothing back:
+    /// conversations whose read horizons were applied. Sends nothing back:
     /// only a local read (`mark_conversation_read`) syncs.
     pub fn apply_read_sync(
         &self,
