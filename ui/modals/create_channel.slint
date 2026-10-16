@@ -637,13 +637,14 @@ export component CreateChannelModal inherits Rectangle {
                                         }
                                     }
 
-                                    VerticalLayout {
+                                    Rectangle {
                                         horizontal-stretch: 1;
                                         vertical-stretch: 1;
-                                        alignment: center;
-                                        spacing: Spacing.xxs;
+                                        background: transparent;
 
                                         Text {
+                                            y: (parent.height - self.height) / 2;
+                                            width: parent.width;
                                             text: friend.display-name;
                                             color: Colors.text-primary;
                                             font-size: Typography.sm;
@@ -651,8 +652,10 @@ export component CreateChannelModal inherits Rectangle {
                                             overflow: elide;
                                         }
 
-                                        Text {
-                                            text: friend.username == "" ? "" : "@" + friend.username;
+                                        if friend.username != "": Text {
+                                            y: parent.height - self.height - Spacing.xxs;
+                                            width: parent.width;
+                                            text: "@" + friend.username;
                                             color: Colors.text-muted;
                                             font-size: Typography.xs;
                                             overflow: elide;

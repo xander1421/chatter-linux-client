@@ -1019,6 +1019,7 @@ export component MainWindow inherits Window {
     in property <bool> channel-settings-archived: false;
     in property <string> channel-settings-created-at: "";
     in property <int> channel-settings-member-count: 0;
+    in property <int> channel-settings-invited-count: 0;
     in property <bool> channel-settings-can-edit: false;
     in property <bool> channel-settings-can-manage-members: false;
     in property <bool> channel-settings-can-archive: false;
@@ -3340,6 +3341,7 @@ export component MainWindow inherits Window {
             is-archived: root.channel-settings-archived;
             created-at: root.channel-settings-created-at;
             member-count: root.channel-settings-member-count;
+            invited-count: root.channel-settings-invited-count;
             can-edit: root.channel-settings-can-edit;
             can-manage-members: root.channel-settings-can-manage-members;
             can-archive: root.channel-settings-can-archive;

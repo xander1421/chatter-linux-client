@@ -191,6 +191,7 @@ pub(crate) fn show_channel_settings_shell(w: &MainWindow, id: &str, kind: &str) 
     w.set_channel_settings_can_leave(false);
     w.set_channel_settings_is_owner(false);
     w.set_channel_settings_member_count(0);
+    w.set_channel_settings_invited_count(0);
     w.set_channel_settings_members(ModelRc::default());
     w.set_channel_settings_can_view_bans(false);
     w.set_channel_settings_banned_members(ModelRc::default());
@@ -252,6 +253,7 @@ fn present_local_channel_settings(w: &MainWindow, settings: &LocalChannelSetting
     w.set_channel_settings_is_owner(settings.is_owner);
     w.set_channel_settings_can_leave(settings.can_leave);
     w.set_channel_settings_member_count(settings.member_count);
+    w.set_channel_settings_invited_count(0);
     // Drop the previous channel's rows. The roster RPC fills this pane
     // after the screen is already up.
     w.set_channel_settings_members(ModelRc::default());
@@ -562,8 +564,8 @@ pub struct PrivateGroupRoster {
     can_manage_members: bool,
     can_leave: bool,
     blocked: bool,
-    /// (user id, display name, role, avatar bytes, is us, blocked in group)
-    members: Vec<(String, String, &'static str, Option<Vec<u8>>, bool, bool)>,
+    /// (user id, display name, role, avatar bytes, is us, blocked in group, invited)
+    members: Vec<(String, String, &'static str, Option<Vec<u8>>, bool, bool, bool)>,
 }
 
 /// Blocking DB reads — call off the UI thread. `None` when the group is not
@@ -595,6 +597,7 @@ pub fn load_private_group_roster(
                 member.avatar,
                 member.user_id == current_user_id,
                 blocked_members.contains(&member.user_id),
+                member.mailbox_pk.is_none(),
             )
         })
         .collect();
@@ -620,7 +623,12 @@ pub fn apply_private_group_roster(w: &MainWindow, roster: PrivateGroupRoster) {
     w.set_channel_settings_can_delete(false);
     w.set_channel_settings_can_leave(roster.can_leave);
     w.set_channel_settings_group_blocked(roster.blocked);
-    w.set_channel_settings_member_count(roster.members.len() as i32);
+    w.set_channel_settings_member_count(
+        roster.members.iter().filter(|member| !member.6).count() as i32,
+    );
+    w.set_channel_settings_invited_count(
+        roster.members.iter().filter(|member| member.6).count() as i32,
+    );
     w.set_channel_settings_is_owner(roster.is_owner);
     w.set_channel_settings_can_manage_members(roster.can_manage_members);
     let is_owner = roster.is_owner;
@@ -628,7 +636,7 @@ pub fn apply_private_group_roster(w: &MainWindow, roster: PrivateGroupRoster) {
         .members
         .into_iter()
         .map(
-            |(user_id, display_name, role, avatar, is_me, blocked)| ChannelMemberData {
+            |(user_id, display_name, role, avatar, is_me, blocked, invited)| ChannelMemberData {
                 user_id: user_id.into(),
                 display_name: display_name.into(),
                 username: "".into(),
@@ -642,10 +650,11 @@ pub fn apply_private_group_roster(w: &MainWindow, roster: PrivateGroupRoster) {
                 muted: false,
                 can_ban: false,
                 can_mute: false,
-                can_make_owner: is_owner && !is_me,
+                can_make_owner: is_owner && !is_me && !invited,
                 // Anon-group membership is owner-authoritative,
                 // not the signed channel log.
                 unverified: false,
+                invited,
                 can_block: !is_me,
                 blocked,
             },
