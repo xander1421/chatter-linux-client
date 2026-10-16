@@ -54,6 +54,7 @@ import java.util.concurrent.Executors
  */
 class MainActivity : GameActivity() {
     private var secureScreenRequested = false
+    private var activityResumed = false
     private var torNetworkCallback: ConnectivityManager.NetworkCallback? = null
     private external fun nativeNetworkChanged()
 
@@ -419,25 +420,34 @@ class MainActivity : GameActivity() {
 
     override fun onPause() {
         // Start while the Activity still has foreground-start eligibility.
+        activityResumed = false
         messagingBackground = true
+        nativeSetAppVisible(false)
         updateMessagingService()
         super.onPause()
     }
 
     override fun onResume() {
         super.onResume()
+        activityResumed = true
         applySecureScreen()
         // A prelaunched Activity can be resumed without ever gaining focus.
         messagingBackground = !window.decorView.hasWindowFocus()
+        nativeSetAppVisible(!messagingBackground)
         updateMessagingService()
         if (intent.action == "com.chatter.client.MESSAGE_OPEN") dispatchMessageNotification(intent)
     }
 
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
-        messagingBackground = !hasFocus
+        val visible = hasFocus && activityResumed
+        messagingBackground = !visible
+        nativeSetAppVisible(visible)
         updateMessagingService()
     }
+
+    /** The focused window, rather than Activity creation, controls inbox resume. */
+    private external fun nativeSetAppVisible(visible: Boolean)
 
     /** Implemented in Rust. Stores a GlobalRef to this Activity. */
     private external fun nativeRegisterActivity()

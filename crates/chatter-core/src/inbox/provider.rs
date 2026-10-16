@@ -40,11 +40,24 @@ const EVENT_CHANNEL_CAPACITY: usize = 256;
 
 /// Coalesced local hints affect pacing only on direct transport. Every cycle
 /// still polls and validates through the normal privacy-preserving pipeline.
-#[derive(Default)]
 struct PollHints {
     wake: tokio::sync::Notify,
+    foreground_wake: tokio::sync::Notify,
+    visible: std::sync::atomic::AtomicBool,
     leases: parking_lot::Mutex<Vec<(u64, std::time::Instant)>>,
     next_id: std::sync::atomic::AtomicU64,
+}
+
+impl Default for PollHints {
+    fn default() -> Self {
+        Self {
+            wake: tokio::sync::Notify::new(),
+            foreground_wake: tokio::sync::Notify::new(),
+            visible: std::sync::atomic::AtomicBool::new(true),
+            leases: parking_lot::Mutex::new(Vec::new()),
+            next_id: std::sync::atomic::AtomicU64::new(0),
+        }
+    }
 }
 
 pub(crate) struct ResponsivePollGuard {
@@ -59,6 +72,23 @@ impl Drop for ResponsivePollGuard {
 }
 
 impl PollHints {
+    fn set_visible(&self, visible: bool) {
+        let was_visible = self.visible.swap(visible, std::sync::atomic::Ordering::AcqRel);
+        if visible && !was_visible {
+            self.foreground_wake.notify_one();
+        }
+    }
+
+    fn cycle_interval(&self, foreground: std::time::Duration) -> std::time::Duration {
+        if self.visible.load(std::sync::atomic::Ordering::Acquire) {
+            foreground
+        } else {
+            // Push normally wakes a sleeping phone. Keep a bounded fallback
+            // when its SSE connection is down or the wake never arrives.
+            std::time::Duration::from_secs(30)
+        }
+    }
+
     fn begin(self: &Arc<Self>) -> ResponsivePollGuard {
         let id = self
             .next_id
@@ -95,6 +125,7 @@ impl PollHints {
     ) -> bool {
         let original = tokio::time::Instant::now() + base;
         let mut target = tokio::time::Instant::now() + self.interval(base, direct());
+        let mut foreground_requested = false;
         loop {
             tokio::select! {
                 _ = shutdown.changed() => {
@@ -105,8 +136,12 @@ impl PollHints {
                     // already scheduled responsive cycle.
                     target = target.min(tokio::time::Instant::now() + std::time::Duration::from_millis(250));
                 }
+                _ = self.foreground_wake.notified() => {
+                    foreground_requested = true;
+                    target = tokio::time::Instant::now();
+                }
                 _ = tokio::time::sleep_until(target) => {
-                    if !direct() && tokio::time::Instant::now() < original {
+                    if !direct() && !foreground_requested && tokio::time::Instant::now() < original {
                         target = original;
                     } else {
                         return true;
@@ -628,6 +663,7 @@ impl DeviceInboxProvider {
         let mut poll_cycle: u64 = 0;
         loop {
             poll_cycle += 1;
+            let cycle_started = tokio::time::Instant::now();
 
             // Apply timing delay before poll cycle (NDSS '21 timing obfuscation)
             timing.delay_before_poll().await;
@@ -749,6 +785,19 @@ impl DeviceInboxProvider {
                 }
             }
 
+            // Mailbox RPCs can stall indefinitely after a background network
+            // change. Bound the auxiliary portion so the authenticated device
+            // inbox retains its fallback cadence even if ntfy never wakes us.
+            // Shield permits a cold onion connect; its privacy transport has
+            // its own longer budget and does not use direct push wakes.
+            let auxiliary_budget = if grpc_pool.transport_mode()
+                == crate::network::grpc::client_pool::TransportMode::Direct
+            {
+                std::time::Duration::from_secs(5)
+            } else {
+                std::time::Duration::from_secs(95)
+            };
+            let auxiliary = async {
             // Random delay between device and DM polling
             timing.delay_between_batch_items().await;
 
@@ -949,13 +998,29 @@ impl DeviceInboxProvider {
                 );
             }
 
-            // Base poll interval between full cycles (5s max — the config's
-            // active/idle interval). Jittered DOWNWARD only (clamp to base) so the
-            // gap never exceeds 5s while still adding timing noise. The per-batch
-            // delays above are only sub-second access-pattern noise; this is what
-            // actually paces the loop. Honour shutdown during the wait.
-            let base = poller.current_interval();
-            let wait = timing.jitter_interval(base).min(base);
+            };
+            let resumed = tokio::select! {
+                result = tokio::time::timeout(auxiliary_budget, auxiliary) => {
+                    if result.is_err() {
+                        tracing::warn!(cycle = poll_cycle, "Inbox auxiliary polling exceeded cycle budget");
+                    }
+                    false
+                }
+                _ = poll_hints.foreground_wake.notified() => true,
+            };
+
+            // Foreground uses the configured active/idle cadence. Background
+            // uses a 30s fallback even if no push wake arrives. Jitter only
+            // shortens that deadline; elapsed mailbox work counts toward it.
+            // The pre-poll delay above still decorrelates each request.
+            let base = poll_hints.cycle_interval(poller.current_interval());
+            let wait = timing
+                .jitter_interval(base)
+                .min(base)
+                .saturating_sub(cycle_started.elapsed());
+            if resumed {
+                continue;
+            }
             if !poll_hints
                 .wait(wait, &mut shutdown_rx, || {
                     grpc_pool.transport_mode()
@@ -971,6 +1036,11 @@ impl DeviceInboxProvider {
     /// Wake the normal cycle; ignored for pacing while on Shield transport.
     pub fn wake(&self) {
         self.poll_hints.wake.notify_one();
+    }
+
+    /// Update the Activity's foreground state without restarting the task.
+    pub fn set_app_visible(&self, visible: bool) {
+        self.poll_hints.set_visible(visible);
     }
 
     /// Bound responsive polling to a key wait and a hard 65-second deadline.

@@ -42,6 +42,30 @@ static ANDROID_SERVICES_READY: std::sync::atomic::AtomicBool =
     std::sync::atomic::AtomicBool::new(false);
 #[cfg(target_os = "android")]
 static ANDROID_HEADLESS_CONTEXT: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+#[cfg(target_os = "android")]
+static ANDROID_ACTIVITY_VISIBLE: std::sync::atomic::AtomicBool =
+    std::sync::atomic::AtomicBool::new(false);
+
+/// Kotlin reports actual window focus, including the first resume before
+/// Slint's listener has a client. A prelaunched Activity is not foreground.
+#[cfg(target_os = "android")]
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_chatter_client_MainActivity_nativeSetAppVisible(
+    mut env: jni::EnvUnowned<'_>,
+    _this: jni::objects::JObject,
+    visible: jni::sys::jboolean,
+) {
+    env.with_env(|_| -> jni::errors::Result<()> {
+        let visible = visible != 0;
+        ANDROID_ACTIVITY_VISIBLE.store(visible, std::sync::atomic::Ordering::Release);
+        if let Some(client) = ANDROID_CLIENT.get() {
+            let _rt = android_runtime().enter();
+            client.set_app_visible(visible);
+        }
+        Ok(())
+    })
+    .resolve::<jni::errors::LogErrorAndDefault>();
+}
 
 #[cfg(target_os = "android")]
 fn android_runtime() -> &'static tokio::runtime::Runtime {
@@ -165,6 +189,9 @@ async fn android_core(
         .notification_sink(sink)
         .build()
         .map_err(|e| e.to_string())?;
+    // The ChatState default is visible for desktop. A Service-first client
+    // starts off screen, before any Activity callback can reach it.
+    client.set_app_visible(ANDROID_ACTIVITY_VISIBLE.load(std::sync::atomic::Ordering::Acquire));
     tracing::info!("Android core: client opened");
     client.restore_session();
     if !client.is_logged_in() && !allow_signed_out {
@@ -193,6 +220,8 @@ async fn android_core(
     }
     ANDROID_CONNECTED.store(connected, std::sync::atomic::Ordering::Release);
     let _ = ANDROID_CLIENT.set(client.clone());
+    // Window focus may have changed while the client was opening.
+    client.set_app_visible(ANDROID_ACTIVITY_VISIBLE.load(std::sync::atomic::Ordering::Acquire));
     tracing::info!("Android core: client published");
     if !allow_signed_out && !ANDROID_SERVICES_READY.load(std::sync::atomic::Ordering::Acquire) {
         return Err("Messaging services did not start".into());
@@ -366,14 +395,7 @@ fn android_main(app: i_slint_backend_android_activity::AndroidApp) {
     init_tracing();
     tracing::info!("Android Activity entry");
 
-    // Activity Resume/Pause is the app's visibility: core marks nothing read
-    // and sends no receipt while it is paused (backgrounded, screen locked).
-    // The client does not exist yet when the platform is installed, so the
-    // listener reads it from a cell filled once `app_init` returns.
-    let visibility_client: std::rc::Rc<
-        std::cell::OnceCell<std::sync::Arc<chatter_core::client::ChatterClient>>,
-    > = Default::default();
-    let listener_client = visibility_client.clone();
+    // Kotlin window focus owns visibility. Slint Pause still flushes drafts.
     let visibility_window: std::rc::Rc<std::cell::OnceCell<slint::Weak<MainWindow>>> =
         Default::default();
     let listener_window = visibility_window.clone();
@@ -394,17 +416,13 @@ fn android_main(app: i_slint_backend_android_activity::AndroidApp) {
                         window.invoke_cancel_composer_keyboard_handover();
                         // The process may be killed while paused: store the
                         // draft now rather than after the autosave delay.
-                        if let Some(client) = listener_client.get() {
+                        if let Some(client) = ANDROID_CLIENT.get() {
                             crate::bin_ui::features::composer::flush_drafts(&window, client);
                         }
-                    } else if let Some(client) = listener_client.get() {
+                    } else if let Some(client) = ANDROID_CLIENT.get() {
                         // Recovery still needs a lifecycle checkpoint without a UI handle.
                         client.flush_composer_persistence();
                     }
-                }
-                if let Some(client) = listener_client.get() {
-                    let _rt = rt_handle().enter();
-                    client.set_app_visible(visible);
                 }
                 if visible {
                     if let Some(window) = listener_window.get().and_then(slint::Weak::upgrade) {
@@ -443,7 +461,6 @@ fn android_main(app: i_slint_backend_android_activity::AndroidApp) {
             return;
         }
     };
-    let _ = visibility_client.set(app_state.ui_ctx.clone());
     let _ = visibility_window.set(slint::ComponentHandle::as_weak(&app_state.window));
 
     // Safe-area insets (status bar, nav bar, IME) are now bound in `app.slint`

@@ -2624,6 +2624,10 @@ impl ChatterClient {
     /// receipt setting). Call from within the tokio runtime.
     pub fn set_app_visible(self: &Arc<Self>, visible: bool) {
         let was_visible = self.chat_state().set_app_visible(visible);
+        #[cfg(target_os = "android")]
+        if let Some(provider) = self.services.device_inbox_provider.get() {
+            provider.set_app_visible(visible);
+        }
         if !visible || was_visible {
             return;
         }
@@ -3246,6 +3250,10 @@ impl ChatterClient {
 
         // ── Infrastructure init ─────────────────────────────────────
         self.ctx.init_device_inbox_provider();
+        #[cfg(target_os = "android")]
+        if let Some(provider) = self.services.device_inbox_provider.get() {
+            provider.set_app_visible(self.chat_state().is_app_visible());
+        }
         self.ctx.init_group_fanout();
         #[cfg(feature = "media")]
         self.ctx.init_call_service();
