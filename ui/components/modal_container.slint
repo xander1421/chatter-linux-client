@@ -50,7 +50,9 @@ export component ModalContainer inherits Rectangle {
     property <length> page-swipe-start: 0px;
     init => { root.page-progress = root.show ? 1 : 0; }
     changed show => { root.page-progress = root.show ? 1 : 0; }
-    animate page-progress { duration: root.page-swiping ? 0ms : Materials.motion-standard; easing: Materials.glide; }
+    // A root tab screen (no back swipe) replaces the previous tab at once: a
+    // slide would show the Chats screen underneath for its first frames.
+    animate page-progress { duration: root.page-swiping || !root.allow-back-swipe ? 0ms : Materials.motion-standard; easing: Materials.glide; }
 
     // Forward focus into the modal's keyboard scope for tab trapping
     forward-focus: modal-keys;
