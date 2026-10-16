@@ -264,6 +264,11 @@ export component ModalContainer inherits Rectangle {
             // Swipe from the leading edge without stealing the page's scrolling.
             if root.phone-page && root.show && root.allow-back-swipe: TouchArea {
                 z: 3;
+                // Pinned to the leading edge. Without an x Slint centres it: a
+                // 24 px strip down the middle swallowed taps there (profile
+                // buttons) and left the edge with no back swipe.
+                x: 0;
+                y: 0;
                 width: 24px;
                 height: parent.height;
                 pointer-event(event) => {
