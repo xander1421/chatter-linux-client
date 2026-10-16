@@ -207,7 +207,8 @@ export component ChannelSettingsModal inherits Rectangle {
             spacing: 0;
 
             if root.active-section != "general" && root.active-section != "destructive": Rectangle {
-                height: Spacing.touch-target-min + Spacing.sm * 2;
+                min-height: Spacing.touch-target-min + Spacing.sm * 2;
+                preferred-height: Spacing.touch-target-min + Spacing.sm * 2;
                 background: transparent;
 
                 settings-tabs := Rectangle {
@@ -260,6 +261,12 @@ export component ChannelSettingsModal inherits Rectangle {
             // Right content area
             Rectangle {
                 background: transparent;
+                // The scroll viewport may be shorter than its content on a
+                // phone. Keep the overview icon below the tab strip even
+                // while the layout compresses the content area.
+                clip: true;
+                min-height: 0px;
+                vertical-stretch: 1;
                 preferred-height: content-area.preferred-height;
 
                 ScrollView {
@@ -419,12 +426,35 @@ export component ChannelSettingsModal inherits Rectangle {
                                         clicked => { root.active-section = "notifications"; }
                                     }
                                     if !root.is-private-group: Rectangle { height: 1px; background: Colors.divider; }
-                                    if !root.is-private-group: SettingsRow {
-                                        touch: true;
-                                        icon: Icons.clock; title: "Disappearing messages";
-                                        detail: DisappearingGlobal.active-label;
-                                        clickable: false;
-                                        show-chevron: false;
+                                    // A channel's timer is fixed at creation;
+                                    // show it as a value, not a disabled action.
+                                    if !root.is-private-group: Rectangle {
+                                        min-height: Spacing.list-row-height-touch;
+                                        HorizontalLayout {
+                                            padding-left: Spacing.md;
+                                            padding-right: Spacing.md;
+                                            spacing: Spacing.md;
+                                            alignment: center;
+                                            Image {
+                                                source: Icons.clock;
+                                                width: Spacing.button-icon;
+                                                height: Spacing.button-icon;
+                                                colorize: Colors.text-secondary;
+                                            }
+                                            Text {
+                                                text: "Disappearing messages";
+                                                horizontal-stretch: 1;
+                                                color: Colors.text-primary;
+                                                font-size: Typography.sm;
+                                                font-weight: Typography.medium;
+                                                overflow: elide;
+                                            }
+                                            Text {
+                                                text: DisappearingGlobal.active-label;
+                                                color: Colors.text-secondary;
+                                                font-size: Typography.sm;
+                                            }
+                                        }
                                     }
                                     if !root.is-private-group && root.channel-type != "dm": Rectangle { height: 1px; background: Colors.divider; }
                                     if !root.is-private-group && root.channel-type != "dm": SettingsRow {
