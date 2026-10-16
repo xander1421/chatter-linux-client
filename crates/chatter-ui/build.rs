@@ -10,6 +10,18 @@ fn main() {
         .filter(|value| !value.is_empty())
         .unwrap_or_else(|| "unknown".to_owned());
     println!("cargo:rustc-env=CHATTER_BUILD_COMMIT={commit}");
+    // HEAD itself moves on a detached checkout (the APK build worktree); the
+    // branch ref below only covers a checked-out branch.
+    if let Ok(head) = std::process::Command::new("git")
+        .args(["rev-parse", "--git-path", "HEAD"])
+        .output()
+    {
+        if head.status.success() {
+            if let Ok(path) = String::from_utf8(head.stdout) {
+                println!("cargo:rerun-if-changed={}", path.trim());
+            }
+        }
+    }
     if let Ok(reference) = std::process::Command::new("git")
         .args(["symbolic-ref", "HEAD"])
         .output()
