@@ -56,7 +56,7 @@ pub extern "system" fn Java_com_chatter_client_MainActivity_nativeSetAppVisible(
     visible: jni::sys::jboolean,
 ) {
     env.with_env(|_| -> jni::errors::Result<()> {
-        let visible = visible != 0;
+        let visible: bool = visible;
         ANDROID_ACTIVITY_VISIBLE.store(visible, std::sync::atomic::Ordering::Release);
         if let Some(client) = ANDROID_CLIENT.get() {
             let _rt = android_runtime().enter();
