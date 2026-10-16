@@ -11,6 +11,7 @@
     <uses-permission android:name="android.permission.RECORD_AUDIO" />
     <uses-permission android:name="android.permission.MODIFY_AUDIO_SETTINGS" />
     <uses-permission android:name="android.permission.WAKE_LOCK" />
+    <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <!-- Shield's Tor directory and hidden-service sockets need network access
          while locked; a CPU wake lock alone does not bypass Doze. -->
     <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
@@ -103,6 +104,15 @@
             android:exported="false" />
 
         <receiver android:name=".UpdateInstallReceiver" android:exported="false" />
+
+        <!-- BOOT_COMPLETED arrives after credential-encrypted storage is unlocked.
+             Package replacement is an Android background FGS-start exemption. -->
+        <receiver android:name=".MessagingRestartReceiver" android:exported="false">
+            <intent-filter>
+                <action android:name="android.intent.action.BOOT_COMPLETED" />
+                <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
+            </intent-filter>
+        </receiver>
 
         <!-- Keeps the BLE mesh radio running while the app is backgrounded.
              Started and stopped by MeshBleBridge; nothing binds to it. The

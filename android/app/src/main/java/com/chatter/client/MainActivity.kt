@@ -398,6 +398,7 @@ class MainActivity : GameActivity() {
     /** Called by core after login/start and before sign-out teardown. */
     fun setMessagingSignedIn(signedIn: Boolean) {
         runOnUiThread {
+            MessagingService.setSignedIn(this, signedIn)
             messagingSignedIn = signedIn
             updateMessagingService()
         }

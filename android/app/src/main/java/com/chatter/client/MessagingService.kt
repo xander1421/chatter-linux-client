@@ -66,7 +66,10 @@ class MessagingService : Service() {
         // Every startForegroundService request must be promoted, even if the
         // activity returned to the foreground before this command ran.
         if (pendingStarts > 0) pendingStarts--
-        if (stopRequested) {
+        if (stopRequested || !coreReadyInProcess) {
+            // A boot/update broadcast can create this service in a fresh
+            // process. Until Rust has a headless startup entry, no inbox
+            // poller exists there; do not hold a wake lock or claim connected.
             if (pendingStarts == 0) stopSelf(startId)
         } else {
             retainInboxExecution()
@@ -80,9 +83,22 @@ class MessagingService : Service() {
     companion object {
         private const val CHANNEL = "chatter_connection"
         private const val ID = 0x4348
+        private const val PREFS = "messaging_lifecycle"
+        private const val SIGNED_IN = "signed_in"
         // Activity lifecycle callbacks and service callbacks run on the main thread.
         private var pendingStarts = 0
         private var stopRequested = false
+        private var coreReadyInProcess = false
+        fun wasSignedIn(context: Context): Boolean =
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .getBoolean(SIGNED_IN, false)
+
+        fun setSignedIn(context: Context, signedIn: Boolean) {
+            // commit makes the marker durable before an update kills this process.
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                .edit().putBoolean(SIGNED_IN, signedIn).commit()
+            coreReadyInProcess = signedIn
+        }
         fun start(context: Context) {
             stopRequested = false
             pendingStarts++
