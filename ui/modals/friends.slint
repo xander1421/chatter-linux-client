@@ -227,6 +227,14 @@ export component FriendsModal inherits Rectangle {
                             height: 100%;
                             mouse-cursor: pointer;
                             clicked => {
+                                if tab.id == "requests" {
+                                    root.requests-sub-tab = root.received-requests.length > 0 ? "received"
+                                        : root.sent-requests.length > 0 ? "sent"
+                                        : root.private-requests.length > 0 ? "private"
+                                        : root.group-invites.length > 0 ? "groups"
+                                        : root.channel-invites.length > 0 ? "channels"
+                                        : "received";
+                                }
                                 root.active-tab = tab.id;
                                 root.switch-tab(tab.id);
                             }

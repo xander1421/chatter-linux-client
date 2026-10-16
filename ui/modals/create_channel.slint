@@ -626,15 +626,20 @@ export component CreateChannelModal inherits Rectangle {
                                         }
                                     }
 
-                                    Avatar {
-                                        size: 32px;
-                                        source: friend.avatar-source;
-                                        anonymous: friend.anonymous;
-                                        name: friend.display-name;
+                                    VerticalLayout {
+                                        alignment: center;
+                                        vertical-stretch: 1;
+                                        Avatar {
+                                            size: 32px;
+                                            source: friend.avatar-source;
+                                            anonymous: friend.anonymous;
+                                            name: friend.display-name;
+                                        }
                                     }
 
                                     VerticalLayout {
                                         horizontal-stretch: 1;
+                                        vertical-stretch: 1;
                                         alignment: center;
                                         spacing: Spacing.xxs;
 

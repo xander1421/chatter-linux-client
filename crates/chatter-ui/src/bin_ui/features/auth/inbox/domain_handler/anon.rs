@@ -86,11 +86,37 @@ pub(super) fn handle_group_joined(
     group_id: AnonGroupId,
 ) {
     let weak = window.clone();
+    let ui_ctx_for_ui = ui_ctx.clone();
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(w) = weak.upgrade() {
+            crate::bin_ui::features::sidebar::refresh_chat_list(&w, &ui_ctx_for_ui);
+            tracing::info!(group_id = %group_id, "Joined anon group - refreshed sidebar");
+        }
+    });
+    refresh_active_group_counts(window, ui_ctx, group_id);
+}
+
+/// The private group header uses its local roster, not channel memberships.
+fn refresh_active_group_counts(
+    window: &Weak<MainWindow>,
+    ui_ctx: &Arc<ChatterClient>,
+    group_id: AnonGroupId,
+) {
+    crate::bin_ui::features::modals::refresh_members_if_open(
+        window.clone(),
+        ui_ctx.clone(),
+        group_id.into(),
+    );
+    let weak = window.clone();
     let ui_ctx = ui_ctx.clone();
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak.upgrade() {
-            crate::bin_ui::features::sidebar::refresh_chat_list(&w, &ui_ctx);
-            tracing::info!(group_id = %group_id, "Joined anon group - refreshed sidebar");
+            if !ui_ctx.active_conversation().matches_anon_group(&group_id) {
+                return;
+            }
+            let members = ui_ctx.get_anon_group_members(&group_id);
+            w.set_member_count(members.iter().filter(|m| m.mailbox_pk.is_some()).count() as i32);
+            w.set_invited_count(members.iter().filter(|m| m.mailbox_pk.is_none()).count() as i32);
         }
     });
 }
@@ -110,12 +136,8 @@ pub(super) fn handle_group_member_list_received(
         member_count,
         "Received anon group member list"
     );
-    // The whole roster was replaced: an open settings modal re-reads it.
-    crate::bin_ui::features::modals::refresh_members_if_open(
-        window.clone(),
-        ui_ctx.clone(),
-        group_id.into(),
-    );
+    // The whole roster was replaced: refresh the open header and settings.
+    refresh_active_group_counts(window, ui_ctx, group_id);
 
     let weak = window.clone();
     let ui_ctx = ui_ctx.clone();
@@ -176,7 +198,7 @@ pub(super) fn handle_group_member_joined(
     let message =
         ui_ctx.anon_group_system_message(group_id, user_id, SystemMessage::UserJoined(user_id));
     super::messaging::handle_message_received(window, ui_ctx, message);
-    super::messaging::update_active_channel_member_count(window, ui_ctx, group_id.into());
+    refresh_active_group_counts(window, ui_ctx, group_id);
 }
 
 pub(super) fn handle_group_member_left(
@@ -188,7 +210,7 @@ pub(super) fn handle_group_member_left(
     let message =
         ui_ctx.anon_group_system_message(group_id, user_id, SystemMessage::UserLeft(user_id));
     super::messaging::handle_message_received(window, ui_ctx, message);
-    super::messaging::update_active_channel_member_count(window, ui_ctx, group_id.into());
+    refresh_active_group_counts(window, ui_ctx, group_id);
 }
 
 pub(super) fn handle_group_member_kicked(
@@ -224,5 +246,5 @@ pub(super) fn handle_group_member_kicked(
         },
     );
     super::messaging::handle_message_received(window, ui_ctx, message);
-    super::messaging::update_active_channel_member_count(window, ui_ctx, group_id.into());
+    refresh_active_group_counts(window, ui_ctx, group_id);
 }
