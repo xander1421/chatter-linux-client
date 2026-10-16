@@ -93,6 +93,7 @@ export component FriendsModal inherits Rectangle {
 
     // Loading states
     in property <bool> loading: false;
+    in property <string> private-request-decision: "";
 
     // Friend code (privacy-first discovery)
     in-out property <string> my-code: "";
@@ -1246,6 +1247,8 @@ export component FriendsModal inherits Rectangle {
                                                 Button {
                                                     text: "Accept";
                                                     variant: "primary";
+                                                    disabled: root.private-request-decision != "";
+                                                    loading: root.private-request-decision == request.user-id;
 
                                                     clicked => {
                                                         root.accept-private-request(request.user-id);
@@ -1255,6 +1258,8 @@ export component FriendsModal inherits Rectangle {
                                                 Button {
                                                     text: "Decline";
                                                     variant: "ghost";
+                                                    disabled: root.private-request-decision != "";
+                                                    loading: root.private-request-decision == request.user-id;
 
                                                     clicked => {
                                                         root.decline-private-request(request.user-id);
@@ -1264,6 +1269,7 @@ export component FriendsModal inherits Rectangle {
                                                 Button {
                                                     text: "Block";
                                                     variant: "destructive";
+                                                    disabled: root.private-request-decision != "";
 
                                                     clicked => {
                                                         root.block-private-request(request.user-id);

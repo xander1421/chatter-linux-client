@@ -526,6 +526,7 @@ export component MainWindow inherits Window {
     in-out property <bool> header-can-open-settings: false;
     in-out property <bool> header-can-open-pinned-list: false;
     in property <bool> secret-request-actions: false;
+    in-out property <string> private-request-decision: "";
     callback secret-request-accept-clicked();
     callback secret-request-decline-clicked();
     in property <[PendingAttachmentData]> pending-attachments: [];
@@ -2341,6 +2342,7 @@ export component MainWindow inherits Window {
                         header-can-open-settings: root.header-can-open-settings;
                         header-can-open-pinned-list: root.header-can-open-pinned-list;
                         secret-request-actions: root.secret-request-actions;
+                        secret-request-busy: root.private-request-decision != "";
                         secret-request-accept-clicked => { root.secret-request-accept-clicked(); }
                         secret-request-decline-clicked => { root.secret-request-decline-clicked(); }
                         pending-attachments: root.pending-attachments;
@@ -3074,6 +3076,7 @@ export component MainWindow inherits Window {
             received-requests: root.friends-received-requests;
             sent-requests: root.friends-sent-requests;
             private-requests: root.friends-private-requests;
+            private-request-decision: root.private-request-decision;
             group-invites: root.friends-group-invites;
             channel-invites: root.friends-channel-invites;
             blocked-users: root.friends-blocked-users;

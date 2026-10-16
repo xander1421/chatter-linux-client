@@ -185,6 +185,7 @@ export component ChatLayout inherits Rectangle {
     // A secret-chat request we have not answered (core's
     // `SecretChatGate::offers_answer`): the notice offers Accept / Decline.
     in property <bool> secret-request-actions: false;
+    in property <bool> secret-request-busy: false;
     callback secret-request-accept-clicked();
     callback secret-request-decline-clicked();
     in property <[PendingAttachmentData]> pending-attachments: [];
@@ -574,10 +575,14 @@ export component ChatLayout inherits Rectangle {
                     Button {
                         text: "Decline";
                         variant: "secondary";
+                        disabled: root.secret-request-busy;
+                        loading: root.secret-request-busy;
                         clicked => { root.secret-request-decline-clicked(); }
                     }
                     Button {
                         text: "Accept";
+                        disabled: root.secret-request-busy;
+                        loading: root.secret-request-busy;
                         clicked => { root.secret-request-accept-clicked(); }
                     }
                 }

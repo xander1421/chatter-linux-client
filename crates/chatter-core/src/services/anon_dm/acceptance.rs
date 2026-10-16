@@ -9,6 +9,19 @@ use chrono::Utc;
 use super::{AnonDmError, AnonDmService, DecryptedPeerProfile};
 
 impl AnonDmService {
+    // A request decision includes its network send and local status change.
+    // Reject overlapping actions instead of queuing a stale button press.
+    fn decision_lock(&self, id: AnonDmId) -> std::sync::Arc<tokio::sync::Mutex<()>> {
+        let mut locks = self.decision_locks.lock().expect("decision locks poisoned");
+        locks.retain(|_, lock| lock.strong_count() > 0);
+        if let Some(lock) = locks.get(&id).and_then(std::sync::Weak::upgrade) {
+            return lock;
+        }
+        let lock = std::sync::Arc::new(tokio::sync::Mutex::new(()));
+        locks.insert(id, std::sync::Arc::downgrade(&lock));
+        lock
+    }
+
     /// Accept an incoming message request.
     ///
     /// Creates our mailbox and sends acceptance to initiator's anonymous mailbox.
@@ -19,6 +32,10 @@ impl AnonDmService {
         self: &std::sync::Arc<Self>,
         conversation_id: AnonDmId,
     ) -> Result<AnonDm, AnonDmError> {
+        let lock = self.decision_lock(conversation_id);
+        let _decision = lock.try_lock().map_err(|_| {
+            AnonDmError::InvalidData("Request decision already in progress".to_string())
+        })?;
         let _current_user = self.current_user_id()?;
 
         // Get the conversation
@@ -147,13 +164,28 @@ impl AnonDmService {
     /// tell and goes locally. We hold no mailbox of our own yet (one is
     /// created on accept), so the row is all there is.
     pub async fn decline_request(&self, conversation_id: &AnonDmId) -> Result<(), AnonDmError> {
+        let lock = self.decision_lock(*conversation_id);
+        let _decision = lock.try_lock().map_err(|_| {
+            AnonDmError::InvalidData("Request decision already in progress".to_string())
+        })?;
         let dm = self
             .anon_dm_repo
             .get_conversation(conversation_id)?
             .ok_or(AnonDmError::ConversationNotFound(*conversation_id))?;
 
         // Must be an incoming request
-        if dm.initiated_by_us || dm.status != AnonDmStatus::Pending {
+        if dm.initiated_by_us {
+            return Err(AnonDmError::InvalidData(
+                "Not a pending incoming request".to_string(),
+            ));
+        }
+
+        // A delayed Decline after a completed Accept must end the chat for
+        // both peers. The accepted conversation owns a server mailbox too.
+        if dm.status == AnonDmStatus::Active {
+            return self.end_conversation(conversation_id).await;
+        }
+        if dm.status != AnonDmStatus::Pending {
             return Err(AnonDmError::InvalidData(
                 "Not a pending incoming request".to_string(),
             ));
@@ -205,6 +237,15 @@ impl AnonDmService {
             ));
         }
 
+        // An end can arrive before an earlier acceptance is processed. Once
+        // the initiator has marked the request declined, a late acceptance
+        // must not bring the ended chat back to Active.
+        if dm.status == AnonDmStatus::Declined {
+            return Err(AnonDmError::InvalidData(
+                "Acceptance for an ended request".to_string(),
+            ));
+        }
+
         // The chat is bound to the device our request was sealed to; an
         // acceptance from any other device is refused (a Shield ECIES request
         // went unbound, so the accepting device binds it here).
@@ -253,7 +294,11 @@ impl AnonDmService {
 
         // A request we already hold is a resend of it (the initiator resends
         // an uncertain request under the same id): nothing new to show.
-        if self.anon_dm_repo.get_conversation(&conversation_id)?.is_some() {
+        if self
+            .anon_dm_repo
+            .get_conversation(&conversation_id)?
+            .is_some()
+        {
             return Err(AnonDmError::ConversationExists(sender_id));
         }
 
