@@ -699,8 +699,10 @@ export component CreateChannelModal inherits Rectangle {
                     background: transparent;
 
                     HorizontalLayout {
+                        width: 100%;
+                        height: 100%;
                         spacing: Spacing.xs;
-                        alignment: start;
+                        alignment: center;
 
                         // Disclosure chevron — SVG, not a Unicode triangle
                         // (the glyph renders as a solid block on Android).
@@ -716,6 +718,8 @@ export component CreateChannelModal inherits Rectangle {
 
                         Text {
                             text: "More options";
+                            wrap: no-wrap;
+                            horizontal-stretch: 0;
                             color: Colors.text-secondary;
                             font-size: Typography.sm;
                             font-weight: Typography.medium;

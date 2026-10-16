@@ -101,8 +101,15 @@ fn spawn_request_stream(
 
                     // Decode avatar OUTSIDE UI thread - image decoding is expensive
                     // Only raw pixels are Send, so decode to RGBA bytes here
+                    // The pointer fetch can finish before this event reaches the UI.
+                    // In that case the stored profile already has the avatar.
+                    let avatar_bytes = sender_avatar.or_else(|| {
+                        ui_ctx
+                            .get_anon_dm_conversation(&conversation_id)
+                            .and_then(|dm| dm.peer_avatar)
+                    });
                     let avatar_pixels: Option<(Vec<u8>, u32, u32)> =
-                        sender_avatar.as_ref().and_then(|bytes| {
+                        avatar_bytes.as_ref().and_then(|bytes| {
                             if bytes.is_empty() {
                                 return None;
                             }

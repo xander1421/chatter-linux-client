@@ -329,6 +329,7 @@ pub(super) fn handle_anon_dm_profile_updated(
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak_for_avatar.upgrade() {
                 update_dm_avatar(&w, &channel_id_for_avatar, &avatar_bytes);
+                update_pending_anon_dm_avatar(&w, &channel_id_for_avatar, &avatar_bytes);
             }
         });
     } else if avatar_url.is_some() {
@@ -353,6 +354,7 @@ pub(super) fn handle_anon_dm_profile_updated(
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak_for_avatar.upgrade() {
                         update_dm_avatar(&w, &channel_id_for_avatar, &bytes);
+                        update_pending_anon_dm_avatar(&w, &channel_id_for_avatar, &bytes);
                     }
                 });
             }
@@ -380,6 +382,23 @@ fn update_dm_avatar(w: &MainWindow, channel_id: &str, bytes: &[u8]) {
                     dm.avatar_source = img;
                     dm.has_avatar = true;
                     dms.set_row_data(i, dm);
+                }
+                break;
+            }
+        }
+    }
+}
+
+/// A fetched request avatar arrives after the request row was first shown.
+fn update_pending_anon_dm_avatar(w: &MainWindow, conversation_id: &str, bytes: &[u8]) {
+    let requests = w.get_friends_private_requests();
+    for i in 0..requests.row_count() {
+        if let Some(mut request) = requests.row_data(i) {
+            if request.user_id == conversation_id {
+                if let Some(image) = crate::bin_ui::converters::avatar_bytes_to_image(bytes) {
+                    request.avatar_source = image;
+                    request.has_avatar = true;
+                    requests.set_row_data(i, request);
                 }
                 break;
             }
