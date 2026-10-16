@@ -270,9 +270,11 @@ export component ChannelSettingsModal inherits Rectangle {
                 preferred-height: content-area.preferred-height;
 
                 ScrollView {
-                    // The stock ScrollView prefers 100% of its parent, which
-                    // would force a content-sized modal back to window height.
-                    preferred-height: content-area.preferred-height;
+                    // Fill the area the layout gave us and scroll inside it.
+                    // Sized to the content instead, it was centered in a
+                    // shorter parent and the overview's top was cut off.
+                    y: 0;
+                    height: parent.height;
                     // Pin the viewport to the visible width: content wider than
                     // the card elides instead of scrolling sideways off-screen.
                     viewport-width: self.width;
@@ -426,35 +428,14 @@ export component ChannelSettingsModal inherits Rectangle {
                                         clicked => { root.active-section = "notifications"; }
                                     }
                                     if !root.is-private-group: Rectangle { height: 1px; background: Colors.divider; }
-                                    // A channel's timer is fixed at creation;
-                                    // show it as a value, not a disabled action.
-                                    if !root.is-private-group: Rectangle {
-                                        min-height: Spacing.list-row-height-touch;
-                                        HorizontalLayout {
-                                            padding-left: Spacing.md;
-                                            padding-right: Spacing.md;
-                                            spacing: Spacing.md;
-                                            alignment: center;
-                                            Image {
-                                                source: Icons.clock;
-                                                width: Spacing.button-icon;
-                                                height: Spacing.button-icon;
-                                                colorize: Colors.text-secondary;
-                                            }
-                                            Text {
-                                                text: "Disappearing messages";
-                                                horizontal-stretch: 1;
-                                                color: Colors.text-primary;
-                                                font-size: Typography.sm;
-                                                font-weight: Typography.medium;
-                                                overflow: elide;
-                                            }
-                                            Text {
-                                                text: DisappearingGlobal.active-label;
-                                                color: Colors.text-secondary;
-                                                font-size: Typography.sm;
-                                            }
-                                        }
+                                    // A channel's timer is fixed at creation:
+                                    // a value row, no chevron, not an action.
+                                    if !root.is-private-group: SettingsRow {
+                                        touch: true;
+                                        icon: Icons.clock; title: "Disappearing messages";
+                                        detail: DisappearingGlobal.active-label;
+                                        clickable: false;
+                                        show-chevron: false;
                                     }
                                     if !root.is-private-group && root.channel-type != "dm": Rectangle { height: 1px; background: Colors.divider; }
                                     if !root.is-private-group && root.channel-type != "dm": SettingsRow {
