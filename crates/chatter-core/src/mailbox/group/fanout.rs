@@ -84,6 +84,14 @@ pub struct GroupPollResult {
     pub mailbox_id: String,
 }
 
+/// Results of one group polling pass, including mailboxes that did not finish.
+pub struct GroupPollBatch {
+    pub results: Vec<(ChannelId, GroupPollResult)>,
+    pub mailbox_count: usize,
+    pub timed_out: usize,
+    pub failed: usize,
+}
+
 impl GroupPollResult {
     /// Check if any messages were received.
     pub fn has_messages(&self) -> bool {
@@ -108,8 +116,8 @@ impl GroupPollResult {
 pub struct GroupFanout {
     /// Manager for group mailbox state persistence.
     mailbox_manager: Arc<GroupMailboxManager>,
-    /// gRPC client for private-channel mailbox operations (follows the pool's
-    /// transport).
+    /// gRPC client for private-channel mailbox sends (follows the pool's
+    /// transport). Polls use independent clients from the pool.
     mailbox_client: Arc<Mutex<AnonymousMailboxClient>>,
     /// Pool for the secret-chat client: anonymous-group mailboxes are polled
     /// and acknowledged over Tor only (`GrpcClientPool::secret_channel`).
@@ -137,7 +145,8 @@ impl GroupFanout {
     }
 
     /// Rebuild the mailbox client from the pool so subsequent group sends and
-    /// polls re-dial over the pool's CURRENT transport.
+    /// sends re-dial over the pool's CURRENT transport. Polls draw fresh
+    /// clients from the pool each pass.
     ///
     /// The client is captured at login (`init_group_fanout`) and a tonic
     /// `Channel` is pinned to the transport it was built with, so a direct
@@ -304,66 +313,66 @@ impl GroupFanout {
 
     /// Poll all group mailboxes for new messages.
     ///
-    /// Polls each group's mailbox in parallel and returns results per group.
-    /// Continues polling other groups if one fails.
+    /// Polls each group's mailbox independently and returns completed results.
+    /// A stalled mailbox cannot discard results fetched from other groups.
     ///
     /// # Returns
     ///
-    /// Vector of (ChannelId, GroupPollResult) for each group with results.
+    /// Completed results and counts for all attempted mailboxes.
     pub async fn poll_all_group_mailboxes(
         &self,
-    ) -> Result<Vec<(ChannelId, GroupPollResult)>, MailboxError> {
+    ) -> Result<GroupPollBatch, MailboxError> {
         // Get all active group mailboxes
         let group_mailboxes = self.mailbox_manager.get_all_group_mailboxes()?;
 
         if group_mailboxes.is_empty() {
-            return Ok(Vec::new());
+            return Ok(GroupPollBatch {
+                results: Vec::new(),
+                mailbox_count: 0,
+                timed_out: 0,
+                failed: 0,
+            });
         }
+
+        let mailbox_count = group_mailboxes.len();
 
         tracing::debug!(
             mailbox_count = group_mailboxes.len(),
             "[GROUP_FANOUT] Found group mailboxes to poll"
         );
 
-        // Anonymous-group (secret-chat) mailboxes are polled over Tor only.
-        // Without a Tor route they are skipped, never polled direct.
-        let secret_client = if group_mailboxes.iter().any(|m| m.4) {
-            match self.pool.secret_mailbox_client() {
-                Ok(client) => Some(Arc::new(Mutex::new(client))),
-                Err(e) => {
-                    tracing::warn!(
-                        error = %e,
-                        "[GROUP_FANOUT] Skipping anonymous group mailboxes: no Tor route"
-                    );
-                    None
-                }
-            }
-        } else {
-            None
-        };
-
-        // Create futures for parallel polling
+        // Give each mailbox its own client. A shared mutex serialized the Tor
+        // requests even though join_all was nominally polling in parallel.
         let futures: Vec<_> = group_mailboxes
             .into_iter()
-            .filter_map(|(group_id, public_key, private_key, mailbox_id, secret)| {
+            .map(|(group_id, public_key, private_key, mailbox_id, secret)| {
                 let client = if secret {
-                    Arc::clone(secret_client.as_ref()?)
+                    self.pool.secret_mailbox_client()
                 } else {
-                    Arc::clone(&self.mailbox_client)
+                    Ok(self.pool.anonymous_mailbox_client())
                 };
                 let manager = Arc::clone(&self.mailbox_manager);
-                Some(async move {
-                    let result = Self::poll_single_group_internal(
-                        client,
-                        manager,
-                        &group_id,
-                        &public_key,
-                        &private_key,
-                        &mailbox_id,
-                    )
-                    .await;
+                async move {
+                    // Only the fetch is timed out. The caller processes and
+                    // acknowledges every successful result without a deadline.
+                    let result = match client {
+                        Ok(client) => tokio::time::timeout(
+                            std::time::Duration::from_secs(95),
+                            Self::poll_single_group_internal(
+                                Arc::new(Mutex::new(client)),
+                                manager,
+                                &group_id,
+                                &public_key,
+                                &private_key,
+                                &mailbox_id,
+                            ),
+                        )
+                        .await
+                        .map_err(|_| ()),
+                        Err(e) => Ok(Err(MailboxError::Network(e.to_string()))),
+                    };
                     (group_id, result)
-                })
+                }
             })
             .collect();
 
@@ -371,18 +380,27 @@ impl GroupFanout {
         let results = join_all(futures).await;
 
         // Filter to only successful results
-        let successful: Vec<(ChannelId, GroupPollResult)> = results
-            .into_iter()
-            .filter_map(|(group_id, result)| match result {
-                Ok(poll_result) => Some((group_id, poll_result)),
-                Err(e) => {
-                    tracing::warn!(error = %e, "Failed to poll group mailbox");
-                    None
+        let mut batch = GroupPollBatch {
+            results: Vec::new(),
+            mailbox_count,
+            timed_out: 0,
+            failed: 0,
+        };
+        for (group_id, result) in results {
+            match result {
+                Ok(Ok(poll_result)) => batch.results.push((group_id, poll_result)),
+                Ok(Err(e)) => {
+                    batch.failed += 1;
+                    tracing::warn!(%group_id, error = %e, "Failed to poll group mailbox");
                 }
-            })
-            .collect();
+                Err(()) => {
+                    batch.timed_out += 1;
+                    tracing::warn!(%group_id, "Group mailbox poll timed out after 95 seconds");
+                }
+            }
+        }
 
-        Ok(successful)
+        Ok(batch)
     }
 
     /// Internal helper for polling a single group mailbox.

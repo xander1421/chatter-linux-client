@@ -84,11 +84,19 @@ pub async fn poll_group_mailboxes(
     retry_budget: &ack_policy::RetryBudget,
 ) {
     match group_fanout.poll_all_group_mailboxes().await {
-        Ok(poll_results) => {
+        Ok(batch) => {
             let mut total_groups = 0u32;
             let mut total_messages = 0u32;
 
-            if poll_results.is_empty() {
+            tracing::info!(
+                mailbox_count = batch.mailbox_count,
+                completed = batch.results.len(),
+                timed_out = batch.timed_out,
+                failed = batch.failed,
+                "[GROUP_POLL] Group mailbox polling cycle completed"
+            );
+
+            if batch.mailbox_count == 0 {
                 // Only log occasionally to avoid spam
                 static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
                 let count = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -97,7 +105,7 @@ pub async fn poll_group_mailboxes(
                 }
             }
 
-            for (group_id, poll_result) in poll_results {
+            for (group_id, poll_result) in batch.results {
                 total_groups += 1;
                 let message_count = poll_result.messages.len();
                 tracing::info!(

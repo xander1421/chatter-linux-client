@@ -660,9 +660,10 @@ impl DeviceInboxProvider {
         // `classify_crypto` defaults to transient, so that is the common case
         // rather than the rare one. Shared across the loops because each of
         // them keys on the same server-side message id.
-        let retry_budget = crate::inbox::ack_policy::RetryBudget::new();
+        let retry_budget = Arc::new(crate::inbox::ack_policy::RetryBudget::new());
 
         let mut anon_polls = tokio::task::JoinSet::new();
+        let mut group_polls = tokio::task::JoinSet::new();
         let mut poll_cycle: u64 = 0;
         loop {
             poll_cycle += 1;
@@ -828,28 +829,6 @@ impl DeviceInboxProvider {
                     &retry_budget,
                 )
                 .await;
-
-                // Random delay between DM and group polling
-                timing.delay_between_batch_items().await;
-
-                // Maybe do a dummy poll before group polling
-                if should_dummy_poll() {
-                    perform_dummy_poll(&mailbox_client, &decoys).await;
-                }
-
-                // 3. Poll group mailboxes (ephemeral per-group mailboxes)
-                poll_group_mailboxes(
-                    &group_fanout,
-                    &group_coordinator,
-                    &message_gateway,
-                    &event_tx,
-                    &channel_repo,
-                    &attachment_repo,
-                    &message_repo,
-                    domain_tx.as_ref(),
-                    &retry_budget,
-                )
-                .await;
             };
             let resumed = tokio::select! {
                 result = tokio::time::timeout(auxiliary_budget, auxiliary) => {
@@ -860,6 +839,42 @@ impl DeviceInboxProvider {
                 }
                 _ = poll_hints.foreground_wake.notified() => true,
             };
+
+            // Group mailboxes can take longer than the auxiliary budget over
+            // Tor. Keep one poll in flight across device-inbox cycles; a cycle
+            // timeout or foreground wake must not discard fetched messages.
+            while let Some(result) = group_polls.try_join_next() {
+                if let Err(error) = result {
+                    tracing::warn!(%error, "Group mailbox polling task failed");
+                }
+            }
+            if group_polls.is_empty() {
+                let group_fanout = group_fanout.clone();
+                let group_coordinator = group_coordinator.clone();
+                let message_gateway = message_gateway.clone();
+                let event_tx = event_tx.clone();
+                let channel_repo = channel_repo.clone();
+                let attachment_repo = attachment_repo.clone();
+                let message_repo = message_repo.clone();
+                let domain_tx = domain_tx.clone();
+                let retry_budget = retry_budget.clone();
+                let timing = timing.clone();
+                group_polls.spawn(async move {
+                    timing.delay_between_batch_items().await;
+                    poll_group_mailboxes(
+                        &group_fanout,
+                        &group_coordinator,
+                        &message_gateway,
+                        &event_tx,
+                        &channel_repo,
+                        &attachment_repo,
+                        &message_repo,
+                        domain_tx.as_ref(),
+                        &retry_budget,
+                    )
+                    .await;
+                });
+            }
 
             // Reap completed polls before starting another. JoinSet aborts its tasks
             // when the inbox loop stops, including on a transport switch.
