@@ -449,6 +449,7 @@ export component FriendsModal inherits Rectangle {
 
                     // ===== Friend Code Section ===== — Neo raised card
                     Rectangle {
+                        vertical-stretch: 0;
                         background: Colors.surface;
                         border-radius: Spacing.radius-md;
                         drop-shadow-blur: Elevation.card-blur;
@@ -715,7 +716,7 @@ export component FriendsModal inherits Rectangle {
                             }
 
                             Text {
-                                text: "Generate your code above and share it with friends";
+                                text: root.my-code != "" ? "Share your code above with friends" : "Generate your code above and share it with friends";
                                 color: Colors.text-muted;
                                 font-size: Typography.sm;
                                 horizontal-alignment: center;

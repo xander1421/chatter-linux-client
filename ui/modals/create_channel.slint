@@ -707,13 +707,19 @@ export component CreateChannelModal inherits Rectangle {
                         // Disclosure chevron — SVG, not a Unicode triangle
                         // (the glyph renders as a solid block on Android).
                         // Points right when collapsed, down when expanded.
-                        Image {
-                            source: Icons.chevron-right;
+                        Rectangle {
                             width: 14px;
-                            height: 14px;
-                            colorize: Colors.text-secondary;
-                            transform-rotation: root.more-options-expanded ? 90deg : 0deg;
-                            animate transform-rotation { duration: Materials.motion-standard; easing: Materials.spring; }
+                            height: 100%;
+
+                            Image {
+                                source: Icons.chevron-right;
+                                width: 14px;
+                                height: 14px;
+                                y: (parent.height - self.height) / 2;
+                                colorize: Colors.text-secondary;
+                                transform-rotation: root.more-options-expanded ? 90deg : 0deg;
+                                animate transform-rotation { duration: Materials.motion-standard; easing: Materials.spring; }
+                            }
                         }
 
                         Text {
