@@ -196,7 +196,12 @@ export component UserProfileModal inherits Rectangle {
         }
 
         Rectangle {
+            // A floating card is sized to its content; a phone page fills the
+            // screen. Left to its preferred height on a phone, the page ended
+            // where its (under-measured) content did, and everything painted
+            // below that edge was not hit-tested.
             preferred-height: profile-header.height + page.preferred-height;
+            height: root.mobile-mode ? parent.height : self.preferred-height;
 
             // ── Top bar ───────────────────────────────────────────────
             // Same rule `Modal` applies, hand-placed only because this screen
