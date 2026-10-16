@@ -228,7 +228,7 @@ impl ChatterClient {
                     display_name: dm
                         .peer_display_name
                         .unwrap_or_else(|| self.fallback_display_name(&dm.peer_id)),
-                        username: String::new(),
+                    username: String::new(),
                     is_anonymous: true,
                 });
             }
@@ -274,6 +274,30 @@ impl ChatterClient {
                 inviter_avatar,
             )
             .await
+    }
+
+    pub fn list_pending_anon_group_invites(
+        &self,
+    ) -> Result<
+        Vec<crate::storage::repositories::anon_group_repo::PendingAnonGroupInvite>,
+        crate::services::anon_group::AnonGroupError,
+    > {
+        self.anon_groups().list_pending_invites()
+    }
+
+    pub async fn accept_pending_anon_group_invite(
+        &self,
+        group_id: crate::domain::anon_group::AnonGroupId,
+    ) -> Result<crate::domain::anon_group::AnonGroup, crate::services::anon_group::AnonGroupError>
+    {
+        self.anon_groups().accept_pending_invite(group_id).await
+    }
+
+    pub fn decline_pending_anon_group_invite(
+        &self,
+        group_id: &crate::domain::anon_group::AnonGroupId,
+    ) -> Result<(), crate::services::anon_group::AnonGroupError> {
+        self.anon_groups().decline_pending_invite(group_id)
     }
 }
 

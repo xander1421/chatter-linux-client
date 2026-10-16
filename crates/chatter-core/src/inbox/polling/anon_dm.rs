@@ -173,9 +173,7 @@ pub(crate) fn route_anon_dm_content(
                     }])
                 }
                 Some(content_v1::content::Content::AnonGroupMemberList(list)) => {
-                    tracing::info!(
-                        "Received anonymous group member list inside anon DM"
-                    );
+                    tracing::info!("Received anonymous group member list inside anon DM");
                     AnonDmRoute::Deliver(vec![InboxEvent::AnonGroupMemberList {
                         peer_id: sender_id,
                         group_id: list.group_id.clone(),
@@ -290,6 +288,7 @@ pub async fn process_anon_dm_results(
     // The peer device the conversation is bound to (v103), if any.
     bound_device: &(dyn Fn(&AnonDmId) -> Option<u32> + Send + Sync),
     message_repo: &Arc<MessageRepository>,
+    anon_group_repo: &crate::storage::repositories::AnonGroupRepository,
     domain_tx: Option<&tokio::sync::broadcast::Sender<DomainEvent>>,
 ) -> ProcessedAnonDmMessages {
     let mut processed: ProcessedAnonDmMessages = HashMap::new();
@@ -517,6 +516,53 @@ pub async fn process_anon_dm_results(
                 conversation_id,
             ) {
                 AnonDmRoute::Deliver(events) => {
+                    // The mailbox is acknowledged immediately after this function returns.
+                    // Retain invitations here, before handing them to the asynchronous processor.
+                    let mut persisted = true;
+                    for event in &events {
+                        if let InboxEvent::AnonGroupInvite {
+                            peer_id,
+                            sender_device_id,
+                            group_id,
+                            group_name,
+                            inviter_mailbox_pk,
+                            profile_key,
+                            encrypted_display_name,
+                            ..
+                        } = event
+                        {
+                            if let (Some(group_id), Ok(mailbox_pk)) = (
+                                crate::domain::anon_group::AnonGroupId::try_from_slice(group_id),
+                                <[u8; 32]>::try_from(inviter_mailbox_pk.as_slice()),
+                            ) {
+                                let key = profile_key
+                                    .as_ref()
+                                    .and_then(|key| <[u8; 32]>::try_from(key.as_slice()).ok());
+                                let name = key
+                                    .as_ref()
+                                    .zip(encrypted_display_name.as_ref())
+                                    .and_then(|(key, encrypted)| {
+                                        crate::crypto::profile_crypto::decrypt_display_name(
+                                            key, encrypted,
+                                        )
+                                        .ok()
+                                    });
+                                let invite = crate::storage::repositories::anon_group_repo::PendingAnonGroupInvite {
+                                    group_id, group_name: group_name.clone(), inviter_id: *peer_id,
+                                    inviter_device_id: *sender_device_id, inviter_mailbox_pk: mailbox_pk,
+                                    profile_key: key, inviter_display_name: name, inviter_avatar: None,
+                                };
+                                if let Err(error) = anon_group_repo.save_pending_invite(&invite) {
+                                    tracing::error!(%error, "Failed to retain group invite before mailbox acknowledgment");
+                                    persisted = false;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    if !persisted {
+                        continue;
+                    }
                     for event in events {
                         if event_tx.send(event).await.is_err() {
                             return processed;
@@ -553,8 +599,14 @@ mod bound_device_tests {
 
     #[test]
     fn bound_secret_chat_refuses_every_other_device() {
-        assert!(from_unbound_device(Some(2), 3), "another device of the peer is refused");
-        assert!(!from_unbound_device(Some(2), 2), "the bound device is accepted");
+        assert!(
+            from_unbound_device(Some(2), 3),
+            "another device of the peer is refused"
+        );
+        assert!(
+            !from_unbound_device(Some(2), 2),
+            "the bound device is accepted"
+        );
         // Unbound chats are not yet active; their acceptance binds them.
         assert!(!from_unbound_device(None, 3));
     }

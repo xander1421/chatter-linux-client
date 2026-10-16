@@ -32,7 +32,7 @@ use crate::MainWindow;
 
 pub use anon_dm_request::spawn_anon_dm_request_handler;
 pub use anon_group_invite::{
-    pending_group_invite_count, spawn_anon_group_invite_handler, wire_group_invite_callbacks,
+    refresh_group_invites, spawn_anon_group_invite_handler, wire_group_invite_callbacks,
 };
 pub use channel_invites::load_channel_invites;
 pub use channel_settings::{

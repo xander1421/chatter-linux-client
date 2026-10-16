@@ -430,7 +430,7 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     .create_anon_group(name.clone(), selected_friends)
                     .await
                 {
-                    Ok(_group) => {
+                    Ok(group) => {
                         crate::bin_ui::features::sidebar::rebuild_chat_list(&weak, &ui_ctx);
                         let weak_success = weak.clone();
                         let _ = slint::invoke_from_event_loop(move || {
@@ -447,6 +447,7 @@ pub fn wire_create_channel(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                     return;
                                 }
                                 crate::bin_ui::features::back::close(&w, "create-channel");
+                                w.invoke_private_group_selected(group.id.to_string().into());
                             }
                         });
                     }

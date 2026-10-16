@@ -38,6 +38,7 @@ export component ChatHeader inherits GlassSurface {
     // Only meaningful for `ConversationKind.channel`: an invite-only channel.
     in property <bool> private-channel: false;
     in property <int> member-count: 0;
+    in property <int> invited-count: 0;
     // A channel we left or were removed from: we no longer see its roster
     // (Channel Settings lists no one) and, as in Signal, cannot call it.
     in property <bool> read-only: false;
@@ -443,6 +444,7 @@ export component ChatHeader inherits GlassSurface {
                         // The public badge (core-worded) rides on the count
                         // line, so every open public channel says it.
                         text: (root.member-count == 1 ? "1 member" : "\{root.member-count} members")
+                            + (root.is-private-group && root.invited-count > 0 ? (root.invited-count == 1 ? " · 1 invited" : " · \{root.invited-count} invited") : "")
                             + (root.is-channel && MembershipGlobal.public-badge != "" ? " \u{b7} " + MembershipGlobal.public-badge : "");
                         color: Colors.text-muted;
                         font-size: Typography.xs;

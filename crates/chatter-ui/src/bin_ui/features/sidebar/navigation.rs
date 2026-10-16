@@ -91,8 +91,16 @@ pub(crate) fn wire_saved_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClien
             // Load the saved messages channel and its messages
             // Saved Messages is your own notepad: nothing in it is ever
             // "unread", so it always opens at the newest entry.
-            load_channel_into_ui_owned(weak, channel_id, ui_ctx, Default::default(), None, owner, None)
-                .await;
+            load_channel_into_ui_owned(
+                weak,
+                channel_id,
+                ui_ctx,
+                Default::default(),
+                None,
+                owner,
+                None,
+            )
+            .await;
         });
     });
 }
@@ -403,26 +411,16 @@ pub(crate) fn load_pending_message_requests_count(
 ///
 /// Opens the friends modal with the "requests" tab and "groups" sub-tab selected.
 /// Refreshes both the badge count and the group invites list in the modal.
-pub(crate) fn wire_group_invites_clicked(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
+pub(crate) fn wire_group_invites_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
+    let ui_ctx = ui_ctx.clone();
 
     window.on_group_invites_clicked(move || {
-        let weak = weak_window.clone();
-
-        let _ = slint::invoke_from_event_loop(move || {
-            if let Some(w) = weak.upgrade() {
-                // Refresh count from the pending invites store
-                let count = crate::bin_ui::features::modals::pending_group_invite_count();
-                tracing::info!(count = count, "Group invites clicked - {} pending", count);
-                w.set_pending_group_invites(count);
-            }
-        });
+        crate::bin_ui::features::modals::refresh_group_invites(&weak_window, &ui_ctx);
     });
 }
 
 /// Load pending group invites count into the sidebar.
-pub(crate) fn load_pending_group_invites_count(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
-    let count = crate::bin_ui::features::modals::pending_group_invite_count();
-    tracing::info!(count = count, "Loaded {} pending group invites", count);
-    window.set_pending_group_invites(count);
+pub(crate) fn load_pending_group_invites_count(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    crate::bin_ui::features::modals::refresh_group_invites(&window.as_weak(), ui_ctx);
 }

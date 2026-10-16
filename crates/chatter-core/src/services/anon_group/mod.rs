@@ -40,6 +40,7 @@ use crate::storage::repositories::AnonDmRepository;
 use crate::storage::repositories::AnonGroupRepository;
 use crate::storage::repositories::AttachmentRepository;
 use crate::storage::repositories::SettingsRepository;
+use crate::storage::repositories::anon_group_repo::PendingAnonGroupInvite;
 
 /// Anonymous group service.
 ///
@@ -70,6 +71,61 @@ pub struct AnonGroupService {
 }
 
 impl AnonGroupService {
+    pub fn save_pending_invite(
+        &self,
+        invite: &PendingAnonGroupInvite,
+    ) -> Result<(), AnonGroupError> {
+        self.anon_group_repo.save_pending_invite(invite)?;
+        Ok(())
+    }
+
+    pub fn list_pending_invites(&self) -> Result<Vec<PendingAnonGroupInvite>, AnonGroupError> {
+        Ok(self.anon_group_repo.list_pending_invites()?)
+    }
+
+    pub fn decline_pending_invite(
+        &self,
+        group_id: &crate::domain::anon_group::AnonGroupId,
+    ) -> Result<(), AnonGroupError> {
+        self.anon_group_repo.remove_pending_invite(group_id)?;
+        Ok(())
+    }
+
+    pub fn update_pending_invite_avatar(
+        &self,
+        group_id: &crate::domain::anon_group::AnonGroupId,
+        avatar: &[u8],
+    ) -> Result<(), AnonGroupError> {
+        self.anon_group_repo
+            .update_pending_invite_avatar(group_id, avatar)?;
+        Ok(())
+    }
+
+    pub async fn accept_pending_invite(
+        &self,
+        group_id: crate::domain::anon_group::AnonGroupId,
+    ) -> Result<crate::domain::anon_group::AnonGroup, AnonGroupError> {
+        let invite = self
+            .list_pending_invites()?
+            .into_iter()
+            .find(|i| i.group_id == group_id)
+            .ok_or_else(|| AnonGroupError::InvalidData("Invitation no longer pending".into()))?;
+        let group = self
+            .accept_invite(
+                invite.group_id,
+                invite.group_name,
+                invite.inviter_id,
+                invite.inviter_id,
+                invite.inviter_device_id,
+                invite.inviter_mailbox_pk,
+                invite.profile_key,
+                invite.inviter_display_name,
+                invite.inviter_avatar,
+            )
+            .await?;
+        self.decline_pending_invite(&group_id)?;
+        Ok(group)
+    }
     /// Create a new AnonGroupService.
     #[allow(clippy::too_many_arguments)]
     pub fn new(
