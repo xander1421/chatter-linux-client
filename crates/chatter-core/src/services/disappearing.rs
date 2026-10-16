@@ -173,7 +173,7 @@ impl DmTimer {
         if self.effective_seconds(now) == 0 {
             return String::new();
         }
-        let ttl = format!("Messages disappear after {}", timer_label(self.seconds));
+        let ttl = format!("Messages disappear {} after read", timer_label(self.seconds));
         if self.enabled_until == 0 {
             return ttl;
         }
