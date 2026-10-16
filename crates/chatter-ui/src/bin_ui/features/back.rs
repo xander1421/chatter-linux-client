@@ -1,8 +1,8 @@
 //! Android Back key.
 //!
-//! `ui/app.slint`'s top-level `back-scope` FocusScope reports every Back press
-//! through the `back-pressed` callback; the decision of what Back *means* is
-//! made here, in Rust, so it can be tested headlessly.
+//! `MainActivity` reports Android Back through the `back-pressed` callback
+//! independently of Slint focus. The `back-scope` FocusScope reports keyboard
+//! Back/Escape on other platforms. The navigation decision is made here.
 //!
 //! Order matters and is the whole point of this module — innermost layer first:
 //!

@@ -323,6 +323,27 @@ pub extern "system" fn Java_com_chatter_client_MainActivity_nativeImeHiddenByBac
     .resolve::<jni::errors::LogErrorAndDefault>()
 }
 
+/// Android Back is delivered by the Activity so navigation does not depend on
+/// Slint's focused item surviving a screen or modal transition.
+#[unsafe(no_mangle)]
+pub extern "system" fn Java_com_chatter_client_MainActivity_nativeBackPressed(
+    mut env: jni::EnvUnowned<'_>,
+    _class: jni::objects::JClass,
+) {
+    env.with_env(|_| -> jni::errors::Result<_> {
+        let Some(weak) = super::call_actions::main_window() else {
+            return Ok(());
+        };
+        let _ = slint::invoke_from_event_loop(move || {
+            if let Some(window) = weak.upgrade() {
+                window.invoke_back_pressed();
+            }
+        });
+        Ok(())
+    })
+    .resolve::<jni::errors::LogErrorAndDefault>()
+}
+
 /// JNI entry point: the soft keyboard's action key (Done) — see
 /// `MainActivity.onEditorAction` for why it does not reach Slint on its own.
 /// Delivered as an Enter press, so the focused TextInput's `accepted` fires

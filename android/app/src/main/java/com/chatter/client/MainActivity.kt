@@ -460,6 +460,28 @@ class MainActivity : GameActivity() {
     /** Implemented in Rust. Back hid the keyboard: drop Slint's text focus too. */
     private external fun nativeImeHiddenByBack()
 
+    /** Route Back through the window's navigation callback, independent of Slint focus. */
+    private external fun nativeBackPressed()
+
+    // GameActivity normally forwards key events to Slint. A focused item can
+    // disappear or clear focus before the next Back, leaving no FocusScope to
+    // receive it. Catch the key at the Activity boundary instead. onKeyPreIme
+    // consumes the press first when it belongs to the IME or selection toolbar.
+    override fun dispatchKeyEvent(event: KeyEvent): Boolean {
+        if (event.keyCode == KeyEvent.KEYCODE_BACK) {
+            if (event.action == KeyEvent.ACTION_UP && !event.isCanceled) nativeBackPressed()
+            return true
+        }
+        return super.dispatchKeyEvent(event)
+    }
+
+    // With predictive Back opted out, Android may dispatch a gesture through
+    // the Activity callback rather than a KEYCODE_BACK (notably on newer OSes).
+    @Suppress("DEPRECATION")
+    override fun onBackPressed() {
+        nativeBackPressed()
+    }
+
     /** Implemented in Rust. The IME's action key, delivered to Slint as Enter. */
     private external fun nativeImeEditorAction()
 
@@ -602,10 +624,13 @@ class MainActivity : GameActivity() {
     private inner class BackHidesImeSurfaceView : ChatterTextInputGate.GatedSurfaceView(this@MainActivity) {
         /** The current Back press started while the keyboard was up. */
         private var backHidesIme = false
+        /** A hide is in flight; visible insets can lag behind that request. */
+        private var imeHidePending = false
         private var backSelectionMode: ActionMode? = null
 
         override fun onCreateInputConnection(outAttrs: EditorInfo): com.google.androidgamesdk.gametextinput.InputConnection? {
             val connection = super.onCreateInputConnection(outAttrs) ?: return null
+            imeHidePending = false
             // Message drafts, names, passwords and recovery material must not
             // enter a keyboard's personalized dictionary.
             outAttrs.imeOptions = outAttrs.imeOptions or EditorInfo.IME_FLAG_NO_PERSONALIZED_LEARNING
@@ -625,8 +650,10 @@ class MainActivity : GameActivity() {
                 KeyEvent.ACTION_DOWN -> {
                     if (event.repeatCount == 0) {
                         backSelectionMode = textSelectionMode
-                        backHidesIme = backSelectionMode == null && ViewCompat.getRootWindowInsets(this)
-                            ?.isVisible(WindowInsetsCompat.Type.ime()) == true
+                        val imeInsets = ViewCompat.getRootWindowInsets(this)
+                        backHidesIme = backSelectionMode == null && !imeHidePending && (imeInsets
+                            ?.isVisible(WindowInsetsCompat.Type.ime()) == true ||
+                            (imeInsets?.getInsets(WindowInsetsCompat.Type.ime())?.bottom ?: 0) > 0)
                     }
                     if (backSelectionMode != null || backHidesIme) return true
                 }
@@ -640,6 +667,7 @@ class MainActivity : GameActivity() {
                     if (!event.isCanceled) {
                         WindowCompat.getInsetsController(window, this)
                             .hide(WindowInsetsCompat.Type.ime())
+                        imeHidePending = true
                         // Slint never hears about that hide: its TextInput keeps
                         // focus and the keyboard can come straight back.
                         nativeImeHiddenByBack()
