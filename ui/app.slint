@@ -1341,7 +1341,6 @@ export component MainWindow inherits Window {
     callback friends-paste-code();
     callback friends-scan-code();
     callback friends-connect-via-code(string);
-    callback friends-connect-private(string);  // Private anon DM (no server)
     callback friends-accept-private-request(string);   // Accept anon DM request
     callback friends-decline-private-request(string);  // Decline anon DM request
     callback friends-block-private-request(string);    // Block anon DM request
@@ -3160,9 +3159,6 @@ export component MainWindow inherits Window {
             }
             connect-via-code(code) => {
                 root.friends-connect-via-code(code);
-            }
-            connect-private(code) => {
-                root.friends-connect-private(code);
             }
             accept-private-request(conversation-id) => {
                 root.friends-accept-private-request(conversation-id);

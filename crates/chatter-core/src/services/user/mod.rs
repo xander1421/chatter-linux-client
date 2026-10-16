@@ -1768,14 +1768,14 @@ impl UserService {
 
         // Try URL format first
         if let Some(id_str) = code.strip_prefix("chatter://connect/") {
-            return id_str.parse::<UserId>().map_err(|_| {
-                UserError::InvalidInput(format!("Invalid user ID in friend code: {}", id_str))
-            });
+            return id_str
+                .parse::<UserId>()
+                .map_err(|_| UserError::InvalidInput("This code isn't valid.".into()));
         }
 
         // Try plain UUID
         code.parse::<UserId>()
-            .map_err(|_| UserError::InvalidInput(format!("Invalid friend code format: {}", code)))
+            .map_err(|_| UserError::InvalidInput("This code isn't valid.".into()))
     }
 
     /// Connect with a user via friend code.
