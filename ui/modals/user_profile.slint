@@ -79,6 +79,7 @@ export component UserProfileModal inherits Rectangle {
     property <bool> confirm-remove: false;
     // The disappearing-messages choices are unfolded under their row.
     property <bool> timer-picker-open: false;
+    changed user-id => { self.timer-picker-open = false; }
     changed display-name => { self.confirm-block = false; self.confirm-remove = false; }
     in property <bool> is-self: false;  // viewing own profile
     in property <bool> is-muted: false;
@@ -242,6 +243,9 @@ export component UserProfileModal inherits Rectangle {
                 viewport-width: self.width;
                 viewport-height: page.preferred-height;
                 interactive: self.viewport-height > self.height;
+                // Buttons and action tiles contain nested TouchAreas. Deliver
+                // their press immediately while retaining drag-to-scroll.
+                immediate-child-press: true;
 
                 // Lazy paging: ask for the next page while there is still a
                 // screenful of runway, so the grid never visibly runs out.
@@ -509,6 +513,7 @@ export component UserProfileModal inherits Rectangle {
 
                                 if root.timer-picker-open: DisappearingSettings {
                                     peer-id: root.user-id;
+                                    current-ttl: DisappearingGlobal.dm-seconds;
                                 }
                             }
                         }

@@ -242,6 +242,9 @@ export component ModalContainer inherits Rectangle {
                 viewport-width: self.width;
                 viewport-height: content.height;
                 interactive: self.viewport-height > self.height;
+                // Full-screen pages may contain their own scrolling controls.
+                // Forward the press through this ancestor without a delay.
+                immediate-child-press: root.full-screen;
 
                 content := Rectangle {
                     width: body.width;

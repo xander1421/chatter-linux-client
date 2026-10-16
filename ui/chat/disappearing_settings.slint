@@ -7,7 +7,10 @@ import { DisappearingGlobal } from "disappearing_global.slint";
 
 export component DisappearingSettings inherits VerticalLayout {
     in property <string> peer-id;
-    property <int> selected-ttl: DisappearingGlobal.dm-seconds > 0 ? DisappearingGlobal.dm-seconds : 30;
+    in property <int> current-ttl;
+    property <int> selected-ttl: root.current-ttl;
+    changed current-ttl => { root.selected-ttl = root.current-ttl; }
+    changed peer-id => { root.selected-ttl = root.current-ttl; }
     property <string> minutes: "5";
     spacing: Spacing.sm;
     Text { text: "Message lifetime"; color: Colors.text-primary; font-size: Typography.sm; }

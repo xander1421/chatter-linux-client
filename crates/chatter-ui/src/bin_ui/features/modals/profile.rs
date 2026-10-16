@@ -1120,10 +1120,14 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 w.get_profile_user_id().to_string(),
                 w.get_profile_is_verified(),
             ),
-            None => return,
+            None => {
+                tracing::debug!("Profile verification tap ignored: window closed");
+                return;
+            }
         };
 
         if profile_user_id.is_empty() {
+            tracing::debug!("Profile verification tap ignored: no profile user");
             return;
         }
 
