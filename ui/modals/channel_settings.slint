@@ -183,8 +183,9 @@ export component ChannelSettingsModal inherits Rectangle {
     property <int> section-tab: root.active-section == "members" ? 1
         : root.active-section == "access" ? 2
         : root.active-section == "notifications" ? (root.has-access-pane ? 3 : 2) : 0;
-    property <bool> has-edits: root.channel-name-draft != root.channel-name
-        || root.channel-description-draft != root.channel-description || root.channel-has-icon-preview;
+    property <bool> has-edits: root.can-edit
+        && (root.channel-name-draft != root.channel-name
+            || root.channel-description-draft != root.channel-description || root.channel-has-icon-preview);
     property <bool> name-invalid: root.channel-name-draft == "";
 
     Modal {
@@ -205,6 +206,7 @@ export component ChannelSettingsModal inherits Rectangle {
         // One content column on every screen; phones use Modal's full-screen page.
         VerticalLayout {
             spacing: 0;
+            alignment: start;
 
             if root.active-section != "general" && root.active-section != "destructive": Rectangle {
                 min-height: Spacing.touch-target-min + Spacing.sm * 2;
@@ -274,6 +276,7 @@ export component ChannelSettingsModal inherits Rectangle {
                     // Sized to the content instead, it was centered in a
                     // shorter parent and the overview's top was cut off.
                     y: 0;
+                    width: parent.width;
                     height: parent.height;
                     // Pin the viewport to the visible width: content wider than
                     // the card elides instead of scrolling sideways off-screen.
@@ -283,6 +286,7 @@ export component ChannelSettingsModal inherits Rectangle {
                     content-area := VerticalLayout {
                         padding: Spacing.md;
                         spacing: Spacing.lg;
+                        alignment: start;
 
                         if root.show-discard-confirm: VerticalLayout {
                             spacing: Spacing.sm;
@@ -327,7 +331,7 @@ export component ChannelSettingsModal inherits Rectangle {
                             }
                         }
 
-                        if root.active-section != "overview": Button {
+                        if root.active-section == "general" || root.active-section == "destructive": Button {
                             text: root.has-edits && root.active-section == "general" ? "‹ Info • Unsaved changes" : "‹ Info";
                             variant: "ghost";
                             height: Spacing.touch-target-min;
@@ -343,13 +347,14 @@ export component ChannelSettingsModal inherits Rectangle {
                                 Rectangle {
                                     height: 80px;
                                     background: transparent;
-                                    if root.channel-has-icon-preview || root.channel-has-avatar: Avatar {
+                                    if root.channel-has-icon-preview || root.channel-has-avatar || root.is-private-group: Avatar {
                                         source: root.channel-has-icon-preview ? root.channel-icon-preview : root.channel-avatar-source;
                                         name: root.channel-name;
+                                        anonymous: root.is-private-group;
                                         size: 80px;
                                         x: (parent.width - self.width) / 2;
                                     }
-                                    if !root.channel-has-icon-preview && !root.channel-has-avatar: Rectangle {
+                                    if !root.channel-has-icon-preview && !root.channel-has-avatar && !root.is-private-group: Rectangle {
                                         width: 80px; height: 80px; border-radius: 40px; background: Colors.inset;
                                         x: (parent.width - self.width) / 2;
                                         Image {
@@ -483,12 +488,13 @@ export component ChannelSettingsModal inherits Rectangle {
                                 spacing: Spacing.sm;
                                 alignment: start;
 
-                                if root.channel-has-icon-preview || root.channel-has-avatar: Avatar {
+                                if root.channel-has-icon-preview || root.channel-has-avatar || root.is-private-group: Avatar {
                                     source: root.channel-has-icon-preview ? root.channel-icon-preview : root.channel-avatar-source;
                                     name: root.channel-name;
+                                    anonymous: root.is-private-group;
                                     size: 40px;
                                 }
-                                if !root.channel-has-icon-preview && !root.channel-has-avatar: Image {
+                                if !root.channel-has-icon-preview && !root.channel-has-avatar && !root.is-private-group: Image {
                                     source: root.is-private-group ? Icons.users
                                         : root.channel-type == "private" ? Icons.lock
                                         : root.channel-type == "dm" ? Icons.message-circle : Icons.hash;
@@ -673,6 +679,7 @@ export component ChannelSettingsModal inherits Rectangle {
                         // ========== Notifications Section ==========
                         if root.active-section == "notifications": VerticalLayout {
                             spacing: Spacing.md;
+                            alignment: start;
 
                             Text {
                                 text: "Notification Preferences";
@@ -686,26 +693,26 @@ export component ChannelSettingsModal inherits Rectangle {
                             ToggleRow {
                                 height: Spacing.touch-target-min;
                                 checked <=> root.is-muted;
-                                accessible-text: "Mute Channel";
+                                accessible-text: root.is-private-group ? "Mute Group" : "Mute Channel";
                                 toggled(value) => {
                                     root.toggle-mute(value);
                                 }
 
                                 Text {
-                                    text: "Mute Channel";
+                                    text: root.is-private-group ? "Mute Group" : "Mute Channel";
                                     color: Colors.text-primary;
                                     font-size: Typography.sm;
                                     wrap: word-wrap;
                                 }
                                 Text {
-                                    text: "You won't receive any notifications from this channel";
+                                    text: root.is-private-group ? "You won't receive any notifications from this group" : "You won't receive any notifications from this channel";
                                     color: Colors.text-muted;
                                     font-size: Typography.xs;
                                     wrap: word-wrap;
                                 }
                             }
 
-                            // AI assistant for this channel
+                            // Anonymous groups are local-only in core's AI policy.
                             ToggleRow {
                                 height: Spacing.touch-target-min;
                                 checked <=> root.ai-enabled;
@@ -721,7 +728,9 @@ export component ChannelSettingsModal inherits Rectangle {
                                     wrap: word-wrap;
                                 }
                                 Text {
-                                    text: "Let the AI read this channel when you ask it something here. Off by default.";
+                                    text: root.is-private-group
+                                        ? "Let local AI read this group when you ask it something here. Cloud AI cannot access this group. Off by default."
+                                        : "Let the AI read this channel when you ask it something here. Off by default.";
                                     color: Colors.text-muted;
                                     font-size: Typography.xs;
                                     wrap: word-wrap;
@@ -1099,6 +1108,7 @@ export component ChannelSettingsModal inherits Rectangle {
                         // ========== Members Section ==========
                         if root.active-section == "members": VerticalLayout {
                             spacing: Spacing.md;
+                            alignment: start;
 
                             HorizontalLayout {
                                 spacing: Spacing.sm;

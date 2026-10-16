@@ -451,6 +451,10 @@ fn wire_chat_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
                     }
                     w.set_channel_settings_id(group_id_str.as_str().into());
                     w.set_channel_settings_name(roster.name.as_str().into());
+                    w.set_channel_settings_name_draft(roster.name.as_str().into());
+                    w.set_channel_settings_description("".into());
+                    w.set_channel_settings_description_draft("".into());
+                    w.set_channel_settings_ai_enabled(ui_ctx.ai_enabled_for(&group_id_str));
                     w.set_channel_settings_type("private-group".into());
                     super::modals::apply_private_group_roster(&w, roster);
                     // Clear a previous channel's ban list.
