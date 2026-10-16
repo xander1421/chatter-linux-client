@@ -482,6 +482,17 @@ class MainActivity : GameActivity() {
             if (event.action == KeyEvent.ACTION_UP && !event.isCanceled) nativeBackPressed()
             return true
         }
+        // GameTextInput turns Enter in a multi-line field into an inserted "\n",
+        // so the composer's key-pressed never saw Return and could not send on
+        // a tablet. Hand plain Enter to Slint as the Return key: the composer
+        // sends where Enter-sends is on, and a TextInput inserts the newline
+        // otherwise. Shift+Enter keeps the IME's newline.
+        if ((event.keyCode == KeyEvent.KEYCODE_ENTER || event.keyCode == KeyEvent.KEYCODE_NUMPAD_ENTER) &&
+            !event.isShiftPressed
+        ) {
+            if (event.action == KeyEvent.ACTION_DOWN) nativeImeEditorAction()
+            return true
+        }
         return super.dispatchKeyEvent(event)
     }
 
