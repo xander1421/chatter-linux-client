@@ -96,6 +96,58 @@ pub fn day_label(datetime: DateTime<Utc>) -> String {
     )
 }
 
+/// The fields needed to decide whether a channel row joins the preceding row.
+/// Day labels are the same ones used for date chips in the message list.
+pub struct ChannelGroupingRow<'a> {
+    pub sender_id: &'a str,
+    pub timestamp_ns: u64,
+    pub day_label: &'a str,
+    pub is_system: bool,
+    pub is_call: bool,
+    pub is_deleted: bool,
+}
+
+/// A later message hides its sender header only when it directly follows a
+/// visible message from the same sender on the same local day, within 5 minutes.
+#[must_use]
+pub fn channel_message_is_continuation(
+    previous: Option<&ChannelGroupingRow<'_>>,
+    current: &ChannelGroupingRow<'_>,
+) -> bool {
+    let Some(previous) = previous else { return false };
+    if previous.is_system
+        || previous.is_call
+        || previous.is_deleted
+        || current.is_system
+        || current.is_call
+        || current.is_deleted
+        || previous.sender_id.is_empty()
+        || previous.sender_id != current.sender_id
+        || previous.timestamp_ns == 0
+        || current.timestamp_ns == 0
+        || previous.day_label.is_empty()
+        || previous.day_label != current.day_label
+    {
+        return false;
+    }
+    current
+        .timestamp_ns
+        .checked_sub(previous.timestamp_ns)
+        .is_some_and(|elapsed| elapsed <= 5 * 60 * 1_000_000_000)
+}
+
+/// Shape a visible channel page, including a newly prepended or removed row's
+/// neighbour. Each flag belongs to the row at the same index.
+#[must_use]
+pub fn channel_continuation_flags(rows: &[ChannelGroupingRow<'_>]) -> Vec<bool> {
+    rows.iter()
+        .enumerate()
+        .map(|(index, current)| {
+            channel_message_is_continuation(index.checked_sub(1).map(|i| &rows[i]), current)
+        })
+        .collect()
+}
+
 fn day_label_at(day: chrono::NaiveDate, today: chrono::NaiveDate) -> String {
     let days_ago = (today - day).num_days();
     match days_ago {

@@ -132,8 +132,46 @@ pub(crate) fn edit_messages(
         .as_any()
         .downcast_ref::<slint::VecModel<crate::MessageItemData>>()
     {
-        Some(vec) => f(vec),
+        Some(vec) => {
+            f(vec);
+            if window.get_conversation_kind() == crate::ConversationKind::Channel {
+                recompute_channel_continuations(vec);
+            }
+        }
         None => tracing::warn!("message list model is not a VecModel; edit dropped"),
+    }
+}
+
+/// Recompute grouping from visible neighbours after insertions, prepends and
+/// removals. Only changed rows notify Slint, preserving the list's model and
+/// scroll anchor.
+pub(crate) fn recompute_channel_continuations(model: &slint::VecModel<crate::MessageItemData>) {
+    use chatter_core::ui::chat_data::{ChannelGroupingRow, channel_continuation_flags};
+
+    let rows: Vec<_> = (0..model.row_count())
+        .filter_map(|i| model.row_data(i))
+        .collect();
+    let grouping_rows: Vec<_> = rows
+        .iter()
+        .map(|row| ChannelGroupingRow {
+            sender_id: row.sender_id.as_str(),
+            timestamp_ns: row.timestamp_ns.as_str().parse::<u64>().unwrap_or(0),
+            day_label: row.date_separator_text.as_str(),
+            is_system: row.is_system,
+            is_call: row.is_call,
+            is_deleted: row.is_deleted,
+        })
+        .collect();
+    let flags = channel_continuation_flags(&grouping_rows);
+    for (index, (mut row, is_continuation)) in rows
+        .into_iter()
+        .zip(flags)
+        .enumerate()
+    {
+        if row.is_continuation != is_continuation {
+            row.is_continuation = is_continuation;
+            model.set_row_data(index, row);
+        }
     }
 }
 

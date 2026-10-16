@@ -354,7 +354,11 @@ pub(crate) async fn load_channel_into_ui_owned(
             .iter()
             .map(|m| m.to_slint_preview_with_user(&current_user_id))
             .collect();
-        w.set_messages(ModelRc::new(VecModel::from(slint_messages)));
+        let model = VecModel::from(slint_messages);
+        if conversation_type == chatter_core::domain::message::ConversationType::Channel {
+            crate::bin_ui::features::chat::recompute_channel_continuations(&model);
+        }
+        w.set_messages(ModelRc::new(model));
         if let Some(started) = open_started {
             tracing::info!(kind = "channel", stage = "model_replaced", rows = display_messages.len(), elapsed_ms = started.elapsed().as_millis(), "conversation_open");
         }
