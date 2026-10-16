@@ -146,6 +146,9 @@ pub struct AnonDmService {
     start_locks: std::sync::Mutex<
         std::collections::HashMap<UserId, std::sync::Weak<tokio::sync::Mutex<()>>>,
     >,
+    decision_locks: std::sync::Mutex<
+        std::collections::HashMap<AnonDmId, std::sync::Weak<tokio::sync::Mutex<()>>>,
+    >,
     pub(crate) settings_repo: Arc<SettingsRepository>,
     pub(crate) anon_dm_repo: Arc<AnonDmRepository>,
     /// Unified message repository for all message CRUD operations.
@@ -174,6 +177,7 @@ impl AnonDmService {
     ) -> Self {
         Self {
             start_locks: Default::default(),
+            decision_locks: Default::default(),
             settings_repo,
             anon_dm_repo,
             message_repo,

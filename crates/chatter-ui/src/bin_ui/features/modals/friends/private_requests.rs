@@ -11,6 +11,25 @@ use chatter_core::client::ChatterClient;
 use crate::bin_ui::converters::{FriendRequestExt, FriendRequestSendData};
 use crate::{FriendRequestData, MainWindow};
 
+// Callbacks run on the Slint event loop. Claim the decision before spawning
+// network work so a second tap (including from the other screen) cannot start.
+fn begin_decision(window: &MainWindow, id: &SharedString) -> bool {
+    if !window.get_private_request_decision().is_empty() {
+        return false;
+    }
+    window.set_private_request_decision(id.clone());
+    true
+}
+
+fn finish_decision(weak: slint::Weak<MainWindow>) {
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(w) = weak.upgrade() {
+            w.set_private_request_decision("".into());
+            w.set_friends_loading(false);
+        }
+    });
+}
+
 /// Wire callback to accept an anonymous DM request.
 ///
 /// This uses the anonymous DM service which has NO server involvement.
@@ -20,29 +39,24 @@ pub(crate) fn wire_accept_private_request(window: &MainWindow, ui_ctx: &Arc<Chat
     let ui_ctx = ui_ctx.clone();
 
     window.on_friends_accept_private_request(move |conversation_id: SharedString| {
+        let Some(w) = weak_window.upgrade() else {
+            return;
+        };
+        if !begin_decision(&w, &conversation_id) {
+            return;
+        }
+        w.set_friends_loading(true);
         let weak = weak_window.clone();
         let ui_ctx = ui_ctx.clone();
         let conv_id_str = conversation_id.to_string();
 
         tokio::spawn(async move {
-            // Set loading state
-            let weak_loading = weak.clone();
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak_loading.upgrade() {
-                    w.set_friends_loading(true);
-                }
-            });
-
             // Parse conversation ID
             let conv_id: chatter_core::domain::anon_dm::AnonDmId = match conv_id_str.parse() {
                 Ok(id) => id,
                 Err(_) => {
                     tracing::error!("Invalid conversation ID: {}", conv_id_str);
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_friends_loading(false);
-                        }
-                    });
+                    finish_decision(weak);
                     return;
                 }
             };
@@ -67,21 +81,15 @@ pub(crate) fn wire_accept_private_request(window: &MainWindow, ui_ctx: &Arc<Chat
                     refresh_private_requests(weak.clone(), &ui_ctx).await;
                     crate::bin_ui::features::sidebar::rebuild_chat_list(&weak, &ui_ctx);
                     // Open in the chat view: its Accept bar gives way to the composer.
-                    crate::bin_ui::features::sidebar::dm::refresh_open_anon_dm(&weak, &ui_ctx, dm_id);
+                    crate::bin_ui::features::sidebar::dm::refresh_open_anon_dm(
+                        &weak, &ui_ctx, dm_id,
+                    );
 
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_friends_loading(false);
-                        }
-                    });
+                    finish_decision(weak);
                 }
                 Err(e) => {
                     tracing::error!("Failed to accept private request: {}", e);
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_friends_loading(false);
-                        }
-                    });
+                    finish_decision(weak);
                 }
             }
         });
@@ -94,29 +102,24 @@ pub(crate) fn wire_decline_private_request(window: &MainWindow, ui_ctx: &Arc<Cha
     let ui_ctx = ui_ctx.clone();
 
     window.on_friends_decline_private_request(move |conversation_id: SharedString| {
+        let Some(w) = weak_window.upgrade() else {
+            return;
+        };
+        if !begin_decision(&w, &conversation_id) {
+            return;
+        }
+        w.set_friends_loading(true);
         let weak = weak_window.clone();
         let ui_ctx = ui_ctx.clone();
         let conv_id_str = conversation_id.to_string();
 
         tokio::spawn(async move {
-            // Set loading state
-            let weak_loading = weak.clone();
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak_loading.upgrade() {
-                    w.set_friends_loading(true);
-                }
-            });
-
             // Parse conversation ID
             let conv_id: chatter_core::domain::anon_dm::AnonDmId = match conv_id_str.parse() {
                 Ok(id) => id,
                 Err(_) => {
                     tracing::error!("Invalid conversation ID: {}", conv_id_str);
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_friends_loading(false);
-                        }
-                    });
+                    finish_decision(weak);
                     return;
                 }
             };
@@ -136,19 +139,11 @@ pub(crate) fn wire_decline_private_request(window: &MainWindow, ui_ctx: &Arc<Cha
                         &ui_ctx,
                         chatter_core::state::ActiveConversation::AnonDm(conv_id),
                     );
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_friends_loading(false);
-                        }
-                    });
+                    finish_decision(weak);
                 }
                 Err(e) => {
                     tracing::error!("Failed to decline private request: {}", e);
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_friends_loading(false);
-                        }
-                    });
+                    finish_decision(weak);
                 }
             }
         });
