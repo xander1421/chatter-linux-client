@@ -12,7 +12,7 @@ export component MeshList inherits Rectangle {
     in property <bool> touch: false;
     callback setup-requested();
     property <bool> expanded: true;
-    property <string> status: !MeshGlobal.mesh-on ? "Radio stopped"
+    property <string> status: !MeshGlobal.mesh-on ? "Stopped"
         : !MeshGlobal.radio-running ? "Unavailable"
         : MeshGlobal.peer-count == 0 ? "0 nearby"
         : MeshGlobal.peer-count == 1 ? "1 nearby"
@@ -76,7 +76,9 @@ export component MeshList inherits Rectangle {
                     width: root.touch ? Spacing.touch-target-min : Spacing.button-height;
                     height: root.touch ? Spacing.touch-target-min : Spacing.button-height;
                     border-radius: Spacing.radius-md;
-                    background: switch-touch.has-hover ? Colors.surface-control-hover : Colors.surface-control;
+                    border-width: 1px;
+                    border-color: Colors.border;
+                    background: switch-touch.has-hover ? Colors.surface-hover : transparent;
                     Text {
                         text: MeshGlobal.mesh-on ? "On" : "Off";
                         color: MeshGlobal.mesh-on ? Colors.primary : Colors.text-primary;

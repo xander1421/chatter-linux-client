@@ -320,10 +320,9 @@ export component Sidebar inherits Rectangle {
                 // No gap under the pinned Search row on a phone: it and Saved
                 // Messages are one list.
                 padding-top: (root.collapsed ? (root.traffic-lights-width > Spacing.none ? root.titlebar-height : Spacing.none) : root.top-row-height) + (root.mobile-mode ? Spacing.none : Spacing.sm);
-                // On a phone the Chats tab's floating create button sits over
-                // the foot of this list; room for it, so it never covers the
-                // last row.
-                padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.fab-size + Spacing.md * 2
+                // The FAB sits one xl above the bottom dock. Leave its full
+                // height plus a row gap so the last action can scroll clear.
+                padding-bottom: root.mobile-mode ? root.bottom-inset + Spacing.fab-size + Spacing.xl + Spacing.md
                         + (root.update-banner-visible ? root.update-banner-height + Spacing.md : Spacing.none)
                     : (root.collapsed ? root.rail-button-count * root.rail-icon-size + (root.rail-button-count - 1) * Spacing.sm + Spacing.lg : Spacing.button-height)
                         + (root.update-banner-visible && !root.collapsed ? root.update-banner-height + Spacing.md : Spacing.none) + Spacing.md;

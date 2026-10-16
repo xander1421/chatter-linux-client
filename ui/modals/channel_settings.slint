@@ -194,9 +194,8 @@ export component ChannelSettingsModal inherits Rectangle {
         max-modal-height: max(240px, root.height - 48px);
         full-screen: root.narrow;
         plain-header: true;
-        // Expand the card to the available height (capped at max-modal-height)
-        // instead of hugging content — the right panel scrolls.
-        fill-height: true;
+        // Let the card hug short sections; Modal caps taller sections to the
+        // viewport and scrolls their content.
 
         close => {
             if root.has-edits { root.show-discard-confirm = true; }
@@ -261,8 +260,12 @@ export component ChannelSettingsModal inherits Rectangle {
             // Right content area
             Rectangle {
                 background: transparent;
+                preferred-height: content-area.preferred-height;
 
                 ScrollView {
+                    // The stock ScrollView prefers 100% of its parent, which
+                    // would force a content-sized modal back to window height.
+                    preferred-height: content-area.preferred-height;
                     // Pin the viewport to the visible width: content wider than
                     // the card elides instead of scrolling sideways off-screen.
                     viewport-width: self.width;
