@@ -105,17 +105,17 @@ pub extern "system" fn Java_com_chatter_client_MessagingService_nativeStartHeadl
         })
         .resolve::<jni::errors::LogErrorAndDefault>();
     if !initialized {
-        return 0;
+        return false;
     }
     crate::platform::android::keystore::init();
     let runtime = android_runtime();
     let _ = RT_HANDLE.set(runtime.handle().clone());
     let result = runtime.block_on(async { android_core(false).await });
     match result {
-        Ok(_) => 1,
+        Ok(_) => true,
         Err(error) => {
             tracing::warn!("Headless messaging startup failed: {error}");
-            0
+            false
         }
     }
 }
