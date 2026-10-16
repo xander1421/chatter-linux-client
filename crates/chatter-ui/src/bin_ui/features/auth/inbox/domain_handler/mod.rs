@@ -384,7 +384,7 @@ pub async fn handle_domain_event(
             // Protocol events - no direct UI action
         }
 
-        // Attachment ready: trigger download + UI update for the receiver.
+        // Attachment ready: fetch its preview and, for small images, the full blob.
         // When the receiver gets a message with attachments, the attachment metadata
         // may not be available yet during MessageReceived handling. AttachmentReady
         // fires after the attachment pointer is processed and stored.
@@ -394,7 +394,7 @@ pub async fn handle_domain_event(
             ..
         } => {
             let downloadable =
-                if attachment.remote_url.is_some() && attachment.encryption_key.is_some() {
+                if attachment.needs_download() {
                     vec![attachment]
                 } else {
                     vec![]

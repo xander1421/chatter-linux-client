@@ -260,12 +260,26 @@ pub struct Attachment {
 }
 
 impl Attachment {
+    /// Fetch received photos automatically on any network up to this size.
+    /// Larger images still receive their small thumbnail sidecar and need a tap
+    /// for the original. Other attachment types stay tap-to-download.
+    pub const AUTO_DOWNLOAD_IMAGE_LIMIT: u64 = 10 * 1024 * 1024;
+
     /// Whether this attachment has what it needs to fetch + decrypt its remote
     /// content: a CDN URL and an encryption key. Callers use this to decide
     /// whether to enqueue a background download.
     #[must_use]
     pub fn is_downloadable(&self) -> bool {
         self.remote_url.is_some() && self.encryption_key.is_some()
+    }
+
+    /// Whether receiving this attachment should fetch its full encrypted blob.
+    /// Thumbnail sidecars are fetched separately, regardless of this policy.
+    #[must_use]
+    pub fn should_auto_download(&self) -> bool {
+        self.needs_download()
+            && self.metadata.is_image()
+            && self.metadata.size <= Self::AUTO_DOWNLOAD_IMAGE_LIMIT
     }
 
     /// Create a new pending attachment.
