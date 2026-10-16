@@ -187,6 +187,17 @@ export component MessageContextMenu inherits Rectangle {
     // callers without a message anchor on the press-point placement.
     in property <length> anchor-top: 0px;
     in property <length> anchor-bottom: 0px;
+    in property <length> anchor-left: 0px;
+    in property <length> anchor-right: 0px;
+    private property <bool> has-bubble-anchor: root.anchor-bottom > root.anchor-top
+        && root.anchor-right > root.anchor-left;
+    private property <length> visible-bubble-top: max(root.content-top, min(root.height, root.anchor-top));
+    private property <length> visible-bubble-bottom: max(0px, min(root.height, root.anchor-bottom));
+    private property <length> visible-bubble-left: max(0px, min(root.width, root.anchor-left));
+    private property <length> visible-bubble-right: max(0px, min(root.width, root.anchor-right));
+    private property <bool> bubble-in-view: root.has-bubble-anchor
+        && root.visible-bubble-bottom > root.visible-bubble-top
+        && root.visible-bubble-right > root.visible-bubble-left;
     out property <length> popup-top: menu-container.y;
     out property <length> popup-bottom: menu-container.y + menu-container.height;
 
@@ -235,7 +246,40 @@ export component MessageContextMenu inherits Rectangle {
     // reads as a modal choice over the chat, not a stray card on top of it.
     width: 100%;
     height: 100%;
-    background: Materials.scrim;
+    background: transparent;
+
+    // Leave the pressed bubble clear while dimming the rest of the chat.
+    // Bounds are captured at press time because virtualized rows may recycle
+    // before the asynchronous menu lookup finishes.
+    if !root.bubble-in-view: Rectangle {
+        width: 100%;
+        height: 100%;
+        background: Materials.scrim;
+    }
+    if root.bubble-in-view: Rectangle {
+        width: 100%;
+        height: root.visible-bubble-top;
+        background: Materials.scrim;
+    }
+    if root.bubble-in-view: Rectangle {
+        y: root.visible-bubble-bottom;
+        width: 100%;
+        height: max(0px, root.height - self.y);
+        background: Materials.scrim;
+    }
+    if root.bubble-in-view: Rectangle {
+        y: root.visible-bubble-top;
+        width: root.visible-bubble-left;
+        height: max(0px, root.visible-bubble-bottom - self.y);
+        background: Materials.scrim;
+    }
+    if root.bubble-in-view: Rectangle {
+        x: root.visible-bubble-right;
+        y: root.visible-bubble-top;
+        width: max(0px, root.width - self.x);
+        height: max(0px, root.visible-bubble-bottom - self.y);
+        background: Materials.scrim;
+    }
 
     // Backdrop touch area to close menu
     TouchArea {
@@ -243,6 +287,16 @@ export component MessageContextMenu inherits Rectangle {
         height: 100%;
         enabled: root.show;
         clicked => { root.close(); }
+    }
+
+    if root.bubble-in-view: Rectangle {
+        x: root.visible-bubble-left;
+        y: root.visible-bubble-top;
+        width: max(0px, root.visible-bubble-right - self.x);
+        height: max(0px, root.visible-bubble-bottom - self.y);
+        border-radius: Spacing.radius-bubble;
+        border-width: Spacing.stroke;
+        border-color: Colors.primary.with-alpha(0.65);
     }
 
     // Menu container - positioned at the anchor (press point / click point).
@@ -273,25 +327,30 @@ export component MessageContextMenu inherits Rectangle {
         property <length> menu-h: menu-layout.preferred-height;
         property <length> top-limit: max(0px, root.content-top) + Spacing.sm;
         property <length> bottom-limit: parent.height - Spacing.sm;
-        property <bool> has-bubble-anchor: root.anchor-bottom > root.anchor-top;
+        property <bool> has-bubble-anchor: root.has-bubble-anchor;
         property <length> room-below: max(0px, self.bottom-limit - root.anchor-bottom - Spacing.sm);
         property <length> room-above: max(0px, root.anchor-top - Spacing.sm - self.top-limit);
-        // Keep the entire bubble visible. If neither side fits, use the larger
-        // side and let the existing Flickable scroll the menu's body.
+        // A bubble that fills the viewport leaves no room on either side.
+        // Keep the menu usable at the top and its bottom edge clear of the
+        // bubble's lower fragment; the existing Flickable scrolls its body.
+        property <bool> cramped-bubble: self.has-bubble-anchor
+            && max(self.room-above, self.room-below) < 2 * Spacing.touch-target-min;
         property <bool> flip-up: self.has-bubble-anchor
-            ? (self.room-below < self.menu-h && self.room-above > self.room-below)
+            ? (self.cramped-bubble || (self.room-below < self.menu-h && self.room-above > self.room-below))
             : root.position-y + Spacing.sm + self.menu-h > self.bottom-limit;
 
         x: max(Spacing.sm, min(root.position-x - Spacing.sm, parent.width - self.width - Spacing.md));
-        y: (max(self.top-limit,
+        y: (self.cramped-bubble ? self.top-limit : max(self.top-limit,
                min(self.flip-up
                     ? (self.has-bubble-anchor ? root.anchor-top : root.position-y) - Spacing.sm - self.height
                     : (self.has-bubble-anchor ? root.anchor-bottom : root.position-y) + Spacing.sm,
                    self.bottom-limit - self.height))) + self.entrance-offset;
         width: min(304px, parent.width - 2 * Spacing.md);
-        height: max(0px, min(self.menu-h, self.has-bubble-anchor
-            ? (self.flip-up ? self.room-above : self.room-below)
-            : self.bottom-limit - self.top-limit));
+        height: max(0px, min(self.menu-h, self.cramped-bubble
+            ? self.bottom-limit - self.top-limit - Spacing.touch-target-min
+            : self.has-bubble-anchor
+                ? (self.flip-up ? self.room-above : self.room-below)
+                : self.bottom-limit - self.top-limit));
         border-radius: Spacing.radius-xl;
 
         // Block backdrop clicks on menu

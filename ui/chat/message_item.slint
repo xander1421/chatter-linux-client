@@ -177,6 +177,8 @@ export component MessageItem inherits Rectangle {
     callback more-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
     out property <length> menu-anchor-top: 0px;
     out property <length> menu-anchor-bottom: 0px;
+    out property <length> menu-anchor-left: 0px;
+    out property <length> menu-anchor-right: 0px;
     callback selection-toggled(string);
     callback open-message-link(string);
     callback message-clicked(string);
@@ -228,9 +230,11 @@ export component MessageItem inherits Rectangle {
     // not reachable from a component-level function.
     property <length> anchor-x: 0px;
     property <length> anchor-y: 0px;
-    function request-menu(x: length, y: length, top: length, bottom: length) {
+    function request-menu(x: length, y: length, top: length, bottom: length, left: length, right: length) {
         root.menu-anchor-top = top;
         root.menu-anchor-bottom = bottom;
+        root.menu-anchor-left = left;
+        root.menu-anchor-right = right;
         root.more-clicked(root.sender-id, root.timestamp-ns, x, y);
     }
     property <bool> holding: false;
@@ -319,7 +323,7 @@ export component MessageItem inherits Rectangle {
 
     // Both the bubble TouchArea and link-owned StyledText stream use absolute
     // coordinates, so movement and anchoring are identical across inline runs.
-    function begin-message-press(x: length, y: length, menu-x: length, menu-y: length, menu-top: length) {
+    function begin-message-press(x: length, y: length, menu-x: length, menu-y: length, menu-top: length, menu-right: length) {
         root.cancel-hold();
         root.begin-swipe(x, y);
         root.press-x = x;
@@ -328,6 +332,8 @@ export component MessageItem inherits Rectangle {
         root.anchor-y = menu-y;
         root.menu-anchor-top = menu-top;
         root.menu-anchor-bottom = menu-y;
+        root.menu-anchor-left = menu-x;
+        root.menu-anchor-right = menu-right;
         root.hold-tier = 0;
         if (root.mobile && !root.selection-mode
             && (!root.is-system || root.is-call) && !root.is-deleted) {
@@ -346,7 +352,8 @@ export component MessageItem inherits Rectangle {
     }
 
     function open-menu() {
-        root.request-menu(root.anchor-x, root.anchor-y, root.menu-anchor-top, root.menu-anchor-bottom);
+        root.request-menu(root.anchor-x, root.anchor-y, root.menu-anchor-top, root.menu-anchor-bottom,
+            root.menu-anchor-left, root.menu-anchor-right);
     }
 
     tier1-timer := Timer {
@@ -582,11 +589,13 @@ export component MessageItem inherits Rectangle {
                     pointer-event(event) => {
                         if event.button == PointerEventButton.right && event.kind == PointerEventKind.up {
                             root.request-menu(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y,
-                                self.absolute-position.y, self.absolute-position.y + self.height);
+                                self.absolute-position.y, self.absolute-position.y + self.height,
+                                self.absolute-position.x, self.absolute-position.x + self.width);
                         }
                         if event.kind == PointerEventKind.down && event.button == PointerEventButton.left {
                             root.begin-message-press(self.absolute-position.x + self.mouse-x, self.absolute-position.y + self.mouse-y,
-                                self.absolute-position.x, self.absolute-position.y + self.height, self.absolute-position.y);
+                                self.absolute-position.x, self.absolute-position.y + self.height, self.absolute-position.y,
+                                self.absolute-position.x + self.width);
                         }
                         if event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel { root.cancel-hold(); }
                     }
@@ -763,7 +772,8 @@ export component MessageItem inherits Rectangle {
                             if (event.button == PointerEventButton.right && event.kind == PointerEventKind.up) {
                                 root.request-menu(self.absolute-position.x + self.mouse-x,
                                     self.absolute-position.y + self.mouse-y,
-                                    bubble.absolute-position.y, bubble.absolute-position.y + bubble.height);
+                                    bubble.absolute-position.y, bubble.absolute-position.y + bubble.height,
+                                    bubble.absolute-position.x, bubble.absolute-position.x + bubble.width);
                                 return;
                             }
 
@@ -773,7 +783,8 @@ export component MessageItem inherits Rectangle {
                                     self.absolute-position.y + self.mouse-y,
                                     self.absolute-position.x,
                                     self.absolute-position.y + self.height,
-                                    self.absolute-position.y);
+                                    self.absolute-position.y,
+                                    self.absolute-position.x + self.width);
                             }
 
                             // Release, or a grab stolen by the scrolling
@@ -1063,7 +1074,8 @@ export component MessageItem inherits Rectangle {
                                                 self.absolute-position.y + self.mouse-y,
                                                 bubble-touch.absolute-position.x,
                                                 bubble-touch.absolute-position.y + bubble-touch.height,
-                                                bubble.absolute-position.y);
+                                                bubble.absolute-position.y,
+                                                bubble.absolute-position.x + bubble.width);
                                         }
                                         if (event.kind == PointerEventKind.move) {
                                             root.move-message-press(self.absolute-position.x + self.mouse-x,
@@ -1108,7 +1120,8 @@ export component MessageItem inherits Rectangle {
                                             self.absolute-position.y + self.mouse-y,
                                             bubble-touch.absolute-position.x,
                                             bubble-touch.absolute-position.y + bubble-touch.height,
-                                            bubble.absolute-position.y);
+                                            bubble.absolute-position.y,
+                                            bubble.absolute-position.x + bubble.width);
                                     }
                                     if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
                                         root.end-swipe(event.kind == PointerEventKind.cancel);
@@ -1235,7 +1248,8 @@ export component MessageItem inherits Rectangle {
                                         }
                                         held => {
                                             root.request-menu(self.anchor-x, self.anchor-y,
-                                                bubble.absolute-position.y, bubble.absolute-position.y + bubble.height);
+                                                bubble.absolute-position.y, bubble.absolute-position.y + bubble.height,
+                                                bubble.absolute-position.x, bubble.absolute-position.x + bubble.width);
                                         }
                                     }
                                 }
@@ -1256,7 +1270,8 @@ export component MessageItem inherits Rectangle {
                                     audio-seek(id, pos) => { root.audio-seek(id, pos); }
                                     more-clicked(x, y) => {
                                         root.request-menu(x, y,
-                                            bubble.absolute-position.y, bubble.absolute-position.y + bubble.height);
+                                            bubble.absolute-position.y, bubble.absolute-position.y + bubble.height,
+                                            bubble.absolute-position.x, bubble.absolute-position.x + bubble.width);
                                     }
                                 }
 
@@ -1361,7 +1376,8 @@ export component MessageItem inherits Rectangle {
                                         }
                                         held => {
                                             root.request-menu(self.anchor-x, self.anchor-y,
-                                                bubble.absolute-position.y, bubble.absolute-position.y + bubble.height);
+                                                bubble.absolute-position.y, bubble.absolute-position.y + bubble.height,
+                                                bubble.absolute-position.x, bubble.absolute-position.x + bubble.width);
                                         }
                                     }
                                 }
@@ -1459,7 +1475,8 @@ export component MessageItem inherits Rectangle {
                                         }
                                         held => {
                                             root.request-menu(self.anchor-x, self.anchor-y,
-                                                bubble.absolute-position.y, bubble.absolute-position.y + bubble.height);
+                                                bubble.absolute-position.y, bubble.absolute-position.y + bubble.height,
+                                                bubble.absolute-position.x, bubble.absolute-position.x + bubble.width);
                                         }
                                     }
                                 }
@@ -1814,7 +1831,8 @@ export component MessageItem inherits Rectangle {
                                 clicked => {
                                         root.request-menu(more-btn.absolute-position.x,
                                             more-btn.absolute-position.y + more-btn.height,
-                                            bubble.absolute-position.y, bubble.absolute-position.y + bubble.height);
+                                            bubble.absolute-position.y, bubble.absolute-position.y + bubble.height,
+                                            bubble.absolute-position.x, bubble.absolute-position.x + bubble.width);
                                 }
                             }
                         }

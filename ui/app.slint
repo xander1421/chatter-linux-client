@@ -688,6 +688,8 @@ export component MainWindow inherits Window {
     in-out property <length> context-menu-content-top: 0px;
     private property <length> context-menu-anchor-top: 0px;
     private property <length> context-menu-anchor-bottom: 0px;
+    private property <length> context-menu-anchor-left: 0px;
+    private property <length> context-menu-anchor-right: 0px;
     // All callbacks use (sender_id, timestamp_ns) for Signal-style lookups
     callback reply-message(string, string);
     callback edit-message(string, string);
@@ -2430,8 +2432,10 @@ export component MainWindow inherits Window {
                         thread-clicked(id) => { root.thread-clicked(id); }
                         more-clicked(sender-id, timestamp-ns, x, y) => {
                             root.context-menu-content-top = self.content-top;
-                            root.context-menu-anchor-top = 0px;
-                            root.context-menu-anchor-bottom = 0px;
+                            root.context-menu-anchor-top = self.menu-anchor-top;
+                            root.context-menu-anchor-bottom = self.menu-anchor-bottom;
+                            root.context-menu-anchor-left = self.menu-anchor-left;
+                            root.context-menu-anchor-right = self.menu-anchor-right;
                             root.more-clicked(sender-id, timestamp-ns, x, y);
                         }
                         quote-clicked(id) => { root.quote-clicked(id); }
@@ -2528,8 +2532,10 @@ export component MainWindow inherits Window {
                         more-clicked(sender-id, timestamp-ns, x, y) => {
                             // The panel's own header is the menu's ceiling.
                             root.context-menu-content-top = self.absolute-position.y;
-                            root.context-menu-anchor-top = 0px;
-                            root.context-menu-anchor-bottom = 0px;
+                            root.context-menu-anchor-top = self.menu-anchor-top;
+                            root.context-menu-anchor-bottom = self.menu-anchor-bottom;
+                            root.context-menu-anchor-left = self.menu-anchor-left;
+                            root.context-menu-anchor-right = self.menu-anchor-right;
                             root.more-clicked(sender-id, timestamp-ns, x, y);
                         }
                         react-clicked(sender-id, timestamp-ns, x, y) => {
@@ -4123,6 +4129,8 @@ export component MainWindow inherits Window {
                 ? root.context-menu-anchor-top - root.safe-area-top : 0px;
             anchor-bottom: root.context-menu-anchor-bottom > 0px
                 ? root.context-menu-anchor-bottom - root.safe-area-top : 0px;
+            anchor-left: root.context-menu-anchor-left;
+            anchor-right: root.context-menu-anchor-right;
             retry-clicked(id) => { root.message-clicked(id); }
             info-clicked(id) => { MessageInfo.open(id); }
             can-thread: root.conversation-kind == ConversationKind.channel;
