@@ -34,6 +34,8 @@ pub enum AnonDmStatus {
     Blocked = 2,
     /// Declined/rejected.
     Declined = 3,
+    /// Ended locally when the peer started a new secret chat. History stays stored.
+    Superseded = 4,
 }
 
 impl AnonDmStatus {
@@ -43,6 +45,7 @@ impl AnonDmStatus {
             1 => Self::Active,
             2 => Self::Blocked,
             3 => Self::Declined,
+            4 => Self::Superseded,
             _ => Self::Pending,
         }
     }

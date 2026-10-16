@@ -862,11 +862,52 @@ impl ChatterClient {
         // as secret. Their traffic rides the onion channel in either mode.
         let mut out: Vec<ChatRowSendData> = self.list_regular_dm_sidebar();
         // Old requests can coexist with an accepted chat in local storage.
-        // Keep the accepted chat as the peer's one visible secret-chat row.
+        // A superseding incoming request takes the peer's one visible row.
         let mut shown_secret_peers = std::collections::HashSet::new();
+        let anon_conversations = self.list_anon_dm_conversations();
+        let superseded_peers: std::collections::HashSet<_> = anon_conversations
+            .iter()
+            .filter(|dm| dm.status == AnonDmStatus::Superseded)
+            .map(|dm| dm.peer_id)
+            .collect();
+
+        // Anon DMs — incoming message requests awaiting acceptance.
+        for dm in self.list_anon_dm_message_requests() {
+            if !shown_secret_peers.insert(dm.peer_id) {
+                continue;
+            }
+            let peer_name = dm
+                .peer_display_name
+                .clone()
+                .unwrap_or_else(|| self.fallback_display_name(&dm.peer_id));
+            let latest = self.get_latest_anon_dm_message(&dm.id);
+            let last_message = if superseded_peers.contains(&dm.peer_id) {
+                format!("{} started a new secret chat — Accept / Decline", peer_name)
+            } else {
+                match &latest {
+                    Some(msg) => self.message_sidebar_preview(msg),
+                    None => "Message request".to_string(),
+                }
+            };
+            out.push(ChatRowSendData {
+                user_id: dm.peer_id.to_string(),
+                initials: initials_from_name(&peer_name),
+                avatar_bytes: dm.peer_avatar.clone(),
+                presence_status: "pending".to_string(),
+                last_message,
+                timestamp: self.sidebar_time(dm.created_at),
+                unread_count: 1,
+                last_activity: Some(latest.map_or(dm.created_at, |m| m.created_at)),
+                ..ChatRowSendData::new(
+                    ConversationType::AnonDm,
+                    dm.id.to_string(),
+                    format!("\u{1F4E9} {}", peer_name),
+                )
+            });
+        }
 
         // Anon DMs — active conversations.
-        for dm in self.list_anon_dm_conversations() {
+        for dm in anon_conversations {
             if dm.status != AnonDmStatus::Active || !shown_secret_peers.insert(dm.peer_id) {
                 continue;
             }
@@ -894,39 +935,6 @@ impl ChatterClient {
                 unread_count: dm.unread_count,
                 last_activity: latest.map(|m| m.created_at),
                 ..ChatRowSendData::new(ConversationType::AnonDm, dm.id.to_string(), display_name)
-            });
-        }
-
-        // Anon DMs — incoming message requests awaiting acceptance.
-        for dm in self.list_anon_dm_message_requests() {
-            if !shown_secret_peers.insert(dm.peer_id) {
-                continue;
-            }
-            let peer_name = dm
-                .peer_display_name
-                .clone()
-                .unwrap_or_else(|| self.fallback_display_name(&dm.peer_id));
-            let latest = self.get_latest_anon_dm_message(&dm.id);
-            let last_message = match &latest {
-                Some(msg) => self.message_sidebar_preview(msg),
-                None => "Message request".to_string(),
-            };
-            out.push(ChatRowSendData {
-                user_id: dm.peer_id.to_string(),
-                initials: initials_from_name(&peer_name),
-                avatar_bytes: dm.peer_avatar.clone(),
-                presence_status: "pending".to_string(),
-                last_message,
-                timestamp: self.sidebar_time(dm.created_at),
-                unread_count: 1,
-                last_activity: Some(latest.map_or(dm.created_at, |m| m.created_at)),
-                // Envelope marker distinguishes a pending request from an
-                // active conversation in the sidebar.
-                ..ChatRowSendData::new(
-                    ConversationType::AnonDm,
-                    dm.id.to_string(),
-                    format!("\u{1F4E9} {}", peer_name),
-                )
             });
         }
 
