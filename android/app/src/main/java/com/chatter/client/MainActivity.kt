@@ -127,6 +127,10 @@ class MainActivity : GameActivity() {
     private external fun nativeReleasePendingVideo(token: Long)
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // Samsung may prelaunch this Activity before BOOT_COMPLETED without
+        // creating a usable window. Preserve the durable account marker until
+        // Rust restores the session; the default Kotlin false is not sign-out.
+        messagingSignedIn = MessagingService.wasSignedIn(this)
         ViewerMediaExport.startup(this)
         // Until Slint's first frame the window background is all there is.
         // themes.xml resolves it from the SYSTEM night mode, so a Light app on
@@ -422,9 +426,16 @@ class MainActivity : GameActivity() {
     override fun onResume() {
         super.onResume()
         applySecureScreen()
-        messagingBackground = false
+        // A prelaunched Activity can be resumed without ever gaining focus.
+        messagingBackground = !window.decorView.hasWindowFocus()
         updateMessagingService()
         if (intent.action == "com.chatter.client.MESSAGE_OPEN") dispatchMessageNotification(intent)
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        messagingBackground = !hasFocus
+        updateMessagingService()
     }
 
     /** Implemented in Rust. Stores a GlobalRef to this Activity. */

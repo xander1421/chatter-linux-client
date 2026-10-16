@@ -21,6 +21,8 @@ pub mod platform;
 mod redacted_log;
 mod tor_stage_trace;
 
+mod app_log;
+
 /// Global tokio runtime handle for use in Slint callbacks.
 /// On Android, Slint's event loop doesn't preserve the tokio runtime context,
 /// so tokio::spawn silently fails from callbacks. This handle is set once at
@@ -107,14 +109,19 @@ pub extern "system" fn Java_com_chatter_client_MessagingService_nativeStartHeadl
     if !initialized {
         return false;
     }
+    init_tracing();
+    tracing::warn!(target: "chatter_ui::startup::headless_entered", "headless core entry");
     crate::platform::android::keystore::init();
     let runtime = android_runtime();
     let _ = RT_HANDLE.set(runtime.handle().clone());
     let result = runtime.block_on(async { android_core(false).await });
     match result {
-        Ok(_) => true,
+        Ok(_) => {
+            tracing::warn!(target: "chatter_ui::startup::headless_ready", "headless core ready");
+            true
+        }
         Err(error) => {
-            tracing::warn!("Headless messaging startup failed: {error}");
+            tracing::warn!(target: "chatter_ui::startup::headless_failed", "Headless messaging startup failed: {error}");
             false
         }
     }
@@ -124,7 +131,9 @@ pub extern "system" fn Java_com_chatter_client_MessagingService_nativeStartHeadl
 async fn android_core(
     allow_signed_out: bool,
 ) -> Result<(std::sync::Arc<chatter_core::client::ChatterClient>, bool), String> {
+    tracing::info!("Android core: waiting for startup lock");
     let _lock = ANDROID_CORE_LOCK.lock().await;
+    tracing::info!("Android core: startup lock acquired");
     if let Some(client) = ANDROID_CLIENT.get() {
         if !allow_signed_out && !client.is_logged_in() {
             return Err("No signed-in session".into());
@@ -156,6 +165,7 @@ async fn android_core(
         .notification_sink(sink)
         .build()
         .map_err(|e| e.to_string())?;
+    tracing::info!("Android core: client opened");
     client.restore_session();
     if !client.is_logged_in() && !allow_signed_out {
         return Err("No restored signed-in session".into());
@@ -167,6 +177,7 @@ async fn android_core(
     let connected = client
         .startup_connect(std::time::Duration::from_secs(5))
         .await;
+    tracing::info!(connected, "Android core: startup connect completed");
     if client.is_logged_in() {
         match client.start().await {
             Ok(()) => ANDROID_SERVICES_READY.store(true, std::sync::atomic::Ordering::Release),
@@ -182,6 +193,7 @@ async fn android_core(
     }
     ANDROID_CONNECTED.store(connected, std::sync::atomic::Ordering::Release);
     let _ = ANDROID_CLIENT.set(client.clone());
+    tracing::info!("Android core: client published");
     if !allow_signed_out && !ANDROID_SERVICES_READY.load(std::sync::atomic::Ordering::Acquire) {
         return Err("Messaging services did not start".into());
     }
@@ -351,6 +363,8 @@ fn android_main(app: i_slint_backend_android_activity::AndroidApp) {
         .map(|p| p.to_string_lossy().into_owned())
         .unwrap_or_else(|| "/data/data/com.chatter.client/files".to_string());
     let _ = ANDROID_DATA_DIR.set(data_dir);
+    init_tracing();
+    tracing::info!("Android Activity entry");
 
     // Activity Resume/Pause is the app's visibility: core marks nothing read
     // and sends no receipt while it is paused (backgrounded, screen locked).
@@ -490,6 +504,60 @@ pub fn mirror_anon_mode_build(window: &MainWindow) {
         .set_onion_built(cfg!(feature = "onion"));
 }
 
+static TRACING_INITIALIZED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
+
+fn init_tracing() {
+    TRACING_INITIALIZED.get_or_init(|| {
+        use tracing_subscriber::{Layer, prelude::*};
+        let normal_filter = if cfg!(debug_assertions) {
+            tracing_subscriber::EnvFilter::from_default_env()
+                .add_directive(tracing::Level::INFO.into())
+        } else {
+            // Release logs must not be made verbose through RUST_LOG.
+            tracing_subscriber::EnvFilter::new("warn")
+        }
+        .add_directive("glycin=warn".parse().unwrap())
+        .add_directive("glycin_utils=warn".parse().unwrap())
+        .add_directive("zbus=warn".parse().unwrap());
+        let stage_trace = tor_stage_trace::TorStageTrace::open().map(|trace| {
+            trace.with_filter(tracing_subscriber::filter::filter_fn(|meta| {
+                *meta.level() <= tracing::Level::DEBUG
+                    && (meta.target().starts_with("tor_dirmgr")
+                        || (tor_stage_trace::dial_active()
+                            && (meta.target().starts_with("tor_hsclient")
+                                || meta.target().starts_with("tor_circmgr"))))
+            }))
+        });
+        // Debug builds keep full event values for development; release builds
+        // never format event values (identifiers, errors, message text).
+        let (full_layer, redacted_layer) = if cfg!(debug_assertions) {
+            (
+                Some(
+                    tracing_subscriber::fmt::layer()
+                        .with_writer(app_log::writer)
+                        .with_filter(normal_filter),
+                ),
+                None,
+            )
+        } else {
+            (
+                None,
+                Some(
+                    tracing_subscriber::fmt::layer()
+                        .with_writer(app_log::writer)
+                        .event_format(redacted_log::RedactedEventFormatter)
+                        .with_filter(normal_filter),
+                ),
+            )
+        };
+        let _ = tracing_subscriber::registry()
+            .with(full_layer)
+            .with(redacted_layer)
+            .with(stage_trace)
+            .try_init();
+    });
+}
+
 /// Phase 1: Async initialization (runs inside block_on — reactor is active).
 /// Creates client, gRPC channels, window, and wires callbacks.
 /// Returns state for the sync event loop phase, or a message to show when
@@ -506,47 +574,7 @@ pub async fn app_init() -> Result<AppState, String> {
 
     let shutdown_token = CancellationToken::new();
 
-    use tracing_subscriber::{Layer, prelude::*};
-    let normal_filter = if cfg!(debug_assertions) {
-        tracing_subscriber::EnvFilter::from_default_env().add_directive(tracing::Level::INFO.into())
-    } else {
-        // Release logs must not be made verbose through RUST_LOG.
-        tracing_subscriber::EnvFilter::new("warn")
-    }
-    .add_directive("glycin=warn".parse().unwrap())
-    .add_directive("glycin_utils=warn".parse().unwrap())
-    .add_directive("zbus=warn".parse().unwrap());
-    let stage_trace = tor_stage_trace::TorStageTrace::open().map(|trace| {
-        trace.with_filter(tracing_subscriber::filter::filter_fn(|meta| {
-            *meta.level() <= tracing::Level::DEBUG
-                && (meta.target().starts_with("tor_dirmgr")
-                    || (tor_stage_trace::dial_active()
-                        && (meta.target().starts_with("tor_hsclient")
-                            || meta.target().starts_with("tor_circmgr"))))
-        }))
-    });
-    // Debug builds keep full event values for development; release builds
-    // never format event values (identifiers, errors, message text).
-    let (full_layer, redacted_layer) = if cfg!(debug_assertions) {
-        (
-            Some(tracing_subscriber::fmt::layer().with_filter(normal_filter)),
-            None,
-        )
-    } else {
-        (
-            None,
-            Some(
-                tracing_subscriber::fmt::layer()
-                    .event_format(redacted_log::RedactedEventFormatter)
-                    .with_filter(normal_filter),
-            ),
-        )
-    };
-    let _ = tracing_subscriber::registry()
-        .with(full_layer)
-        .with(redacted_layer)
-        .with(stage_trace)
-        .try_init();
+    init_tracing();
 
     tracing::info!("Chatter Client v0.1.0 ({})", std::env::consts::OS);
 

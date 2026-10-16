@@ -86,6 +86,7 @@ class MessagingService : Service() {
                     Log.e("MessagingService", "Headless core startup failed", error)
                     false
                 }
+                if (!ready) Log.w("MessagingService", "Native headless startup returned false")
                 Handler(Looper.getMainLooper()).post {
                     nativeStartupPending = false
                     if (ready && !stopRequested && wasSignedIn(this)) {
@@ -122,7 +123,10 @@ class MessagingService : Service() {
             // commit makes the marker durable before an update kills this process.
             context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
                 .edit().putBoolean(SIGNED_IN, signedIn).commit()
-            coreReadyInProcess = signedIn
+            // Core calls this at the beginning of start(), before its inbox
+            // poller exists. Only a successful nativeStartHeadless may mark
+            // this process ready; it also waits for Activity startup if needed.
+            if (!signedIn) coreReadyInProcess = false
         }
         fun start(context: Context) {
             stopRequested = false
