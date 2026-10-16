@@ -220,6 +220,7 @@ impl ChatterClient {
         text: String,
         reply: Option<ComposerReply>,
     ) -> Result<ComposerSend, String> {
+        let text = text.trim().to_owned();
         let session_revision = self.auth_state().get().session_revision;
         let chat = self.chat_state().get();
         let conversation = chat.active_conversation;
