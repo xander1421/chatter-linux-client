@@ -152,6 +152,7 @@ export component SettingsScreen inherits Rectangle {
     property <float> page-entry: 1;
     changed active-section => {
         root.confirm-revoke-id = 0;
+        content-scroll.viewport-y = 0px;
         if root.active-section == "devices" { root.refresh-sessions(); }
         // Snap the new section a little toward its source, then let it glide
         // into the same content column. The timer separates the two frames.
@@ -364,7 +365,7 @@ export component SettingsScreen inherits Rectangle {
             vertical-stretch: 1;
             background: Colors.background;
 
-            Flickable {
+            content-scroll := Flickable {
                 width: parent.width;
                 height: parent.height;
                 viewport-width: self.width;
@@ -838,7 +839,9 @@ export component SettingsScreen inherits Rectangle {
                                 border-width: Elevation.rim-width;
                                 border-color: Elevation.card-rim;
 
-                                VerticalLayout {
+                                preferred-height: backup-content.preferred-height;
+
+                                backup-content := VerticalLayout {
                                     padding: Spacing.md;
                                     spacing: Spacing.sm;
 
@@ -847,6 +850,7 @@ export component SettingsScreen inherits Rectangle {
                                         icon: Icons.download;
                                         title: "Message Backup";
                                         detail: "Encrypted message history, conversations, and contacts. File backups need a passphrase; server backups need your PIN.";
+                                        min-height: root.compact-mode ? 112px : Spacing.button-height;
                                         clickable: false;
                                         show-chevron: false;
                                     }
@@ -911,12 +915,13 @@ export component SettingsScreen inherits Rectangle {
 
                                     HorizontalLayout {
                                         spacing: Spacing.sm;
-                                        alignment: end;
+                                        alignment: start;
 
                                         Button {
                                             touch: root.mobile-platform;
                                             text: "Back Up to Server";
                                             variant: "secondary";
+                                            horizontal-stretch: 1;
                                             disabled: root.message-backup-pin == "";
                                             clicked => {
                                                 root.server-message-backup(root.message-backup-pin);
@@ -927,6 +932,7 @@ export component SettingsScreen inherits Rectangle {
                                             touch: root.mobile-platform;
                                             text: "Restore from Server";
                                             variant: "secondary";
+                                            horizontal-stretch: 1;
                                             disabled: root.message-backup-pin == "";
                                             clicked => {
                                                 root.restore-message-backup(root.message-backup-pin);
@@ -2079,7 +2085,9 @@ export component SettingsScreen inherits Rectangle {
                                 border-width: Elevation.rim-width;
                                 border-color: Elevation.card-rim;
 
-                                VerticalLayout {
+                                preferred-height: identity-content.preferred-height;
+
+                                identity-content := VerticalLayout {
                                     padding: Spacing.md;
                                     spacing: Spacing.sm;
 
@@ -2098,7 +2106,9 @@ export component SettingsScreen inherits Rectangle {
                                         background: Colors.inset;
                                         border-radius: Spacing.radius-md;
 
-                                        VerticalLayout {
+                                        preferred-height: fingerprint-content.preferred-height;
+
+                                        fingerprint-content := VerticalLayout {
                                             padding: Spacing.lg;
 
                                             Text {
@@ -2107,6 +2117,8 @@ export component SettingsScreen inherits Rectangle {
                                                 font-size: Typography.sm;
                                                 letter-spacing: 1px;
                                                 horizontal-alignment: center;
+                                                wrap: word-wrap;
+                                                min-width: 0px;
                                             }
                                         }
                                     }
@@ -2150,10 +2162,13 @@ export component SettingsScreen inherits Rectangle {
                                 border-width: Elevation.rim-width;
                                 border-color: Elevation.card-rim;
 
-                                ToggleRow {
+                                preferred-height: sealed-sender-row.preferred-height;
+
+                                sealed-sender-row := ToggleRow {
                                     row-padding: Spacing.md;
                                     row-spacing: Spacing.md;
                                     label-spacing: Spacing.sm;
+                                    min-height: root.compact-mode ? 128px : Spacing.button-height;
                                     accessible-text: "Allow sealed sender from anyone";
                                     checked <=> root.sealed-sender-unrestricted;
                                     toggled(value) => {
@@ -2213,7 +2228,6 @@ export component SettingsScreen inherits Rectangle {
                                     label-spacing: Spacing.sm;
                                     accessible-text: "Enable Local AI";
                                     checked <=> root.local-ai-enabled;
-                                    glow-mode: "cyan";
                                     toggled(value) => {
                                         root.local-ai-enabled = value;
                                         root.local-ai-enabled-changed(value);
@@ -2253,7 +2267,6 @@ export component SettingsScreen inherits Rectangle {
                                         label-spacing: Spacing.sm;
                                         accessible-text: "Use cloud AI";
                                         checked <=> root.ai-prefer-cloud;
-                                        glow-mode: "cyan";
                                         toggled(value) => {
                                             root.ai-prefer-cloud = value;
                                             root.ai-prefer-cloud-changed(value);
@@ -3250,6 +3263,7 @@ export component SettingsScreen inherits Rectangle {
                             { id: "about", label: "About" }
                         ]: Button {
                             touch: root.mobile-platform;
+                            hover-enabled: !root.mobile-platform;
                             text: item.label;
                             height: Spacing.touch-target-min;
                             // Selected tab = the neutral raised pill every other tab bar uses
