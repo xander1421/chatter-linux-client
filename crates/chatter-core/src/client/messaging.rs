@@ -1233,7 +1233,10 @@ impl ChatterClient {
                         username: String::new(),
                         avatar_bytes: profile.avatar_bytes.clone(),
                         avatar_decoded: None,
-                        presence_status: profile.presence.as_str().to_string(),
+                        presence_status: self
+                            .peer_presence(&friendship.addressee_id)
+                            .as_str()
+                            .to_string(),
                         custom_status: String::new(),
                         is_anon: false,
                     });
@@ -1251,8 +1254,8 @@ impl ChatterClient {
     ///
     /// Shield on: active anon-DM peers. Shield off: accepted friends who are
     /// not blocked (`listed_friends`, either direction of the row). Presence
-    /// is `offline` — the stored profile can still say `online` from the
-    /// previous session, and this path has not asked the server.
+    /// uses the same privacy-shaped local presence as the DM sidebar. Live
+    /// presence events update both views after this snapshot is published.
     pub fn local_friend_tab_entries(&self) -> Vec<crate::ui::sidebar_data::FriendDataSendData> {
         use crate::domain::anon_dm::AnonDmStatus;
         use crate::ui::sidebar_data::FriendDataSendData;
@@ -1290,7 +1293,7 @@ impl ChatterClient {
                     username: String::new(),
                     avatar_bytes,
                     avatar_decoded: None,
-                    presence_status: "offline".to_string(),
+                    presence_status: self.peer_presence(&peer).as_str().to_string(),
                     custom_status: String::new(),
                     is_anon: false,
                 }
