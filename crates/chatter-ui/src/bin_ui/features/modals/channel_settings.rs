@@ -565,7 +565,15 @@ pub struct PrivateGroupRoster {
     can_leave: bool,
     blocked: bool,
     /// (user id, display name, role, avatar bytes, is us, blocked in group, invited)
-    members: Vec<(String, String, &'static str, Option<Vec<u8>>, bool, bool, bool)>,
+    members: Vec<(
+        String,
+        String,
+        &'static str,
+        Option<Vec<u8>>,
+        bool,
+        bool,
+        bool,
+    )>,
 }
 
 /// Blocking DB reads — call off the UI thread. `None` when the group is not
@@ -602,8 +610,8 @@ pub fn load_private_group_roster(
         })
         .collect();
     Some(PrivateGroupRoster {
-        is_owner: group.is_current_user_owner(&current_user_id),
-        can_manage_members: group.can_manage_members(),
+        is_owner: group.status.can_send() && group.is_current_user_owner(&current_user_id),
+        can_manage_members: group.status.can_send() && group.can_manage_members(),
         can_leave: ui_ctx.can_leave_anon_group(&group_id),
         blocked: group.is_blocked(),
         name: group.name,
@@ -624,10 +632,10 @@ pub fn apply_private_group_roster(w: &MainWindow, roster: PrivateGroupRoster) {
     w.set_channel_settings_can_leave(roster.can_leave);
     w.set_channel_settings_group_blocked(roster.blocked);
     w.set_channel_settings_member_count(
-        roster.members.iter().filter(|member| !member.6).count() as i32,
+        roster.members.iter().filter(|member| !member.6).count() as i32
     );
     w.set_channel_settings_invited_count(
-        roster.members.iter().filter(|member| member.6).count() as i32,
+        roster.members.iter().filter(|member| member.6).count() as i32
     );
     w.set_channel_settings_is_owner(roster.is_owner);
     w.set_channel_settings_can_manage_members(roster.can_manage_members);
@@ -1040,7 +1048,19 @@ fn wire_member_management(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 // A group kick emits no membership event here; re-read the roster.
                 Ok(()) => {
                     if let Some(id) = conv.channel_id() {
-                        refresh_members_if_open(weak, ui_ctx, id);
+                        refresh_members_if_open(weak.clone(), ui_ctx.clone(), id);
+                        if let ActiveConversation::AnonGroup(group_id) = conv {
+                            let _ = slint::invoke_from_event_loop(move || {
+                                if let Some(w) = weak.upgrade() {
+                                    crate::bin_ui::features::sidebar::refresh_chat_list(&w, &ui_ctx);
+                                    if ui_ctx.active_conversation().matches_anon_group(&group_id) {
+                                        crate::bin_ui::features::sidebar::private_group::load_private_group_messages(
+                                            &w, &ui_ctx, &group_id.to_string(),
+                                        );
+                                    }
+                                }
+                            });
+                        }
                     }
                 }
                 Err(e) => {

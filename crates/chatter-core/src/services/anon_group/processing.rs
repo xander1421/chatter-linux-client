@@ -154,7 +154,7 @@ impl AnonGroupService {
         // applies, so the roster stays true and we never keep sending to
         // someone who left.
         let group_blocked = match self.anon_group_repo.get_group(group_id) {
-            Ok(group) => group.is_some_and(|g| g.is_blocked()),
+            Ok(group) => group.is_some_and(|g| !g.status.can_receive()),
             Err(_) => true,
         };
         if group_blocked {

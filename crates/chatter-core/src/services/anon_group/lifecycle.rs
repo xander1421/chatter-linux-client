@@ -512,7 +512,7 @@ impl AnonGroupService {
 
         // Refuse to refresh if the group is blocked — no legitimate use case
         // and it would leak a control message to a blocked party.
-        if group.is_blocked() {
+        if !group.status.can_receive() {
             return Err(AnonGroupError::GroupBlocked(*group_id));
         }
 
@@ -642,7 +642,7 @@ impl AnonGroupService {
         for group in groups {
             // Skip blocked groups — no refresh necessary and avoids leaking
             // control traffic to blocked peers.
-            if group.is_blocked() {
+            if !group.status.can_receive() {
                 continue;
             }
 

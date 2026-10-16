@@ -88,6 +88,7 @@ pub fn load_private_group_messages(
 
         // Update UI to show selected group and messages
         let group_name = group.name.clone();
+        let removed = group.status == chatter_core::domain::anon_group::AnonGroupStatus::Removed;
         let ui_ctx_gifs = ui_ctx.clone();
         let ui_ctx_for_ui = ui_ctx.clone();
         crate::run_history_ui!(weak_window, owner, |w| {
@@ -101,12 +102,23 @@ pub fn load_private_group_messages(
 
             // Set chat header info for private group
             w.set_channel_name(group_name.into());
+            w.set_conversation_read_only(removed);
+            w.set_composer_notice(if removed {
+                "You were removed from the group".into()
+            } else {
+                "".into()
+            });
             crate::bin_ui::converters::set_conversation_kind(
                 &w,
                 &ui_ctx_for_ui,
                 &chatter_core::domain::message::ConversationType::AnonGroup,
                 false,
             );
+            if removed {
+                w.set_header_can_call(false);
+                w.set_header_can_invite(false);
+                w.set_header_can_open_settings(false);
+            }
             w.set_is_dm(false);
             w.set_member_count(member_count);
             w.set_invited_count(invited_count);

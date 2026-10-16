@@ -2317,6 +2317,39 @@ impl ConversationHandle {
                     .delete_channel_cascade(channel_id)
                     .map_err(storage)
             }
+            ActiveConversation::AnonGroup(id)
+                if self.client.get_anon_group(id).is_some_and(|g| {
+                    g.status == crate::domain::anon_group::AnonGroupStatus::Removed
+                }) =>
+            {
+                let storage =
+                    |e: crate::error::StorageError| ConversationError::Other(e.to_string());
+                let channel_id: ChannelId = (*id).into();
+                let messages = self
+                    .client
+                    .messages()
+                    .get_messages_local(&channel_id, &ConversationType::AnonGroup, None, u32::MAX)
+                    .map_err(ConversationError::Message)?;
+                let attachments: Vec<_> = messages
+                    .iter()
+                    .flat_map(|m| m.attachments.iter().copied())
+                    .collect::<std::collections::HashSet<_>>()
+                    .into_iter()
+                    .collect();
+                let ids: Vec<_> = messages.into_iter().map(|m| m.id).collect();
+                self.client
+                    .messages()
+                    .message_repo
+                    .delete_batch(&ids)
+                    .map_err(storage)?;
+                self.client
+                    .attachments()
+                    .attachment_repo()
+                    .delete_unreferenced(&attachments)
+                    .map_err(storage)?;
+                self.client.anon_groups().delete_removed_group(id)?;
+                Ok(())
+            }
             ActiveConversation::AnonGroup(_) | ActiveConversation::Channel(_) => Err(
                 ConversationError::Other("a group is left, not deleted".into()),
             ),
@@ -2422,11 +2455,14 @@ impl ConversationHandle {
         match &self.conversation {
             ActiveConversation::AnonDm(id) => {
                 let service = self.client.anon_dms();
-                let ready = service.get_conversation(id)
+                let ready = service
+                    .get_conversation(id)
                     .map_err(|e| ConversationError::Other(e.to_string()))?
                     .is_some_and(|dm| dm.is_ready());
                 if !ready {
-                    return Err(ConversationError::Other("secret chat is not active yet".into()));
+                    return Err(ConversationError::Other(
+                        "secret chat is not active yet".into(),
+                    ));
                 }
                 let me = service
                     .current_user_id()

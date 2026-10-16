@@ -91,15 +91,32 @@ impl AnonGroupService {
             }
         }
 
+        let removed_name = self
+            .anon_group_repo
+            .get_member_display_name(&group_id, &kicked_user_id)?;
         let applied = self.anon_group_repo.remove_ordered_member(
             &group_id,
             &kicked_user_id,
             timestamp,
             Some((&sender_id, &verified_key)),
-            kicked_user_id == current_user,
+            false,
         )?;
-        if applied && kicked_user_id == current_user {
-            self.held_posts.forget(&group_id);
+        if applied {
+            let content = if kicked_user_id == current_user {
+                self.anon_group_repo.update_status(
+                    &group_id,
+                    crate::domain::anon_group::AnonGroupStatus::Removed,
+                )?;
+                self.held_posts.forget(&group_id);
+                crate::domain::message::SystemMessage::SelfRemoved { by: sender_id }
+            } else {
+                crate::domain::message::SystemMessage::UserRemoved {
+                    by: sender_id,
+                    removed: kicked_user_id,
+                    removed_name,
+                }
+            };
+            self.store_system_message(&group_id, Some(sender_id), content, timestamp)?;
         }
         Ok(applied)
     }

@@ -381,9 +381,7 @@ impl GroupMailboxManager {
 
     /// Save/update our mailbox for a group.
     pub fn save_our_mailbox(&self, mailbox: &GroupMailbox) -> Result<(), MailboxError> {
-        tracing::info!(
-            "[GROUP_MAILBOX] Saving our mailbox to database"
-        );
+        tracing::info!("[GROUP_MAILBOX] Saving our mailbox to database");
 
         let conn = self
             .db
@@ -426,9 +424,7 @@ impl GroupMailboxManager {
         group_id: &ChannelId,
         mailbox: &MemberMailbox,
     ) -> Result<(), MailboxError> {
-        tracing::info!(
-            "[STORE_MEMBER_MAILBOX] Storing member mailbox"
-        );
+        tracing::info!("[STORE_MEMBER_MAILBOX] Storing member mailbox");
 
         let conn = self
             .db
@@ -646,7 +642,8 @@ impl GroupMailboxManager {
                  FROM group_mailboxes WHERE expires_at > ?1
                  UNION ALL
                  SELECT group_id, mailbox_public_key, mailbox_private_key, id, expires_at, 'anon' as source
-                 FROM anon_group_mailboxes WHERE expires_at > ?1",
+                 FROM anon_group_mailboxes WHERE expires_at > ?1
+                   AND EXISTS (SELECT 1 FROM anon_groups g WHERE g.id = anon_group_mailboxes.group_id AND g.status != 3)",
             )
             .map_err(|e| MailboxError::Storage(e.to_string()))?;
 

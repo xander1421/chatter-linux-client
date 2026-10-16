@@ -6,6 +6,17 @@ use crate::domain::anon_group::{AnonGroupId, AnonGroupStatus};
 use super::{AnonGroupError, AnonGroupService};
 
 impl AnonGroupService {
+    fn check_group_not_removed(&self, group_id: &AnonGroupId) -> Result<(), AnonGroupError> {
+        let group = self
+            .anon_group_repo
+            .get_group(group_id)?
+            .ok_or(AnonGroupError::GroupNotFound(*group_id))?;
+        if group.status == AnonGroupStatus::Removed {
+            return Err(AnonGroupError::GroupBlocked(*group_id));
+        }
+        Ok(())
+    }
+
     /// Default rate limit: 60 messages per minute per group.
     const RATE_LIMIT_MESSAGES: u32 = 60;
     /// Default rate limit window: 1 minute.
@@ -13,6 +24,7 @@ impl AnonGroupService {
 
     /// Block a group (ignore all messages, stop polling mailbox).
     pub fn block_group(&self, group_id: &AnonGroupId) -> Result<(), AnonGroupError> {
+        self.check_group_not_removed(group_id)?;
         self.anon_group_repo
             .update_status(group_id, AnonGroupStatus::Blocked)?;
         self.held_posts.forget(group_id);
@@ -22,6 +34,7 @@ impl AnonGroupService {
 
     /// Unblock a group (resume normal operation).
     pub fn unblock_group(&self, group_id: &AnonGroupId) -> Result<(), AnonGroupError> {
+        self.check_group_not_removed(group_id)?;
         self.anon_group_repo
             .update_status(group_id, AnonGroupStatus::Active)?;
         tracing::info!("Unblocked group");
@@ -30,6 +43,7 @@ impl AnonGroupService {
 
     /// Mute a group (receive messages but no notifications).
     pub fn mute_group(&self, group_id: &AnonGroupId) -> Result<(), AnonGroupError> {
+        self.check_group_not_removed(group_id)?;
         self.anon_group_repo
             .update_status(group_id, AnonGroupStatus::Muted)?;
         tracing::info!("Muted group");
@@ -38,6 +52,7 @@ impl AnonGroupService {
 
     /// Unmute a group (resume notifications).
     pub fn unmute_group(&self, group_id: &AnonGroupId) -> Result<(), AnonGroupError> {
+        self.check_group_not_removed(group_id)?;
         self.anon_group_repo
             .update_status(group_id, AnonGroupStatus::Active)?;
         tracing::info!("Unmuted group");
@@ -121,7 +136,7 @@ impl AnonGroupService {
             .get_group(group_id)?
             .ok_or(AnonGroupError::GroupNotFound(*group_id))?;
 
-        if group.is_blocked() {
+        if !group.status.can_send() {
             return Err(AnonGroupError::GroupBlocked(*group_id));
         }
 

@@ -795,8 +795,16 @@ impl SystemMessage {
     /// Describe a membership notice in its conversation's terms.
     #[must_use]
     pub fn description_for(&self, conversation_type: &ConversationType) -> String {
-        if *conversation_type == ConversationType::AnonGroup && matches!(self, Self::UserJoined(_)) {
-            "joined the group".to_string()
+        if *conversation_type == ConversationType::AnonGroup {
+            match self {
+                Self::UserJoined(_) => "joined the group".to_string(),
+                Self::SelfRemoved { .. } => "removed you from the group".to_string(),
+                Self::UserRemoved { removed_name, .. } => format!(
+                    "removed {} from the group",
+                    removed_name.as_deref().unwrap_or("a member")
+                ),
+                _ => self.description(),
+            }
         } else {
             self.description()
         }

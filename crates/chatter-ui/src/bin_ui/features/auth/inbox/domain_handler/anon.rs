@@ -217,34 +217,23 @@ pub(super) fn handle_group_member_kicked(
     window: &Weak<MainWindow>,
     ui_ctx: &Arc<ChatterClient>,
     group_id: AnonGroupId,
-    user_id: UserId,
-    kicked_by: UserId,
+    _user_id: UserId,
+    _kicked_by: UserId,
 ) {
-    // We were the one removed: core has dropped the group (`handle_kick`).
-    if ui_ctx.get_anon_group(&group_id).is_none() {
-        let (weak, ui_ctx) = (window.clone(), ui_ctx.clone());
-        tokio::spawn(async move {
-            crate::bin_ui::features::sidebar::conversation_removed(
-                &weak,
-                &ui_ctx,
-                chatter_core::state::ActiveConversation::AnonGroup(group_id),
-            );
-        });
-        return;
-    }
-    let message = ui_ctx.anon_group_system_message(
-        group_id,
-        kicked_by, // sender = admin who did it
-        SystemMessage::UserRemoved {
-            by: kicked_by,
-            removed: user_id,
-            removed_name: Some(ui_ctx.display_name_in(
-                &chatter_core::domain::message::ConversationType::AnonGroup,
-                &group_id.into(),
-                &user_id,
-            )),
-        },
-    );
-    super::messaging::handle_message_received(window, ui_ctx, message);
+    // Core stored the verified notice and retained a removed user's history.
+    // Reload from storage so the line is also present after reopening.
     refresh_active_group_counts(window, ui_ctx, group_id);
+    let (weak, ui_ctx) = (window.clone(), ui_ctx.clone());
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(w) = weak.upgrade() {
+            crate::bin_ui::features::sidebar::refresh_chat_list(&w, &ui_ctx);
+            if ui_ctx.active_conversation().matches_anon_group(&group_id) {
+                crate::bin_ui::features::sidebar::private_group::load_private_group_messages(
+                    &w,
+                    &ui_ctx,
+                    &group_id.to_string(),
+                );
+            }
+        }
+    });
 }

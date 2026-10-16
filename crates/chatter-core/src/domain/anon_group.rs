@@ -30,6 +30,8 @@ pub enum AnonGroupStatus {
     Muted = 1,
     /// Group is blocked (ignore all messages, don't poll mailbox).
     Blocked = 2,
+    /// We were removed; retain local history until Delete chat.
+    Removed = 3,
 }
 
 impl AnonGroupStatus {
@@ -38,6 +40,7 @@ impl AnonGroupStatus {
         match value {
             1 => Self::Muted,
             2 => Self::Blocked,
+            3 => Self::Removed,
             _ => Self::Active,
         }
     }

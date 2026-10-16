@@ -11,6 +11,23 @@ use crate::util::time::TimestampNanos;
 use super::{AnonGroupError, AnonGroupService};
 
 impl AnonGroupService {
+    /// Forget a group after we were removed. The conversation layer clears
+    /// unified messages first; deleting the group cascades its mailbox data.
+    pub fn delete_removed_group(&self, group_id: &AnonGroupId) -> Result<(), AnonGroupError> {
+        let group = self
+            .anon_group_repo
+            .get_group(group_id)?
+            .ok_or(AnonGroupError::GroupNotFound(*group_id))?;
+
+        if group.status != crate::domain::anon_group::AnonGroupStatus::Removed {
+            return Err(AnonGroupError::InvalidData(
+                "Only removed groups can be deleted locally".into(),
+            ));
+        }
+        self.anon_group_repo.delete_group(group_id)?;
+        Ok(())
+    }
+
     /// Leave a group voluntarily.
     pub async fn leave_group(&self, group_id: &AnonGroupId) -> Result<(), AnonGroupError> {
         let current_user = self.current_user_id()?;
@@ -19,6 +36,10 @@ impl AnonGroupService {
             .anon_group_repo
             .get_group(group_id)?
             .ok_or(AnonGroupError::GroupNotFound(*group_id))?;
+
+        if !group.status.can_send() {
+            return Err(AnonGroupError::GroupBlocked(*group_id));
+        }
 
         if !self.may_leave(&group, &current_user)? {
             return Err(AnonGroupError::OwnerMustTransfer);
@@ -113,7 +134,8 @@ impl AnonGroupService {
         ) else {
             return false;
         };
-        self.may_leave(&group, &me).unwrap_or(false)
+        group.status != crate::domain::anon_group::AnonGroupStatus::Removed
+            && self.may_leave(&group, &me).unwrap_or(false)
     }
 
     /// Hand the group to `new_owner` (owner only). Every member is told by
@@ -129,6 +151,9 @@ impl AnonGroupService {
             .anon_group_repo
             .get_group(group_id)?
             .ok_or(AnonGroupError::GroupNotFound(*group_id))?;
+        if !group.status.can_send() {
+            return Err(AnonGroupError::GroupBlocked(*group_id));
+        }
         if group.owner_id != current_user {
             return Err(AnonGroupError::InsufficientPermissions(
                 "Only the owner can transfer ownership".to_string(),
@@ -209,6 +234,10 @@ impl AnonGroupService {
             .get_group(group_id)?
             .ok_or(AnonGroupError::GroupNotFound(*group_id))?;
 
+        if !group.status.can_send() {
+            return Err(AnonGroupError::GroupBlocked(*group_id));
+        }
+
         if !group.my_role.can_kick() {
             return Err(AnonGroupError::InsufficientPermissions(
                 "Only admins can kick members".to_string(),
@@ -256,7 +285,7 @@ impl AnonGroupService {
         }
 
         // Notify every other member, the kicked one included: their client
-        // verifies the same signature and drops the group (`handle_kick`),
+        // verifies the same signature and retains its history read-only (`handle_kick`),
         // instead of posting into a group that no longer lists them.
         for member in members {
             if member.user_id == current_user {
@@ -283,7 +312,7 @@ impl AnonGroupService {
 
         // Removal and its tombstone were committed before network fanout.
 
-        tracing::info!("Kicked from group");
+        tracing::info!("Removed member from group");
         Ok(())
     }
 

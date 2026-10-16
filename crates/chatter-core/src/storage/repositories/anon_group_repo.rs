@@ -1282,7 +1282,7 @@ impl AnonGroupRepository {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
             "SELECT id, name, my_role, bootstrap_complete, created_at, updated_at, status, owner_id
-             FROM anon_groups WHERE status != 2 ORDER BY updated_at DESC",
+             FROM anon_groups WHERE status NOT IN (2, 3) ORDER BY updated_at DESC",
         )?;
 
         let mut rows = stmt.query([])?;

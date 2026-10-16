@@ -239,12 +239,17 @@ impl ChatterClient {
         let me = self.session_current_user_id()?;
         (message.sender_id == Some(me)
             && match message.conversation_type {
-                ConversationType::Channel | ConversationType::ServerDm =>
-                    matches!(message.delivery_status.as_str(), "failed" | "parked"),
-                ConversationType::AnonDm => message.delivery_status == "failed"
-                    && message.failure_reason.as_deref() == Some("Message not submitted"),
-                ConversationType::AnonGroup | ConversationType::SavedMessages
-                    | ConversationType::Mesh | ConversationType::MeshDm => false,
+                ConversationType::Channel | ConversationType::ServerDm => {
+                    matches!(message.delivery_status.as_str(), "failed" | "parked")
+                }
+                ConversationType::AnonDm => {
+                    message.delivery_status == "failed"
+                        && message.failure_reason.as_deref() == Some("Message not submitted")
+                }
+                ConversationType::AnonGroup
+                | ConversationType::SavedMessages
+                | ConversationType::Mesh
+                | ConversationType::MeshDm => false,
             }
             && !message.is_deleted)
             .then_some(message.sent_at)
@@ -291,7 +296,11 @@ impl ChatterClient {
             return None;
         }
         let name = self.message_sender_display_name(&message);
-        let content = format!("{} {}", name, system.description_for(&message.conversation_type));
+        let content = format!(
+            "{} {}",
+            name,
+            system.description_for(&message.conversation_type)
+        );
         Some((name, content))
     }
 
@@ -698,7 +707,16 @@ impl ChatterClient {
                 CT::Channel => channel_id.is_some_and(|id| self.can_leave_channel(&id)),
                 _ => false,
             },
-            can_delete: is_channel && channel_id.is_some_and(|id| self.is_former_channel(&id)),
+            can_delete: (is_channel && channel_id.is_some_and(|id| self.is_former_channel(&id)))
+                || (conv.conversation_type == CT::AnonGroup
+                    && conv
+                        .conversation_id
+                        .parse()
+                        .ok()
+                        .and_then(|id| self.get_anon_group(&id))
+                        .is_some_and(|g| {
+                            g.status == crate::domain::anon_group::AnonGroupStatus::Removed
+                        })),
             ..ChatRowSendData::new(
                 conv.conversation_type.clone(),
                 conv.conversation_id.clone(),
@@ -1025,6 +1043,7 @@ impl ChatterClient {
             // Any member may leave; the owner only once someone else owns it
             // or nobody else is left (`AnonGroupService::can_leave`).
             can_leave: self.anon_groups().can_leave(&group.id),
+            can_delete: group.status == crate::domain::anon_group::AnonGroupStatus::Removed,
             last_activity: Some(last_activity),
             ..ChatRowSendData::new(
                 crate::domain::message::ConversationType::AnonGroup,
@@ -1169,6 +1188,9 @@ impl ChatterClient {
             });
         }
         for group in self.sidebar_private_groups() {
+            if !group.status.can_send() {
+                continue;
+            }
             out.push(ForwardDestination {
                 kind: CT::AnonGroup,
                 id: group.id.to_string(),

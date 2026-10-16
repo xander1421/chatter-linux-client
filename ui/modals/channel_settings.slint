@@ -1371,6 +1371,8 @@ export component ChannelSettingsModal inherits Rectangle {
                                                 ? "Ban " + member.display-name + "? They will be removed and can't rejoin."
                                                 : root.confirm-action == "owner"
                                                 ? "Make " + member.display-name + " the owner of " + (root.is-private-group ? "" : "#") + root.channel-name + "? You'll become an admin."
+                                                : member.invited && root.is-private-group
+                                                ? "Cancel " + member.display-name + "'s invite?"
                                                 : "Remove " + member.display-name + (root.is-private-group ? " from this group?" : " from this channel?");
                                             color: Colors.text-primary;
                                             font-size: Typography.sm;
@@ -1390,7 +1392,7 @@ export component ChannelSettingsModal inherits Rectangle {
 
                                             Button {
                                                 height: Spacing.touch-target-min;
-                                                text: root.confirm-action == "ban" ? "Ban" : root.confirm-action == "owner" ? "Make owner" : "Remove";
+                                                text: root.confirm-action == "ban" ? "Ban" : root.confirm-action == "owner" ? "Make owner" : member.invited && root.is-private-group ? "Cancel invite" : "Remove";
                                                 variant: root.confirm-action == "owner" ? "primary" : "destructive";
                                                 horizontal-stretch: 1;
                                                 clicked => {
@@ -1482,7 +1484,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                             clicked => { root.confirm-action = "owner"; }
                                         }
 
-                                        if member.can-block: Button {
+                                        if member.can-block && !member.invited: Button {
                                             height: Spacing.touch-target-min;
                                             text: member.blocked ? "Unblock in group" : "Block in group";
                                             variant: "secondary";
@@ -1495,7 +1497,7 @@ export component ChannelSettingsModal inherits Rectangle {
 
                                         if root.can-manage-members && member.role != "owner": Button {
                                             height: Spacing.touch-target-min;
-                                            text: root.is-private-group ? "Remove from group" : "Remove from channel";
+                                            text: member.invited && root.is-private-group ? "Cancel invite" : root.is-private-group ? "Remove from group" : "Remove from channel";
                                             variant: "destructive";
 
                                             clicked => { root.confirm-action = "remove"; }
@@ -1578,7 +1580,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                             }
                                         }
 
-                                        if member.can-block: HorizontalLayout {
+                                        if member.can-block && !member.invited: HorizontalLayout {
                                             alignment: end;
 
                                             Button {
@@ -1599,7 +1601,7 @@ export component ChannelSettingsModal inherits Rectangle {
 
                                             if root.can-manage-members && member.role != "owner": Button {
                                                 height: Spacing.touch-target-min;
-                                                text: "Remove";
+                                                text: member.invited && root.is-private-group ? "Cancel invite" : "Remove";
                                                 variant: "destructive";
 
                                                 clicked => { root.confirm-action = "remove"; }
