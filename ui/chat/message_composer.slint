@@ -510,6 +510,7 @@ export component MessageComposer inherits GlassSurface {
     // inside its bounds between consecutive key events.
     // "Touch input", plumbed from ChatLayout.
     in property <bool> mobile: false;
+    in property <bool> enter-sends: true;
 
     // Accessories retain their own material when the raised main row is transparent.
     accessory-surface := GlassSurface {
@@ -1271,10 +1272,10 @@ export component MessageComposer inherits GlassSurface {
                         }
 
                         key-pressed(event) => {
-                            // Enter sends on desktop. On a phone it is a newline, like
-                            // Signal: the soft keyboard has no Shift+Enter, so sending on
-                            // it made multi-line messages impossible. Send is the button.
-                            if (event.text == "\n" && !event.modifiers.shift && !root.mobile) {
+                            // Wide tablet and desktop keyboards send with Enter;
+                            // Shift+Enter remains a newline. Phone keyboards keep
+                            // Enter for multi-line messages and use the send button.
+                            if (event.text == "\n" && !event.modifiers.shift && root.enter-sends) {
                                 if (root.can-send && !VoiceRecording.active) {
                                     if (root.is-editing) {
                                         root.send-edit(root.edit-message-id, root.outgoing-text);

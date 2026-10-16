@@ -26,6 +26,8 @@ pub enum FriendCodeConnection {
 pub enum FriendCodeConnectionError {
     #[error("This code isn't valid.")]
     InvalidCode,
+    #[error("That's a username — ask for a friend code or username link.")]
+    UsernameInsteadOfCode,
     #[error("Server-managed friend codes can't be used in Shield mode. Ask for a private code.")]
     ServerCodeInShield,
     #[error("Secret chats aren't available on this device.")]
@@ -283,6 +285,15 @@ impl ChatterClient {
         }
 
         if !crate::domain::UsernameLink::is_username_link(code) {
+            let candidate = code.strip_prefix('@').unwrap_or(code);
+            if !candidate.is_empty()
+                && candidate.len() <= 64
+                && candidate
+                    .chars()
+                    .all(|ch| ch.is_ascii_alphanumeric() || ch == '_' || ch == '.')
+            {
+                return Err(FriendCodeConnectionError::UsernameInsteadOfCode);
+            }
             crate::services::user::UserService::parse_friend_code(code)
                 .map_err(|_| FriendCodeConnectionError::InvalidCode)?;
         }

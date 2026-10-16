@@ -2289,6 +2289,7 @@ export component MainWindow inherits Window {
                         selection-mode: root.selection-mode;
                         // Press-and-hold on a bubble is a touch gesture only.
                         mobile: root.is-mobile-platform;
+                        composer-enter-sends: !root.is-mobile-platform || root.width >= 840px;
                         rounded-page-top: root.is-mobile-platform && !root.compact-layout;
                         menu-open: root.context-menu-visible || root.reaction-picker-visible;
                         // Tier 2 of the hold escalates out of tier 1: close the menu
