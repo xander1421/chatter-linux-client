@@ -264,6 +264,11 @@ impl i_slint_core::window::WindowAdapterInternal for AndroidWindowAdapter {
             }
             InputMethodRequest::Disable => {
                 self.dismiss_selection_menu();
+                self.window.set_virtual_keyboard(
+                    LogicalPosition::default(),
+                    LogicalSize::default(),
+                    i_slint_core::InternalToken,
+                );
                 self.java_helper
                     .show_or_hide_soft_input(false)
                     .unwrap_or_else(|e| print_jni_error(&self.app, e));
@@ -391,6 +396,11 @@ impl i_slint_core::window::WindowAdapterInternal for AndroidWindowAdapter {
                 *self.ime_client.borrow_mut() = None;
                 self.deferred_ime_update.take();
                 self.forget_ime_session();
+                self.window.set_virtual_keyboard(
+                    LogicalPosition::default(),
+                    LogicalSize::default(),
+                    i_slint_core::InternalToken,
+                );
                 self.app.hide_soft_input(true);
                 return;
             }
@@ -1285,6 +1295,16 @@ impl AndroidWindowAdapter {
                             self.long_press_selection.set(false);
                             self.dismiss_selection_menu();
                             let position = position_for_event(motion_event, offset, scale);
+                            if option_env!("CHATTER_PROFILE_TAP_PROBE").is_some() {
+                                crate::profile_tap_probe(&format!(
+                                    "down x={:.1} y={:.1} window={:?} keyboard={:?} text_focus={}",
+                                    position.x,
+                                    position.y,
+                                    self.window.size(),
+                                    self.window.virtual_keyboard(i_slint_core::InternalToken),
+                                    WindowInner::from_pub(&self.window).text_input_focused(),
+                                ));
+                            }
 
                             // A field destroyed since the last focus change
                             // must be released first, or `finish_composing`
@@ -1607,6 +1627,26 @@ impl AndroidWindowAdapter {
         safe_area: PhysicalEdges,
         keyboard: PhysicalEdges,
     ) {
+        // Android 10 infers the IME from the visible display frame. After a
+        // field loses focus that frame can remain short while the IME closes,
+        // leaving a positive virtual-keyboard rect over a full-height page.
+        // Every Flickable then intercepts presses below that rect's top even
+        // though it still paints its children there. Focus loss is authoritative
+        // for our input geometry; a later layout callback may still be stale.
+        let text_focus = WindowInner::from_pub(&self.window).text_input_focused();
+        let reported_keyboard = keyboard;
+        let keyboard = if !authoritative_geometry && !text_focus {
+            PhysicalEdges::default()
+        } else {
+            keyboard
+        };
+        if option_env!("CHATTER_PROFILE_TAP_PROBE").is_some() {
+            crate::profile_tap_probe(&format!(
+                "insets window={}x{} reported_bottom={} effective_bottom={} text_focus={}",
+                window_size.width, window_size.height, reported_keyboard.bottom, keyboard.bottom,
+                text_focus,
+            ));
+        }
         crate::inset_dispatch::publish_window_insets(
             &self.window, authoritative_geometry, window_origin, window_size, safe_area, keyboard,
         );

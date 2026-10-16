@@ -15,6 +15,27 @@ mod inset_dispatch;
 mod text_input_offsets;
 mod text_input_publication;
 
+#[link(name = "log")]
+unsafe extern "C" {
+    fn __android_log_write(
+        priority: i32,
+        tag: *const std::ffi::c_char,
+        text: *const std::ffi::c_char,
+    ) -> i32;
+}
+
+// Opt-in native probe for the Android 10 full-screen page touch cutoff. Build
+// with CHATTER_PROFILE_TAP_PROBE=1 and read the ProfileTap logcat tag. Keep it
+// compile-time gated so normal pointer/inset dispatch allocates nothing.
+pub(crate) fn profile_tap_probe(message: &str) {
+    if option_env!("CHATTER_PROFILE_TAP_PROBE").is_none() {
+        return;
+    }
+    if let Ok(message) = std::ffi::CString::new(message) {
+        unsafe { __android_log_write(4, c"ProfileTap".as_ptr(), message.as_ptr()); }
+    }
+}
+
 #[cfg(all(not(feature = "aa-06"), feature = "aa-05"))]
 pub use android_activity_05 as android_activity;
 #[cfg(feature = "aa-06")]

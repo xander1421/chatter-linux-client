@@ -143,6 +143,15 @@ impl Item for Flickable {
     ) -> InputEventFilterResult {
         if let Some(pos) = event.position() {
             let geometry = Self::geometry_without_virtual_keyboard(self_rc);
+            #[cfg(target_os = "android")]
+            if option_env!("CHATTER_PROFILE_TAP_PROBE").is_some()
+                && matches!(event, MouseEvent::Pressed { .. })
+            {
+                profile_tap_probe(&std::format!(
+                    "flickable press local=({:.1},{:.1}) item={:?} hit={:?}",
+                    pos.x, pos.y, self_rc.geometry(), geometry,
+                ));
+            }
 
             if (pos.x < 0 as _
                 || pos.y < 0 as _
@@ -236,6 +245,23 @@ impl Item for Flickable {
 
     fn clips_children(self: core::pin::Pin<&Self>) -> bool {
         true
+    }
+}
+
+#[cfg(target_os = "android")]
+#[link(name = "log")]
+unsafe extern "C" {
+    fn __android_log_write(
+        priority: i32,
+        tag: *const core::ffi::c_char,
+        text: *const core::ffi::c_char,
+    ) -> i32;
+}
+
+#[cfg(target_os = "android")]
+fn profile_tap_probe(message: &str) {
+    if let Ok(message) = std::ffi::CString::new(message) {
+        unsafe { __android_log_write(4, c"ProfileTap".as_ptr(), message.as_ptr()); }
     }
 }
 
