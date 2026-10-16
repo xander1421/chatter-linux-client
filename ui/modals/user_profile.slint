@@ -304,18 +304,20 @@ export component UserProfileModal inherits Rectangle {
                         // Signal shows a badge only once verified; an
                         // unverified "?" read as "suspicious person".
                         if !root.is-self && root.is-verified: Rectangle {
-                            width: Spacing.button-height;
-                            height: Spacing.button-height;
+                            // A small inline mark beside the name, not a
+                            // button-sized tile.
+                            width: 20px;
+                            height: 20px;
                             y: (parent.height - self.height) / 2;
-                            border-radius: 11px;
-                            background: Colors.online.with-alpha(0.15);
+                            border-radius: self.width / 2;
+                            background: Colors.online;
                             accessible-role: button;
                             accessible-label: "Verified — show safety number";
 
                             Text {
                                 text: "\u{2713}";
-                                color: Colors.online;
-                                font-size: Typography.xs2;
+                                color: Colors.on-action;
+                                font-size: Typography.xs;
                                 font-weight: Typography.bold;
                                 horizontal-alignment: center;
                                 vertical-alignment: center;
