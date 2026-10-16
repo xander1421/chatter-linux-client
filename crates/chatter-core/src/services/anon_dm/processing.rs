@@ -161,14 +161,14 @@ impl AnonDmService {
             Ok(Some(dm)) => {
                 if dm.peer_id != *sender_id {
                     // Secret chat: no identities in the log.
-                    tracing::info!(
+                    tracing::warn!(
                         conversation_id = %conversation_id,
                         "[ANON_DM] Dropped message from unexpected sender"
                     );
                     return Ok(vec![]);
                 }
                 if !dm.is_ready() {
-                    tracing::info!(
+                    tracing::warn!(
                         conversation_id = %conversation_id,
                         status = ?dm.status,
                         "[ANON_DM] Dropped message in non-active conversation"
@@ -177,14 +177,14 @@ impl AnonDmService {
                 }
             }
             Ok(None) => {
-                tracing::info!(
+                tracing::warn!(
                     conversation_id = %conversation_id,
                     "[ANON_DM] Dropped message for unknown conversation"
                 );
                 return Ok(vec![]);
             }
             Err(e) => {
-                tracing::warn!(conversation_id = %conversation_id, error = %e, "[ANON_DM] Failed to check conversation");
+                tracing::warn!(conversation_id = %conversation_id, error = %e, "[ANON_DM] Dropped message: failed to check conversation");
                 return Ok(vec![]);
             }
         }

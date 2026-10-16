@@ -690,7 +690,8 @@ impl InboxEventProcessor {
                     profile_key,
                     encrypted_display_name,
                     avatar,
-                );
+                )
+                .await;
                 // Return false - UI needs to update sidebar entry
             }
 
@@ -1973,7 +1974,7 @@ impl InboxEventProcessor {
         });
     }
 
-    fn handle_anon_dm_accept(
+    async fn handle_anon_dm_accept(
         &self,
         peer_id: UserId,
         sender_device_id: u32,
@@ -2015,84 +2016,85 @@ impl InboxEventProcessor {
         let encrypted_display_name = encrypted_display_name.clone();
         let avatar = avatar.clone();
 
-        tokio::spawn(async move {
-            let (avatar, retry) = first_avatar_fetch(&anon_dm_service, avatar).await;
-            let service_for_handle = anon_dm_service.clone();
-            let result = tokio::task::spawn_blocking(move || {
-                service_for_handle.handle_acceptance_encrypted(
-                    anon_dm_id,
+        // Apply acceptance before returning to the ordered inbox event loop.
+        // A message deposited immediately after Accept can be in the same poll
+        // batch; deferring this write (especially behind a Tor avatar fetch)
+        // makes process_incoming_content see Pending and discard that message.
+        let service_for_handle = anon_dm_service.clone();
+        let result = tokio::task::spawn_blocking(move || {
+            service_for_handle.handle_acceptance_encrypted(
+                anon_dm_id,
+                peer_id,
+                sender_device_id,
+                mailbox_pk,
+                profile_key,
+                encrypted_display_name,
+                None,
+            )
+        })
+        .await;
+        match result {
+            Ok(Ok(profile)) => {
+                // Emit acceptance event
+                event_bus.emit_domain(DomainEvent::AnonDmRequestAccepted {
+                    conversation_id: anon_dm_id,
                     peer_id,
-                    sender_device_id,
-                    mailbox_pk,
-                    profile_key,
-                    encrypted_display_name,
-                    avatar,
-                )
-            })
-            .await;
+                    peer_mailbox_pk: mailbox_pk,
+                    profile_key: profile.profile_key,
+                    peer_display_name: profile.display_name.clone(),
+                    peer_avatar: profile.avatar.clone(),
+                });
 
-            if let (Ok(Ok(_)), Some(pointer)) = (&result, retry) {
-                tokio::spawn(refresh_peer_avatar(
-                    anon_dm_service.clone(),
-                    event_bus.clone(),
-                    anon_dm_id,
-                    peer_id,
-                    pointer,
-                    &crate::services::secret_avatar::RETRY_DELAYS[1..],
-                ));
-            }
-            match result {
-                Ok(Ok(profile)) => {
-                    // Emit acceptance event
-                    event_bus.emit_domain(DomainEvent::AnonDmRequestAccepted {
-                        conversation_id: anon_dm_id,
+                // Also emit profile updated event to ensure UI updates avatars immediately
+                event_bus.emit_domain(DomainEvent::AnonDmProfileUpdated {
+                    conversation_id: anon_dm_id,
+                    user_id: peer_id,
+                    display_name: Some(profile.display_name),
+                    avatar: profile.avatar,
+                    avatar_url: None,
+                    bio: None,
+                    timestamp: TimestampNanos::now().as_u64(),
+                });
+
+                if let Some(pointer) = avatar {
+                    tokio::spawn(refresh_peer_avatar(
+                        anon_dm_service.clone(),
+                        event_bus.clone(),
+                        anon_dm_id,
                         peer_id,
-                        peer_mailbox_pk: mailbox_pk,
-                        profile_key: profile.profile_key,
-                        peer_display_name: profile.display_name.clone(),
-                        peer_avatar: profile.avatar.clone(),
-                    });
+                        pointer,
+                        &crate::services::secret_avatar::RETRY_DELAYS,
+                    ));
+                }
 
-                    // Also emit profile updated event to ensure UI updates avatars immediately
-                    event_bus.emit_domain(DomainEvent::AnonDmProfileUpdated {
-                        conversation_id: anon_dm_id,
-                        user_id: peer_id,
-                        display_name: Some(profile.display_name),
-                        avatar: profile.avatar,
-                        avatar_url: None,
-                        bio: None,
-                        timestamp: TimestampNanos::now().as_u64(),
-                    });
-
-                    // Auto-send our profile (display name + avatar) back to the
-                    // peer now that the Double Ratchet is established. The peer
-                    // only saw our ECIES init at request time — this is the
-                    // first moment we can share richer identity securely.
-                    // Moved here from the UI layer so the profile sync
-                    // happens regardless of frontend.
-                    let our_name = client.auth_state().get().display_name.clone();
-                    let service = anon_dm_service.clone();
-                    tokio::spawn(async move {
-                        if let Err(e) = service
-                            .send_profile_update(&anon_dm_id, our_name, None, None)
-                            .await
-                        {
-                            tracing::warn!(
-                                conversation_id = %anon_dm_id,
-                                error = %e,
-                                "Failed to send profile back to responder after acceptance"
-                            );
-                        }
-                    });
-                }
-                Ok(Err(e)) => {
-                    tracing::debug!(peer_id = %peer_id, error = %e, "Failed to handle AnonDmAccept");
-                }
-                Err(e) => {
-                    tracing::error!(error = %e, "spawn_blocking panicked in AnonDmAccept handler");
-                }
+                // Auto-send our profile (display name + avatar) back to the
+                // peer now that the Double Ratchet is established. The peer
+                // only saw our ECIES init at request time — this is the
+                // first moment we can share richer identity securely.
+                // Moved here from the UI layer so the profile sync
+                // happens regardless of frontend.
+                let our_name = client.auth_state().get().display_name.clone();
+                let service = anon_dm_service.clone();
+                tokio::spawn(async move {
+                    if let Err(e) = service
+                        .send_profile_update(&anon_dm_id, our_name, None, None)
+                        .await
+                    {
+                        tracing::warn!(
+                            conversation_id = %anon_dm_id,
+                            error = %e,
+                            "Failed to send profile back to responder after acceptance"
+                        );
+                    }
+                });
             }
-        });
+            Ok(Err(e)) => {
+                tracing::warn!(conversation_id = %anon_dm_id, error = %e, "Failed to handle secret chat acceptance");
+            }
+            Err(e) => {
+                tracing::error!(error = %e, "spawn_blocking panicked in AnonDmAccept handler")
+            }
+        }
     }
 
     fn handle_anon_dm_message(
