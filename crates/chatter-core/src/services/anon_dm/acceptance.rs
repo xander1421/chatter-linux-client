@@ -301,10 +301,15 @@ impl AnonDmService {
         {
             return Err(AnonDmError::ConversationExists(sender_id));
         }
-        if let Some(old) = self.anon_dm_repo.get_live_conversation_by_peer(&sender_id)?
-            && old.status == AnonDmStatus::Active
-        {
-            tracing::warn!(%conversation_id, "peer restarted secret chat");
+        if let Some(old) = self.anon_dm_repo.get_live_conversation_by_peer(&sender_id)? {
+            // A blocked peer must not escape the block by starting over.
+            if old.status == AnonDmStatus::Blocked {
+                tracing::info!(%conversation_id, "Dropped secret-chat request from blocked peer");
+                return Err(AnonDmError::ConversationExists(sender_id));
+            }
+            if old.status == AnonDmStatus::Active {
+                tracing::warn!(%conversation_id, "peer restarted secret chat");
+            }
         }
 
         // Create conversation as incoming request
@@ -391,10 +396,15 @@ impl AnonDmService {
             );
             return Ok(false);
         }
-        if let Some(old) = self.anon_dm_repo.get_live_conversation_by_peer(&dm.peer_id)?
-            && old.status == AnonDmStatus::Active
-        {
-            tracing::warn!(conversation_id = %dm.id, "peer restarted secret chat");
+        if let Some(old) = self.anon_dm_repo.get_live_conversation_by_peer(&dm.peer_id)? {
+            // A blocked peer must not escape the block by starting over.
+            if old.status == AnonDmStatus::Blocked {
+                tracing::info!(conversation_id = %dm.id, "Dropped secret-chat request from blocked peer");
+                return Ok(false);
+            }
+            if old.status == AnonDmStatus::Active {
+                tracing::warn!(conversation_id = %dm.id, "peer restarted secret chat");
+            }
         }
 
         // Store the conversation

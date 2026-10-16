@@ -61,13 +61,12 @@ impl AnonDmRepository {
         let tx = conn.transaction()?;
         tx.execute(
             "UPDATE anon_dm_conversations SET status = ?1, updated_at = ?2
-             WHERE peer_id = ?3 AND status IN (?4, ?5, ?6)",
+             WHERE peer_id = ?3 AND status IN (?4, ?5)",
             params![
                 AnonDmStatus::Superseded.to_i32(),
                 Utc::now().to_rfc3339(),
                 dm.peer_id.to_string(),
                 AnonDmStatus::Active.to_i32(),
-                AnonDmStatus::Blocked.to_i32(),
                 AnonDmStatus::Pending.to_i32(),
             ],
         )?;
