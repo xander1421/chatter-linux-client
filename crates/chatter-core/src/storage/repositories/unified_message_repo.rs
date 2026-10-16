@@ -215,9 +215,41 @@ impl UnifiedMessageRepository {
         saved_pin_clock: Option<u64>,
         local_saved: bool,
     ) -> Result<bool, StorageError> {
+        let own_server_message = matches!(
+            message.conversation_type,
+            ConversationType::ServerDm | ConversationType::Channel
+        ) && !matches!(
+            message.content,
+            MessageContent::System(_) | MessageContent::Call(_)
+        ) && message.sender_id.is_some_and(|sender| {
+            use crate::services::current_user::CurrentUserProvider;
+            super::settings_repo::SettingsRepository::new(self.db.clone())
+                .current_user_id()
+                .is_ok_and(|me| me == sender)
+        });
         let is_read = self.stored_is_read(message);
         let conn = self.db.connection()?;
         let tx = conn.unchecked_transaction()?;
+        let is_read = if !is_read
+            && matches!(
+                message.conversation_type,
+                ConversationType::ServerDm | ConversationType::Channel
+            ) {
+            let horizon: Option<i64> = tx
+                .query_row(
+                    "SELECT sent_at FROM conversation_read_horizons
+                     WHERE conversation_type = ?1 AND conversation_id = ?2",
+                    params![
+                        message.conversation_type.as_str(),
+                        message.conversation_id.to_string()
+                    ],
+                    |row| row.get(0),
+                )
+                .optional()?;
+            horizon.is_some_and(|sent_at| message.sent_at <= sent_at as u64)
+        } else {
+            is_read
+        };
         if (saved_pin_clock.is_some() || local_saved)
             && tx.query_row(
                 "SELECT EXISTS(SELECT 1 FROM deleted_messages WHERE id = ?1)",
@@ -323,6 +355,17 @@ impl UnifiedMessageRepository {
             ],
         )?;
         if rows > 0 {
+            // A transcript of our own send is proof that every earlier incoming
+            // message was read on that device, even if this device receives the
+            // transcript before those incoming messages.
+            if own_server_message {
+                Self::advance_read_horizon(
+                    &tx,
+                    &message.conversation_id,
+                    &message.conversation_type,
+                    message.sent_at,
+                )?;
+            }
             // Includes a held pin applied by take_on_arrival: timestamp when
             // this client first observes it, not an invented remote pin clock.
             if message.is_pinned {
@@ -1051,7 +1094,8 @@ impl UnifiedMessageRepository {
     ) -> Result<(UnreadAnchor, Vec<(UserId, u64)>), StorageError> {
         let anchor = self.unread_anchor(conversation_id, conversation_type)?;
         let conn = self.db.connection()?;
-        let flipped = conn
+        let tx = conn.unchecked_transaction()?;
+        let flipped = tx
             .prepare(
                 "UPDATE messages SET is_read = 1 WHERE conversation_id = ?1 AND conversation_type = ?2 AND is_read = 0
                  RETURNING sender_id, sent_at",
@@ -1060,7 +1104,21 @@ impl UnifiedMessageRepository {
                 Ok((row.get::<_, Option<String>>(0)?, row.get::<_, i64>(1)?))
             })?
             .collect::<Result<Vec<_>, _>>()?;
-        super::ephemeral_repo::start_read_countdowns(&conn)?;
+        if matches!(
+            conversation_type,
+            ConversationType::ServerDm | ConversationType::Channel
+        ) {
+            if let Some(sent_at) = flipped.iter().map(|(_, sent_at)| *sent_at).max() {
+                Self::advance_read_horizon(
+                    &tx,
+                    conversation_id,
+                    conversation_type,
+                    sent_at as u64,
+                )?;
+            }
+        }
+        super::ephemeral_repo::start_read_countdowns(&tx)?;
+        tx.commit()?;
         let read = flipped
             .into_iter()
             .filter_map(|(sender, sent_at)| Some((sender?.parse().ok()?, sent_at as u64)))
@@ -2528,41 +2586,78 @@ impl UnifiedMessageRepository {
         Ok(rows > 0)
     }
 
-    /// Apply a `ReadSync` from another of our devices: mark each named message
-    /// read. Every entry is scoped to its conversation, author and sent time —
-    /// never a bare `sent_at` match (INFRA-25: mesh timestamps collide) — and
-    /// to server conversations, the only ones a `ReadSync` is sent for. Our own
-    /// messages are never "unread" and are skipped. Returns the conversations
-    /// in which something was newly read.
+    /// Advance the durable read position and clear messages already present.
+    /// Called inside the same transaction as the triggering read or own send.
+    fn advance_read_horizon(
+        conn: &rusqlite::Connection,
+        conversation_id: &ChannelId,
+        conversation_type: &ConversationType,
+        sent_at: u64,
+    ) -> Result<usize, StorageError> {
+        if sent_at > i64::MAX as u64 {
+            return Err(StorageError::InvalidData(
+                "read timestamp out of range".into(),
+            ));
+        }
+        conn.execute(
+            "INSERT INTO conversation_read_horizons (conversation_type, conversation_id, sent_at)
+             VALUES (?1, ?2, ?3)
+             ON CONFLICT(conversation_type, conversation_id) DO UPDATE SET
+                 sent_at = MAX(sent_at, excluded.sent_at)",
+            params![
+                conversation_type.as_str(),
+                conversation_id.to_string(),
+                sent_at as i64
+            ],
+        )?;
+        let rows = conn.execute(
+            "UPDATE messages SET is_read = 1, updated_at = ?1
+             WHERE conversation_type = ?2 AND conversation_id = ?3 AND is_read = 0
+               AND sent_at <= (SELECT sent_at FROM conversation_read_horizons
+                               WHERE conversation_type = ?2 AND conversation_id = ?3)",
+            params![
+                Utc::now().to_rfc3339(),
+                conversation_type.as_str(),
+                conversation_id.to_string()
+            ],
+        )?;
+        Ok(rows)
+    }
+
+    /// Apply own-device reads as conversation horizons. The sync may precede
+    /// messages it covers; store its highest position so later inserts land
+    /// read too. Never touch anonymous or mesh conversations.
     pub fn mark_read_synced(
         &self,
         reads: &[(ChannelId, UserId, u64)],
         self_user_id: &UserId,
     ) -> Result<Vec<ChannelId>, StorageError> {
         let conn = self.db.connection()?;
-        let now = Utc::now().to_rfc3339();
+        let tx = conn.unchecked_transaction()?;
         let mut changed = Vec::new();
+        let mut horizons: HashMap<(ChannelId, ConversationType), u64> = HashMap::new();
         for (conversation_id, sender_id, sent_at) in reads {
-            if sender_id == self_user_id {
+            if sender_id == self_user_id || *sent_at > i64::MAX as u64 {
                 continue;
             }
-            let rows = conn.execute(
-                "UPDATE messages SET is_read = 1, updated_at = ?1
-                 WHERE conversation_id = ?2 AND sender_id = ?3 AND sent_at = ?4
-                   AND is_read = 0
-                   AND conversation_type IN ('server_dm', 'channel')",
-                params![
-                    now,
-                    conversation_id.to_string(),
-                    sender_id.to_string(),
-                    *sent_at as i64
-                ],
-            )?;
-            if rows > 0 && !changed.contains(conversation_id) {
-                changed.push(*conversation_id);
+            let kind = if *conversation_id == ChannelId::from(*sender_id) {
+                ConversationType::ServerDm
+            } else {
+                ConversationType::Channel
+            };
+            horizons
+                .entry((*conversation_id, kind))
+                .and_modify(|current| *current = (*current).max(*sent_at))
+                .or_insert(*sent_at);
+        }
+        for ((conversation_id, kind), sent_at) in horizons {
+            let rows = Self::advance_read_horizon(&tx, &conversation_id, &kind, sent_at)?;
+            if rows > 0 && !changed.contains(&conversation_id) {
+                changed.push(conversation_id);
             }
         }
-        super::ephemeral_repo::start_read_countdowns(&conn)?;
+        super::ephemeral_repo::start_read_countdowns(&tx)?;
+        tx.commit()?;
         Ok(changed)
     }
 

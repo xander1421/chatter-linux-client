@@ -115,6 +115,7 @@ mod v114_mesh_signal;
 mod v115_mesh_signal_courier;
 mod v116_mesh_private_channels;
 mod v117_mesh_conversation_kinds;
+mod v118_read_horizons;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -457,4 +458,5 @@ pub fn default_migrations() -> MigrationRunner {
         .register(v115_mesh_signal_courier::V115MeshSignalCourier)
         .register(v116_mesh_private_channels::V116MeshPrivateChannels)
         .register(v117_mesh_conversation_kinds::V117MeshConversationKinds)
+        .register(v118_read_horizons::V118ReadHorizons)
 }
