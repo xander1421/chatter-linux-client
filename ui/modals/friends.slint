@@ -558,7 +558,7 @@ export component FriendsModal inherits Rectangle {
                                     }
 
                                     Text {
-                                        text: root.effective-private-mode ? "(No server involvement)" : "(Enable Shield for a private, anonymous contact)";
+                                        text: root.effective-private-mode ? "(Anonymous — over Tor, no account link)" : "(Enable Shield for a private, anonymous contact)";
                                         color: Colors.text-muted.with-alpha(0.7);
                                         font-size: Typography.xs;
                                         wrap: word-wrap;
@@ -730,7 +730,7 @@ export component FriendsModal inherits Rectangle {
 
                             Text {
                                 text: root.effective-private-mode
-                                    ? "\u{1F510} Private mode uses end-to-end encryption with no server involvement"
+                                    ? "\u{1F510} Private codes start a secret chat through anonymous mailboxes over Tor"
                                     : "\u{1F517} Server codes send a friend request; private codes start a secret chat over Tor";
                                 color: Colors.text-muted.with-alpha(0.7);
                                 font-size: Typography.xs;
