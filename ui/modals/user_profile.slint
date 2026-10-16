@@ -820,11 +820,20 @@ export component UserProfileModal inherits Rectangle {
                         if root.show-safety-number && root.safety-number != "": VerticalLayout {
                             spacing: Spacing.sm;
 
-                            Text {
-                                text: "Compare this number with your contact to verify end-to-end encryption. If the numbers match, your conversation is secure.";
-                                color: Colors.text-muted;
-                                font-size: Typography.xs;
-                                wrap: word-wrap;
+                            // Explicit height from an inner layout, as the
+                            // number box below: a bare wrapped Text here was
+                            // measured a line short on a phone, and the next
+                            // row covered Mark as verified.
+                            Rectangle {
+                                height: safety-hint.preferred-height;
+                                safety-hint := VerticalLayout {
+                                    Text {
+                                        text: "Compare this number with your contact to verify end-to-end encryption. If the numbers match, your conversation is secure.";
+                                        color: Colors.text-muted;
+                                        font-size: Typography.xs;
+                                        wrap: word-wrap;
+                                    }
+                                }
                             }
 
                             // A padded layout, not an absolutely placed Text: the
