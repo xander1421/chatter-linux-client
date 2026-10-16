@@ -38,6 +38,7 @@ export component RegisterPage inherits Rectangle {
     // Steps: 1: Profile, 2: Password, 3: PIN, 4: Server/Review
     property <int> current-step: 1;
     property <int> total-steps: 4;
+    changed current-step => { root.clear-error(); flick.viewport-y = 0px; }
 
     property <bool> submitted: false;
     property <float> arrival: 0;
@@ -63,10 +64,14 @@ export component RegisterPage inherits Rectangle {
 
     // PIN strength — computed in chatter-core, set from Rust
     in property <int> pin-strength: 0;
+    property <string> pin-error: root.pin == "" ? "" : root.pin-validation(root.pin);
+    property <int> visible-pin-strength: root.pin-error != "" ? 1 : root.pin-strength;
     
 
     callback register(string, string, string, string, string);
     pure callback username-validation(string) -> string;
+    pure callback pin-validation(string) -> string;
+    callback clear-error();
     property <string> username-error: root.username-validation(root.username);
     callback password-changed(string);
     callback pin-changed(string);
@@ -141,13 +146,15 @@ export component RegisterPage inherits Rectangle {
         }
 
         flick := Flickable {
-            viewport-height: max(self.height, content.preferred-height);
+            vertical-stretch: 1;
+            // The outer app shrinks for the IME. Keep the card at its preferred
+            // height so the lower fields and Continue become scrollable.
+            viewport-height: content.preferred-height;
             interactive: content.preferred-height > self.height;
 
             content := VerticalLayout {
                 padding: Spacing.lg;
                 spacing: Spacing.none;
-                alignment: center;
                 cross-axis-alignment: center;
 
                 Rectangle {
@@ -324,6 +331,7 @@ export component RegisterPage inherits Rectangle {
                                 placeholder: "Display name";
                                 text <=> root.display-name;
                                 disabled: root.loading;
+                                edited(text) => { root.clear-error(); }
                             }
 
                             // No availability check: the server exposes no
@@ -334,6 +342,7 @@ export component RegisterPage inherits Rectangle {
                                 placeholder: "Username";
                                 text <=> root.username;
                                 disabled: root.loading;
+                                edited(text) => { root.clear-error(); }
                             }
 
                             if root.username != "" && root.username-error != "": Text {
@@ -368,7 +377,7 @@ export component RegisterPage inherits Rectangle {
                                 password: true;
                                 text <=> root.password;
                                 disabled: root.loading;
-                                edited(text) => { root.password-changed(text); }
+                                edited(text) => { root.clear-error(); root.password-changed(text); }
                             }
 
                             // Password strength meter (4 segments)
@@ -412,6 +421,7 @@ export component RegisterPage inherits Rectangle {
                                 disabled: root.loading;
                                 error: password != "" && confirm-password != "" && !passwords-match;
                                 error-message: "Passwords do not match";
+                                edited(text) => { root.clear-error(); }
                             }
 
                             Button {
@@ -452,27 +462,35 @@ export component RegisterPage inherits Rectangle {
                                 password: true;
                                 text <=> root.pin;
                                 disabled: root.loading;
-                                edited(text) => { root.pin-changed(text); }
+                                edited(text) => { root.clear-error(); root.pin-changed(text); }
+                            }
+
+                            if root.pin-error != "": Text {
+                                text: root.pin-error;
+                                color: Colors.error;
+                                font-size: Typography.sm;
+                                wrap: word-wrap;
+                                min-height: self.preferred-height;
                             }
 
                             // PIN strength (3 segments: weak/fair/strong)
                             if root.pin-strength > 0: HorizontalLayout {
                                 accessible-role: text;
-                                accessible-label: "PIN strength: " + (root.pin-strength == 1 ? "Weak" :
-                                    root.pin-strength == 2 ? "Fair" : "Strong");
+                                accessible-label: "PIN strength: " + (root.visible-pin-strength == 1 ? "Weak" :
+                                    root.visible-pin-strength == 2 ? "Fair" : "Strong");
                                 spacing: Spacing.xs;
                                 height: 8px;
                                 Rectangle {
                                     horizontal-stretch: 1; height: 4px; border-radius: 2px;
-                                    background: root.pin-strength == 1 ? Colors.error : (root.pin-strength == 2 ? Colors.warning : Colors.success);
+                                    background: root.visible-pin-strength == 1 ? Colors.error : (root.visible-pin-strength == 2 ? Colors.warning : Colors.success);
                                 }
                                 Rectangle {
                                     horizontal-stretch: 1; height: 4px; border-radius: 2px;
-                                    background: root.pin-strength >= 2 ? (root.pin-strength == 3 ? Colors.success : Colors.warning) : Colors.surface-hover;
+                                    background: root.visible-pin-strength >= 2 ? (root.visible-pin-strength == 3 ? Colors.success : Colors.warning) : Colors.surface-hover;
                                 }
                                 Rectangle {
                                     horizontal-stretch: 1; height: 4px; border-radius: 2px;
-                                    background: root.pin-strength == 3 ? Colors.success : Colors.surface-hover;
+                                    background: root.visible-pin-strength == 3 ? Colors.success : Colors.surface-hover;
                                 }
                             }
 
@@ -484,12 +502,13 @@ export component RegisterPage inherits Rectangle {
                                 disabled: root.loading;
                                 error: pin != "" && confirm-pin != "" && !root.pins-match;
                                 error-message: "PINs do not match";
+                                edited(text) => { root.clear-error(); }
                             }
 
                             Button {
                                 text: "Continue";
                                 variant: "primary";
-                                disabled: pin == "" || !pins-match || pin-strength < 2;
+                                disabled: pin == "" || !pins-match || root.pin-error != "";
                                 clicked => { current-step = 4; }
                             }
                         }
@@ -518,6 +537,7 @@ export component RegisterPage inherits Rectangle {
                                 placeholder: "Direct server URL";
                                 text <=> root.server-url;
                                 disabled: root.loading;
+                                edited(text) => { root.clear-error(); }
                             }
 
                             if !AnonMode.enabled: HorizontalLayout {
@@ -527,14 +547,14 @@ export component RegisterPage inherits Rectangle {
                                     variant: "secondary";
                                     horizontal-stretch: 1;
                                     disabled: root.loading;
-                                    clicked => { root.server-url = "http://localhost:50051"; }
+                                    clicked => { root.server-url = "http://localhost:50051"; root.clear-error(); }
                                 }
                                 Button {
                                     text: "Official";
                                     variant: "secondary";
                                     horizontal-stretch: 1;
                                     disabled: root.loading;
-                                    clicked => { root.server-url = "https://api.chatter.example.com"; }
+                                    clicked => { root.server-url = "https://api.chatter.example.com"; root.clear-error(); }
                                 }
                             }
 

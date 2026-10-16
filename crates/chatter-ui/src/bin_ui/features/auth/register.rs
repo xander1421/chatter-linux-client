@@ -5,6 +5,7 @@ use std::sync::{Arc, Mutex, OnceLock};
 use slint::ComponentHandle;
 
 use chatter_core::client::ChatterClient;
+use chatter_core::error::CryptoError;
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
 use chatter_core::media::{FileFilter, FilePicker, FilePickerConfig};
 
@@ -15,6 +16,18 @@ fn selected_avatar() -> &'static Mutex<Option<Vec<u8>>> {
 
 use super::initial_data::load_initial_data;
 use crate::MainWindow;
+
+fn pin_validation_message(pin: &str) -> String {
+    match chatter_core::crypto::svr::validate_pin(pin) {
+        Ok(()) => String::new(),
+        Err(CryptoError::Validation(message)) => message,
+        Err(error) => error.to_string(),
+    }
+}
+
+fn registration_error_message(message: &str) -> &str {
+    message.strip_prefix("validation error: ").unwrap_or(message)
+}
 
 pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
@@ -125,6 +138,16 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             .into()
     });
 
+    window.on_register_pin_validation(|pin| pin_validation_message(pin.as_str()).into());
+    window.on_register_clear_error({
+        let weak = weak_window.clone();
+        move || {
+            if let Some(w) = weak.upgrade() {
+                w.set_register_error("".into());
+            }
+        }
+    });
+
     window.on_register_password_changed({
         let weak = weak_window.clone();
         let ui_ctx = ui_ctx.clone();
@@ -174,7 +197,7 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 if let Err(e) = ui_ctx.set_server_url(&server_url) {
                     if let Some(w) = weak.upgrade() {
                         w.set_register_loading(false);
-                        w.set_register_error(format!("Invalid Server URL: {}", e).into());
+                        w.set_register_error(format!("Invalid Server URL: {}", registration_error_message(&e.to_string())).into());
                         w.global::<crate::AnonMode>().set_onboarding_progress("".into());
                     }
                     return;
@@ -261,6 +284,7 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         let ui_ctx_for_handlers = ui_ctx.clone();
                         if has_recovery_codes {
                             let codes = result.recovery_codes.unwrap();
+                            let welcome_name = display_name.clone();
                             let _ = slint::invoke_from_event_loop(move || {
                                 // Spawn UI event handlers (must be on UI thread)
                                 crate::bin_ui::features::modals::spawn_anon_group_invite_handler(weak_for_ui.clone(), &ui_ctx_for_handlers);
@@ -282,11 +306,13 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                     // page to a shell that still thinks nobody is
                                     // logged in.
                                     w.set_is_signed_in(true);
+                                    w.set_user_display_name(welcome_name.into());
                                     w.set_current_view("welcome".into());
                                     crate::bin_ui::features::back::push(&w, "recovery-codes");
                                 }
                             });
                         } else {
+                            let welcome_name = display_name.clone();
                             let _ = slint::invoke_from_event_loop(move || {
                                 crate::bin_ui::features::modals::spawn_anon_group_invite_handler(weak_for_ui.clone(), &ui_ctx_for_handlers);
                                 crate::bin_ui::features::modals::spawn_anon_dm_request_handler(weak_for_ui.clone(), &ui_ctx_for_handlers);
@@ -302,6 +328,7 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                     // page to a shell that still thinks nobody is
                                     // logged in.
                                     w.set_is_signed_in(true);
+                                    w.set_user_display_name(welcome_name.into());
                                     w.set_current_view("welcome".into());
                                 }
                             });
@@ -316,7 +343,7 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(w) = weak.upgrade() {
                                 w.set_register_loading(false);
-                                w.set_register_error(error_msg.into());
+                                w.set_register_error(registration_error_message(&error_msg).into());
                                 w.global::<crate::AnonMode>().set_onboarding_progress("".into());
                             }
                         });
