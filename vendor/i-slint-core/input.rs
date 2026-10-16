@@ -25,6 +25,7 @@ use core::pin::Pin;
 use core::time::Duration;
 
 #[cfg(target_os = "android")]
+#[allow(unsafe_code)]
 #[link(name = "log")]
 unsafe extern "C" {
     fn __android_log_write(
@@ -35,6 +36,7 @@ unsafe extern "C" {
 }
 
 #[cfg(target_os = "android")]
+#[allow(unsafe_code)]
 fn profile_tap_probe(message: &str) {
     if let Ok(message) = std::ffi::CString::new(message) {
         unsafe { __android_log_write(4, c"ProfileTap".as_ptr(), message.as_ptr()); }
