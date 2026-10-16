@@ -133,7 +133,13 @@ impl MessageService {
                 Ok(()) => delivered += 1,
                 Err(e) => {
                     tracing::warn!(peer_id = %peer_id, device_id = mailbox.device_id, error = %e, "Mailbox DM to a peer device failed");
-                    last_error = Some(e);
+                    // One earlier ambiguous deposit keeps the whole send
+                    // ambiguous even if a later device failed at preconnect.
+                    if last_error.as_ref().is_none_or(|previous: &MessageError| {
+                        matches!(previous, MessageError::Network(crate::error::NetworkError::RequestNotSent(_)))
+                    }) || !matches!(&e, MessageError::Network(crate::error::NetworkError::RequestNotSent(_))) {
+                        last_error = Some(e);
+                    }
                 }
             }
         }
@@ -794,6 +800,7 @@ impl MessageService {
         use crate::services::mailbox_manager::MailboxError;
 
         const MAX_ATTEMPTS: u32 = 4; // 1 initial + 3 retries
+        let mut earlier_ambiguous = false;
 
         for attempt in 0..MAX_ATTEMPTS {
             if attempt > 0 {
@@ -823,6 +830,7 @@ impl MessageService {
                 Err(MailboxError::Network(net_err))
                     if net_err.is_retryable() && attempt + 1 < MAX_ATTEMPTS =>
                 {
+                    earlier_ambiguous |= !matches!(net_err, crate::error::NetworkError::RequestNotSent(_));
                     tracing::warn!(
                         peer_id = %peer_id,
                         device_id,
@@ -831,6 +839,12 @@ impl MessageService {
                         error = %net_err,
                         "Mailbox send failed, retrying"
                     );
+                }
+                Err(MailboxError::Network(crate::error::NetworkError::RequestNotSent(_)))
+                    if earlier_ambiguous =>
+                {
+                    // A previous deposit attempt may already have arrived.
+                    return Err(MessageError::Network(crate::error::NetworkError::Unavailable));
                 }
                 Err(MailboxError::Network(e)) => return Err(MessageError::Network(e)),
             }

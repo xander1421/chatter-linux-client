@@ -48,7 +48,8 @@ impl MailboxManager {
     ) -> Result<(), MailboxError> {
         #[cfg(feature = "onion")]
         {
-            self.client_pool.prepare_unidentified_deposit().await?;
+            self.client_pool.prepare_unidentified_deposit().await
+                .map_err(|e| NetworkError::RequestNotSent(e.to_string()))?;
         }
         let client = self.client_pool.anonymous_mailbox_client();
         let result = Self::deposit(
@@ -83,9 +84,11 @@ impl MailboxManager {
     ) -> Result<(), MailboxError> {
         #[cfg(feature = "onion")]
         {
-            self.client_pool.prepare_secret_deposit().await?;
+            self.client_pool.prepare_secret_deposit().await
+                .map_err(|e| NetworkError::RequestNotSent(e.to_string()))?;
         }
-        let client = self.client_pool.secret_mailbox_client()?;
+        let client = self.client_pool.secret_mailbox_client()
+            .map_err(|e| NetworkError::RequestNotSent(e.to_string()))?;
         let result = Self::deposit(
             client,
             destination_public_key,

@@ -301,7 +301,7 @@ impl MessageService {
         // must retain this composer attempt while the queue owns its delivery.
         crate::services::gateway::submission::mark_submission_started()?;
         self.message_repo.insert_outgoing(&entry.row)?;
-        self.attempt_channel_entry(&journal_key, &generation, &entry)
+        self.attempt_channel_entry(&journal_key, &generation, &entry, true)
             .await
     }
 
@@ -564,6 +564,7 @@ impl MessageService {
         journal_key: &str,
         generation: &str,
         entry: &Entry,
+        first_attempt: bool,
     ) -> Result<Message, MessageError> {
         let row = &entry.row;
         let quote = entry.quote.as_ref().map(|q| QuoteIntent {
@@ -757,8 +758,18 @@ impl MessageService {
                 Ok(sent)
             }
             Err(error) => {
+                let request_not_sent = matches!(
+                    &error,
+                    MessageError::Network(crate::error::NetworkError::RequestNotSent(_))
+                );
+                // A later preconnect miss does not undo an earlier ambiguous
+                // deposit. Keep replaying its exact request in that case.
                 let transient = crate::services::gateway::submission::check_send_session().is_err()
-                    || matches!(&error, MessageError::Network(e) if e.is_retryable() || e.is_transport_error());
+                    || if request_not_sent {
+                        !first_attempt
+                    } else {
+                        matches!(&error, MessageError::Network(e) if e.is_retryable() || e.is_transport_error())
+                    };
                 let changed = {
                     let conn = self.database.connection()?;
                     // Transient failures resume preparation or replay the exact
@@ -1053,7 +1064,7 @@ pub(crate) fn spawn_channel_send_recovery(
                     .scope(session.clone(), async {
                         messages.message_repo.insert_or_ignore(&entry.row)?;
                         messages
-                            .attempt_channel_entry(&key, &generation, &entry)
+                            .attempt_channel_entry(&key, &generation, &entry, false)
                             .await
                     })
                     .await;

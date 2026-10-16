@@ -150,7 +150,14 @@ pub(super) fn settle_failure(
     row: Option<String>,
     error: SendError,
 ) -> Result<SendError, SendError> {
-    if !started {
+    let request_not_sent = matches!(
+        &error,
+        SendError::AnonDm(crate::services::anon_dm::AnonDmError::NotSubmitted(_))
+            | SendError::Message(crate::services::message::MessageError::Network(
+                crate::error::NetworkError::RequestNotSent(_)
+            ))
+    );
+    if !started || request_not_sent {
         if let Some(id) = row.as_ref() {
             let conn = db.connection().map_err(storage_error)?;
             conn.execute("UPDATE messages SET delivery_status='failed',failure_reason='Message not submitted' WHERE id=?1 AND delivery_status NOT IN ('sent','delivered','read')", params![id])

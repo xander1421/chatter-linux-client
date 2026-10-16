@@ -239,7 +239,19 @@ impl AnonDmService {
             .await
             .map_err(|e| {
                 tracing::warn!(error = %e, "[ANON_DM_MAILBOX] Failed to send to mailbox");
-                if retained.is_some() {
+                if let crate::services::mailbox_manager::MailboxError::Network(
+                    crate::error::NetworkError::RequestNotSent(_),
+                ) = &e {
+                    if let Some(key) = retained.as_ref() {
+                        // If this cleanup fails, retain the no-retry claim.
+                        if crate::services::gateway::submission::discard_before_deposit(
+                            self.settings_repo.database(), key,
+                        ).is_err() {
+                            return AnonDmError::DeliveryUnconfirmed;
+                        }
+                    }
+                    AnonDmError::NotSubmitted(e.to_string())
+                } else if retained.is_some() {
                     AnonDmError::DeliveryUnconfirmed
                 } else if matches!(
                     e,

@@ -9,6 +9,9 @@ use tonic::{Code, Status};
 /// Network error with gRPC status code classification.
 #[derive(Debug, Clone, Error)]
 pub enum NetworkError {
+    /// The connection or tonic readiness check failed before the request was sent.
+    #[error("request not sent: {0}")]
+    RequestNotSent(String),
     /// Connection to server failed.
     #[error("connection failed: {0}")]
     ConnectionFailed(String),
@@ -77,6 +80,22 @@ impl NetworkError {
     pub fn from_status(status: &Status) -> Self {
         let message = status.message().to_string();
         let code = status.code();
+
+        // tonic's readiness check precedes the RPC call. Its connect error
+        // cannot have delivered any request bytes, unlike an h2 error after
+        // the call starts. A bare Unavailable remains ambiguous.
+        let mut source = StdError::source(status);
+        let mut connect_error = false;
+        while let Some(error) = source {
+            if format!("{error:?}").contains("ConnectError") {
+                connect_error = true;
+                break;
+            }
+            source = error.source();
+        }
+        if message.starts_with("Service was not ready:") || connect_error {
+            return Self::RequestNotSent(message);
+        }
 
         // Log detailed error info for debugging
         tracing::debug!(
@@ -160,7 +179,8 @@ impl NetworkError {
     pub fn is_retryable(&self) -> bool {
         matches!(
             self,
-            NetworkError::Unavailable
+            NetworkError::RequestNotSent(_)
+                | NetworkError::Unavailable
                 | NetworkError::RateLimited
                 | NetworkError::ServerError(_)
                 | NetworkError::Timeout
@@ -189,7 +209,9 @@ impl NetworkError {
     pub fn is_transport_error(&self) -> bool {
         matches!(
             self,
-            NetworkError::Unavailable | NetworkError::ConnectionFailed(_)
+            NetworkError::RequestNotSent(_)
+                | NetworkError::Unavailable
+                | NetworkError::ConnectionFailed(_)
         )
     }
 

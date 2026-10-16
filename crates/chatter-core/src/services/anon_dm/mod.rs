@@ -43,6 +43,8 @@ use crate::storage::repositories::SettingsRepository;
 /// Anonymous DM service errors.
 #[derive(Debug, thiserror::Error)]
 pub enum AnonDmError {
+    #[error("message not submitted: {0}")]
+    NotSubmitted(String),
     #[error("Delivery unconfirmed; the original submission is retained and retry is disabled")]
     DeliveryUnconfirmed,
     /// Not logged in.

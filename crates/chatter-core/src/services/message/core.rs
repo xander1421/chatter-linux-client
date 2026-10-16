@@ -33,6 +33,7 @@ impl MessageError {
     pub fn permanent_send_failure_reason(&self) -> Option<&'static str> {
         use crate::error::NetworkError;
         match self {
+            Self::Network(NetworkError::RequestNotSent(_)) => Some("Message not submitted"),
             Self::Network(e) if e.is_retryable() || e.is_transport_error() => None,
             Self::Network(NetworkError::MismatchedDevices { .. }) => None,
             // SpiceDB down answers PermissionDenied. That is a delivery miss,

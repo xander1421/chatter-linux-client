@@ -3543,6 +3543,31 @@ impl ChatterClient {
             .await;
         match outcome {
             Ok(mut result) => {
+                // Shield friend DMs return their stored failed row as Ok.
+                // A mailbox preconnect failure preceded every deposit byte,
+                // even though encryption already started the send journal.
+                if matches!(
+                    result.send_error.as_ref(),
+                    Some(crate::services::message::MessageError::Network(
+                        crate::error::NetworkError::RequestNotSent(_)
+                    ))
+                ) {
+                    let error = result.send_error.take().unwrap();
+                    send_attempt::settle_failure(
+                        &self.services.database,
+                        &key,
+                        attempt,
+                        started,
+                        original_row.clone(),
+                        SendError::Message(error),
+                    )
+                    .map_err(|error| (error, original_row.clone()))?;
+                    if let Some(id) = original_row.as_deref().and_then(|id| id.parse().ok()) {
+                        result.message = self.messages().get_message_local(&id)
+                            .map_err(|error| (error.into(), original_row.clone()))?;
+                    }
+                    return Ok(result);
+                }
                 // A durable channel queue knows terminal authorization/content
                 // refusal separately from transient or uncertain submission.
                 if let Some(message) = result.message.as_ref() {

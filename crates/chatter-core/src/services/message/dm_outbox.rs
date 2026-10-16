@@ -162,7 +162,8 @@ pub(super) enum FirstAttempt {
 
 /// What an attempt's failure means for the entry.
 fn transient(error: &MessageError) -> bool {
-    error.permanent_send_failure_reason().is_none()
+    matches!(error, MessageError::Network(NetworkError::RequestNotSent(_)))
+        || error.permanent_send_failure_reason().is_none()
         || matches!(
             error,
             MessageError::Storage(_)
@@ -476,7 +477,8 @@ impl MessageService {
             }
             Err(error) => error,
         };
-        if !transient(&error) && !crate::services::gateway::submission::submission_started() {
+        if matches!(&error, MessageError::Network(NetworkError::RequestNotSent(_)))
+            || !transient(&error) && !crate::services::gateway::submission::submission_started() {
             // Refused before any ratchet step or request byte: plainly failed.
             let result = Err(error);
             if !self.settle_sealed_dm(id, generation, &result, true)? {

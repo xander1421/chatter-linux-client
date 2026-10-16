@@ -153,6 +153,17 @@ pub(crate) fn discard_before_encryption(db: &Database, key: &str) {
     }
 }
 
+/// A deposit preparation failure proves that no mailbox request was made.
+/// Release its retained ciphertext so the original row can be retried.
+pub(crate) fn discard_before_deposit(db: &Database, key: &str) -> Result<(), StorageError> {
+    let conn = db.connection()?;
+    conn.execute(
+        "DELETE FROM settings WHERE key=?1 AND json_extract(value,'$.confirmed')=0",
+        params![key],
+    )?;
+    Ok(())
+}
+
 // Scoped to one original core future (not a global flag). Once any route can
 // encrypt, deposit, distribute a key or enqueue delivery, failure is ambiguous.
 tokio::task_local! {
