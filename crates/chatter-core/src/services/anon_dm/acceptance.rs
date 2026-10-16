@@ -240,7 +240,7 @@ impl AnonDmService {
         // An end can arrive before an earlier acceptance is processed. Once
         // the initiator has marked the request declined, a late acceptance
         // must not bring the ended chat back to Active.
-        if dm.status == AnonDmStatus::Declined {
+        if matches!(dm.status, AnonDmStatus::Declined | AnonDmStatus::Superseded) {
             return Err(AnonDmError::InvalidData(
                 "Acceptance for an ended request".to_string(),
             ));
@@ -301,6 +301,16 @@ impl AnonDmService {
         {
             return Err(AnonDmError::ConversationExists(sender_id));
         }
+        if let Some(old) = self.anon_dm_repo.get_live_conversation_by_peer(&sender_id)? {
+            // A blocked peer must not escape the block by starting over.
+            if old.status == AnonDmStatus::Blocked {
+                tracing::info!(%conversation_id, "Dropped secret-chat request from blocked peer");
+                return Err(AnonDmError::ConversationExists(sender_id));
+            }
+            if old.status == AnonDmStatus::Active {
+                tracing::warn!(%conversation_id, "peer restarted secret chat");
+            }
+        }
 
         // Create conversation as incoming request
         let mut dm = AnonDm::from_request(conversation_id, sender_id, sender_mailbox_pk);
@@ -308,7 +318,7 @@ impl AnonDmService {
         dm.peer_profile_key = profile_key;
         dm.peer_display_name = peer_display_name;
         dm.peer_avatar = peer_avatar;
-        self.anon_dm_repo.insert_conversation(&dm)?;
+        self.anon_dm_repo.insert_incoming_replacing_live(&dm)?;
         crate::services::disappearing::initialize_anon_dm_timer(
             &self.settings_repo, &self.message_repo,
             &conversation_id,
@@ -386,9 +396,19 @@ impl AnonDmService {
             );
             return Ok(false);
         }
+        if let Some(old) = self.anon_dm_repo.get_live_conversation_by_peer(&dm.peer_id)? {
+            // A blocked peer must not escape the block by starting over.
+            if old.status == AnonDmStatus::Blocked {
+                tracing::info!(conversation_id = %dm.id, "Dropped secret-chat request from blocked peer");
+                return Ok(false);
+            }
+            if old.status == AnonDmStatus::Active {
+                tracing::warn!(conversation_id = %dm.id, "peer restarted secret chat");
+            }
+        }
 
         // Store the conversation
-        self.anon_dm_repo.insert_conversation(dm)?;
+        self.anon_dm_repo.insert_incoming_replacing_live(dm)?;
         crate::services::disappearing::initialize_anon_dm_timer(
             &self.settings_repo, &self.message_repo,
             &dm.id,

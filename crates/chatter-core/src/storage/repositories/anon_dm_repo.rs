@@ -54,6 +54,44 @@ impl AnonDmRepository {
         Ok(())
     }
 
+    /// Keep a peer's previous chat and its messages, but let a new incoming
+    /// request become the only live chat. Both changes must commit together.
+    pub fn insert_incoming_replacing_live(&self, dm: &AnonDm) -> Result<(), StorageError> {
+        let mut conn = self.db.connection()?;
+        let tx = conn.transaction()?;
+        tx.execute(
+            "UPDATE anon_dm_conversations SET status = ?1, updated_at = ?2
+             WHERE peer_id = ?3 AND status IN (?4, ?5)",
+            params![
+                AnonDmStatus::Superseded.to_i32(),
+                Utc::now().to_rfc3339(),
+                dm.peer_id.to_string(),
+                AnonDmStatus::Active.to_i32(),
+                AnonDmStatus::Pending.to_i32(),
+            ],
+        )?;
+        tx.execute(
+            "INSERT INTO anon_dm_conversations (id, peer_id, initiated_by_us, status, peer_mailbox_pk, peer_profile_key, peer_display_name, peer_avatar, created_at, updated_at, peer_device_id, request_state)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+            params![
+                dm.id.to_string(),
+                dm.peer_id.to_string(),
+                dm.initiated_by_us as i32,
+                dm.status.to_i32(),
+                dm.peer_mailbox_pk.as_ref().map(|k| k.as_slice()),
+                dm.peer_profile_key.as_ref().map(|k| k.as_slice()),
+                dm.peer_display_name.as_deref(),
+                dm.peer_avatar.as_deref(),
+                dm.created_at.to_rfc3339(),
+                dm.updated_at.to_rfc3339(),
+                dm.peer_device_id,
+                dm.request as i32,
+            ],
+        )?;
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Bind the conversation to `device_id` of the peer. First pin wins: a
     /// conversation already bound to another device is refused — a secret
     /// chat never moves to another of the peer's devices. Not part of
@@ -111,9 +149,10 @@ impl AnonDmRepository {
     }
 
     /// The live secret chat with `peer_id`: Active first, then Blocked, then
-    /// a pending request, newest first within each. A Declined chat is never
-    /// it. One peer can hold several rows (a declined request next to a new
-    /// one, a chat per peer device, requests crossing), so this is a
+    /// a pending request, preferring message history within each status. Declined
+    /// and Superseded chats are never live. One peer can hold several rows
+    /// (a declined request next to a new one, a chat per peer device, requests
+    /// crossing), so this is a
     /// deterministic pick for peer-level questions ("is there a chat with
     /// them?"). Anything acting on one specific chat goes by its id.
     pub fn get_live_conversation_by_peer(
@@ -126,7 +165,7 @@ impl AnonDmRepository {
              (SELECT MAX(created_at) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_deleted = 0) as last_message_at, \
              (SELECT COUNT(*) FROM messages WHERE conversation_id = anon_dm_conversations.id AND conversation_type = 'anon_dm' AND is_read = 0 AND is_deleted = 0) as unread_count, peer_device_id, request_state \
              FROM anon_dm_conversations WHERE peer_id = ?1 AND status IN (?2, ?3, ?4) \
-             ORDER BY CASE status WHEN ?2 THEN 0 WHEN ?3 THEN 1 ELSE 2 END, created_at DESC, id DESC LIMIT 1",
+             ORDER BY CASE status WHEN ?2 THEN 0 WHEN ?3 THEN 1 ELSE 2 END, last_message_at DESC NULLS LAST, created_at DESC, id DESC LIMIT 1",
         )?;
         stmt.query_row(
             params![

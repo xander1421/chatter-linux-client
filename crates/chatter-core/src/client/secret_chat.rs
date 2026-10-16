@@ -77,6 +77,7 @@ pub enum SecretChatGate {
     /// We asked; the peer has not accepted yet.
     AwaitingPeer,
     Declined,
+    Superseded,
     Blocked,
 }
 
@@ -87,6 +88,7 @@ impl SecretChatGate {
             Self::AwaitingOurAnswer => "Secret chat request. Accept it to reply.",
             Self::AwaitingPeer => "Waiting for them to accept your secret chat request.",
             Self::Declined => "This secret chat request was declined.",
+            Self::Superseded => "This secret chat ended when a new request arrived.",
             Self::Blocked => "You blocked this secret chat.",
         }
     }
@@ -109,6 +111,7 @@ impl ChatterClient {
             AnonDmStatus::Pending if dm.initiated_by_us => Some(SecretChatGate::AwaitingPeer),
             AnonDmStatus::Pending => Some(SecretChatGate::AwaitingOurAnswer),
             AnonDmStatus::Declined => Some(SecretChatGate::Declined),
+            AnonDmStatus::Superseded => Some(SecretChatGate::Superseded),
             AnonDmStatus::Blocked => Some(SecretChatGate::Blocked),
         }
     }
@@ -150,7 +153,7 @@ impl ChatterClient {
                 AnonDmStatus::Active => return Ok(existing),
                 AnonDmStatus::Pending => {}
                 AnonDmStatus::Blocked => return Err(SecretChatError::Blocked),
-                AnonDmStatus::Declined => {}
+                AnonDmStatus::Declined | AnonDmStatus::Superseded => {}
             }
         }
         let mut dm = self.start_anon_dm(peer, None).await?;
