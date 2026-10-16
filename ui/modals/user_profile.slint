@@ -241,8 +241,12 @@ export component UserProfileModal inherits Rectangle {
                 width: parent.width;
                 height: parent.height - self.y;
                 viewport-width: self.width;
-                viewport-height: page.preferred-height;
-                interactive: self.viewport-height > self.height;
+                // At least the visible height: children outside the viewport
+                // are not hit-tested, and the page's measured height can fall
+                // short of what wrapped text paints, which left the lower
+                // buttons on a phone drawn but dead.
+                viewport-height: max(self.height, page.preferred-height);
+                interactive: page.preferred-height > self.height;
                 // Buttons and action tiles contain nested TouchAreas. Deliver
                 // their press immediately while retaining drag-to-scroll.
                 immediate-child-press: true;
