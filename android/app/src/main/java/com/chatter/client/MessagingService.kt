@@ -11,6 +11,8 @@ import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
+import android.os.Handler
+import android.os.Looper
 import android.annotation.SuppressLint
 import android.util.Log
 
@@ -22,6 +24,8 @@ import android.util.Log
  */
 class MessagingService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
+    private var nativeStartupPending = false
+    private external fun nativeStartHeadless(context: Context): Boolean
 
     // The service lifetime is the bound: release onDestroy, and never restart
     // after process death. Doze can still suspend network/ignore wake locks.
@@ -66,15 +70,36 @@ class MessagingService : Service() {
         // Every startForegroundService request must be promoted, even if the
         // activity returned to the foreground before this command ran.
         if (pendingStarts > 0) pendingStarts--
-        if (stopRequested || !coreReadyInProcess) {
-            // A boot/update broadcast can create this service in a fresh
-            // process. Until Rust has a headless startup entry, no inbox
-            // poller exists there; do not hold a wake lock or claim connected.
+        if (stopRequested || !wasSignedIn(this)) {
             if (pendingStarts == 0) stopSelf(startId)
-        } else {
+        } else if (coreReadyInProcess) {
             retainInboxExecution()
+        } else if (!nativeStartupPending) {
+            nativeStartupPending = true
+            // Keep DB open and bounded network startup off Android's main
+            // thread. JNI runs on this attached Java thread, not a Rust worker.
+            Thread({
+                val ready = try {
+                    System.loadLibrary("chatter_ui")
+                    nativeStartHeadless(applicationContext)
+                } catch (error: Throwable) {
+                    Log.e("MessagingService", "Headless core startup failed", error)
+                    false
+                }
+                Handler(Looper.getMainLooper()).post {
+                    nativeStartupPending = false
+                    if (ready && !stopRequested && wasSignedIn(this)) {
+                        coreReadyInProcess = true
+                        retainInboxExecution()
+                    } else if (pendingStarts == 0) {
+                        stopSelf()
+                    }
+                }
+            }, "ChatterHeadlessStart").start()
+        } else {
+            // A previous start already owns startup; its completion retains
+            // execution or stops this service.
         }
-        // Rust state cannot be reconstructed by a service-only process restart.
         return START_NOT_STICKY
     }
 
