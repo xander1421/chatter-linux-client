@@ -183,10 +183,8 @@ pub(super) fn handle_group_updated(
 // =========================================================================
 // Anonymous Group Membership Events (system-message synthesis)
 //
-// `Member{Joined,Left,Kicked}` events arrive as bare metadata; the UI maps
-// each to a `SystemMessage` variant and asks core to build the domain
-// `Message` (`ChatterClient::anon_group_system_message`), keeping mod.rs a
-// pure dispatch table and message construction out of the UI.
+// Join events synthesize a live line while core persists the notice. Leave
+// and kick events reload their already-persisted notices from core.
 // =========================================================================
 
 pub(super) fn handle_group_member_joined(
@@ -205,12 +203,24 @@ pub(super) fn handle_group_member_left(
     window: &Weak<MainWindow>,
     ui_ctx: &Arc<ChatterClient>,
     group_id: AnonGroupId,
-    user_id: UserId,
+    _user_id: UserId,
 ) {
-    let message =
-        ui_ctx.anon_group_system_message(group_id, user_id, SystemMessage::UserLeft(user_id));
-    super::messaging::handle_message_received(window, ui_ctx, message);
     refresh_active_group_counts(window, ui_ctx, group_id);
+    // Core persisted the verified leave notice. Reload from storage so the
+    // open chat and sidebar use the same line and timestamp after reopening.
+    let (weak, ui_ctx) = (window.clone(), ui_ctx.clone());
+    let _ = slint::invoke_from_event_loop(move || {
+        if let Some(w) = weak.upgrade() {
+            crate::bin_ui::features::sidebar::refresh_chat_list(&w, &ui_ctx);
+            if ui_ctx.active_conversation().matches_anon_group(&group_id) {
+                crate::bin_ui::features::sidebar::private_group::load_private_group_messages(
+                    &w,
+                    &ui_ctx,
+                    &group_id.to_string(),
+                );
+            }
+        }
+    });
 }
 
 pub(super) fn handle_group_member_kicked(

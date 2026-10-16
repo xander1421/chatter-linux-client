@@ -326,6 +326,14 @@ impl ChatterClient {
         messages
             .iter()
             .map(|msg| {
+                if let crate::domain::message::MessageContent::System(
+                    crate::domain::message::SystemMessage::AnonGroupUserLeft {
+                        left_name: Some(name),
+                    },
+                ) = &msg.content
+                {
+                    return name.clone();
+                }
                 // System lines about us read "You left the channel", as Signal's do.
                 if matches!(
                     msg.content,

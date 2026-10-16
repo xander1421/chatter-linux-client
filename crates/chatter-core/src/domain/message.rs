@@ -697,6 +697,9 @@ impl SealedSenderContent {
 pub enum SystemMessage {
     UserJoined(UserId),
     UserLeft(UserId),
+    /// Anonymous group leave. The member's group name must be captured before
+    /// their roster entry is removed so the notice survives a chat reload.
+    AnonGroupUserLeft { left_name: Option<String> },
     /// This member is gone from the roster and no verified signed change says
     /// why: "{user} is no longer a member". Never worded as a leave.
     UserGone(UserId),
@@ -798,6 +801,7 @@ impl SystemMessage {
         if *conversation_type == ConversationType::AnonGroup {
             match self {
                 Self::UserJoined(_) => "joined the group".to_string(),
+                Self::AnonGroupUserLeft { .. } => "left the group".to_string(),
                 Self::SelfRemoved { .. } => "removed you from the group".to_string(),
                 Self::UserRemoved { removed_name, .. } => format!(
                     "removed {} from the group",
@@ -816,6 +820,7 @@ impl SystemMessage {
         match self {
             Self::UserJoined(_) => "joined the channel".to_string(),
             Self::UserLeft(_) => "left the channel".to_string(),
+            Self::AnonGroupUserLeft { .. } => "left the group".to_string(),
             Self::UserGone(_) => "is no longer a member".to_string(),
             Self::ChannelCreated => "created the channel".to_string(),
             Self::ChannelRenamed { old_name, new_name } => {

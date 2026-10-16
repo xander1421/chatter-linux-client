@@ -18,9 +18,24 @@ impl AnonGroupService {
         // A non-member's leave still records its removal barrier (it may beat
         // the roster that adds it), but there is no one to announce as gone.
         let was_member = self.anon_group_repo.is_member(&group_id, &sender_id)?;
+        let left_name = if was_member {
+            self.anon_group_repo
+                .get_member_display_name(&group_id, &sender_id)?
+                .filter(|name| !name.is_empty())
+        } else {
+            None
+        };
         let removed = self
             .anon_group_repo
             .remove_ordered_member(&group_id, &sender_id, timestamp, None, false)?;
+        if removed && was_member {
+            self.store_system_message(
+                &group_id,
+                Some(sender_id),
+                crate::domain::message::SystemMessage::AnonGroupUserLeft { left_name },
+                timestamp,
+            )?;
+        }
         Ok(removed && was_member)
     }
 

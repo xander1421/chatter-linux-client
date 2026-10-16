@@ -73,9 +73,8 @@ impl ChatterClient {
     }
 
     /// Build the synthetic system `Message` shown for an anon-group membership
-    /// change ("X joined", "X left", "X removed by Y"). The membership events
-    /// arrive as bare metadata; constructing the domain `Message` is core's
-    /// job, not the UI's.
+    /// join. The membership event arrives as bare metadata; constructing the
+    /// domain `Message` is core's job, not the UI's.
     pub fn anon_group_system_message(
         &self,
         group_id: crate::domain::anon_group::AnonGroupId,
