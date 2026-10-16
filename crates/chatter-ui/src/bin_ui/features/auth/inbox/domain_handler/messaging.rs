@@ -274,11 +274,18 @@ pub(super) fn handle_message_received(
                         .downcast_ref::<VecModel<MessageItemData>>()
                     {
                         vec_model.insert(insert_pos, new_msg);
+                        if conv_type == chatter_core::domain::message::ConversationType::Channel {
+                            crate::bin_ui::features::chat::recompute_channel_continuations(vec_model);
+                        }
                         tracing::info!(insert_pos, "[UI_RECV] inserted via VecModel.insert");
                     } else {
                         let mut messages: Vec<MessageItemData> = current_model.iter().collect();
                         messages.insert(insert_pos, new_msg);
-                        w.set_messages(ModelRc::new(VecModel::from(messages)));
+                        let model = VecModel::from(messages);
+                        if conv_type == chatter_core::domain::message::ConversationType::Channel {
+                            crate::bin_ui::features::chat::recompute_channel_continuations(&model);
+                        }
+                        w.set_messages(ModelRc::new(model));
                         tracing::warn!(insert_pos, "[UI_RECV] downcast failed; replaced model");
                     }
 
