@@ -32,6 +32,8 @@ pub enum FriendCodeConnectionError {
     ServerCodeInShield,
     #[error("Secret chats aren't available on this device.")]
     SecretChatUnavailable,
+    #[error("You already have a secret chat with them.")]
+    ExistingSecretChat(crate::domain::anon_dm::AnonDmId),
     #[error(transparent)]
     FriendRequest(#[from] crate::services::UserError),
     #[error(transparent)]
@@ -283,15 +285,28 @@ impl ChatterClient {
             if !self.secret_chats_available() {
                 return Err(FriendCodeConnectionError::SecretChatUnavailable);
             }
-            return self
+            return match self
                 .start_anon_dm_conversation_private(
                     &private,
                     Some(message.unwrap_or("Hello!")),
                     sender_display_name,
                 )
                 .await
-                .map(FriendCodeConnection::SecretChat)
-                .map_err(Into::into);
+            {
+                Ok(dm) => Ok(FriendCodeConnection::SecretChat(dm)),
+                Err(crate::services::anon_dm::AnonDmError::ConversationExists(peer)) => {
+                    // The service excludes declined chats and replaces them on retry.
+                    // Return the live chat's ID so the UI can open its existing row.
+                    let existing = self.anon_dms().get_live_conversation_by_peer(&peer)?;
+                    match existing {
+                        Some(dm) => Err(FriendCodeConnectionError::ExistingSecretChat(dm.id)),
+                        None => Err(FriendCodeConnectionError::SecretChat(
+                            crate::services::anon_dm::AnonDmError::ConversationExists(peer),
+                        )),
+                    }
+                }
+                Err(error) => Err(error.into()),
+            };
         }
 
         if !crate::domain::UsernameLink::is_username_link(code) {
