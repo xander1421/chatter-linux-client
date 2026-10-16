@@ -155,7 +155,7 @@ export component FriendsModal inherits Rectangle {
         show: root.show-modal;
         title: "Contacts";
         modal-width: 680px;
-        max-modal-height: 800px;
+        max-modal-height: max(240px, root.height - 96px);
         // On a phone this is the Contacts screen, not a dialog over the chat
         // list — the bottom tab bar navigates to it the same way Telegram's
         // does, so it gets the whole viewport.
@@ -239,7 +239,12 @@ export component FriendsModal inherits Rectangle {
 
             // Content area
             Rectangle {
-                min-height: 400px;
+                // On a floating card, let Add Friend's full content determine
+                // the card height. The shared Modal caps it at the viewport and
+                // scrolls its body when that content is taller than the cap.
+                min-height: !root.mobile-mode && root.active-tab == "find"
+                    ? max(400px, find-content.preferred-height)
+                    : 400px;
                 vertical-stretch: 1;
 
                 // ===== Friends Tab =====
@@ -443,9 +448,11 @@ export component FriendsModal inherits Rectangle {
                 }
 
                 // ===== Find Users Tab =====
-                if root.active-tab == "find": VerticalLayout {
+                find-content := VerticalLayout {
                     vertical-stretch: 1;
-                    spacing: Spacing.md;
+                    if root.active-tab == "find": VerticalLayout {
+                        vertical-stretch: 1;
+                        spacing: Spacing.md;
 
                     // ===== Friend Code Section ===== — Neo raised card
                     Rectangle {
@@ -744,6 +751,7 @@ export component FriendsModal inherits Rectangle {
                             }
                         }
                     }
+                }
                 }
 
                 // ===== Requests Tab =====
