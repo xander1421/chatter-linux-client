@@ -2,6 +2,7 @@
 //! encrypted call history or treats server call events as signaling authority.
 use crate::error::NetworkError;
 use crate::network::grpc::GrpcClientPool;
+use std::collections::HashSet;
 
 #[derive(Clone, Debug, Default)]
 pub struct RecordRow {
@@ -26,6 +27,7 @@ pub struct NotificationRow {
     pub body: String,
     pub actor_id: String,
     pub avatar: Option<Vec<u8>>,
+    pub device_id: u32,
     pub channel_id: String,
     pub kind: String,
     pub when: String,
@@ -58,6 +60,40 @@ fn offset(cursor: &str) -> Result<i32, NetworkError> {
         .ok_or_else(|| NetworkError::InvalidRequest("Invalid page cursor".into()))
 }
 
+/// The notification has no friend-request ID, so its current relationship
+/// cannot establish the outcome of an older request from the same person.
+pub fn collapse_friend_requests(rows: &mut Vec<NotificationRow>) {
+    let mut seen = HashSet::new();
+    rows.retain(|row| row.kind != "friend-request"
+        || row.actor_id.is_empty()
+        || seen.insert(row.actor_id.clone()));
+}
+
+fn device_linked_details(body: &str, metadata: &str) -> (String, u32) {
+    let meta = serde_json::from_str::<serde_json::Value>(metadata).ok();
+    let device_id = meta.as_ref().and_then(|m| m.get("linked_device_id")
+        .or_else(|| m.get("device_id"))).and_then(|v| v.as_u64())
+        .and_then(|id| u32::try_from(id).ok()).unwrap_or_default();
+    let label = meta.as_ref().and_then(|m| {
+        m.get("device_name").or_else(|| m.get("device_info"))
+            .and_then(|v| v.as_str()).map(str::trim).filter(|s| !s.is_empty())
+    });
+    let body = match label {
+        Some(label) => format!("{label} was linked to your account."),
+        None if body.starts_with("A Android ") => body.replacen("A Android ", "Android ", 1),
+        None => body.to_owned(),
+    };
+    (body, device_id)
+}
+
+fn notification_actor(actor_id: String, metadata: &str) -> String {
+    if !actor_id.is_empty() { return actor_id; }
+    serde_json::from_str::<serde_json::Value>(metadata).ok()
+        .and_then(|meta| ["actor_id", "friend_id", "sender_id", "requester_id"].iter()
+            .find_map(|key| meta.get(key).and_then(|v| v.as_str()).map(str::to_owned)))
+        .unwrap_or_default()
+}
+
 pub async fn page(
     pool: &GrpcClientPool,
     kind: &str,
@@ -73,7 +109,9 @@ pub async fn page(
                 .list_notifications(false, vec![], 50, start)
                 .await?;
             let end = start.saturating_add(response.notifications.len() as i32);
-            let notifications = response.notifications.into_iter().map(|n| {
+            let mut items = response.notifications;
+            items.sort_by_key(|n| std::cmp::Reverse(n.created_at));
+            let notifications = items.into_iter().map(|n| {
                 let kind = match crate::proto::chat_v1::NotificationType::try_from(n.r#type) {
                     Ok(crate::proto::chat_v1::NotificationType::FriendRequest) => "friend-request",
                     Ok(crate::proto::chat_v1::NotificationType::FriendAccepted) => "friend-accepted",
@@ -82,10 +120,25 @@ pub async fn page(
                     Ok(crate::proto::chat_v1::NotificationType::Mention) => "mention",
                     Ok(crate::proto::chat_v1::NotificationType::Reply) => "reply",
                     Ok(crate::proto::chat_v1::NotificationType::Reaction) => "reaction",
+                    Ok(crate::proto::chat_v1::NotificationType::DeviceLinked) => "device-linked",
                     _ => "other",
                 };
-                NotificationRow { id: n.id, title: n.title, body: n.body,
-                    actor_id: n.actor_id, avatar: None, channel_id: n.channel_id,
+                let (body, device_id) = if kind == "device-linked" {
+                    device_linked_details(&n.body, &n.metadata)
+                } else { (n.body, 0) };
+                let (title, body) = if kind == "friend-accepted" && n.actor_id.is_empty() {
+                    if let Some((name, message)) = body.split_once(" · ") {
+                        if message == "Your friend request was accepted" {
+                            (name.to_owned(), message.to_owned())
+                        } else { (n.title, body) }
+                    } else { (n.title, body) }
+                } else { (n.title, body) };
+                let actor_id = if kind == "friend-request" || kind == "friend-accepted" {
+                    notification_actor(n.actor_id, &n.metadata)
+                } else { n.actor_id };
+                NotificationRow { id: n.id, title, body,
+                    actor_id, avatar: None,
+                    device_id, channel_id: n.channel_id,
                     kind: kind.into(), when: relative_time(n.created_at), read: n.read,
                     status: String::new() }
             }).collect();

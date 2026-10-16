@@ -5,6 +5,7 @@ import { Spacing } from "../theme/spacing.slint";
 import { Typography } from "../theme/typography.slint";
 import { ScrollView } from "std-widgets.slint";
 import { Avatar } from "../components/avatar.slint";
+import { Icons } from "../theme/icons.slint";
 
 export struct ServerRecordRow { id: string, title: string, body: string, primary: string, secondary: string }
 export struct NotificationViewRow { id: string, title: string, body: string, kind: string, actor-id: string, channel-id: string, avatar: image, when: string, read: bool, status: string }
@@ -78,32 +79,40 @@ export component ServerRecordsScreen inherits Rectangle {
                         HorizontalLayout {
                             padding: Spacing.sm;
                             spacing: Spacing.sm;
-                            if row.kind == "friend-request" || row.kind == "friend-accepted": Avatar {
-                                name: row.title; source: row.avatar; size: 42px;
-                            }
-                            if row.kind != "friend-request" && row.kind != "friend-accepted": Rectangle {
-                                width: 42px; height: 42px;
+                            Rectangle {
+                                min-width: 42px; max-width: 42px; height: 42px;
                                 border-radius: 21px;
-                                background: Colors.surface-control;
-                                Text {
+                                background: row.kind == "friend-request" || row.kind == "friend-accepted" ? transparent : Colors.surface-control;
+                                if row.kind == "friend-request" || row.kind == "friend-accepted": Avatar {
+                                    name: row.title; source: row.avatar; size: 42px;
+                                }
+                                if row.kind == "device-linked": Image {
+                                    source: Icons.smartphone; width: 22px; height: 22px;
+                                    x: (parent.width - self.width) / 2; y: (parent.height - self.height) / 2;
+                                    colorize: Colors.primary;
+                                }
+                                if row.kind != "friend-request" && row.kind != "friend-accepted" && row.kind != "device-linked": Text {
                                     text: row.kind == "channel-invite" ? "#" : row.kind == "mention" ? "@" : row.kind == "reply" ? "↩" : row.kind == "reaction" ? "♡" : row.kind == "message" ? "✉" : "•";
                                     color: Colors.primary; font-size: Typography.base;
                                     horizontal-alignment: center; vertical-alignment: center;
                                 }
                             }
                             VerticalLayout {
+                                horizontal-stretch: 1;
                                 alignment: center;
                                 spacing: 2px;
-                                HorizontalLayout {
-                                    Text { text: row.title; color: Colors.text-primary; font-size: Typography.base; font-weight: row.read ? 400 : Typography.semibold; overflow: elide; horizontal-stretch: 1; }
-                                    Text { text: row.when; color: Colors.text-muted; font-size: Typography.sm; }
-                                }
+                                Text { text: row.title; color: Colors.text-primary; font-size: Typography.base; font-weight: row.read ? 400 : Typography.semibold; overflow: elide; }
                                 Text { text: row.body; color: Colors.text-secondary; font-size: Typography.sm; overflow: elide; }
                                 if row.status != "": Text { text: row.status; color: Colors.primary; font-size: Typography.sm; }
                             }
-                            if !row.read: Rectangle { width: 8px; height: 8px; border-radius: 4px; background: Colors.primary; }
+                            Text { min-width: 62px; max-width: 62px; text: row.when; color: Colors.text-muted; font-size: Typography.sm; horizontal-alignment: right; }
+                            Rectangle {
+                                min-width: 8px; max-width: 8px; height: 8px;
+                                border-radius: 4px; background: row.read ? transparent : Colors.primary;
+                            }
                             Button {
                                 text: "×"; label: "Delete notification"; variant: "icon"; size: "small";
+                                min-width: 36px; max-width: 36px;
                                 disabled: ServerRecordsGlobal.loading;
                                 clicked => { ServerRecordsGlobal.act(row.id, "Delete"); }
                             }

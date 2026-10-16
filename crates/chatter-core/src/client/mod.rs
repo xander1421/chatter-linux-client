@@ -501,7 +501,16 @@ impl ChatterClient {
             let invites = if page.notifications.iter().any(|n| n.kind == "channel-invite") {
                 self.services.grpc_pool.channel_client().list_pending_invites().await.ok()
             } else { None };
+            let sessions = if page.notifications.iter().any(|n| n.kind == "device-linked") {
+                self.list_sessions().await.ok()
+            } else { None };
             for row in &mut page.notifications {
+                if row.kind == "device-linked" {
+                    if let Some(session) = sessions.as_ref().and_then(|sessions| sessions.iter()
+                        .find(|session| session.device_id == row.device_id && row.device_id != 0)) {
+                        row.body = format!("{} was linked to your account.", session.device_info);
+                    }
+                }
                 if row.kind == "channel-invite" {
                     if let Some(ref invites) = invites {
                         let pending = invites.invites.iter().find(|i| i.channel_id == row.channel_id);
@@ -552,6 +561,7 @@ impl ChatterClient {
                     }
                 }
             }
+            crate::services::server_records::collapse_friend_requests(&mut page.notifications);
         }
         Ok(page)
     }

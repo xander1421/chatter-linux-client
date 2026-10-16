@@ -2,6 +2,7 @@
 use crate::{MainWindow, NotificationViewRow, ServerRecordRow, ServerRecordsGlobal, run_ui};
 use chatter_core::client::ChatterClient;
 use slint::{ComponentHandle, Model, ModelRc, VecModel};
+use std::collections::HashSet;
 use std::sync::{
     Arc,
     atomic::{AtomicU64, Ordering},
@@ -102,6 +103,12 @@ fn request(
                         avatar: r.avatar.as_deref().and_then(crate::bin_ui::converters::avatar_bytes_to_image).unwrap_or_default(),
                         read: r.read, status: r.status.into(),
                     }));
+                    // Pages can split one actor's request history. Keep the
+                    // newest visible row across the already loaded pages.
+                    let mut seen_request_actors = HashSet::new();
+                    notifications.retain(|row| row.kind.as_str() != "friend-request"
+                        || row.actor_id.is_empty()
+                        || seen_request_actors.insert(row.actor_id.to_string()));
                     g.set_notifications(ModelRc::new(VecModel::from(notifications)));
                     let mut rows: Vec<ServerRecordRow> = if more {
                         g.get_rows().iter().collect()
