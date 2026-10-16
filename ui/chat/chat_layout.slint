@@ -59,6 +59,10 @@ export component ChatLayout inherits Rectangle {
     out property <length> content-top: root.absolute-position.y
         + (root.hide-header ? 0px
            : root.mobile ? Spacing.header-height-touch : Spacing.header-height);
+    out property <length> menu-anchor-top: message-list.menu-anchor-top;
+    out property <length> menu-anchor-bottom: message-list.menu-anchor-bottom;
+    out property <length> menu-anchor-left: message-list.menu-anchor-left;
+    out property <length> menu-anchor-right: message-list.menu-anchor-right;
 
     // Jarvis AI thinking state
     in-out property <bool> jarvis-thinking: false;
