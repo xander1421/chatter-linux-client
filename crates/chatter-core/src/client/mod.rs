@@ -3916,8 +3916,8 @@ impl ChatterClient {
         })
     }
 
-    /// Retry a failed channel message or friend DM and return the updated row.
-    /// Channels acquire the server message ID; DMs retain their original identity.
+    /// Retry a failed channel or DM message and return the updated row.
+    /// Channels may acquire a server message ID; DMs retain their original identity.
     pub async fn retry_failed_message(
         &self,
         message_id: &str,
@@ -3937,8 +3937,12 @@ impl ChatterClient {
             &message.conversation_id.to_string(),
         )
         .ok_or(SendError::UnsupportedAction)?;
-        // Anonymous rows never fall through to a fresh server DM post. Their
-        // exact-envelope admission is owned by the anonymous submission layer.
+        if message.conversation_type == crate::domain::message::ConversationType::AnonDm {
+            if self.retryable_message_timestamp(&id).is_none() {
+                return Err(SendError::UnsupportedAction);
+            }
+            return self.retry_failed_anon_dm(message, conversation).await;
+        }
         if !matches!(
             message.conversation_type,
             crate::domain::message::ConversationType::Channel
@@ -4016,6 +4020,42 @@ impl ChatterClient {
                 )
                 .map_err(|_| SendError::DeliveryUnconfirmed)?;
                 Err(SendError::DeliveryUnconfirmed)
+            }
+        }
+    }
+
+    async fn retry_failed_anon_dm(
+        &self,
+        message: crate::domain::message::Message,
+        conversation: ActiveConversation,
+    ) -> Result<crate::domain::message::Message, SendError> {
+        let id = message.id;
+        let service = &self.services.message_service;
+        let session = crate::services::gateway::submission::SendSession::capture(self.auth_state());
+        let (key, attempt) = self.retain_retry_attempt(conversation, &message)?;
+        let (result, started, _) = crate::services::gateway::submission::SEND_SESSION.scope(
+            session,
+            crate::services::gateway::submission::track_submission(
+                self.services.anon_dm_service.retry_failed_message(&message),
+                Some((self.services.database.clone(), key.clone(), attempt.to_string())),
+            ),
+        ).await;
+        match result {
+            Ok(()) => {
+                let updated = service.finish_retry_row(&id, "sent", None)?;
+                self.finish_send_attempt(&key, attempt, Some(id.to_string()), true)
+                    .map_err(|_| SendError::DeliveryUnconfirmed)?;
+                Ok(updated)
+            }
+            Err(error) => {
+                let error = send_attempt::settle_failure(
+                    &self.services.database, &key, attempt, started,
+                    Some(id.to_string()), SendError::AnonDm(error),
+                )?;
+                if matches!(error, SendError::DeliveryUnconfirmed) {
+                    service.finish_retry_row(&id, "sending", Some("Delivery unconfirmed"))?;
+                }
+                Err(error)
             }
         }
     }
