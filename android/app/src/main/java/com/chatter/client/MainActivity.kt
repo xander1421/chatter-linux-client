@@ -131,6 +131,7 @@ class MainActivity : GameActivity() {
         // creating a usable window. Preserve the durable account marker until
         // Rust restores the session; the default Kotlin false is not sign-out.
         messagingSignedIn = MessagingService.wasSignedIn(this)
+        messagingBackground = true
         ViewerMediaExport.startup(this)
         // Until Slint's first frame the window background is all there is.
         // themes.xml resolves it from the SYSTEM night mode, so a Light app on
