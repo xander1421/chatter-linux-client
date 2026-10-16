@@ -266,11 +266,13 @@ impl SendBoundary {
 
 pub(crate) fn bind_original_row(id: String) -> Result<(), StorageError> {
     SEND_BOUNDARY.try_with(|boundary| {
+        // Keep the exact row visible to in-process failure settlement even if
+        // updating the durable journal below fails after the insert.
+        *boundary.row.lock().unwrap() = Some(id.clone());
         if let Some((db, key, attempt)) = &boundary.journal {
             let conn = db.connection()?;
             conn.execute("UPDATE settings SET value=json_set(value,'$.message_id',?2) WHERE key=?1 AND json_extract(value,'$.attempt_id')=?3", params![key, id, attempt])?;
         }
-        *boundary.row.lock().unwrap() = Some(id);
         Ok(())
     }).unwrap_or(Ok(()))
 }
