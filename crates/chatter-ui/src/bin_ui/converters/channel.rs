@@ -169,6 +169,7 @@ pub fn member_to_slint(
         can_mute: m.moderation.can_mute,
         can_make_owner: m.moderation.can_make_owner,
         unverified: m.unverified,
+        invited: false,
         // Blocking within a conversation is a private-group control.
         can_block: false,
         blocked: false,

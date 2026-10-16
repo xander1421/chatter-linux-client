@@ -34,6 +34,8 @@ export struct ChannelMemberData {
     // Listed by the server but outside the verified membership: gets no
     // sender keys. Decided in core (`is_unverified_channel_member`).
     unverified: bool,
+    // Private-group invitation is still pending until a mailbox key arrives.
+    invited: bool,
     // Private groups: anyone but us may be blocked in the group (their
     // posts are dropped on this device), and is shown so.
     can-block: bool,
@@ -68,6 +70,7 @@ export component ChannelSettingsModal inherits Rectangle {
     in property <bool> is-archived: false;
     in property <string> created-at: "";
     in property <int> member-count: 0;
+    in property <int> invited-count: 0;
 
     // Current user's permissions
     in property <bool> can-edit: false;
@@ -157,6 +160,10 @@ export component ChannelSettingsModal inherits Rectangle {
 
     // Private group helper
     property <bool> is-private-group: channel-type == "private-group";
+    property <string> member-summary: (root.member-count > 0 || root.invited-count > 0
+        ? root.member-count + (root.member-count == 1 ? " member" : " members") : "")
+        + (root.is-private-group && root.invited-count > 0
+            ? " · " + root.invited-count + " invited" : "");
 
     // Helper to get role display color
     pure function role-color(role: string) -> color {
@@ -373,8 +380,8 @@ export component ChannelSettingsModal inherits Rectangle {
                                     wrap: word-wrap;
                                 }
                                 Text {
-                                    text: (root.member-count > 0 ? root.member-count + (root.member-count == 1 ? " member" : " members") : "")
-                                        + (root.created-at != "" ? " • Created " + root.created-at : "");
+                                    text: root.member-summary
+                                        + (root.created-at != "" ? (root.member-summary != "" ? " • " : "") + "Created " + root.created-at : "");
                                     color: Colors.text-secondary; font-size: Typography.sm;
                                     horizontal-alignment: center;
                                 }
@@ -416,7 +423,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                     if root.can-manage-members || root.members.length > 0: SettingsRow {
                                         touch: true;
                                         icon: Icons.users; title: "Members";
-                                        detail: root.member-count + (root.member-count == 1 ? " member" : " members");
+                                        detail: root.member-summary;
                                         clicked => { root.active-section = "members"; }
                                     }
                                     if root.can-manage-members || root.members.length > 0: Rectangle { height: 1px; background: Colors.divider; }
@@ -520,8 +527,8 @@ export component ChannelSettingsModal inherits Rectangle {
                                     Text {
                                         // No count once we left: the roster is no longer ours to see,
                                         // and "0 members" contradicted the header.
-                                        text: (root.member-count == 0 ? "" : root.member-count + (root.member-count == 1 ? " member" : " members"))
-                                            + (root.member-count > 0 && root.created-at != "" ? " • " : "")
+                                        text: root.member-summary
+                                            + (root.member-summary != "" && root.created-at != "" ? " • " : "")
                                             + (root.created-at == "" ? "" : "Created " + root.created-at);
                                         color: Colors.text-muted;
                                         font-size: Typography.xs;
@@ -714,7 +721,6 @@ export component ChannelSettingsModal inherits Rectangle {
 
                             // Anonymous groups are local-only in core's AI policy.
                             ToggleRow {
-                                height: Spacing.touch-target-min;
                                 checked <=> root.ai-enabled;
                                 accessible-text: "AI assistant";
                                 toggled(value) => {
@@ -1226,7 +1232,7 @@ export component ChannelSettingsModal inherits Rectangle {
                                                 overflow: elide;
                                             }
 
-                                            if member.role != "member" || member.username != "" || member.muted || member.unverified: HorizontalLayout {
+                                            if member.role != "member" || member.username != "" || member.muted || member.unverified || member.invited: HorizontalLayout {
                                                 spacing: Spacing.xs;
 
                                                 if member.role != "member": Rectangle {
@@ -1239,6 +1245,23 @@ export component ChannelSettingsModal inherits Rectangle {
                                                         x: Spacing.xs;
                                                         text: member.role;
                                                         color: root.role-color(member.role);
+                                                        font-size: Typography.xs;
+                                                        font-weight: Typography.medium;
+                                                        vertical-alignment: center;
+                                                        height: 100%;
+                                                    }
+                                                }
+
+                                                if member.invited: Rectangle {
+                                                    width: invited-text.preferred-width + Spacing.sm;
+                                                    height: Spacing.badge-md;
+                                                    background: Colors.info.with-alpha(0.15);
+                                                    border-radius: Spacing.radius-sm;
+
+                                                    invited-text := Text {
+                                                        x: Spacing.xs;
+                                                        text: "invited";
+                                                        color: Colors.info;
                                                         font-size: Typography.xs;
                                                         font-weight: Typography.medium;
                                                         vertical-alignment: center;
