@@ -846,7 +846,11 @@ export component UserProfileModal inherits Rectangle {
                                         font-weight: Typography.medium;
                                         horizontal-alignment: center;
                                         wrap: word-wrap;
-                                        letter-spacing: 1px;
+                                        // No letter-spacing: layout measures
+                                        // wrapped text without it, so on a
+                                        // phone the box came out a line short
+                                        // and the next row covered the verify
+                                        // button (taps went to it).
                                     }
                                 }
                             }
