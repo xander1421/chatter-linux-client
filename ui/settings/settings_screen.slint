@@ -172,8 +172,6 @@ export component SettingsScreen inherits Rectangle {
         duration: root.page-appearing ? Materials.motion-standard : 0ms;
         easing: Materials.glide;
     }
-    property <length> selected-tab-start: 0px;
-    property <length> selected-tab-end: 0px;
     property <bool> show-password-form: false;
     property <bool> show-pin-form: false;
     property <bool> show-backup-retry: false;
@@ -195,6 +193,7 @@ export component SettingsScreen inherits Rectangle {
     callback delete-account-confirmed(string);  // password — fired only after explicit confirm
     callback regenerate-recovery-codes(string);  // password — fired only after explicit confirm
     callback close-settings();
+    callback open-licenses();
 
     // Privacy callbacks
     callback read-receipts-changed(bool);
@@ -1819,9 +1818,18 @@ export component SettingsScreen inherits Rectangle {
                                 font-weight: Typography.semibold;
                             }
 
-                            VerticalLayout {
-                                spacing: Spacing.sm;
-                                init => { NotificationDelivery.load(); }
+                            Rectangle {
+                                background: Colors.surface-section;
+                                border-radius: Spacing.radius-lg;
+                                drop-shadow-blur: Elevation.card-blur;
+                                drop-shadow-offset-y: Elevation.card-offset;
+                                drop-shadow-color: Elevation.card-shadow;
+                                border-width: Elevation.rim-width;
+                                border-color: Elevation.card-rim;
+                                VerticalLayout {
+                                    padding: Spacing.md;
+                                    spacing: Spacing.sm;
+                                    init => { NotificationDelivery.load(); }
 
                                 ToggleRow {
                                     accessible-text: "Account push notifications";
@@ -1858,6 +1866,7 @@ export component SettingsScreen inherits Rectangle {
                                     variant: "ghost";
                                     disabled: NotificationDelivery.busy;
                                     clicked => { NotificationDelivery.load(); }
+                                }
                                 }
                             }
 
@@ -3113,23 +3122,65 @@ export component SettingsScreen inherits Rectangle {
                             spacing: Spacing.md;
                             Text { text: "About Chatter"; color: Colors.text-primary;
                                 font-size: Typography.xl; font-weight: Typography.semibold; }
-                            Text { text: "Version " + UpdateGlobal.installed-version;
-                                color: Colors.text-secondary; font-size: Typography.sm; }
-                            Button { text: UpdateGlobal.state == "checking" ? "Checking…" : "Check for updates";
-                                disabled: UpdateGlobal.state == "checking";
-                                clicked => { UpdateGlobal.check(); }
+                            Rectangle {
+                                background: Colors.surface-section;
+                                border-radius: Spacing.radius-lg;
+                                drop-shadow-blur: Elevation.card-blur;
+                                drop-shadow-offset-y: Elevation.card-offset;
+                                drop-shadow-color: Elevation.card-shadow;
+                                border-width: Elevation.rim-width;
+                                border-color: Elevation.card-rim;
+                                VerticalLayout {
+                                    padding: Spacing.md;
+                                    spacing: Spacing.sm;
+                                    SettingsRow {
+                                        touch: root.mobile-platform;
+                                        icon: Icons.info;
+                                        title: "Version";
+                                        detail: UpdateGlobal.installed-version + " · Build " + UpdateGlobal.build-code + " · Commit " + UpdateGlobal.build-commit;
+                                        clickable: false;
+                                        show-chevron: false;
+                                    }
+                                    Button {
+                                        touch: root.mobile-platform;
+                                        text: UpdateGlobal.state == "checking" ? "Checking…" : "Check for updates";
+                                        disabled: UpdateGlobal.state == "checking";
+                                        clicked => { UpdateGlobal.check(); }
+                                    }
+                                    if UpdateGlobal.state == "available": Text {
+                                        text: "Update available — " + UpdateGlobal.version;
+                                        color: Colors.text-primary; font-size: Typography.sm;
+                                    }
+                                    if UpdateGlobal.error != "": Text {
+                                        text: UpdateGlobal.error; color: Colors.error;
+                                        font-size: Typography.sm; wrap: word-wrap;
+                                    }
+                                    if UpdateGlobal.notice != "": Text {
+                                        text: UpdateGlobal.notice; color: Colors.text-secondary;
+                                        font-size: Typography.sm; wrap: word-wrap;
+                                    }
+                                }
                             }
-                            if UpdateGlobal.state == "available": Text {
-                                text: "Update available — " + UpdateGlobal.version;
-                                color: Colors.text-primary; font-size: Typography.sm;
-                            }
-                            if UpdateGlobal.error != "": Text {
-                                text: UpdateGlobal.error; color: Colors.error;
-                                font-size: Typography.sm; wrap: word-wrap;
-                            }
-                            if UpdateGlobal.notice != "": Text {
-                                text: UpdateGlobal.notice; color: Colors.text-secondary;
-                                font-size: Typography.sm;
+                            Rectangle {
+                                background: Colors.surface-section;
+                                border-radius: Spacing.radius-lg;
+                                VerticalLayout {
+                                    padding: Spacing.md;
+                                    spacing: Spacing.sm;
+                                    SettingsRow {
+                                        touch: root.mobile-platform;
+                                        icon: Icons.info;
+                                        title: "Open-source licenses";
+                                        detail: "View licenses for vendored components in the source repository.";
+                                        clicked => { root.open-licenses(); }
+                                    }
+                                    Text {
+                                        text: "Privacy: Your settings control read receipts, notification previews, and whether AI requests leave this device.";
+                                        color: Colors.text-secondary;
+                                        font-size: Typography.xs;
+                                        wrap: word-wrap;
+                                    }
+                                }
                             }
                         }
                     }
@@ -3171,7 +3222,8 @@ export component SettingsScreen inherits Rectangle {
                 clicked => { root.close-settings(); }
             }
 
-            // A clipped scrolling strip needs a soft edge beside the back button.
+            // The section chips scroll across the remaining phone width. Fades
+            // hint at more sections without adding a second navigation arrow.
             Rectangle {
                 horizontal-stretch: 1;
                 min-width: 0px;
@@ -3205,49 +3257,21 @@ export component SettingsScreen inherits Rectangle {
                             variant: root.active-section == item.id ? "secondary" : "ghost";
                             clicked => {
                                 root.active-section = item.id;
-                                // `self.x` is viewport-relative here; store
-                                // content coordinates so later arrow scrolls
-                                // can compare against the new viewport offset.
-                                root.selected-tab-start = self.x - tabs.viewport-x;
-                                root.selected-tab-end = self.x + self.width - tabs.viewport-x;
-                                // Bring the selected pill fully clear of the fixed Back
-                                // button and the scrolling strip's faded edges.
-                                if self.x + tabs.viewport-x < Spacing.sm {
-                                    tabs.viewport-x = min(0px, max(tabs.width - tabs.viewport-width, Spacing.sm - self.x));
-                                } else if self.x + self.width + tabs.viewport-x > tabs.width - Spacing.sm {
-                                    tabs.viewport-x = min(0px, max(tabs.width - tabs.viewport-width, tabs.width - Spacing.sm - self.x - self.width));
-                                }
                             }
                         }
                     }
                 }
                 if tabs.viewport-x < 0px: Rectangle {
                     x: 0;
-                    width: Spacing.xxxl + Spacing.lg;
+                    width: Spacing.md;
                     height: parent.height;
-                    background: @linear-gradient(90deg, Colors.background 0%, Colors.background 75%, Colors.background.with-alpha(0) 100%);
-                    Text { text: "‹"; color: Colors.text-primary; font-size: 24px; vertical-alignment: center; }
-                    TouchArea { clicked => { tabs.viewport-x = min(0px, tabs.viewport-x + tabs.width / 2); } }
+                    background: @linear-gradient(90deg, Colors.surface-page 0%, Colors.surface-page.with-alpha(0) 100%);
                 }
                 if tabs.viewport-width + tabs.viewport-x > tabs.width: Rectangle {
                     x: parent.width - self.width;
-                    width: Spacing.xxxl + Spacing.lg;
+                    width: Spacing.md;
                     height: parent.height;
-                    background: @linear-gradient(90deg, Colors.background.with-alpha(0) 0%, Colors.background 25%, Colors.background 100%);
-                    Text { text: "›"; color: Colors.text-primary; font-size: 24px; horizontal-alignment: right; vertical-alignment: center; }
-                    TouchArea { clicked => {
-                        tabs.viewport-x = max(tabs.width - tabs.viewport-width, tabs.viewport-x - tabs.width / 2);
-                        // If the selected pill crosses the leading fade, move
-                        // it wholly out of the strip instead of clipping it.
-                        if root.selected-tab-end > root.selected-tab-start
-                            && root.selected-tab-start + tabs.viewport-x < Spacing.xxxl + Spacing.lg
-                            && root.selected-tab-end + tabs.viewport-x > 0px {
-                            let fully-hidden = -root.selected-tab-end - Spacing.sm;
-                            tabs.viewport-x = fully-hidden >= tabs.width - tabs.viewport-width
-                                ? fully-hidden
-                                : Spacing.xxxl + Spacing.lg + Spacing.sm - root.selected-tab-start;
-                        }
-                    } }
+                    background: @linear-gradient(90deg, Colors.surface-page.with-alpha(0) 0%, Colors.surface-page 100%);
                 }
             }
         }

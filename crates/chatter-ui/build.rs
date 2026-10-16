@@ -1,4 +1,34 @@
 fn main() {
+    // Keep the About page tied to the source revision compiled into this app.
+    let commit = std::process::Command::new("git")
+        .args(["rev-parse", "--short=8", "HEAD"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())
+        .and_then(|output| String::from_utf8(output.stdout).ok())
+        .map(|value| value.trim().to_owned())
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "unknown".to_owned());
+    println!("cargo:rustc-env=CHATTER_BUILD_COMMIT={commit}");
+    if let Ok(reference) = std::process::Command::new("git")
+        .args(["symbolic-ref", "HEAD"])
+        .output()
+    {
+        if reference.status.success() {
+            if let Ok(reference) = String::from_utf8(reference.stdout) {
+                if let Ok(path) = std::process::Command::new("git")
+                    .args(["rev-parse", "--git-path", reference.trim()])
+                    .output()
+                {
+                    if path.status.success() {
+                        if let Ok(path) = String::from_utf8(path.stdout) {
+                            println!("cargo:rerun-if-changed={}", path.trim());
+                        }
+                    }
+                }
+            }
+        }
+    }
     // Enforce this for every Cargo release entry point, not just the APK script.
     if std::env::var_os("CARGO_FEATURE_DEV_AUTO_REGISTER").is_some()
         && std::env::var("PROFILE").as_deref() == Ok("release")

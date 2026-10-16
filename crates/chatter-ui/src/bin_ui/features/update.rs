@@ -60,6 +60,8 @@ async fn check(client: Arc<ChatterClient>, weak: Weak<MainWindow>, manual: bool)
 pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
     let global = window.global::<UpdateGlobal>();
     global.set_installed_version(update::installed_version_name().into());
+    global.set_build_code(update::installed_version_code().to_string().into());
+    global.set_build_commit(env!("CHATTER_BUILD_COMMIT").into());
     global.set_play_distribution(update::channel() == "play");
 
     let manual_client = client.clone();

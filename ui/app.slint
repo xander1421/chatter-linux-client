@@ -3736,6 +3736,9 @@ export component MainWindow inherits Window {
             close-settings => {
                 root.nav-close("settings");
             }
+            open-licenses => {
+                root.open-message-link("https://github.com/xander1421/chatter-linux-client/tree/master/vendor");
+            }
             read-receipts-changed(value) => {
                 root.settings-read-receipts-changed(value);
             }
