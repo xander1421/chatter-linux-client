@@ -2756,6 +2756,11 @@ export component MainWindow inherits Window {
         // that modal is this page's Edit button — so its backdrop dims the
         // profile it edits (§112u).
         if root.is-presented("user-profile") || root.is-presented("edit-profile"): UserProfileModal {
+            // Fill the window: left to its preferred height the modal ended
+            // where its content was measured to, and on a phone the lower
+            // controls painted past that edge received no input.
+            width: 100%;
+            height: 100%;
             show-modal: root.active-modal == "user-profile" || root.active-modal == "edit-profile";
             user-id: root.profile-user-id;
             is-anonymous: root.profile-is-anonymous;
