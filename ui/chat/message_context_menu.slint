@@ -202,7 +202,7 @@ export component MessageContextMenu inherits Rectangle {
     // Something on the second page is offered. Core decides each flag.
     private property <bool> more-page: MessageMenuActions.react || MessageMenuActions.info
         || (MessageMenuActions.reply && root.can-thread) || MessageMenuActions.select
-        || MessageMenuActions.edit || MessageMenuActions.pin || MessageMenuActions.download
+        || MessageMenuActions.pin || MessageMenuActions.download
         || MessageMenuActions.delete-for-everyone || MessageMenuActions.delete-for-me;
 
     // Callbacks - use (sender_id, timestamp_ns) for Signal-style lookups
@@ -399,7 +399,7 @@ export component MessageContextMenu inherits Rectangle {
                     }
                 }
 
-                if MessageMenuActions.edit && root.more-actions: MenuItem {
+                if MessageMenuActions.edit && !root.more-actions: MenuItem {
                     icon: Icons.edit;
                     label: "Edit";
                     clicked => {
@@ -417,20 +417,20 @@ export component MessageContextMenu inherits Rectangle {
                     }
                 }
 
-                if MessageMenuActions.forward && !root.more-actions: MenuItem {
-                    icon: Icons.send;
-                    label: "Forward";
-                    clicked => {
-                        root.forward-clicked(root.sender-id, root.timestamp-ns);
-                        root.close();
-                    }
-                }
-
                 if MessageMenuActions.copy && !root.more-actions: MenuItem {
                     icon: Icons.copy;
                     label: "Copy";
                     clicked => {
                         root.copy-clicked(root.sender-id, root.timestamp-ns);
+                        root.close();
+                    }
+                }
+
+                if MessageMenuActions.forward && !root.more-actions: MenuItem {
+                    icon: Icons.send;
+                    label: "Forward";
+                    clicked => {
+                        root.forward-clicked(root.sender-id, root.timestamp-ns);
                         root.close();
                     }
                 }
