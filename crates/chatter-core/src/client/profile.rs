@@ -16,6 +16,36 @@ pub struct BlockedContact {
     pub anon_chat: bool,
 }
 
+/// The result of redeeming a code in Contacts › Add Friend.
+pub enum FriendCodeConnection {
+    FriendRequest(crate::domain::user::Friendship),
+    SecretChat(crate::domain::anon_dm::AnonDm),
+}
+
+#[derive(Debug, thiserror::Error)]
+pub enum FriendCodeConnectionError {
+    #[error("This code isn't valid.")]
+    InvalidCode,
+    #[error("Server-managed friend codes can't be used in Shield mode. Ask for a private code.")]
+    ServerCodeInShield,
+    #[error("Secret chats aren't available on this device.")]
+    SecretChatUnavailable,
+    #[error(transparent)]
+    FriendRequest(#[from] crate::services::UserError),
+    #[error(transparent)]
+    SecretChat(#[from] crate::services::anon_dm::AnonDmError),
+}
+
+impl FriendCodeConnectionError {
+    pub fn user_message(&self) -> String {
+        match self {
+            Self::FriendRequest(error) => error.user_message(),
+            Self::SecretChat(_) => "Couldn't start the secret chat. Try again.".into(),
+            _ => self.to_string(),
+        }
+    }
+}
+
 impl ChatterClient {
     // ── Display / profile façade ─────────────────────────────────────────
 
@@ -214,8 +244,8 @@ impl ChatterClient {
         code: &str,
         message: Option<&str>,
     ) -> Result<crate::domain::user::Friendship, crate::services::UserError> {
-        // A regular friend code ends in an identified friend request; shield
-        // mode redeems private codes (`start_anon_dm_conversation_private`).
+        // A regular friend code ends in an identified friend request, which
+        // Shield mode must refuse.
         if self.anon_mode_enabled() {
             return Err(crate::services::UserError::ForbiddenInAnonMode);
         }
@@ -225,6 +255,44 @@ impl ChatterClient {
             client.refresh_and_emit_friend_requests().await;
         });
         Ok(result)
+    }
+
+    /// Redeem either kind of friend code without relying on the current UI mode.
+    pub async fn connect_friend_code(
+        self: &Arc<Self>,
+        code: &str,
+        message: Option<&str>,
+        sender_display_name: Option<&str>,
+    ) -> Result<FriendCodeConnection, FriendCodeConnectionError> {
+        let code = code.trim();
+        if crate::domain::PrivateFriendCode::is_private_code(code) {
+            let private = crate::domain::PrivateFriendCode::parse(code)
+                .map_err(|_| FriendCodeConnectionError::InvalidCode)?;
+            if !self.secret_chats_available() {
+                return Err(FriendCodeConnectionError::SecretChatUnavailable);
+            }
+            return self
+                .start_anon_dm_conversation_private(
+                    &private,
+                    Some(message.unwrap_or("Hello!")),
+                    sender_display_name,
+                )
+                .await
+                .map(FriendCodeConnection::SecretChat)
+                .map_err(Into::into);
+        }
+
+        if !crate::domain::UsernameLink::is_username_link(code) {
+            crate::services::user::UserService::parse_friend_code(code)
+                .map_err(|_| FriendCodeConnectionError::InvalidCode)?;
+        }
+        if self.anon_mode_enabled() {
+            return Err(FriendCodeConnectionError::ServerCodeInShield);
+        }
+        self.connect_via_friend_code(code, message)
+            .await
+            .map(FriendCodeConnection::FriendRequest)
+            .map_err(Into::into)
     }
 
     pub async fn list_friend_requests(
@@ -510,12 +578,8 @@ impl ChatterClient {
         intro_message: Option<&str>,
         sender_display_name: Option<&str>,
     ) -> Result<crate::domain::anon_dm::AnonDm, crate::services::anon_dm::AnonDmError> {
-        // Redeeming a private code + firing the ECIES init must ride the anon
-        // transport (isolated Tor circuit, blind-token delivery). Outside shield
-        // mode it would go over the identified/direct path — refuse.
-        if !self.anon_mode_enabled() {
-            return Err(crate::services::anon_dm::AnonDmError::RequiresAnonMode);
-        }
+        // The anon DM service requires the isolated onion channel for this
+        // flow, including when Shield is off.
         self.anon_dms()
             .start_conversation_private(friend_code, intro_message, sender_display_name)
             .await

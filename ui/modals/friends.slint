@@ -102,11 +102,8 @@ export component FriendsModal inherits Rectangle {
     in-out property <string> request-note: "";  // Optional intro note sent with a friend request
     in-out property <image> qr-code-image;
     in-out property <bool> show-qr: false;
-    // Connection mode is IMPLIED by shield state, not a user toggle: shield on =
-    // private/anon (no server), shield off = normal server friend request. A
-    // server-managed request while in shield mode would leak identity, so there
-    // is deliberately no way to pick it there. (Core `RequiresAnonMode` guard is
-    // the real boundary; this just keeps the UI honest.)
+    // Shield decides which code this account generates. Redeeming a code is
+    // routed by its format in core; private codes work with Shield off too.
     property <bool> effective-private-mode: AnonMode.enabled;
 
     // Callbacks
@@ -116,8 +113,7 @@ export component FriendsModal inherits Rectangle {
     callback copy-code();
     callback paste-code();                   // System clipboard → code-input
     callback scan-code();                    // Camera QR → code-input
-    callback connect-via-code(string);       // Server-managed friend request
-    callback connect-private(string);        // Private anon DM (no server involvement)
+    callback connect-via-code(string);       // Core routes private and server-managed codes
     callback switch-tab(string);
 
     // Friends actions
@@ -597,16 +593,12 @@ export component FriendsModal inherits Rectangle {
                                     // Short enough for the phone-width field
                                     // beside Paste and Connect (it clipped to
                                     // "Enter friend's cod"); the mode line
-                                    // below says private vs server-managed.
+                                    // below explains the generated code's mode.
                                     placeholder: "Friend code";
                                     text <=> root.code-input;
 
                                     accepted(code) => {
-                                        if (root.effective-private-mode) {
-                                            root.connect-private(code);
-                                        } else {
-                                            root.connect-via-code(code);
-                                        }
+                                        root.connect-via-code(code);
                                     }
                                 }
 
@@ -630,18 +622,13 @@ export component FriendsModal inherits Rectangle {
                                     loading: root.loading;
 
                                     clicked => {
-                                        if (root.effective-private-mode) {
-                                            root.connect-private(root.code-input);
-                                        } else {
-                                            root.connect-via-code(root.code-input);
-                                        }
+                                        root.connect-via-code(root.code-input);
                                     }
                                 }
                             }
 
-                            // Optional intro note — sent E2E-encrypted with the
-                            // friend request. Below the code entry: enter code →
-                            // add note → Connect.
+                            // Optional intro note for a friend request or secret
+                            // chat invitation. Below code entry: add note → Connect.
                             Input {
                                 placeholder: "Add a note (optional)";
                                 text <=> root.request-note;
@@ -741,7 +728,7 @@ export component FriendsModal inherits Rectangle {
                             Text {
                                 text: root.effective-private-mode
                                     ? "\u{1F510} Private mode uses end-to-end encryption with no server involvement"
-                                    : "\u{1F517} Standard mode sends a friend request through the server";
+                                    : "\u{1F517} Server codes send a friend request; private codes start a secret chat over Tor";
                                 color: Colors.text-muted.with-alpha(0.7);
                                 font-size: Typography.xs;
                                 horizontal-alignment: center;

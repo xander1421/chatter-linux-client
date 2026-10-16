@@ -42,7 +42,6 @@ pub fn wire_friends_modal(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     // Privacy-first friend discovery
     friend_code::wire_generate_friend_code(window, ui_ctx);
     friend_code::wire_connect_via_friend_code(window, ui_ctx);
-    friend_code::wire_connect_private(window, ui_ctx);
 
     // Anonymous DM (private) request actions
     private_requests::wire_accept_private_request(window, ui_ctx);

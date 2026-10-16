@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, SharedString};
 
-use chatter_core::client::ChatterClient;
+use chatter_core::client::{ChatterClient, FriendCodeConnection};
 
 // refresh_sent_requests removed — core emits FriendRequestsUpdated after
 // every send/respond/remove and the dispatcher refreshes the sidebar.
@@ -70,7 +70,7 @@ pub(crate) fn wire_generate_friend_code(window: &MainWindow, ui_ctx: &Arc<Chatte
 
 /// "Scan QR code": the decoded text lands in the friend-code input exactly
 /// as Paste would put it there. Connect still has to be tapped, and goes
-/// through the same `connect-via-code` / `connect-private` parsers.
+/// through the same core code router.
 #[cfg(target_os = "android")]
 fn wire_scan_friend_code(window: &MainWindow) {
     use crate::platform::android::{permissions, qr_scanner};
@@ -93,7 +93,7 @@ fn wire_scan_friend_code(window: &MainWindow) {
                 match outcome {
                     qr_scanner::ScanOutcome::Scanned(text) => {
                         w.set_friends_code_input(text.trim().into());
-                        w.set_friends_code_status("Code scanned — tap Connect to send the request".into());
+                        w.set_friends_code_status("Code scanned — tap Connect".into());
                     }
                     qr_scanner::ScanOutcome::Cancelled => w.set_friends_code_status("".into()),
                     qr_scanner::ScanOutcome::CameraDenied => w.set_friends_code_status(
@@ -320,11 +320,7 @@ fn wire_copy_friend_code(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
     });
 }
 
-/// Wire callback to connect with a user via friend code.
-///
-/// Accepts friend codes in formats:
-/// - `chatter://connect/{user_id}` (URL format)
-/// - `{user_id}` (plain UUID)
+/// Connect using the code itself to choose a friend request or secret chat.
 pub(crate) fn wire_connect_via_friend_code(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let ui_ctx_connect = ui_ctx.clone();
@@ -333,191 +329,78 @@ pub(crate) fn wire_connect_via_friend_code(window: &MainWindow, ui_ctx: &Arc<Cha
         let weak = weak_window.clone();
         let ui_ctx = ui_ctx_connect.clone();
         let code_str = code.to_string();
-
         if code_str.trim().is_empty() {
             return;
         }
 
-        // Read the optional intro note on the UI thread before spawning.
-        let note = weak
+        let (note, display_name) = weak
             .upgrade()
-            .map(|w| w.get_friends_request_note().to_string())
+            .map(|w| {
+                (
+                    w.get_friends_request_note().to_string(),
+                    ui_ctx.auth_state().get().display_name,
+                )
+            })
             .unwrap_or_default();
-
         tokio::spawn(async move {
-            // Set loading state
+            let is_private = chatter_core::domain::PrivateFriendCode::is_private_code(&code_str);
             let weak_loading = weak.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak_loading.upgrade() {
                     w.set_friends_loading(true);
+                    w.set_friends_code_status(
+                        (if is_private {
+                            "Secret chat is getting ready…"
+                        } else {
+                            "Connecting…"
+                        })
+                        .into(),
+                    );
                 }
             });
 
-            let note_trimmed = note.trim();
-            let note_arg = if note_trimmed.is_empty() {
-                None
-            } else {
-                Some(note_trimmed)
-            };
-            match ui_ctx.connect_via_friend_code(&code_str, note_arg).await {
-                Ok(friendship) => {
-                    let friend_id = friendship.addressee_id.to_string();
-                    tracing::info!("Sent friend request via code to {}", friend_id);
-
-                    // Core emits FriendRequestsUpdated — no explicit refresh needed.
+            let note = note.trim();
+            let message = if note.is_empty() { None } else { Some(note) };
+            match ui_ctx
+                .connect_friend_code(&code_str, message, display_name.as_deref())
+                .await
+            {
+                Ok(FriendCodeConnection::FriendRequest(friendship)) => {
+                    tracing::info!(
+                        "Sent friend request via code to {}",
+                        friendship.addressee_id
+                    );
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             w.set_friends_loading(false);
-                            // Clear the input field
                             w.set_friends_code_input("".into());
                             w.set_friends_request_note("".into());
-                            // Show success message (if UI supports it)
                             w.set_friends_code_status("Friend request sent!".into());
                         }
                     });
                 }
-                Err(e) => {
-                    tracing::error!("Failed to connect via friend code: {}", e);
-                    let error_msg = e.user_message();
-
+                Ok(FriendCodeConnection::SecretChat(dm)) => {
+                    tracing::info!("Started secret chat {} with {}", dm.id, dm.peer_id);
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
+                            crate::bin_ui::features::sidebar::refresh_chat_list(&w, &ui_ctx);
                             w.set_friends_loading(false);
-                            // Show error message
-                            w.set_friends_code_status(error_msg.into());
+                            w.set_friends_code_input("".into());
+                            w.set_friends_request_note("".into());
+                            w.set_friends_code_status("Secret chat started!".into());
                         }
                     });
                 }
-            }
-        });
-    });
-}
-
-/// Wire callback to connect privately via anon DM.
-///
-/// This uses the anonymous DM service which has NO server involvement.
-/// The connection is established via blind signature tokens and HPKE encryption.
-///
-/// Accepts codes in formats:
-/// - `chatter://private/{base32}` (NDSS'21 compliant - includes identity key + delivery token)
-/// - `chatter://connect/{user_id}` (Legacy - requires prekey fetch, NOT fully private)
-/// - `{user_id}` (Legacy - plain UUID)
-///
-/// # NDSS'21 Compliance
-///
-/// The `chatter://private/` format embeds all key material needed for initial
-/// contact. NO prekey fetch is required, so the server learns NOTHING about
-/// who is contacting whom.
-pub(crate) fn wire_connect_private(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
-    let weak_window = window.as_weak();
-    let auth_state = ui_ctx.auth_state().clone();
-    let ui_ctx_private = ui_ctx.clone();
-
-    window.on_friends_connect_private(move |code: SharedString| {
-        let weak = weak_window.clone();
-        let auth_state = auth_state.clone();
-        let ui_ctx = ui_ctx_private.clone();
-        let code_str = code.to_string();
-
-        if code_str.trim().is_empty() {
-            return;
-        }
-
-        tokio::spawn(async move {
-            // Set loading state
-            let weak_loading = weak.clone();
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak_loading.upgrade() {
-                    w.set_friends_loading(true);
+                Err(error) => {
+                    tracing::error!("Failed to connect via friend code: {}", error);
+                    let message = error.user_message();
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            w.set_friends_loading(false);
+                            w.set_friends_code_status(message.into());
+                        }
+                    });
                 }
-            });
-
-            // Check if this is an NDSS'21 compliant private code
-            if chatter_core::domain::PrivateFriendCode::is_private_code(&code_str) {
-                // Parse the private friend code (includes identity key + delivery token)
-                let friend_code = match chatter_core::domain::PrivateFriendCode::parse(&code_str) {
-                    Ok(fc) => fc,
-                    Err(e) => {
-                        let error_msg = format!("Invalid private code: {}", e);
-                        tracing::error!("Failed to parse private friend code: {}", e);
-
-                        let _ = slint::invoke_from_event_loop(move || {
-                            if let Some(w) = weak.upgrade() {
-                                w.set_friends_loading(false);
-                                w.set_friends_code_status(error_msg.into());
-                            }
-                        });
-                        return;
-                    }
-                };
-
-                // Get our display name from auth state
-                let my_display_name = auth_state.get().display_name;
-
-                let waiting = weak.clone();
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(w) = waiting.upgrade() {
-                        w.set_friends_code_status("Secret chat is getting ready — will start automatically".into());
-                    }
-                });
-
-                // Start NDSS'21 compliant conversation (NO prekey fetch, full privacy)
-                match ui_ctx
-                    .start_anon_dm_conversation_private(&friend_code, Some("Hello!"), my_display_name.as_deref())
-                    .await
-                {
-                    Ok(dm) => {
-                        let peer_id = dm.peer_id;
-                        let peer_id_str = peer_id.to_string();
-                        let dm_id = dm.id;
-
-                        tracing::info!(
-                            "Started NDSS'21-compliant private conversation {} with {} (no prekey fetch)",
-                            dm_id,
-                            peer_id_str
-                        );
-
-                        // Core's sidebar already lists outgoing requests; rebuild
-                        // from it rather than hand-editing the model (which also
-                        // dropped any existing DM with the same peer).
-                        let ui_ctx = ui_ctx.clone();
-                        let _ = slint::invoke_from_event_loop(move || {
-                            if let Some(w) = weak.upgrade() {
-                                crate::bin_ui::features::sidebar::refresh_chat_list(&w, &ui_ctx);
-
-                                w.set_friends_loading(false);
-                                w.set_friends_code_input("".into());
-                                w.set_friends_code_status("Private conversation started!".into());
-                            }
-                        });
-                    }
-                    Err(e) => {
-                        let error_msg = format!("{}", e);
-                        tracing::error!("Failed to start private conversation: {}", error_msg);
-
-                        let _ = slint::invoke_from_event_loop(move || {
-                            if let Some(w) = weak.upgrade() {
-                                w.set_friends_loading(false);
-                                w.set_friends_code_status(error_msg.into());
-                            }
-                        });
-                    }
-                }
-            } else {
-                // Not a private code - show helpful error
-                // Private mode requires a chatter://private/ code with embedded keys
-                let error_msg = "Private mode requires a chatter://private/ code. Ask your friend to share their private code, or disable private mode.".to_string();
-                tracing::warn!(
-                    "Private mode enabled but received non-private code: {}",
-                    code_str
-                );
-
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(w) = weak.upgrade() {
-                        w.set_friends_loading(false);
-                        w.set_friends_code_status(error_msg.into());
-                    }
-                });
             }
         });
     });
