@@ -190,7 +190,10 @@ export component ModalContainer inherits Rectangle {
                                 ? (root.last-drag-y - root.drag-start-y) / 4
                                 : root.last-drag-y - root.drag-start-y;
                         }
-                        if (event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel) {
+                        if (event.kind == PointerEventKind.cancel) {
+                            root.dragging = false;
+                            root.drag-offset = 0px;
+                        } else if (event.kind == PointerEventKind.up) {
                             root.dragging = false;
                             if (root.drag-offset > 96px || (root.drag-offset > 32px && root.drag-step > 16px)) {
                                 root.close();

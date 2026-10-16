@@ -2562,7 +2562,12 @@ export component MainWindow inherits Window {
                             root.chat-push-progress = 1 - min(1, max(0,
                                 (self.absolute-position.x + self.mouse-x - root.chat-edge-start) / root.width));
                         }
-                        if event.kind == PointerEventKind.up || event.kind == PointerEventKind.cancel {
+                        // The system Back gesture can take this touch away;
+                        // only a completed in-app swipe may close the chat.
+                        if event.kind == PointerEventKind.cancel {
+                            root.chat-edge-swiping = false;
+                            root.chat-push-progress = 1;
+                        } else if event.kind == PointerEventKind.up {
                             root.chat-edge-swiping = false;
                             if root.chat-push-progress < 0.7 { root.mobile-show-chat = false; }
                             else { root.chat-push-progress = 1; }
