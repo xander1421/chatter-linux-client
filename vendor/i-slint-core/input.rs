@@ -24,6 +24,23 @@ use core::fmt::Display;
 use core::pin::Pin;
 use core::time::Duration;
 
+#[cfg(target_os = "android")]
+#[link(name = "log")]
+unsafe extern "C" {
+    fn __android_log_write(
+        priority: i32,
+        tag: *const core::ffi::c_char,
+        text: *const core::ffi::c_char,
+    ) -> i32;
+}
+
+#[cfg(target_os = "android")]
+fn profile_tap_probe(message: &str) {
+    if let Ok(message) = std::ffi::CString::new(message) {
+        unsafe { __android_log_write(4, c"ProfileTap".as_ptr(), message.as_ptr()); }
+    }
+}
+
 /// A mouse or touch event
 ///
 /// The only difference with [`crate::platform::WindowEvent`] is that it uses untyped `Point`
@@ -1588,6 +1605,23 @@ fn send_mouse_event_to_item(
 ) -> VisitChildrenResult {
     let item = item_rc.borrow();
     let geom = item_rc.geometry();
+    #[cfg(target_os = "android")]
+    let profile_tap = option_env!("CHATTER_PROFILE_TAP_PROBE").is_some()
+        && matches!(mouse_event, MouseEvent::Pressed { .. });
+    #[cfg(target_os = "android")]
+    if profile_tap {
+        if let Some(pos) = mouse_event.position() {
+            profile_tap_probe(&std::format!(
+                "visit {:?} point=({:.1},{:.1}) geom={:?} contains={} clips={}",
+                item_rc,
+                pos.x,
+                pos.y,
+                geom,
+                geom.contains(pos),
+                item.as_ref().clips_children(),
+            ));
+        }
+    }
     // translated in our coordinate
     let mut event_for_children = mouse_event.clone();
     // Unapply the translation to go from 'world' space to local space
@@ -1611,6 +1645,10 @@ fn send_mouse_event_to_item(
     } else {
         InputEventFilterResult::ForwardAndIgnore
     };
+    #[cfg(target_os = "android")]
+    if profile_tap {
+        profile_tap_probe(&std::format!("filter {:?} result={filter_result:?}", item_rc));
+    }
 
     let (forward_to_children, ignore) = match filter_result {
         InputEventFilterResult::ForwardEvent => (true, false),
@@ -1662,6 +1700,10 @@ fn send_mouse_event_to_item(
             actual_visitor,
         );
         if r.has_aborted() {
+            #[cfg(target_os = "android")]
+            if profile_tap {
+                profile_tap_probe(&std::format!("child stopped at {:?}", item_rc));
+            }
             return r;
         }
     };
@@ -1676,6 +1718,10 @@ fn send_mouse_event_to_item(
         }
         item.as_ref().input_event(&event, window_adapter, &item_rc, &mut result.cursor)
     };
+    #[cfg(target_os = "android")]
+    if profile_tap {
+        profile_tap_probe(&std::format!("event {:?} result={r:?}", item_rc));
+    }
     match r {
         InputEventResult::EventAccepted => VisitChildrenResult::abort(item_rc.index(), 0),
         InputEventResult::EventIgnored => {
