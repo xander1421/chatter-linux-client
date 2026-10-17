@@ -1076,6 +1076,14 @@ impl AnonGroupService {
 
         tracing::info!("Invited {} members to group", invited_count);
 
+        // Existing members need the owner's pending-invite admission before
+        // they post, so each poster can queue its own copy for the invitee.
+        if invited_count > 0 {
+            tracing::info!(group_id = %group_id, invited_count,
+                "Broadcasting pending invitees to group posters");
+            self.broadcast_member_list(group_id).await?;
+        }
+
         if let Some(error) = first_send_error {
             return Err(error);
         }

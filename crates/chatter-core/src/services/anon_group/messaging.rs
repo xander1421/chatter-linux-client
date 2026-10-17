@@ -513,8 +513,8 @@ impl AnonGroupService {
             }
         }
 
-        // Queue the same Content for members whose JoinAck hasn't been
-        // received yet. Encode once and reuse; drained in handle_join_ack.
+        // Queue the same Content for members whose mailbox is still unknown.
+        // Each poster owns this queue; the owner's later roster also drains it.
         let mut queued_count = 0usize;
         if !pending_members.is_empty() {
             let content_blob = content.encode_to_vec();
@@ -532,6 +532,8 @@ impl AnonGroupService {
                     &content_blob,
                 )?;
                 queued_count += 1;
+                tracing::info!(group_id = %group_id, recipient = %member.user_id,
+                    sent_at, "Queued group content for invited member on poster device");
             }
         }
 
@@ -577,7 +579,7 @@ impl AnonGroupService {
         tracing::info!(
             recipient = %recipient_user_id,
             count = pending.len(),
-            "Draining pending anon group messages after JoinAck"
+            "Draining pending anon group messages after mailbox learned"
         );
 
         for (row_id, blob, attempts) in pending {
@@ -684,6 +686,30 @@ impl AnonGroupService {
             }
         }
 
+        Ok(())
+    }
+
+    /// A non-owner learns a joiner's mailbox through the owner roster, not
+    /// through the JoinAck sent to the owner. Drain this poster's own rows.
+    pub(crate) async fn drain_pending_after_roster(
+        &self,
+        group_id: &AnonGroupId,
+    ) -> Result<(), AnonGroupError> {
+        for member in self.anon_group_repo.get_members_with_mailbox(group_id)? {
+            let Some(key) = member.mailbox_pk else {
+                continue;
+            };
+            if !self
+                .anon_group_repo
+                .get_pending_messages_for_member(group_id, &member.user_id)?
+                .is_empty()
+            {
+                tracing::info!(group_id = %group_id, recipient = %member.user_id,
+                    "Owner roster supplied mailbox for queued group posts");
+                self.drain_pending_messages(group_id, &member.user_id, &key)
+                    .await?;
+            }
+        }
         Ok(())
     }
 
