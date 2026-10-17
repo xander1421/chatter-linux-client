@@ -477,6 +477,23 @@ impl ChatState {
         });
     }
 
+    /// Remove a deleted conversation's tray, including the active tray.
+    pub fn take_attachment_tray_for(
+        &self,
+        conversation: ActiveConversation,
+    ) -> Vec<PendingAttachment> {
+        let key = conversation.channel_id();
+        let mut taken = Vec::new();
+        self.store.update(|state| {
+            if state.active_conversation == conversation && state.active_channel_id == key {
+                taken = std::mem::take(&mut state.pending_attachments);
+            } else if let Some(tray) = state.attachment_trays.remove(&key) {
+                taken = tray;
+            }
+        });
+        taken
+    }
+
     /// Stage an asynchronous selection under the conversation that requested it.
     pub fn add_pending_attachment_for(
         &self,
@@ -1613,11 +1630,17 @@ mod attachment_tray_tests {
         state.add_pending_attachment(file("old.png"));
         state.clear_attachment_trays();
         state.add_pending_attachment(file("new.png"));
-        assert!(state.take_pending_attachments_for(conversation, old_revision).is_none());
+        assert!(
+            state
+                .take_pending_attachments_for(conversation, old_revision)
+                .is_none()
+        );
         assert_eq!(state.get_pending_attachments()[0].filename, "new.png");
         assert_eq!(
-            state.take_pending_attachments_for(conversation, state.get().attachment_revision)
-                .unwrap()[0].filename,
+            state
+                .take_pending_attachments_for(conversation, state.get().attachment_revision)
+                .unwrap()[0]
+                .filename,
             "new.png",
         );
     }

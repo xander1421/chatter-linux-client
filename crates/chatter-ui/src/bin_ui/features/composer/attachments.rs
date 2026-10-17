@@ -15,6 +15,7 @@ use crate::{MainWindow, PendingAttachmentData};
 /// Used by both file picker and drag/drop.
 pub(crate) async fn process_and_add_file(
     file_path: PathBuf,
+    staged_size: Option<u64>,
     chat_state: &ChatState,
     conversation: ActiveConversation,
     revision: u64,
@@ -41,7 +42,7 @@ pub(crate) async fn process_and_add_file(
     tracing::debug!(
         "Queued attachment: {} ({} bytes, {})",
         filename,
-        metadata.len(),
+        staged_size.unwrap_or(metadata.len()),
         mime_type
     );
 
@@ -51,7 +52,7 @@ pub(crate) async fn process_and_add_file(
         temp_id,
         filename,
         file_path.to_path_buf(),
-        metadata.len(),
+        staged_size.unwrap_or(metadata.len()),
         mime_type,
     );
     chat_state.add_pending_attachment_for(conversation, revision, pending);
@@ -178,9 +179,15 @@ pub(crate) fn wire_attachment_clicked(
                 tracing::info!("Selected {} file(s) for attachment", selected_files.len());
 
                 for file_path in selected_files {
-                    if let Err(e) =
-                        process_and_add_file(file_path, &chat_state, conversation, revision, &weak)
-                            .await
+                    if let Err(e) = process_and_add_file(
+                        file_path,
+                        None,
+                        &chat_state,
+                        conversation,
+                        revision,
+                        &weak,
+                    )
+                    .await
                     {
                         tracing::error!("{}", e);
                     }
@@ -208,11 +215,26 @@ pub(crate) fn wire_attachment_clicked(
                 for file_path in selected_files {
                     // The SAF copy sits in the purgeable cache dir and is ours:
                     // move it where a restart finds it (core owns the dir).
-                    let file_path = ui_ctx_attach.stage_owned_file(file_path);
-                    if let Err(e) =
-                        process_and_add_file(file_path, &chat_state, conversation, revision, &weak)
-                            .await
+                    let source = file_path;
+                    let file_path = ui_ctx_attach.stage_owned_file(source.clone());
+                    if file_path == source {
+                        let _ = tokio::fs::remove_file(&source).await;
+                        tracing::warn!("Could not encrypt selected attachment");
+                        continue;
+                    }
+                    if let Err(e) = process_and_add_file(
+                        file_path.clone(),
+                        ui_ctx_attach.staged_file_size(&file_path),
+                        &chat_state,
+                        conversation,
+                        revision,
+                        &weak,
+                    )
+                    .await
                     {
+                        ui_ctx_attach.release_staged_files(&[PendingAttachment::new(
+                            AttachmentId::new(), String::new(), file_path, 0, String::new(),
+                        )]);
                         tracing::error!("{}", e);
                     }
                 }
@@ -297,12 +319,25 @@ pub(crate) fn wire_paste_image(
                 tracing::warn!("Could not stage pasted image");
                 return;
             }
-            match process_and_add_file(staged.clone(), &chat_state, conversation, revision, &weak)
-                .await
+            match process_and_add_file(
+                staged.clone(),
+                ui_ctx.staged_file_size(&staged),
+                &chat_state,
+                conversation,
+                revision,
+                &weak,
+            )
+            .await
             {
                 Ok(()) => tracing::info!("Attached image pasted from clipboard"),
                 Err(e) => {
-                    let _ = tokio::fs::remove_file(&staged).await;
+                    ui_ctx.release_staged_files(&[PendingAttachment::new(
+                        AttachmentId::new(),
+                        String::new(),
+                        staged,
+                        0,
+                        String::new(),
+                    )]);
                     tracing::error!("{e}");
                 }
             }

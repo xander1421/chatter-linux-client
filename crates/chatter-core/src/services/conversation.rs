@@ -2248,7 +2248,7 @@ impl ConversationHandle {
     /// message brings it back — so those are left (Channel Settings › Leave),
     /// never deleted here.
     pub async fn delete_conversation(&self) -> ConversationResult {
-        match &self.conversation {
+        let result = match &self.conversation {
             // A secret chat ends for both sides (Telegram-style).
             ActiveConversation::AnonDm(id) => {
                 Ok(self.client.anon_dms().end_conversation(id).await?)
@@ -2354,7 +2354,11 @@ impl ConversationHandle {
                 ConversationError::Other("a group is left, not deleted".into()),
             ),
             ActiveConversation::None => Err(ConversationError::NoConversation),
+        };
+        if result.is_ok() {
+            self.client.clear_composer_conversation(self.conversation);
         }
+        result
     }
 
     /// This conversation's disappearing-messages timer in seconds (`0` = off).

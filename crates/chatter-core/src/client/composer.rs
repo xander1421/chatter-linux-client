@@ -7,6 +7,7 @@
 //! finishes.
 
 use std::collections::HashMap;
+use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::Ordering;
 
@@ -203,6 +204,15 @@ struct ComposerRecovery {
     parked: Vec<ParkedSend>,
 }
 
+/// File encryption material lives in SQLCipher, as it does for downloaded
+/// attachments. The staged file itself contains only authenticated ciphertext.
+#[derive(serde::Serialize, serde::Deserialize)]
+struct StagingCrypto {
+    key: Vec<u8>,
+    digest: Vec<u8>,
+    plaintext_size: u64,
+}
+
 impl ComposerRecovery {
     fn is_empty(&self) -> bool {
         self.trays.is_empty() && self.parked.is_empty()
@@ -324,7 +334,7 @@ impl ChatterClient {
                 tracing::warn!("persisted composer drafts not deleted at sign-out");
             }
             // The account's staged copies go with its row.
-            let _ = std::fs::remove_dir_all(self.staging_dir(owner));
+            self.wipe_staging_dir(owner);
         }
         self.composer_drafts_dirty.store(false, Ordering::SeqCst);
         self.composer_recovery_dirty.store(false, Ordering::SeqCst);
@@ -783,6 +793,156 @@ impl ChatterClient {
         self.staging_root().join(owner.0.to_string())
     }
 
+    fn staging_files(&self, owner: UserId) -> Vec<PathBuf> {
+        let Ok(dirs) = std::fs::read_dir(self.staging_dir(owner)) else {
+            return Vec::new();
+        };
+        dirs.flatten()
+            .flat_map(|dir| {
+                std::fs::read_dir(dir.path())
+                    .into_iter()
+                    .flatten()
+                    .flatten()
+                    .map(|entry| entry.path())
+                    .collect::<Vec<_>>()
+            })
+            .collect()
+    }
+
+    fn wipe_staging_dir(&self, owner: UserId) {
+        for path in self.staging_files(owner) {
+            if let Some(key) = self.staging_crypto_key(&path) {
+                let _ = self.settings_repo().delete(&key);
+            }
+        }
+        let _ = std::fs::remove_dir_all(self.staging_dir(owner));
+    }
+
+    /// A clean break from the former plaintext layout: only files whose
+    /// encryption metadata is readable in SQLCipher may survive startup.
+    pub(super) fn discard_legacy_staging_all(&self) {
+        let Ok(accounts) = std::fs::read_dir(self.staging_root()) else { return };
+        for account in accounts.flatten() {
+            let Ok(dirs) = std::fs::read_dir(account.path()) else { continue };
+            for dir in dirs.flatten() {
+                let Ok(files) = std::fs::read_dir(dir.path()) else { continue };
+                for file in files.flatten() {
+                    let path = file.path();
+                    let Some(key) = self.staging_crypto_key(&path) else { continue };
+                    if matches!(self.settings_repo().get::<StagingCrypto>(&key), Ok(None)) {
+                        let _ = std::fs::remove_file(&path);
+                        let _ = std::fs::remove_dir(dir.path());
+                    }
+                }
+            }
+        }
+    }
+
+    fn staging_crypto_key(&self, path: &std::path::Path) -> Option<String> {
+        let relative = path.strip_prefix(self.staging_root()).ok()?;
+        let mut parts = relative.components();
+        let std::path::Component::Normal(owner) = parts.next()? else {
+            return None;
+        };
+        let std::path::Component::Normal(token) = parts.next()? else {
+            return None;
+        };
+        let std::path::Component::Normal(_) = parts.next()? else {
+            return None;
+        };
+        if parts.next().is_some() {
+            return None;
+        }
+        let owner = owner.to_str()?;
+        let token = token.to_str()?;
+        Some(format!("ui.composer_staging.{owner}.{token}"))
+    }
+
+    /// Return the real size for a staged ciphertext file, for the tray UI.
+    pub fn staged_file_size(&self, path: &std::path::Path) -> Option<u64> {
+        let key = self.staging_crypto_key(path)?;
+        Some(
+            self.settings_repo()
+                .get::<StagingCrypto>(&key)
+                .ok()??
+                .plaintext_size,
+        )
+    }
+
+    fn restorable_staged_file(&self, path: &std::path::Path) -> bool {
+        let Some(key) = self.staging_crypto_key(path) else { return true };
+        !matches!(self.settings_repo().get::<StagingCrypto>(&key), Ok(None))
+    }
+
+    /// Verify and decrypt a staged file for the duration of one upload.
+    /// The existing attachment uploader and media sanitizer require a file path;
+    /// its private temporary plaintext file is removed when the send returns.
+    pub(crate) fn staged_upload_file(
+        &self,
+        path: &std::path::Path,
+    ) -> Result<Option<(tempfile::TempDir, PathBuf)>, crate::services::attachment::AttachmentError>
+    {
+        use crate::services::attachment::AttachmentError;
+        let Some(key_name) = self.staging_crypto_key(path) else {
+            return Ok(None);
+        };
+        let crypto: StagingCrypto = self
+            .settings_repo()
+            .get(&key_name)
+            .map_err(|e| AttachmentError::StorageError(e.to_string()))?
+            .ok_or_else(|| {
+                AttachmentError::DecryptionError("staged file has no encryption key".into())
+            })?;
+        let key: [u8; 64] = crypto
+            .key
+            .try_into()
+            .map_err(|_| AttachmentError::DecryptionError("invalid staged file key".into()))?;
+        let digest: [u8; 32] = crypto
+            .digest
+            .try_into()
+            .map_err(|_| AttachmentError::DecryptionError("invalid staged file digest".into()))?;
+        let source =
+            std::fs::File::open(path).map_err(|e| AttachmentError::FileError(e.to_string()))?;
+        let size = source
+            .metadata()
+            .map_err(|e| AttachmentError::FileError(e.to_string()))?
+            .len() as usize;
+        let mut decryptor = crate::crypto::streaming_decrypt::StreamingDecryptor::new(
+            std::io::BufReader::new(source),
+            &key,
+            &digest,
+            crypto.plaintext_size as usize,
+            size,
+        );
+        decryptor
+            .verify()
+            .map_err(|e| AttachmentError::DecryptionError(e.to_string()))?;
+        decryptor
+            .init_decryption()
+            .map_err(|e| AttachmentError::DecryptionError(e.to_string()))?;
+        let temp = tempfile::tempdir().map_err(|e| AttachmentError::FileError(e.to_string()))?;
+        let output_path = temp.path().join(
+            path.file_name()
+                .ok_or_else(|| AttachmentError::FileError("staged filename missing".into()))?,
+        );
+        let mut output = std::fs::File::create(&output_path)
+            .map_err(|e| AttachmentError::FileError(e.to_string()))?;
+        let mut chunk = vec![0u8; 512 * 1024];
+        loop {
+            let read = decryptor
+                .read_decrypted(&mut chunk)
+                .map_err(|e| AttachmentError::DecryptionError(e.to_string()))?;
+            if read == 0 {
+                break;
+            }
+            output
+                .write_all(&chunk[..read])
+                .map_err(|e| AttachmentError::FileError(e.to_string()))?;
+        }
+        drop(output);
+        Ok(Some((temp, output_path)))
+    }
+
     /// The account whose recovery row may be written: the drafts' owner,
     /// only while the session that loaded it is the current one. `None`
     /// between a sign-out and the next composer use, so nothing of the old
@@ -804,12 +964,9 @@ impl ChatterClient {
         owner.filter(|owner| Some(*owner) == auth.current_user_id)
     }
 
-    /// Shelter a file the app itself produced — an Android SAF copy in the
-    /// purgeable cache dir, a pasted image in `/tmp` — under the signed-in
-    /// account's staging directory, where a restart or a cache purge does
-    /// not reach it. Returns the path to stage: the original when no account
-    /// can own it or the move fails, in which case the file still sends, it
-    /// is only not sheltered. Never call this with a file the user owns.
+    /// Encrypt an app-owned picker or paste copy under the signed-in account.
+    /// The random file key is stored in SQLCipher before ciphertext is published.
+    /// A failed stage returns the original path; callers must reject that path.
     pub fn stage_owned_file(&self, path: PathBuf) -> PathBuf {
         let (_drafts, _) = self.composer_drafts_for_session();
         let Some(owner) = self.recovery_owner() else {
@@ -824,15 +981,54 @@ impl ChatterClient {
         if std::fs::create_dir_all(&dir).is_err() {
             return path;
         }
-        let dest = dir.join(name);
-        if std::fs::rename(&path, &dest).is_err() {
-            // Another filesystem: copy, then let go of the original.
-            if std::fs::copy(&path, &dest).is_err() {
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            if std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).is_err() {
                 let _ = std::fs::remove_dir(&dir);
                 return path;
             }
-            let _ = std::fs::remove_file(&path);
         }
+        let dest = dir.join(name);
+        let staging = match tempfile::NamedTempFile::new_in(&dir) {
+            Ok(file) => file,
+            Err(_) => {
+                let _ = std::fs::remove_dir(&dir);
+                return path;
+            }
+        };
+        let encrypted =
+            match crate::crypto::attachment_crypto::AttachmentCrypto::encrypt_file_to_file(
+                &path,
+                staging.path(),
+            ) {
+                Ok(result) => result,
+                Err(error) => {
+                    tracing::warn!(%error, "could not encrypt staged attachment");
+                    drop(staging);
+                    let _ = std::fs::remove_dir(&dir);
+                    return path;
+                }
+            };
+        let Some(key_name) = self.staging_crypto_key(&dest) else {
+            return path;
+        };
+        let crypto = StagingCrypto {
+            key: encrypted.key.to_vec(),
+            digest: encrypted.digest.to_vec(),
+            plaintext_size: encrypted.plaintext_size,
+        };
+        if self.settings_repo().set(&key_name, &crypto).is_err() {
+            drop(staging);
+            let _ = std::fs::remove_dir(&dir);
+            return path;
+        }
+        if staging.persist(&dest).is_err() {
+            let _ = self.settings_repo().delete(&key_name);
+            let _ = std::fs::remove_dir_all(&dir);
+            return path;
+        }
+        let _ = std::fs::remove_file(&path);
         // The Android picker copies each selection into a directory of its
         // own (`MainActivity.copyToCache`); it is empty now.
         if let Some(parent) = path.parent() {
@@ -858,10 +1054,32 @@ impl ChatterClient {
                 continue;
             }
             let _ = std::fs::remove_file(path);
+            if let Some(key) = self.staging_crypto_key(path) {
+                let _ = self.settings_repo().delete(&key);
+            }
             if let Some(dir) = path.parent() {
                 let _ = std::fs::remove_dir(dir);
             }
         }
+    }
+
+    /// A deleted conversation cannot leave recoverable staged copies behind.
+    pub(crate) fn clear_composer_conversation(&self, conversation: ActiveConversation) {
+        let (_drafts, _) = self.composer_drafts_for_session();
+        drop(_drafts);
+        let tray = self.chat_state().take_attachment_tray_for(conversation);
+        self.release_staged_files(&tray);
+        let mut parked = self.parked_sends.lock();
+        parked.retain(|send| {
+            if send.conversation == conversation {
+                self.release_staged_files(&send.attachments);
+                false
+            } else {
+                true
+            }
+        });
+        drop(parked);
+        let _ = self.persist_composer_recovery();
     }
 
     /// Write the trays and the parked sends under the signed-in account.
@@ -964,7 +1182,11 @@ impl ChatterClient {
                 self.composer_recovery_unread.store(true, Ordering::SeqCst);
                 continue;
             };
-            for attachment in attachments.into_iter().map(StagedAttachment::into_pending) {
+            for attachment in attachments
+                .into_iter()
+                .filter(|attachment| self.restorable_staged_file(&attachment.path))
+                .map(StagedAttachment::into_pending)
+            {
                 // Trays are keyed by channel id alone, so the variant does
                 // not matter here: a DM's tray has the DM's derived id.
                 chat.add_pending_attachment_for(
@@ -979,6 +1201,7 @@ impl ChatterClient {
             let attachments: Vec<PendingAttachment> = send
                 .attachments
                 .into_iter()
+                .filter(|attachment| self.restorable_staged_file(&attachment.path))
                 .map(StagedAttachment::into_pending)
                 .collect();
             if send.text.is_empty() && send.reply.is_none() && attachments.is_empty() {
@@ -1547,17 +1770,19 @@ mod tests {
         let kept = stage(&client, picked(&dir, "for-a.png"));
         open(&client, b);
         // A GIF: pre-uploaded, no file behind it.
-        client.chat_state().add_pending_attachment(PendingAttachment::with_pointer(
-            AttachmentId::new(),
-            Default::default(),
-            "fun.gif".into(),
-            9,
-            "image/gif".into(),
-            crate::proto::content_v1::AttachmentPointer {
-                cdn_key: "k".into(),
-                ..Default::default()
-            },
-        ));
+        client
+            .chat_state()
+            .add_pending_attachment(PendingAttachment::with_pointer(
+                AttachmentId::new(),
+                Default::default(),
+                "fun.gif".into(),
+                9,
+                "image/gif".into(),
+                crate::proto::content_v1::AttachmentPointer {
+                    cdn_key: "k".into(),
+                    ..Default::default()
+                },
+            ));
         client.persist_composer_recovery();
         drop(client);
 
@@ -1631,7 +1856,11 @@ mod tests {
         let back = client.take_parked_send(true).expect("parked send lost");
         assert_eq!(back.text, "both");
         let paths: Vec<_> = back.attachments.iter().map(|a| a.path.clone()).collect();
-        assert_eq!(paths, vec![kept.path.clone(), lost.path.clone()], "partial send prepared");
+        assert_eq!(
+            paths,
+            vec![kept.path.clone(), lost.path.clone()],
+            "partial send prepared"
+        );
         assert!(kept.path.is_file());
     }
 
@@ -1645,7 +1874,10 @@ mod tests {
         let file = stage(&client, picked(&dir, "safe.png"));
         // Whatever wrote this row, this build cannot decode it.
         let key = ChatterClient::composer_recovery_key(user);
-        client.settings_repo().set(&key, &"not a recovery row").unwrap();
+        client
+            .settings_repo()
+            .set(&key, &"not a recovery row")
+            .unwrap();
         drop(client);
 
         let client = client_in(&dir);
@@ -1691,9 +1923,14 @@ mod tests {
         let client = client_in(&dir);
         client.auth_state().set_logged_in(user, 1, "A".into());
         open(&client, b);
-        assert!(client.take_parked_send(true).is_none(), "A's send restored into B");
+        assert!(
+            client.take_parked_send(true).is_none(),
+            "A's send restored into B"
+        );
         open(&client, a);
-        let back = client.take_parked_send(true).expect("parked send lost over restart");
+        let back = client
+            .take_parked_send(true)
+            .expect("parked send lost over restart");
         assert_eq!(back.text, "caption");
         assert_eq!(back.reply.unwrap().preview, "quoted");
         assert_eq!(back.attachments.len(), 1);
@@ -1706,7 +1943,10 @@ mod tests {
         let client = client_in(&dir);
         client.auth_state().set_logged_in(user, 1, "A".into());
         open(&client, a);
-        assert!(client.take_parked_send(true).is_none(), "taken send came back");
+        assert!(
+            client.take_parked_send(true).is_none(),
+            "taken send came back"
+        );
     }
 
     #[tokio::test]
@@ -1741,13 +1981,20 @@ mod tests {
         let client = client_in(&dir);
         client.auth_state().set_logged_in(user, 1, "A".into());
         assert_eq!(client.thread_draft(&root), "half a reply");
-        assert!(client.thread_draft(&crate::domain::ids::MessageId::new()).is_empty());
+        assert!(
+            client
+                .thread_draft(&crate::domain::ids::MessageId::new())
+                .is_empty()
+        );
         client.set_thread_draft(&root, "");
         drop(client);
 
         let client = client_in(&dir);
         client.auth_state().set_logged_in(user, 1, "A".into());
-        assert!(client.thread_draft(&root).is_empty(), "sent reply came back");
+        assert!(
+            client.thread_draft(&root).is_empty(),
+            "sent reply came back"
+        );
 
         // A reply that failed after the tap goes back to its thread, unless
         // something newer was typed there or the session is over.
@@ -1761,7 +2008,10 @@ mod tests {
         assert!(client.restore_thread_draft(&root, "and again", revision));
         assert_eq!(client.thread_draft(&root), "typed since");
         assert!(client.has_failed_thread_reply(&root));
-        assert!(client.take_failed_thread_reply(&root).is_none(), "took over typed text");
+        assert!(
+            client.take_failed_thread_reply(&root).is_none(),
+            "took over typed text"
+        );
         // The newer reply goes out: its draft clears, the parked one survives
         // a restart and comes back only into the empty draft.
         client.set_thread_draft(&root, "");
@@ -1773,7 +2023,10 @@ mod tests {
             Some("failed reply\n\nand again")
         );
         assert_eq!(client.thread_draft(&root), "failed reply\n\nand again");
-        assert!(client.take_failed_thread_reply(&root).is_none(), "restored twice");
+        assert!(
+            client.take_failed_thread_reply(&root).is_none(),
+            "restored twice"
+        );
         client.set_thread_draft(&root, "");
         assert!(!client.restore_thread_draft(&root, "failed reply", revision + 1));
         assert!(client.thread_draft(&root).is_empty());

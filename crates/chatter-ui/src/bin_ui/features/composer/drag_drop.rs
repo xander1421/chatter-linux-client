@@ -85,7 +85,8 @@ fn handle_dropped_file(path: PathBuf, chat_state: &ChatState, weak: &slint::Weak
     let weak = weak.clone();
 
     tokio::spawn(async move {
-        if let Err(e) = process_and_add_file(path, &chat_state, conversation, revision, &weak).await
+        if let Err(e) =
+            process_and_add_file(path, None, &chat_state, conversation, revision, &weak).await
         {
             tracing::error!("Failed to process dropped file: {}", e);
         }

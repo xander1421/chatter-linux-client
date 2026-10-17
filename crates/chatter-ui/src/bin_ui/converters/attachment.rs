@@ -131,9 +131,7 @@ impl AttachmentDisplayData {
         // Priority 2: Load from local path after download
         let (has_thumbnail, thumbnail, img_width, img_height) = if !media_ready {
             (false, Image::default(), self.width, self.height)
-        } else if let Some(pixels) =
-            &self.thumbnail_pixels
-        {
+        } else if let Some(pixels) = &self.thumbnail_pixels {
             // Pre-decoded and shared: wrapping it is a reference count, no copy.
             let (w, h) = (pixels.width(), pixels.height());
             (true, Image::from_rgba8(pixels.clone()), w as i32, h as i32)
@@ -353,7 +351,11 @@ pub fn pending_attachment_to_slint(attachment: &PendingAttachment) -> PendingAtt
     let is_image = attachment.mime_type.starts_with("image/");
 
     // Try to load thumbnail for images
-    let (has_thumbnail, thumbnail) = if is_image && attachment.path.exists() {
+    let encrypted_staging = attachment
+        .path
+        .components()
+        .any(|component| component.as_os_str() == "composer-staging");
+    let (has_thumbnail, thumbnail) = if is_image && !encrypted_staging && attachment.path.exists() {
         match Image::load_from_path(&attachment.path) {
             Ok(img) => (true, img),
             Err(e) => {

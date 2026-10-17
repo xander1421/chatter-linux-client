@@ -242,6 +242,7 @@ impl ClientBuilder {
             composer_owner: Mutex::new(String::new()),
             expired_messages: tokio::sync::broadcast::channel(16).0,
         });
+        client.discard_legacy_staging_all();
         client.install_session_recovery();
         Ok(client)
     }
@@ -3768,6 +3769,7 @@ impl ChatterClient {
         let uploaded = upload_attachments(
             pending_attachments,
             &self.attachments().for_conversation(&conversation),
+            Some(self),
         )
         .await
         .map_err(|e| SendError::from(e).before_submission())?;
@@ -5735,6 +5737,7 @@ pub enum NotificationTarget {
 async fn upload_attachments(
     pending: &[PendingAttachment],
     attachment_service: &AttachmentService,
+    client: Option<&ChatterClient>,
 ) -> Result<UploadedAttachments, AttachmentError> {
     let mut pointers = Vec::with_capacity(pending.len());
     let mut attachments = Vec::with_capacity(pending.len());
@@ -5746,7 +5749,12 @@ async fn upload_attachments(
             }
             continue;
         }
-        match attachment_service.upload_to_cdn_encrypted(&att.path).await {
+        let staged = client
+            .map(|client| client.staged_upload_file(&att.path))
+            .transpose()?
+            .flatten();
+        let upload_path = staged.as_ref().map(|(_, path)| path.as_path()).unwrap_or(&att.path);
+        match attachment_service.upload_to_cdn_encrypted(upload_path).await {
             Ok(res) => {
                 pointers.push(res.to_attachment_pointer());
                 if let Ok(Some(full_att)) = attachment_service.get(&res.attachment_id) {
@@ -5980,7 +5988,7 @@ mod upload_attachments_tests {
             input.path().to_path_buf(),
             payload.len() as u64,
         )];
-        let result = upload_attachments(&pending, &svc).await;
+        let result = upload_attachments(&pending, &svc, None).await;
 
         match result {
             Err(AttachmentError::EncryptionError(msg)) => {
