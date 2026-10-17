@@ -41,7 +41,7 @@ pub use search_visible::{SearchPage, VisibleSearchHit};
 pub use send_attempt::await_send_with_notice;
 mod receipts;
 pub use anon_group::AnonGroupInviteCandidate;
-pub use messaging::{ForwardDestination, InviteCandidate, ReplyParentMedia};
+pub use messaging::{ChannelInviteRow, ForwardDestination, InviteCandidate, ReplyParentMedia};
 pub use profile::{FriendCodeConnection, FriendCodeConnectionError};
 pub use secret_chat::{SecretChatError, SecretChatGate};
 

@@ -12,7 +12,7 @@ use slint::{ComponentHandle, ModelRc, SharedString, VecModel, Weak};
 
 use crate::{FriendRequestData, MainWindow};
 use chatter_core::client::ChatterClient;
-use chatter_core::domain::ids::{ChannelId, UserId};
+use chatter_core::domain::ids::ChannelId;
 
 /// Send-safe intermediate type for channel invite display data.
 struct ChannelInviteSendData {
@@ -42,32 +42,15 @@ fn format_created_at(created_at: u64) -> String {
 pub fn load_channel_invites(weak: Weak<MainWindow>, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
     tokio::spawn(async move {
-        let invites = ui_ctx.list_pending_channel_invites().await;
+        let invites = ui_ctx.channel_invite_rows().await;
         let send_items: Vec<ChannelInviteSendData> = invites
             .into_iter()
-            .map(|inv| {
-                let channel_name = if inv.channel_name.is_empty() {
-                    "Channel invite".to_string()
-                } else {
-                    format!("#{}", inv.channel_name)
-                };
-                // display_name falls back to the raw id for a user this device
-                // knows nothing about; a UUID is not a name, so say nothing.
-                let invited_by = inv
-                    .inviter_id
-                    .parse::<UserId>()
-                    .ok()
-                    .map(|uid| ui_ctx.display_name(&uid))
-                    .filter(|name| *name != inv.inviter_id)
-                    .map(|name| format!("Invited by {name}"))
-                    .unwrap_or_default();
-                ChannelInviteSendData {
-                    channel_id: inv.channel_id,
-                    channel_name,
-                    invited_by,
-                    sent_at: format_created_at(inv.created_at),
-                    note: inv.message,
-                }
+            .map(|invite| ChannelInviteSendData {
+                channel_id: invite.channel_id,
+                channel_name: invite.channel_name,
+                invited_by: invite.invited_by,
+                sent_at: format_created_at(invite.created_at),
+                note: invite.note,
             })
             .collect();
 
