@@ -13,4 +13,6 @@ pub mod linux;
 #[cfg(target_os = "macos")]
 pub mod macos;
 
+pub mod clipboard;
+
 pub(crate) mod video_source;

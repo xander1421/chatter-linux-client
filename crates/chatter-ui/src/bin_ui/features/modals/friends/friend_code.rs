@@ -244,53 +244,23 @@ fn wire_copy_friend_code(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
         if let Some(w) = weak_window.upgrade() {
             let code = w.get_friends_my_code().to_string();
             if !code.is_empty() {
-                // Use wl-copy for Wayland (more reliable than arboard on Wayland).
-                // Desktop-only: subprocess clipboard tools don't exist on mobile
-                // and `arboard` isn't a dependency there.
+                // Desktop clipboard access can block while contacting Wayland/X11.
                 #[cfg(not(any(target_os = "android", target_os = "ios")))]
                 {
                     let code_clone = code.clone();
                     std::thread::spawn(move || {
-                        // Try wl-copy first (Wayland), fall back to xclip (X11),
-                        // then arboard (macOS/Windows, or Linux without either tool).
-                        let result = std::process::Command::new("wl-copy")
-                            .arg(&code_clone)
-                            .status()
-                            .or_else(|_| {
-                                std::process::Command::new("xclip")
-                                    .args(["-selection", "clipboard"])
-                                    .stdin(std::process::Stdio::piped())
-                                    .spawn()
-                                    .and_then(|mut child| {
-                                        use std::io::Write;
-                                        if let Some(stdin) = child.stdin.as_mut() {
-                                            stdin.write_all(code_clone.as_bytes())?;
-                                        }
-                                        child.wait()
-                                    })
-                            });
-
-                        match result {
-                            Ok(status) if status.success() => {
-                                tracing::info!("Copied friend code to clipboard");
-                            }
-                            _ => {
-                                match arboard::Clipboard::new()
-                                    .and_then(|mut c| c.set_text(code_clone.clone()))
-                                {
-                                    Ok(()) => {
-                                        tracing::info!("Copied friend code to clipboard");
-                                    }
-                                    Err(e) => {
-                                        tracing::error!("Failed to copy to clipboard: {}", e);
-                                    }
-                                }
-                            }
+                        match crate::platform::clipboard::set_text(
+                            "Friend code",
+                            &code_clone,
+                            false,
+                        ) {
+                            Ok(()) => tracing::info!("Copied friend code to clipboard"),
+                            Err(e) => tracing::error!("Failed to copy to clipboard: {}", e),
                         }
                     });
                 }
-                #[cfg(target_os = "android")]
-                match crate::platform::android::clipboard::set_text("Friend code", &code) {
+                #[cfg(any(target_os = "android", target_os = "ios"))]
+                match crate::platform::clipboard::set_text("Friend code", &code, false) {
                     Ok(()) => {
                         tracing::info!("Copied friend code to clipboard");
                         w.set_friends_code_status("Copied to clipboard!".into());
@@ -299,11 +269,6 @@ fn wire_copy_friend_code(window: &MainWindow, _ui_ctx: &Arc<ChatterClient>) {
                         tracing::error!("Failed to copy friend code to clipboard: {}", e);
                         w.set_friends_code_status("Couldn't copy — use Show QR".into());
                     }
-                }
-                #[cfg(target_os = "ios")]
-                {
-                    tracing::warn!("Clipboard not implemented on iOS");
-                    w.set_friends_code_status("Copy unavailable — use Show QR".into());
                 }
 
                 // Desktop reports success unconditionally because the copy runs

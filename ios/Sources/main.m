@@ -10,6 +10,34 @@
 // the smoke half goes away with CHATTER_RUST_UI. Don't grow it.
 
 #import <UIKit/UIKit.h>
+#include <stdbool.h>
+
+// Called by chatter-ui's shared clipboard adapter. Recovery codes are kept on
+// this device only and expire after the same 60 seconds used on other platforms.
+bool chatter_ios_clipboard_set_text(const char *utf8, bool secret) {
+  if (!utf8) return false;
+  NSString *text = [NSString stringWithUTF8String:utf8];
+  if (!text) return false;
+
+  void (^write)(void) = ^{
+    UIPasteboard *pasteboard = UIPasteboard.generalPasteboard;
+    if (secret) {
+      NSDictionary *options = @{
+        UIPasteboardOptionLocalOnly : @YES,
+        UIPasteboardOptionExpirationDate : [NSDate dateWithTimeIntervalSinceNow:60]
+      };
+      [pasteboard setItems:@[ @{@"public.utf8-plain-text" : text} ] options:options];
+    } else {
+      pasteboard.string = text;
+    }
+  };
+  if (NSThread.isMainThread) {
+    write();
+  } else {
+    dispatch_sync(dispatch_get_main_queue(), write);
+  }
+  return true;
+}
 
 extern char *chatter_ios_smoke(const char *docs_dir);
 extern void chatter_ios_string_free(char *s);
