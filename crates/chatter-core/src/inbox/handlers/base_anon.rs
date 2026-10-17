@@ -311,7 +311,14 @@ pub trait AnonInboxBackend {
     fn get_message_id_by_timestamp(&self, id: &Self::Id, ts: u64) -> Option<MessageId>;
 
     /// Default: no-op. DM overrides to persist read/delivered status to its table.
-    fn persist_delivery_status(&self, _id: &Self::Id, _timestamps: &[u64], _status: &str) {}
+    fn persist_delivery_status(
+        &self,
+        _id: &Self::Id,
+        _timestamps: &[u64],
+        _status: &str,
+    ) -> Result<(), String> {
+        Ok(())
+    }
 
     /// Whether receipts should emit `MessagesRead` / `MessagesDelivered` events.
     /// Default: true. Group overrides to suppress (receipts are debug-only there).
@@ -405,7 +412,11 @@ pub fn dispatch_common_content<B: AnonInboxBackend>(
                         timestamp = delete.target_sent_timestamp,
                         "Delete target not found"
                     ),
-                    Err(e) => tracing::warn!(error = %e, "Failed to delete message"),
+                    Err(e) => {
+                        return CommonDispatchOutcome::Failed(
+                            crate::error::StorageError::InvalidData(e),
+                        );
+                    }
                 }
                 return CommonDispatchOutcome::Handled(events);
             }
@@ -537,7 +548,12 @@ pub fn dispatch_common_content<B: AnonInboxBackend>(
 
         Some(ContentKind::Receipt(receipt)) => {
             if receipt.r#type == receipt_message::Type::Read as i32 {
-                backend.persist_delivery_status(id, &receipt.timestamps, "read");
+                if let Err(error) = backend.persist_delivery_status(id, &receipt.timestamps, "read")
+                {
+                    return CommonDispatchOutcome::Failed(crate::error::StorageError::InvalidData(
+                        error,
+                    ));
+                }
                 if backend.emit_receipts() {
                     events.push(DomainEvent::MessagesRead {
                         reader_id: *sender_id,
@@ -547,7 +563,13 @@ pub fn dispatch_common_content<B: AnonInboxBackend>(
                     });
                 }
             } else if receipt.r#type == receipt_message::Type::Delivery as i32 {
-                backend.persist_delivery_status(id, &receipt.timestamps, "delivered");
+                if let Err(error) =
+                    backend.persist_delivery_status(id, &receipt.timestamps, "delivered")
+                {
+                    return CommonDispatchOutcome::Failed(crate::error::StorageError::InvalidData(
+                        error,
+                    ));
+                }
                 if backend.emit_receipts() {
                     events.push(DomainEvent::MessagesDelivered {
                         recipient_id: *sender_id,
@@ -613,7 +635,11 @@ pub fn dispatch_common_content<B: AnonInboxBackend>(
                     target_timestamp,
                     "Edit held for its message, refused, or already shown"
                 ),
-                Err(e) => tracing::warn!(id = %id, error = %e, "Failed to apply an edit"),
+                Err(e) => {
+                    return CommonDispatchOutcome::Failed(crate::error::StorageError::InvalidData(
+                        e,
+                    ));
+                }
             }
             CommonDispatchOutcome::Handled(events)
         }

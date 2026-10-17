@@ -12,13 +12,34 @@ pub const MAX_RETAINED_ARTIFACTS: i64 = 4096;
 pub enum ReceiveKind {
     Reaction,
     Content,
+    Edit,
+    Delete,
+    Receipt,
+    Timer,
+    Roster,
+    Kick,
+    Leave,
+    JoinAck,
+    Profile,
 }
 impl ReceiveKind {
-    fn as_str(self) -> &'static str {
+    pub(crate) fn as_str(self) -> &'static str {
         match self {
             Self::Reaction => "reaction",
             Self::Content => "content",
+            Self::Edit => "edit",
+            Self::Delete => "delete",
+            Self::Receipt => "receipt",
+            Self::Timer => "timer",
+            Self::Roster => "roster",
+            Self::Kick => "kick",
+            Self::Leave => "leave",
+            Self::JoinAck => "join_ack",
+            Self::Profile => "profile",
         }
+    }
+    pub(crate) fn is_content(self) -> bool {
+        self != Self::Reaction
     }
 }
 pub fn check_capacity(conn: &Connection) -> Result<(), StorageError> {
@@ -120,6 +141,30 @@ impl ReceiveArtifact {
             ReceiveKind::Content,
         )
     }
+    pub(crate) fn new_control(
+        key: ReceiveKey,
+        digest: Vec<u8>,
+        sender: String,
+        sender_device: u32,
+        content: Vec<u8>,
+        message_type: u8,
+        kind: ReceiveKind,
+    ) -> Result<Self, StorageError> {
+        if !kind.is_content() || kind == ReceiveKind::Content {
+            return Err(StorageError::InvalidData(
+                "invalid receive control kind".into(),
+            ));
+        }
+        Self::new_kind(
+            key,
+            digest,
+            sender,
+            sender_device,
+            content,
+            message_type,
+            kind,
+        )
+    }
     fn new_kind(
         key: ReceiveKey,
         digest: Vec<u8>,
@@ -180,6 +225,15 @@ fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ReceiveArtifact> {
         kind: match r.get::<_, String>(13)?.as_str() {
             "reaction" => ReceiveKind::Reaction,
             "content" => ReceiveKind::Content,
+            "edit" => ReceiveKind::Edit,
+            "delete" => ReceiveKind::Delete,
+            "receipt" => ReceiveKind::Receipt,
+            "timer" => ReceiveKind::Timer,
+            "roster" => ReceiveKind::Roster,
+            "kick" => ReceiveKind::Kick,
+            "leave" => ReceiveKind::Leave,
+            "join_ack" => ReceiveKind::JoinAck,
+            "profile" => ReceiveKind::Profile,
             _ => {
                 return Err(rusqlite::Error::InvalidColumnType(
                     13,
@@ -306,7 +360,7 @@ pub fn mark_content_upstream_acked(
     let Some(artifact) = load(conn, key, digest)? else {
         return Ok(());
     };
-    if artifact.kind != ReceiveKind::Content {
+    if !artifact.kind.is_content() {
         return Err(StorageError::InvalidData("receive kind mismatch".into()));
     }
     conn.execute(
@@ -325,7 +379,7 @@ pub fn mark_content_applied(
     conn: &Connection,
     artifact: &ReceiveArtifact,
 ) -> Result<(), StorageError> {
-    if conn.is_autocommit() || artifact.kind != ReceiveKind::Content {
+    if conn.is_autocommit() || !artifact.kind.is_content() {
         return Err(StorageError::InvalidData(
             "content applied marker requires a transaction".into(),
         ));

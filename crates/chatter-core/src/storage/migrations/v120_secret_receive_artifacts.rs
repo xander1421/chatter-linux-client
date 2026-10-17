@@ -8,11 +8,11 @@ impl Migration for V120SecretReceiveArtifacts {
     }
 
     fn description(&self) -> &'static str {
-        "Retain authenticated secret data posts before acknowledgment"
+        "Retain authenticated secret posts and controls before acknowledgment"
     }
 
     fn up(&self) -> &'static str {
-        "ALTER TABLE reaction_receive_artifacts ADD COLUMN kind TEXT NOT NULL DEFAULT 'reaction' CHECK(kind IN ('reaction','content'));
+        "ALTER TABLE reaction_receive_artifacts ADD COLUMN kind TEXT NOT NULL DEFAULT 'reaction' CHECK(kind IN ('reaction','content','edit','delete','receipt','timer','roster','kick','leave','join_ack','profile'));
          ALTER TABLE reaction_receive_artifacts ADD COLUMN upstream_acked_at INTEGER;"
     }
 }

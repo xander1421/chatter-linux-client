@@ -143,9 +143,27 @@ impl AnonInboxBackend for AnonGroupService {
             .map(|m| m.id)
     }
 
-    /// Group receipts are debug-only (not yet persisted or emitted to UI).
+    fn persist_delivery_status(
+        &self,
+        id: &Self::Id,
+        timestamps: &[u64],
+        status: &str,
+    ) -> Result<(), String> {
+        self.message_service
+            .message_repo
+            .update_delivery_status_by_timestamps(
+                &(*id).into(),
+                &ConversationType::AnonGroup,
+                timestamps,
+                status,
+            )
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    /// Surface persisted group receipts after the authenticated roster gate.
     fn emit_receipts(&self) -> bool {
-        false
+        true
     }
 }
 

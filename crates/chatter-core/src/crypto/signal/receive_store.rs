@@ -306,6 +306,33 @@ fn reaction_content(
     }
 }
 
+fn control_kind(
+    content: &crate::proto::content_v1::Content,
+    depth: usize,
+) -> Option<crate::storage::receive_artifact::ReceiveKind> {
+    use crate::proto::content_v1::content::Content as Body;
+    use crate::storage::receive_artifact::ReceiveKind as Kind;
+    if depth > 4 {
+        return None;
+    }
+    match content.content.as_ref()? {
+        Body::AnonDmMessage(m) => control_kind(m.inner_content.as_deref()?, depth + 1),
+        Body::AnonGroupMessage(m) => control_kind(m.inner_content.as_deref()?, depth + 1),
+        Body::Edit(_) => Some(Kind::Edit),
+        Body::Receipt(_) => Some(Kind::Receipt),
+        Body::DataMessage(m) if m.delete.is_some() => Some(Kind::Delete),
+        Body::DataMessage(m) if crate::services::disappearing::is_timer_update(m) => {
+            Some(Kind::Timer)
+        }
+        Body::AnonGroupMemberList(_) | Body::AnonGroupUpdate(_) => Some(Kind::Roster),
+        Body::AnonGroupKick(_) => Some(Kind::Kick),
+        Body::AnonGroupLeave(_) => Some(Kind::Leave),
+        Body::AnonGroupJoinAck(_) => Some(Kind::JoinAck),
+        Body::AnonGroupProfileShare(_) | Body::AnonDmProfileUpdate(_) => Some(Kind::Profile),
+        _ => None,
+    }
+}
+
 fn from_artifact(
     a: crate::storage::receive_artifact::ReceiveArtifact,
 ) -> std::result::Result<crate::services::signal::actor::DurableReceive, crate::error::ServiceError>
@@ -402,7 +429,7 @@ async fn decrypt_durable_inner(
             "decrypted receive content exceeds bound".into(),
         ));
     }
-    // Only reactions and data posts need a ratchet-atomic handoff in this phase.
+    // Durable controls share the ratchet-atomic journal with reactions and posts.
     let decoded = crate::network::validation::protovalidate::decode_validated::<
         crate::proto::content_v1::Content,
     >(result.message.as_slice())
@@ -421,7 +448,10 @@ async fn decrypt_durable_inner(
         matches!(inner.and_then(|inner| inner.content.as_ref()), Some(Body::DataMessage(data))
             if data.delete.is_none() && !crate::services::disappearing::is_timer_update(data))
     });
-    let artifact = if is_reaction || is_data_post {
+    let control = decoded
+        .as_ref()
+        .and_then(|content| control_kind(content, 0));
+    let artifact = if is_reaction || is_data_post || control.is_some() {
         // Refuse oversized plaintext before committing any ratchet writes.
         if result.message.len() > MAX_RECEIVE_CONTENT {
             return Err(ServiceError::Validation(
@@ -438,19 +468,36 @@ async fn decrypt_durable_inner(
                 )));
             }
         };
-        let constructor = if is_reaction {
-            ReceiveArtifact::new
+        let artifact = if is_reaction {
+            ReceiveArtifact::new(
+                key.clone(),
+                digest,
+                result.sender_uuid.clone(),
+                u32::from(result.device_id),
+                result.message.clone(),
+                message_type,
+            )?
+        } else if let Some(kind) = control {
+            ReceiveArtifact::new_control(
+                key.clone(),
+                digest,
+                result.sender_uuid.clone(),
+                u32::from(result.device_id),
+                result.message.clone(),
+                message_type,
+                kind,
+            )?
         } else {
-            ReceiveArtifact::new_content
+            ReceiveArtifact::new_content(
+                key.clone(),
+                digest,
+                result.sender_uuid.clone(),
+                u32::from(result.device_id),
+                result.message.clone(),
+                message_type,
+            )?
         };
-        Some(constructor(
-            key.clone(),
-            digest,
-            result.sender_uuid.clone(),
-            u32::from(result.device_id),
-            result.message.clone(),
-            message_type,
-        )?)
+        Some(artifact)
     } else {
         None
     };
@@ -458,7 +505,7 @@ async fn decrypt_durable_inner(
         base.key_store
             .commit_receive(&key, &identities.changes(), artifact.as_ref())?;
     if let Some(a) = committed {
-        tracing::info!(envelope_id = %a.key.envelope_id, "secret receive artifact committed");
+        tracing::info!(envelope_id = %a.key.envelope_id, kind = a.kind.as_str(), "secret receive artifact committed");
         return from_artifact(a).map(Some);
     }
     Ok(Some(crate::services::signal::actor::DurableReceive {

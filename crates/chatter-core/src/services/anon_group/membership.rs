@@ -1111,8 +1111,19 @@ impl AnonGroupService {
         avatar: Option<Vec<u8>>,
     ) -> Result<(), AnonGroupError> {
         // 1. Verify membership
-        if !self.anon_group_repo.is_member(&group_id, &member_id)? {
-            return Err(AnonGroupError::MemberNotFound(member_id));
+        let member = self
+            .anon_group_repo
+            .get_member(&group_id, &member_id)?
+            .ok_or(AnonGroupError::MemberNotFound(member_id))?;
+        if profile_key.is_none_or(|value| member.profile_key == Some(value))
+            && display_name
+                .as_ref()
+                .is_none_or(|value| member.display_name.as_ref() == Some(value))
+            && avatar
+                .as_ref()
+                .is_none_or(|value| member.avatar.as_ref() == Some(value))
+        {
+            return Ok(());
         }
 
         // 2. Update local profile
