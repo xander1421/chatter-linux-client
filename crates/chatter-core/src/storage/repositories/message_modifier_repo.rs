@@ -80,6 +80,12 @@ impl MessageModifierRepository {
         Self { db }
     }
 
+    /// Remove expired pending modifiers even if no later modifier or target arrives.
+    pub fn prune_expired(&self, now: u64) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        prune(&conn, now)
+    }
+
     /// Hold `author`'s edit of its message sent at `target_sent_at` until the
     /// message arrives. `conversation` is where that message must turn up
     /// (`None`: anywhere — an edit from our own other device). Of two pending
@@ -190,6 +196,19 @@ impl MessageModifierRepository {
             false,
             now,
         )
+    }
+
+    /// Author-only secret-group tombstone in the exact group scope.
+    pub fn queue_anon_group_delete(
+        &self,
+        author: &UserId,
+        target_sent_at: u64,
+        group: ChannelId,
+        now: u64,
+    ) -> Result<(), StorageError> {
+        self.upsert(author, target_sent_at, "delete", None,
+            &format!("anon-group-delete:{}", group), Some(group),
+            Some(ConversationType::AnonGroup.as_str()), 0, false, now)
     }
 
     /// Typed DM tombstone: author is one of the authenticated DM participants.
@@ -522,6 +541,8 @@ pub(crate) fn take_on_arrival<'a>(
     conn: &Connection,
     message: &'a Message,
 ) -> Result<Arrival<'a>, StorageError> {
+    // Expire even when no newer modifier arrives.
+    prune(conn, crate::util::time::TimestampNanos::now().as_u64())?;
     // Call identity is shared across replicas; authors and timestamps are local.
     // Check before the author fallback.
     if let Some(call_id) = canonical_call_record_id(message) {

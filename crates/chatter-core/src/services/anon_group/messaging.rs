@@ -524,8 +524,9 @@ impl AnonGroupService {
     /// Each row is re-decoded into a `Content` proto and delivered via
     /// `send_to_anon_mailbox`. Rows are deleted on success, left in place on
     /// failure for retry on the next JoinAck or `retry_parked_sends`. A row
-    /// that fails `MAX_PARKED_ATTEMPTS` times is given up and, if it was a
-    /// user's post, reported in the chat as `SystemMessage::Undelivered`. A
+    /// user's post that fails `MAX_PARKED_ATTEMPTS` times is given up and
+    /// reported in the chat as `SystemMessage::Undelivered`. Owner rosters
+    /// remain queued until confirmed or replaced by a newer roster. A
     /// failure because the token batch is empty is not the member's fault
     /// and does not count.
     pub(crate) async fn drain_pending_messages(
@@ -598,6 +599,17 @@ impl AnonGroupService {
                         );
                         break;
                     }
+                    if matches!(
+                        content.content.as_ref(),
+                        Some(content_v1::content::Content::AnonGroupMemberList(_))
+                    ) {
+                        // A missed roster can hold a joiner's posts forever.
+                        // Keep its durable row until a deposit is confirmed or
+                        // a newer roster replaces it.
+                        tracing::warn!(row_id, recipient = %recipient_user_id, error = %e,
+                            "Owner roster remains queued for retry");
+                        break;
+                    }
                     if attempts + 1 < MAX_PARKED_ATTEMPTS {
                         tracing::warn!(
                             row_id,
@@ -641,6 +653,10 @@ impl AnonGroupService {
     /// tokens are not adjacent in time to the authenticated request that
     /// fetched them (NDSS'21 §VI-F). Stops early when the batch is empty.
     pub async fn retry_parked_sends(&self) -> Result<(), AnonGroupError> {
+        crate::storage::repositories::message_modifier_repo::MessageModifierRepository::new(
+            self.message_service.database.clone(),
+        )
+        .prune_expired(TimestampNanos::now().as_u64())?;
         let current = self.current_user_id()?;
         for group in self.anon_group_repo.list_active_groups()? {
             // Before the first authoritative roster, the inviter is deliberately
@@ -702,19 +718,22 @@ impl AnonGroupService {
         &self,
         group_id: &AnonGroupId,
     ) -> Result<(), AnonGroupError> {
-        let posts = super::send_ledger::held_posts(
-            &self.message_service.database,
-            &group_id.to_string(),
-        )?;
+        let posts =
+            super::send_ledger::held_posts(&self.message_service.database, &group_id.to_string())?;
         if posts.is_empty() {
             return Ok(());
         }
         let current = self.current_user_id()?;
-        let group = self.anon_group_repo.get_group(group_id)?
+        let group = self
+            .anon_group_repo
+            .get_group(group_id)?
             .ok_or(AnonGroupError::GroupNotFound(*group_id))?;
         let reason = if group.is_blocked() {
             Some("group blocked")
-        } else if self.anon_group_repo.awaiting_join_roster(group_id, &current)? {
+        } else if self
+            .anon_group_repo
+            .awaiting_join_roster(group_id, &current)?
+        {
             Some("owner roster has not admitted local join")
         } else {
             None
@@ -731,7 +750,8 @@ impl AnonGroupService {
                     let message_id = id.parse().map_err(|_| {
                         AnonGroupError::InvalidData("Invalid held group message ID".into())
                     })?;
-                    self.message_service.finish_retry_row(&message_id, "sent", None)
+                    self.message_service
+                        .finish_retry_row(&message_id, "sent", None)
                         .map_err(|e| AnonGroupError::MessageError(e.to_string()))?;
                     tracing::info!(message_id = %id, "held group post released");
                 }

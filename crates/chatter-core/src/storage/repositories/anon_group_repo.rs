@@ -506,9 +506,11 @@ impl AnonGroupRepository {
                 && old_admission > roster_at
                 && (removed == 0 || admission > removed)
             {
-                tx.execute("UPDATE anon_group_member_order SET acknowledged_at=admitted_at
+                tx.execute(
+                    "UPDATE anon_group_member_order SET acknowledged_at=admitted_at
                     WHERE group_id=?1 AND user_id=?2 AND admitted_at=?3",
-                    params![group.to_string(), member.user_id.to_string(), old_admission])?;
+                    params![group.to_string(), member.user_id.to_string(), old_admission],
+                )?;
             }
             if (removed > 0 && (admission <= removed || timestamp <= removed))
                 || admission < old_admission
@@ -1539,6 +1541,58 @@ impl AnonGroupRepository {
                 "Anonymous recipient removed or reinvited".into(),
             ));
         }
+        Ok(())
+    }
+
+    /// Atomically replace older owner rosters for each recipient with this
+    /// snapshot. The existing pending-message drain then survives restarts.
+    pub fn replace_pending_roster(
+        &self,
+        group_id: &AnonGroupId,
+        recipients: &[UserId],
+        content_blob: &[u8],
+    ) -> Result<(), StorageError> {
+        use prost::Message as _;
+        let content = crate::proto::content_v1::Content::decode(content_blob)
+            .map_err(|_| StorageError::InvalidData("Invalid roster content".into()))?;
+        let roster_at = match content.content {
+            Some(crate::proto::content_v1::content::Content::AnonGroupMemberList(roster)) => roster.timestamp,
+            _ => return Err(StorageError::InvalidData("Pending content is not a roster".into())),
+        };
+        let mut conn = self.db.connection()?;
+        let tx = conn.transaction()?;
+        for recipient in recipients {
+            let mut old = Vec::new();
+            let mut newer_queued = false;
+            {
+                let mut stmt = tx.prepare("SELECT id, encrypted_content_blob FROM pending_anon_group_messages WHERE group_id=?1 AND recipient_user_id=?2")?;
+                let rows = stmt.query_map(
+                    params![group_id.to_string(), recipient.to_string()],
+                    |row| Ok((row.get::<_, i64>(0)?, row.get::<_, Vec<u8>>(1)?)),
+                )?;
+                for row in rows {
+                    let (id, blob) = row?;
+                    if let Some(crate::proto::content_v1::content::Content::AnonGroupMemberList(roster)) =
+                        crate::proto::content_v1::Content::decode(blob.as_slice()).ok().and_then(|old| old.content)
+                    {
+                        if roster.timestamp >= roster_at {
+                            newer_queued = true;
+                        } else {
+                            old.push(id);
+                        }
+                    }
+                }
+            }
+            for id in old {
+                tx.execute("DELETE FROM pending_anon_group_messages WHERE id=?1", [id])?;
+            }
+            if newer_queued {
+                continue;
+            }
+            tx.execute("INSERT INTO pending_anon_group_messages (group_id,recipient_user_id,encrypted_content_blob,created_at,attempts) VALUES (?1,?2,?3,?4,0)",
+                params![group_id.to_string(), recipient.to_string(), content_blob, Utc::now().to_rfc3339()])?;
+        }
+        tx.commit()?;
         Ok(())
     }
 

@@ -249,6 +249,15 @@ impl AnonGroupService {
         timestamp_ns: u64,
     ) -> Result<bool, AnonGroupError> {
         let channel_id: ChannelId = (*group_id).into();
+        crate::storage::repositories::message_modifier_repo::MessageModifierRepository::new(
+            self.message_service.database.clone(),
+        )
+        .queue_anon_group_delete(
+            sender_id,
+            timestamp_ns,
+            channel_id,
+            crate::util::time::TimestampNanos::now().as_u64(),
+        )?;
         if self
             .message_service
             .message_repo
