@@ -45,6 +45,14 @@ pub use messaging::{ForwardDestination, InviteCandidate, ReplyParentMedia};
 pub use profile::{FriendCodeConnection, FriendCodeConnectionError};
 pub use secret_chat::{SecretChatError, SecretChatGate};
 
+/// Rows removed by a local expiry sweep and attachments no longer referenced
+/// by any stored message.
+#[derive(Clone, Debug)]
+pub struct ExpiredMessages {
+    pub messages: Vec<crate::domain::message::Message>,
+    pub removed_attachment_ids: Vec<crate::domain::ids::AttachmentId>,
+}
+
 /// A user-search hit surfaced to the UI (friends modal search).
 ///
 /// Privacy note: display names are profile-key-encrypted on the server, so the
@@ -452,7 +460,7 @@ pub struct ChatterClient {
     composer_owner: Mutex<String>,
     /// Messages the disappearing-messages reaper just deleted. See
     /// `subscribe_expired_messages`.
-    expired_messages: tokio::sync::broadcast::Sender<Vec<crate::domain::message::Message>>,
+    expired_messages: tokio::sync::broadcast::Sender<ExpiredMessages>,
 }
 
 pub use crate::services::user::ReceivedFriendRequestProfile;
@@ -3398,7 +3406,30 @@ impl ChatterClient {
                             notifications.remove_message_notifications(
                                 &gone.iter().map(|message| message.id).collect::<Vec<_>>(),
                             );
-                            let _ = expired.send(gone);
+                            // A restart clears the ledger while Android may retain its tag.
+                            let message_repo = crate::storage::repositories::MessageRepository::new(db.clone());
+                            for (conversation_id, conversation_type) in gone.iter()
+                                .map(|m| (m.conversation_id, m.conversation_type.clone()))
+                                .collect::<std::collections::HashSet<_>>()
+                            {
+                                match message_repo.get_unread_count(&conversation_id, &conversation_type) {
+                                    Ok(0) => {
+                                        if let Err(e) = notifications.cancel_conversation(&conversation_id) {
+                                            tracing::warn!(error = %e, "Failed to cancel expired conversation notification");
+                                        }
+                                    }
+                                    Ok(_) => {}
+                                    Err(e) => tracing::warn!(error = %e, "Failed to check unread messages after expiry"),
+                                }
+                            }
+                            let attachment_repo = crate::storage::repositories::AttachmentRepository::new(db.clone());
+                            let removed_attachment_ids = gone.iter()
+                                .flat_map(|message| message.attachments.iter().copied())
+                                .collect::<std::collections::HashSet<_>>()
+                                .into_iter()
+                                .filter(|id| matches!(attachment_repo.get(id), Ok(None)))
+                                .collect();
+                            let _ = expired.send(ExpiredMessages { messages: gone, removed_attachment_ids });
                         }
                         Ok(_) => {}
                         Err(e) => tracing::warn!(error = %e, "ephemeral reaper: cleanup failed"),
@@ -4224,7 +4255,7 @@ impl ChatterClient {
     /// device, one batch per sweep, for the open chat to drop.
     pub fn subscribe_expired_messages(
         &self,
-    ) -> tokio::sync::broadcast::Receiver<Vec<crate::domain::message::Message>> {
+    ) -> tokio::sync::broadcast::Receiver<ExpiredMessages> {
         self.expired_messages.subscribe()
     }
 

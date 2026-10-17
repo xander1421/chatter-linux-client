@@ -64,12 +64,14 @@ fn wire_expired(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     tokio::spawn(async move {
         use tokio::sync::broadcast::error::RecvError;
         loop {
-            let (gone, reply_targets): (
+            let (gone, reply_targets, attachments): (
                 std::collections::HashSet<String>,
                 std::collections::HashSet<(String, String)>,
+                std::collections::HashSet<String>,
             ) = match expired.recv().await {
                 Ok(batch) => (
                     batch
+                        .messages
                         .iter()
                         .flat_map(|m| {
                             [
@@ -80,19 +82,28 @@ fn wire_expired(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         })
                         .collect(),
                     batch
+                        .messages
                         .iter()
                         .filter_map(|m| {
                             m.sender_id
                                 .map(|author| (author.to_string(), m.sent_at.to_string()))
                         })
                         .collect(),
+                    batch
+                        .removed_attachment_ids
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect(),
                 ),
                 Err(RecvError::Lagged(_)) => {
+                    // We no longer know which attachment ids expired.
+                    crate::bin_ui::decode_cache::wipe();
                     crate::bin_ui::features::sidebar::history_changed(&weak, &ctx);
                     continue;
                 }
                 Err(RecvError::Closed) => break,
             };
+            crate::bin_ui::decode_cache::evict_attachments(&attachments);
             crate::bin_ui::features::sidebar::history_changed(&weak, &ctx);
             let weak = weak.clone();
             let _ = slint::invoke_from_event_loop(move || {
