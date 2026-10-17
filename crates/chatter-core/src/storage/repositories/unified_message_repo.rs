@@ -977,7 +977,6 @@ impl UnifiedMessageRepository {
         for table in [
             "pending_scoped_reactions",
             "reaction_action_versions",
-            "reaction_scope_unresolved",
             "unified_reactions",
         ] {
             tx.execute(
