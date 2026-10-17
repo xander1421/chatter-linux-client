@@ -789,6 +789,33 @@ impl ChatterClient {
         self.directories().data_dir().join("composer-staging")
     }
 
+    fn staged_upload_temp_root() -> PathBuf {
+        crate::services::attachment::attachments_dir().join("staged-upload-tmp")
+    }
+
+    /// Upload plaintext is only needed for one send. A process death skips
+    /// TempDir's destructor, so remove any leftovers before a client can send.
+    pub(super) fn cleanup_staged_upload_temps(&self) -> std::io::Result<()> {
+        let root = Self::staged_upload_temp_root();
+        if root.exists() {
+            std::fs::remove_dir_all(&root)?;
+        }
+        Self::ensure_staged_upload_temp_root()?;
+        Ok(())
+    }
+
+    fn ensure_staged_upload_temp_root() -> std::io::Result<PathBuf> {
+        crate::services::attachment::ensure_attachments_dir()?;
+        let root = Self::staged_upload_temp_root();
+        std::fs::create_dir_all(&root)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))?;
+        }
+        Ok(root)
+    }
+
     fn staging_dir(&self, owner: UserId) -> PathBuf {
         self.staging_root().join(owner.0.to_string())
     }
@@ -960,7 +987,12 @@ impl ChatterClient {
         decryptor
             .init_decryption()
             .map_err(|e| AttachmentError::DecryptionError(e.to_string()))?;
-        let temp = tempfile::tempdir().map_err(|e| AttachmentError::FileError(e.to_string()))?;
+        let root = Self::ensure_staged_upload_temp_root()
+            .map_err(|e| AttachmentError::FileError(e.to_string()))?;
+        let temp = tempfile::Builder::new()
+            .prefix("upload-")
+            .tempdir_in(root)
+            .map_err(|e| AttachmentError::FileError(e.to_string()))?;
         let output_path = temp.path().join(
             path.file_name()
                 .ok_or_else(|| AttachmentError::FileError("staged filename missing".into()))?,

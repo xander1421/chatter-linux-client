@@ -544,8 +544,18 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 /// Recover a definite failure into its own empty composer, or park it there
 /// for later. Expired sessions and newer input are handled by core.
 pub fn recover_failed_send(w: &MainWindow, ui_ctx: &ChatterClient, send: ComposerSend) {
+    if !ui_ctx.composer_session_is_current(send.session_revision) {
+        return;
+    }
+    let has_attachments = !send.attachments.is_empty();
     if let Some(send) = ui_ctx.recover_composer_send(send, composer_is_empty(w)) {
         restore_composer(w, ui_ctx, send);
+    }
+    if has_attachments {
+        w.set_toast_message("Attachment not sent. Try again.".into());
+        w.set_toast_variant("error".into());
+        w.set_toast_visible(true);
+        w.global::<crate::Haptics>().invoke_error();
     }
 }
 
