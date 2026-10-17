@@ -27,10 +27,24 @@ impl AnonGroupService {
             String::new(),
             sent_at,
         );
+        // Names are snapshots of local roster state and can change between
+        // application and replay. Keep them out of the identity preimage.
+        let notice = match &system_content {
+            SystemMessage::UserJoined(user) => format!("joined:{user}"),
+            SystemMessage::AnonGroupUserLeft { .. } => "left".to_string(),
+            SystemMessage::UserRemoved { removed, .. } => format!("removed:{removed}"),
+            SystemMessage::SelfRemoved { .. } => "self-removed".to_string(),
+            SystemMessage::Undelivered { sent_at, .. } => format!("undelivered:{sent_at}"),
+            other => format!("{other:?}"),
+        };
         message.content = MessageContent::System(system_content);
+        let identity = format!("secret-system:{channel_id}:{sender_id:?}:{sent_at}:{notice}");
+        message.id = MessageId(uuid::Uuid::new_v5(&uuid::Uuid::nil(), identity.as_bytes()));
 
         let msg_id_str = message.id.to_string();
-        self.message_service.message_repo.insert(&message)?;
+        self.message_service
+            .message_repo
+            .insert_or_ignore(&message)?;
         tracing::debug!(
             "Stored system message {} in group at {}",
             msg_id_str,
@@ -64,7 +78,9 @@ impl AnonGroupService {
             quote,
         );
         let msg_id_str = message.id.to_string();
-        self.message_service.message_repo.insert(&message)?;
+        self.message_service
+            .message_repo
+            .insert_or_ignore(&message)?;
         tracing::debug!(
             "Stored message {} in group with sent_at={}",
             msg_id_str,
@@ -94,7 +110,9 @@ impl AnonGroupService {
             None,
         );
         let msg_id_str = message.id.to_string();
-        self.message_service.message_repo.insert(&message)?;
+        self.message_service
+            .message_repo
+            .insert_or_ignore(&message)?;
         tracing::debug!(
             "Stored text message {} in group with sent_at={}",
             msg_id_str,
@@ -131,7 +149,9 @@ impl AnonGroupService {
             quote,
         );
         let msg_id_str = message.id.to_string();
-        self.message_service.message_repo.insert(&message)?;
+        self.message_service
+            .message_repo
+            .insert_or_ignore(&message)?;
         tracing::debug!(
             "Stored message {} in group with sent_at={}, attachments={}",
             msg_id_str,
@@ -171,7 +191,9 @@ impl AnonGroupService {
             quote,
         );
         let msg_id_str = message.id.to_string();
-        self.message_service.message_repo.insert(&message)?;
+        self.message_service
+            .message_repo
+            .insert_or_ignore(&message)?;
         Ok(AnonGroupMessageId::from_string(msg_id_str))
     }
 

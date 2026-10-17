@@ -216,6 +216,19 @@ impl From<UserId> for ChannelId {
 // ============================================================================
 
 impl MessageId {
+    /// Stable identity for a received secret-chat message. The conversation
+    /// scope prevents an author reusing a sent clock in another mailbox from
+    /// colliding with this message during receive replay.
+    #[must_use]
+    pub fn from_secret_sender_timestamp(
+        conversation_id: &ChannelId,
+        sender_id: &UserId,
+        sent_at_ns: u64,
+    ) -> Self {
+        let input = format!("secret-msg:{conversation_id}:{sender_id}:{sent_at_ns}");
+        Self(Uuid::new_v5(&Uuid::nil(), input.as_bytes()))
+    }
+
     /// Create a deterministic MessageId from a timestamp.
     ///
     /// Used for Signal-style message identification where messages are

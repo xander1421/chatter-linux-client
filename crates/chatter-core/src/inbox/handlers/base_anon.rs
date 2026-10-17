@@ -242,6 +242,16 @@ pub trait AnonInboxBackend {
         quote: Option<QuoteContext>,
     ) -> Result<String, String>;
 
+    /// A replayed secret post must not create a second UI delivery event.
+    fn has_data_message(
+        &self,
+        _id: &Self::Id,
+        _sender: &UserId,
+        _sent_at: u64,
+    ) -> Result<bool, crate::error::StorageError> {
+        Ok(false)
+    }
+
     fn delete_message(&self, id: &Self::Id, sender: &UserId, ts: u64) -> Result<bool, String>;
 
     /// Apply `sender`'s edit of its own message sent at `target_ts` in `id`,
@@ -404,6 +414,12 @@ pub fn dispatch_common_content<B: AnonInboxBackend>(
             let has_attachments = !data_msg.attachments.is_empty();
             if !has_text && !has_attachments {
                 return CommonDispatchOutcome::Handled(events);
+            }
+
+            match backend.has_data_message(id, sender_id, inner_content.timestamp) {
+                Ok(true) => return CommonDispatchOutcome::Handled(events),
+                Ok(false) => {}
+                Err(error) => return CommonDispatchOutcome::Failed(error),
             }
 
             let attachment_ids = if has_attachments {

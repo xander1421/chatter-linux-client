@@ -99,7 +99,7 @@ pub(crate) fn build_anon_message(
         };
 
     Message {
-        id: MessageId::new(),
+        id: MessageId::from_secret_sender_timestamp(&conversation_id, &sender_id, sent_at),
         conversation_id,
         conversation_type,
         sender_id: Some(sender_id),
