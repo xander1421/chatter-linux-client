@@ -20,6 +20,7 @@ use crate::MainWindow;
 
 /// Wire composer callbacks.
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    attachments::register_preview_client(ui_ctx);
     attachments::wire_attachment_clicked(window, ui_ctx.chat_state().clone(), ui_ctx);
     attachments::wire_remove_attachment(window, ui_ctx);
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
