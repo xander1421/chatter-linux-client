@@ -1234,6 +1234,7 @@ impl MeshService {
             .load(id)?
             .ok_or_else(|| MeshError::Binding("unknown private channel".into()))?;
         state.rotate(&self.identity, None, Some(peer))?;
+        state.rotate_sender(&self.identity)?;
         self.private_channels.save(&state)?;
         let bytes = state.update_bytes()?;
         for member in &state.members {
@@ -1257,17 +1258,20 @@ impl MeshService {
             .load(id)?
             .ok_or_else(|| MeshError::Binding("unknown private channel".into()))?;
         let notice = state.leave_notice(&self.identity)?;
-        self.private_channels.save_pending_leave(&PendingLeave {
-            notice: notice.clone(), creator: state.creator.clone(),
-        })?;
-        let encoded = notice.encode()?;
-        let broadcast = state.encrypt(&self.identity.peer_id(), &encoded)?;
-        let peers = state
+        let peers: Vec<PeerId> = state
             .members
             .iter()
             .filter(|member| member.peer != self.identity.peer_id().as_str())
             .map(|member| PeerId::from_str(&member.peer))
             .collect();
+        self.private_channels.save_pending_leave(&PendingLeave {
+            notice: notice.clone(),
+            creator: state.creator.clone(),
+            recipients: peers.iter().map(ToString::to_string).collect(),
+            acknowledged: vec![],
+        })?;
+        let encoded = notice.encode()?;
+        let broadcast = state.encrypt(&self.identity.peer_id(), &encoded)?;
         let notice = serde_json::to_vec(&notice)
             .map_err(|_| MeshError::Binding("invalid leave notice".into()))?;
         let mut control = b"CHTRPCL2".to_vec();
@@ -1341,7 +1345,15 @@ impl MeshService {
             .private_channels
             .load(id)?
             .ok_or_else(|| MeshError::Binding("unknown private channel".into()))?;
-        Ok(state.stale || !state.departed.is_empty())
+        Ok(state.missing_sender_keys(&self.identity.peer_id()) > 0)
+    }
+
+    pub fn private_channel_missing_keys(&self, id: &str) -> Result<usize, MeshError> {
+        let state = self
+            .private_channels
+            .load(id)?
+            .ok_or_else(|| MeshError::Binding("unknown private channel".into()))?;
+        Ok(state.missing_sender_keys(&self.identity.peer_id()))
     }
 
     pub fn send_private_channel(&self, id: &str, text: &str) -> Result<String, MeshError> {
@@ -1349,14 +1361,14 @@ impl MeshService {
             .private_channels
             .load(id)?
             .ok_or_else(|| MeshError::Binding("unknown private channel".into()))?;
-        if state.stale || !state.departed.is_empty() {
+        if state.stale {
             return Err(MeshError::Binding(
-                "Rekey pending — departed member can still read old-key traffic".into(),
+                "Waiting for a verified membership update".into(),
             ));
         }
         let bytes = state.encrypt(&self.identity.peer_id(), text)?;
         let message_id =
-            uuid::Uuid::from_bytes(bytes[32..48].try_into().expect("fixed frame")).to_string();
+            uuid::Uuid::from_bytes(bytes[72..88].try_into().expect("fixed frame")).to_string();
         self.ble
             .send(BleCommand::PrivateChannelMessage {
                 channel_id: id.into(),
