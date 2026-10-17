@@ -5014,7 +5014,7 @@ impl ChatterClient {
         self.clear_composer_session();
         // The account service clears persisted credentials. Retire the old
         // session before publishing logout, just as normal sign-out does.
-        self.shutdown_session(revision).await;
+        self.shutdown_session(revision, false).await;
         self.services.auth_state.set_logged_out_if_current(revision);
         Ok(())
     }
@@ -5451,11 +5451,11 @@ impl ChatterClient {
             return;
         }
         self.auth_state().invalidate_session();
-        self.shutdown_session(self.auth_state().get().session_revision)
+        self.shutdown_session(self.auth_state().get().session_revision, true)
             .await;
     }
 
-    async fn shutdown_session(&self, revision: u64) {
+    async fn shutdown_session(&self, revision: u64, publish_offline: bool) {
         if self.auth_state().get().session_revision != revision {
             return;
         }
@@ -5539,8 +5539,12 @@ impl ChatterClient {
         // Publish OFFLINE presence so our friends see us go offline. Best-effort
         // and done BEFORE the gRPC disconnect below so the RPC can still reach the
         // server (set_presence awaits the identified UpdatePresence internally).
-        self.set_presence(crate::domain::user::PresenceStatus::Offline)
-            .await;
+        // Deleted accounts have already lost their auth token and cannot
+        // publish presence; avoid delaying the local session transition.
+        if publish_offline {
+            self.set_presence(crate::domain::user::PresenceStatus::Offline)
+                .await;
+        }
 
         // Disconnect gRPC
         self.services.auth_service.disconnect();
