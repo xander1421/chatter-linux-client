@@ -74,7 +74,7 @@ pub extern "system" fn Java_com_chatter_client_MainActivity_nativeOnBackupDestin
 ) {
     env.with_env(|_| -> jni::errors::Result<()> {
         if let Some(tx) = CREATE_PENDING.lock().unwrap().take() {
-            let _ = tx.send(selected != 0);
+            let _ = tx.send(selected);
         }
         Ok(())
     })
