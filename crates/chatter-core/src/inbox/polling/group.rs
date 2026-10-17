@@ -192,7 +192,19 @@ pub async fn poll_group_mailboxes(
                     }
                     if ack_result.is_ok() {
                         for id in &ack_ids_for_log {
-                            tracing::info!(envelope_id = %id, "secret mailbox ACK succeeded");
+                            if let Some((key, digest)) =
+                                ack_bindings.iter().find(|(key, _)| &key.envelope_id == id)
+                            {
+                                if let Ok(Some(kind)) =
+                                    message_repo.receive_artifact_kind(key, digest)
+                                {
+                                    tracing::info!(envelope_id = %id, kind = kind.as_str(), "secret mailbox ACK succeeded");
+                                } else {
+                                    tracing::info!(envelope_id = %id, "secret mailbox ACK succeeded");
+                                }
+                            } else {
+                                tracing::info!(envelope_id = %id, "secret mailbox ACK succeeded");
+                            }
                         }
                         for (key, digest) in ack_bindings {
                             if crate::inbox::reaction_handoff::acknowledge(
@@ -272,7 +284,7 @@ async fn process_sealed_sender_group_message(
         .await
     {
         Ok((Some(artifact), _)) => {
-            if artifact.kind == crate::storage::receive_artifact::ReceiveKind::Content {
+            if artifact.kind.is_content() {
                 let Some(handoff) = content_handoff else {
                     tracing::warn!("Group data handoff unavailable; envelope retained");
                     return AckDecision::Retain;

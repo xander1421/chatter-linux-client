@@ -119,6 +119,7 @@ mod v118_read_horizons;
 mod v119_pending_anon_group_invites;
 mod v120_secret_receive_artifacts;
 mod v121_anon_group_departed_profiles;
+mod v122_secret_receive_control_kinds;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -465,4 +466,5 @@ pub fn default_migrations() -> MigrationRunner {
         .register(v118_read_horizons::V118ReadHorizons)
         .register(v120_secret_receive_artifacts::V120SecretReceiveArtifacts)
         .register(v121_anon_group_departed_profiles::V121AnonGroupDepartedProfiles)
+        .register(v122_secret_receive_control_kinds::V122SecretReceiveControlKinds)
 }

@@ -339,7 +339,7 @@ pub async fn process_anon_dm_results(
             {
                 Ok(received) => {
                     if let Some(artifact) = received.artifact {
-                        if artifact.kind == crate::storage::receive_artifact::ReceiveKind::Content {
+                        if artifact.kind.is_content() {
                             let Some(handoff) = content_handoff else {
                                 tracing::warn!(
                                     "Anonymous DM data handoff unavailable; envelope retained"

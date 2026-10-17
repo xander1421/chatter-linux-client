@@ -1476,12 +1476,12 @@ impl UnifiedMessageRepository {
         key: &crate::storage::receive_artifact::ReceiveKey,
         digest: &[u8],
     ) -> Result<(), StorageError> {
-        use crate::storage::receive_artifact::{self, ReceiveKind};
+        use crate::storage::receive_artifact;
         let mut conn = self.db.connection()?;
         let tx = conn.transaction()?;
         receive_artifact::require_current_binding(&tx, key)?;
         match receive_artifact::load(&tx, key, digest)? {
-            Some(artifact) if artifact.kind == ReceiveKind::Content => {
+            Some(artifact) if artifact.kind.is_content() => {
                 receive_artifact::mark_content_upstream_acked(&tx, key, digest)?;
             }
             Some(_) => receive_artifact::mark_acknowledged(&tx, key, digest)?,
@@ -1489,6 +1489,15 @@ impl UnifiedMessageRepository {
         }
         tx.commit()?;
         Ok(())
+    }
+
+    pub(crate) fn receive_artifact_kind(
+        &self,
+        key: &crate::storage::receive_artifact::ReceiveKey,
+        digest: &[u8],
+    ) -> Result<Option<crate::storage::receive_artifact::ReceiveKind>, StorageError> {
+        let conn = self.db.read_connection()?;
+        Ok(crate::storage::receive_artifact::load(&conn, key, digest)?.map(|a| a.kind))
     }
 
     pub(crate) fn finish_content_artifact(
@@ -1500,6 +1509,21 @@ impl UnifiedMessageRepository {
         crate::storage::receive_artifact::mark_content_applied(&tx, artifact)?;
         tx.commit()?;
         Ok(())
+    }
+
+    pub(crate) fn has_earlier_pending_receive_artifact(
+        &self,
+        artifact: &crate::storage::receive_artifact::ReceiveArtifact,
+    ) -> Result<bool, StorageError> {
+        let conn = self.db.read_connection()?;
+        crate::storage::receive_artifact::require_current_binding(&conn, &artifact.key)?;
+        let count: i64 = conn.query_row(
+            "SELECT count(*) FROM reaction_receive_artifacts WHERE local_account=?1 AND local_device=?2 AND transport=?3 AND scope=?4 AND kind!='reaction' AND state='pending' AND (server_timestamp_ns,id)<(?5,?6)",
+            params![artifact.key.local_account, artifact.key.local_device, artifact.key.transport,
+                artifact.key.scope, artifact.key.server_timestamp_ns as i64, artifact.id],
+            |row| row.get(0),
+        )?;
+        Ok(count != 0)
     }
 
     pub(crate) fn pending_reaction_artifacts_after(
@@ -1538,7 +1562,7 @@ impl UnifiedMessageRepository {
         use crate::storage::receive_artifact;
         let conn = self.db.read_connection()?;
         let (account, device) = reaction_receive_binding(&conn)?;
-        let mut stmt = conn.prepare("SELECT id FROM reaction_receive_artifacts WHERE local_account=?1 AND local_device=?2 AND kind='content' AND state='pending' AND (?3 IS NULL OR (server_timestamp_ns,id)>(?3,?4)) ORDER BY server_timestamp_ns,id LIMIT ?5")?;
+        let mut stmt = conn.prepare("SELECT id FROM reaction_receive_artifacts WHERE local_account=?1 AND local_device=?2 AND kind!='reaction' AND state='pending' AND (?3 IS NULL OR (server_timestamp_ns,id)>(?3,?4)) ORDER BY server_timestamp_ns,id LIMIT ?5")?;
         let ids = stmt
             .query_map(
                 params![

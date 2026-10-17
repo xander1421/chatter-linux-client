@@ -149,8 +149,15 @@ impl AnonInboxBackend for AnonDmService {
             .map(|m| m.id)
     }
 
-    fn persist_delivery_status(&self, id: &Self::Id, timestamps: &[u64], status: &str) {
-        let _ = self.update_delivery_status(id, timestamps, status);
+    fn persist_delivery_status(
+        &self,
+        id: &Self::Id,
+        timestamps: &[u64],
+        status: &str,
+    ) -> Result<(), String> {
+        self.update_delivery_status(id, timestamps, status)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
     }
 }
 
@@ -337,12 +344,7 @@ impl AnonDmService {
                     // (inbox_processor `refresh_peer_avatar`), never here.
 
                     // Store the updated conversation
-                    if let Err(e) = self.anon_dm_repo.update_conversation(&conv) {
-                        tracing::warn!(
-                            "Failed to update anon DM conversation with new profile: {}",
-                            e
-                        );
-                    }
+                    self.anon_dm_repo.update_conversation(&conv)?;
 
                     // Emit event for UI update
                     events.push(DomainEvent::AnonDmProfileUpdated {

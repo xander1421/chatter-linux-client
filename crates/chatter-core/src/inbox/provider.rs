@@ -1069,10 +1069,14 @@ impl DeviceInboxProvider {
                                                 }
                                                 if ack_result.is_ok() {
                                                     for id in ack_ids {
-                                                        tracing::info!(envelope_id = %id, "secret mailbox ACK succeeded");
                                                         if let Some((key, digest)) =
-                                                            ack_bindings.get(&(conversation_id, id))
+                                                            ack_bindings.get(&(conversation_id, id.clone()))
                                                         {
+                                                            if let Ok(Some(kind)) = message_repo.receive_artifact_kind(key, digest) {
+                                                                tracing::info!(envelope_id = %id, kind = kind.as_str(), "secret mailbox ACK succeeded");
+                                                            } else {
+                                                                tracing::info!(envelope_id = %id, "secret mailbox ACK succeeded");
+                                                            }
                                                             if crate::inbox::reaction_handoff::acknowledge(
                                                                 &message_repo,
                                                                 key,
