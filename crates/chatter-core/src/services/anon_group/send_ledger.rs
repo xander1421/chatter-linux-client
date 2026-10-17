@@ -106,18 +106,6 @@ pub(super) fn held_posts(
     Ok(posts)
 }
 
-/// The exact retained post still carries its original wire timestamp after
-/// release; sender-side recipient revalidation uses the owner admission clock.
-pub(super) fn was_held(db: &Database, key: &str, group: &str) -> Result<bool, StorageError> {
-    let conn = db.read_connection()?;
-    let found: i64 = conn.query_row(
-        "SELECT EXISTS(SELECT 1 FROM settings WHERE key=?1 AND json_extract(value,'$.held_group')=?2)",
-        params![key, group],
-        |row| row.get(0),
-    )?;
-    Ok(found != 0)
-}
-
 // None means an unrelated control/legacy send without a registered outgoing row.
 pub(super) fn initialize(
     db: &Database,

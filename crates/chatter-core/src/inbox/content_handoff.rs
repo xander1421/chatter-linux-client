@@ -641,8 +641,26 @@ impl ContentHandoff {
                 cursor = Some((last.key.server_timestamp_ns, last.id.clone()));
             }
             for artifact in artifacts {
+                match repo.content_artifact_still_pending(&artifact) {
+                    Ok(false) => {
+                        tracing::info!(envelope_id = %artifact.key.envelope_id,
+                            outcome = "already finished", "Secret receive replay skipped");
+                        continue;
+                    }
+                    Ok(true) => {}
+                    Err(error) => {
+                        tracing::warn!(envelope_id = %artifact.key.envelope_id, %error,
+                            "Secret receive replay deferred");
+                        continue;
+                    }
+                }
                 if let Err(error) = self.apply(repo, &artifact).await {
-                    tracing::warn!(envelope_id = %artifact.key.envelope_id, %error, "Secret data post awaits replay");
+                    match repo.content_artifact_still_pending(&artifact) {
+                        Ok(false) => tracing::info!(envelope_id = %artifact.key.envelope_id,
+                            outcome = "finished during replay", "Secret receive replay skipped"),
+                        _ => tracing::warn!(envelope_id = %artifact.key.envelope_id, %error,
+                            "Secret data post awaits replay"),
+                    }
                 }
             }
         }

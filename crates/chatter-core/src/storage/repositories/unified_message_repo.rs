@@ -1555,6 +1555,23 @@ impl UnifiedMessageRepository {
         Ok(())
     }
 
+    /// A replay batch is a snapshot: live application can retire a row before
+    /// replay reaches it. Only its exact pending binding is safe to apply.
+    pub(crate) fn content_artifact_still_pending(
+        &self,
+        artifact: &crate::storage::receive_artifact::ReceiveArtifact,
+    ) -> Result<bool, StorageError> {
+        let conn = self.db.read_connection()?;
+        crate::storage::receive_artifact::require_current_binding(&conn, &artifact.key)?;
+        match crate::storage::receive_artifact::load_by_id(&conn, &artifact.id)? {
+            None => Ok(false),
+            Some(current) if current.key != artifact.key || current.digest != artifact.digest => {
+                Err(StorageError::InvalidData("receive artifact changed".into()))
+            }
+            Some(current) => Ok(!current.applied && !current.acknowledged),
+        }
+    }
+
     pub(crate) fn has_earlier_pending_receive_artifact(
         &self,
         artifact: &crate::storage::receive_artifact::ReceiveArtifact,

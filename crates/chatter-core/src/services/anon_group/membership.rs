@@ -219,33 +219,18 @@ impl AnonGroupService {
         if let Some((id, timestamp)) = scope {
             let group = AnonGroupId::try_from_slice(id)
                 .ok_or_else(|| AnonGroupError::InvalidData("Invalid recipient group".into()))?;
-            let timestamp = if let Some(Kind::AnonGroupMessage(message)) = content.content.as_ref() {
-                if let Some(inner) = message.inner_content.as_deref() {
-                    let sender = self.current_user_id()?;
-                    let key = super::send_ledger::key(&sender.to_string(), &group.to_string(), inner);
-                    if super::send_ledger::was_held(
-                        &self.message_service.database,
-                        &key,
-                        &group.to_string(),
-                    )? {
-                        self.anon_group_repo.local_join_owner_admission(&group)?
-                            .ok_or_else(|| AnonGroupError::InvalidData(
-                                "Held group post has no owner admission cutoff".into(),
-                            ))?
-                            .max(timestamp)
-                    } else {
-                        timestamp
-                    }
-                } else {
-                    timestamp
-                }
+            // The post path fixed eligibility in its send ledger before
+            // parking. A selected invitee may only acquire this mailbox at a
+            // later JoinAck, so recheck the active member and exact key here
+            // without comparing admission to the post's original timestamp.
+            let post = matches!(content.content.as_ref(),
+                Some(Kind::AnonGroupMessage(message)) if matches!(message.inner_content.as_deref().and_then(|inner| inner.content.as_ref()), Some(Kind::DataMessage(_))));
+            let current = if post {
+                self.anon_group_repo.current_post_recipient(&group, peer, key)?
             } else {
-                timestamp
+                self.anon_group_repo.current_recipient(&group, peer, key, timestamp)?
             };
-            if !self
-                .anon_group_repo
-                .current_recipient(&group, peer, key, timestamp)?
-            {
+            if !current {
                 return Err(AnonGroupError::MemberNotFound(*peer));
             }
         }
