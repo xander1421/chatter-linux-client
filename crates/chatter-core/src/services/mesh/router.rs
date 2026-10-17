@@ -38,7 +38,8 @@ use chatter_mesh_store::router::{MessageRouter, RouterEvent, SendOutcome};
 use chatter_mesh_store::storage::{Storage, StorageKey};
 use chatter_mesh_store::{MESSAGE_TTL_SECS, RouterTransport, StoreError};
 use parking_lot::Mutex;
-use rand::RngCore;
+use rand::{RngCore, TryRngCore};
+use rand::rngs::OsRng;
 use serde::{Deserialize, Serialize};
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use tokio::sync::oneshot;
@@ -201,7 +202,7 @@ impl DropRelay for NostrDropRelay {
         // hang the actor; its last draw is still a fresh key.
         let mut bytes = [0u8; 32];
         for _ in 0..16 {
-            rand::rng().fill_bytes(&mut bytes);
+            OsRng.unwrap_err().fill_bytes(&mut bytes);
             if NostrIdentity::from_secret(bytes).is_ok() {
                 break;
             }
