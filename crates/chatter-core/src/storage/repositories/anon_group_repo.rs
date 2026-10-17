@@ -175,6 +175,24 @@ impl AnonGroupRepository {
         Ok(waiting != 0)
     }
 
+    /// The owner's admission for our current join, in the same clock domain
+    /// as the other admissions in its roster. Local wall time is not usable
+    /// as a cutoff for a post held before that roster arrived.
+    pub fn local_join_owner_admission(
+        &self,
+        group: &AnonGroupId,
+    ) -> Result<Option<u64>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let admission: Option<i64> = conn
+            .query_row(
+                "SELECT CAST(value AS INTEGER) FROM settings WHERE key=?1",
+                [format!("anon.group.local_owner_admission.v1:{group}")],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(admission.filter(|value| *value > 0).map(|value| value as u64))
+    }
+
     pub fn member_at(
         &self,
         group: &AnonGroupId,
@@ -490,7 +508,7 @@ impl AnonGroupRepository {
         if timestamp == 0 || timestamp <= roster_at {
             return Ok(false);
         }
-        let mut acknowledge_local_admission = false;
+        let mut local_owner_admission = None;
         for (member, admission) in members {
             let admission = membership_timestamp(*admission)?;
             if admission > timestamp {
@@ -508,7 +526,7 @@ impl AnonGroupRepository {
                 && old_admission > 0
                 && (removed == 0 || old_admission > removed)
             {
-                acknowledge_local_admission = true;
+                local_owner_admission = Some(admission);
             }
             if (removed > 0 && (admission <= removed || timestamp <= removed))
                 || admission < old_admission
@@ -532,12 +550,19 @@ impl AnonGroupRepository {
             ON CONFLICT(group_id) DO UPDATE SET roster_at = MAX(roster_at,excluded.roster_at)",
             params![group.to_string(), timestamp],
         )?;
-        let local_admission_acknowledged = if acknowledge_local_admission {
+        let local_admission_acknowledged = if let Some(owner_admission) = local_owner_admission {
             tx.execute(
                 "UPDATE anon_group_member_order SET acknowledged_at=admitted_at
                  WHERE group_id=?1 AND user_id=?2 AND admitted_at>0",
                 params![group.to_string(), me.to_string()],
-            )? > 0
+            )? > 0 && {
+                tx.execute(
+                    "INSERT INTO settings(key,value,updated_at) VALUES (?1,?2,?3)
+                     ON CONFLICT(key) DO UPDATE SET value=excluded.value,updated_at=excluded.updated_at",
+                    params![format!("anon.group.local_owner_admission.v1:{group}"), owner_admission.to_string(), Utc::now().to_rfc3339()],
+                )?;
+                true
+            }
         } else {
             false
         };
