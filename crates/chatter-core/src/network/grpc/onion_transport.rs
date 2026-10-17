@@ -24,8 +24,8 @@ use arti_client::{DataStream, HasKind, TorClient, TorClientConfig};
 use http::Uri;
 use hyper_util::rt::TokioIo;
 use tokio::sync::OnceCell;
-use tor_rtcompat::PreferredRuntime;
 use tor_netdir::Timeliness;
+use tor_rtcompat::PreferredRuntime;
 use tower::Service;
 
 /// Phase budgets: 120s bootstrap (including shared-initializer wait), then
@@ -203,11 +203,18 @@ where
     } {
         Some(Ok(value)) => return Ok(value),
         Some(Err(_)) => {
-            tracing::info!(phase = "hidden_service_connect", "onion first dial failed; starting isolated attempt");
+            tracing::info!(
+                phase = "hidden_service_connect",
+                "onion first dial failed; starting isolated attempt"
+            );
             return second.await;
         }
         None => {
-            tracing::info!(phase = "hidden_service_connect", elapsed_ms = delay.as_millis() as u64, "onion dial hedged with fresh isolation");
+            tracing::info!(
+                phase = "hidden_service_connect",
+                elapsed_ms = delay.as_millis() as u64,
+                "onion dial hedged with fresh isolation"
+            );
         }
     }
     tokio::select! {
@@ -270,8 +277,12 @@ fn wake_directory(client: &TorClient<PreferredRuntime>) {
     }
 }
 
-pub(crate) async fn ensure_fresh_directory(client: &TorClient<PreferredRuntime>) -> Result<(), std::io::Error> {
-    let dir = client.dirmgr().map_err(|_| io_err("onion directory unavailable"))?;
+pub(crate) async fn ensure_fresh_directory(
+    client: &TorClient<PreferredRuntime>,
+) -> Result<(), std::io::Error> {
+    let dir = client
+        .dirmgr()
+        .map_err(|_| io_err("onion directory unavailable"))?;
     if dir.netdir(Timeliness::Strict).is_ok() {
         return Ok(());
     }
@@ -280,10 +291,16 @@ pub(crate) async fn ensure_fresh_directory(client: &TorClient<PreferredRuntime>)
     // consensus slightly past fresh-until. Waiting for Strict on every channel
     // multiplies a directory outage into a 20s stall for every concurrent dial.
     if dir.netdir(Timeliness::Timely).is_ok() {
-        tracing::info!(phase = "directory_refresh", "onion consensus outside strict window; using timely directory");
+        tracing::info!(
+            phase = "directory_refresh",
+            "onion consensus outside strict window; using timely directory"
+        );
         return Ok(());
     }
-    tracing::info!(phase = "directory_refresh", "onion consensus unavailable; waiting for refresh");
+    tracing::info!(
+        phase = "directory_refresh",
+        "onion consensus unavailable; waiting for refresh"
+    );
     let result = tokio::time::timeout(Duration::from_secs(20), async {
         loop {
             if dir.netdir(Timeliness::Timely).is_ok() {
@@ -291,12 +308,19 @@ pub(crate) async fn ensure_fresh_directory(client: &TorClient<PreferredRuntime>)
             }
             tokio::time::sleep(Duration::from_millis(500)).await;
         }
-    }).await;
+    })
+    .await;
     if result.is_err() {
-        tracing::warn!(phase = "directory_refresh", "onion consensus unavailable after refresh");
+        tracing::warn!(
+            phase = "directory_refresh",
+            "onion consensus unavailable after refresh"
+        );
         return Err(io_err("onion directory refresh timed out"));
     }
-    tracing::info!(phase = "directory_refresh", "onion directory available after refresh");
+    tracing::info!(
+        phase = "directory_refresh",
+        "onion directory available after refresh"
+    );
     Ok(())
 }
 
@@ -306,6 +330,11 @@ pub(crate) async fn shared_bootstrap(
     let base_result = tokio::time::timeout(
         BOOTSTRAP_TIMEOUT,
         tor.get_or_try_init(|| async {
+            let cache_present = TOR_DIRS
+                .get()
+                .is_some_and(|(_, cache)| cache.join("dir.sqlite3").is_file());
+            let bootstrap_started = Instant::now();
+            tracing::info!(cache_present, "onion Tor bootstrap started");
             let config =
                 tor_client_config().map_err(|e| io_err(format!("onion transport: {e}")))?;
             let jh = tor_runtime().spawn(async {
@@ -316,7 +345,18 @@ pub(crate) async fn shared_bootstrap(
                 let _ = tokio_rustls::rustls::crypto::ring::default_provider().install_default();
                 TorClient::create_bootstrapped(config).await
             });
-            await_tor_task(jh, BOOTSTRAP_TIMEOUT, "bootstrap").await
+            let result = await_tor_task(jh, BOOTSTRAP_TIMEOUT, "bootstrap").await;
+            tracing::info!(
+                cache_present,
+                elapsed_ms = bootstrap_started.elapsed().as_millis() as u64,
+                outcome = if result.is_ok() {
+                    "completed"
+                } else {
+                    "failed"
+                },
+                "onion Tor bootstrap ended"
+            );
+            result
         }),
     )
     .await;
@@ -440,12 +480,39 @@ impl Service<Uri> for OnionConnector {
                     // The second future is not polled until the first fails or
                     // the hedge timer fires, so it starts no early traffic.
                     let retry_client = client.isolated_client();
+                    let attempts = Arc::new(AtomicUsize::new(0));
+                    let first_attempts = attempts.clone();
+                    let second_attempts = attempts.clone();
+                    let dial_started = Instant::now();
                     let result = hedged_dial(
-                        client.connect((host.as_str(), port)),
-                        retry_client.connect((host.as_str(), port)),
+                        async {
+                            first_attempts.fetch_add(1, Ordering::Relaxed);
+                            let started = Instant::now();
+                            let result = client.connect((host.as_str(), port)).await;
+                            tracing::info!(attempt = 1, elapsed_ms = started.elapsed().as_millis() as u64,
+                                outcome = if result.is_ok() { "completed" } else { "failed" },
+                                error_kind = ?result.as_ref().err().map(HasKind::kind),
+                                "onion hidden-service attempt ended");
+                            result
+                        },
+                        async {
+                            second_attempts.fetch_add(1, Ordering::Relaxed);
+                            let started = Instant::now();
+                            let result = retry_client.connect((host.as_str(), port)).await;
+                            tracing::info!(attempt = 2, elapsed_ms = started.elapsed().as_millis() as u64,
+                                outcome = if result.is_ok() { "completed" } else { "failed" },
+                                error_kind = ?result.as_ref().err().map(HasKind::kind),
+                                "onion hidden-service attempt ended");
+                            result
+                        },
                         HEDGE_DELAY,
                     )
                     .await;
+                    tracing::info!(elapsed_ms = dial_started.elapsed().as_millis() as u64,
+                        attempts = attempts.load(Ordering::Relaxed),
+                        outcome = if result.is_ok() { "completed" } else { "failed" },
+                        error_kind = ?result.as_ref().err().map(HasKind::kind),
+                        "onion hidden-service dial ended");
                     if let Err(error) = &result {
                         tracing::warn!(error_kind = ?error.kind(), "onion dial attempts failed");
                     }

@@ -4,16 +4,18 @@
 use std::fs::{File, OpenOptions};
 use std::io::Write;
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::time::Instant;
 
 use tracing::{Event, Subscriber};
-use tracing_subscriber::layer::Context;
 use tracing_subscriber::Layer;
+use tracing_subscriber::layer::Context;
 
 pub(crate) struct TorStageTrace {
     file: Mutex<File>,
     lines: AtomicUsize,
+    started: Instant,
 }
 
 pub(crate) fn dial_active() -> bool {
@@ -52,17 +54,63 @@ impl TorStageTrace {
         Some(Self {
             file: Mutex::new(file),
             lines: AtomicUsize::new(0),
+            started: Instant::now(),
         })
     }
 }
 
 #[derive(Default)]
-struct Message(String);
+struct Message {
+    text: String,
+    elapsed_ms: Option<u64>,
+    attempts: Option<u64>,
+    attempt: Option<u64>,
+    cache_present: Option<bool>,
+    outcome: Option<&'static str>,
+    error_kind: Option<String>,
+}
 
 impl tracing::field::Visit for Message {
     fn record_debug(&mut self, field: &tracing::field::Field, value: &dyn std::fmt::Debug) {
         if matches!(field.name(), "message" | "error") {
-            self.0.push_str(&format!(" {value:?}"));
+            self.text.push_str(&format!(" {value:?}"));
+        } else if field.name() == "error_kind" {
+            // Only keep enum-like names; never copy arbitrary Arti values.
+            let formatted = format!("{value:?}");
+            let value = formatted
+                .strip_prefix("Some(")
+                .and_then(|v| v.strip_suffix(')'))
+                .unwrap_or(&formatted);
+            if value.len() <= 48 && value.chars().all(|c| c.is_ascii_alphanumeric() || c == '_') {
+                self.error_kind = Some(value.to_owned());
+            }
+        }
+    }
+
+    fn record_str(&mut self, field: &tracing::field::Field, value: &str) {
+        if field.name() == "message" {
+            self.text.push_str(value);
+        } else if field.name() == "outcome" {
+            self.outcome = match value {
+                "completed" => Some("completed"),
+                "failed" => Some("failed"),
+                _ => None,
+            };
+        }
+    }
+
+    fn record_u64(&mut self, field: &tracing::field::Field, value: u64) {
+        match field.name() {
+            "elapsed_ms" => self.elapsed_ms = Some(value),
+            "attempts" => self.attempts = Some(value),
+            "attempt" => self.attempt = Some(value),
+            _ => {}
+        }
+    }
+
+    fn record_bool(&mut self, field: &tracing::field::Field, value: bool) {
+        if field.name() == "cache_present" {
+            self.cache_present = Some(value);
         }
     }
 
@@ -76,7 +124,7 @@ impl tracing::field::Visit for Message {
         }
         let mut source = Some(value);
         while let Some(error) = source {
-            self.0.push_str(&format!(" {error}"));
+            self.text.push_str(&format!(" {error}"));
             source = error.source();
         }
     }
@@ -84,7 +132,13 @@ impl tracing::field::Visit for Message {
 
 fn stage(message: &str) -> &'static str {
     let msg = message.to_ascii_lowercase();
-    if msg.contains("http status code 404") {
+    if msg.contains("onion tor bootstrap") {
+        "bootstrap"
+    } else if msg.contains("onion hidden-service attempt") {
+        "dial_attempt"
+    } else if msg.contains("onion hidden-service dial") {
+        "dial"
+    } else if msg.contains("http status code 404") {
         "hsdir_404"
     } else if msg.contains("hs desc fetch") || msg.contains("descriptor") {
         "descriptor"
@@ -113,16 +167,18 @@ impl<S: Subscriber> Layer<S> for TorStageTrace {
             "circmgr"
         } else if target.starts_with("tor_dirmgr") {
             "dirmgr"
+        } else if target == "chatter_core::network::grpc::onion_transport" {
+            "connector"
         } else {
             return;
         };
         let mut message = Message::default();
         event.record(&mut message);
-        let stage = stage(&message.0);
+        let stage = stage(&message.text);
         if stage == "other" {
             return;
         }
-        let detail = message.0.to_ascii_lowercase();
+        let detail = message.text.to_ascii_lowercase();
         let outcome = if detail.contains("timed out") || detail.contains("timeout") {
             "timeout"
         } else if detail.contains("failed") || detail.contains("error") {
@@ -130,18 +186,25 @@ impl<S: Subscriber> Layer<S> for TorStageTrace {
         } else {
             "progress"
         };
+        let outcome = message.outcome.unwrap_or(outcome);
         if self.lines.fetch_add(1, Ordering::Relaxed) >= 10_000 {
             return;
         }
         if let Ok(mut file) = self.file.lock() {
             let _ = writeln!(
                 file,
-                "{} component={} level={} stage={} outcome={}",
+                "{} elapsed_ms={} component={} level={} stage={} outcome={} phase_ms={:?} attempt={:?} attempts={:?} cache_present={:?} error_kind={:?}",
                 chrono::Utc::now().to_rfc3339(),
+                self.started.elapsed().as_millis(),
                 component,
                 event.metadata().level(),
                 stage,
-                outcome
+                outcome,
+                message.elapsed_ms,
+                message.attempt,
+                message.attempts,
+                message.cache_present,
+                message.error_kind
             );
         }
     }

@@ -539,7 +539,8 @@ fn init_tracing() {
         let stage_trace = tor_stage_trace::TorStageTrace::open().map(|trace| {
             trace.with_filter(tracing_subscriber::filter::filter_fn(|meta| {
                 *meta.level() <= tracing::Level::DEBUG
-                    && (meta.target().starts_with("tor_dirmgr")
+                    && (meta.target() == "chatter_core::network::grpc::onion_transport"
+                        || meta.target().starts_with("tor_dirmgr")
                         || (tor_stage_trace::dial_active()
                             && (meta.target().starts_with("tor_hsclient")
                                 || meta.target().starts_with("tor_circmgr"))))
