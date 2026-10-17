@@ -253,12 +253,18 @@ fn finish_picker(
 /// clipboard (if any) as a pending attachment. Text paste is handled by the
 /// TextInput itself; this only fires the image path.
 #[cfg(not(any(target_os = "android", target_os = "ios")))]
-pub(crate) fn wire_paste_image(window: &MainWindow, chat_state: ChatState) {
+pub(crate) fn wire_paste_image(
+    window: &MainWindow,
+    ui_ctx: &std::sync::Arc<chatter_core::client::ChatterClient>,
+) {
     let weak_window = window.as_weak();
+    let chat_state = ui_ctx.chat_state().clone();
+    let ui_ctx = ui_ctx.clone();
 
     window.on_paste_image(move || {
         let weak = weak_window.clone();
         let chat_state = chat_state.clone();
+        let ui_ctx = ui_ctx.clone();
 
         let snapshot = chat_state.get();
         let conversation = snapshot.active_conversation;
@@ -283,9 +289,22 @@ pub(crate) fn wire_paste_image(window: &MainWindow, chat_state: ChatState) {
                 }
             };
 
-            match process_and_add_file(path, &chat_state, conversation, revision, &weak).await {
+            // Clipboard bytes are app-owned. Move the PNG out of the shared
+            // system temp directory before keeping it in a recoverable tray.
+            let staged = ui_ctx.stage_owned_file(path.clone());
+            if staged == path {
+                let _ = tokio::fs::remove_file(&path).await;
+                tracing::warn!("Could not stage pasted image");
+                return;
+            }
+            match process_and_add_file(staged.clone(), &chat_state, conversation, revision, &weak)
+                .await
+            {
                 Ok(()) => tracing::info!("Attached image pasted from clipboard"),
-                Err(e) => tracing::error!("{e}"),
+                Err(e) => {
+                    let _ = tokio::fs::remove_file(&staged).await;
+                    tracing::error!("{e}");
+                }
             }
         });
     });
@@ -305,11 +324,17 @@ fn read_clipboard_image() -> Result<PathBuf, String> {
     let buffer = image::RgbaImage::from_raw(width, height, img.bytes.into_owned())
         .ok_or_else(|| "clipboard image dimensions don't match buffer".to_string())?;
 
-    let path = std::env::temp_dir().join(format!("chatter-paste-{}.png", AttachmentId::new()));
-    buffer
-        .save_with_format(&path, image::ImageFormat::Png)
+    let mut file = tempfile::Builder::new()
+        .prefix("chatter-paste-")
+        .suffix(".png")
+        .tempfile()
+        .map_err(|e| format!("failed to create pasted image: {e}"))?;
+    image::DynamicImage::ImageRgba8(buffer)
+        .write_to(&mut file, image::ImageFormat::Png)
         .map_err(|e| format!("failed to encode pasted image: {e}"))?;
-
+    let (_file, path) = file
+        .keep()
+        .map_err(|e| format!("failed to keep pasted image: {e}"))?;
     Ok(path)
 }
 
