@@ -127,6 +127,11 @@ pub enum BleCommand {
         channel_id: String,
         bytes: Vec<u8>,
     },
+    PrivateLeave {
+        peers: Vec<PeerId>,
+        notice: Vec<u8>,
+        broadcast: Vec<u8>,
+    },
     /// Broadcast a file into the mesh room.
     ///
     /// The TLV arrives already built and already size-checked: the service reads

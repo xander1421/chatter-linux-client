@@ -30,6 +30,7 @@ use crate::storage::Database;
 const INVITE_PREFIX: &str = "chatter-mesh-private-v2:";
 const UPDATE_MAGIC: &[u8; 8] = b"CHTRPCU2";
 const FRAME_MAGIC: &[u8; 8] = b"CHTRPCM2";
+const LEAVE_MAGIC: &str = "CHTRPCL1:";
 const MAX_MEMBERS: usize = 16;
 const MAX_TEXT: usize = 1024;
 
@@ -62,6 +63,135 @@ pub struct PrivateChannel {
     /// A newer authenticated frame was seen before its key update arrived.
     #[serde(default)]
     pub stale: bool,
+    #[serde(default)]
+    pub stale_epoch: u64,
+    /// Signed departures received before the creator's next rotation.
+    #[serde(default)]
+    pub departed: Vec<LeaveNotice>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct LeaveNotice {
+    pub id: String,
+    pub epoch: u64,
+    pub peer: String,
+    pub signature: Vec<u8>,
+}
+
+#[derive(Clone, Serialize, Deserialize)]
+pub struct PendingLeave {
+    pub notice: LeaveNotice,
+    pub creator: String,
+}
+
+#[derive(Serialize)]
+struct LeavePreimage<'a> {
+    domain: &'static str,
+    id: &'a str,
+    epoch: u64,
+    peer: &'a str,
+}
+
+impl LeaveNotice {
+    fn preimage(&self) -> Option<Vec<u8>> {
+        serde_json::to_vec(&LeavePreimage {
+            domain: "chatter.mesh.private.leave.v1",
+            id: &self.id,
+            epoch: self.epoch,
+            peer: &self.peer,
+        })
+        .ok()
+    }
+
+    pub fn encode(&self) -> Result<String, MeshError> {
+        let bytes = serde_json::to_vec(self).map_err(|_| failure("invalid leave notice"))?;
+        Ok(format!("{LEAVE_MAGIC}{}", URL_SAFE_NO_PAD.encode(bytes)))
+    }
+
+    pub fn decode(text: &str) -> Option<Self> {
+        let encoded = text.strip_prefix(LEAVE_MAGIC)?;
+        if encoded.len() > 1024 {
+            return None;
+        }
+        serde_json::from_slice(&URL_SAFE_NO_PAD.decode(encoded).ok()?).ok()
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct EpochProof {
+    domain: String,
+    id: String,
+    name: String,
+    creator: String,
+    creator_static: Vec<u8>,
+    epoch: u64,
+    members: Vec<Member>,
+    key_hash: Vec<u8>,
+    previous_hash: Vec<u8>,
+    signature: Vec<u8>,
+}
+
+impl EpochProof {
+    pub fn channel_id(&self) -> &str {
+        &self.id
+    }
+
+    pub fn matches(&self, state: &PrivateChannel) -> bool {
+        self.epoch == state.epoch && self.signature == state.signature
+    }
+
+    pub fn encode(&self) -> Option<Vec<u8>> {
+        let mut bytes = b"CHTRPCH2".to_vec();
+        bytes.extend(serde_json::to_vec(self).ok()?);
+        (bytes.len() <= 4096).then_some(bytes)
+    }
+
+    pub fn decode(bytes: &[u8]) -> Option<Self> {
+        if !bytes.starts_with(b"CHTRPCH2") || bytes.len() > 4096 {
+            return None;
+        }
+        serde_json::from_slice(&bytes[8..]).ok()
+    }
+
+    pub fn verified_for(&self, state: &PrivateChannel) -> bool {
+        if self.domain != "chatter.mesh.private.roster.v1"
+            || self.id != state.id
+            || self.creator != state.creator
+            || self.creator_static != state.creator_static
+            || self.epoch == 0
+            || self.key_hash.len() != 32
+            || self.previous_hash.len() != 32
+            || self.signature.len() != 64
+            || self.members.len() > MAX_MEMBERS
+            || self.members.is_empty()
+            || self.members[0].peer != state.creator
+            || self.members[0].signing_key != state.creator_key
+        {
+            return false;
+        }
+        let Ok(key) = <[u8; 32]>::try_from(state.creator_key.as_slice()) else {
+            return false;
+        };
+        let Ok(sig) = <[u8; 64]>::try_from(self.signature.as_slice()) else {
+            return false;
+        };
+        let preimage = EpochPreimage {
+            domain: "chatter.mesh.private.roster.v1",
+            id: &self.id,
+            name: &self.name,
+            creator: &self.creator,
+            creator_static: &self.creator_static,
+            epoch: self.epoch,
+            members: &self.members,
+            key_hash: self.key_hash.clone(),
+            previous_hash: &self.previous_hash,
+        };
+        serde_json::to_vec(&preimage).is_ok_and(|bytes| verify_bytes(&sig, &bytes, &key))
+    }
+
+    pub fn epoch(&self) -> u64 {
+        self.epoch
+    }
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -136,6 +266,8 @@ impl PrivateChannel {
             pending_invites: vec![],
             awaiting_rekey: vec![],
             stale: false,
+            stale_epoch: 0,
+            departed: vec![],
         };
         state.sign(identity)?;
         Ok(state)
@@ -184,6 +316,11 @@ impl PrivateChannel {
                 m.signing_key.len() != 32 || PeerId::from_str(&m.peer).to_routing_bytes().is_none()
             })
             || self.prior_epochs.len() > 4
+            || self.departed.len() > MAX_MEMBERS
+            || self
+                .departed
+                .iter()
+                .any(|notice| !self.verify_leave(notice))
             || self
                 .prior_epochs
                 .iter()
@@ -214,7 +351,64 @@ impl PrivateChannel {
             .and_then(|m| m.signing_key.as_slice().try_into().ok())
     }
 
+    pub fn leave_notice(&self, identity: &MeshIdentity) -> Result<LeaveNotice, MeshError> {
+        if self.member_key(&identity.peer_id()).is_none() {
+            return Err(failure("not a channel member"));
+        }
+        let mut notice = LeaveNotice {
+            id: self.id.clone(),
+            epoch: self.epoch,
+            peer: identity.peer_id().to_string(),
+            signature: vec![],
+        };
+        notice.signature = sign_bytes(
+            identity,
+            &notice
+                .preimage()
+                .ok_or_else(|| failure("invalid leave notice"))?,
+        )
+        .to_vec();
+        Ok(notice)
+    }
+
+    pub fn verify_leave(&self, notice: &LeaveNotice) -> bool {
+        if notice.id != self.id || notice.epoch != self.epoch || notice.signature.len() != 64 {
+            return false;
+        }
+        let Some(key) = self.member_key(&PeerId::from_str(&notice.peer)) else {
+            return false;
+        };
+        let Ok(sig) = <[u8; 64]>::try_from(notice.signature.as_slice()) else {
+            return false;
+        };
+        notice
+            .preimage()
+            .is_some_and(|bytes| verify_bytes(&sig, &bytes, &key))
+    }
+
+    pub fn epoch_proof(&self) -> EpochProof {
+        EpochProof {
+            domain: "chatter.mesh.private.roster.v1".into(),
+            id: self.id.clone(),
+            name: self.name.clone(),
+            creator: self.creator.clone(),
+            creator_static: self.creator_static.clone(),
+            epoch: self.epoch,
+            members: self.members.clone(),
+            key_hash: Sha256::digest(&self.key).to_vec(),
+            previous_hash: self.previous_hash.clone(),
+            signature: self.signature.clone(),
+        }
+    }
+
     pub fn member_key_for_packet(&self, peer: &PeerId, bytes: &[u8]) -> Option<[u8; 32]> {
+        if self
+            .departed
+            .iter()
+            .any(|notice| notice.peer == peer.as_str())
+        {
+            return None;
+        }
         if bytes.len() < 24 {
             return None;
         }
@@ -325,6 +519,7 @@ impl PrivateChannel {
             }
         }
         self.previous_hash = Sha256::digest(self.preimage()?).to_vec();
+        self.departed.clear();
         if remove.is_some() {
             self.prior_epochs.clear();
         } else {
@@ -380,6 +575,8 @@ impl PrivateChannel {
             && state.prior_epochs.is_empty()
             && state.awaiting_rekey.is_empty()
             && !state.stale
+            && state.stale_epoch == 0
+            && state.departed.is_empty()
             && state.verify())
         .then_some(state)
     }
@@ -742,6 +939,43 @@ impl PrivateChannelStore {
                 params![invite.channel_id, bytes],
             )
             .map_err(db_error)?;
+        Ok(())
+    }
+
+    pub fn save_pending_leave(&self, leave: &PendingLeave) -> Result<(), MeshError> {
+        let bytes = serde_json::to_vec(leave).map_err(|_| failure("invalid leave notice"))?;
+        self.db.connection()?.execute(
+            "INSERT INTO mesh_private_joins(channel_id,invite) VALUES(?1,?2)
+             ON CONFLICT(channel_id) DO UPDATE SET invite=excluded.invite",
+            params![format!("leave:{}", leave.notice.id), bytes],
+        ).map_err(db_error)?;
+        Ok(())
+    }
+
+    pub fn pending_leaves_for(&self, creator: &PeerId) -> Result<Vec<PendingLeave>, MeshError> {
+        let conn = self.db.read_connection()?;
+        let mut stmt = conn.prepare("SELECT invite FROM mesh_private_joins WHERE channel_id LIKE 'leave:%'")
+            .map_err(db_error)?;
+        let rows = stmt.query_map([], |row| row.get::<_, Vec<u8>>(0)).map_err(db_error)?;
+        let mut leaves = Vec::new();
+        for row in rows {
+            let bytes = row.map_err(db_error)?;
+            let leave: PendingLeave = serde_json::from_slice(&bytes)
+                .map_err(|_| failure("corrupt pending leave"))?;
+            if leave.creator == creator.as_str() { leaves.push(leave); }
+        }
+        Ok(leaves)
+    }
+
+    pub fn clear_pending_leave(&self, id: &str, epoch: u64, creator: &PeerId) -> Result<(), MeshError> {
+        for leave in self.pending_leaves_for(creator)? {
+            if leave.notice.id == id && leave.notice.epoch == epoch {
+                self.db.connection()?.execute(
+                    "DELETE FROM mesh_private_joins WHERE channel_id=?1",
+                    params![format!("leave:{id}")],
+                ).map_err(db_error)?;
+            }
+        }
         Ok(())
     }
     pub fn pending(&self, id: &str) -> Result<Option<Invite>, MeshError> {

@@ -995,6 +995,14 @@ impl ChatterClient {
     }
 
     #[cfg(feature = "mesh")]
+    pub fn mesh_private_channel_rekey_pending(
+        &self,
+        id: &str,
+    ) -> Result<bool, crate::services::mesh::MeshError> {
+        self.mesh().private_channel_rekey_pending(id)
+    }
+
+    #[cfg(feature = "mesh")]
     pub fn mesh_join_channel(
         &self,
         name: &str,
