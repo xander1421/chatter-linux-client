@@ -156,6 +156,46 @@ impl AnonGroupRepository {
             AND COALESCE(o.admitted_at,0) <= ?4)",params![group.to_string(),user.to_string(),key.as_slice(),timestamp],|r|r.get(0))?)
     }
 
+    /// A member's locally accepted join needs an owner roster newer than that
+    /// admission before its recipient snapshot is complete.
+    pub fn awaiting_join_roster(
+        &self,
+        group: &AnonGroupId,
+        me: &UserId,
+    ) -> Result<bool, StorageError> {
+        let conn = self.db.read_connection()?;
+        let waiting: i64 = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM anon_groups g
+             JOIN anon_group_member_order m ON m.group_id=g.id AND m.user_id=?2
+             LEFT JOIN anon_group_order o ON o.group_id=g.id
+             WHERE g.id=?1 AND g.owner_id != ?2
+             AND m.admitted_at > COALESCE(o.roster_at,0))",
+            params![group.to_string(), me.to_string()],
+            |row| row.get(0),
+        )?;
+        Ok(waiting != 0)
+    }
+
+    pub fn member_at(
+        &self,
+        group: &AnonGroupId,
+        user: &UserId,
+        timestamp: u64,
+    ) -> Result<bool, StorageError> {
+        let timestamp = membership_timestamp(timestamp)?;
+        let conn = self.db.read_connection()?;
+        let member: i64 = conn.query_row(
+            "SELECT EXISTS(SELECT 1 FROM anon_group_members m
+             LEFT JOIN anon_group_member_order o ON o.group_id=m.group_id AND o.user_id=m.user_id
+             WHERE m.group_id=?1 AND m.user_id=?2 AND m.is_active=1
+             AND (COALESCE(o.removed_at,0)=0 OR o.admitted_at>o.removed_at)
+             AND COALESCE(o.admitted_at,0)<=?3)",
+            params![group.to_string(), user.to_string(), timestamp],
+            |row| row.get(0),
+        )?;
+        Ok(member != 0)
+    }
+
     pub fn next_membership_timestamp(
         &self,
         group: &AnonGroupId,
