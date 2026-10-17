@@ -156,6 +156,23 @@ impl AnonGroupRepository {
             AND COALESCE(o.admitted_at,0) <= ?4)",params![group.to_string(),user.to_string(),key.as_slice(),timestamp],|r|r.get(0))?)
     }
 
+    /// Recheck a recipient selected for a post before encryption or retry.
+    /// A pending invite can gain its mailbox after the post was composed;
+    /// its later JoinAck must not invalidate the original recipient snapshot.
+    pub fn current_post_recipient(
+        &self,
+        group: &AnonGroupId,
+        user: &UserId,
+        key: &[u8; 32],
+    ) -> Result<bool, StorageError> {
+        let conn = self.db.read_connection()?;
+        Ok(conn.query_row("SELECT EXISTS(SELECT 1 FROM anon_group_members m
+            LEFT JOIN anon_group_member_order o ON o.group_id=m.group_id AND o.user_id=m.user_id
+            WHERE m.group_id=?1 AND m.user_id=?2 AND m.is_active=1 AND m.mailbox_pk=?3
+            AND (COALESCE(o.removed_at,0)=0 OR o.admitted_at>o.removed_at))",
+            params![group.to_string(),user.to_string(),key.as_slice()],|r|r.get(0))?)
+    }
+
     /// A local join waits until an owner roster explicitly includes this
     /// admission. Local and owner wall clocks cannot be compared for this.
     pub fn awaiting_join_roster(

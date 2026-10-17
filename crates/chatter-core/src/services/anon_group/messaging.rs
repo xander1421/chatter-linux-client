@@ -589,6 +589,8 @@ impl AnonGroupService {
                     );
                     // Undecodable row is poison — remove it to avoid re-trying forever.
                     let _ = self.anon_group_repo.delete_pending_message(row_id);
+                    tracing::info!(row_id, group_id = %group_id, recipient = %recipient_user_id,
+                        outcome = "invalid payload dropped", "Pending anon group delivery resolved");
                     continue;
                 }
             };
@@ -611,10 +613,14 @@ impl AnonGroupService {
                     // queue row. A deletion failure cannot trigger re-encryption.
                     self.record_group_delivery(group_id, &content, recipient_user_id, "confirmed")?;
                     self.anon_group_repo.delete_pending_message(row_id)?;
+                    tracing::info!(row_id, group_id = %group_id, recipient = %recipient_user_id,
+                        outcome = "confirmed", "Pending anon group delivery resolved");
                 }
                 Err(AnonGroupError::DeliveryUnconfirmed) => {
                     // Keep the row and exact encrypted submission. Do not
                     // increment a failure ceiling or claim it was undelivered.
+                    tracing::info!(row_id, group_id = %group_id, recipient = %recipient_user_id,
+                        outcome = "unconfirmed", "Pending anon group delivery retained");
                     break;
                 }
                 Err(e) => {
@@ -635,9 +641,13 @@ impl AnonGroupService {
                         // a newer roster replaces it.
                         tracing::warn!(row_id, recipient = %recipient_user_id, error = %e,
                             "Owner roster remains queued for retry");
+                        tracing::info!(row_id, group_id = %group_id, recipient = %recipient_user_id,
+                            outcome = "roster retry", "Pending anon group delivery retained");
                         break;
                     }
                     if attempts + 1 < MAX_PARKED_ATTEMPTS {
+                        tracing::info!(row_id, group_id = %group_id, recipient = %recipient_user_id,
+                            outcome = "retry", reason = %e, "Pending anon group delivery retained");
                         tracing::warn!(
                             row_id,
                             recipient = %recipient_user_id,
@@ -657,6 +667,8 @@ impl AnonGroupService {
                     );
                     self.record_group_delivery(group_id, &content, recipient_user_id, "failed")?;
                     self.anon_group_repo.delete_pending_message(row_id)?;
+                    tracing::info!(row_id, group_id = %group_id, recipient = %recipient_user_id,
+                        outcome = "failed", reason = %e, "Pending anon group delivery resolved");
                     if let Some(undelivered) = undelivered_post(&content) {
                         self.store_system_message(
                             group_id,
