@@ -312,29 +312,10 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                 }
             };
 
-            #[cfg(not(any(target_os = "android", target_os = "ios")))]
-            {
-                use chatter_core::system::Clipboard;
-                match Clipboard::new() {
-                    Ok(mut clipboard) => {
-                        if let Err(e) = clipboard.set_text(&fingerprint) {
-                            tracing::error!("Failed to copy fingerprint to clipboard: {}", e);
-                        } else {
-                            tracing::info!("Fingerprint copied to clipboard");
-                        }
-                    }
-                    Err(e) => {
-                        tracing::error!("Failed to access clipboard: {}", e);
-                    }
-                }
-            }
-            #[cfg(target_os = "android")]
-            match crate::platform::android::clipboard::set_text("Safety number", &fingerprint) {
+            match crate::platform::clipboard::set_text("Safety number", &fingerprint, false) {
                 Ok(()) => tracing::info!("Fingerprint copied to clipboard"),
                 Err(e) => tracing::error!("Failed to copy fingerprint to clipboard: {}", e),
             }
-            #[cfg(target_os = "ios")]
-            tracing::warn!("Clipboard not implemented on iOS");
         });
     });
 
@@ -742,74 +723,14 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                         all_codes.push_str(&codes_model.row_data(i).unwrap_or_default());
                     }
 
-                    #[cfg(not(any(target_os = "android", target_os = "ios")))]
-                    {
-                        use chatter_core::system::Clipboard;
-                        match Clipboard::new() {
-                            Ok(mut clipboard) => {
-                                if let Err(e) = clipboard.set_text(&all_codes) {
-                                    tracing::error!(
-                                        "Failed to copy recovery codes to clipboard: {}",
-                                        e
-                                    );
-                                } else {
-                                    tracing::info!(
-                                        "Recovery codes copied to clipboard (auto-clears in 60s)"
-                                    );
-                                    // SECURITY: Auto-clear clipboard after 60 seconds
-                                    std::thread::spawn(move || {
-                                        std::thread::sleep(std::time::Duration::from_secs(60));
-                                        let _ = slint::invoke_from_event_loop(move || {
-                                            if let Ok(mut cb) = Clipboard::new() {
-                                                if let Err(e) = cb.clear() {
-                                                    tracing::warn!(
-                                                        "Failed to auto-clear clipboard: {}",
-                                                        e
-                                                    );
-                                                } else {
-                                                    tracing::info!(
-                                                        "Clipboard auto-cleared after 60s"
-                                                    );
-                                                }
-                                            }
-                                        });
-                                    });
-                                }
-                            }
-                            Err(e) => {
-                                tracing::error!("Failed to access clipboard: {}", e);
-                            }
-                        }
-                    }
-                    #[cfg(target_os = "android")]
-                    match crate::platform::android::clipboard::set_text(
-                        "Recovery codes",
-                        &all_codes,
-                    ) {
+                    match crate::platform::clipboard::set_text("Recovery codes", &all_codes, true) {
                         Ok(()) => {
-                            tracing::info!(
-                                "Recovery codes copied to clipboard (auto-clears in 60s)"
-                            );
-                            // Same 60s wipe as the desktop path: recovery codes
-                            // unlock the encrypted key backup, so they must not
-                            // sit in the clipboard indefinitely.
-                            std::thread::spawn(|| {
-                                std::thread::sleep(std::time::Duration::from_secs(60));
-                                if let Err(e) =
-                                    crate::platform::android::clipboard::set_text("", "")
-                                {
-                                    tracing::warn!("Failed to auto-clear clipboard: {}", e);
-                                } else {
-                                    tracing::info!("Clipboard auto-cleared after 60s");
-                                }
-                            });
+                            tracing::info!("Recovery codes copied to clipboard (expires in 60s)")
                         }
                         Err(e) => {
                             tracing::error!("Failed to copy recovery codes to clipboard: {}", e)
                         }
                     }
-                    #[cfg(target_os = "ios")]
-                    tracing::warn!("Clipboard not implemented on iOS");
                 }
             });
         }
@@ -928,9 +849,7 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
         if let Err(e) = ui_ctx_ai.set_local_ai_enabled(enabled) {
             tracing::error!("Failed to save local AI enabled setting: {}", e);
             if let Some(w) = weak_ai_save.upgrade() {
-                w.set_settings_local_ai_enabled(
-                    ui_ctx_ai.local_ai_enabled().unwrap_or(!enabled),
-                );
+                w.set_settings_local_ai_enabled(ui_ctx_ai.local_ai_enabled().unwrap_or(!enabled));
             }
             return;
         }
