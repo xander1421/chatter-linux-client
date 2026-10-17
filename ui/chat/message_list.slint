@@ -35,6 +35,7 @@ export component MessageList inherits Rectangle {
     // them in viewport-height and its bottom clamp. Chrome overlays the view.
     in property <length> top-inset: 0px;
     in property <length> bottom-inset: 0px;
+    property <bool> bubble-swiping: false;
     // Properties
     in property <[MessageItemData]> messages: [];
     // Last tapped image thumbnail in window coordinates. The parent reads
@@ -507,6 +508,7 @@ export component MessageList inherits Rectangle {
             width: 100%;
             height: 100%;
             immediate-child-press: true;
+            interactive: !root.bubble-swiping;
 
             // How far the content extends below the bottom edge. Exact once the
             // last row is live (the runtime's estimate then closes on the real
@@ -892,6 +894,7 @@ export component MessageList inherits Rectangle {
 
                 message-bubble := MessageItem {
                     width: 100%;
+                    swipe-engaged(on) => { root.bubble-swiping = on; }
                     animate-arrival: idx >= root.arrival-start-index && idx < root.arrival-end-index;
                     arrival-stagger-index: idx - root.arrival-start-index;
                     message-id: item.message-id;

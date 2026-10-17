@@ -167,6 +167,9 @@ export component MessageItem inherits Rectangle {
 
     // Callbacks
     callback reply-clicked(string, string);
+    // A horizontal bubble swipe owns the gesture: the host list stops
+    // scrolling so a few pixels of vertical drift cannot steal it.
+    callback swipe-engaged(bool);
     callback forward-clicked(string, string);
     callback react-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
     // Tapping an existing reaction toggles YOUR reaction of that emoji. Before
@@ -281,6 +284,7 @@ export component MessageItem inherits Rectangle {
             }
             if (abs(dx) < 9px || abs(dx) <= abs(dy)) { return; }
             root.swipe-active = true;
+            root.swipe-engaged(true);
             root.cancel-hold();
         }
         if (root.swipe-forward != forward) { root.swipe-haptic-fired = false; }
@@ -302,7 +306,7 @@ export component MessageItem inherits Rectangle {
 
     function end-swipe(cancelled: bool) {
         let trigger = !cancelled && root.swipe-active && root.swipe-armed;
-        if (root.swipe-active) { root.hold-tier = 3; }
+        if (root.swipe-active) { root.hold-tier = 3; root.swipe-engaged(false); }
         root.swipe-tracking = false;
         root.swipe-active = false;
         root.swipe-armed = false;
