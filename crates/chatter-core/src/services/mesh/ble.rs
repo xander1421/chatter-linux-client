@@ -192,6 +192,8 @@ pub struct BleRuntime {
     /// Per-ingress budget for open channels, independent of outbound pacing.
     channel_ingress: std::collections::HashMap<String, (u64, u32)>,
     private_ingress: std::collections::HashMap<String, (u64, u32)>,
+    /// Authenticated private authors share one budget across relay links.
+    private_authored_ingress: std::collections::HashMap<PeerId, (u64, u32)>,
     carrier_ingress: std::collections::HashMap<String, (u64, u32)>,
     last_channel_presence_ms: u64,
     last_private_rekey_ms: u64,
@@ -250,6 +252,7 @@ impl BleRuntime {
             last_throughput_report_ms: 0,
             channel_ingress: std::collections::HashMap::new(),
             private_ingress: std::collections::HashMap::new(),
+            private_authored_ingress: std::collections::HashMap::new(),
             carrier_ingress: std::collections::HashMap::new(),
             last_channel_presence_ms: 0,
             last_private_rekey_ms: 0,
@@ -1661,14 +1664,36 @@ impl BleRuntime {
             return false;
         };
         if let Some(notice) = LeaveNotice::decode(&content) {
-            if notice.peer != claimed.as_str() {
+            if notice.peer != claimed.as_str() || !state.verify_leave(&notice) {
                 return false;
             }
-            // Broadcast ingress is synchronous; the creator rotates on the
-            // next maintenance pass after persisting the departure.
+            // A valid departure must still propagate if its signer was blocked
+            // locally or exhausted its ordinary message budget.
             self.on_private_leave(claimed, notice);
             return true;
         }
+        // A member blocked locally must not consume our radio as an author.
+        // Apply this only after signature and AEAD verification: an untrusted
+        // relay may copy a blocked peer's sender ID onto an opaque frame.
+        if self.events.peer_blocked(claimed) {
+            return false;
+        }
+        let now_ms = now_millis();
+        self.private_authored_ingress
+            .retain(|_, (start, _)| now_ms.saturating_sub(*start) < 60_000);
+        if self.private_authored_ingress.len() >= 128
+            && !self.private_authored_ingress.contains_key(claimed)
+        {
+            return false;
+        }
+        let budget = self
+            .private_authored_ingress
+            .entry(claimed.clone())
+            .or_insert((now_ms, 0));
+        if budget.1 >= CHANNEL_INGRESS_PER_MINUTE {
+            return false;
+        }
+        budget.1 += 1;
         let author = claimed.clone();
         let conversation = MeshConversation::PrivateChannel(state.id.clone());
         let nickname = self
