@@ -140,6 +140,30 @@ export component MeshContextBar inherits Rectangle {
                 }
             }
 
+            if MeshGlobal.active-kind == "private-channel": VerticalLayout {
+                spacing: Spacing.xxs;
+                Text { text: "Channel settings"; color: Colors.text-muted; font-size: Typography.xs; }
+                Rectangle {
+                    height: Spacing.button-height;
+                    Text {
+                        text: MeshGlobal.private-leave-pending ? "Confirm leave channel and delete this device's key" : "Leave channel";
+                        color: Colors.warning;
+                        font-size: Typography.xs;
+                        vertical-alignment: center;
+                    }
+                    TouchArea { clicked => {
+                        if MeshGlobal.private-leave-pending {
+                            MeshGlobal.private-leave-pending = false;
+                            MeshGlobal.leave-private-channel(MeshGlobal.active-scope);
+                        } else { MeshGlobal.private-leave-pending = true; }
+                    } }
+                }
+                if MeshGlobal.private-leave-pending: Text {
+                    text: "Other devices keep their existing roster and keys.";
+                    color: Colors.text-muted; font-size: Typography.xs; wrap: word-wrap;
+                }
+            }
+
             if MeshGlobal.active-kind == "dm" && (!MeshGlobal.active-verified || MeshGlobal.identity-panel-open): VerticalLayout {
                 spacing: Spacing.xs;
                 HorizontalLayout {
