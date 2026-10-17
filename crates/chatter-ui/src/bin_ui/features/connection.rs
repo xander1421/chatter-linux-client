@@ -15,8 +15,7 @@ use std::sync::Arc;
 
 use slint::ComponentHandle;
 
-use chatter_core::client::ChatterClient;
-use chatter_core::network::connection::ConnectionState;
+use chatter_core::client::{ChatterClient, ConnectionState};
 use chatter_core::state::{OfflineState, OfflineStateData, StateSnapshot};
 use tokio::sync::broadcast;
 

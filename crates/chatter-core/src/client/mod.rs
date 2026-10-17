@@ -44,6 +44,8 @@ pub use anon_group::{AnonGroupInviteCandidate, PrivateGroupRoster};
 pub use messaging::{ChannelInviteRow, ForwardDestination, InviteCandidate, ReplyParentMedia};
 pub use profile::{FriendCodeConnection, FriendCodeConnectionError};
 pub use secret_chat::{SecretChatError, SecretChatGate};
+pub use crate::network::connection::ConnectionState;
+pub use crate::storage::backup_data::ImportSummary;
 
 /// Rows removed by a local expiry sweep and attachments no longer referenced
 /// by any stored message.
@@ -74,6 +76,41 @@ pub struct UnreadBadges {
     pub row: u32,
     /// Conversations with unread messages that the current mode shows.
     pub total: u32,
+}
+
+/// Public mesh trust state without storage implementation details.
+#[cfg(feature = "mesh")]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MeshBindingStatus {
+    Unverified,
+    BindingOffered,
+    Verified,
+    KeyChanged,
+}
+
+#[cfg(feature = "mesh")]
+impl MeshBindingStatus {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Unverified => "Mesh peer · self-asserted name",
+            Self::BindingOffered => "Binding pending",
+            Self::Verified => "Verified Chatter contact",
+            Self::KeyChanged => "Identity changed · verify again",
+        }
+    }
+}
+
+#[cfg(feature = "mesh")]
+impl From<crate::storage::mesh_binding_store::PeerBinding> for MeshBindingStatus {
+    fn from(value: crate::storage::mesh_binding_store::PeerBinding) -> Self {
+        use crate::storage::mesh_binding_store::PeerBinding;
+        match value {
+            PeerBinding::Unverified => Self::Unverified,
+            PeerBinding::BindingOffered => Self::BindingOffered,
+            PeerBinding::Verified { .. } => Self::Verified,
+            PeerBinding::KeyChanged => Self::KeyChanged,
+        }
+    }
 }
 
 mod notification;
@@ -803,7 +840,7 @@ impl ChatterClient {
         &self,
         peer: &str,
         scanned_qr: Option<&str>,
-    ) -> Result<crate::storage::mesh_binding_store::PeerBinding, crate::services::mesh::MeshError>
+    ) -> Result<MeshBindingStatus, crate::services::mesh::MeshError>
     {
         let owner = self.session_current_user_id().ok_or_else(|| {
             crate::services::mesh::MeshError::Binding("sign in before verifying a contact".into())
@@ -816,7 +853,7 @@ impl ChatterClient {
             device,
             &chatter_mesh::ids::PeerId::from_str(peer),
             scanned_qr,
-        )
+        ).map(Into::into)
     }
 
     #[cfg(feature = "mesh")]
@@ -829,13 +866,14 @@ impl ChatterClient {
     pub fn mesh_binding_state(
         &self,
         peer: &str,
-    ) -> Result<crate::storage::mesh_binding_store::PeerBinding, crate::services::mesh::MeshError>
+    ) -> Result<MeshBindingStatus, crate::services::mesh::MeshError>
     {
         let owner = self.session_current_user_id().ok_or_else(|| {
             crate::services::mesh::MeshError::Binding("sign in to view account bindings".into())
         })?;
         self.mesh()
             .binding_state(owner, &chatter_mesh::ids::PeerId::from_str(peer))
+            .map(Into::into)
     }
 
     #[cfg(feature = "mesh")]
@@ -2590,6 +2628,41 @@ impl ChatterClient {
     /// conversation is currently being viewed.
     pub fn active_conversation(&self) -> crate::state::ActiveConversation {
         self.services.chat_state.active_conversation()
+    }
+
+    /// Current onion connection indicator, including the signed-out screens.
+    pub fn tor_status_code(&self) -> i32 {
+        crate::network::connection::tor_status().as_i32()
+    }
+
+    /// Whether bounded onion dial tracing was enabled for this process.
+    pub fn tor_stage_trace_active() -> bool {
+        #[cfg(feature = "onion")]
+        {
+            crate::network::grpc::onion_transport::stage_trace_active()
+        }
+        #[cfg(not(feature = "onion"))]
+        {
+            false
+        }
+    }
+
+    /// Select a conversation through the client so attachment trays and thread
+    /// selection move together with the active conversation.
+    pub fn select_conversation(&self, conversation: crate::state::ActiveConversation) {
+        self.services.chat_state.set_active_conversation(conversation);
+    }
+
+    /// Legacy channel selection keeps the channel-specific attachment tray
+    /// transition before selecting the typed conversation.
+    pub fn select_channel(&self, channel: crate::domain::ids::ChannelId) {
+        self.services.chat_state.set_active_channel(channel);
+        self.select_conversation(crate::state::ActiveConversation::Channel(channel));
+    }
+
+    /// Read-only copy of chat state for presentation consumers.
+    pub fn chat_snapshot(&self) -> crate::state::ChatStateData {
+        self.services.chat_state.get()
     }
     pub fn message_state(&self) -> &MessageState {
         &self.services.message_state
@@ -4921,6 +4994,8 @@ impl ChatterClient {
         &self,
         password: &str,
     ) -> Result<(), crate::services::account_service::AccountError> {
+        let _lifecycle = self.auth_lifecycle_lock.lock().await;
+        let revision = self.services.auth_state.get().session_revision;
         #[cfg(feature = "mesh")]
         let former_owner = self.session_current_user_id();
         let auth = self.auth();
@@ -4937,6 +5012,10 @@ impl ChatterClient {
                 .map_err(crate::services::account_service::AccountError::Storage)?;
         }
         self.clear_composer_session();
+        // The account service clears persisted credentials. Retire the old
+        // session before publishing logout, just as normal sign-out does.
+        self.shutdown_session(revision).await;
+        self.services.auth_state.set_logged_out_if_current(revision);
         Ok(())
     }
 

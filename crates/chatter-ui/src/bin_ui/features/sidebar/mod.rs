@@ -113,8 +113,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     // got no unread badge. Clear it the moment the pane closes.
     let (weak, ctx) = (slint::ComponentHandle::as_weak(window), ui_ctx.clone());
     window.on_chat_pane_closed(move || {
-        ctx.chat_state()
-            .set_active_conversation(chatter_core::state::ActiveConversation::None);
+        ctx.select_conversation(chatter_core::state::ActiveConversation::None);
         if let Some(w) = weak.upgrade() {
             w.invoke_refresh_screen_protection();
             refresh_selection(&w, &ctx);
@@ -551,9 +550,7 @@ pub(crate) fn conversation_removed(
         if ui_ctx_ui.composer_session_is_current(session_revision)
             && ui_ctx_ui.active_conversation() == conv
         {
-            ui_ctx_ui
-                .chat_state()
-                .set_active_conversation(chatter_core::state::ActiveConversation::None);
+            ui_ctx_ui.select_conversation(chatter_core::state::ActiveConversation::None);
             w.invoke_refresh_screen_protection();
             w.set_messages(slint::ModelRc::new(
                 slint::VecModel::<crate::MessageItemData>::default(),

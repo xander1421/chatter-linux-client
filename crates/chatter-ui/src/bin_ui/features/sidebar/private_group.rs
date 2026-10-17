@@ -163,7 +163,7 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<Chat
         // Commit active-conversation state SYNCHRONOUSLY on the UI thread
         // (same race fix as dm.rs — see comment there).
         if let Ok(parsed) = group_id_str.parse::<AnonGroupId>() {
-            ui_ctx.chat_state().set_active_conversation(
+            ui_ctx.select_conversation(
                 chatter_core::state::ActiveConversation::AnonGroup(parsed),
             );
         }
@@ -171,7 +171,7 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<Chat
             w.invoke_refresh_screen_protection();
         }
 
-        let owner = HistoryOwner::begin(&ui_ctx, ui_ctx.chat_state().active_conversation());
+        let owner = HistoryOwner::begin(&ui_ctx, ui_ctx.active_conversation());
         tokio::spawn(async move {
             if !owner.is_current() {
                 return;

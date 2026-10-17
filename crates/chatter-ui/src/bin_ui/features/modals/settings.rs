@@ -4,12 +4,12 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, SharedString};
 
-use chatter_core::client::{ChatterClient, ClientError};
+use chatter_core::client::{ChatterClient, ClientError, ImportSummary};
 
 use crate::MainWindow;
 
 fn message_restore_status(
-    result: Result<chatter_core::storage::backup_data::ImportSummary, ClientError>,
+    result: Result<ImportSummary, ClientError>,
 ) -> String {
     match result {
         Ok(summary) => format!(
@@ -809,7 +809,6 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                 Ok(()) => {
                     // Account is gone server-side and local auth state is cleared
                     // by the wrapper. Reflect it in the UI and route to login.
-                    ui_ctx.auth_state().set_logged_out();
                     crate::bin_ui::decode_cache::on_logout();
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {

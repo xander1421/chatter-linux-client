@@ -159,7 +159,7 @@ pub fn wire_start_secret_chat(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
 
 /// The peer of the open regular DM, if that is what is open.
 fn open_dm_peer(ui_ctx: &ChatterClient) -> Option<UserId> {
-    match ui_ctx.chat_state().active_conversation() {
+    match ui_ctx.active_conversation() {
         chatter_core::state::ActiveConversation::ServerDm { peer_id } => Some(peer_id),
         _ => None,
     }
@@ -272,14 +272,14 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         // sets it, send_message.rs:86 early-returns and
         // handle_message_received drops the bubble (`is_active=false`).
         tracing::info!(?active, dm_id = %dm_id_str, is_anon = is_anon_dm, "[UI_OPEN_DM] committing active conversation pre-spawn");
-        ui_ctx.chat_state().set_active_conversation(active);
+        ui_ctx.select_conversation(active);
         if let Some(w) = weak.upgrade() {
             w.invoke_refresh_screen_protection();
         }
 
         if let Some(w) = weak.upgrade() {
             crate::bin_ui::features::composer::sync_composer_draft(
-                &w, &ui_ctx, ui_ctx.chat_state().get().attachment_revision,
+                &w, &ui_ctx, ui_ctx.chat_snapshot().attachment_revision,
             );
         }
 
