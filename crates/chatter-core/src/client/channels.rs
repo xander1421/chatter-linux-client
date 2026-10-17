@@ -22,7 +22,32 @@ pub enum ChannelMemberFailure {
     Bans(String),
 }
 
+/// User-facing wording for a channel lifecycle event.
+pub enum ChannelEventNotice<'a> {
+    Moderation { action: &'a str, reason: Option<&'a str> },
+    OperationFailed { code: &'a str, message: &'a str },
+}
+
 impl ChatterClient {
+    pub fn channel_event_notice(event: ChannelEventNotice<'_>) -> String {
+        match event {
+            ChannelEventNotice::Moderation { action, reason } => match (action, reason) {
+                ("BAN", Some(r)) => format!("You were banned from this channel: {r}"),
+                ("BAN", None) => "You were banned from this channel.".into(),
+                ("KICK", Some(r)) => format!("You were removed from this channel: {r}"),
+                ("KICK", None) => "You were removed from this channel.".into(),
+                ("MUTE", _) => "You were muted in this channel.".into(),
+                ("UNMUTE", _) => "You were unmuted in this channel.".into(),
+                ("UNBAN", _) => "Your ban was lifted.".into(),
+                _ => "A moderation action was applied to your account.".into(),
+            },
+            ChannelEventNotice::OperationFailed { code, message } => {
+                if message.is_empty() { format!("Channel operation failed ({code}).") }
+                else { format!("Channel operation failed: {message}") }
+            }
+        }
+    }
+
     /// Fetch all roster pages, preserving a partial roster when a later page fails.
     /// Bans are fetched after members because the member fetch refreshes our role.
     pub async fn channel_member_lists(
