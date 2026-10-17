@@ -10,7 +10,7 @@ use crate::storage::receive_artifact::{ReceiveArtifact, ReceiveKind};
 use crate::storage::{Database, MessageRepository, SettingsRepository, UserRepository};
 
 #[derive(Clone)]
-pub(crate) struct ContentHandoff {
+pub struct ContentHandoff {
     pub dm: Arc<AnonDmService>,
     pub group: Arc<AnonGroupService>,
     pub events: EventBus,
