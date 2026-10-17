@@ -148,6 +148,17 @@ impl ChatterClient {
             .flatten()
     }
 
+    pub fn get_anon_group_member_avatar(
+        &self,
+        group_id: &crate::domain::anon_group::AnonGroupId,
+        user_id: &crate::domain::ids::UserId,
+    ) -> Option<Vec<u8>> {
+        self.anon_groups()
+            .get_member_avatar(group_id, user_id)
+            .ok()
+            .flatten()
+    }
+
     /// Build the synthetic system `Message` shown for an anon-group membership
     /// join. The membership event arrives as bare metadata; constructing the
     /// domain `Message` is core's job, not the UI's.

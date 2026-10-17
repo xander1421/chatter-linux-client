@@ -545,8 +545,7 @@ impl ChatterClient {
                     *msg.conversation_id.as_uuid(),
                 );
                 let sid = msg.sender_id?;
-                self.get_anon_group_member(&group_id, &sid)
-                    .and_then(|m| m.avatar)
+                self.get_anon_group_member_avatar(&group_id, &sid)
             }
             _ => self.user_avatar(&msg.sender_id?),
         }

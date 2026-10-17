@@ -1410,7 +1410,7 @@ impl UnifiedMessageRepository {
             let allowed=!blocked && (own || match scope.kind {
                 ConversationType::AnonDm=>tx.query_row("SELECT EXISTS(SELECT 1 FROM anon_dm_conversations WHERE id=?1 AND peer_id=?2 AND peer_device_id=?3 AND status=1 AND length(peer_mailbox_pk)=32) AND NOT EXISTS(SELECT 1 FROM anon_dm_blocked_users WHERE user_id=?2)",params![scope.id.to_string(),actor.to_string(),stored.sender_device],|r|r.get::<_,bool>(0))?,
                 ConversationType::Channel=>tx.query_row("SELECT EXISTS(SELECT 1 FROM memberships WHERE channel_id=?1 AND user_id=?2)",params![scope.id.to_string(),actor.to_string()],|r|r.get::<_,bool>(0))?,
-                ConversationType::AnonGroup=>tx.query_row("SELECT EXISTS(SELECT 1 FROM anon_group_members g JOIN anon_groups a ON a.id=g.group_id WHERE g.group_id=?1 AND g.user_id=?2 AND a.status<>2) AND NOT EXISTS(SELECT 1 FROM anon_group_blocked_users WHERE group_id=?1 AND user_id=?2)",params![scope.id.to_string(),actor.to_string()],|r|r.get::<_,bool>(0))?,
+                ConversationType::AnonGroup=>tx.query_row("SELECT EXISTS(SELECT 1 FROM anon_group_members g JOIN anon_groups a ON a.id=g.group_id WHERE g.group_id=?1 AND g.user_id=?2 AND g.is_active=1 AND a.status<>2) AND NOT EXISTS(SELECT 1 FROM anon_group_blocked_users WHERE group_id=?1 AND user_id=?2)",params![scope.id.to_string(),actor.to_string()],|r|r.get::<_,bool>(0))?,
                 _=>false,
             });
             if !allowed && !blocked {
@@ -1588,7 +1588,7 @@ impl UnifiedMessageRepository {
                     OR (p.conversation_type='server_dm' AND p.conversation_id=p.actor_id)
                     OR (p.conversation_type='channel' AND EXISTS(SELECT 1 FROM memberships v WHERE v.channel_id=p.conversation_id AND v.user_id=p.actor_id))
                     OR (p.conversation_type='anon_dm' AND EXISTS(SELECT 1 FROM anon_dm_conversations d WHERE d.id=p.conversation_id AND d.peer_id=p.actor_id AND d.status=1 AND length(d.peer_mailbox_pk)=32) AND NOT EXISTS(SELECT 1 FROM anon_dm_blocked_users b WHERE b.user_id=p.actor_id))
-                    OR (p.conversation_type='anon_group' AND EXISTS(SELECT 1 FROM anon_group_members g JOIN anon_groups a ON a.id=g.group_id WHERE g.group_id=p.conversation_id AND g.user_id=p.actor_id AND a.status<>2) AND NOT EXISTS(SELECT 1 FROM anon_group_blocked_users b WHERE b.group_id=p.conversation_id AND b.user_id=p.actor_id)))
+                    OR (p.conversation_type='anon_group' AND EXISTS(SELECT 1 FROM anon_group_members g JOIN anon_groups a ON a.id=g.group_id WHERE g.group_id=p.conversation_id AND g.user_id=p.actor_id AND g.is_active=1 AND a.status<>2) AND NOT EXISTS(SELECT 1 FROM anon_group_blocked_users b WHERE b.group_id=p.conversation_id AND b.user_id=p.actor_id)))
                 ORDER BY p.conversation_type,p.conversation_id,p.author_id,p.target_sent_at LIMIT 1000")?;
             stmt.query_map(params![own], |r| {
                 Ok((
