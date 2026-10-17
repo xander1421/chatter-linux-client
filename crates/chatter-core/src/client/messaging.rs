@@ -9,6 +9,15 @@ use crate::state::ActiveConversation;
 
 use crate::ui::chat_data::sidebar_time_at;
 
+/// Channel invitation text resolved from the current user's local contacts.
+pub struct ChannelInviteRow {
+    pub channel_id: String,
+    pub channel_name: String,
+    pub invited_by: String,
+    pub created_at: u64,
+    pub note: String,
+}
+
 /// Make every chat-list preview a single plain-text line, including notices,
 /// attachment labels and pending requests. The row elides to its own width.
 pub(crate) fn plain_sidebar_preview(input: &str) -> String {
@@ -1649,6 +1658,36 @@ impl ChatterClient {
                 Vec::new()
             }
         }
+    }
+
+    /// Pending invitations with unknown inviter IDs hidden from the display.
+    pub async fn channel_invite_rows(&self) -> Vec<ChannelInviteRow> {
+        self.list_pending_channel_invites()
+            .await
+            .into_iter()
+            .map(|invite| {
+                let channel_name = if invite.channel_name.is_empty() {
+                    "Channel invite".to_string()
+                } else {
+                    format!("#{}", invite.channel_name)
+                };
+                let invited_by = invite
+                    .inviter_id
+                    .parse::<crate::domain::ids::UserId>()
+                    .ok()
+                    .map(|user_id| self.display_name(&user_id))
+                    .filter(|name| *name != invite.inviter_id)
+                    .map(|name| format!("Invited by {name}"))
+                    .unwrap_or_default();
+                ChannelInviteRow {
+                    channel_id: invite.channel_id,
+                    channel_name,
+                    invited_by,
+                    created_at: invite.created_at,
+                    note: invite.message,
+                }
+            })
+            .collect()
     }
 
     /// Accept or decline a channel invitation. Returns the channel on accept,

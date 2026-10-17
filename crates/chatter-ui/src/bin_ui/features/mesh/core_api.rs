@@ -51,7 +51,7 @@ use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::UserId;
 use chatter_core::domain::message::Message;
 use chatter_core::services::mesh::{
-    MeshConversation, MeshDelivery, MeshError, MeshEvent, MeshPeer, MeshStatus,
+    MeshConversation, MeshDelivery, MeshError, MeshEvent, MeshStatus,
 };
 
 /// One sidebar row, as the Slint model wants it.
@@ -159,54 +159,30 @@ pub fn service_running(ui_ctx: &Arc<ChatterClient>) -> bool {
 /// guessed at: it would be unopenable, and a sidebar entry that does nothing is
 /// worse than no entry.
 pub fn rows(ui_ctx: &Arc<ChatterClient>) -> Vec<MeshRow> {
-    let conversations = match ui_ctx.mesh_conversations() {
-        Ok(conversations) => conversations,
+    let rows = match ui_ctx.mesh_sidebar_rows() {
+        Ok(rows) => rows,
         Err(error) => {
             tracing::warn!(%error, "mesh: could not list conversations");
             return Vec::new();
         }
     };
-    let peers: Vec<MeshPeer> = ui_ctx.mesh_peers();
-
-    conversations
-        .into_iter()
-        .filter_map(|conversation| {
-            let scope = ui_ctx.mesh_conversation_for(&conversation.id)?;
-            // `MeshPeer` is handed to the UI whole, by design ("everything here
-            // is already shaped"), so a DM row reads its peer's own flags
-            // rather than inferring anything about them.
-            let (reachable, verified) = match &scope {
-                MeshConversation::Dm(peer) => peers
-                    .iter()
-                    .find(|known| known.peer == *peer)
-                    .map(|known| (known.connected || known.reachable, known.account_verified))
-                    .unwrap_or((false, false)),
-                _ => (false, false),
-            };
-            let binding_label = match &scope {
-                MeshConversation::Dm(peer) => ui_ctx
-                    .mesh_binding_state(peer.as_str())
-                    .map(|state| state.label())
-                    .unwrap_or("Mesh peer · self-asserted name"),
-                _ => "",
-            };
-            Some(MeshRow {
-                id: conversation.id,
-                kind: kind_of(&scope),
-                binding_label,
-                scope: scope_of(&scope),
-                title: conversation.name,
-                timestamp: conversation
-                    .last_message_at
-                    .map(chatter_core::ui::format_timestamp)
-                    .unwrap_or_default(),
-                unread_count: i32::try_from(conversation.unread_count).unwrap_or(i32::MAX),
-                reachable,
-                verified,
-                muted: matches!(&scope, MeshConversation::Channel(name) if ui_ctx.mesh_channel_muted(name)),
-                blocked: matches!(&scope, MeshConversation::Dm(peer) if ui_ctx.mesh_peer_blocked(peer.as_str())),
-                conversation: scope,
-            })
+    rows.into_iter()
+        .map(|row| MeshRow {
+            kind: kind_of(&row.conversation),
+            scope: scope_of(&row.conversation),
+            timestamp: row
+                .last_message_at
+                .map(chatter_core::ui::format_timestamp)
+                .unwrap_or_default(),
+            unread_count: i32::try_from(row.unread_count).unwrap_or(i32::MAX),
+            conversation: row.conversation,
+            id: row.id,
+            title: row.title,
+            reachable: row.reachable,
+            verified: row.verified,
+            muted: row.muted,
+            blocked: row.blocked,
+            binding_label: row.binding_label,
         })
         .collect()
 }
