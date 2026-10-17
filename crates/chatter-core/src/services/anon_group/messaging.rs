@@ -366,12 +366,29 @@ impl AnonGroupService {
             return Err(AnonGroupError::DeliveryUnconfirmed);
         }
 
-        let sent_at = if is_post && inner_content.timestamp != 0 {
+        let original_sent_at = if is_post && inner_content.timestamp != 0 {
             inner_content.timestamp
         } else {
             TimestampNanos::now().as_u64()
         };
+        // A held post predates the confirming owner roster. Compare roster
+        // admissions in the owner's clock domain, while the inner post keeps
+        // its original timestamp for identity and display ordering.
+        let owner_admission_cutoff = if releasing_held {
+            Some(self.anon_group_repo
+                .local_join_owner_admission(group_id)?
+                .ok_or_else(|| AnonGroupError::InvalidData(
+                    "Held group post has no owner admission cutoff".into(),
+                ))?)
+        } else {
+            None
+        };
+        let sent_at = original_sent_at;
+        if releasing_held && self.anon_group_repo.get_member(group_id, &current_user)?.is_none() {
+            return Err(AnonGroupError::MemberNotFound(current_user));
+        }
         if is_post
+            && !releasing_held
             && !self
                 .anon_group_repo
                 .member_at(group_id, &current_user, sent_at)?
@@ -389,7 +406,7 @@ impl AnonGroupService {
             for member in members.iter().chain(pending_members.iter()) {
                 if self
                     .anon_group_repo
-                    .member_at(group_id, &member.user_id, sent_at)?
+                    .member_at(group_id, &member.user_id, owner_admission_cutoff.unwrap_or(sent_at))?
                 {
                     eligible.insert(member.user_id);
                 }
@@ -404,6 +421,14 @@ impl AnonGroupService {
             .filter(|id| *id != current_user)
             .map(|id| id.to_string())
             .collect();
+        if releasing_held {
+            tracing::info!(group_id = %group_id, original_sent_at,
+                admission_cutoff = owner_admission_cutoff.unwrap_or(sent_at),
+                recipient_count = recipients.len(), "held group post recipient snapshot selected");
+            if recipients.is_empty() {
+                return Err(AnonGroupError::DeliveryUnconfirmed);
+            }
+        }
         if super::send_ledger::initialize(&self.message_service.database, &ledger_key, &recipients)?
             == Some(false)
         {
@@ -723,6 +748,7 @@ impl AnonGroupService {
         let posts =
             super::send_ledger::held_posts(&self.message_service.database, &group_id.to_string())?;
         if posts.is_empty() {
+            tracing::info!(group_id = %group_id, reason = "no uninitialized held ledger rows", "held group post scan complete");
             return Ok(());
         }
         let current = self.current_user_id()?;
@@ -742,7 +768,7 @@ impl AnonGroupService {
         };
         if let Some(reason) = reason {
             for (id, _) in posts {
-                tracing::debug!(message_id = %id, reason, "held post still waiting");
+                tracing::info!(message_id = %id, group_id = %group_id, reason, "held post still waiting");
             }
             return Ok(());
         }
@@ -755,14 +781,13 @@ impl AnonGroupService {
                     self.message_service
                         .finish_retry_row(&message_id, "sent", None)
                         .map_err(|e| AnonGroupError::MessageError(e.to_string()))?;
-                    tracing::info!(message_id = %id, "held group post released");
+                    tracing::info!(message_id = %id, group_id = %group_id, reason = "all original recipients confirmed", "held group post released");
                 }
                 Err(AnonGroupError::DeliveryUnconfirmed) => {
-                    tracing::debug!(message_id = %id, reason = "delivery unconfirmed", "held post still waiting");
+                    tracing::info!(message_id = %id, group_id = %group_id, reason = "recipient delivery pending or unconfirmed", "held post still waiting");
                 }
                 Err(error) => {
-                    tracing::debug!(message_id = %id, reason = "send retry error", "held post still waiting");
-                    tracing::warn!(%error, "Held group post waits for retry");
+                    tracing::info!(message_id = %id, group_id = %group_id, reason = %error, "held post still waiting");
                     break;
                 }
             }
