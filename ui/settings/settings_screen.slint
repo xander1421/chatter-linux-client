@@ -317,18 +317,20 @@ export component SettingsScreen inherits Rectangle {
                         spacing: Spacing.sm;
                         alignment: start;
 
-                        if !root.compact-mode: Image {
-                            source: item.id == "account" ? Icons.user
-                                : item.id == "devices" ? Icons.smartphone
-                                : item.id == "privacy" ? Icons.shield
-                                : item.id == "notifications" ? Icons.bell
-                                : item.id == "encryption" ? Icons.lock
-                                : item.id == "ai" ? Icons.sparkles
-                                : item.id == "about" ? Icons.info : Icons.moon;
-                            width: Spacing.button-icon;
-                            height: Spacing.button-icon;
-                            colorize: active-section == item.id ? Colors.selected-indicator : Colors.text-secondary;
-                            vertical-alignment: center;
+                        if !root.compact-mode: VerticalLayout {
+                            alignment: center;
+                            Image {
+                                source: item.id == "account" ? Icons.user
+                                    : item.id == "devices" ? Icons.smartphone
+                                    : item.id == "privacy" ? Icons.shield
+                                    : item.id == "notifications" ? Icons.bell
+                                    : item.id == "encryption" ? Icons.lock
+                                    : item.id == "ai" ? Icons.sparkles
+                                    : item.id == "about" ? Icons.info : Icons.moon;
+                                width: Spacing.button-icon;
+                                height: Spacing.button-icon;
+                                colorize: active-section == item.id ? Colors.selected-indicator : Colors.text-secondary;
+                            }
                         }
 
                         Text {
@@ -1248,12 +1250,14 @@ export component SettingsScreen inherits Rectangle {
                                         padding: Spacing.md;
                                         spacing: Spacing.md;
 
-                                        Image {
-                                            source: session.is-mobile ? Icons.smartphone : Icons.monitor;
-                                            colorize: Colors.text-secondary;
-                                            width: Spacing.button-icon;
-                                            height: Spacing.button-icon;
-                                            vertical-alignment: center;
+                                        VerticalLayout {
+                                            alignment: center;
+                                            Image {
+                                                source: session.is-mobile ? Icons.smartphone : Icons.monitor;
+                                                colorize: Colors.text-secondary;
+                                                width: Spacing.button-icon;
+                                                height: Spacing.button-icon;
+                                            }
                                         }
 
                                         VerticalLayout {
