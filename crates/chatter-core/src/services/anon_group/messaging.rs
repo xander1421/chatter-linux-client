@@ -313,6 +313,15 @@ impl AnonGroupService {
         group_id: &AnonGroupId,
         inner_content: Content,
     ) -> Result<(), AnonGroupError> {
+        self.send_message_impl(group_id, inner_content, false).await
+    }
+
+    async fn send_message_impl(
+        &self,
+        group_id: &AnonGroupId,
+        inner_content: Content,
+        releasing_held: bool,
+    ) -> Result<(), AnonGroupError> {
         use crate::proto::content_v1::AnonGroupMessage;
         use prost::Message as ProstMessage;
 
@@ -322,7 +331,9 @@ impl AnonGroupService {
         self.check_group_not_blocked(group_id)?;
 
         // Check rate limit before sending
-        self.check_rate_limit(group_id)?;
+        if !releasing_held {
+            self.check_rate_limit(group_id)?;
+        }
 
         // Verify group exists and we're a member
         let _group = self
@@ -330,17 +341,60 @@ impl AnonGroupService {
             .get_group(group_id)?
             .ok_or(AnonGroupError::GroupNotFound(*group_id))?;
 
-        // Get confirmed members (those with mailbox keys)
-        let members = self.anon_group_repo.get_members_with_mailbox(group_id)?;
-        // Get pending members (mailbox_pk not yet confirmed). Messages for
-        // these members are enqueued and drained when their JoinAck lands.
-        let pending_members = self.anon_group_repo.get_members_without_mailbox(group_id)?;
-
         let ledger_key = super::send_ledger::key(
             &current_user.to_string(),
             &group_id.to_string(),
             &inner_content,
         );
+        let is_post = matches!(
+            inner_content.content.as_ref(),
+            Some(content_v1::content::Content::DataMessage(_))
+        );
+        if is_post
+            && self
+                .anon_group_repo
+                .awaiting_join_roster(group_id, &current_user)?
+        {
+            super::send_ledger::hold(
+                &self.message_service.database,
+                &ledger_key,
+                &group_id.to_string(),
+                &inner_content,
+            )?;
+            return Err(AnonGroupError::DeliveryUnconfirmed);
+        }
+
+        let sent_at = if is_post && inner_content.timestamp != 0 {
+            inner_content.timestamp
+        } else {
+            TimestampNanos::now().as_u64()
+        };
+        if is_post
+            && !self
+                .anon_group_repo
+                .member_at(group_id, &current_user, sent_at)?
+        {
+            return Err(AnonGroupError::MemberNotFound(current_user));
+        }
+
+        // Get confirmed members (those with mailbox keys)
+        let mut members = self.anon_group_repo.get_members_with_mailbox(group_id)?;
+        // Get pending members (mailbox_pk not yet confirmed). Messages for
+        // these members are enqueued and drained when their JoinAck lands.
+        let mut pending_members = self.anon_group_repo.get_members_without_mailbox(group_id)?;
+        if is_post {
+            let mut eligible = std::collections::HashSet::new();
+            for member in members.iter().chain(pending_members.iter()) {
+                if self
+                    .anon_group_repo
+                    .member_at(group_id, &member.user_id, sent_at)?
+                {
+                    eligible.insert(member.user_id);
+                }
+            }
+            members.retain(|member| eligible.contains(&member.user_id));
+            pending_members.retain(|member| eligible.contains(&member.user_id));
+        }
         let recipients: Vec<String> = members
             .iter()
             .map(|m| m.user_id)
@@ -366,7 +420,7 @@ impl AnonGroupService {
                 group_message,
             ))),
             ephemeral_reply_to: None,
-            timestamp: TimestampNanos::now().as_u64(),
+            timestamp: sent_at,
             padding: Self::generate_padding(160),
         };
 
@@ -621,6 +675,32 @@ impl AnonGroupService {
                                     tracing::warn!(%error, "Bootstrap reannouncement failed; bounded retry retained");
                                 }
                             }
+                        }
+                    }
+                }
+            }
+            if !group.is_blocked()
+                && !self
+                    .anon_group_repo
+                    .awaiting_join_roster(&group.id, &current)?
+            {
+                for (id, content) in super::send_ledger::held_posts(
+                    &self.message_service.database,
+                    &group.id.to_string(),
+                )? {
+                    match self.send_message_impl(&group.id, content, true).await {
+                        Ok(()) => {
+                            let id = id.parse().map_err(|_| {
+                                AnonGroupError::InvalidData("Invalid held group message ID".into())
+                            })?;
+                            self.message_service
+                                .finish_retry_row(&id, "sent", None)
+                                .map_err(|e| AnonGroupError::MessageError(e.to_string()))?;
+                        }
+                        Err(AnonGroupError::DeliveryUnconfirmed) => {}
+                        Err(error) => {
+                            tracing::warn!(%error, "Held group post waits for retry");
+                            break;
                         }
                     }
                 }

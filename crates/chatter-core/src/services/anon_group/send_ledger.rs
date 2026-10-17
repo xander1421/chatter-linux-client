@@ -11,6 +11,10 @@ struct Ledger {
     message_id: String,
     initialized: bool,
     recipients: BTreeMap<String, String>,
+    #[serde(default)]
+    held_group: Option<String>,
+    #[serde(default)]
+    held_content: Option<Vec<u8>>,
 }
 
 pub(super) fn key(owner: &str, group: &str, inner: &crate::proto::content_v1::Content) -> String {
@@ -39,7 +43,9 @@ pub(super) fn register(db: &Database, key: &str, message_id: &str) -> Result<(),
             encode(&Ledger {
                 message_id: message_id.into(),
                 initialized: false,
-                recipients: BTreeMap::new()
+                recipients: BTreeMap::new(),
+                held_group: None,
+                held_content: None,
             })?,
             chrono::Utc::now().to_rfc3339()
         ],
@@ -50,6 +56,49 @@ pub(super) fn register(db: &Database, key: &str, message_id: &str) -> Result<(),
         ));
     }
     Ok(())
+}
+
+/// Preserve the exact post while the joining member awaits its first roster.
+pub(super) fn hold(
+    db: &Database,
+    key: &str,
+    group: &str,
+    content: &crate::proto::content_v1::Content,
+) -> Result<(), StorageError> {
+    mutate(db, key, |ledger| {
+        if !ledger.initialized {
+            ledger.held_group = Some(group.to_owned());
+            ledger.held_content = Some(content.encode_to_vec());
+        }
+    })?
+    .ok_or_else(|| StorageError::InvalidData("Group post has no retained row".into()))?;
+    Ok(())
+}
+
+pub(super) fn held_posts(
+    db: &Database,
+    group: &str,
+) -> Result<Vec<(String, crate::proto::content_v1::Content)>, StorageError> {
+    let conn = db.read_connection()?;
+    let mut stmt = conn.prepare(
+        "SELECT value FROM settings WHERE key LIKE 'send.group.completion.v1:%' \
+         AND json_extract(value,'$.held_group')=?1 \
+         AND json_extract(value,'$.initialized')=0 ORDER BY updated_at",
+    )?;
+    let rows = stmt.query_map([group], |row| row.get::<_, String>(0))?;
+    let mut posts = Vec::new();
+    for row in rows {
+        let ledger = decode(&row?)?;
+        if let Some(bytes) = ledger.held_content {
+            posts.push((
+                ledger.message_id,
+                crate::proto::content_v1::Content::decode(bytes.as_slice()).map_err(|_| {
+                    StorageError::InvalidData("Invalid held anonymous group post".into())
+                })?,
+            ));
+        }
+    }
+    Ok(posts)
 }
 
 // None means an unrelated control/legacy send without a registered outgoing row.
