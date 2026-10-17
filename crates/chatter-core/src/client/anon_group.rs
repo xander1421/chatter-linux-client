@@ -52,7 +52,8 @@ impl ChatterClient {
                 blocked: blocked_members.contains(&member.user_id),
             }
         }).collect();
-        let (member_count, invited_count) = self.anon_group_member_counts(&group_id);
+        let invited_count = members.iter().filter(|member| member.invited).count() as i32;
+        let member_count = members.len() as i32 - invited_count;
         Some(PrivateGroupRoster {
             is_owner,
             can_manage_members: group.status.can_send() && group.can_manage_members(),
