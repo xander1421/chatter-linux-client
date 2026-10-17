@@ -100,21 +100,6 @@ impl MessageService {
         Ok(())
     }
 
-    /// Snapshot the actual peer devices targeted by a send, before transport.
-    /// Exclude our linked devices: their read state travels via ReadSync.
-    pub fn snapshot_receipt_targets(
-        &self,
-        message_id: MessageId,
-        targets: &[(UserId, DeviceId)],
-    ) -> Result<(), MessageError> {
-        MessageReceiptRepository::new(self.database.clone()).snapshot_targets(
-            message_id,
-            self.current_user_id()?,
-            targets,
-        )?;
-        Ok(())
-    }
-
     /// Capture the actual DM fanout before any device can acknowledge it.
     pub(crate) fn snapshot_dm_content_targets(
         &self,

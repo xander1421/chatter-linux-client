@@ -742,18 +742,6 @@ impl ChatterClient {
     }
 
     #[cfg(feature = "mesh")]
-    pub fn mesh_identity_qr(&self, peer: &str) -> Result<String, crate::services::mesh::MeshError> {
-        let owner = self.session_current_user_id().ok_or_else(|| {
-            crate::services::mesh::MeshError::Binding("sign in before sharing your identity".into())
-        })?;
-        let device = self.sessions().current_device_id().ok_or_else(|| {
-            crate::services::mesh::MeshError::Binding("no account device is active".into())
-        })?;
-        self.mesh()
-            .identity_qr(&chatter_mesh::ids::PeerId::from_str(peer), owner, device)
-    }
-
-    #[cfg(feature = "mesh")]
     pub fn mesh_identity_qr_png(
         &self,
         peer: &str,
@@ -2409,10 +2397,6 @@ impl ChatterClient {
             .await?;
         *self.pending_update.lock() = found.clone();
         Ok(found)
-    }
-
-    pub async fn download_available_update(&self) -> Result<std::path::PathBuf, String> {
-        self.download_available_update_with_progress(&|_| {}).await
     }
 
     pub async fn download_available_update_with_progress(
