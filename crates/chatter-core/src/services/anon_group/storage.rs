@@ -20,12 +20,22 @@ impl AnonGroupService {
         sent_at: u64,
     ) -> Result<AnonGroupMessageId, AnonGroupError> {
         let channel_id: ChannelId = (*group_id).into();
+        // A post can reach us before the owner's roster admits its sender.
+        // Place that sender's join notice immediately before the earliest held
+        // post, while retaining the roster timestamp as the notice identity.
+        let display_at = match &system_content {
+            SystemMessage::UserJoined(user) => self
+                .held_posts
+                .earliest_post_timestamp(group_id, user)
+                .map_or(sent_at, |post_at| sent_at.min(post_at.saturating_sub(1))),
+            _ => sent_at,
+        };
         let mut message = Message::new_text(
             channel_id,
             ConversationType::AnonGroup,
             sender_id,
             String::new(),
-            sent_at,
+            display_at,
         );
         // Names are snapshots of local roster state and can change between
         // application and replay. Keep them out of the identity preimage.
