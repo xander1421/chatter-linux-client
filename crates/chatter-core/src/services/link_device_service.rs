@@ -31,7 +31,6 @@ use crate::crypto::message_backup::derive_link_sync_kek;
 use crate::crypto::provisioning::{ProvisioningKeypair, decrypt_envelope, encrypt_envelope};
 use crate::crypto::signal::identity::IdentityKeyManager;
 use crate::crypto::signal::prekey::PreKeyManager;
-use crate::domain::notification::NotificationPriority;
 use crate::error::{CryptoError, NetworkError, StorageError};
 use crate::events::EventBus;
 use crate::inbox::handlers::DomainEvent;
