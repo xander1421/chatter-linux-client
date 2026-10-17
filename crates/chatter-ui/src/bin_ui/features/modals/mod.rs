@@ -36,7 +36,7 @@ pub use anon_group_invite::{
 };
 pub use channel_invites::load_channel_invites;
 pub use channel_settings::{
-    apply_private_group_roster, load_private_group_roster, open_channel_settings,
+    apply_private_group_roster, open_channel_settings,
     open_invite_member_modal, open_private_group_invite_modal, refresh_members_if_open,
     wire_channel_settings,
 };

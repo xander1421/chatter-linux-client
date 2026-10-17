@@ -516,7 +516,7 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         {
             let ui_ctx = ui_ctx_jarvis.clone();
             tokio::spawn(async move {
-                crate::bin_ui::features::auth::presence_integration::track_activity(&ui_ctx).await;
+                ui_ctx.record_presence_activity().await;
             });
         }
 

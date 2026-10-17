@@ -1,10 +1,9 @@
 //! Thin presentation glue for core-owned server record pages.
 use crate::{MainWindow, NotificationViewRow, ServerRecordRow, ServerRecordsGlobal, run_ui};
 use chatter_core::client::ChatterClient;
-use slint::{ComponentHandle, Model, ModelRc, VecModel};
-use std::collections::HashSet;
+use slint::{ComponentHandle, ModelRc, VecModel};
 use std::sync::{
-    Arc,
+    Arc, Mutex,
     atomic::{AtomicU64, Ordering},
 };
 
@@ -12,11 +11,14 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
     // Each request supersedes previous results, including a close/reopen into
     // another channel. Weak handles are upgraded only on the event loop.
     let generation = Arc::new(AtomicU64::new(0));
+    let loaded = Arc::new(Mutex::new(chatter_core::services::server_records::RecordPage::default()));
     let weak = window.as_weak();
+    let loaded_on_open = loaded.clone();
     window
         .global::<ServerRecordsGlobal>()
         .on_open(move |kind, channel| {
             if let Some(w) = weak.upgrade() {
+                *loaded_on_open.lock().unwrap() = Default::default();
                 let g = w.global::<ServerRecordsGlobal>();
                 g.set_kind(kind);
                 g.set_channel(channel);
@@ -30,13 +32,15 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
     let weak = window.as_weak();
     let ctx = client.clone();
     let seq = generation.clone();
+    let loaded_for_load = loaded.clone();
     window.global::<ServerRecordsGlobal>().on_load(move |more| {
         if let Some(w) = weak.upgrade() {
-            request(&w, &ctx, &seq, more, None);
+            request(&w, &ctx, &seq, &loaded_for_load, more, None);
         }
     });
     let weak = window.as_weak();
     let ctx = client.clone();
+    let loaded_for_act = loaded.clone();
     window
         .global::<ServerRecordsGlobal>()
         .on_act(move |id, action| {
@@ -46,6 +50,7 @@ pub fn wire(window: &MainWindow, client: &Arc<ChatterClient>) {
                         &w,
                         &ctx,
                         &generation,
+                        &loaded_for_act,
                         false,
                         Some((id.to_string(), action.to_string())),
                     );
@@ -58,6 +63,7 @@ fn request(
     w: &MainWindow,
     client: &Arc<ChatterClient>,
     generation: &Arc<AtomicU64>,
+    loaded: &Arc<Mutex<chatter_core::services::server_records::RecordPage>>,
     more: bool,
     action: Option<(String, String)>,
 ) {
@@ -74,6 +80,7 @@ fn request(
     let token = generation.fetch_add(1, Ordering::SeqCst) + 1;
     let generation = generation.clone();
     let client = client.clone();
+    let loaded = loaded.clone();
     let weak = w.as_weak();
     tokio::spawn(async move {
         let result = async {
@@ -92,36 +99,24 @@ fn request(
             let g = w.global::<ServerRecordsGlobal>();
             g.set_loading(false);
             match result {
-                Ok(page) => {
-                    let mut notifications: Vec<NotificationViewRow> = if more {
-                        g.get_notifications().iter().collect()
-                    } else { vec![] };
-                    notifications.extend(page.notifications.into_iter().map(|r| NotificationViewRow {
+                Ok(next) => {
+                    let page = if more {
+                        chatter_core::services::server_records::merge_pages(
+                            loaded.lock().unwrap().clone(), next)
+                    } else { next };
+                    *loaded.lock().unwrap() = page.clone();
+                    let notifications = page.notifications.into_iter().map(|r| NotificationViewRow {
                         id: r.id.into(), title: r.title.into(), body: r.body.into(),
                         kind: r.kind.into(), actor_id: r.actor_id.into(),
                         channel_id: r.channel_id.into(), when: r.when.into(),
                         avatar: r.avatar.as_deref().and_then(crate::bin_ui::converters::avatar_bytes_to_image).unwrap_or_default(),
                         read: r.read, status: r.status.into(),
-                    }));
-                    // Pages can split one actor's request history. Keep the
-                    // newest visible row across the already loaded pages.
-                    let mut seen_request_actors = HashSet::new();
-                    notifications.retain(|row| row.kind.as_str() != "friend-request"
-                        || row.actor_id.is_empty()
-                        || seen_request_actors.insert(row.actor_id.to_string()));
+                    }).collect::<Vec<_>>();
                     g.set_notifications(ModelRc::new(VecModel::from(notifications)));
-                    let mut rows: Vec<ServerRecordRow> = if more {
-                        g.get_rows().iter().collect()
-                    } else {
-                        vec![]
-                    };
-                    rows.extend(page.rows.into_iter().map(|r| ServerRecordRow {
-                        id: r.id.into(),
-                        title: r.title.into(),
-                        body: r.body.into(),
-                        primary: r.primary.into(),
-                        secondary: r.secondary.into(),
-                    }));
+                    let rows = page.rows.into_iter().map(|r| ServerRecordRow {
+                        id: r.id.into(), title: r.title.into(), body: r.body.into(),
+                        primary: r.primary.into(), secondary: r.secondary.into(),
+                    }).collect::<Vec<_>>();
                     g.set_rows(ModelRc::new(VecModel::from(rows)));
                     g.set_next(page.next.into());
                 }

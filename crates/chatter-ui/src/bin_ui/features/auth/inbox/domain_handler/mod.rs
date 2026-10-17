@@ -765,16 +765,10 @@ pub async fn handle_domain_event(
                 // An open chat stays open: it is read-only now, its composer
                 // replaced by the notice (ChannelMemberLeft refreshes both).
                 let removed = matches!(action.as_str(), "KICK" | "BAN");
-                let text = match (action.as_str(), reason.as_deref()) {
-                    ("BAN", Some(r)) => format!("You were banned from this channel: {r}"),
-                    ("BAN", None) => "You were banned from this channel.".to_string(),
-                    ("KICK", Some(r)) => format!("You were removed from this channel: {r}"),
-                    ("KICK", None) => "You were removed from this channel.".to_string(),
-                    ("MUTE", _) => "You were muted in this channel.".to_string(),
-                    ("UNMUTE", _) => "You were unmuted in this channel.".to_string(),
-                    ("UNBAN", _) => "Your ban was lifted.".to_string(),
-                    _ => "A moderation action was applied to your account.".to_string(),
-                };
+                let text = ChatterClient::channel_event_notice(
+                    chatter_core::client::channels::ChannelEventNotice::Moderation {
+                        action: action.as_str(), reason: reason.as_deref(),
+                    });
                 let variant = if matches!(action.as_str(), "UNMUTE" | "UNBAN") {
                     "success"
                 } else {
@@ -833,11 +827,10 @@ pub async fn handle_domain_event(
         // the toast is what stops the user waiting for an operation that is
         // never going to land.
         DomainEvent::ChannelOperationFailed { code, message, .. } => {
-            let text = if message.is_empty() {
-                format!("Channel operation failed ({code}).")
-            } else {
-                format!("Channel operation failed: {message}")
-            };
+            let text = ChatterClient::channel_event_notice(
+                chatter_core::client::channels::ChannelEventNotice::OperationFailed {
+                    code: &code, message: &message,
+                });
             let weak = window.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak.upgrade() {

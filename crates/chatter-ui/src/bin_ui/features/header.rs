@@ -542,7 +542,7 @@ fn wire_chat_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
             std::thread::spawn(move || {
                 // Shared with the live refresh on membership events
                 // (`refresh_members_if_open`), so both read the same roster.
-                let Some(roster) = super::modals::load_private_group_roster(&ui_ctx, group_id)
+                let Some(roster) = ui_ctx.private_group_settings_roster(group_id)
                 else {
                     let ui_ctx = ui_ctx.clone();
                     let weak = weak.clone();

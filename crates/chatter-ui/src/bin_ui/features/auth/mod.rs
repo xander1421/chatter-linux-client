@@ -7,7 +7,6 @@ pub(crate) mod initial_data;
 pub mod link_device;
 mod login;
 mod logout;
-pub mod presence_integration;
 mod recovery;
 mod register;
 mod shield;

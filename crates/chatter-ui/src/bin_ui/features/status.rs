@@ -40,7 +40,7 @@ fn wire_status_change(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let ui_ctx = ui_ctx.clone();
 
         crate::rt_handle().spawn(async move {
-            super::auth::presence_integration::set_user_status(&ui_ctx, &status).await;
+            ui_ctx.set_presence_mode_choice(&status).await;
         });
     });
 }

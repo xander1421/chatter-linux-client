@@ -13,7 +13,7 @@ pub struct RecordRow {
     pub secondary: String,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub struct RecordPage {
     pub rows: Vec<RecordRow>,
     pub notifications: Vec<NotificationRow>,
@@ -67,6 +67,16 @@ pub fn collapse_friend_requests(rows: &mut Vec<NotificationRow>) {
     rows.retain(|row| row.kind != "friend-request"
         || row.actor_id.is_empty()
         || seen.insert(row.actor_id.clone()));
+}
+
+/// Append a fetched page before rendering, preserving the first visible request
+/// for each actor even when request history crosses a page boundary.
+pub fn merge_pages(mut previous: RecordPage, mut next: RecordPage) -> RecordPage {
+    previous.rows.append(&mut next.rows);
+    previous.notifications.append(&mut next.notifications);
+    collapse_friend_requests(&mut previous.notifications);
+    previous.next = next.next;
+    previous
 }
 
 fn device_linked_details(body: &str, metadata: &str) -> (String, u32) {

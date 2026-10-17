@@ -156,6 +156,28 @@ pub fn jarvis_channel_reply_text(
     }
 }
 
+pub struct LocalAiModelChoices {
+    pub active_models: Vec<String>,
+    pub providers: Vec<LocalAiProviderChoice>,
+    pub catalog: Vec<LocalAiCatalogChoice>,
+}
+
+pub struct LocalAiProviderChoice {
+    pub kind: String,
+    pub display_name: String,
+    pub detail: String,
+    pub is_active: bool,
+}
+
+pub struct LocalAiCatalogChoice {
+    pub name: String,
+    pub tag: String,
+    pub detail: String,
+    pub fit: &'static str,
+    pub fit_label: &'static str,
+    pub installed: bool,
+}
+
 impl ChatterClient {
     // ── Jarvis façade ────────────────────────────────────────────────────
 
@@ -289,6 +311,54 @@ impl ChatterClient {
     /// Current hardware profile (blocking probes — call off the UI thread).
     pub fn local_ai_hardware_profile(&self) -> crate::local_ai::hardware::HardwareProfile {
         crate::local_ai::hardware::HardwareProfile::detect()
+    }
+
+    /// Resolve provider and catalog choices for the local AI settings view.
+    pub fn local_ai_model_choices(
+        &self,
+        providers: &[crate::local_ai::providers::DetectedProvider],
+        active_provider: &str,
+        profile: &crate::local_ai::hardware::HardwareProfile,
+    ) -> LocalAiModelChoices {
+        use crate::local_ai::catalog::{CATALOG, ModelKind};
+        use crate::local_ai::hardware::ModelFit;
+        use crate::local_ai::providers::ProviderKind;
+        let active_models = providers.iter()
+            .find(|p| p.kind.as_str() == active_provider)
+            .map(|p| p.models.iter().map(|m| m.name.clone())
+                .filter(|name| {
+                    let n = name.to_lowercase();
+                    !n.contains("embed") && !n.contains("minilm") && !n.contains("bge")
+                }).collect()).unwrap_or_default();
+        let ollama_models: Vec<_> = providers.iter()
+            .find(|p| p.kind == ProviderKind::Ollama)
+            .map(|p| p.models.iter().map(|m| m.name.clone()).collect())
+            .unwrap_or_default();
+        let providers = providers.iter().map(|p| LocalAiProviderChoice {
+            kind: p.kind.as_str().into(), display_name: p.kind.display_name().into(),
+            detail: if p.kind == ProviderKind::MistralRs {
+                "in-process GPU engine (loads models from HuggingFace)".into()
+            } else { format!("{} models · {}", p.models.len(), p.url) },
+            is_active: p.kind.as_str() == active_provider,
+        }).collect();
+        let catalog = CATALOG.iter().map(|m| {
+            let installed = ollama_models.iter().any(|name: &String|
+                name == m.ollama_tag || name.starts_with(&format!("{}:", m.ollama_tag)));
+            let (fit, fit_label) = match m.fit(profile) {
+                ModelFit::Gpu => ("gpu", "Fits GPU"),
+                ModelFit::CpuSlow => ("cpu", "CPU only (slow)"),
+                ModelFit::TooBig => ("big", "Too big for this machine"),
+            };
+            let kind_label = match m.kind {
+                ModelKind::Chat => "", ModelKind::Embedding => " · embeddings",
+            };
+            LocalAiCatalogChoice {
+                name: m.name.into(), tag: m.ollama_tag.into(),
+                detail: format!("{}B params · {:.1} GB{}", m.params_b, m.size_gb, kind_label),
+                fit, fit_label, installed,
+            }
+        }).collect();
+        LocalAiModelChoices { active_models, providers, catalog }
     }
 
     /// The active provider's settings identifier ("ollama", "mistralrs", …).

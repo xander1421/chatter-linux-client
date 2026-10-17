@@ -108,7 +108,7 @@ pub fn wire_forward_message_action(window: &MainWindow, ui_ctx: &Arc<ChatterClie
             let text = handle.get_message_text(&target_sender_id, target_sent_timestamp)
                 .ok()
                 .flatten();
-            let preview = super::forward_preview::message_preview(
+            let preview = chatter_core::client::preview::forward_message_preview(
                 text.as_deref(),
                 |text| ui_ctx.truncate_message_preview(text),
                 || handle

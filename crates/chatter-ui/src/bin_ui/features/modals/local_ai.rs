@@ -6,9 +6,6 @@ use std::sync::Arc;
 use slint::{ComponentHandle, Model, ModelRc, SharedString, VecModel};
 
 use chatter_core::client::ChatterClient;
-use chatter_core::local_ai::catalog::{CATALOG, ModelKind};
-use chatter_core::local_ai::hardware::ModelFit;
-use chatter_core::local_ai::providers::ProviderKind;
 
 use crate::{CatalogModelData, LocalAIProviderData, MainWindow};
 
@@ -89,72 +86,19 @@ pub async fn refresh_all(ui_ctx: Arc<ChatterClient>, weak: slint::Weak<MainWindo
     let active_provider = ui_ctx.local_ai_active_provider();
     let active_model = ui_ctx.local_ai_chat_model();
 
-    // Installed CHAT models on the active provider (embedders are not
-    // pickable chat models; Ollama names may carry ":latest").
-    let active_models: Vec<String> = providers
-        .iter()
-        .find(|p| p.kind.as_str() == active_provider)
-        .map(|p| {
-            p.models
-                .iter()
-                .map(|m| m.name.clone())
-                .filter(|name| {
-                    let n = name.to_lowercase();
-                    !n.contains("embed") && !n.contains("minilm") && !n.contains("bge")
-                })
-                .collect()
-        })
-        .unwrap_or_default();
-    let ollama_models: Vec<String> = providers
-        .iter()
-        .find(|p| p.kind == ProviderKind::Ollama)
-        .map(|p| p.models.iter().map(|m| m.name.clone()).collect())
-        .unwrap_or_default();
-
-    let provider_rows: Vec<LocalAIProviderData> = providers
-        .iter()
-        .map(|p| LocalAIProviderData {
-            kind: p.kind.as_str().into(),
-            display_name: p.kind.display_name().into(),
-            detail: if p.kind == ProviderKind::MistralRs {
-                "in-process GPU engine (loads models from HuggingFace)".into()
-            } else {
-                format!("{} models · {}", p.models.len(), p.url).into()
-            },
-            is_active: p.kind.as_str() == active_provider,
-        })
-        .collect();
-
-    let catalog_rows: Vec<CatalogModelData> = CATALOG
-        .iter()
-        .map(|m| {
-            let installed = ollama_models.iter().any(|name| {
-                name == m.ollama_tag || name.starts_with(&format!("{}:", m.ollama_tag))
-            });
-            let fit = m.fit(&profile);
-            let (fit_key, fit_label) = match fit {
-                ModelFit::Gpu => ("gpu", "Fits GPU"),
-                ModelFit::CpuSlow => ("cpu", "CPU only (slow)"),
-                ModelFit::TooBig => ("big", "Too big for this machine"),
-            };
-            let kind_label = match m.kind {
-                ModelKind::Chat => "",
-                ModelKind::Embedding => " · embeddings",
-            };
-            CatalogModelData {
-                name: m.name.into(),
-                tag: m.ollama_tag.into(),
-                detail: format!("{}B params · {:.1} GB{}", m.params_b, m.size_gb, kind_label)
-                    .into(),
-                fit: fit_key.into(),
-                fit_label: fit_label.into(),
-                installed,
-                downloading: false,
-                progress: 0.0,
-                error: "".into(),
-            }
-        })
-        .collect();
+    let choices = ui_ctx.local_ai_model_choices(&providers, &active_provider, &profile);
+    let active_models = choices.active_models;
+    let provider_rows: Vec<LocalAIProviderData> = choices.providers.into_iter().map(|p|
+        LocalAIProviderData {
+            kind: p.kind.into(), display_name: p.display_name.into(),
+            detail: p.detail.into(), is_active: p.is_active,
+        }).collect();
+    let catalog_rows: Vec<CatalogModelData> = choices.catalog.into_iter().map(|m|
+        CatalogModelData {
+            name: m.name.into(), tag: m.tag.into(), detail: m.detail.into(),
+            fit: m.fit.into(), fit_label: m.fit_label.into(), installed: m.installed,
+            downloading: false, progress: 0.0, error: "".into(),
+        }).collect();
 
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak.upgrade() {

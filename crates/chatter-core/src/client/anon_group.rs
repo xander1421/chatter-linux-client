@@ -2,7 +2,67 @@
 
 use super::ChatterClient;
 
+/// Core-owned settings state for a private group's roster.
+pub struct PrivateGroupRoster {
+    pub name: String,
+    pub is_owner: bool,
+    pub can_manage_members: bool,
+    pub can_leave: bool,
+    pub blocked: bool,
+    pub member_count: i32,
+    pub invited_count: i32,
+    pub members: Vec<PrivateGroupMemberRow>,
+}
+
+pub struct PrivateGroupMemberRow {
+    pub user_id: String,
+    pub display_name: String,
+    pub role: &'static str,
+    pub avatar: Option<Vec<u8>>,
+    pub can_make_owner: bool,
+    pub invited: bool,
+    pub can_block: bool,
+    pub blocked: bool,
+}
+
 impl ChatterClient {
+    pub fn private_group_settings_roster(
+        &self,
+        group_id: crate::domain::anon_group::AnonGroupId,
+    ) -> Option<PrivateGroupRoster> {
+        let group = self.get_anon_group(&group_id)?;
+        let current_user_id = self.session_current_user_id()?;
+        let channel_id: crate::domain::ids::ChannelId = group_id.into();
+        let blocked_members = self.anon_group_blocked_members(&group_id);
+        let is_owner = group.status.can_send() && group.is_current_user_owner(&current_user_id);
+        let members: Vec<_> = self.get_anon_group_members(&group_id).into_iter().map(|member| {
+            let is_me = member.user_id == current_user_id;
+            let invited = member.mailbox_pk.is_none();
+            PrivateGroupMemberRow {
+                display_name: self.display_name_in(
+                    &crate::domain::message::ConversationType::AnonGroup,
+                    &channel_id, &member.user_id,
+                ),
+                user_id: member.user_id.to_string(),
+                role: member.role.as_str(),
+                avatar: member.avatar,
+                can_make_owner: is_owner && !is_me && !invited,
+                invited,
+                can_block: !is_me,
+                blocked: blocked_members.contains(&member.user_id),
+            }
+        }).collect();
+        let invited_count = members.iter().filter(|member| member.invited).count() as i32;
+        let member_count = members.len() as i32 - invited_count;
+        Some(PrivateGroupRoster {
+            is_owner,
+            can_manage_members: group.status.can_send() && group.can_manage_members(),
+            can_leave: self.can_leave_anon_group(&group_id),
+            blocked: group.is_blocked(),
+            name: group.name, member_count, invited_count, members,
+        })
+    }
+
     // ── Anon group façade ────────────────────────────────────────────────
 
     pub fn list_anon_groups(

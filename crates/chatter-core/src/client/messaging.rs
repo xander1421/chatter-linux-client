@@ -144,6 +144,12 @@ mod sidebar_time_tests {
     }
 }
 
+/// Actions available for the current stored selection.
+pub struct SelectionActions {
+    pub can_delete_everyone: bool,
+    pub can_forward: bool,
+}
+
 impl ChatterClient {
     // ── Messages façade ──────────────────────────────────────────────────
 
@@ -230,6 +236,39 @@ impl ChatterClient {
         self.messages()
             .user_has_reacted(scope, sender_id, sent_at_ns, emoji)
             .unwrap_or(false)
+    }
+
+    /// Resolve selected IDs against current storage and conversation, in the
+    /// caller's display order. A missing or foreign row invalidates the set.
+    pub fn selected_message_targets(
+        &self,
+        conversation: ActiveConversation,
+        ids: &[String],
+    ) -> Option<Vec<(crate::domain::ids::UserId, u64)>> {
+        if ids.is_empty() || conversation.channel_id().is_none() { return None; }
+        let mut seen = std::collections::HashSet::new();
+        ids.iter().map(|id| {
+            if !seen.insert(id) { return None; }
+            let id = id.parse().ok()?;
+            let message = self.get_message_local(&id)?;
+            if Some(message.conversation_id) != conversation.channel_id() { return None; }
+            Some((message.sender_id?, message.sent_at))
+        }).collect()
+    }
+
+    pub fn selection_actions(
+        self: &Arc<Self>,
+        conversation: ActiveConversation,
+        ids: &[String],
+    ) -> SelectionActions {
+        let handle = self.conversation(conversation);
+        let targets = self.selected_message_targets(conversation, ids);
+        SelectionActions {
+            can_delete_everyone: targets.as_ref().is_some_and(|targets|
+                targets.iter().all(|(author, ts)|
+                    handle.can_delete_for_everyone(author, *ts).unwrap_or(false))),
+            can_forward: handle.can_forward_from(),
+        }
     }
 
     pub fn get_message_local(
@@ -1632,6 +1671,16 @@ impl ChatterClient {
         channel_id: &crate::domain::ids::ChannelId,
     ) -> Result<(), crate::services::channel::ChannelError> {
         self.channels().delete_channel(channel_id).await
+    }
+
+    /// Keep only invite choices that are selected and currently eligible.
+    pub fn eligible_channel_invite_targets<I>(
+        &self, rows: I,
+    ) -> Vec<crate::domain::ids::UserId>
+    where I: IntoIterator<Item = (String, bool, bool, bool)> {
+        rows.into_iter().filter_map(|(id, selected, already_member, banned)| {
+            if selected && !already_member && !banned { id.parse().ok() } else { None }
+        }).collect()
     }
 
     pub async fn invite_user_to_channel(
