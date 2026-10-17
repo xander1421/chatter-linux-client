@@ -603,6 +603,11 @@ pub(crate) fn show_chat_pane(weak: &slint::Weak<MainWindow>) {
         // A conversation lives on the Chats tab: opened from Contacts, Calls
         // or a pushed profile, it must not stay hidden behind them.
         crate::bin_ui::features::back::reset_to_chats(&w);
+        // Picker visibility belongs to the composer being left. Reset at the
+        // synchronous entry point as well as on phone Back: a two-pane switch
+        // does not change mobile-show-chat, and the chat child is recreated.
+        w.set_composer_emoji_picker_visible(false);
+        w.set_composer_gif_picker_visible(false);
         // Clear the old header synchronously, before revealing the pane or
         // waiting for the next conversation's asynchronous load.
         w.set_loading_messages(true);
