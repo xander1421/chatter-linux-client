@@ -145,6 +145,13 @@ pub(super) fn handle_group_member_list_received(
         if let Some(w) = weak.upgrade() {
             let is_active = ui_ctx.active_conversation().matches_anon_group(&group_id);
             if is_active {
+                // Older group sends used the DM bootstrap placeholder. A
+                // roster refresh restores the group composer as well.
+                if w.get_composer_placeholder().as_str()
+                    == crate::bin_ui::features::chat::send_message::BOOTSTRAP_PLACEHOLDER
+                {
+                    w.set_composer_placeholder("Type a message...".into());
+                }
                 tracing::debug!(
                     "Refreshing message list for group {} after member list update",
                     group_id_str

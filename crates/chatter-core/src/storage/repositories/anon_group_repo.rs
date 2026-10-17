@@ -156,8 +156,8 @@ impl AnonGroupRepository {
             AND COALESCE(o.admitted_at,0) <= ?4)",params![group.to_string(),user.to_string(),key.as_slice(),timestamp],|r|r.get(0))?)
     }
 
-    /// A member's locally accepted join needs an owner roster newer than that
-    /// admission before its recipient snapshot is complete.
+    /// A local join waits until an owner roster explicitly includes this
+    /// admission. Local and owner wall clocks cannot be compared for this.
     pub fn awaiting_join_roster(
         &self,
         group: &AnonGroupId,
@@ -167,9 +167,8 @@ impl AnonGroupRepository {
         let waiting: i64 = conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM anon_groups g
              JOIN anon_group_member_order m ON m.group_id=g.id AND m.user_id=?2
-             LEFT JOIN anon_group_order o ON o.group_id=g.id
              WHERE g.id=?1 AND g.owner_id != ?2
-             AND m.admitted_at > COALESCE(o.roster_at,0))",
+             AND m.acknowledged_at < m.admitted_at)",
             params![group.to_string(), me.to_string()],
             |row| row.get(0),
         )?;
@@ -462,6 +461,7 @@ impl AnonGroupRepository {
         &self,
         group: &AnonGroupId,
         owner: &UserId,
+        me: &UserId,
         timestamp: u64,
         members: &[(AnonGroupMember, u64)],
     ) -> Result<bool, StorageError> {
@@ -499,6 +499,17 @@ impl AnonGroupRepository {
                 "SELECT admitted_at, removed_at, changed_at FROM anon_group_member_order WHERE group_id = ?1 AND user_id = ?2",
                 params![group.to_string(), member.user_id.to_string()], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))
             ).optional()?.unwrap_or((0, 0, 0));
+            // The owner can have minted the admission before our local clock
+            // recorded acceptance. Confirm the local generation separately;
+            // never make the owner's roster timestamp compete with that clock.
+            if member.user_id == *me
+                && old_admission > roster_at
+                && (removed == 0 || admission > removed)
+            {
+                tx.execute("UPDATE anon_group_member_order SET acknowledged_at=admitted_at
+                    WHERE group_id=?1 AND user_id=?2 AND admitted_at=?3",
+                    params![group.to_string(), member.user_id.to_string(), old_admission])?;
+            }
             if (removed > 0 && (admission <= removed || timestamp <= removed))
                 || admission < old_admission
                 || timestamp < changed

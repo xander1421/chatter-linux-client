@@ -406,11 +406,14 @@ impl CoreServices {
 
         let anon_group_service = self.anon_group_service.clone();
         let retry_parked = async move {
+            // Retained join posts survive restart; inspect them soon after
+            // startup instead of waiting for the first 5–15 minute poll.
+            initial_token_refill_sleep().await;
             loop {
-                jittered_sleep().await;
                 if let Err(e) = anon_group_service.retry_parked_sends().await {
                     tracing::warn!("Parked anon-group send retry failed: {}", e);
                 }
+                jittered_sleep().await;
             }
         };
 
