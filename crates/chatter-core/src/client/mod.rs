@@ -1869,6 +1869,10 @@ impl ChatterClient {
         self.local_ai().set_enabled(enabled)
     }
 
+    pub fn local_ai_enabled(&self) -> Result<bool, crate::services::ai::LocalAIError> {
+        self.local_ai().enabled()
+    }
+
     // ── Cloud AI silo façade ─────────────────────────────────────────────
     //
     // Thin delegation: every decision (policy clamp, availability, key

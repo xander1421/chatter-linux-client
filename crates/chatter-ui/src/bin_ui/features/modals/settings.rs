@@ -894,11 +894,17 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
 
     // Local AI enabled toggle
     let ui_ctx_ai = ui_ctx.clone();
+    let weak_ai_save = window.as_weak();
     #[cfg(feature = "jarvis")]
     let weak_ai_toggle = window.as_weak();
     window.on_settings_local_ai_enabled_changed(move |enabled: bool| {
         if let Err(e) = ui_ctx_ai.set_local_ai_enabled(enabled) {
             tracing::error!("Failed to save local AI enabled setting: {}", e);
+            if let Some(w) = weak_ai_save.upgrade() {
+                w.set_settings_local_ai_enabled(
+                    ui_ctx_ai.local_ai_enabled().unwrap_or(!enabled),
+                );
+            }
             return;
         }
         tracing::debug!("Local AI enabled setting changed to: {}", enabled);
