@@ -191,6 +191,13 @@ fn apply_header(window: &MainWindow, ui_ctx: &ChatterClient, row: &MeshRow) {
                 .mesh_private_channel_rekey_pending(&row.scope)
                 .unwrap_or(false),
     );
+    global.set_private_missing_keys(if row.kind == "private-channel" {
+        ui_ctx
+            .mesh_private_channel_missing_keys(&row.scope)
+            .unwrap_or(0) as i32
+    } else {
+        0
+    });
     global.set_active_reachable(row.reachable);
     global.set_active_verified(row.verified);
     global.set_identity_panel_open(false);

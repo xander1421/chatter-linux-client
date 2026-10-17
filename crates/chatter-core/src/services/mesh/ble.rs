@@ -75,6 +75,7 @@ use super::file_stream::{
 use super::mapping::{self, InboundMessage, MeshConversation, outbound_message};
 use super::private_channel::{
     EpochProof, Invite, LeaveNotice, Member, PrivateChannel, PrivateChannelStore,
+    SenderDistribution,
 };
 use super::router::{RouterCommand, RouterHandle};
 use super::signal_mesh::{self, BundleFrame};
@@ -1646,7 +1647,10 @@ impl BleRuntime {
         let Ok(states) = self.private_channels.list() else {
             return false;
         };
-        let Some(state) = states.iter().find(|s| s.has_route_tag(&packet.payload)) else {
+        let Some(mut state) = states
+            .into_iter()
+            .find(|s| s.has_route_tag(&packet.payload))
+        else {
             // An opaque route tag and claimed epoch cannot prove a rotation.
             // A creator-signed proof delivered over Noise gates old-key sends.
             return true;
@@ -1663,6 +1667,9 @@ impl BleRuntime {
         let Some((wire_id, content)) = state.decrypt(claimed, &packet.payload) else {
             return false;
         };
+        if !state.record_message(&wire_id) || self.private_channels.save(&state).is_err() {
+            return false;
+        }
         if let Some(notice) = LeaveNotice::decode(&content) {
             if notice.peer != claimed.as_str() || !state.verify_leave(&notice) {
                 return false;
@@ -1794,14 +1801,36 @@ impl BleRuntime {
                     && (update.epoch > old.epoch.saturating_add(1)
                         || old.chain_hash().ok().as_deref()
                             == Some(update.previous_hash.as_slice()));
-                if valid
-                    && update.epoch == old.epoch.saturating_add(1)
-                    && old
+                if valid {
+                    update.remember_previous(&old);
+                    let removed = old
                         .members
                         .iter()
-                        .all(|m| update.members.iter().any(|next| next.peer == m.peer))
-                {
-                    update.remember_previous(&old);
+                        .any(|m| !update.members.iter().any(|next| next.peer == m.peer));
+                    let admitted = update
+                        .members
+                        .iter()
+                        .any(|m| !old.members.iter().any(|prior| prior.peer == m.peer));
+                    update
+                        .sender_keys
+                        .retain(|key| update.members.iter().any(|m| m.peer == key.peer));
+                    update
+                        .prior_sender_keys
+                        .retain(|prior| update.members.iter().any(|m| m.peer == prior.sender.peer));
+                    if (removed || admitted) && update.rotate_sender(&self.identity).is_err() {
+                        return;
+                    }
+                    if removed || admitted {
+                        update.invalidate_other_sender_keys(&self.identity.peer_id());
+                    }
+                    for member in &update.members {
+                        if !old.members.iter().any(|m| m.peer == member.peer)
+                            && member.peer != self.identity.peer_id().as_str()
+                            && !update.pending_distributions.contains(&member.peer)
+                        {
+                            update.pending_distributions.push(member.peer.clone());
+                        }
+                    }
                 }
                 valid
             }
@@ -1824,6 +1853,9 @@ impl BleRuntime {
             Err(_) => false,
         };
         if !valid {
+            return;
+        }
+        if update.initialize_sender(&self.identity).is_err() {
             return;
         }
         update.awaiting_rekey = update
@@ -1882,21 +1914,28 @@ impl BleRuntime {
         let Ok(Some(mut state)) = self.private_channels.load(&notice.id) else {
             return false;
         };
-        if notice.peer != claimed.as_str() { return false; }
-        let creator = state.creator == self.identity.peer_id().as_str();
-        if creator && state.epoch > notice.epoch {
-            // We already committed the creator-signed rotation on a previous
-            // encounter; acknowledge a retained retry from the leaver.
+        if notice.peer != claimed.as_str() && state.member_key(claimed).is_none() {
+            return false;
+        }
+        if state.epoch > notice.epoch && state.member_key(&PeerId::from_str(&notice.peer)).is_none()
+        {
+            // A newer creator-signed roster already excludes this peer.
             return true;
         }
-        if !state.verify_leave(&notice) { return false; }
+        if !state.verify_leave(&notice) {
+            return false;
+        }
         if state.departed.iter().any(|old| old.peer == notice.peer) {
-            return creator;
+            return true;
         }
         state.departed.push(notice);
+        if state.rotate_sender(&self.identity).is_err() {
+            return false;
+        }
+        state.invalidate_other_sender_keys(&self.identity.peer_id());
         if self.private_channels.save(&state).is_ok() {
             self.events.send(MeshEvent::PrivateChannelChanged);
-            return creator;
+            return true;
         }
         false
     }
@@ -2548,10 +2587,20 @@ impl BleRuntime {
                 }
             }
             if let Ok(states) = self.private_channels.list() {
-                for state in states {
+                for mut state in states {
                     if state.member_key(&self.identity.peer_id()).is_some()
                         && state.member_key(claimed).is_some()
                     {
+                        for notice in &state.departed {
+                            if notice.peer == claimed.as_str() {
+                                continue;
+                            }
+                            if let Ok(bytes) = serde_json::to_vec(notice) {
+                                let mut control = b"CHTRPCL2".to_vec();
+                                control.extend(bytes);
+                                self.send_private_control(claimed, &control).await;
+                            }
+                        }
                         if let Some(hint) = state.epoch_proof().encode() {
                             self.send_private_control(claimed, &hint).await;
                         }
@@ -2559,6 +2608,20 @@ impl BleRuntime {
                             && let Ok(bytes) = state.update_bytes()
                         {
                             self.send_private_control(claimed, &bytes).await;
+                        }
+                        if state
+                            .pending_distributions
+                            .iter()
+                            .any(|peer| peer == claimed.as_str())
+                            && let Some(distribution) =
+                                state.distribution(&self.identity).and_then(|d| d.encode())
+                        {
+                            state.reset_distribution_attempt(claimed.as_str());
+                            if state.mark_distribution_attempt(claimed.as_str())
+                                && self.private_channels.save(&state).is_ok()
+                            {
+                                self.send_private_control(claimed, &distribution).await;
+                            }
                         }
                     }
                 }
@@ -2741,6 +2804,40 @@ impl BleRuntime {
             self.on_private_epoch(claimed, update).await;
             return;
         }
+        if let Some(distribution) = SenderDistribution::decode(&plaintext) {
+            if let Ok(Some(mut state)) = self.private_channels.load(&distribution.id) {
+                if distribution.verify(&state, claimed) {
+                    let changed = state.accept_distribution(&distribution, claimed);
+                    if changed && self.private_channels.save(&state).is_ok() {
+                        self.events.send(MeshEvent::PrivateChannelChanged);
+                    }
+                    if let Some(ack) = distribution.ack() {
+                        self.send_private_control(claimed, &ack).await;
+                    }
+                }
+            }
+            return;
+        }
+        if plaintext.len() == 64 && plaintext.starts_with(b"CHTRPSA3") {
+            if let Ok(id) = uuid::Uuid::from_slice(&plaintext[8..24]) {
+                if let Ok(Some(mut state)) = self.private_channels.load(&id.to_string()) {
+                    if state.member_key(claimed).is_some()
+                        && state.chain_hash().ok().as_deref() == Some(&plaintext[24..56])
+                        && state.sender_keys.iter().any(|key| {
+                            key.peer == self.identity.peer_id().as_str()
+                                && key.generation.to_be_bytes() == plaintext[56..64]
+                        })
+                    {
+                        state
+                            .pending_distributions
+                            .retain(|peer| peer != claimed.as_str());
+                        state.reset_distribution_attempt(claimed.as_str());
+                        let _ = self.private_channels.save(&state);
+                    }
+                }
+            }
+            return;
+        }
         if let Some(proof) = EpochProof::decode(&plaintext) {
             self.on_private_epoch_hint(claimed, proof).await;
             return;
@@ -2763,7 +2860,9 @@ impl BleRuntime {
         if plaintext.len() == 32 && plaintext.starts_with(b"CHTRPLA1") {
             if let Ok(id) = uuid::Uuid::from_slice(&plaintext[8..24]) {
                 let epoch = u64::from_be_bytes(plaintext[24..32].try_into().expect("leave epoch"));
-                let _ = self.private_channels.clear_pending_leave(&id.to_string(), epoch, claimed);
+                let _ = self
+                    .private_channels
+                    .clear_pending_leave(&id.to_string(), epoch, claimed);
             }
             return;
         }
@@ -3726,7 +3825,7 @@ impl BleRuntime {
         let Ok(Some(state)) = self.private_channels.load(id) else {
             return;
         };
-        if state.stale || !state.departed.is_empty() {
+        if state.stale {
             return;
         }
         let packet_sender = self.identity.peer_id();
@@ -4497,7 +4596,9 @@ impl BleRuntime {
                                 break;
                             }
                         }
-                        if self.private_channels.save(&channel).is_err() {
+                        if channel.rotate_sender(&self.identity).is_err()
+                            || self.private_channels.save(&channel).is_err()
+                        {
                             continue;
                         }
                         self.events.send(MeshEvent::PrivateChannelChanged);
@@ -4509,6 +4610,21 @@ impl BleRuntime {
                     {
                         for peer in &channel.awaiting_rekey {
                             self.send_private_control(&PeerId::from_str(peer), &bytes)
+                                .await;
+                        }
+                    }
+                    if let Some(distribution) = channel
+                        .distribution(&self.identity)
+                        .and_then(|d| d.encode())
+                    {
+                        let peers = channel.pending_distributions.clone();
+                        for peer in peers {
+                            if !channel.mark_distribution_attempt(&peer)
+                                || self.private_channels.save(&channel).is_err()
+                            {
+                                continue;
+                            }
+                            self.send_private_control(&PeerId::from_str(&peer), &distribution)
                                 .await;
                         }
                     }
