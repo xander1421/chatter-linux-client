@@ -1,0 +1,50 @@
+import { Avatar } from "avatar.slint";
+import { Colors } from "../theme/colors.slint";
+import { Spacing } from "../theme/spacing.slint";
+import { Typography } from "../theme/typography.slint";
+
+export struct AvatarOption { label: string, source: image, color: color, initials: bool }
+
+export component AvatarPicker inherits VerticalLayout {
+    in property <[AvatarOption]> choices: [];
+    in property <int> selected-index: -1;
+    in property <string> name: "";
+    in property <bool> disabled: false;
+    callback selected(int);
+
+    spacing: Spacing.xs;
+    Text {
+        text: "Choose your avatar";
+        color: Colors.text-secondary;
+        font-size: Typography.sm;
+        horizontal-alignment: center;
+    }
+    HorizontalLayout {
+        alignment: center;
+        spacing: Spacing.xs;
+        for choice[i] in root.choices: Rectangle {
+            width: min(48px, (root.width - 5 * Spacing.xs) / 6);
+            height: self.width;
+            border-radius: self.width / 2;
+            background: transparent;
+            border-width: root.selected-index == i ? 2px : 0px;
+            border-color: Colors.text-primary;
+            accessible-role: button;
+            accessible-label: choice.label + " avatar" + (root.selected-index == i ? ", selected" : "");
+            Avatar {
+                x: (parent.width - self.width) / 2;
+                y: (parent.height - self.height) / 2;
+                size: parent.width - 8px;
+                source: choice.source;
+                name: choice.initials ? root.name : "";
+                fallback-text: "?";
+                fallback-bg: choice.color;
+                fallback-fg: Colors.on-action;
+            }
+            TouchArea {
+                enabled: !root.disabled;
+                clicked => { root.selected(i); }
+            }
+        }
+    }
+}

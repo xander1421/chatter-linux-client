@@ -12,6 +12,7 @@
 //! Services encapsulate all repository access - UI code never touches repos directly.
 
 pub mod auth;
+pub(crate) mod avatar_defaults;
 /// Android hardware/gesture Back. Compiled everywhere; inert on desktop.
 pub mod back;
 #[cfg(feature = "call-ui")]
