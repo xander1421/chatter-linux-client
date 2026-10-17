@@ -2,6 +2,7 @@
 //!
 //! Handles selecting a DM conversation, loading messages, and presence.
 
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 use slint::{ComponentHandle, ModelRc, SharedString, VecModel};
@@ -14,6 +15,24 @@ use crate::MainWindow;
 
 use super::stop_audio_playback;
 use crate::bin_ui::features::history_owner::HistoryOwner;
+
+// Notification delivery and the selection callback run on the UI thread.
+// Capture this one-shot preference before the asynchronous history load.
+static NOTIFICATION_OPEN_LATEST: AtomicBool = AtomicBool::new(false);
+
+pub(crate) fn open_from_notification(
+    window: &MainWindow,
+    conversation: chatter_core::state::ActiveConversation,
+) {
+    if matches!(
+        conversation,
+        chatter_core::state::ActiveConversation::ServerDm { .. }
+            | chatter_core::state::ActiveConversation::AnonDm(_)
+    ) {
+        NOTIFICATION_OPEN_LATEST.store(true, Ordering::Relaxed);
+    }
+    super::select_conversation(window, conversation);
+}
 
 /// Sidebar menu › Delete chat on a DM row, or a channel we are no longer in
 /// (confirmed in the menu). Core resolves the row and deletes
@@ -200,8 +219,9 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
 
     window.on_dm_selected(move |dm_id: SharedString| {
+        let open_latest = NOTIFICATION_OPEN_LATEST.swap(false, Ordering::Relaxed);
         let open_started = std::time::Instant::now();
-        tracing::info!(kind = "dm", stage = "tap", elapsed_ms = 0, "conversation_open");
+        tracing::info!(kind = "dm", stage = "tap", source = if open_latest { "notification" } else { "other" }, elapsed_ms = 0, "conversation_open");
         let dm_id_str = dm_id.to_string();
         if dm_id_str.is_empty() {
             return;
@@ -354,7 +374,11 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 let anchor_page = messages.clone();
                 crate::run_history_ui!(weak, owner, |w| {
                     use slint::Model;
-                    super::apply_unread_anchor(&w, anchor, &anchor_page);
+                    super::apply_unread_anchor(
+                        &w,
+                        if open_latest { Default::default() } else { anchor },
+                        &anchor_page,
+                    );
                     let before = w.get_messages().row_count();
                     let current_user_id = ui_ctx.session_current_user_id().map(|id| id.to_string()).unwrap_or_default();
                     let slint_messages: Vec<_> = display_messages.iter().map(|d| d.to_slint_preview_with_user(&current_user_id)).collect();
@@ -474,7 +498,11 @@ pub fn wire_dm_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let anchor_page = messages.clone();
             let media_owner = owner.clone();
             crate::run_history_ui!(weak, owner, |w| {
-                super::apply_unread_anchor(&w, anchor, &anchor_page);
+                super::apply_unread_anchor(
+                    &w,
+                    if open_latest { Default::default() } else { anchor },
+                    &anchor_page,
+                );
                 let current_user_id = ui_ctx.session_current_user_id().map(|id| id.to_string()).unwrap_or_default();
                 let slint_messages: Vec<_> = display_messages.iter().map(|d| d.to_slint_preview_with_user(&current_user_id)).collect();
                 w.set_messages(ModelRc::new(VecModel::from(slint_messages)));

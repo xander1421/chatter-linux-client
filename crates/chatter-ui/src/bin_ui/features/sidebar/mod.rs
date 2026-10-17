@@ -62,13 +62,20 @@ pub(crate) fn fill_open_media(
     mut rows: Vec<crate::bin_ui::converters::MessageDisplayData>,
     current_user_id: String,
 ) {
-    crate::rt_handle().spawn(async move {
+    // Image decoding is CPU work and can be slow on an older phone after the
+    // Android pause path has wiped the decoded-image cache. Keep it off the
+    // Tokio workers that also drive conversation and visibility events.
+    let queued_at = std::time::Instant::now();
+    crate::rt_handle().spawn_blocking(move || {
+        let queued_ms = queued_at.elapsed().as_millis();
+        let decode_started = std::time::Instant::now();
         for row in &mut rows {
             row.decode_attachment_thumbnails();
         }
         let image_count = rows.iter().flat_map(|m| &m.attachments)
             .filter(|a| a.thumbnail_pixels.is_some()).count();
-        tracing::info!(stage = "images_decoded", images = image_count, "conversation_open");
+        tracing::info!(stage = "images_decoded", images = image_count,
+            queued_ms, decode_ms = decode_started.elapsed().as_millis(), "conversation_open");
         crate::run_history_ui!(weak, owner, |w| {
             use slint::Model;
             let model = w.get_messages();

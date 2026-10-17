@@ -95,7 +95,10 @@ pub fn open_pending(window: &crate::MainWindow) {
         chatter_core::client::NotificationTarget::Conversation(conversation) => {
             window.set_active_tab("chats".into());
             window.set_mobile_show_chat(true);
-            crate::bin_ui::features::sidebar::select_conversation(window, conversation);
+            // A message notification is a request for the newest message.
+            // The ordinary sidebar open instead starts at the first unread
+            // row, which can be much older than the notification itself.
+            crate::bin_ui::features::sidebar::dm::open_from_notification(window, conversation);
         }
         chatter_core::client::NotificationTarget::SecretRequest => {
             window.set_mobile_show_chat(false);

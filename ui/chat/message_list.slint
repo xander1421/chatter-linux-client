@@ -681,10 +681,12 @@ export component MessageList inherits Rectangle {
                 } else if (root.jump-row >= 0) {
                     // The bootstrap timer or a fresh delegate measurement owns
                     // navigation; this callback's coordinates may be transient.
-                } else if (root.at-end && !root.opening-on-unread && !root.scrolling
+                } else if ((root.at-end || root.following-tail)
+                        && !root.opening-on-unread && !root.scrolling
                         && self.viewport-height != root.seen-height && self.bottom-gap() > 1px) {
                     // A content re-estimate (a row measured, a thumbnail
-                    // grown) while sitting exactly on the end keeps the end.
+                    // grown) can follow the opening seek's last retry. Keep
+                    // its tail intent through the first stable media layout.
                     self.seek-end();
                 } else {
                     self.read-position();
