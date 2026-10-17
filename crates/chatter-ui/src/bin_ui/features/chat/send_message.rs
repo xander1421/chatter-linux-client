@@ -961,6 +961,23 @@ async fn deliver_inner(
         // switch (an upload takes up to 30s per file) is in the store, and
         // shows when its conversation is opened again.
         if ui_ctx.chat_state().active_conversation() == conversation {
+            // A peer can receipt a secret mailbox post before this send
+            // returns and its own bubble is appended. The receipt event then
+            // finds only the provisional row (with a different timestamp).
+            // Read the persisted status now so that early receipts survive
+            // the replacement of that provisional row.
+            let delivery_status = msg_id
+                .parse::<chatter_core::domain::ids::MessageId>()
+                .ok()
+                .and_then(|id| ui_ctx.get_message_local(&id))
+                .map(|message| {
+                    chatter_core::services::message::display_delivery_status(
+                        &message.delivery_status,
+                        message.failure_reason.as_deref(),
+                    )
+                    .to_owned()
+                })
+                .unwrap_or_else(|| delivery_status.to_owned());
             let slint_attachments: Vec<_> =
                 attachment_display.iter().map(|a| a.to_slint()).collect();
             let (reply_thumbnail, reply_has_thumbnail, reply_thumb_w, reply_thumb_h) =
@@ -996,7 +1013,7 @@ async fn deliver_inner(
                 reply_thumb_w,
                 reply_thumb_h,
                 &reply_media,
-                delivery_status,
+                &delivery_status,
             );
             {
                 use slint::Model;
