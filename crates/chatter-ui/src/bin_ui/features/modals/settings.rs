@@ -515,18 +515,34 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
         let weak = weak_mb_export.clone();
         let passphrase = passphrase.to_string();
         tokio::spawn(async move {
-            // `FilePicker` is `#[cfg(not(target_os = "android"))]` in core
-            // (media/mod.rs:33). Without this gate the Android target does not
-            // compile at all — which is how it has been on this branch since
-            // the backup UI landed. Tell the user instead of failing the build.
             #[cfg(target_os = "android")]
             {
-                let _ = (&ui_ctx, &passphrase);
-                set_message_backup_status(
-                    &weak,
-                    "Export to a file is not available on Android yet — use \"Back up to server\""
-                        .to_string(),
-                );
+                use crate::platform::android::backup_document;
+                let staged = match tempfile::NamedTempFile::new_in(ui_ctx.directories().cache_dir()) {
+                    Ok(file) => file,
+                    Err(e) => {
+                        set_message_backup_status(&weak, format!("Export failed: {e}"));
+                        return;
+                    }
+                };
+                let stats = match ui_ctx.export_message_backup(staged.path(), &passphrase).await {
+                    Ok(stats) => stats,
+                    Err(e) => {
+                        set_message_backup_status(&weak, format!("Export failed: {e}"));
+                        return;
+                    }
+                };
+                match backup_document::create().await {
+                    Ok(true) => {
+                        let status = match backup_document::write_document(staged.path()) {
+                            Ok(()) => format!("Backup exported ({} rows)", stats.rows),
+                            Err(e) => format!("Export failed: {e}"),
+                        };
+                        set_message_backup_status(&weak, status);
+                    }
+                    Ok(false) => {}
+                    Err(e) => set_message_backup_status(&weak, format!("Export failed: {e}")),
+                }
             }
             #[cfg(not(target_os = "android"))]
             {
@@ -557,14 +573,25 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
         let weak = weak_mb_import.clone();
         let passphrase = passphrase.to_string();
         tokio::spawn(async move {
-            // See the export closure above — same cfg gate, same reason.
             #[cfg(target_os = "android")]
             {
-                let _ = (&ui_ctx, &passphrase);
-                set_message_backup_status(
-                    &weak,
-                    "Restore from a file is not available on Android yet".to_string(),
-                );
+                use crate::platform::android::backup_document;
+                match backup_document::open().await {
+                    Ok(Some(path)) => {
+                        let result = ui_ctx.import_message_backup(&path, &passphrase).await;
+                        let _ = tokio::fs::remove_file(&path).await;
+                        let status = match result {
+                            Ok(s) => format!(
+                                "Restored {} of {} rows (rest already present)",
+                                s.rows_inserted, s.rows_seen
+                            ),
+                            Err(e) => format!("Restore failed: {e}"),
+                        };
+                        set_message_backup_status(&weak, status);
+                    }
+                    Ok(None) => {}
+                    Err(e) => set_message_backup_status(&weak, format!("Restore failed: {e}")),
+                }
             }
             #[cfg(not(target_os = "android"))]
             {
@@ -894,11 +921,17 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
 
     // Local AI enabled toggle
     let ui_ctx_ai = ui_ctx.clone();
+    let weak_ai_save = window.as_weak();
     #[cfg(feature = "jarvis")]
     let weak_ai_toggle = window.as_weak();
     window.on_settings_local_ai_enabled_changed(move |enabled: bool| {
         if let Err(e) = ui_ctx_ai.set_local_ai_enabled(enabled) {
             tracing::error!("Failed to save local AI enabled setting: {}", e);
+            if let Some(w) = weak_ai_save.upgrade() {
+                w.set_settings_local_ai_enabled(
+                    ui_ctx_ai.local_ai_enabled().unwrap_or(!enabled),
+                );
+            }
             return;
         }
         tracing::debug!("Local AI enabled setting changed to: {}", enabled);

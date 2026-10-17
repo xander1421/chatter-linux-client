@@ -735,6 +735,60 @@ class MainActivity : GameActivity() {
             nativeOnFilesPicked(paths.toTypedArray())
         }
 
+    @Volatile private var backupDestination: Uri? = null
+    private val createBackupDocument =
+        registerForActivityResult(ActivityResultContracts.CreateDocument("application/octet-stream")) { uri ->
+            backupDestination = uri
+            nativeOnBackupDestination(uri != null)
+        }
+    private val openBackupDocument =
+        registerForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+            val path = uri?.let { copyBackupToCache(it) } ?: ""
+            nativeOnBackupDocument(path)
+        }
+
+    @Suppress("unused")
+    fun launchBackupCreate() {
+        runOnUiThread { createBackupDocument.launch("chatter-backup.chbk") }
+    }
+
+    @Suppress("unused")
+    fun launchBackupOpen() {
+        runOnUiThread { openBackupDocument.launch(arrayOf("*/*")) }
+    }
+
+    @Suppress("unused")
+    fun writeBackupDocument(path: String): Boolean {
+        val uri = backupDestination ?: return false
+        backupDestination = null
+        return try {
+            val output = contentResolver.openOutputStream(uri, "wt") ?: return false
+            File(path).inputStream().use { input -> output.use { input.copyTo(it) } }
+            true
+        } catch (_: Exception) {
+            Log.e(TAG, "Backup document write failed")
+            false
+        }
+    }
+
+    private fun copyBackupToCache(uri: Uri): String {
+        var file: File? = null
+        return try {
+            val staged = File.createTempFile("message_backup_", ".chbk", cacheDir)
+            file = staged
+            val input = contentResolver.openInputStream(uri) ?: throw java.io.IOException("No input")
+            input.use { source -> staged.outputStream().use { source.copyTo(it) } }
+            staged.absolutePath
+        } catch (_: Exception) {
+            file?.delete()
+            Log.e(TAG, "Backup document read failed")
+            ""
+        }
+    }
+
+    private external fun nativeOnBackupDestination(selected: Boolean)
+    private external fun nativeOnBackupDocument(path: String)
+
     /** Called from Rust (JNI) to open the document chooser. */
     @Suppress("unused")
     fun launchFilePicker(mimeTypes: Array<String>) {

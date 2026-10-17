@@ -131,4 +131,11 @@ impl LocalAIService {
         }
         Ok(())
     }
+
+    /// Read the persisted opt-in independently of compile-time model availability.
+    pub fn enabled(&self) -> Result<bool, LocalAIError> {
+        self.settings_repo
+            .get_local_ai_enabled()
+            .map_err(|e| LocalAIError::LoadFailed(format!("Failed to read enabled state: {}", e)))
+    }
 }
