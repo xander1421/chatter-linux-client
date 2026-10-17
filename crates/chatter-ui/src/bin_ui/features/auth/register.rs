@@ -26,7 +26,9 @@ fn pin_validation_message(pin: &str) -> String {
 }
 
 fn registration_error_message(message: &str) -> &str {
-    message.strip_prefix("validation error: ").unwrap_or(message)
+    message
+        .strip_prefix("validation error: ")
+        .unwrap_or(message)
 }
 
 pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
@@ -37,18 +39,21 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     if let Ok(mut g) = selected_avatar().lock() {
         *g = None;
     }
+    super::super::avatar_defaults::install(window);
+    super::super::avatar_defaults::show_register_default(
+        window,
+        chatter_core::ui::random_preset_avatar_index(),
+    );
 
     window.on_register_select_default_avatar({
         let weak = weak_window.clone();
         move |idx| {
-            if (0..3).contains(&idx) {
+            if (0..chatter_core::ui::DEFAULT_AVATARS.len() as i32).contains(&idx) {
                 if let Ok(mut g) = selected_avatar().lock() {
                     *g = None;
                 }
                 if let Some(w) = weak.upgrade() {
-                    w.set_register_has_avatar(false);
-                    w.set_register_avatar_source(slint::Image::default());
-                    w.set_register_selected_default_idx(idx);
+                    super::super::avatar_defaults::show_register_default(&w, idx as usize);
                 }
             }
         }
@@ -61,8 +66,8 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 *g = None;
             }
             if let Some(w) = weak.upgrade() {
-                w.set_register_has_avatar(false);
-                w.set_register_avatar_source(slint::Image::default());
+                let idx = w.get_register_selected_default_idx().max(0) as usize;
+                super::super::avatar_defaults::show_register_default(&w, idx);
             }
         }
     });
@@ -210,12 +215,10 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 if let Some(bytes) = user_avatar {
                     bytes
                 } else {
-                    let color = weak_window.upgrade()
-                        .map(|w| w.get_register_avatar_color())
-                        .unwrap_or_else(|| slint::Color::from_rgb_u8(15, 118, 110));
-                    chatter_core::ui::registration_avatar(
-                        &display_name, [color.red(), color.green(), color.blue()]
-                    ).unwrap_or_default()
+                    let index = weak_window.upgrade()
+                        .map(|w| w.get_register_selected_default_idx().max(0) as usize)
+                        .unwrap_or(0);
+                    chatter_core::ui::default_avatar_bytes(index, &display_name).unwrap_or_default()
                 }
             };
 

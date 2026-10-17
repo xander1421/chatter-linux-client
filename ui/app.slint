@@ -19,6 +19,7 @@ import { DismissButton } from "components/dismiss_button.slint";
 // Import auth screens
 import { LoginPage } from "pages/login.slint";
 import { RegisterPage } from "pages/register.slint";
+import { AvatarOption } from "components/avatar_picker.slint";
 import { AccountRecoveryPage } from "pages/account_recovery.slint";
 import { LinkDevicePage } from "pages/link_device.slint";
 import { LoadingPage } from "pages/loading.slint";
@@ -362,6 +363,7 @@ export component MainWindow inherits Window {
     in property <bool> register-loading: false;
     in property <string> register-error: "";
     in property <image> register-avatar-source;
+    in property <[AvatarOption]> avatar-options: [];
     in property <bool> register-has-avatar: false;
     in-out property <int> register-selected-default-idx: 0;
     in-out property <color> register-avatar-color: Colors.avatar-teal;
@@ -952,6 +954,9 @@ export component MainWindow inherits Window {
     in-out property <string> edit-profile-display-name: "";
     in-out property <string> edit-profile-bio: "";
     in property <image> edit-profile-avatar;
+    in property <color> edit-profile-avatar-color: Colors.avatar-teal;
+    in property <int> edit-profile-selected-default-idx: -1;
+    in property <bool> edit-profile-has-photo: false;
     in property <bool> edit-profile-loading: false;
     in property <string> edit-profile-error: "";
 
@@ -1324,6 +1329,8 @@ export component MainWindow inherits Window {
     callback profile-reset-share-link();
     callback edit-profile-save(string, string);
     callback edit-profile-change-avatar();
+    callback edit-profile-select-default-avatar(int);
+    callback edit-profile-remove-avatar();
 
     // Friends modal
     callback friends-modal-switch-tab(string);
@@ -1854,6 +1861,7 @@ export component MainWindow inherits Window {
                 loading: root.register-loading;
                 error: root.register-error;
                 avatar-source: root.register-avatar-source;
+                avatar-options: root.avatar-options;
                 has-avatar: root.register-has-avatar;
                 selected-default-idx <=> root.register-selected-default-idx;
                 avatar-color <=> root.register-avatar-color;
@@ -2898,6 +2906,10 @@ export component MainWindow inherits Window {
             display-name <=> root.edit-profile-display-name;
             bio <=> root.edit-profile-bio;
             avatar: root.edit-profile-avatar;
+            avatar-options: root.avatar-options;
+            avatar-color: root.edit-profile-avatar-color;
+            selected-default-idx: root.edit-profile-selected-default-idx;
+            has-photo: root.edit-profile-has-photo;
             loading: root.edit-profile-loading;
             error-message: root.edit-profile-error;
 
@@ -2910,6 +2922,8 @@ export component MainWindow inherits Window {
             change-avatar => {
                 root.edit-profile-change-avatar();
             }
+            select-default-avatar(idx) => { root.edit-profile-select-default-avatar(idx); }
+            remove-avatar => { root.edit-profile-remove-avatar(); }
         }
 
         // Recovery Codes Modal

@@ -7,6 +7,8 @@ import { Modal } from "../components/modal.slint";
 import { Button } from "../components/button.slint";
 import { Input } from "../components/input.slint";
 import { Avatar } from "../components/avatar.slint";
+import { AvatarPicker, AvatarOption } from "../components/avatar_picker.slint";
+import { Icons } from "../theme/icons.slint";
 import { Materials } from "../theme/materials.slint";
 
 export component EditProfileModal inherits Rectangle {
@@ -14,17 +16,24 @@ export component EditProfileModal inherits Rectangle {
     in-out property <string> display-name: "";
     in-out property <string> bio: "";
     in property <image> avatar;
+    in property <[AvatarOption]> avatar-options: [];
+    in property <color> avatar-color: Colors.avatar-teal;
+    in property <int> selected-default-idx: -1;
+    in property <bool> has-photo: false;
+    property <bool> avatar-menu-open: false;
     in property <bool> loading: false;
     in property <string> error-message: "";
 
     callback close();
     callback save(string, string); // display-name, bio
     callback change-avatar();
+    callback select-default-avatar(int);
+    callback remove-avatar();
 
     Modal {
         show: root.show-modal;
         title: "Edit profile";
-        modal-width: 400px;
+        modal-width: 440px;
 
         close => {
             root.close();
@@ -41,18 +50,56 @@ export component EditProfileModal inherits Rectangle {
 
                 HorizontalLayout {
                     alignment: center;
-                    Avatar {
-                        size: 80px;
-                        name: root.display-name;
-                        source: root.avatar;
+                    Rectangle {
+                        width: 96px;
+                        height: 96px;
+                        background: transparent;
+                        accessible-role: button;
+                        accessible-label: "Edit profile photo";
+                        Avatar {
+                            size: 96px;
+                            name: root.display-name;
+                            source: root.avatar;
+                            fallback-text: "?";
+                            fallback-bg: root.avatar-color;
+                            fallback-fg: Colors.on-action;
+                        }
+                        Rectangle {
+                            x: parent.width - self.width;
+                            y: parent.height - self.height;
+                            width: 30px;
+                            height: 30px;
+                            border-radius: 15px;
+                            background: Colors.action-fill;
+                            border-width: Spacing.stroke;
+                            border-color: Colors.surface;
+                            Image { source: Icons.edit; width: 16px; height: 16px; colorize: Colors.on-action; }
+                        }
+                        TouchArea { enabled: !root.loading; clicked => { root.avatar-menu-open = !root.avatar-menu-open; } }
                     }
                 }
-
-                Button {
-                    text: "Change Avatar";
-                    variant: "ghost";
-                    clicked => { root.change-avatar(); }
+                if root.avatar-menu-open: HorizontalLayout {
+                    alignment: center;
+                    spacing: Spacing.sm;
+                    Button {
+                        text: "Choose photo";
+                        variant: "secondary";
+                        clicked => { root.avatar-menu-open = false; root.change-avatar(); }
+                    }
+                    if root.has-photo: Button {
+                        text: "Remove photo";
+                        variant: "secondary";
+                        clicked => { root.avatar-menu-open = false; root.remove-avatar(); }
+                    }
                 }
+            }
+
+            AvatarPicker {
+                choices: root.avatar-options;
+                selected-index: root.selected-default-idx;
+                name: root.display-name;
+                disabled: root.loading;
+                selected(i) => { root.select-default-avatar(i); }
             }
 
             // Display Name Section

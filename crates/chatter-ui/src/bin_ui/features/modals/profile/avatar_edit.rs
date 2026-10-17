@@ -42,6 +42,7 @@ struct Edit {
     operation: u64,
     stack: Option<ModelRc<SharedString>>,
     staged: Option<Result<Vec<u8>, String>>,
+    default_index: Option<usize>,
     picking: bool,
     saving: bool,
 }
@@ -61,9 +62,13 @@ pub(super) fn retire() {
 }
 fn open(w: &MainWindow, owner: Owner) {
     retire();
+    let default_index = chatter_core::ui::random_preset_avatar_index();
     w.set_edit_profile_display_name(w.get_profile_display_name());
     w.set_edit_profile_bio(w.get_profile_bio());
     w.set_edit_profile_avatar(w.get_user_avatar_source());
+    w.set_edit_profile_has_photo(w.get_user_avatar_source().size().width > 0);
+    w.set_edit_profile_selected_default_idx(default_index as i32);
+    w.set_edit_profile_avatar_color(slint::Color::from_rgb_u8(15, 118, 110));
     w.set_edit_profile_error("".into());
     w.set_edit_profile_loading(false);
     crate::bin_ui::features::back::push(w, "edit-profile");
@@ -71,6 +76,7 @@ fn open(w: &MainWindow, owner: Owner) {
         let mut s = s.borrow_mut();
         s.stack = Some(w.get_modal_stack());
         s.owner = Some(owner);
+        s.default_index = Some(default_index);
     });
 }
 fn current(w: &MainWindow, owner: Owner, r: &Request) -> bool {
@@ -173,6 +179,7 @@ fn finish_picker(
         Ok(Some(bytes)) => match crate::bin_ui::slint_conversions::memory_to_slint_image(&bytes) {
             Ok(image) => {
                 w.set_edit_profile_avatar(image);
+                w.set_edit_profile_has_photo(true);
                 w.set_edit_profile_error("".into());
                 EDIT.with(|s| s.borrow_mut().staged = Some(Ok(bytes)));
             }
@@ -187,6 +194,35 @@ fn finish_picker(
 fn reject_picker(w: &MainWindow, error: String) {
     w.set_edit_profile_error(error.clone().into());
     EDIT.with(|s| s.borrow_mut().staged = Some(Err(error)));
+}
+
+fn select_default(w: &MainWindow, owner: Owner, index: usize) {
+    if owner.user.is_none() || w.get_active_modal() != "edit-profile" {
+        return;
+    }
+    let Some(bytes) =
+        chatter_core::ui::default_avatar_bytes(index, w.get_edit_profile_display_name().as_str())
+    else {
+        return;
+    };
+    EDIT.with(|state| {
+        let mut state = state.borrow_mut();
+        if state.owner != Some(owner)
+            || state.stack.as_ref() != Some(&w.get_modal_stack())
+            || state.saving
+        {
+            return;
+        }
+        if let Some(alive) = &state.alive {
+            alive.store(false, Ordering::SeqCst);
+        }
+        state.operation = state.operation.wrapping_add(1);
+        state.picking = false;
+        state.default_index = Some(index);
+        state.staged = Some(Ok(bytes));
+        crate::bin_ui::features::avatar_defaults::show_edit_default(w, index);
+        w.set_edit_profile_error("".into());
+    });
 }
 fn finish_save(w: &MainWindow, owner: Owner, r: Request, result: Result<Profile, String>) {
     if !current(w, owner, &r) {
@@ -238,6 +274,23 @@ fn finish_save(w: &MainWindow, owner: Owner, r: Request, result: Result<Profile,
 pub(super) fn wire(window: &MainWindow, ctx: &Arc<ChatterClient>) {
     let weak = window.as_weak();
     let client = ctx.clone();
+    window.on_edit_profile_select_default_avatar(move |index| {
+        if let Some(w) = weak.upgrade() {
+            select_default(&w, Owner::read(&client), index.max(0) as usize);
+        }
+    });
+    let weak = window.as_weak();
+    let client = ctx.clone();
+    window.on_edit_profile_remove_avatar(move || {
+        if let Some(w) = weak.upgrade() {
+            let index = EDIT
+                .with(|s| s.borrow().default_index)
+                .unwrap_or_else(chatter_core::ui::random_preset_avatar_index);
+            select_default(&w, Owner::read(&client), index);
+        }
+    });
+    let weak = window.as_weak();
+    let client = ctx.clone();
     window.on_profile_edit_profile(move || {
         if let Some(w) = weak.upgrade() {
             if Owner::read(&client).user.is_some() {
@@ -284,9 +337,14 @@ pub(super) fn wire(window: &MainWindow, ctx: &Arc<ChatterClient>) {
     let client = ctx.clone();
     window.on_edit_profile_save(move |name, bio| {
         let Some(w) = weak.upgrade() else { return };
-        let Some((request, bytes)) = begin(&w, Owner::read(&client), true) else {
+        let Some((request, mut bytes)) = begin(&w, Owner::read(&client), true) else {
             return;
         };
+        if !w.get_edit_profile_has_photo() {
+            if let Some(index) = EDIT.with(|s| s.borrow().default_index) {
+                bytes = chatter_core::ui::default_avatar_bytes(index, name.as_str());
+            }
+        }
         let (weak, client) = (weak.clone(), client.clone());
         let name = name.to_string();
         let bio = bio.to_string();

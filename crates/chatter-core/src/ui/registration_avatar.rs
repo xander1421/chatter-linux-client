@@ -1,5 +1,70 @@
 use ab_glyph::{Font, FontArc, PxScale, ScaleFont, point};
 
+pub struct DefaultAvatar {
+    pub label: &'static str,
+    pub image: Option<&'static [u8]>,
+    pub color: [u8; 3],
+}
+
+/// Order and payloads shared by registration and the profile editor.
+pub const DEFAULT_AVATARS: [DefaultAvatar; 6] = [
+    DefaultAvatar {
+        label: "Doge",
+        image: Some(include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/avatars/doge.jpg"
+        ))),
+        color: [0, 0, 0],
+    },
+    DefaultAvatar {
+        label: "Pepe",
+        image: Some(include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/avatars/pepe.jpg"
+        ))),
+        color: [0, 0, 0],
+    },
+    DefaultAvatar {
+        label: "Wojak",
+        image: Some(include_bytes!(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../assets/avatars/wojak.jpg"
+        ))),
+        color: [0, 0, 0],
+    },
+    DefaultAvatar {
+        label: "Teal initials",
+        image: None,
+        color: [15, 118, 110],
+    },
+    DefaultAvatar {
+        label: "Blue initials",
+        image: None,
+        color: [29, 78, 216],
+    },
+    DefaultAvatar {
+        label: "Purple initials",
+        image: None,
+        color: [109, 40, 217],
+    },
+];
+
+pub fn random_preset_avatar_index() -> usize {
+    let nanos = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap_or_default()
+        .subsec_nanos();
+    nanos as usize % 3
+}
+
+pub fn default_avatar_bytes(index: usize, name: &str) -> Option<Vec<u8>> {
+    let choice = DEFAULT_AVATARS.get(index)?;
+    choice
+        .image
+        .map(|bytes| bytes.to_vec())
+        .or_else(|| registration_avatar(name, choice.color))
+}
+
 // Render the same initials shown by Avatar into real image bytes. Registration
 // uploads these bytes, so friends and linked surfaces see the chosen identity.
 pub fn registration_avatar(name: &str, color: [u8; 3]) -> Option<Vec<u8>> {

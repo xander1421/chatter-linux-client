@@ -8,6 +8,7 @@ import { Typography } from "../theme/typography.slint";
 import { Button } from "../components/button.slint";
 import { Input } from "../components/input.slint";
 import { Avatar } from "../components/avatar.slint";
+import { AvatarPicker, AvatarOption } from "../components/avatar_picker.slint";
 import { OfflineMeshNotice } from "../components/offline_mesh_notice.slint";
 import { DismissButton } from "../components/dismiss_button.slint";
 import { ShieldOnboardingToggle } from "../anon_mode/shield_onboarding.slint";
@@ -27,6 +28,7 @@ export component RegisterPage inherits Rectangle {
     in property <image> avatar-source;
     in property <bool> has-avatar: false;
     in property <int> selected-default-idx: 0;
+    in property <[AvatarOption]> avatar-options: [];
     in-out property <color> avatar-color: Colors.avatar-teal;
     property <bool> avatar-menu-open: false;
     // Touch density for the Shield header control.
@@ -215,7 +217,7 @@ export component RegisterPage inherits Rectangle {
                                 horizontal-alignment: center;
                             }
 
-                            // The preview uses the shared Avatar initials renderer.
+                            // The preview follows the selected default or an overriding photo.
                             VerticalLayout {
                                 alignment: center;
                                 spacing: Spacing.sm;
@@ -282,48 +284,12 @@ export component RegisterPage inherits Rectangle {
                                 }
                             }
 
-                            VerticalLayout {
-                                alignment: center;
-                                spacing: Spacing.xs;
-                                Text {
-                                    text: "Initials color";
-                                    color: Colors.text-muted;
-                                    font-size: Typography.xs;
-                                    horizontal-alignment: center;
-                                }
-                                HorizontalLayout {
-                                    alignment: center;
-                                    spacing: Spacing.md;
-                                    for preset[i] in [
-                                    { color: Colors.avatar-teal, label: "Teal" },
-                                    { color: Colors.avatar-blue, label: "Blue" },
-                                    { color: Colors.avatar-purple, label: "Purple" },
-                                    ]: Rectangle {
-                                        accessible-role: button;
-                                        accessible-label: preset.label + " avatar color" + (root.selected-default-idx == i ? ", selected" : "");
-                                        width: Spacing.touch-target-min;
-                                        height: Spacing.touch-target-min;
-                                        border-radius: self.width / 2;
-                                        background: transparent;
-                                        border-width: root.selected-default-idx == i ? Spacing.stroke : 0px;
-                                        border-color: Colors.text-primary;
-                                        Rectangle {
-                                            x: (parent.width - self.width) / 2;
-                                            y: (parent.height - self.height) / 2;
-                                            width: 34px;
-                                            height: 34px;
-                                            border-radius: self.width / 2;
-                                            background: preset.color;
-                                        }
-                                        TouchArea {
-                                            enabled: !root.loading;
-                                            clicked => {
-                                                root.avatar-color = preset.color;
-                                                root.select-default-avatar(i);
-                                            }
-                                        }
-                                    }
-                                }
+                            AvatarPicker {
+                                choices: root.avatar-options;
+                                selected-index: root.selected-default-idx;
+                                name: root.display-name;
+                                disabled: root.loading;
+                                selected(i) => { root.select-default-avatar(i); }
                             }
 
                             // Display name
