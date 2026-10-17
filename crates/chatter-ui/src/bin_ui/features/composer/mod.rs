@@ -236,8 +236,8 @@ fn wire_per_conversation_drafts(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
         ids.sort();
         ids
     };
-    let mut rx = ui_ctx.chat_state().subscribe();
-    let initial = ui_ctx.chat_state().get();
+    let mut rx = ui_ctx.subscribe_chat_snapshots();
+    let initial = ui_ctx.chat_snapshot();
     let mut current = key(&initial);
     let mut current_revision = initial.attachment_revision;
     let mut current_trays = trays(&initial);
@@ -256,7 +256,7 @@ fn wire_per_conversation_drafts(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
             let snapshot = match rx.recv().await {
                 Ok(snap) => snap,
                 Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
-                    Arc::new(ctx.chat_state().get())
+                    Arc::new(ctx.chat_snapshot())
                 }
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             };

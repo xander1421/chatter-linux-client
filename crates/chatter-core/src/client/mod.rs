@@ -2664,6 +2664,25 @@ impl ChatterClient {
     pub fn chat_snapshot(&self) -> crate::state::ChatStateData {
         self.services.chat_state.get()
     }
+
+    /// Read-only account state for UI ownership and session-revision checks.
+    pub fn auth_snapshot(&self) -> crate::state::AuthStateData {
+        self.services.auth_state.get()
+    }
+
+    pub fn subscribe_auth_snapshots(
+        &self,
+    ) -> tokio::sync::broadcast::Receiver<crate::state::StateSnapshot<crate::state::AuthStateData>>
+    {
+        self.services.auth_state.subscribe()
+    }
+
+    pub fn subscribe_chat_snapshots(
+        &self,
+    ) -> tokio::sync::broadcast::Receiver<crate::state::StateSnapshot<crate::state::ChatStateData>>
+    {
+        self.services.chat_state.subscribe()
+    }
     pub fn message_state(&self) -> &MessageState {
         &self.services.message_state
     }
