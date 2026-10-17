@@ -228,6 +228,9 @@ impl ClientBuilder {
             composer_owner: Mutex::new(String::new()),
             expired_messages: tokio::sync::broadcast::channel(16).0,
         });
+        client.cleanup_staged_upload_temps().map_err(|e| {
+            ClientError::Validation(format!("Cannot clean staged upload files: {e}"))
+        })?;
         client.discard_legacy_staging_all();
         client.install_session_recovery();
         Ok(client)
