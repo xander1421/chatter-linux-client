@@ -64,6 +64,18 @@ pub fn add_jarvis_thinking_placeholder(window: &MainWindow) -> String {
     id
 }
 
+/// Clear only the placeholder belonging to this request.
+pub fn remove_jarvis_thinking_placeholder(window: &MainWindow, thinking_id: &str) {
+    let model = window.get_messages();
+    if model.iter().any(|row| row.message_id.as_str() == thinking_id) {
+        let rows: Vec<_> = model
+            .iter()
+            .filter(|row| row.message_id.as_str() != thinking_id)
+            .collect();
+        window.set_messages(ModelRc::new(VecModel::from(rows)));
+    }
+}
+
 /// Remove the thinking placeholder and add the real response.
 pub fn replace_thinking_with_response(
     window: &MainWindow,

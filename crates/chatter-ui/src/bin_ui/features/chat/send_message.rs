@@ -10,7 +10,7 @@
 
 use std::sync::Arc;
 
-use slint::ComponentHandle;
+use slint::{ComponentHandle, Model};
 
 use chatter_core::client::{ChatterClient, ComposerReply, ComposerSend};
 use chatter_core::services::gateway;
@@ -461,10 +461,22 @@ pub fn wire_send(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         #[cfg(feature = "jarvis")]
         if let Some(cmd) = crate::bin_ui::features::jarvis::parse_slash_command(&text) {
             let ui_ctx = ui_ctx_jarvis.clone();
-            let channel_id = chat_state.get().active_channel_id;
+            let conversation = chat_state.active_conversation();
+            let auth = ui_ctx.auth_state().get();
+            let owner =
+                auth.current_user_id
+                    .map(|user_id| chatter_core::client::JarvisSessionOwner {
+                        user_id,
+                        revision: auth.session_revision,
+                    });
+            let view_owner = crate::bin_ui::features::history_owner::HistoryOwner::capture(
+                &ui_ctx,
+                conversation,
+            );
             let weak = weak_window.clone();
             tokio::spawn(async move {
-                handle_jarvis_slash_command(&ui_ctx, cmd, channel_id.as_ref(), weak).await;
+                handle_jarvis_slash_command(&ui_ctx, cmd, conversation, owner, view_owner, weak)
+                    .await;
             });
             return true;
         }
@@ -1078,37 +1090,40 @@ async fn deliver_inner(
 async fn handle_jarvis_slash_command(
     ui_ctx: &Arc<ChatterClient>,
     cmd: chatter_core::services::jarvis::JarvisCommand,
-    channel_id: Option<&chatter_core::domain::ids::ChannelId>,
+    conversation: ActiveConversation,
+    session: Option<chatter_core::client::JarvisSessionOwner>,
+    owner: crate::bin_ui::features::history_owner::HistoryOwner,
     weak_window: slint::Weak<MainWindow>,
 ) {
-    use chatter_core::domain::jarvis::JarvisContext;
-
-    let context = match channel_id {
-        Some(id) => JarvisContext::channel(id.clone()),
-        None => {
-            let placeholder_id: chatter_core::domain::ids::ChannelId = uuid::Uuid::nil().into();
-            JarvisContext::dm(placeholder_id)
-        }
-    };
-    let author_id = ui_ctx.auth_state().get().current_user_id;
+    let Some(session) = session else { return };
+    if !owner.is_current() {
+        return;
+    }
 
     // Surface the thinking placeholder before kicking off the core call.
-    ui_ctx.jarvis_state().set_thinking(true);
     let thinking_id = {
         let weak = weak_window.clone();
-        let (tx, rx) = std::sync::mpsc::channel();
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let owner = owner.clone();
+        let jarvis_state = ui_ctx.jarvis_state().clone();
         let _ = slint::invoke_from_event_loop(move || {
-            if let Some(w) = weak.upgrade() {
-                w.set_jarvis_thinking(true);
-                let id = crate::bin_ui::features::jarvis::add_jarvis_thinking_placeholder(&w);
-                let _ = tx.send(id);
+            if owner.is_current() {
+                if let Some(w) = weak.upgrade() {
+                    jarvis_state.set_thinking(true);
+                    w.set_jarvis_thinking(true);
+                    let id = crate::bin_ui::features::jarvis::add_jarvis_thinking_placeholder(&w);
+                    let _ = tx.send(id);
+                }
             }
         });
-        rx.recv().ok()
+        rx.await.ok()
     };
+    if thinking_id.is_none() {
+        return;
+    }
 
     let (query_display, result) = ui_ctx
-        .jarvis_execute(cmd, &context, author_id.as_ref())
+        .jarvis_execute_for_conversation(cmd, conversation, session)
         .await;
     let response_text = match &result {
         Ok(response) => response.clone(),
@@ -1117,17 +1132,27 @@ async fn handle_jarvis_slash_command(
 
     let jarvis_state = ui_ctx.jarvis_state().clone();
     let _ = slint::invoke_from_event_loop(move || {
-        jarvis_state.set_thinking(false);
         if let Some(w) = weak_window.upgrade() {
-            w.set_jarvis_thinking(false);
             if let Some(tid) = thinking_id {
-                crate::bin_ui::features::jarvis::replace_thinking_with_response(
-                    &w,
-                    &tid,
-                    &query_display,
-                    &response_text,
-                );
+                if owner.is_current() {
+                    crate::bin_ui::features::jarvis::replace_thinking_with_response(
+                        &w,
+                        &tid,
+                        &query_display,
+                        &response_text,
+                    );
+                } else {
+                    crate::bin_ui::features::jarvis::remove_jarvis_thinking_placeholder(&w, &tid);
+                }
+                let still_thinking = w
+                    .get_messages()
+                    .iter()
+                    .any(|row| row.delivery_status.as_str() == "thinking");
+                w.set_jarvis_thinking(still_thinking);
+                jarvis_state.set_thinking(still_thinking);
             }
+        } else {
+            jarvis_state.set_thinking(false);
         }
     });
 }
