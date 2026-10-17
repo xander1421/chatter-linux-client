@@ -64,15 +64,20 @@ pub(super) fn hold(
     key: &str,
     group: &str,
     content: &crate::proto::content_v1::Content,
-) -> Result<(), StorageError> {
-    mutate(db, key, |ledger| {
+) -> Result<Option<String>, StorageError> {
+    let first_hold = mutate(db, key, |ledger| {
         if !ledger.initialized {
+            let first_hold = ledger.held_group.is_none();
             ledger.held_group = Some(group.to_owned());
             ledger.held_content = Some(content.encode_to_vec());
+            if first_hold {
+                return Some(ledger.message_id.clone());
+            }
         }
+        None
     })?
     .ok_or_else(|| StorageError::InvalidData("Group post has no retained row".into()))?;
-    Ok(())
+    Ok(first_hold)
 }
 
 pub(super) fn held_posts(

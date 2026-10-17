@@ -490,6 +490,7 @@ impl AnonGroupRepository {
         if timestamp == 0 || timestamp <= roster_at {
             return Ok(false);
         }
+        let mut acknowledge_local_admission = false;
         for (member, admission) in members {
             let admission = membership_timestamp(*admission)?;
             if admission > timestamp {
@@ -500,17 +501,14 @@ impl AnonGroupRepository {
                 params![group.to_string(), member.user_id.to_string()], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?))
             ).optional()?.unwrap_or((0, 0, 0));
             // The owner can have minted the admission before our local clock
-            // recorded acceptance. Confirm the local generation separately;
-            // never make the owner's roster timestamp compete with that clock.
+            // recorded acceptance. A fresh owner roster listing our current
+            // mailbox confirms the local generation. Defer the write until
+            // after the roster's own admitted_at update below.
             if member.user_id == *me
-                && old_admission > roster_at
-                && (removed == 0 || admission > removed)
+                && old_admission > 0
+                && (removed == 0 || old_admission > removed)
             {
-                tx.execute(
-                    "UPDATE anon_group_member_order SET acknowledged_at=admitted_at
-                    WHERE group_id=?1 AND user_id=?2 AND admitted_at=?3",
-                    params![group.to_string(), member.user_id.to_string(), old_admission],
-                )?;
+                acknowledge_local_admission = true;
             }
             if (removed > 0 && (admission <= removed || timestamp <= removed))
                 || admission < old_admission
@@ -534,7 +532,17 @@ impl AnonGroupRepository {
             ON CONFLICT(group_id) DO UPDATE SET roster_at = MAX(roster_at,excluded.roster_at)",
             params![group.to_string(), timestamp],
         )?;
+        let local_admission_acknowledged = if acknowledge_local_admission {
+            tx.execute(
+                "UPDATE anon_group_member_order SET acknowledged_at=admitted_at
+                 WHERE group_id=?1 AND user_id=?2 AND admitted_at>0",
+                params![group.to_string(), me.to_string()],
+            )? > 0
+        } else {
+            false
+        };
         tx.commit()?;
+        tracing::info!(group_id = %group, local_admission_acknowledged, "owner group roster applied");
         Ok(true)
     }
 

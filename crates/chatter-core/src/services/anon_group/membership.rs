@@ -852,7 +852,11 @@ impl AnonGroupService {
             // could evict us again after we explicitly accepted a reinvitation.
             if user_id == current_user {
                 if let Some(local) = self.anon_group_repo.get_member(&group_id, &user_id)? {
-                    parsed.push((local, member_info.admission_timestamp));
+                    if local.mailbox_pk.as_ref().is_some_and(|key| {
+                        member_info.mailbox_pk.as_slice() == key.as_slice()
+                    }) {
+                        parsed.push((local, member_info.admission_timestamp));
+                    }
                 }
                 continue;
             }

@@ -355,12 +355,14 @@ impl AnonGroupService {
                 .anon_group_repo
                 .awaiting_join_roster(group_id, &current_user)?
         {
-            super::send_ledger::hold(
+            if let Some(message_id) = super::send_ledger::hold(
                 &self.message_service.database,
                 &ledger_key,
                 &group_id.to_string(),
                 &inner_content,
-            )?;
+            )? {
+                tracing::info!(%message_id, group_id = %group_id, "group post held awaiting owner roster");
+            }
             return Err(AnonGroupError::DeliveryUnconfirmed);
         }
 
