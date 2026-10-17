@@ -1105,8 +1105,29 @@ impl ChatterClient {
 
     /// A deleted conversation cannot leave recoverable staged copies behind.
     pub(crate) fn clear_composer_conversation(&self, conversation: ActiveConversation) {
-        let (_drafts, _) = self.composer_drafts_for_session();
-        drop(_drafts);
+        self.clear_composer_conversation_messages(conversation, &[]);
+    }
+
+    pub(crate) fn clear_composer_conversation_messages(
+        &self,
+        conversation: ActiveConversation,
+        message_ids: &[MessageId],
+    ) {
+        let (mut drafts, _) = self.composer_drafts_for_session();
+        if let Some(channel) = conversation.channel_id() {
+            let key = channel.to_string();
+            drafts.remove(&key);
+            let mut owner = self.composer_owner.lock();
+            if *owner == key {
+                owner.clear();
+            }
+        }
+        for id in message_ids {
+            drafts.remove(&Self::thread_draft_key(id));
+            drafts.remove(&Self::failed_thread_reply_key(id));
+        }
+        self.persist_composer_drafts(&drafts);
+        drop(drafts);
         let tray = self.chat_state().take_attachment_tray_for(conversation);
         self.release_staged_files(&tray);
         let mut parked = self.parked_sends.lock();

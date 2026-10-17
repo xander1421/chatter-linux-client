@@ -2159,12 +2159,53 @@ impl ConversationHandle {
         match &self.conversation {
             ActiveConversation::Channel(id) => Ok(self.client.leave_channel(id).await?),
             ActiveConversation::AnonGroup(id) => {
-                Ok(self.client.anon_groups().leave_group(id).await?)
+                self.client.anon_groups().leave_group(id).await?;
+                self.purge_anon_group_history(id)?;
+                Ok(())
             }
             _ => Err(ConversationError::Other(
                 "only channels and groups can be left".into(),
             )),
         }
+    }
+
+    /// A voluntary leave removes the group row, but unified history lives in
+    /// separate tables. Clear it before a later invitation recreates the row.
+    fn purge_anon_group_history(
+        &self,
+        id: &crate::domain::anon_group::AnonGroupId,
+    ) -> ConversationResult {
+        let channel_id: ChannelId = (*id).into();
+        let messages = self
+            .client
+            .messages()
+            .message_repo
+            .list_all_for_conversation(&channel_id, &ConversationType::AnonGroup)?;
+        let attachments: Vec<_> = messages
+            .iter()
+            .flat_map(|message| message.attachments.iter().copied())
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+        let ids: Vec<_> = messages.into_iter().map(|message| message.id).collect();
+        for batch in ids.chunks(500) {
+            self.client.messages().message_repo.delete_batch(batch)?;
+        }
+        self.client
+            .attachments()
+            .attachment_repo()
+            .delete_unreferenced(&attachments)?;
+        self.client
+            .messages()
+            .message_repo
+            .purge_anon_group_orphans(&channel_id, &ids)?;
+        self.client
+            .notifications()
+            .cancel_conversation(&channel_id)
+            .map_err(|error| ConversationError::Other(error.to_string()))?;
+        self.client
+            .clear_composer_conversation_messages(self.conversation, &ids);
+        Ok(())
     }
 
     /// Remove `user` from this conversation (Settings › Members › Remove).

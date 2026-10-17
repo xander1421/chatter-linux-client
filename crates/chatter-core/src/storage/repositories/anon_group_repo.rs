@@ -1006,6 +1006,20 @@ impl AnonGroupRepository {
         Ok(members)
     }
 
+    /// Departed profiles remain stored for historical names. Snapshot their
+    /// inactive state before applying a roster so re-admission is observable.
+    pub fn inactive_member_ids(&self, group_id: &AnonGroupId) -> Result<Vec<UserId>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let mut stmt = conn
+            .prepare("SELECT user_id FROM anon_group_members WHERE group_id=?1 AND is_active=0")?;
+        let rows = stmt.query_map([group_id.to_string()], |row| row.get::<_, String>(0))?;
+        rows.map(|row| {
+            row?.parse()
+                .map_err(|_| StorageError::InvalidData("Invalid group member ID".into()))
+        })
+        .collect()
+    }
+
     /// Get members that have confirmed their mailbox key (for sending messages).
     pub fn get_members_with_mailbox(
         &self,
