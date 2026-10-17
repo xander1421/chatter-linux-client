@@ -22,7 +22,6 @@ use std::sync::Arc;
 use slint::{ComponentHandle, Model, SharedString};
 
 use chatter_core::client::ChatterClient;
-use chatter_core::domain::UserId;
 
 use crate::MainWindow;
 
@@ -50,29 +49,11 @@ fn refresh_delete_everyone(
     ui_ctx: &Arc<ChatterClient>,
     selected_ids: &HashSet<String>,
 ) {
-    let handle = ui_ctx.conversation(ui_ctx.chat_state().active_conversation());
-    let model = w.get_messages();
-    let resolved_count = model
-        .iter()
-        .filter(|row| selected_ids.contains(row.message_id.as_str()))
-        .count();
-    let all_ok = !selected_ids.is_empty()
-        && resolved_count == selected_ids.len()
-        && model
-            .iter()
-            .filter(|row| selected_ids.contains(row.message_id.as_str()))
-            .all(|row| {
-                let Ok(author) = row.sender_id.parse::<UserId>() else {
-                    return false;
-                };
-                let Ok(ts) = row.timestamp_ns.parse() else {
-                    return false;
-                };
-                handle.can_delete_for_everyone(&author, ts).unwrap_or(false)
-            });
+    let ids = selected_ids.iter().cloned().collect::<Vec<_>>();
+    let actions = ui_ctx.selection_actions(ui_ctx.chat_state().active_conversation(), &ids);
     let chrome = w.global::<crate::SelectionChrome>();
-    chrome.set_can_delete_everyone(all_ok);
-    chrome.set_can_forward(handle.can_forward_from());
+    chrome.set_can_delete_everyone(actions.can_delete_everyone);
+    chrome.set_can_forward(actions.can_forward);
 }
 
 /// Leave selection mode and drop the marks.
@@ -86,18 +67,10 @@ fn exit(w: &MainWindow, selected_ids: &Rc<RefCell<HashSet<String>>>, generation:
 }
 
 /// Snapshot the complete selection before any asynchronous deletion begins.
-fn selected_targets(w: &MainWindow, ids: &HashSet<String>) -> Option<Vec<(UserId, u64)>> {
-    let rows: Vec<_> = w
-        .get_messages()
-        .iter()
+fn selected_ids_in_order(w: &MainWindow, ids: &HashSet<String>) -> Vec<String> {
+    w.get_messages().iter()
         .filter(|row| ids.contains(row.message_id.as_str()))
-        .collect();
-    if rows.is_empty() || rows.len() != ids.len() {
-        return None;
-    }
-    rows.into_iter()
-        .map(|row| Some((row.sender_id.parse().ok()?, row.timestamp_ns.parse().ok()?)))
-        .collect()
+        .map(|row| row.message_id.to_string()).collect()
 }
 
 fn delete_selection(
@@ -111,14 +84,16 @@ fn delete_selection(
     if pending.get() {
         return;
     }
-    let Some(targets) = selected_targets(w, &selected_ids.borrow()) else {
+    let ordered_ids = selected_ids_in_order(w, &selected_ids.borrow());
+    let conversation = ui_ctx.chat_state().active_conversation();
+    let Some(targets) = (ordered_ids.len() == selected_ids.borrow().len())
+        .then(|| ui_ctx.selected_message_targets(conversation, &ordered_ids)).flatten() else {
         // A row is gone: the scope offered for it is stale too.
         refresh_delete_everyone(w, ui_ctx, &selected_ids.borrow());
         w.set_toast_message("The selected messages are no longer available.".into());
         w.set_toast_visible(true);
         return;
     };
-    let conversation = ui_ctx.chat_state().active_conversation();
     let handle = ui_ctx.conversation(conversation);
     if everyone
         && !targets
@@ -315,24 +290,14 @@ pub fn wire_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let ui_ctx = ui_ctx.clone();
         window.on_selection_copy_clicked(move || {
             let Some(w) = weak.upgrade() else { return };
-            let targets: Vec<(String, String)> = {
-                let set = selected_ids.borrow();
-                let model = w.get_messages();
-                model
-                    .iter()
-                    .filter(|row| set.contains(row.message_id.as_str()))
-                    .map(|row| (row.sender_id.to_string(), row.timestamp_ns.to_string()))
-                    .collect()
-            };
+            let ordered_ids = selected_ids_in_order(&w, &selected_ids.borrow());
+            let targets = ui_ctx.selected_message_targets(
+                ui_ctx.chat_state().active_conversation(), &ordered_ids).unwrap_or_default();
             let handle = ui_ctx.conversation(ui_ctx.chat_state().active_conversation());
             std::thread::spawn(move || {
                 let texts: Vec<String> = targets
                     .iter()
-                    .filter_map(|(sender, ts)| {
-                        let sender = sender.parse().ok()?;
-                        let ts: u64 = ts.parse().ok()?;
-                        handle.get_message_text(&sender, ts).ok().flatten()
-                    })
+                    .filter_map(|(sender, ts)| handle.get_message_text(sender, *ts).ok().flatten())
                     .collect();
                 if !texts.is_empty() {
                     crate::bin_ui::features::chat::actions::copy_text(&texts.join("\n\n"));
@@ -351,15 +316,11 @@ pub fn wire_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let ui_ctx = ui_ctx.clone();
         window.on_selection_forward_clicked(move || {
             let Some(w) = weak.upgrade() else { return };
-            let sources: Vec<String> = {
-                let set = selected_ids.borrow();
-                let model = w.get_messages();
-                model
-                    .iter()
-                    .filter(|row| set.contains(row.message_id.as_str()))
-                    .map(|row| format!("{}:{}", row.sender_id, row.timestamp_ns))
-                    .collect()
-            };
+            let ordered_ids = selected_ids_in_order(&w, &selected_ids.borrow());
+            let targets = ui_ctx.selected_message_targets(
+                ui_ctx.chat_state().active_conversation(), &ordered_ids).unwrap_or_default();
+            let sources: Vec<String> = targets.iter()
+                .map(|(sender, ts)| format!("{sender}:{ts}")).collect();
             if sources.is_empty() {
                 return;
             }
