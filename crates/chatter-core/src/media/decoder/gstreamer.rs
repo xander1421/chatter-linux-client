@@ -56,6 +56,8 @@ pub struct GStreamerDecoder {
     video_sink: Option<gst_app::AppSink>,
     /// Playbin element (if using playbin3) for volume control
     playbin: Option<gst::Element>,
+    /// Volume element in the dynamically linked memory-playback audio branch.
+    memory_audio_volume: Arc<Mutex<Option<gst::Element>>>,
     info: Option<VideoInfo>,
     position_ms: Arc<Mutex<u64>>,
     /// AppSrc for memory-based playback (kept alive for the pipeline lifetime)
@@ -73,6 +75,7 @@ impl GStreamerDecoder {
             pipeline: None,
             video_sink: None,
             playbin: None,
+            memory_audio_volume: Arc::new(Mutex::new(None)),
             info: None,
             position_ms: Arc::new(Mutex::new(0)),
             _appsrc: None,
@@ -320,6 +323,7 @@ impl GStreamerDecoder {
         // Clone sink for use in pad-added callback
         let video_sink_clone = video_sink.clone();
         let pipeline_weak = pipeline.downgrade();
+        let memory_audio_volume = self.memory_audio_volume.clone();
 
         // Track if video stream was found (for detecting audio-only files)
         let video_linked = Arc::new(std::sync::atomic::AtomicBool::new(false));
@@ -402,6 +406,9 @@ impl GStreamerDecoder {
                     let resample = gst::ElementFactory::make("audioresample")
                         .build()
                         .map_err(|e| format!("Failed to create audioresample: {}", e))?;
+                    let volume = gst::ElementFactory::make("volume")
+                        .build()
+                        .map_err(|e| format!("Failed to create audio volume: {}", e))?;
                     // Use autoaudiosink - outputs to PulseAudio/PipeWire automatically
                     let sink = if crate::system::null_audio() {
                         "fakesink"
@@ -413,7 +420,8 @@ impl GStreamerDecoder {
                         .map_err(|e| format!("Failed to create {sink}: {e}"))?;
 
                     // Add all elements to pipeline
-                    let elements: &[&gst::Element] = &[&queue, &convert, &resample, &audiosink];
+                    let elements: &[&gst::Element] =
+                        &[&queue, &convert, &resample, &volume, &audiosink];
                     pipeline
                         .add_many(elements)
                         .map_err(|e| format!("Failed to add audio elements: {}", e))?;
@@ -435,6 +443,8 @@ impl GStreamerDecoder {
                     src_pad
                         .link(&sink_pad)
                         .map_err(|e| format!("Failed to link audio pad: {:?}", e))?;
+
+                    *memory_audio_volume.lock().unwrap() = Some(volume);
 
                     tracing::info!("Audio pipeline linked successfully (autoaudiosink)");
                 }
@@ -1125,10 +1135,11 @@ impl VideoDecoder for GStreamerDecoder {
             return Ok(());
         }
 
-        // For decodebin3 pipeline (memory playback), volume control would require
-        // adding a volume element to the audio pipeline. For now, log a warning.
-        // TODO: Add volume element to memory pipeline for proper volume control
-        tracing::debug!("Volume control not available for memory pipeline");
+        let volume_element = self.memory_audio_volume.lock().unwrap();
+        let volume_element = volume_element.as_ref().ok_or_else(|| {
+            MediaError::PlaybackError("No audio volume element in memory pipeline".to_string())
+        })?;
+        volume_element.set_property("volume", volume.clamp(0.0, 1.0));
         Ok(())
     }
 
@@ -1138,6 +1149,7 @@ impl VideoDecoder for GStreamerDecoder {
         }
         self.video_sink = None;
         self.playbin = None;
+        *self.memory_audio_volume.lock().unwrap() = None;
         self.info = None;
         self._appsrc = None;
     }
