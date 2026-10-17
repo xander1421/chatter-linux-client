@@ -6,6 +6,7 @@
 //! .slint code binds those directly — no Rust polling required.
 
 pub mod activity;
+pub mod backup_document;
 #[cfg(feature = "call-ui")]
 pub mod audio_route;
 pub mod call_actions;

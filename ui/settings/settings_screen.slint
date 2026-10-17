@@ -48,8 +48,6 @@ export component SettingsScreen inherits Rectangle {
     // Room left for the mobile tab bar drawn over the bottom of the screen.
     in property <length> bottom-inset: 0px;
     in property <bool> mobile-platform: false;
-    // Mobile has no save-document adapter; disclose before requesting a secret.
-    property <bool> file-backup-available: !root.mobile-platform;
     in property <image> avatar;
     in property <int> session-count: 0;
     in property <[SessionInfo]> sessions: [];
@@ -855,27 +853,20 @@ export component SettingsScreen inherits Rectangle {
                                         show-chevron: false;
                                     }
 
-                                    if !root.file-backup-available: Text {
-                                        text: "File backup is unavailable on this device. Use server backup below.";
-                                        color: Colors.text-muted;
-                                        font-size: Typography.xs;
-                                        wrap: word-wrap;
-                                    }
-
-                                    if root.file-backup-available: Input {
+                                    Input {
                                         placeholder: "Backup passphrase (for file backup)";
                                         password: true;
                                         text <=> root.message-backup-passphrase;
                                     }
 
-                                    if root.file-backup-available && root.message-backup-passphrase == "": Text {
+                                    if root.message-backup-passphrase == "": Text {
                                         text: "Enter a backup passphrase to enable file export and restore.";
                                         color: Colors.text-muted;
                                         font-size: Typography.xs;
                                         wrap: word-wrap;
                                     }
 
-                                    if root.file-backup-available: HorizontalLayout {
+                                    HorizontalLayout {
                                         spacing: Spacing.sm;
                                         alignment: end;
 
