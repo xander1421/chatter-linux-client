@@ -1924,7 +1924,6 @@ dependencies = [
  "aes-gcm",
  "anyhow",
  "apple-native-keyring-store",
- "arboard",
  "argon2",
  "arti-client",
  "async-trait",

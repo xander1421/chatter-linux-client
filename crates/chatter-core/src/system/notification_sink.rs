@@ -1,7 +1,7 @@
 //! Platform-neutral notification sink abstraction.
 //!
 //! Core defines the trait; platform impls live where they belong:
-//! - Desktop impl: `system::notifications::DesktopNotifications` (uses notify-rust)
+//! - Desktop impl with `desktop-native`: `system::notifications::DesktopNotifications` (uses notify-rust)
 //! - Android impl: `chatter-ui/src/platform/android/notifications.rs` (uses JNI)
 //!
 //! The UI crate injects the right impl via `ClientBuilder::notification_sink`.

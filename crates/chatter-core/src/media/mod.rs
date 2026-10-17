@@ -7,7 +7,10 @@
 pub mod audio_player;
 pub mod audio_recorder;
 pub mod decoder;
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(all(
+    feature = "desktop-native",
+    not(any(target_os = "android", target_os = "ios"))
+))]
 pub mod file_picker;
 pub mod gif;
 pub mod image_processor;
@@ -18,7 +21,10 @@ pub mod waveform;
 
 pub use audio_player::{AudioPlayer, PlaybackState};
 pub use audio_recorder::{AudioRecorder, RecordingState};
-#[cfg(not(any(target_os = "android", target_os = "ios")))]
+#[cfg(all(
+    feature = "desktop-native",
+    not(any(target_os = "android", target_os = "ios"))
+))]
 pub use file_picker::{FileFilter, FilePicker, FilePickerConfig};
 pub use image_processor::{DEFAULT_THUMBNAIL_SIZE, ImageProcessor};
 pub use video_playback::{

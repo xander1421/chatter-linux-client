@@ -40,7 +40,7 @@ pub fn set_text(label: &str, text: &str, secret: bool) -> Result<(), String> {
                 return Ok(());
             }
         }
-        let mut clipboard = chatter_core::system::Clipboard::new().map_err(|e| e.to_string())?;
+        let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
         clipboard.set_text(text).map_err(|e| e.to_string())
     }
 }
@@ -61,8 +61,7 @@ fn set_secret_text(label: &str, text: &str) -> Result<(), String> {
         {
             let _ = label;
             // Keep the write and timed clear on the same desktop backend.
-            let mut clipboard =
-                chatter_core::system::Clipboard::new().map_err(|e| e.to_string())?;
+            let mut clipboard = arboard::Clipboard::new().map_err(|e| e.to_string())?;
             clipboard.set_text(text).map_err(|e| e.to_string())?;
         }
         std::thread::spawn(|| {
@@ -74,7 +73,7 @@ fn set_secret_text(label: &str, text: &str) -> Result<(), String> {
             }
             #[cfg(not(target_os = "android"))]
             if let Err(e) = slint::invoke_from_event_loop(|| {
-                if let Ok(mut clipboard) = chatter_core::system::Clipboard::new() {
+                if let Ok(mut clipboard) = arboard::Clipboard::new() {
                     if let Err(e) = clipboard.clear() {
                         tracing::warn!("Failed to auto-clear clipboard: {e}");
                     } else {
