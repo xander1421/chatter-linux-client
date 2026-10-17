@@ -270,33 +270,13 @@ fn failed_privacy_writes_restore_effective_values_and_selected_gif_tab_keeps_sea
     chatter_ui::bin_ui::features::back::close(&w, "channel-settings");
     chatter_ui::bin_ui::features::back::push(&w, "settings");
     pump(&w);
-    scroll_to_label(
-        &w,
-        "File backup is unavailable on this device. Use server backup below.",
-    );
-    assert!(
-        ElementHandle::find_by_accessible_label(
-            &w,
-            "File backup is unavailable on this device. Use server backup below."
-        )
-        .next()
-        .is_some()
-    );
+    // Android file backup goes through the system document picker (SAF).
+    scroll_to_label(&w, "Backup passphrase (for file backup)");
     assert!(
         ElementHandle::find_by_accessible_label(&w, "Backup passphrase (for file backup)")
             .next()
-            .is_none(),
-        "unavailable file backup must not ask for a secret"
-    );
-    assert!(
-        ElementHandle::find_by_accessible_label(&w, "Export to File…")
-            .next()
-            .is_none()
-    );
-    assert!(
-        ElementHandle::find_by_accessible_label(&w, "Restore from File…")
-            .next()
-            .is_none()
+            .is_some(),
+        "mobile file backup asks for its passphrase"
     );
     // The server actions remain present, with their original production callbacks.
     scroll_to_label(&w, "Back Up to Server");
