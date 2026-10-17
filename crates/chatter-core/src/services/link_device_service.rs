@@ -43,7 +43,6 @@ use crate::network::grpc::provisioning_client::{
 use crate::proto::provisioning_v1::{ProvisionEnvelope, ProvisionMessage, ProvisioningSession};
 use crate::services::auth_service::{AuthError, prove_password};
 use crate::services::message_backup_service::{BackupStats, MessageBackupService};
-use crate::services::notification_service::NotificationService;
 use crate::storage::backup_data::ImportSummary;
 use crate::storage::repositories::settings_repo::{SettingsRepository, keys};
 use crate::storage::{Database, KeyStore};
@@ -273,7 +272,6 @@ pub struct LinkDeviceService {
     /// can build a `MessageBackupService` without a wider client handle.
     database: Arc<Database>,
     event_bus: EventBus,
-    notifications: Arc<NotificationService>,
     /// UUID of an in-flight new-device session, owned here so the cancel
     /// button can reach it without the UI tracking session state.
     active_uuid: Mutex<Option<String>>,
@@ -286,7 +284,6 @@ impl LinkDeviceService {
         key_store: Arc<KeyStore>,
         database: Arc<Database>,
         event_bus: EventBus,
-        notifications: Arc<NotificationService>,
     ) -> Self {
         Self {
             grpc_pool,
@@ -294,7 +291,6 @@ impl LinkDeviceService {
             key_store,
             database,
             event_bus,
-            notifications,
             active_uuid: Mutex::new(None),
         }
     }
@@ -1804,7 +1800,6 @@ mod tests {
     use crate::domain::user::User;
     use crate::events::EventBus;
     use crate::network::grpc::client_pool::GrpcClientPool;
-    use crate::services::notification_service::NotificationService;
     use crate::storage::repositories::user_repo::UserRepository;
     use crate::storage::{Database, KeyStore};
     use tempfile::NamedTempFile;
@@ -1851,15 +1846,12 @@ mod tests {
         // smallest possible instances.
         let grpc_pool = Arc::new(GrpcClientPool::new("https://127.0.0.1:0").expect("grpc pool"));
         let event_bus = EventBus::new();
-        let notifications = Arc::new(NotificationService::noop());
-
         let svc = Arc::new(LinkDeviceService::new(
             grpc_pool,
             settings_repo,
             key_store,
             db,
             event_bus,
-            notifications,
         ));
         (svc, db_file)
     }
