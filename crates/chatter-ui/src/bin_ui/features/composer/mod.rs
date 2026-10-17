@@ -23,7 +23,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     attachments::wire_attachment_clicked(window, ui_ctx.chat_state().clone(), ui_ctx);
     attachments::wire_remove_attachment(window, ui_ctx);
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
-    attachments::wire_paste_image(window, ui_ctx.chat_state().clone());
+    attachments::wire_paste_image(window, ui_ctx);
     #[cfg(not(any(target_os = "android", target_os = "ios")))]
     drag_drop::wire_drag_drop(window, ui_ctx);
     emoji::wire_emoji_clicked(window, ui_ctx);
