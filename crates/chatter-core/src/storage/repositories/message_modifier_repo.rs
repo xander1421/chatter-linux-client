@@ -502,7 +502,7 @@ pub(crate) fn may_modify(
         ConversationType::Channel => conn.query_row(
             "SELECT EXISTS(SELECT 1 FROM memberships WHERE channel_id=?1 AND user_id=?2)",params![message.conversation_id.to_string(),actor],|row|row.get(0))?,
         ConversationType::AnonGroup => conn.query_row(
-            "SELECT EXISTS(SELECT 1 FROM anon_group_members g JOIN anon_groups a ON a.id=g.group_id WHERE g.group_id=?1 AND g.user_id=?2 AND a.status<>2) AND NOT EXISTS(SELECT 1 FROM anon_group_blocked_users WHERE group_id=?1 AND user_id=?2)",
+            "SELECT EXISTS(SELECT 1 FROM anon_group_members g JOIN anon_groups a ON a.id=g.group_id WHERE g.group_id=?1 AND g.user_id=?2 AND g.is_active=1 AND a.status<>2) AND NOT EXISTS(SELECT 1 FROM anon_group_blocked_users WHERE group_id=?1 AND user_id=?2)",
             params![message.conversation_id.to_string(), actor],
             |row| row.get(0),
         )?,

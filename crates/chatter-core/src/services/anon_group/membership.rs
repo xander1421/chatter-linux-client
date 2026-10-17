@@ -1074,6 +1074,15 @@ impl AnonGroupService {
             .get_member_display_name(group_id, user_id)?)
     }
 
+    /// Retain the last shared avatar for departed members' message history.
+    pub fn get_member_avatar(
+        &self,
+        group_id: &AnonGroupId,
+        user_id: &UserId,
+    ) -> Result<Option<Vec<u8>>, AnonGroupError> {
+        Ok(self.anon_group_repo.get_member_avatar(group_id, user_id)?)
+    }
+
     /// Check if a user is a member of a group.
     pub fn is_member(
         &self,

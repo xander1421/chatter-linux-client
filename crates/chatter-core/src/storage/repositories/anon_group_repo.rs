@@ -11,7 +11,7 @@ use crate::domain::anon_group::{
 use crate::error::StorageError;
 use crate::storage::Database;
 use chrono::Utc;
-use rusqlite::params;
+use rusqlite::{OptionalExtension, params};
 use std::sync::Arc;
 
 /// Anonymous group data repository.
@@ -151,7 +151,7 @@ impl AnonGroupRepository {
         let conn = self.db.connection()?;
         Ok(conn.query_row("SELECT EXISTS(SELECT 1 FROM anon_group_members m JOIN anon_groups g ON g.id = m.group_id
             LEFT JOIN anon_group_member_order o ON o.group_id = m.group_id AND o.user_id = m.user_id
-            WHERE m.group_id = ?1 AND m.user_id = ?2 AND m.mailbox_pk = ?3
+            WHERE m.group_id = ?1 AND m.user_id = ?2 AND m.is_active = 1 AND m.mailbox_pk = ?3
             AND (COALESCE(o.removed_at,0) = 0 OR o.admitted_at > o.removed_at)
             AND COALESCE(o.admitted_at,0) <= ?4)",params![group.to_string(),user.to_string(),key.as_slice(),timestamp],|r|r.get(0))?)
     }
@@ -202,7 +202,7 @@ impl AnonGroupRepository {
             ));
         }
         let members = {
-            let mut stmt = tx.prepare("SELECT id,group_id,user_id,role,mailbox_pk,joined_at,profile_key,display_name,avatar,device_id FROM anon_group_members WHERE group_id = ?1 ORDER BY joined_at")?;
+            let mut stmt = tx.prepare("SELECT id,group_id,user_id,role,mailbox_pk,joined_at,profile_key,display_name,avatar,device_id FROM anon_group_members WHERE group_id = ?1 AND is_active = 1 ORDER BY joined_at")?;
             let rows = stmt.query_map([group.to_string()], row_to_member)?;
             rows.collect::<Result<Vec<_>, _>>()?
         };
@@ -268,7 +268,7 @@ impl AnonGroupRepository {
         };
         let role: Option<i32> = tx
             .query_row(
-                "SELECT role FROM anon_group_members WHERE group_id = ?1 AND user_id = ?2",
+                "SELECT role FROM anon_group_members WHERE group_id = ?1 AND user_id = ?2 AND is_active = 1",
                 params![group.to_string(), sender.to_string()],
                 |r| r.get(0),
             )
@@ -306,7 +306,7 @@ impl AnonGroupRepository {
                 if target == *sender || change.timestamp != update.timestamp {
                     return Ok(false);
                 }
-                let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM anon_group_members WHERE group_id = ?1 AND user_id = ?2)",params![group.to_string(),target.to_string()], |r|r.get(0))?;
+                let exists: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM anon_group_members WHERE group_id = ?1 AND user_id = ?2 AND is_active = 1)",params![group.to_string(),target.to_string()], |r|r.get(0))?;
                 if !exists {
                     return Ok(false);
                 }
@@ -368,7 +368,7 @@ impl AnonGroupRepository {
         }
         let existing: Option<Option<Vec<u8>>> = tx
             .query_row(
-                "SELECT mailbox_pk FROM anon_group_members WHERE group_id = ?1 AND user_id = ?2",
+                "SELECT mailbox_pk FROM anon_group_members WHERE group_id = ?1 AND user_id = ?2 AND is_active = 1",
                 params![member.group_id.to_string(), member.user_id.to_string()],
                 |r| r.get(0),
             )
@@ -395,7 +395,7 @@ impl AnonGroupRepository {
             })?,
         );
         record_member_change(&tx, &member.group_id, &member.user_id, changed_at)?;
-        tx.execute("UPDATE anon_group_members SET mailbox_pk = ?1,profile_key = COALESCE(?2,profile_key),display_name = COALESCE(?3,display_name),avatar = COALESCE(?4,avatar),device_id = COALESCE(?7,device_id) WHERE group_id = ?5 AND user_id = ?6",
+        tx.execute("UPDATE anon_group_members SET mailbox_pk = ?1,profile_key = COALESCE(?2,profile_key),display_name = COALESCE(?3,display_name),avatar = COALESCE(?4,avatar),device_id = COALESCE(?7,device_id) WHERE group_id = ?5 AND user_id = ?6 AND is_active = 1",
             params![member.mailbox_pk.as_ref().map(|v|v.as_slice()),member.profile_key.as_ref().map(|v|v.as_slice()),member.display_name,member.avatar,member.group_id.to_string(),member.user_id.to_string(),member.device_id])?;
         tx.execute("INSERT INTO anon_group_member_order(group_id,user_id,acknowledged_at) VALUES (?1,?2,?3) ON CONFLICT(group_id,user_id) DO UPDATE SET acknowledged_at = excluded.acknowledged_at",
             params![member.group_id.to_string(),member.user_id.to_string(),timestamp])?;
@@ -513,14 +513,14 @@ impl AnonGroupRepository {
             return Ok(false);
         }
         if owner == target.to_string() {
-            let others: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM anon_group_members WHERE group_id = ?1 AND user_id != ?2)",params![group.to_string(),target.to_string()],|r|r.get(0))?;
+            let others: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM anon_group_members WHERE group_id = ?1 AND user_id != ?2 AND is_active = 1)",params![group.to_string(),target.to_string()],|r|r.get(0))?;
             if others {
                 return Ok(false);
             }
         }
         if let Some((actor, verified_key)) = kicker {
             let authority: Option<(i32, Option<Vec<u8>>)> = tx.query_row(
-                "SELECT role,mailbox_pk FROM anon_group_members WHERE group_id = ?1 AND user_id = ?2",
+                "SELECT role,mailbox_pk FROM anon_group_members WHERE group_id = ?1 AND user_id = ?2 AND is_active = 1",
                 params![group.to_string(), actor.to_string()], |r| Ok((r.get(0)?,r.get(1)?))).optional()?;
             if !authority.is_some_and(|(role, key)| {
                 (actor.to_string() == owner || AnonGroupRole::from_i32(role).can_kick())
@@ -541,7 +541,7 @@ impl AnonGroupRepository {
             removed_at = MAX(removed_at,excluded.removed_at), changed_at = MAX(changed_at,excluded.changed_at)",
             params![group.to_string(), target.to_string(), timestamp])?;
         tx.execute(
-            "DELETE FROM anon_group_members WHERE group_id = ?1 AND user_id = ?2",
+            "UPDATE anon_group_members SET is_active = 0, mailbox_pk = NULL, device_id = NULL WHERE group_id = ?1 AND user_id = ?2",
             params![group.to_string(), target.to_string()],
         )?;
         tx.execute(
@@ -607,7 +607,7 @@ impl AnonGroupRepository {
         let tx = conn.transaction()?;
         let role: Option<i32> = tx
             .query_row(
-                "SELECT role FROM anon_group_members WHERE group_id = ?1 AND user_id = ?2",
+                "SELECT role FROM anon_group_members WHERE group_id = ?1 AND user_id = ?2 AND is_active = 1",
                 params![member.group_id.to_string(), actor.to_string()],
                 |r| r.get(0),
             )
@@ -628,7 +628,7 @@ impl AnonGroupRepository {
             return Ok(false);
         }
         let exists: bool = tx.query_row(
-            "SELECT EXISTS(SELECT 1 FROM anon_group_members WHERE group_id = ?1 AND user_id = ?2)",
+            "SELECT EXISTS(SELECT 1 FROM anon_group_members WHERE group_id = ?1 AND user_id = ?2 AND is_active = 1)",
             params![member.group_id.to_string(), member.user_id.to_string()],
             |r| r.get(0),
         )?;
@@ -777,9 +777,10 @@ impl AnonGroupRepository {
     pub fn add_member(&self, member: &AnonGroupMember) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
         conn.execute(
-            "INSERT INTO anon_group_members (id, group_id, user_id, role, mailbox_pk, joined_at, profile_key, display_name, avatar, device_id)
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)
+            "INSERT INTO anon_group_members (id, group_id, user_id, role, mailbox_pk, joined_at, profile_key, display_name, avatar, device_id, is_active)
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, 1)
              ON CONFLICT(group_id, user_id) DO UPDATE SET
+                is_active = 1,
                 role = excluded.role,
                 mailbox_pk = COALESCE(excluded.mailbox_pk, mailbox_pk),
                 device_id = COALESCE(excluded.device_id, device_id),
@@ -802,7 +803,7 @@ impl AnonGroupRepository {
         Ok(())
     }
 
-    /// Remove a member from a group.
+    /// Remove a member from the live roster while keeping their profile for history.
     pub fn remove_member(
         &self,
         group_id: &AnonGroupId,
@@ -810,7 +811,8 @@ impl AnonGroupRepository {
     ) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
         let rows = conn.execute(
-            "DELETE FROM anon_group_members WHERE group_id = ?1 AND user_id = ?2",
+            "UPDATE anon_group_members SET is_active = 0, mailbox_pk = NULL, device_id = NULL
+             WHERE group_id = ?1 AND user_id = ?2 AND is_active = 1",
             params![group_id.to_string(), user_id.to_string(),],
         )?;
         if rows == 0 {
@@ -843,7 +845,7 @@ impl AnonGroupRepository {
                  profile_key = COALESCE(?4, profile_key),
                  display_name = COALESCE(?5, display_name),
                  avatar = COALESCE(?6, avatar)
-             WHERE group_id = ?2 AND user_id = ?3",
+             WHERE group_id = ?2 AND user_id = ?3 AND is_active = 1",
             params![
                 mailbox_pk.as_slice(),
                 group_id.to_string(),
@@ -879,7 +881,7 @@ impl AnonGroupRepository {
              SET profile_key = COALESCE(?1, profile_key),
                  display_name = COALESCE(?2, display_name),
                  avatar = COALESCE(?3, avatar)
-             WHERE group_id = ?4 AND user_id = ?5",
+             WHERE group_id = ?4 AND user_id = ?5 AND is_active = 1",
             params![
                 profile_key.as_ref().map(|pk| pk.as_slice()),
                 display_name,
@@ -906,7 +908,7 @@ impl AnonGroupRepository {
     ) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
         let rows = conn.execute(
-            "UPDATE anon_group_members SET mailbox_pk = ?1 WHERE group_id = ?2 AND user_id = ?3",
+            "UPDATE anon_group_members SET mailbox_pk = ?1 WHERE group_id = ?2 AND user_id = ?3 AND is_active = 1",
             params![
                 mailbox_pk.as_slice(),
                 group_id.to_string(),
@@ -931,7 +933,7 @@ impl AnonGroupRepository {
     ) -> Result<(), StorageError> {
         let conn = self.db.connection()?;
         let rows = conn.execute(
-            "UPDATE anon_group_members SET role = ?1 WHERE group_id = ?2 AND user_id = ?3",
+            "UPDATE anon_group_members SET role = ?1 WHERE group_id = ?2 AND user_id = ?3 AND is_active = 1",
             params![role.to_i32(), group_id.to_string(), user_id.to_string(),],
         )?;
         if rows == 0 {
@@ -951,7 +953,7 @@ impl AnonGroupRepository {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
             "SELECT id, group_id, user_id, role, mailbox_pk, joined_at, profile_key, display_name, avatar, device_id
-             FROM anon_group_members WHERE group_id = ?1 ORDER BY joined_at",
+             FROM anon_group_members WHERE group_id = ?1 AND is_active = 1 ORDER BY joined_at",
         )?;
 
         let mut rows = stmt.query(params![group_id.to_string()])?;
@@ -972,7 +974,7 @@ impl AnonGroupRepository {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
             "SELECT id, group_id, user_id, role, mailbox_pk, joined_at, profile_key, display_name, avatar, device_id
-             FROM anon_group_members WHERE group_id = ?1 AND mailbox_pk IS NOT NULL
+             FROM anon_group_members WHERE group_id = ?1 AND is_active = 1 AND mailbox_pk IS NOT NULL
              ORDER BY joined_at",
         )?;
 
@@ -998,7 +1000,7 @@ impl AnonGroupRepository {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
             "SELECT id, group_id, user_id, role, mailbox_pk, joined_at, profile_key, display_name, avatar, device_id
-             FROM anon_group_members WHERE group_id = ?1 AND mailbox_pk IS NULL
+             FROM anon_group_members WHERE group_id = ?1 AND is_active = 1 AND mailbox_pk IS NULL
              ORDER BY joined_at",
         )?;
 
@@ -1021,7 +1023,7 @@ impl AnonGroupRepository {
         let conn = self.db.read_connection()?;
         let mut stmt = conn.prepare(
             "SELECT id, group_id, user_id, role, mailbox_pk, joined_at, profile_key, display_name, avatar, device_id
-             FROM anon_group_members WHERE group_id = ?1 AND user_id = ?2",
+             FROM anon_group_members WHERE group_id = ?1 AND user_id = ?2 AND is_active = 1",
         )?;
 
         let result = stmt.query_row(
@@ -1036,6 +1038,24 @@ impl AnonGroupRepository {
         }
     }
 
+    /// Include departed members when resolving message history. Never use this
+    /// accessor for membership checks or delivery.
+    pub fn get_member_avatar(
+        &self,
+        group_id: &AnonGroupId,
+        user_id: &UserId,
+    ) -> Result<Option<Vec<u8>>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let avatar: Option<Option<Vec<u8>>> = conn
+            .query_row(
+                "SELECT avatar FROM anon_group_members WHERE group_id = ?1 AND user_id = ?2",
+                params![group_id.to_string(), user_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(avatar.flatten())
+    }
+
     /// Check if a user is a member of a group.
     pub fn is_member(
         &self,
@@ -1044,7 +1064,7 @@ impl AnonGroupRepository {
     ) -> Result<bool, StorageError> {
         let conn = self.db.read_connection()?;
         let count: i32 = conn.query_row(
-            "SELECT COUNT(*) FROM anon_group_members WHERE group_id = ?1 AND user_id = ?2",
+            "SELECT COUNT(*) FROM anon_group_members WHERE group_id = ?1 AND user_id = ?2 AND is_active = 1",
             params![group_id.to_string(), user_id.to_string(),],
             |row| row.get(0),
         )?;
@@ -1059,7 +1079,7 @@ impl AnonGroupRepository {
     ) -> Result<Option<AnonGroupRole>, StorageError> {
         let conn = self.db.read_connection()?;
         let result: Result<i32, _> = conn.query_row(
-            "SELECT role FROM anon_group_members WHERE group_id = ?1 AND user_id = ?2",
+            "SELECT role FROM anon_group_members WHERE group_id = ?1 AND user_id = ?2 AND is_active = 1",
             params![group_id.to_string(), user_id.to_string(),],
             |row| row.get(0),
         );
@@ -1083,7 +1103,7 @@ impl AnonGroupRepository {
         let conn = self.db.read_connection()?;
         let result: Result<Option<String>, _> = conn.query_row(
             "SELECT display_name FROM anon_group_members \
-             WHERE user_id = ?1 AND display_name IS NOT NULL AND display_name != '' LIMIT 1",
+             WHERE user_id = ?1 AND is_active = 1 AND display_name IS NOT NULL AND display_name != '' LIMIT 1",
             params![user_id.to_string()],
             |row| row.get(0),
         );
@@ -1100,17 +1120,31 @@ impl AnonGroupRepository {
         user_id: &UserId,
     ) -> Result<Option<String>, StorageError> {
         let conn = self.db.read_connection()?;
-        let result: Result<Option<String>, _> = conn.query_row(
-            "SELECT display_name FROM anon_group_members WHERE group_id = ?1 AND user_id = ?2",
-            params![group_id.to_string(), user_id.to_string(),],
-            |row| row.get(0),
-        );
-
-        match result {
-            Ok(name) => Ok(name),
-            Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-            Err(e) => Err(StorageError::Database(e)),
+        let current: Option<Option<String>> = conn
+            .query_row(
+                "SELECT display_name FROM anon_group_members WHERE group_id = ?1 AND user_id = ?2",
+                params![group_id.to_string(), user_id.to_string(),],
+                |row| row.get(0),
+            )
+            .optional()?;
+        if let Some(name) = current.flatten().filter(|name| !name.is_empty()) {
+            return Ok(Some(name));
         }
+
+        // Groups that lost a member before the profile was retained can still
+        // name old messages from the authenticated leave notice's snapshot.
+        let departed: Option<String> = conn
+            .query_row(
+                "SELECT json_extract(content_json, '$.System.AnonGroupUserLeft.left_name')
+                 FROM messages WHERE conversation_type = 'anon_group'
+                 AND conversation_id = ?1 AND sender_id = ?2
+                 AND json_type(content_json, '$.System.AnonGroupUserLeft.left_name') = 'text'
+                 ORDER BY sent_at DESC LIMIT 1",
+                params![group_id.to_string(), user_id.to_string()],
+                |row| row.get(0),
+            )
+            .optional()?;
+        Ok(departed.filter(|name| !name.is_empty()))
     }
 
     // ========================================================================
@@ -1182,7 +1216,7 @@ impl AnonGroupRepository {
              JOIN anon_group_pending p ON p.group_id=m.group_id AND p.user_id=m.user_id AND p.action='invite'
              LEFT JOIN anon_group_member_order o ON o.group_id=m.group_id AND o.user_id=m.user_id
              WHERE m.group_id=?1 AND m.user_id=?2 AND m.mailbox_pk IS NULL
-             AND p.expires_at > ?3 AND COALESCE(o.admitted_at,0) >= COALESCE(o.removed_at,0)
+             AND m.is_active = 1 AND p.expires_at > ?3 AND COALESCE(o.admitted_at,0) >= COALESCE(o.removed_at,0)
              AND (COALESCE(o.removed_at,0)=0 OR o.admitted_at > o.removed_at))",
             params![group.to_string(), user.to_string(), Utc::now().to_rfc3339()],
             |r| r.get(0),
@@ -1202,7 +1236,7 @@ impl AnonGroupRepository {
         tx.execute(
             "INSERT OR IGNORE INTO anon_group_pending(id,group_id,user_id,action,created_at,expires_at,retry_count)
              SELECT ?1,?2,?3,'invite',?4,?5,0 WHERE EXISTS
-             (SELECT 1 FROM anon_group_members WHERE group_id=?2 AND user_id=?3)",
+             (SELECT 1 FROM anon_group_members WHERE group_id=?2 AND user_id=?3 AND is_active = 1)",
             params![pending.id, group.to_string(), user.to_string(), pending.created_at.to_rfc3339(), pending.expires_at.to_rfc3339()],
         )?;
         // At most three attempts across restarts, spaced by at least five minutes
@@ -1424,7 +1458,7 @@ impl AnonGroupRepository {
              SELECT ?1, ?2, ?3, ?4, 0 WHERE EXISTS (
                 SELECT 1 FROM anon_group_members m JOIN anon_groups g ON g.id = m.group_id
                 LEFT JOIN anon_group_member_order o ON o.group_id = m.group_id AND o.user_id = m.user_id
-                WHERE m.group_id = ?1 AND m.user_id = ?2
+                WHERE m.group_id = ?1 AND m.user_id = ?2 AND m.is_active = 1
                 AND (COALESCE(o.removed_at,0) = 0 OR o.admitted_at > o.removed_at)
                 AND COALESCE(o.admitted_at,0) <= ?5)",
             params![
@@ -1587,10 +1621,10 @@ fn write_ordered_member(
     conn: &rusqlite::Connection,
     member: &AnonGroupMember,
 ) -> Result<(), StorageError> {
-    conn.execute("INSERT INTO anon_group_members(id,group_id,user_id,role,mailbox_pk,joined_at,profile_key,display_name,avatar,device_id)
-        VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10) ON CONFLICT(group_id,user_id) DO UPDATE SET
+    conn.execute("INSERT INTO anon_group_members(id,group_id,user_id,role,mailbox_pk,joined_at,profile_key,display_name,avatar,device_id,is_active)
+        VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,1) ON CONFLICT(group_id,user_id) DO UPDATE SET
         role = excluded.role, mailbox_pk = COALESCE(excluded.mailbox_pk,mailbox_pk), device_id = COALESCE(excluded.device_id,device_id),
-        profile_key = COALESCE(excluded.profile_key,profile_key), display_name = COALESCE(excluded.display_name,display_name), avatar = COALESCE(excluded.avatar,avatar)",
+        profile_key = COALESCE(excluded.profile_key,profile_key), display_name = COALESCE(excluded.display_name,display_name), avatar = COALESCE(excluded.avatar,avatar), is_active = 1",
         params![member.id,member.group_id.to_string(),member.user_id.to_string(),member.role.to_i32(),
             member.mailbox_pk.as_ref().map(|v|v.as_slice()),member.joined_at.to_rfc3339(),
             member.profile_key.as_ref().map(|v|v.as_slice()),member.display_name,member.avatar,member.device_id])?;
