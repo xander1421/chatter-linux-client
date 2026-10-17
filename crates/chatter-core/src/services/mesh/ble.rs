@@ -1642,30 +1642,34 @@ impl BleRuntime {
             return false;
         };
         let Some(state) = states
-            .into_iter()
+            .iter()
             .find(|s| s.has_route_tag(&packet.payload))
         else {
-            // A signed frame at a newer epoch tells a continuing member its
-            // local key is stale even though the new route tag is opaque.
+            // The route tag is opaque without the epoch key. Even a valid
+            // signature does not identify which channel this frame belongs to:
+            // a shared member could otherwise freeze every channel they share
+            // with us by signing one unknown-tag frame with a large epoch. When
+            // there is exactly one possible channel, preserve the early stale
+            // gate that stops an old-key sender after a remote rotation.
             if packet.payload.starts_with(b"CHTRPCM2") && packet.payload.len() >= 72 {
                 let frame_epoch =
                     u64::from_be_bytes(packet.payload[24..32].try_into().expect("frame epoch"));
-                if let Ok(channels) = self.private_channels.list() {
-                    for mut channel in channels {
-                        if channel.creator != self.identity.peer_id().as_str()
-                            && frame_epoch > channel.epoch
-                            && channel
-                                .member_key(claimed)
-                                .is_some_and(|key| verify_packet(packet, &key))
-                        {
-                            channel.stale = true;
-                            let _ = self.private_channels.save(&channel);
-                            self.events.send(MeshEvent::PrivateChannelChanged);
-                        }
+                let mut candidates = states.into_iter().filter(|channel| {
+                    channel.creator != self.identity.peer_id().as_str()
+                        && frame_epoch > channel.epoch
+                        && channel
+                            .member_key(claimed)
+                            .is_some_and(|key| verify_packet(packet, &key))
+                });
+                if let Some(mut channel) = candidates.next()
+                    && candidates.next().is_none()
+                {
+                    channel.stale = true;
+                    if self.private_channels.save(&channel).is_ok() {
+                        self.events.send(MeshEvent::PrivateChannelChanged);
                     }
                 }
             }
-            // A nonmember may still relay the opaque packet.
             return true;
         };
         let Some(signing_key) = state.member_key_for_packet(claimed, &packet.payload) else {
@@ -1681,7 +1685,7 @@ impl BleRuntime {
             return false;
         };
         let author = claimed.clone();
-        let conversation = MeshConversation::PrivateChannel(state.id);
+        let conversation = MeshConversation::PrivateChannel(state.id.clone());
         let nickname = self
             .state
             .with(|s| s.peers.info(&author).map(|p| p.nickname.clone()))
