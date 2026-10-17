@@ -901,6 +901,38 @@ impl UnifiedMessageRepository {
         Ok(())
     }
 
+    /// Clear retained reply snapshots before their disappearing parent is
+    /// hard-deleted. The reply itself remains available in history.
+    pub fn redact_expired_reply_quotes(&self, expired: &[Message]) -> Result<(), StorageError> {
+        let conn = self.db.connection()?;
+        for parent in expired {
+            // Anonymous replies use a timestamp-derived id instead of the
+            // parent's stored id. Keep the author and conversation in that
+            // match so simultaneous messages in other chats stay untouched.
+            let synthetic = MessageId::from_timestamp(parent.sent_at);
+            conn.execute(
+                "UPDATE messages SET
+                    reply_to_text = NULL,
+                    reply_to_thumbnail = NULL,
+                    reply_to_thumbnail_mime = NULL,
+                    content_json = CASE
+                        WHEN json_valid(content_json)
+                             AND json_type(content_json, '$.quote') = 'object'
+                        THEN json_set(content_json, '$.quote.preview', '')
+                        ELSE content_json END
+                 WHERE reply_to = ?1
+                    OR (reply_to = ?2 AND reply_to_author_id = ?3 AND conversation_id = ?4)",
+                params![
+                    parent.id.to_string(),
+                    synthetic.to_string(),
+                    parent.sender_id.map(|id| id.to_string()),
+                    parent.conversation_id.to_string(),
+                ],
+            )?;
+        }
+        Ok(())
+    }
+
     /// Hard-delete multiple messages by ID (purge — row + content removed,
     /// CASCADE clears dependents like `ephemeral_messages`/`unified_reactions`).
     ///

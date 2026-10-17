@@ -509,6 +509,9 @@ pub fn reap_expired(
         .iter()
         .filter_map(|id| messages.get(id).ok().flatten())
         .collect();
+    // Replies retain a copy of their parent's text (and sometimes a media
+    // thumbnail). Remove those copies before deleting the parent row.
+    messages.redact_expired_reply_quotes(&gone)?;
     messages.delete_batch(&ids)?;
     // The rows cascade with their message; this clears any whose message was
     // already gone.

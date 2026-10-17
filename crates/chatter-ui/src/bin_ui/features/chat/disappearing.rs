@@ -11,7 +11,7 @@ use chatter_core::client::ChatterClient;
 use chatter_core::domain::ids::UserId;
 use chatter_core::services::disappearing;
 use chatter_core::state::ActiveConversation;
-use slint::{ComponentHandle, ModelRc, VecModel};
+use slint::{ComponentHandle, Model, ModelRc, VecModel};
 
 use crate::{DisappearingGlobal, DisappearingOption, MainWindow};
 
@@ -55,22 +55,85 @@ fn wire_secret_timer(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     });
 }
 
-/// Drop the bubbles of messages core's reaper has just deleted.
+/// Drop expired bubbles and quote snapshots, then redraw rows from core's
+/// stored preview, timestamp, and unread count for every conversation kind.
 fn wire_expired(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let mut expired = ui_ctx.subscribe_expired_messages();
     let weak = window.as_weak();
+    let ctx = ui_ctx.clone();
     tokio::spawn(async move {
         use tokio::sync::broadcast::error::RecvError;
         loop {
-            let gone: std::collections::HashSet<String> = match expired.recv().await {
-                Ok(batch) => batch.iter().map(|m| m.id.to_string()).collect(),
-                Err(RecvError::Lagged(_)) => continue,
+            let (gone, reply_targets): (
+                std::collections::HashSet<String>,
+                std::collections::HashSet<(String, String)>,
+            ) = match expired.recv().await {
+                Ok(batch) => (
+                    batch
+                        .iter()
+                        .flat_map(|m| {
+                            [
+                                m.id.to_string(),
+                                chatter_core::domain::ids::MessageId::from_timestamp(m.sent_at)
+                                    .to_string(),
+                            ]
+                        })
+                        .collect(),
+                    batch
+                        .iter()
+                        .filter_map(|m| {
+                            m.sender_id
+                                .map(|author| (author.to_string(), m.sent_at.to_string()))
+                        })
+                        .collect(),
+                ),
+                Err(RecvError::Lagged(_)) => {
+                    crate::bin_ui::features::sidebar::history_changed(&weak, &ctx);
+                    continue;
+                }
                 Err(RecvError::Closed) => break,
             };
+            crate::bin_ui::features::sidebar::history_changed(&weak, &ctx);
             let weak = weak.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 let Some(w) = weak.upgrade() else { return };
                 super::remove_messages_where(&w, |m| gone.contains(m.message_id.as_str()));
+                if let Some(results) = w
+                    .get_unified_search_messages()
+                    .as_any()
+                    .downcast_ref::<VecModel<crate::SearchResult>>()
+                {
+                    for index in (0..results.row_count()).rev() {
+                        if results
+                            .row_data(index)
+                            .is_some_and(|hit| gone.contains(hit.message_id.as_str()))
+                        {
+                            results.remove(index);
+                        }
+                    }
+                }
+                if reply_targets.contains(&(
+                    w.get_composer_reply_to_sender().to_string(),
+                    w.get_composer_reply_to_timestamp().to_string(),
+                )) {
+                    super::send_message::clear_reply(&w);
+                }
+                let model = w.get_messages();
+                for index in 0..model.row_count() {
+                    let Some(mut row) = model.row_data(index) else {
+                        continue;
+                    };
+                    if !gone.contains(row.reply_to_message_id.as_str()) {
+                        continue;
+                    }
+                    row.reply_to_preview = "".into();
+                    row.reply_to_not_found = true;
+                    row.reply_to_category = "".into();
+                    row.reply_to_attachment_id = "".into();
+                    row.reply_to_has_thumbnail = false;
+                    row.reply_to_thumbnail = slint::Image::default();
+                    model.set_row_data(index, row);
+                }
             });
         }
     });
