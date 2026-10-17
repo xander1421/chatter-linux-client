@@ -61,7 +61,9 @@ use crate::storage::repositories::unified_message_repo::reaction_projection;
 use std::collections::HashSet;
 
 /// Payload schema version (independent of the container's format_version).
-/// Bump this whenever the exported tables or columns change.
+/// Bump this for every change to backup content, including exported tables,
+/// columns, row selection, or the meaning of stored values. Older builds must
+/// reject newer payloads rather than silently importing only familiar fields.
 pub const PAYLOAD_VERSION: u32 = 1;
 
 /// Whitelisted tables, in FK-safe import order (parents before children:
@@ -164,7 +166,8 @@ pub struct ImportSummary {
     /// Rows admitted, including updates to older evidence within this payload.
     /// Already retained local actor authority and duplicate evidence are skipped.
     pub rows_inserted: usize,
-    /// Rows already present locally or not admitted by reaction authority.
+    /// Rows already present locally or not admitted by retained reaction authority.
+    /// Unsupported payloads return an error instead of an incomplete summary.
     pub rows_skipped: usize,
 }
 
@@ -413,6 +416,12 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
                         "backup payload has duplicate info frames".into(),
                     ));
                 }
+                if info.payload_version > PAYLOAD_VERSION {
+                    return Err(StorageError::UnsupportedBackup(format!(
+                        "payload version {} is newer than supported version {}",
+                        info.payload_version, PAYLOAD_VERSION
+                    )));
+                }
                 if info.payload_version != PAYLOAD_VERSION {
                     return Err(StorageError::InvalidData(format!(
                         "unsupported backup payload version {} (this build supports version {})",
@@ -422,9 +431,14 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
                 saw_info = true;
             }
             Some(frame::Payload::Table(th)) => {
+                if !saw_info {
+                    return Err(StorageError::InvalidData(
+                        "backup table appears before info frame".into(),
+                    ));
+                }
                 let allowed = BACKUP_TABLES.contains(&th.table.as_str()) || th.table == "settings";
                 if !allowed {
-                    return Err(StorageError::InvalidData(format!(
+                    return Err(StorageError::UnsupportedBackup(format!(
                         "backup contains unknown table '{}'",
                         th.table
                     )));
@@ -433,7 +447,7 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
                 let live_cols = table_columns(&tx, table)?;
                 for col in &th.columns {
                     if !live_cols.contains(col) {
-                        return Err(StorageError::InvalidData(format!(
+                        return Err(StorageError::UnsupportedBackup(format!(
                             "backup table '{table}' contains unknown column '{col}'"
                         )));
                     }
