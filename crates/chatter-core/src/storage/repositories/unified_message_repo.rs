@@ -964,6 +964,51 @@ impl UnifiedMessageRepository {
         Ok(rows)
     }
 
+    /// Clear conversation-scoped state that is not a child of a message row.
+    /// The membership ordering tombstones live elsewhere and must survive.
+    pub fn purge_anon_group_orphans(
+        &self,
+        group: &ChannelId,
+        ids: &[MessageId],
+    ) -> Result<(), StorageError> {
+        let mut conn = self.db.connection()?;
+        let tx = conn.transaction()?;
+        let group = group.to_string();
+        for table in [
+            "pending_scoped_reactions",
+            "reaction_action_versions",
+            "reaction_scope_unresolved",
+            "unified_reactions",
+        ] {
+            tx.execute(
+                &format!("DELETE FROM {table} WHERE conversation_type='anon_group' AND conversation_id=?1"),
+                [&group],
+            )?;
+        }
+        tx.execute(
+            "DELETE FROM pending_message_modifiers WHERE conversation_id=?1",
+            [&group],
+        )?;
+        tx.execute(
+            "DELETE FROM pending_anon_group_messages WHERE group_id=?1",
+            [&group],
+        )?;
+        tx.execute(
+            "DELETE FROM settings WHERE key LIKE 'send.group.completion.v1:%'
+             AND json_valid(value) AND json_extract(value,'$.held_group')=?1",
+            [&group],
+        )?;
+        for id in ids {
+            tx.execute(
+                "DELETE FROM settings WHERE key LIKE 'send.group.completion.v1:%'
+                 AND json_valid(value) AND json_extract(value,'$.message_id')=?1",
+                [id.to_string()],
+            )?;
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
     /// Whether this message id was deleted locally (see `delete`). Ingest
     /// checks it so a re-fetched copy stays deleted.
     // tombstones are never pruned; one short row per deleted message.
@@ -2490,6 +2535,21 @@ impl UnifiedMessageRepository {
             ])?;
             collect_messages(&mut rows)
         }
+    }
+
+    /// Include thread replies and locally deleted rows for a full local purge.
+    pub fn list_all_for_conversation(
+        &self,
+        channel_id: &ChannelId,
+        conversation_type: &ConversationType,
+    ) -> Result<Vec<Message>, StorageError> {
+        let conn = self.db.read_connection()?;
+        let mut stmt = conn.prepare(&format!(
+            "SELECT {} FROM messages WHERE conversation_id=?1 AND conversation_type=?2",
+            message_columns("messages")
+        ))?;
+        let mut rows = stmt.query(params![channel_id.to_string(), conversation_type.as_str()])?;
+        collect_messages(&mut rows)
     }
 
     /// Reply counts per thread root for one conversation.

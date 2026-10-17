@@ -924,9 +924,40 @@ impl AnonGroupService {
             parsed.push((member, member_info.admission_timestamp));
         }
 
-        Ok(self
+        let had_roster = self.anon_group_repo.has_applied_roster(&group_id)?;
+        let confirmed_before: std::collections::HashSet<UserId> = self
             .anon_group_repo
-            .apply_ordered_roster(&group_id, &sender_id, timestamp, &parsed)?)
+            .get_members(&group_id)?
+            .into_iter()
+            .filter(|member| member.mailbox_pk.is_some())
+            .map(|member| member.user_id)
+            .collect();
+        let inactive_before: std::collections::HashSet<UserId> = self
+            .anon_group_repo
+            .inactive_member_ids(&group_id)?
+            .into_iter()
+            .collect();
+        let applied = self
+            .anon_group_repo
+            .apply_ordered_roster(&group_id, &sender_id, timestamp, &parsed)?;
+        if applied {
+            for member in self.anon_group_repo.get_members(&group_id)? {
+                if member.mailbox_pk.is_some()
+                    && !confirmed_before.contains(&member.user_id)
+                    && (had_roster || inactive_before.contains(&member.user_id))
+                {
+                    // The roster timestamp is the stable notice version. A
+                    // replay is ignored by the ordered roster and message ID.
+                    self.store_system_message(
+                        &group_id,
+                        Some(member.user_id),
+                        crate::domain::message::SystemMessage::UserJoined(member.user_id),
+                        timestamp,
+                    )?;
+                }
+            }
+        }
+        Ok(applied)
     }
 
     /// Owner-only eligibility for retrying the existing pending admission.

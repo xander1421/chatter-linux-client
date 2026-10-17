@@ -290,12 +290,6 @@ impl AnonGroupService {
                         if member.mailbox_pk.is_some()
                             && !confirmed_before.contains(&member.user_id)
                         {
-                            self.store_system_message(
-                                group_id,
-                                Some(member.user_id),
-                                crate::domain::message::SystemMessage::UserJoined(member.user_id),
-                                list.timestamp,
-                            )?;
                             events.push(DomainEvent::AnonGroupMemberJoined {
                                 group_id: *group_id,
                                 user_id: member.user_id,

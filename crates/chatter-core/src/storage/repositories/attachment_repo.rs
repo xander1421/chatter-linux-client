@@ -285,7 +285,10 @@ impl AttachmentRepository {
                 params![attachment.id.to_string(), secret],
             )?;
             if rows != 1 {
-                return Err(StorageError::NotFound(format!("Attachment {}", attachment.id)));
+                return Err(StorageError::NotFound(format!(
+                    "Attachment {}",
+                    attachment.id
+                )));
             }
         }
         tx.commit()?;
@@ -359,6 +362,13 @@ impl AttachmentRepository {
                 if let Err(e) = std::fs::remove_file(&path) {
                     if e.kind() != std::io::ErrorKind::NotFound {
                         tracing::warn!(attachment_id = %id, error = %e, "attachment file not removed");
+                    }
+                }
+            }
+            if let Some(thumbnail) = self.get_thumbnail(id)? {
+                if let Err(e) = std::fs::remove_file(&thumbnail.local_path) {
+                    if e.kind() != std::io::ErrorKind::NotFound {
+                        tracing::warn!(attachment_id = %id, error = %e, "thumbnail file not removed");
                     }
                 }
             }
