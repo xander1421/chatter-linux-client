@@ -232,7 +232,11 @@ fn pending_attachment_to_display_data(
         category: category.to_string(),
         thumbnail_url: String::new(),
         download_url: String::new(),
-        local_path: Some(attachment.path.to_string_lossy().into_owned()),
+        local_path: (!attachment
+            .path
+            .components()
+            .any(|component| component.as_os_str() == "composer-staging"))
+        .then(|| attachment.path.to_string_lossy().into_owned()),
         is_image: attachment.mime_type.starts_with("image/"),
         is_video: FileCategory::from_mime_and_filename(&attachment.mime_type, &attachment.filename)
             == FileCategory::Video,
