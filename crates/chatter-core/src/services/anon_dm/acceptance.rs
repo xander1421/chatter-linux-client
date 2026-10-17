@@ -292,6 +292,12 @@ impl AnonDmService {
             return Err(AnonDmError::CannotMessageSelf);
         }
 
+        // A peer-level block outlives any one conversation row. Check it
+        // before accepting a fresh request ID, including after chat deletion.
+        if self.is_user_blocked(&sender_id)? {
+            return Err(AnonDmError::ConversationExists(sender_id));
+        }
+
         // A request we already hold is a resend of it (the initiator resends
         // an uncertain request under the same id): nothing new to show.
         if self
@@ -388,6 +394,11 @@ impl AnonDmService {
         _peer_identity_key: &[u8; 33],
         _peer_delivery_token: &[u8; 12],
     ) -> Result<bool, AnonDmError> {
+        // Private-code init takes a separate ingestion path from sealed
+        // requests, but the peer-level block must apply to both.
+        if self.is_user_blocked(&dm.peer_id)? {
+            return Ok(false);
+        }
         // Check if conversation already exists
         if let Some(_existing) = self.anon_dm_repo.get_conversation(&dm.id)? {
             tracing::warn!(
