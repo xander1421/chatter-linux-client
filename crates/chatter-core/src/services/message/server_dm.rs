@@ -23,6 +23,7 @@
 //!   al., NDSS'21 §III-IV).
 
 use prost::Message as ProstMessage;
+use rand::TryRngCore;
 
 use crate::domain::ids::{AttachmentId, ChannelId, UserId};
 use crate::domain::message::{ConversationType, Message, MessageContent, MixedContent};
@@ -1279,7 +1280,7 @@ fn pick_sealed_access_key(profile_key: Option<&[u8; 32]>, unrestricted: bool) ->
         Some(pk) => Some(crate::crypto::derive_uak(pk)),
         None if unrestricted => {
             let mut key = [0u8; 16];
-            rand::RngCore::fill_bytes(&mut rand::rng(), &mut key);
+            rand::RngCore::fill_bytes(&mut rand::rngs::OsRng.unwrap_err(), &mut key);
             Some(key)
         }
         None => None,

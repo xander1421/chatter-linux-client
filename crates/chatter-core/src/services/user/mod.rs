@@ -14,6 +14,7 @@ use std::time::{Duration, Instant};
 use tokio_stream::StreamExt;
 
 use chrono::Utc;
+use rand::TryRngCore;
 
 use crate::domain::ids::UserId;
 use crate::domain::user::{Friendship, FriendshipStatus, Profile, StatusMessage, User};
@@ -1673,7 +1674,11 @@ impl UserService {
                 )
             })?;
 
-        let (entropy, blob) = usernames::create_for_username(&mut rand::rng(), full_username, None)
+        let (entropy, blob) = usernames::create_for_username(
+            &mut rand::rngs::OsRng.unwrap_err(),
+            full_username,
+            None,
+        )
             .map_err(|e| UserError::InvalidInput(format!("Failed to encrypt username: {e}")))?;
 
         let mut user_client = self.user_client();

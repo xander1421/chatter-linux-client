@@ -16,6 +16,7 @@ use std::time::Duration;
 
 use async_trait::async_trait;
 use libsignal_protocol::{KeyPair, PrivateKey};
+use rand::TryRngCore;
 
 use super::verified_state::canonical::{INVITE_DOMAIN, signed_message};
 use super::verified_state::{
@@ -761,7 +762,7 @@ impl InviteLink {
     pub fn generate(channel_id: ChannelId) -> Self {
         Self {
             channel_id,
-            invite_key: KeyPair::generate(&mut rand::rng()).private_key,
+            invite_key: KeyPair::generate(&mut rand::rngs::OsRng.unwrap_err()).private_key,
         }
     }
 

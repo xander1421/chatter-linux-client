@@ -21,6 +21,7 @@ use std::time::Duration;
 
 use libsignal_protocol::{IdentityKey, IdentityKeyPair, PrivateKey};
 use parking_lot::Mutex;
+use rand::TryRngCore;
 use tokio::sync::mpsc;
 use url::Url;
 use zeroize::{Zeroize, Zeroizing};
@@ -614,14 +615,8 @@ impl LinkDeviceService {
         let identity_key = IdentityKey::new(public);
         let identity_pair = IdentityKeyPair::new(identity_key, private);
 
-        // Generate fresh registration ID + keys synchronously and drop the
-        // (`!Send`) ThreadRng before any `.await`, so the surrounding async
-        // fn stays Send for tokio::spawn.
-        //
-        // Moved into a non-async inner fn: Rust's async drop tracking is
-        // conservative around `?` early-returns — keeping `rand::rng()` in a
-        // plain fn guarantees the `ThreadRng` local never ends up in the async
-        // state machine.
+        // Generate fresh registration ID and keys synchronously, keeping RNG
+        // state out of the async state machine.
         let prekey_manager = PreKeyManager::new(self.key_store.clone());
         #[allow(clippy::type_complexity)]
         fn gen_keys(
@@ -637,7 +632,7 @@ impl LinkDeviceService {
             ),
             CryptoError,
         > {
-            let mut rng = rand::rng();
+            let mut rng = rand::rngs::OsRng.unwrap_err();
             let reg_id = (rand::Rng::random::<u32>(&mut rng) % 0x3FFF) + 1;
             let signed = prekey_manager.generate_signed_prekey(&mut rng, 1, identity_pair)?;
             // The medium-term LAST-RESORT PQSPK (id 1) — reused across
@@ -1637,9 +1632,10 @@ fn build_link_url(
 }
 
 fn random_provisioning_code() -> String {
-    use rand::Rng;
-    let mut rng = rand::rng();
-    let bytes: [u8; 24] = std::array::from_fn(|_| rng.random());
+    let mut bytes = [0u8; 24];
+    rand::rngs::OsRng
+        .try_fill_bytes(&mut bytes)
+        .expect("OS CSPRNG must not fail");
     base64_url(&bytes)
 }
 
