@@ -21,7 +21,7 @@ pub(crate) struct TorStageTrace {
 pub(crate) fn dial_active() -> bool {
     #[cfg(feature = "onion")]
     {
-        chatter_core::network::grpc::onion_transport::stage_trace_active()
+        chatter_core::client::ChatterClient::tor_stage_trace_active()
     }
     #[cfg(not(feature = "onion"))]
     {

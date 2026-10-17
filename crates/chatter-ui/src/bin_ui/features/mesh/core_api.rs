@@ -190,14 +190,14 @@ pub fn verify_binding(
     ui_ctx: &Arc<ChatterClient>,
     peer: &str,
     qr: &str,
-) -> Result<chatter_core::storage::mesh_binding_store::PeerBinding, MeshError> {
+) -> Result<chatter_core::client::MeshBindingStatus, MeshError> {
     ui_ctx.mesh_verify_binding(peer, Some(qr))
 }
 
 pub fn verify_known_contact(
     ui_ctx: &Arc<ChatterClient>,
     peer: &str,
-) -> Result<chatter_core::storage::mesh_binding_store::PeerBinding, MeshError> {
+) -> Result<chatter_core::client::MeshBindingStatus, MeshError> {
     ui_ctx.mesh_verify_binding(peer, None)
 }
 

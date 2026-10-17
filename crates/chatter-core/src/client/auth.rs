@@ -71,7 +71,7 @@ impl ChatterClient {
                     if let Err(error) = client.auth().end_session() {
                         tracing::error!(%error, "could not persist ended session");
                     }
-                    client.shutdown_session(teardown_revision).await;
+                    client.shutdown_session(teardown_revision, true).await;
                     client
                         .auth_state()
                         .set_session_ended_if_current(teardown_revision);
@@ -991,7 +991,7 @@ impl ChatterClient {
         }
         let result = self.auth().do_logout().await;
         if self.auth_state().get().session_revision == teardown_revision {
-            self.shutdown_session(teardown_revision).await;
+            self.shutdown_session(teardown_revision, true).await;
             self.auth_state()
                 .set_logged_out_if_current(teardown_revision);
         }

@@ -48,6 +48,16 @@ pub mod wire;
 
 // ── Internal modules ────────────────────────────────────────────────────────
 
+// Temporary external-access allowlist while the client façade is expanded:
+// - app, mailbox, proto, and util: core integration fixtures construct or
+//   inspect these implementation objects directly.
+// - network, services, and storage: current client signatures and platform/UI
+//   adapters still expose transport, service, and persistence types.
+// - config, inbox, local_ai, cloud_ai, ai_policy, and ui: consumers still use
+//   constants, event/AI contracts, and prepared view data from these modules.
+// - update: the desktop updater is consumed directly by chatter-ui.
+// Keep additions here explicit; `sync` has no external caller and is private.
+
 /// Arbiter between the two AI silos — outside both by design.
 pub mod ai_policy;
 #[doc(hidden)]
@@ -70,8 +80,7 @@ pub mod proto;
 pub mod services;
 #[doc(hidden)]
 pub mod storage;
-#[doc(hidden)]
-pub mod sync;
+pub(crate) mod sync;
 pub mod update;
 #[doc(hidden)]
 pub mod ui;

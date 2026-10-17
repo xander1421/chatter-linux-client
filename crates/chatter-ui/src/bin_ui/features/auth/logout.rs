@@ -12,7 +12,7 @@ pub fn wire_logout(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     // Session expiry uses the same native password/PIN recovery screen. Read
     // authoritative state again on the UI thread so queued old events cannot
     // route a newly authenticated account back to login.
-    let mut auth_rx = ui_ctx.auth_state().subscribe();
+    let mut auth_rx = ui_ctx.subscribe_auth_snapshots();
     let recovery_client = ui_ctx.clone();
     let recovery_window = window.as_weak();
     tokio::spawn(async move {
@@ -21,7 +21,7 @@ pub fn wire_logout(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 Ok(_) | Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {}
                 Err(tokio::sync::broadcast::error::RecvError::Closed) => break,
             }
-            let state = recovery_client.auth_state().get();
+            let state = recovery_client.auth_snapshot();
             if !state.session_ended {
                 continue;
             }
@@ -29,7 +29,7 @@ pub fn wire_logout(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let weak = recovery_window.clone();
             let revision = state.session_revision;
             let _ = slint::invoke_from_event_loop(move || {
-                let state = client.auth_state().get();
+                let state = client.auth_snapshot();
                 if !state.session_ended || state.session_revision != revision {
                     return;
                 }

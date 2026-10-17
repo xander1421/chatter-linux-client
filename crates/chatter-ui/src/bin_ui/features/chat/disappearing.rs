@@ -257,8 +257,8 @@ fn wire_refresh(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     refresh_header(window, ui_ctx);
 
     let key = |d: &chatter_core::state::ChatStateData| d.active_conversation.clone();
-    let mut current = key(&ui_ctx.chat_state().get());
-    let mut switches = ui_ctx.chat_state().subscribe();
+    let mut current = key(&ui_ctx.chat_snapshot());
+    let mut switches = ui_ctx.subscribe_chat_snapshots();
     let mut changes = ui_ctx.subscribe_disappearing_timer_changes();
     let weak = window.as_weak();
     let ctx = ui_ctx.clone();

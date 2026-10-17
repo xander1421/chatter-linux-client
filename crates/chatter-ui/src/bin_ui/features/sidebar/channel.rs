@@ -76,10 +76,7 @@ pub fn wire_channel_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         // Commit active-conversation state SYNCHRONOUSLY on the UI thread
         // (same race fix as dm.rs — see comment there).
         if let Ok(parsed) = channel_id_str.parse::<ChannelId>() {
-            ui_ctx.chat_state().set_active_channel(parsed);
-            ui_ctx
-                .chat_state()
-                .set_active_conversation(chatter_core::state::ActiveConversation::Channel(parsed));
+            ui_ctx.select_channel(parsed);
         }
         if let Some(w) = weak.upgrade() {
             w.invoke_refresh_screen_protection();

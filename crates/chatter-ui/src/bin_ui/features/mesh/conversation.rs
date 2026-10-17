@@ -31,9 +31,7 @@ pub fn open(window: &MainWindow, ui_ctx: &Arc<ChatterClient>, id: &str) {
     // Nothing server-backed is on screen any more. Leaving a stale
     // `ActiveConversation` behind would send the next message to a channel the
     // user is no longer looking at.
-    ui_ctx
-        .chat_state()
-        .set_active_conversation(ActiveConversation::None);
+    ui_ctx.select_conversation(ActiveConversation::None);
     window.invoke_refresh_screen_protection();
 
     crate::bin_ui::features::sidebar::stop_audio_playback();

@@ -21,7 +21,6 @@ pub(crate) fn wire_saved_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClien
         super::show_chat_pane(&weak);
         let ui_ctx = ui_ctx_clone.clone();
         let auth_state = ui_ctx.auth_state().clone();
-        let chat_state = ui_ctx.chat_state().clone();
 
         // Stop any playing audio when switching channels
         stop_audio_playback();
@@ -40,9 +39,7 @@ pub(crate) fn wire_saved_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClien
 
         // Commit active-conversation state SYNCHRONOUSLY on the UI thread
         // (same race fix as dm.rs — see comment there).
-        chat_state.set_active_channel(channel_id);
-        chat_state
-            .set_active_conversation(chatter_core::state::ActiveConversation::Channel(channel_id));
+        ui_ctx.select_channel(channel_id);
         if let Some(w) = weak.upgrade() {
             w.invoke_refresh_screen_protection();
         }
@@ -51,7 +48,7 @@ pub(crate) fn wire_saved_messages(window: &MainWindow, ui_ctx: &Arc<ChatterClien
             crate::bin_ui::features::composer::sync_composer_draft(
                 &w,
                 &ui_ctx,
-                ui_ctx.chat_state().get().attachment_revision,
+                ui_ctx.chat_snapshot().attachment_revision,
             );
         }
 

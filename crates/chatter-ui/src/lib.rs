@@ -859,10 +859,11 @@ pub async fn app_init() -> Result<AppState, String> {
     // restored-session branch that used to start it.
     {
         let weak_for_tor = window.as_weak();
+        let client_for_tor = client.clone();
         tokio::spawn(async move {
             let mut last = -1i32;
             loop {
-                let s = chatter_core::network::connection::tor_status().as_i32();
+                let s = client_for_tor.tor_status_code();
                 if s != last {
                     last = s;
                     let weak = weak_for_tor.clone();
