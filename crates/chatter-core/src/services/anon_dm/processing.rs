@@ -53,6 +53,19 @@ impl AnonInboxBackend for AnonDmService {
             .map_err(|e| e.to_string())
     }
 
+    fn has_data_message(
+        &self,
+        id: &Self::Id,
+        sender: &UserId,
+        sent_at: u64,
+    ) -> Result<bool, crate::error::StorageError> {
+        let channel: ChannelId = (*id).into();
+        let message_id = MessageId::from_secret_sender_timestamp(&channel, sender, sent_at);
+        Ok(self.message_repo.get(&message_id)?.is_some_and(|message| {
+            message.conversation_id == channel && message.sender_id == Some(*sender)
+        }))
+    }
+
     fn delete_message(&self, id: &Self::Id, sender: &UserId, ts: u64) -> Result<bool, String> {
         self.delete_message_by_timestamp(id, sender, ts)
             .map_err(|e| e.to_string())
@@ -487,7 +500,7 @@ impl AnonDmService {
             quote,
         );
         let message_id = message.id;
-        self.message_repo.insert(&message)?;
+        self.message_repo.insert_or_ignore(&message)?;
         tracing::debug!(
             "Stored message {} in conversation {} with sent_at={}",
             message_id,
@@ -518,7 +531,7 @@ impl AnonDmService {
             None,
         );
         let message_id = message.id;
-        self.message_repo.insert(&message)?;
+        self.message_repo.insert_or_ignore(&message)?;
         tracing::debug!(
             "Stored text message {} in conversation {} with sent_at={}",
             message_id,
@@ -559,7 +572,7 @@ impl AnonDmService {
         let message_id = message.id;
         let has_text = !text.is_empty();
 
-        self.message_repo.insert(&message)?;
+        self.message_repo.insert_or_ignore(&message)?;
         tracing::debug!(
             conversation_id = %conversation_id,
             message_id = %message_id,

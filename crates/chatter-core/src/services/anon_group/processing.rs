@@ -51,6 +51,23 @@ impl AnonInboxBackend for AnonGroupService {
             .map_err(|e| e.to_string())
     }
 
+    fn has_data_message(
+        &self,
+        id: &Self::Id,
+        sender: &UserId,
+        sent_at: u64,
+    ) -> Result<bool, crate::error::StorageError> {
+        let channel: crate::domain::ChannelId = (*id).into();
+        let message_id = MessageId::from_secret_sender_timestamp(&channel, sender, sent_at);
+        Ok(self
+            .message_service
+            .message_repo
+            .get(&message_id)?
+            .is_some_and(|message| {
+                message.conversation_id == channel && message.sender_id == Some(*sender)
+            }))
+    }
+
     fn delete_message(&self, id: &Self::Id, sender: &UserId, ts: u64) -> Result<bool, String> {
         self.delete_message_by_timestamp(id, sender, ts)
             .map_err(|e| e.to_string())
