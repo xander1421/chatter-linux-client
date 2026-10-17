@@ -45,7 +45,6 @@ pub use messaging::{ChannelInviteRow, ForwardDestination, InviteCandidate, Reply
 pub use profile::{FriendCodeConnection, FriendCodeConnectionError};
 pub use secret_chat::{SecretChatError, SecretChatGate};
 pub use crate::network::connection::ConnectionState;
-pub use crate::storage::backup_data::ImportSummary;
 
 /// Rows removed by a local expiry sweep and attachments no longer referenced
 /// by any stored message.
@@ -76,6 +75,26 @@ pub struct UnreadBadges {
     pub row: u32,
     /// Conversations with unread messages that the current mode shows.
     pub total: u32,
+}
+
+/// Counts returned by a completed message-history import.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ImportSummary {
+    pub tables: usize,
+    pub rows_seen: usize,
+    pub rows_inserted: usize,
+    pub rows_skipped: usize,
+}
+
+impl From<crate::storage::backup_data::ImportSummary> for ImportSummary {
+    fn from(summary: crate::storage::backup_data::ImportSummary) -> Self {
+        Self {
+            tables: summary.tables,
+            rows_seen: summary.rows_seen,
+            rows_inserted: summary.rows_inserted,
+            rows_skipped: summary.rows_skipped,
+        }
+    }
 }
 
 /// Public mesh trust state without storage implementation details.
@@ -1470,10 +1489,11 @@ impl ChatterClient {
         &self,
         path: &std::path::Path,
         passphrase: &str,
-    ) -> Result<crate::storage::backup_data::ImportSummary, ClientError> {
+    ) -> Result<ImportSummary, ClientError> {
         self.message_backup()
             .import_from_file(path, passphrase)
             .await
+            .map(Into::into)
             .map_err(ClientError::BackupRestore)
     }
 
@@ -1494,10 +1514,11 @@ impl ChatterClient {
     pub async fn restore_server_message_backup(
         &self,
         pin: &str,
-    ) -> Result<crate::storage::backup_data::ImportSummary, ClientError> {
+    ) -> Result<ImportSummary, ClientError> {
         self.message_backup()
             .restore_from_server(pin)
             .await
+            .map(Into::into)
             .map_err(ClientError::BackupRestore)
     }
 
