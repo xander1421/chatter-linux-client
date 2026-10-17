@@ -4,9 +4,25 @@ use std::sync::Arc;
 
 use slint::{ComponentHandle, Model, SharedString};
 
-use chatter_core::client::ChatterClient;
+use chatter_core::client::{ChatterClient, ClientError};
 
 use crate::MainWindow;
+
+fn message_restore_status(
+    result: Result<chatter_core::storage::backup_data::ImportSummary, ClientError>,
+) -> String {
+    match result {
+        Ok(summary) => format!(
+            "Restored {} rows ({} already present or kept locally)",
+            summary.rows_inserted, summary.rows_skipped
+        ),
+        Err(error) if error.is_unsupported_backup() => {
+            "This backup was made by a newer version of Chatter. Update the app to restore it."
+                .into()
+        }
+        Err(error) => format!("Restore failed: {error}"),
+    }
+}
 
 pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     if let Some((height, width)) = ui_ctx.composer_keyboard_geometry() {
@@ -580,13 +596,7 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                     Ok(Some(path)) => {
                         let result = ui_ctx.import_message_backup(&path, &passphrase).await;
                         let _ = tokio::fs::remove_file(&path).await;
-                        let status = match result {
-                            Ok(s) => format!(
-                                "Restored {} rows ({} skipped)",
-                                s.rows_inserted, s.rows_skipped
-                            ),
-                            Err(e) => format!("Restore failed: {e}"),
-                        };
+                        let status = message_restore_status(result);
                         set_message_backup_status(&weak, status);
                     }
                     Ok(None) => {}
@@ -605,13 +615,9 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                 else {
                     return; // user cancelled
                 };
-                let status = match ui_ctx.import_message_backup(&path, &passphrase).await {
-                    Ok(s) => format!(
-                        "Restored {} rows ({} skipped)",
-                        s.rows_inserted, s.rows_skipped
-                    ),
-                    Err(e) => format!("Restore failed: {e}"),
-                };
+                let status = message_restore_status(
+                    ui_ctx.import_message_backup(&path, &passphrase).await,
+                );
                 set_message_backup_status(&weak, status);
             }
         });
@@ -641,13 +647,7 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
         let weak = weak_mb_restore.clone();
         let pin = pin.to_string();
         tokio::spawn(async move {
-            let status = match ui_ctx.restore_server_message_backup(&pin).await {
-                Ok(s) => format!(
-                    "Restored {} rows ({} skipped)",
-                    s.rows_inserted, s.rows_skipped
-                ),
-                Err(e) => format!("Server restore failed: {e}"),
-            };
+            let status = message_restore_status(ui_ctx.restore_server_message_backup(&pin).await);
             set_message_backup_status(&weak, status);
         });
     });

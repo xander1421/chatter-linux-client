@@ -170,6 +170,7 @@ pub(super) fn log_invalid_row(row: &rusqlite::Row<'_>, entity: &'static str, err
         .unwrap_or_else(|_| "<unreadable>".into());
     let error_class = match error {
         StorageError::InvalidData(_) => "invalid_data",
+        StorageError::UnsupportedBackup(_) => "unsupported_backup",
         StorageError::Database(_) => "row_decode",
         StorageError::ConnectionPool(_) => "connection_pool",
         StorageError::Migration(_) => "migration",

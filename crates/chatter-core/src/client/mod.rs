@@ -254,6 +254,9 @@ pub enum ClientError {
     Auth(#[from] AuthError),
     #[error("{0}")]
     Validation(String),
+    /// Preserve restore failures so callers can identify a newer backup.
+    #[error("backup restore failed: {0}")]
+    BackupRestore(crate::services::message_backup_service::MessageBackupError),
     /// Login authenticated, but this device has no Signal identity key and one
     /// could not be recovered.
     ///
@@ -264,6 +267,20 @@ pub enum ClientError {
     /// identity" applies — see [`KeyRecoveryNeed::user_message`].
     #[error("{}", .0.user_message())]
     IdentityRecoveryRequired(crate::services::key_recovery::KeyRecoveryNeed),
+}
+
+impl ClientError {
+    /// Whether a message-history backup requires a newer app to restore.
+    pub fn is_unsupported_backup(&self) -> bool {
+        matches!(
+            self,
+            Self::BackupRestore(
+                crate::services::message_backup_service::MessageBackupError::Storage(
+                    crate::error::StorageError::UnsupportedBackup(_)
+                )
+            )
+        )
+    }
 }
 
 /// Result of a successful recovery code usage.
@@ -1419,7 +1436,7 @@ impl ChatterClient {
         self.message_backup()
             .import_from_file(path, passphrase)
             .await
-            .map_err(|e| ClientError::Validation(format!("backup restore failed: {e}")))
+            .map_err(ClientError::BackupRestore)
     }
 
     /// Create/refresh the server-side encrypted message backup (PIN-keyed,
@@ -1443,7 +1460,7 @@ impl ChatterClient {
         self.message_backup()
             .restore_from_server(pin)
             .await
-            .map_err(|e| ClientError::Validation(format!("server restore failed: {e}")))
+            .map_err(ClientError::BackupRestore)
     }
 
     /// Get the call signaling service (persistent instance for pending state).
