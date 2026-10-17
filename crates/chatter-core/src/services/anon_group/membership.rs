@@ -705,33 +705,32 @@ impl AnonGroupService {
             padding: Self::generate_padding(160),
         };
 
-        let current_user = self.current_user_id()?;
-
         let member_count = confirmed_members.len();
-        // Send to each confirmed member's anonymous mailbox (staggered)
+        let recipients: Vec<UserId> = confirmed_members
+            .iter()
+            .filter(|member| member.user_id != current_user)
+            .map(|member| member.user_id)
+            .collect();
+        self.anon_group_repo.replace_pending_roster(
+            group_id,
+            &recipients,
+            &content.encode_to_vec(),
+        )?;
+        // Each persisted row is removed only after a confirmed mailbox deposit.
         for member in &confirmed_members {
             if member.user_id == current_user {
                 continue; // Don't send to ourselves
             }
-
-            // Member has confirmed mailbox (from get_members_with_mailbox)
             let mailbox_pk = member
                 .mailbox_pk
                 .expect("get_members_with_mailbox guarantees mailbox_pk");
-
             let delay_ms = rand::rng().next_u32() % 5_000; // 0-5 second delay
             sleep(Duration::from_millis(delay_ms as u64)).await;
-
             if let Err(e) = self
-                .send_to_anon_mailbox(
-                    &member.user_id,
-                    member.device_id,
-                    &mailbox_pk,
-                    content.clone(),
-                )
+                .drain_pending_messages(group_id, &member.user_id, &mailbox_pk)
                 .await
             {
-                tracing::error!("Failed to send member list to: {}", e);
+                tracing::error!("Failed to drain member list to {}: {}", member.user_id, e);
             }
         }
 
@@ -937,9 +936,13 @@ impl AnonGroupService {
             .inactive_member_ids(&group_id)?
             .into_iter()
             .collect();
-        let applied = self
-            .anon_group_repo
-            .apply_ordered_roster(&group_id, &sender_id, &current_user, timestamp, &parsed)?;
+        let applied = self.anon_group_repo.apply_ordered_roster(
+            &group_id,
+            &sender_id,
+            &current_user,
+            timestamp,
+            &parsed,
+        )?;
         if applied {
             for member in self.anon_group_repo.get_members(&group_id)? {
                 if member.mailbox_pk.is_some()
