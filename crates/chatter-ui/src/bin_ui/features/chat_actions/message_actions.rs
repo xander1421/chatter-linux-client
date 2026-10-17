@@ -157,7 +157,6 @@ pub fn wire_reply_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 if m.sender_id.as_str() == sender_id_str && m.timestamp_ns.as_str() == timestamp_str
                 {
                     sender_name = m.sender_name.to_string();
-                    let content = m.content.to_string();
 
                     let attachments = m.attachments;
                     let mut preview_attachments = Vec::new();
