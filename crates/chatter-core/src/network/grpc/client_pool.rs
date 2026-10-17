@@ -877,6 +877,7 @@ impl GrpcClientPool {
     /// The cached channel retains the connection and its idle keepalives.
     #[cfg(feature = "onion")]
     pub async fn preconnect_secret(&self) -> Result<(), NetworkError> {
+        let generation = self.transport_gen.load(std::sync::atomic::Ordering::Acquire);
         let onion = self
             .onion_addr
             .read()
@@ -898,11 +899,30 @@ impl GrpcClientPool {
             .await
             .map_err(|_| NetworkError::Timeout)??;
         let mut guard = self.secret_channel.write();
-        if self.onion_addr.read().as_deref() == Some(onion.as_str()) {
+        if self.onion_addr.read().as_deref() == Some(onion.as_str())
+            && self.transport_gen.load(std::sync::atomic::Ordering::Acquire) == generation
+        {
             *guard = Some(channel);
             *self.secret_health.write() = Some(Instant::now());
         }
         Ok(())
+    }
+
+    /// Invalidate h2 connections after resume or a default-network change.
+    /// The generation fence prevents an in-flight preconnect from publishing a
+    /// connection established on the previous network after this reset.
+    #[cfg(feature = "onion")]
+    pub fn invalidate_onion_connections(&self) {
+        let mut channel = self.channel.write();
+        self.transport_gen
+            .fetch_add(1, std::sync::atomic::Ordering::AcqRel);
+        *self.secret_channel.write() = None;
+        *self.secret_health.write() = None;
+        if self.transport_mode() == TransportMode::Onion {
+            *channel = None;
+            *self.unidentified_channel.write() = None;
+            *self.unidentified_health.write() = None;
+        }
     }
 
     #[cfg(feature = "onion")]

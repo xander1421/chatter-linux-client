@@ -2678,12 +2678,31 @@ impl ChatterClient {
         {
             let pool = self.services.grpc_pool.clone();
             let shield = self.anon_mode_enabled();
+            // A network transition invalidates the h2 connections, not just
+            // Arti's directory. Do this before scheduling warmup so sends and
+            // polls cannot keep borrowing the old channel while it redials.
+            pool.invalidate_onion_connections();
+            if shield
+                && pool.transport_mode()
+                    == crate::network::grpc::client_pool::TransportMode::Onion
+            {
+                crate::network::connection::set_tor_status(
+                    crate::network::connection::TorStatus::Connecting,
+                );
+            }
+            let inbox = self.services.device_inbox_provider.get().cloned();
             self.services.runtime_handle.spawn(async move {
                 crate::network::grpc::onion_transport::refresh_directory(pool.onion_tor());
                 if shield
                     && pool.transport_mode()
                         == crate::network::grpc::client_pool::TransportMode::Onion
                 {
+                    // The provider owns clones of its old authenticated and
+                    // anonymous channels; replacing pool entries alone cannot
+                    // move its active poll loop to the new network.
+                    if let Some(inbox) = inbox {
+                        inbox.refresh_clients(&pool).await;
+                    }
                     let _ = tokio::join!(
                         async {
                             if let Err(error) = pool.connect().await {
