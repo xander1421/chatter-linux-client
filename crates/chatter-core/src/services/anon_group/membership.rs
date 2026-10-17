@@ -1044,6 +1044,16 @@ impl AnonGroupService {
         Ok(self.anon_group_repo.get_members(group_id)?)
     }
 
+    /// Count joined members and pending invitees from the local roster.
+    pub fn member_counts(&self, group_id: &AnonGroupId) -> Result<(usize, usize), AnonGroupError> {
+        let members = self.get_members(group_id)?;
+        let joined = members
+            .iter()
+            .filter(|member| member.mailbox_pk.is_some())
+            .count();
+        Ok((joined, members.len() - joined))
+    }
+
     /// Get a member of a group.
     pub fn get_member(
         &self,

@@ -45,6 +45,22 @@ impl ChatterClient {
         self.anon_groups().get_members(group_id).unwrap_or_default()
     }
 
+    /// Joined members and pending invitees for the private-group header.
+    pub fn anon_group_member_counts(
+        &self,
+        group_id: &crate::domain::anon_group::AnonGroupId,
+    ) -> (i32, i32) {
+        self.anon_groups()
+            .member_counts(group_id)
+            .map(|(joined, invited)| {
+                (
+                    i32::try_from(joined).unwrap_or(i32::MAX),
+                    i32::try_from(invited).unwrap_or(i32::MAX),
+                )
+            })
+            .unwrap_or_default()
+    }
+
     /// Whether to offer Leave for a private group: not to its owner while
     /// others remain (they must make someone else owner first).
     pub fn can_leave_anon_group(&self, group_id: &crate::domain::anon_group::AnonGroupId) -> bool {
