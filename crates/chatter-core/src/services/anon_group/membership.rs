@@ -939,7 +939,7 @@ impl AnonGroupService {
             .collect();
         let applied = self
             .anon_group_repo
-            .apply_ordered_roster(&group_id, &sender_id, timestamp, &parsed)?;
+            .apply_ordered_roster(&group_id, &sender_id, &current_user, timestamp, &parsed)?;
         if applied {
             for member in self.anon_group_repo.get_members(&group_id)? {
                 if member.mailbox_pk.is_some()

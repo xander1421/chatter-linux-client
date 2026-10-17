@@ -1011,7 +1011,9 @@ async fn deliver_inner(
                 );
             }
 
-            if bootstrap_initiated {
+            // Group fan-out can be pending too, but it does not establish a
+            // DM channel and must leave the group composer available.
+            if bootstrap_initiated && !matches!(conversation, ActiveConversation::AnonGroup(_)) {
                 w.set_composer_placeholder(BOOTSTRAP_PLACEHOLDER.into());
             }
 

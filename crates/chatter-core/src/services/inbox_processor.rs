@@ -494,6 +494,20 @@ impl InboxEventProcessor {
                     .await;
                     match applied {
                         Ok(Ok(true)) => {
+                            event_bus.emit_domain(DomainEvent::AnonGroupMemberListReceived {
+                                group_id: anon_group_id,
+                                members: members.clone(),
+                            });
+                            if let Err(error) = anon_service
+                                .retry_held_posts_for_group(&anon_group_id)
+                                .await
+                            {
+                                tracing::warn!(%error, "Held group post retry after roster failed");
+                            }
+                            event_bus.emit_domain(DomainEvent::AnonGroupMemberListReceived {
+                                group_id: anon_group_id,
+                                members: members.clone(),
+                            });
                             refresh_roster_avatars(anon_service, event_bus, anon_group_id, members)
                                 .await
                         }
@@ -1894,6 +1908,11 @@ impl InboxEventProcessor {
                 &inner_content_ref,
             ) {
                 Ok(events) => {
+                    let applied_roster = events.iter().find_map(|event| match event {
+                        DomainEvent::AnonGroupMemberListReceived { group_id, members }
+                            if *group_id == anon_group_id => Some(members.clone()),
+                        _ => None,
+                    });
                     for event in events {
                         if let DomainEvent::AnonGroupMemberListReceived { group_id, members } =
                             &event
@@ -1906,6 +1925,20 @@ impl InboxEventProcessor {
                             ));
                         }
                         event_bus.emit_domain(event);
+                    }
+                    if let Some(members) = applied_roster {
+                        tokio::spawn(async move {
+                            if let Err(error) = anon_group_service
+                                .retry_held_posts_for_group(&anon_group_id).await
+                            {
+                                tracing::warn!(%error, "Held group post retry after roster failed");
+                            }
+                            // Re-read the local row after fan-out settles.
+                            event_bus.emit_domain(DomainEvent::AnonGroupMemberListReceived {
+                                group_id: anon_group_id,
+                                members,
+                            });
+                        });
                     }
                 }
                 Err(e) => {

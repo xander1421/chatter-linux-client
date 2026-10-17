@@ -679,41 +679,70 @@ impl AnonGroupService {
                     }
                 }
             }
-            if !group.is_blocked()
-                && !self
-                    .anon_group_repo
-                    .awaiting_join_roster(&group.id, &current)?
-            {
-                for (id, content) in super::send_ledger::held_posts(
-                    &self.message_service.database,
-                    &group.id.to_string(),
-                )? {
-                    match self.send_message_impl(&group.id, content, true).await {
-                        Ok(()) => {
-                            let id = id.parse().map_err(|_| {
-                                AnonGroupError::InvalidData("Invalid held group message ID".into())
-                            })?;
-                            self.message_service
-                                .finish_retry_row(&id, "sent", None)
-                                .map_err(|e| AnonGroupError::MessageError(e.to_string()))?;
-                        }
-                        Err(AnonGroupError::DeliveryUnconfirmed) => {}
-                        Err(error) => {
-                            tracing::warn!(%error, "Held group post waits for retry");
-                            break;
-                        }
-                    }
-                }
-            }
+            self.retry_held_posts_for_group(&group.id).await?;
             for member in self.anon_group_repo.get_members_with_mailbox(&group.id)? {
                 if self.token_manager.available_token_count().unwrap_or(0) == 0 {
-                    return Ok(());
+                    // Keep visiting other groups: their held posts may already
+                    // have pairwise sessions and need no fresh token.
+                    break;
                 }
                 let mailbox_pk = member
                     .mailbox_pk
                     .expect("get_members_with_mailbox guarantees mailbox_pk");
                 self.drain_pending_messages(&group.id, &member.user_id, &mailbox_pk)
                     .await?;
+            }
+        }
+        Ok(())
+    }
+
+    /// Retry a joiner's retained posts immediately after an owner roster, as
+    /// well as from the periodic/startup retry loop.
+    pub async fn retry_held_posts_for_group(
+        &self,
+        group_id: &AnonGroupId,
+    ) -> Result<(), AnonGroupError> {
+        let posts = super::send_ledger::held_posts(
+            &self.message_service.database,
+            &group_id.to_string(),
+        )?;
+        if posts.is_empty() {
+            return Ok(());
+        }
+        let current = self.current_user_id()?;
+        let group = self.anon_group_repo.get_group(group_id)?
+            .ok_or(AnonGroupError::GroupNotFound(*group_id))?;
+        let reason = if group.is_blocked() {
+            Some("group blocked")
+        } else if self.anon_group_repo.awaiting_join_roster(group_id, &current)? {
+            Some("owner roster has not admitted local join")
+        } else {
+            None
+        };
+        if let Some(reason) = reason {
+            for (id, _) in posts {
+                tracing::debug!(message_id = %id, reason, "held post still waiting");
+            }
+            return Ok(());
+        }
+        for (id, content) in posts {
+            match self.send_message_impl(group_id, content, true).await {
+                Ok(()) => {
+                    let message_id = id.parse().map_err(|_| {
+                        AnonGroupError::InvalidData("Invalid held group message ID".into())
+                    })?;
+                    self.message_service.finish_retry_row(&message_id, "sent", None)
+                        .map_err(|e| AnonGroupError::MessageError(e.to_string()))?;
+                    tracing::info!(message_id = %id, "held group post released");
+                }
+                Err(AnonGroupError::DeliveryUnconfirmed) => {
+                    tracing::debug!(message_id = %id, reason = "delivery unconfirmed", "held post still waiting");
+                }
+                Err(error) => {
+                    tracing::debug!(message_id = %id, reason = "send retry error", "held post still waiting");
+                    tracing::warn!(%error, "Held group post waits for retry");
+                    break;
+                }
             }
         }
         Ok(())
