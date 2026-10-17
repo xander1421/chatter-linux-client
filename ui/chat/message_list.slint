@@ -324,6 +324,7 @@ export component MessageList inherits Rectangle {
     callback attachment-clicked(string);  // attachment ID
     callback audio-seek(string, float);  // attachment ID, position 0.0-1.0
     callback scroll-to-bottom-clicked();  // Emitted when scroll-to-bottom button clicked
+    callback list-geometry(float, float, bool); // visible height, content height, tail seek
 
     changed bottom-inset => {
         if (root.is-at-bottom && !root.opening-on-unread
@@ -488,6 +489,20 @@ export component MessageList inherits Rectangle {
             triggered => { list.seek-row(root.jump-row); }
         }
 
+        // Android can restore the surface after the opening seek. Reapply the
+        // tail against the completed layout whenever either dimension changes.
+        follow-layout := Timer {
+            interval: 16ms;
+            running: false;
+            triggered => {
+                self.running = false;
+                if (root.following-tail && !root.scrolling && root.jump-row < 0
+                        && list.height > 0px && list.viewport-height > 0px) {
+                    list.seek-end();
+                }
+            }
+        }
+
         list := ListView {
             width: 100%;
             height: 100%;
@@ -552,7 +567,8 @@ export component MessageList inherits Rectangle {
             }
 
             function seek-end() {
-                self.viewport-y = self.height - self.viewport-height;
+                root.list-geometry(self.height / 1px, self.viewport-height / 1px, true);
+                self.viewport-y = Math.min(0px, self.height - self.viewport-height);
             }
 
             // True once the runtime has written its first estimate. Before
@@ -722,10 +738,14 @@ export component MessageList inherits Rectangle {
             }
             changed viewport-height => {
                 self.measured = true;
+                root.list-geometry(self.height / 1px, self.viewport-height / 1px, false);
+                if (root.following-tail) { follow-layout.restart(); }
                 self.settle();
             }
 
             changed height => {
+                root.list-geometry(self.height / 1px, self.viewport-height / 1px, false);
+                if (root.following-tail) { follow-layout.restart(); }
                 self.settle();
             }
 
