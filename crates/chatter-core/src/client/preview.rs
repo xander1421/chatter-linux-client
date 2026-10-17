@@ -1,6 +1,6 @@
 //! Attachment-only summaries for the forwarding picker. No media reads or transport.
 
-use chatter_core::domain::attachment::{FileCategory, FileMetadata, SharedCategory};
+use crate::domain::attachment::{FileCategory, FileMetadata, SharedCategory};
 
 /// Captioned messages retain the existing truncation and skip attachment lookup.
 pub fn forward_message_preview(

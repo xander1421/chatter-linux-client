@@ -1673,6 +1673,16 @@ impl ChatterClient {
         self.channels().delete_channel(channel_id).await
     }
 
+    /// Keep only invite choices that are selected and currently eligible.
+    pub fn eligible_channel_invite_targets<I>(
+        &self, rows: I,
+    ) -> Vec<crate::domain::ids::UserId>
+    where I: IntoIterator<Item = (String, bool, bool, bool)> {
+        rows.into_iter().filter_map(|(id, selected, already_member, banned)| {
+            if selected && !already_member && !banned { id.parse().ok() } else { None }
+        }).collect()
+    }
+
     pub async fn invite_user_to_channel(
         &self,
         channel_id: &crate::domain::ids::ChannelId,

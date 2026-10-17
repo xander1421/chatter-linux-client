@@ -1581,10 +1581,9 @@ fn wire_invite_channel_members(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
             let Some(w) = weak.upgrade() else { return };
             let channel_id = w.get_invite_member_channel_id().to_string();
             let users = w.get_invite_member_users();
-            let selected_vec: Vec<String> = users.iter()
-                .filter(|u| u.selected && !u.already_member && !u.banned)
-                .map(|u| u.id.to_string())
-                .collect();
+            let selected_vec = ui_ctx.eligible_channel_invite_targets(users.iter()
+                .map(|u| (u.id.to_string(), u.selected, u.already_member, u.banned))
+                .collect::<Vec<_>>());
             (channel_id, selected_vec)
         };
 
@@ -1623,13 +1622,8 @@ fn wire_invite_channel_members(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
             // Why the last failure failed, for the toast (F76: a server refusal
             // only reached the log, so the inviter could not tell why).
             let mut failure_reason = String::new();
-            for user_id_str in &selected_user_ids {
-                let user_id: UserId = match user_id_str.parse() {
-                    Ok(id) => id,
-                    Err(_) => continue,
-                };
-
-                match ui_ctx.invite_user_to_channel(&channel_id, &user_id, None).await {
+            for user_id in &selected_user_ids {
+                match ui_ctx.invite_user_to_channel(&channel_id, user_id, None).await {
                     Ok(_) => {
                         success_count += 1;
                         tracing::info!(
