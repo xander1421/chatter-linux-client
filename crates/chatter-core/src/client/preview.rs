@@ -3,7 +3,7 @@
 use chatter_core::domain::attachment::{FileCategory, FileMetadata, SharedCategory};
 
 /// Captioned messages retain the existing truncation and skip attachment lookup.
-pub(super) fn message_preview(
+pub fn forward_message_preview(
     text: Option<&str>,
     truncate: impl FnOnce(&str) -> String,
     attachments: impl FnOnce() -> Vec<Option<FileMetadata>>,
@@ -15,7 +15,7 @@ pub(super) fn message_preview(
 }
 
 /// Missing metadata still represents an attachment and contributes to the count.
-pub(super) fn attachment_preview(metadata: &[Option<FileMetadata>]) -> String {
+pub fn attachment_preview(metadata: &[Option<FileMetadata>]) -> String {
     let mut counts = [0usize; 6];
     for meta in metadata {
         let kind = match meta {
@@ -57,6 +57,40 @@ pub(super) fn attachment_preview(metadata: &[Option<FileMetadata>]) -> String {
     }
 }
 
+/// The UI supplies only attachment display fields; core owns the summary.
+pub struct ActionPreviewAttachment {
+    pub is_image: bool,
+    pub category: String,
+    pub filename: String,
+}
+
+pub fn message_action_preview(text: &str, attachments: &[ActionPreviewAttachment]) -> String {
+    let text_preview = if text.chars().count() > 50 {
+        format!("{}...", text.chars().take(47).collect::<String>())
+    } else { text.to_string() };
+    let image_count = attachments.iter().filter(|a| a.is_image).count();
+    let files: Vec<_> = attachments.iter().filter(|a| !a.is_image).collect();
+    let mut parts = Vec::new();
+    if image_count == 1 { parts.push("\u{1F4F7} Photo".to_string()); }
+    else if image_count > 1 { parts.push(format!("\u{1F4F7} {image_count} Photos")); }
+    if files.len() == 1 {
+        let file = files[0];
+        let emoji = match file.category.as_str() {
+            "audio" => "\u{1F3B5}", "video" => "\u{1F3AC}",
+            "document" => "\u{1F4C4}", "code" => "\u{1F4DD}",
+            "archive" => "\u{1F4E6}", _ => "\u{1F4CE}",
+        };
+        parts.push(format!("{emoji} {}", file.filename));
+    } else if files.len() > 1 { parts.push(format!("\u{1F4CE} {} files", files.len())); }
+    let attachment_label = parts.join(", ");
+    match (text_preview.is_empty(), attachment_label.is_empty()) {
+        (false, false) => format!("{text_preview} \u{2022} {attachment_label}"),
+        (true, false) => attachment_label,
+        (false, true) => text_preview,
+        (true, true) => String::new(),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -69,7 +103,7 @@ mod tests {
     fn text_keeps_original_content_and_truncation_without_attachment_lookup() {
         let text = "  caption with photo  ";
         assert_eq!(
-            message_preview(
+            forward_message_preview(
                 Some(text),
                 |body| {
                     assert_eq!(body, text);
@@ -81,7 +115,7 @@ mod tests {
         );
         for empty in [None, Some(""), Some(" \n\t")] {
             assert_eq!(
-                message_preview(
+                forward_message_preview(
                     empty,
                     |_| panic!("empty body"),
                     || vec![metadata("photo.jpg", "image/jpeg")]

@@ -159,68 +159,25 @@ pub fn wire_reply_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     sender_name = m.sender_name.to_string();
                     let content = m.content.to_string();
 
-                    // Build text preview (truncate if needed)
-                    let text_preview = if content.chars().count() > 50 {
-                        format!("{}...", content.chars().take(47).collect::<String>())
-                    } else {
-                        content.clone()
-                    };
-
-                    // Build attachment indicator and extract thumbnail
-                    let mut attachment_label = String::new();
+                    let attachments = m.attachments;
+                    let mut preview_attachments = Vec::new();
                     if m.has_attachments {
-                        let att_model = m.attachments;
-                        let att_count = att_model.row_count();
-                        let mut image_count = 0;
-                        // (emoji, filename) so audio/document/code/archive keep their own icon
-                        let mut file_entries: Vec<(&'static str, String)> = Vec::new();
-
-                        for j in 0..att_count {
-                            if let Some(att) = att_model.row_data(j) {
-                                if att.is_image {
-                                    image_count += 1;
-                                    // Grab the first image thumbnail for the composer
-                                    if !reply_has_thumbnail && att.has_thumbnail {
-                                        reply_thumbnail = att.thumbnail;
-                                        reply_has_thumbnail = true;
-                                    }
-                                } else {
-                                    let emoji = match att.category.as_str() {
-                                        "audio" => "\u{1F3B5}",
-                                        "video" => "\u{1F3AC}",
-                                        "document" => "\u{1F4C4}",
-                                        "code" => "\u{1F4DD}",
-                                        "archive" => "\u{1F4E6}",
-                                        _ => "\u{1F4CE}",
-                                    };
-                                    file_entries.push((emoji, att.filename.to_string()));
+                        for j in 0..attachments.row_count() {
+                            if let Some(att) = attachments.row_data(j) {
+                                if att.is_image && !reply_has_thumbnail && att.has_thumbnail {
+                                    reply_thumbnail = att.thumbnail.clone();
+                                    reply_has_thumbnail = true;
                                 }
+                                preview_attachments.push(chatter_core::client::preview::ActionPreviewAttachment {
+                                    is_image: att.is_image,
+                                    category: att.category.to_string(),
+                                    filename: att.filename.to_string(),
+                                });
                             }
                         }
-
-                        // Build descriptive label
-                        let mut parts: Vec<String> = Vec::new();
-                        if image_count == 1 {
-                            parts.push("\u{1F4F7} Photo".to_string());
-                        } else if image_count > 1 {
-                            parts.push(format!("\u{1F4F7} {} Photos", image_count));
-                        }
-                        if file_entries.len() == 1 {
-                            let (emoji, name) = &file_entries[0];
-                            parts.push(format!("{} {}", emoji, name));
-                        } else if file_entries.len() > 1 {
-                            parts.push(format!("\u{1F4CE} {} files", file_entries.len()));
-                        }
-                        attachment_label = parts.join(", ");
                     }
-
-                    // Combine text + attachment label
-                    reply_preview = match (text_preview.is_empty(), attachment_label.is_empty()) {
-                        (false, false) => format!("{} \u{2022} {}", text_preview, attachment_label),
-                        (true, false) => attachment_label,
-                        (false, true) => text_preview,
-                        (true, true) => String::new(),
-                    };
+                    reply_preview = chatter_core::client::preview::message_action_preview(
+                        m.content.as_str(), &preview_attachments);
 
                     break;
                 }

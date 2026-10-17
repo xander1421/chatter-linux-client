@@ -95,6 +95,7 @@ mod picker_history;
 mod pin;
 mod profile;
 mod profile_visibility;
+pub mod preview;
 mod push_config;
 mod secret_chat;
 mod shared_content;
