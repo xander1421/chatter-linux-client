@@ -534,8 +534,7 @@ fn wire_chat_settings_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
             std::thread::spawn(move || {
                 // Shared with the live refresh on membership events
                 // (`refresh_members_if_open`), so both read the same roster.
-                let Some(roster) = ui_ctx.private_group_settings_roster(group_id)
-                else {
+                let Some(roster) = ui_ctx.private_group_settings_roster(group_id) else {
                     let ui_ctx = ui_ctx.clone();
                     let weak = weak.clone();
                     let id = group_id_str.clone();
@@ -787,14 +786,8 @@ fn load_older(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, until: Option<Message
             ),
             None => Ok(until
                 .as_ref()
-                .and_then(|id| ui_ctx.get_message_local(id))
-                .filter(|m| {
-                    m.conversation_id == channel_id
-                        && m.conversation_type == conversation_type
-                        && !m.is_deleted
-                })
-                .into_iter()
-                .collect()),
+                .map(|id| ui_ctx.get_history_target_local(id, &channel_id, &conversation_type))
+                .unwrap_or_default()),
         };
         message_state.set_loading(channel_id, false);
         let older_messages = match older_messages {

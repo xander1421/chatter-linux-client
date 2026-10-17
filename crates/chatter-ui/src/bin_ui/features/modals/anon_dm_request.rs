@@ -98,6 +98,7 @@ fn spawn_request_stream(
                     let peer_name = sender_name.clone();
                     let intro = intro_message.unwrap_or_default();
                     let weak = weak_window.clone();
+                    let request_client = ui_ctx.clone();
 
                     // Decode avatar OUTSIDE UI thread - image decoding is expensive
                     // Only raw pixels are Send, so decode to RGBA bytes here
@@ -137,13 +138,7 @@ fn spawn_request_stream(
                             let current_requests = w.get_friends_private_requests();
                             // A resent request carries the same conversation
                             // id: replace its row, never add a second.
-                            let mut requests: Vec<FriendRequestData> = current_requests
-                                .iter()
-                                .filter(|r| r.user_id.as_str() != conv_id_str)
-                                .collect();
-
-                            // Add new request
-                            requests.push(FriendRequestData {
+                            let incoming = FriendRequestData {
                                 user_id: conv_id_str.clone().into(), // conversation_id
                                 display_name: peer_name.clone().into(),
                                 username: "Private".into(),
@@ -155,7 +150,13 @@ fn spawn_request_stream(
                                     intro.into()
                                 },
                                 note: "".into(),
-                            });
+                            };
+                            let requests = request_client.reconcile_anon_dm_request_rows(
+                                current_requests.iter(),
+                                &conversation_id,
+                                |row| row.user_id.as_str(),
+                                incoming,
+                            );
 
                             w.set_friends_private_requests(ModelRc::new(VecModel::from(
                                 requests.clone(),
@@ -251,6 +252,7 @@ fn spawn_request_stream(
                         intro_message.clone()
                     };
                     let weak = weak_window.clone();
+                    let request_client = ui_ctx.clone();
 
                     // Decode avatar BEFORE invoke_from_event_loop to avoid blocking UI thread
                     let avatar_pixels: Option<(Vec<u8>, u32, u32)> =
@@ -279,13 +281,7 @@ fn spawn_request_stream(
                             let current_requests = w.get_friends_private_requests();
                             // A resent request carries the same conversation
                             // id: replace its row, never add a second.
-                            let mut requests: Vec<FriendRequestData> = current_requests
-                                .iter()
-                                .filter(|r| r.user_id.as_str() != conv_id_str)
-                                .collect();
-
-                            // Add new request with sender's identity (revealed after ECIES decryption)
-                            requests.push(FriendRequestData {
+                            let incoming = FriendRequestData {
                                 user_id: conv_id_str.clone().into(), // conversation_id
                                 display_name: peer_name.clone().into(),
                                 username: "Private".into(),
@@ -293,7 +289,13 @@ fn spawn_request_stream(
                                 has_avatar,
                                 sent_at: intro.into(),
                                 note: "".into(),
-                            });
+                            };
+                            let requests = request_client.reconcile_anon_dm_request_rows(
+                                current_requests.iter(),
+                                &conversation_id,
+                                |row| row.user_id.as_str(),
+                                incoming,
+                            );
 
                             w.set_friends_private_requests(ModelRc::new(VecModel::from(
                                 requests.clone(),

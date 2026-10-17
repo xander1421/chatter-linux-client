@@ -6,6 +6,24 @@ use crate::domain::message::{ConversationType, Message};
 use super::{AnonDmError, AnonDmService};
 
 impl AnonDmService {
+    /// Replace a pending request by conversation identity, retaining the order
+    /// of every other request. Repeated delivery must produce one row.
+    pub fn reconcile_request_rows<T>(
+        &self,
+        current: impl IntoIterator<Item = T>,
+        conversation_id: &AnonDmId,
+        row_id: impl Fn(&T) -> &str,
+        incoming: T,
+    ) -> Vec<T> {
+        let id = conversation_id.to_string();
+        let mut rows: Vec<T> = current
+            .into_iter()
+            .filter(|row| row_id(row) != id)
+            .collect();
+        rows.push(incoming);
+        rows
+    }
+
     /// Get a conversation by ID.
     pub fn get_conversation(
         &self,

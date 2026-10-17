@@ -217,22 +217,15 @@ pub fn start_video_frame_timer(window: &MainWindow, shared_frames: SharedVideoFr
                 return;
             }
 
-            // Stable tile order. The core snapshot iterates a HashMap, so its
-            // order is unspecified and can shuffle between frames; the Slint
-            // side indexes `remote-video-frames` positionally ([0], [1], …),
-            // so an unstable order would swap participants' tiles. Sort by
-            // participant id once, off-thread, to pin each participant to a
-            // row.
-            let mut ordered: Vec<&(String, _)> = snapshot.iter().collect();
-            ordered.sort_by(|a, b| a.0.cmp(&b.0));
-            let snapshot_len = ordered.len();
+            // Core supplies stable participant order for positional tiles.
+            let snapshot_len = snapshot.len();
 
             #[cfg(target_os = "linux")]
             {
                 // GL path: publish Arc-cloned frames into the gl_call inbox
                 // (no pixel copy), then request a redraw so the notifier
                 // drains the inbox and uploads on the GL thread.
-                let batch: Vec<(String, Arc<Vec<u8>>, u32, u32, u32, u64)> = ordered
+                let batch: Vec<(String, Arc<Vec<u8>>, u32, u32, u32, u64)> = snapshot
                     .iter()
                     .map(|(id, frame)| {
                         (
@@ -277,9 +270,9 @@ pub fn start_video_frame_timer(window: &MainWindow, shared_frames: SharedVideoFr
                 // build `slint::Image` here because it isn't `Send`. Keep the
                 // participant id with each buffer so the local self-preview
                 // frame can be split out on the UI thread.
-                let buffers: Vec<(String, slint::SharedPixelBuffer<slint::Rgba8Pixel>)> = ordered
+                let buffers: Vec<(String, slint::SharedPixelBuffer<slint::Rgba8Pixel>)> = snapshot
                     .iter()
-                    .map(|(id, frame)| ((*id).clone(), slint::SharedPixelBuffer::clone_from_slice(
+                    .map(|(id, frame)| (id.clone(), slint::SharedPixelBuffer::clone_from_slice(
                         &frame.rgba_data, frame.width, frame.height,
                     )))
                     .collect();

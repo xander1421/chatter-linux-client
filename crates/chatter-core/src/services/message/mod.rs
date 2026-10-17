@@ -712,6 +712,24 @@ impl MessageService {
             .pop())
     }
 
+    /// A jump target eligible for the open conversation's history list.
+    pub fn get_history_target_local(
+        &self,
+        message_id: &crate::domain::ids::MessageId,
+        channel_id: &ChannelId,
+        conversation_type: &ConversationType,
+    ) -> Result<Vec<Message>, MessageError> {
+        Ok(self
+            .get_message_local(message_id)?
+            .filter(|message| {
+                message.conversation_id == *channel_id
+                    && message.conversation_type == *conversation_type
+                    && !message.is_deleted
+            })
+            .into_iter()
+            .collect())
+    }
+
     /// Whether the parent message a reply quotes is missing or deleted.
     ///
     /// Signal-Desktop parity: a reply keeps its quoted snapshot even after the

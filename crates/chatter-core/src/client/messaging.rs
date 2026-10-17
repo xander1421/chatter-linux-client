@@ -278,6 +278,17 @@ impl ChatterClient {
         self.messages().get_message_local(message_id).ok().flatten()
     }
 
+    pub fn get_history_target_local(
+        &self,
+        message_id: &crate::domain::ids::MessageId,
+        channel_id: &crate::domain::ids::ChannelId,
+        conversation_type: &ConversationType,
+    ) -> Vec<crate::domain::message::Message> {
+        self.messages()
+            .get_history_target_local(message_id, channel_id, conversation_type)
+            .unwrap_or_default()
+    }
+
     /// Timestamp of an outgoing failed or parked message eligible for tap-to-retry.
     pub fn retryable_message_timestamp(
         &self,
