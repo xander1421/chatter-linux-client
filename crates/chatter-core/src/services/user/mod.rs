@@ -1541,16 +1541,6 @@ impl UserService {
         Ok(png_bytes)
     }
 
-    /// Generate a QR code as base64-encoded PNG (for embedding in UI).
-    ///
-    /// Returns a data URL that can be used directly in image sources.
-    pub fn generate_friend_qr_base64(&self, size: u32) -> Result<String, UserError> {
-        use base64::Engine;
-        let png_bytes = self.generate_friend_qr(size)?;
-        let b64 = base64::engine::general_purpose::STANDARD.encode(&png_bytes);
-        Ok(format!("data:image/png;base64,{}", b64))
-    }
-
     // ========================================================================
     // NDSS'21 Private Friend Codes (includes identity key + delivery token)
     // ========================================================================

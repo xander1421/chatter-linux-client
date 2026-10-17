@@ -2297,25 +2297,6 @@ async fn refresh_roster_avatars(
     }
 }
 
-/// The first fetch of the avatar a secret-chat request or acceptance points
-/// at, made before the chat is stored. Returns the avatar, and the pointer
-/// again when the fetch failed so it is retried once the chat exists.
-async fn first_avatar_fetch(
-    service: &crate::services::anon_dm::AnonDmService,
-    pointer: Option<crate::proto::content_v1::AttachmentPointer>,
-) -> (
-    Option<Vec<u8>>,
-    Option<crate::proto::content_v1::AttachmentPointer>,
-) {
-    match service.resolve_peer_avatar(pointer.as_ref(), None).await {
-        Ok(avatar) => (avatar, None),
-        Err(e) => {
-            tracing::warn!(error = %e, "Secret-chat avatar fetch failed; will retry");
-            (None, pointer)
-        }
-    }
-}
-
 /// Fetch the avatar a secret-chat control points at (retrying a failed fetch
 /// after each of `delays`) and, when it is new, store it and tell the UI. The
 /// control itself (name, bio, the chat) was applied without waiting for this.
