@@ -224,7 +224,7 @@ fn wire_password_login(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
                     // Load initial data + presence
                     load_initial_data(weak.clone(), &ui_ctx).await;
-                    super::presence_integration::initialize_presence(&ui_ctx).await;
+                    ui_ctx.initialize_presence().await;
                 }
                 Err(e) => {
                     // A login that could not establish this device's identity

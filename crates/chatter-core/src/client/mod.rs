@@ -95,6 +95,7 @@ mod picker_history;
 mod pin;
 mod profile;
 mod profile_visibility;
+mod presence;
 pub mod preview;
 mod push_config;
 mod secret_chat;
@@ -209,6 +210,7 @@ impl ClientBuilder {
             sent_receipts: Mutex::new(Vec::new()),
             started: AtomicBool::new(false),
             last_activity_ms: AtomicU64::new(0),
+            presence_controller: presence::PresenceController::new(),
             push_shutdown: Mutex::new(None),
             call_signaling: std::sync::OnceLock::new(),
             svr_backup_service: std::sync::OnceLock::new(),
@@ -390,6 +392,7 @@ pub struct ChatterClient {
     started: AtomicBool,
     /// Epoch millis of last user activity (for idle detection).
     last_activity_ms: AtomicU64,
+    presence_controller: presence::PresenceController,
     /// Shutdown channel for the active ntfy push listener task, if any.
     /// Reset / replaced on every `configure_push` call so the caller can
     /// swap URLs (or disable push) idempotently.

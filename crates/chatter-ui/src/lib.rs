@@ -1182,7 +1182,7 @@ fn app_run(state: AppState) {
     rt_handle().spawn(async move {
         if ui_ctx.auth_state().is_logged_in() {
             tracing::info!("Sending offline presence before shutdown...");
-            bin_ui::features::auth::presence_integration::shutdown_presence(&ui_ctx).await;
+            ui_ctx.shutdown_presence().await;
             tokio::time::sleep(std::time::Duration::from_millis(500)).await;
         }
         ui_ctx.shutdown().await;

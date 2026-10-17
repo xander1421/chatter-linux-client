@@ -22,10 +22,7 @@ pub fn wire_typing_changed(window: &crate::MainWindow, ui_ctx: &Arc<ChatterClien
         if is_typing {
             let ui_ctx_activity = ui_ctx.clone();
             tokio::spawn(async move {
-                crate::bin_ui::features::auth::presence_integration::track_activity(
-                    &ui_ctx_activity,
-                )
-                .await;
+                ui_ctx_activity.record_presence_activity().await;
             });
 
             ui_ctx.typing_bump(ui_ctx.chat_state().active_conversation());

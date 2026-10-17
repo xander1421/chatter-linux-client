@@ -248,5 +248,5 @@ async fn finish_linked(weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<ChatterClien
     });
 
     load_initial_data(weak.clone(), ui_ctx).await;
-    super::presence_integration::initialize_presence(ui_ctx).await;
+    ui_ctx.initialize_presence().await;
 }
