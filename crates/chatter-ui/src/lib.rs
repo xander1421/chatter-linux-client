@@ -252,6 +252,9 @@ struct ChatOpenFrame {
     images_pending: bool,
     rows: usize,
     images: usize,
+    visible_height: f32,
+    content_height: f32,
+    seek_logged: bool,
     after_content: Option<Box<dyn FnOnce() + Send>>,
 }
 
@@ -267,6 +270,9 @@ pub(crate) fn trace_chat_open_started(started: std::time::Instant, kind: &'stati
             images_pending: false,
             rows: 0,
             images: 0,
+            visible_height: 0.0,
+            content_height: 0.0,
+            seek_logged: false,
             after_content: None,
         });
     }
@@ -295,6 +301,21 @@ pub(crate) fn trace_chat_open_images(images: usize) {
         if let Some(frame) = frame.as_mut() {
             frame.images = images;
             frame.images_pending = true;
+        }
+    }
+}
+
+fn trace_chat_list_geometry(visible_height: f32, content_height: f32, seeking: bool) {
+    if let Ok(mut open) = CHAT_OPEN_FRAME.lock() {
+        if let Some(frame) = open.as_mut() {
+            frame.visible_height = visible_height;
+            frame.content_height = content_height;
+            if seeking && !frame.seek_logged {
+                tracing::info!(kind = frame.kind, stage = "tail_seek",
+                    visible_height, content_height,
+                    elapsed_ms = frame.started.elapsed().as_millis(), "conversation_open");
+                frame.seek_logged = true;
+            }
         }
     }
 }
@@ -331,6 +352,8 @@ pub(crate) fn record_startup_frame(state: &slint::RenderingState) {
                         kind = frame.kind,
                         stage = "first_images_frame",
                         images = frame.images,
+                        visible_height = frame.visible_height,
+                        content_height = frame.content_height,
                         elapsed_ms = frame.started.elapsed().as_millis(),
                         "conversation_open"
                     );
@@ -691,6 +714,7 @@ pub async fn app_init() -> Result<AppState, String> {
     let connected = client.startup_connect(BOOT_CONNECT_BUDGET).await;
 
     let window = MainWindow::new().expect("Failed to create window");
+    window.on_list_geometry(trace_chat_list_geometry);
     // Native winit window is created later, on show. The id has to be set
     // before that, and the Slint platform exists only after `MainWindow::new`.
     #[cfg(target_os = "linux")]

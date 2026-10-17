@@ -1274,6 +1274,7 @@ export component MainWindow inherits Window {
     callback remove-attachment(string);
     callback typing-changed(bool);  // true when started typing, false when stopped
     callback scroll-to-bottom-clicked();  // Emitted when scroll-to-bottom button is clicked
+    callback list-geometry(float, float, bool);
     callback start-voice-call();  // Start voice call in current channel
     callback start-video-call();  // Start video call in current channel
 
@@ -2484,6 +2485,9 @@ export component MainWindow inherits Window {
                         remove-attachment(id) => { root.remove-attachment(id); }
                         typing-changed(is-typing) => { root.typing-changed(is-typing); }
                         scroll-to-bottom-clicked => { root.scroll-to-bottom-clicked(); }
+                        list-geometry(visible, content, seeking) => {
+                            root.list-geometry(visible, content, seeking);
+                        }
                     }
 
                         // Nothing open (the tablet/desktop pane before the first

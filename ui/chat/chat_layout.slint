@@ -278,6 +278,7 @@ export component ChatLayout inherits Rectangle {
     callback audio-seek(string, float);  // attachment ID, position 0.0-1.0
     callback load-more();
     callback scroll-to-bottom-clicked();  // Emitted when scroll-to-bottom button is clicked
+    callback list-geometry(float, float, bool);
 
     // Composer callbacks
     callback send(string) -> bool;
@@ -409,6 +410,9 @@ export component ChatLayout inherits Rectangle {
         }
         scroll-to-bottom-clicked => {
             root.scroll-to-bottom-clicked();
+        }
+        list-geometry(visible, content, seeking) => {
+            root.list-geometry(visible, content, seeking);
         }
     }
 
