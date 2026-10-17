@@ -1006,15 +1006,17 @@ impl MeshEvents {
             }
         }
         match &event {
-            MeshEvent::Message(message) => {
-                if let Err(error) = self.timeline.record(message) {
-                    tracing::error!(
-                        target: "mesh",
-                        %error,
-                        "a mesh message could not be stored; it is live-only"
-                    );
+            MeshEvent::Message(message) => match self.timeline.record(message) {
+                Ok(false)
+                    if matches!(&message.conversation, MeshConversation::PrivateChannel(_)) =>
+                {
+                    return;
                 }
-            }
+                Err(error) => tracing::error!(
+                    target: "mesh", %error, "a mesh message could not be stored; it is live-only"
+                ),
+                _ => {}
+            },
             MeshEvent::Delivery {
                 message_id, state, ..
             } => self.timeline.record_delivery(message_id, *state),

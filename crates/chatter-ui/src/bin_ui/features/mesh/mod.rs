@@ -102,9 +102,9 @@ pub fn clear_active(window: &MainWindow) {
     global.set_private_invite_visible(false);
     global.set_private_remove_pending("".into());
     global.set_private_can_manage(false);
-    global.set_private_removable_members(ModelRc::new(VecModel::from(
-        Vec::<crate::PrivateChannelMemberData>::new(),
-    )));
+    global.set_private_removable_members(ModelRc::new(VecModel::from(Vec::<
+        crate::PrivateChannelMemberData,
+    >::new())));
     // The mesh set its own placeholder; leaving it would label a DM "everyone
     // in radio range".
     window.set_composer_placeholder("Type a message...".into());
@@ -285,7 +285,8 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             match ui_ctx.mesh_remove_private_channel_member(id.as_str(), peer.as_str()) {
                 Ok(()) => {
                     w.global::<MeshGlobal>().set_notice(
-                        "Member removed; a new key is sent to remaining members over Noise.".into(),
+                        "Member removed; waiting for remaining members to confirm the new key."
+                            .into(),
                     );
                     refresh_rows(&w, &ui_ctx);
                 }
@@ -755,6 +756,7 @@ pub fn refresh_rows(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     .map(|member| crate::PrivateChannelMemberData {
                         peer_id: member.peer_id.into(),
                         display_name: member.display_name.into(),
+                        awaiting_rekey: member.awaiting_rekey,
                     })
                     .collect();
                 global.set_private_removable_members(ModelRc::new(VecModel::from(members)));
