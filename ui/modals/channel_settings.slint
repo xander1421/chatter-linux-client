@@ -501,14 +501,17 @@ export component ChannelSettingsModal inherits Rectangle {
                                     anonymous: root.is-private-group;
                                     size: 40px;
                                 }
-                                if !root.channel-has-icon-preview && !root.channel-has-avatar && !root.is-private-group: Image {
-                                    source: root.is-private-group ? Icons.users
-                                        : root.channel-type == "private" ? Icons.lock
-                                        : root.channel-type == "dm" ? Icons.message-circle : Icons.hash;
-                                    width: 24px; height: 24px;
-                                    colorize: Colors.text-primary;
-                                    accessible-label: root.is-private-group ? "Group icon"
-                                        : root.channel-type == "private" ? "Private channel icon" : "Channel icon";
+                                if !root.channel-has-icon-preview && !root.channel-has-avatar && !root.is-private-group: VerticalLayout {
+                                    alignment: center;
+                                    Image {
+                                        source: root.is-private-group ? Icons.users
+                                            : root.channel-type == "private" ? Icons.lock
+                                            : root.channel-type == "dm" ? Icons.message-circle : Icons.hash;
+                                        width: 24px; height: 24px;
+                                        colorize: Colors.text-primary;
+                                        accessible-label: root.is-private-group ? "Group icon"
+                                            : root.channel-type == "private" ? "Private channel icon" : "Channel icon";
+                                    }
                                 }
 
                                 VerticalLayout {
