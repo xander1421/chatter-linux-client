@@ -47,7 +47,8 @@
 //! Generic rows use skip-if-exists. Reaction evidence for actors absent locally
 //! is merged deterministically within the payload before rebuilding projections;
 //! locally retained actor authority wins over restored state across all emojis.
-//! Unknown tables/columns are skipped (forward compatibility across schema drift).
+//! A payload with tables or columns unknown to this build is rejected before
+//! the transaction commits, so restore never silently loses history.
 
 use prost::Message;
 use prost::bytes::Buf;
@@ -60,6 +61,7 @@ use crate::storage::repositories::unified_message_repo::reaction_projection;
 use std::collections::HashSet;
 
 /// Payload schema version (independent of the container's format_version).
+/// Bump this whenever the exported tables or columns change.
 pub const PAYLOAD_VERSION: u32 = 1;
 
 /// Whitelisted tables, in FK-safe import order (parents before children:
@@ -162,6 +164,8 @@ pub struct ImportSummary {
     /// Rows admitted, including updates to older evidence within this payload.
     /// Already retained local actor authority and duplicate evidence are skipped.
     pub rows_inserted: usize,
+    /// Rows already present locally or not admitted by reaction authority.
+    pub rows_skipped: usize,
 }
 
 fn value_ref_to_column(v: ValueRef<'_>) -> ColumnValue {
@@ -368,8 +372,8 @@ fn dump_attachments(
 
 /// Import a decrypted payload. Existing PK/dedup conflicts are skipped, so
 /// rows that already exist locally (same PK / dedup key) are skipped — a
-/// restore can never overwrite newer local data. Unknown tables and unknown
-/// columns are skipped silently (forward compatibility).
+/// restore can never overwrite newer local data. Unknown tables and columns
+/// reject the payload; the transaction then rolls back without partial import.
 pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSummary, StorageError> {
     let mut buf = payload;
     let mut summary = ImportSummary::default();
@@ -377,9 +381,6 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
     // Per-table insert state, rebuilt at each TableHeader frame.
     struct TableState {
         insert_sql: String,
-        /// Indices into the frame's value vector, aligned with insert_sql
-        /// placeholders (backup columns unknown to the live schema dropped).
-        value_indices: Vec<usize>,
         scoped_indices: Option<[usize; 6]>,
         ledger_table: Option<String>,
         columns: Vec<String>,
@@ -414,8 +415,8 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
                 }
                 if info.payload_version != PAYLOAD_VERSION {
                     return Err(StorageError::InvalidData(format!(
-                        "unsupported backup payload version {}",
-                        info.payload_version
+                        "unsupported backup payload version {} (this build supports version {})",
+                        info.payload_version, PAYLOAD_VERSION
                     )));
                 }
                 saw_info = true;
@@ -423,24 +424,26 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
             Some(frame::Payload::Table(th)) => {
                 let allowed = BACKUP_TABLES.contains(&th.table.as_str()) || th.table == "settings";
                 if !allowed {
-                    // Unknown table from a future payload — skip its rows.
-                    current = None;
-                    continue;
+                    return Err(StorageError::InvalidData(format!(
+                        "backup contains unknown table '{}'",
+                        th.table
+                    )));
                 }
                 let table = th.table.as_str();
                 let live_cols = table_columns(&tx, table)?;
-                let mut names = Vec::new();
-                let mut value_indices = Vec::new();
-                for (i, col) in th.columns.iter().enumerate() {
-                    if live_cols.iter().any(|c| c == col) {
-                        names.push(col.clone());
-                        value_indices.push(i);
+                for col in &th.columns {
+                    if !live_cols.contains(col) {
+                        return Err(StorageError::InvalidData(format!(
+                            "backup table '{table}' contains unknown column '{col}'"
+                        )));
                     }
                 }
-                if names.is_empty() {
-                    current = None;
-                    continue;
+                if th.columns.is_empty() {
+                    return Err(StorageError::InvalidData(format!(
+                        "backup table '{table}' has no columns"
+                    )));
                 }
+                let names = &th.columns;
                 let ledger_table = matches!(
                     table,
                     "reaction_action_versions"
@@ -541,25 +544,26 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
                     insert_sql,
                     scoped_indices,
                     ledger_table,
-                    columns: names,
-                    value_indices,
+                    columns: names.clone(),
                 });
                 summary.tables += 1;
             }
             Some(frame::Payload::Row(row)) => {
-                let Some(state) = &current else { continue };
+                let Some(state) = &current else {
+                    return Err(StorageError::InvalidData(
+                        "backup row has no table header".into(),
+                    ));
+                };
+                if row.values.len() != state.columns.len() {
+                    return Err(StorageError::InvalidData(format!(
+                        "backup row has {} values for {} columns",
+                        row.values.len(),
+                        state.columns.len()
+                    )));
+                }
                 summary.rows_seen += 1;
 
-                let params: Vec<SqlValue> = state
-                    .value_indices
-                    .iter()
-                    .map(|&i| {
-                        row.values
-                            .get(i)
-                            .map(column_to_sql_value)
-                            .unwrap_or(SqlValue::Null)
-                    })
-                    .collect();
+                let params: Vec<SqlValue> = row.values.iter().map(column_to_sql_value).collect();
                 if let Some(indices) = state.scoped_indices {
                     let text = |i: usize| match params.get(i) {
                         Some(SqlValue::Text(value)) => Ok(value.clone()),
@@ -642,6 +646,7 @@ pub fn import_frames(conn: &mut Connection, payload: &[u8]) -> Result<ImportSumm
     }
     reaction_projection::rebuild_all(&tx)?;
     tx.commit()?;
+    summary.rows_skipped = summary.rows_seen.saturating_sub(summary.rows_inserted);
     Ok(summary)
 }
 
