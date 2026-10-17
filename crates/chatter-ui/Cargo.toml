@@ -81,6 +81,7 @@ gstreamer-gl = { version = "0.25", optional = true }
 livekit = { version = "0.7.52", default-features = false, features = ["tokio", "rustls-tls-webpki-roots"], optional = true }
 rand = "0.10.3"
 image = { version = "0.25.9", default-features = false, features = ["png", "jpeg", "gif", "webp"] }
+tempfile = "3"
 pdfium-render = { version = "0.9", optional = true }
 dirs = "7.0.0"
 chrono = { version = "0.4", features = ["serde"] }
@@ -132,7 +133,6 @@ jni_021 = { package = "jni", version = "=0.21.1" }
 ndk-context = "0.1"
 
 [dev-dependencies]
-tempfile = "3"
 # Headless GUI test backend for VALIDATED-UI.md (slint::testing analog).
 # Pinned to =1.17.1 to match the `slint` crate exactly — the testing backend
 # links i-slint-core, which must be the SAME version as the generated MainWindow's
