@@ -414,10 +414,12 @@ impl AnonGroupService {
             members.retain(|member| eligible.contains(&member.user_id));
             pending_members.retain(|member| eligible.contains(&member.user_id));
         }
+        // Only members with a confirmed mailbox participate in the original
+        // post's completion status. Invitees still get a durable queued copy,
+        // but their later JoinAck must not keep today's bubble unconfirmed.
         let recipients: Vec<String> = members
             .iter()
             .map(|m| m.user_id)
-            .chain(pending_members.iter().map(|m| m.user_id))
             .filter(|id| *id != current_user)
             .map(|id| id.to_string())
             .collect();
@@ -539,7 +541,7 @@ impl AnonGroupService {
             parked_count,
             queued_count
         );
-        if unconfirmed || parked_count > 0 || queued_count > 0 {
+        if unconfirmed || parked_count > 0 {
             return Err(AnonGroupError::DeliveryUnconfirmed);
         }
         Ok(())
