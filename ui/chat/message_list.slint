@@ -325,7 +325,6 @@ export component MessageList inherits Rectangle {
     callback load-more();
     callback attachment-clicked(string);  // attachment ID
     callback audio-seek(string, float);  // attachment ID, position 0.0-1.0
-    callback scroll-to-bottom-clicked();  // Emitted when scroll-to-bottom button clicked
     callback list-geometry(float, float, bool); // visible height, content height, tail seek
     callback visible-media-rows(int, int);
 
@@ -1106,7 +1105,6 @@ export component MessageList inherits Rectangle {
                         root.is-at-bottom = true;
                         root.go-to-end();
                     }
-                    root.scroll-to-bottom-clicked();
                 }
             }
 

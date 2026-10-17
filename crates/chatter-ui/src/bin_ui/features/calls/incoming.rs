@@ -606,6 +606,41 @@ fn handle_orchestrator_event(
         CallOrchestratorEvent::IncomingPresented { .. }
         | CallOrchestratorEvent::IncomingWithdrawn { .. } => {}
 
+        CallOrchestratorEvent::CameraUnavailable { call } => {
+            let weak = weak.clone();
+            let ui_ctx = ui_ctx.clone();
+            let _ = slint::spawn_local(async move {
+                // Initial auto-publish can fail before the accept path paints
+                // its active-call view. Apply the failure once that view exists.
+                for _ in 0..30 {
+                    let Some(w) = weak.upgrade() else { return };
+                    if !ui_ctx.call_session_is_current(revision) { return; }
+                    if w.get_active_call_data().call_id.as_str() == call.as_str() {
+                        w.set_call_is_video_enabled(false);
+                        if let Some(local_id) = ui_ctx.session_current_user_id() {
+                            let data = w.get_active_call_data();
+                            for index in 0..data.participants.row_count() {
+                                if let Some(mut participant) = data.participants.row_data(index) {
+                                    if participant.user_id.as_str() == local_id.to_string() {
+                                        participant.is_video_enabled = false;
+                                        if let Some(model) = data.participants.as_any().downcast_ref::<VecModel<CallParticipantData>>() {
+                                            model.set_row_data(index, participant);
+                                        }
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        w.set_toast_message("Camera unavailable".into());
+                        w.set_toast_variant("error".into());
+                        w.set_toast_visible(true);
+                        return;
+                    }
+                    tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                }
+            });
+        }
+
         CallOrchestratorEvent::ActiveEnded { call, reason } => {
             tracing::info!(
                 call = %call.as_str(),
