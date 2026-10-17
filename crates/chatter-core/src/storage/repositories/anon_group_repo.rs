@@ -59,7 +59,7 @@ impl AnonGroupRepository {
         let mut stmt = conn.prepare(
             "SELECT group_id, group_name, inviter_id, inviter_device_id,
             inviter_mailbox_pk, profile_key, inviter_display_name, inviter_avatar
-            FROM pending_anon_group_invites ORDER BY received_at DESC",
+            FROM pending_anon_group_invites ORDER BY received_at ASC, group_id ASC",
         )?;
         let rows = stmt.query_map([], |row| {
             let group_id: String = row.get(0)?;

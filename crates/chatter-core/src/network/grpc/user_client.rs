@@ -308,11 +308,16 @@ impl UserClient {
             }),
         };
 
-        self.inner
+        let mut response = self.inner
             .list_friend_requests(request)
             .await
             .map(|r| r.into_inner())
-            .map_err(|s| NetworkError::from_status(&s))
+            .map_err(|s| NetworkError::from_status(&s))?;
+        // Keep existing rows in place when a newer request arrives.
+        response.requests.sort_by(|a, b| {
+            a.added_at.cmp(&b.added_at).then_with(|| a.user_id.cmp(&b.user_id))
+        });
+        Ok(response)
     }
 
     // ==================== Blocking RPCs ====================

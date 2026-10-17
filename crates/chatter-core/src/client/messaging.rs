@@ -1700,7 +1700,12 @@ impl ChatterClient {
     ) -> Vec<crate::proto::chat_v1::PendingChannelInvite> {
         let mut client = self.services.grpc_pool.channel_client();
         match client.list_pending_invites().await {
-            Ok(resp) => resp.invites,
+            Ok(mut resp) => {
+                resp.invites.sort_by(|a, b| {
+                    a.created_at.cmp(&b.created_at).then_with(|| a.channel_id.cmp(&b.channel_id))
+                });
+                resp.invites
+            }
             Err(e) => {
                 tracing::debug!(error = %e, "list_pending_channel_invites failed");
                 Vec::new()
