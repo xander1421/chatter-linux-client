@@ -91,6 +91,22 @@ use crate::storage::repositories::MessageRepository;
 use account_binding::{BindingQr, BindingV1, PROOF_TTL_SECS};
 use private_channel::{PrivateChannel, PrivateChannelStore};
 
+/// A mesh conversation with its sidebar state resolved by the mesh service.
+pub struct MeshSidebarRow {
+    pub conversation: MeshConversation,
+    pub id: String,
+    pub kind: &'static str,
+    pub scope: String,
+    pub title: String,
+    pub timestamp: String,
+    pub unread_count: i32,
+    pub reachable: bool,
+    pub verified: bool,
+    pub muted: bool,
+    pub blocked: bool,
+    pub binding_label: &'static str,
+}
+
 pub use config::MeshConfig;
 pub use error::MeshError;
 pub use events::{MeshDelivery, MeshEvent, MeshMessage, MeshPeer, MeshStatus, RadioDown};
@@ -999,6 +1015,41 @@ impl MeshService {
         Ok(self.timeline.conversations()?)
     }
 
+    /// Resolve and order sidebar rows before the UI maps them to its model.
+    pub fn sidebar_rows(&self, owner: Option<UserId>) -> Result<Vec<MeshSidebarRow>, MeshError> {
+        let peers = self.peers();
+        Ok(self.conversations()?.into_iter().filter_map(|row| {
+            let conversation = self.conversation_for(&row.id)?;
+            let (kind, scope) = match &conversation {
+                MeshConversation::Room => ("room", String::new()),
+                MeshConversation::Geohash(cell) => ("geohash", cell.clone()),
+                MeshConversation::Channel(name) => ("channel", name.clone()),
+                MeshConversation::PrivateChannel(id) => ("private-channel", id.clone()),
+                MeshConversation::Dm(peer) => ("dm", peer.as_str().to_owned()),
+            };
+            let (reachable, verified, binding_label) = match &conversation {
+                MeshConversation::Dm(peer) => {
+                    let (reachable, verified) = peers.iter().find(|known| known.peer == *peer)
+                        .map(|known| (known.connected || known.reachable, known.account_verified))
+                        .unwrap_or((false, false));
+                    let label = owner.and_then(|id| self.binding_state(id, peer).ok())
+                        .map(|state| state.label())
+                        .unwrap_or("Mesh peer · self-asserted name");
+                    (reachable, verified, label)
+                }
+                _ => (false, false, ""),
+            };
+            let muted = matches!(&conversation, MeshConversation::Channel(name) if self.channel_muted(name));
+            let blocked = matches!(&conversation, MeshConversation::Dm(peer) if self.peer_blocked(peer));
+            Some(MeshSidebarRow {
+                conversation, id: row.id, kind, scope, title: row.name,
+                timestamp: row.last_message_at.map(crate::ui::format_timestamp).unwrap_or_default(),
+                unread_count: i32::try_from(row.unread_count).unwrap_or(i32::MAX),
+                reachable, verified, muted, blocked, binding_label,
+            })
+        }).collect())
+    }
+
     /// The mesh conversation a sidebar row refers to, or `None` when the id is
     /// not one of ours.
     ///
@@ -1195,6 +1246,18 @@ impl MeshService {
                     .map_err(|_| MeshError::NotRunning)?;
             }
         }
+        Ok(())
+    }
+
+    /// Leave this device's private channel, including the local epoch keys.
+    /// The existing protocol has no member-originated leave or creator-closure
+    /// message, so other devices keep their current roster until changed.
+    pub fn leave_private_channel(&self, id: &str) -> Result<(), MeshError> {
+        self.private_channels.load(id)?
+            .ok_or_else(|| MeshError::Binding("unknown private channel".into()))?;
+        self.private_channels.remove(id)?;
+        self.private_channels.clear_pending(id)?;
+        self.timeline.close_private_channel(id);
         Ok(())
     }
 

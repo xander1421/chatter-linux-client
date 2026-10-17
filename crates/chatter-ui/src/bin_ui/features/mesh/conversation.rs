@@ -180,6 +180,7 @@ fn apply_header(window: &MainWindow, ui_ctx: &ChatterClient, row: &MeshRow) {
     window.set_pinned_total_count(0);
 
     let global = window.global::<MeshGlobal>();
+    global.set_private_leave_pending(false);
     global.set_active_id(row.id.clone().into());
     global.set_active_kind(row.kind.into());
     global.set_active_title(row.title.clone().into());

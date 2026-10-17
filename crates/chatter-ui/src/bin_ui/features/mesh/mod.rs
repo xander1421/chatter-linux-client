@@ -90,6 +90,7 @@ pub fn clear_active(window: &MainWindow) {
     global.set_active_kind("".into());
     global.set_active_title("".into());
     global.set_active_scope("".into());
+    global.set_private_leave_pending(false);
     global.set_active_reachable(false);
     global.set_active_verified(false);
     global.set_active_binding_label("Mesh peer · self-asserted name".into());
@@ -334,6 +335,24 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             } else {
                 if matches!(active(), Some(MeshConversation::Channel(ref open)) if open == name.as_str()) { clear_active(&w); }
                 refresh_rows(&w, &ui_ctx);
+            }
+        });
+    }
+    {
+        let weak = window.as_weak();
+        let ui_ctx = ui_ctx.clone();
+        global.on_leave_private_channel(move |id| {
+            let Some(w) = weak.upgrade() else { return };
+            match ui_ctx.mesh_leave_private_channel(id.as_str()) {
+                Ok(()) => {
+                    if matches!(active(), Some(MeshConversation::PrivateChannel(ref open)) if open == id.as_str()) {
+                        clear_active(&w);
+                    }
+                    refresh_rows(&w, &ui_ctx);
+                }
+                Err(error) => w.global::<MeshGlobal>().set_notice(
+                    format!("Could not leave private channel: {error}").into(),
+                ),
             }
         });
     }

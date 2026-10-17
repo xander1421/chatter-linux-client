@@ -76,20 +76,6 @@ pub struct UnreadBadges {
     pub total: u32,
 }
 
-/// One mesh conversation with all sidebar state resolved by core.
-#[cfg(feature = "mesh")]
-pub struct MeshSidebarRow {
-    pub conversation: crate::services::mesh::MeshConversation,
-    pub id: String,
-    pub title: String,
-    pub last_message_at: Option<chrono::DateTime<chrono::Utc>>,
-    pub unread_count: u32,
-    pub reachable: bool,
-    pub verified: bool,
-    pub muted: bool,
-    pub blocked: bool,
-    pub binding_label: &'static str,
-}
 mod notification;
 mod picker_history;
 mod pin;
@@ -698,52 +684,12 @@ impl ChatterClient {
         self.mesh().conversations()
     }
 
-    /// Mesh sidebar rows with scope, peer state, and preferences resolved.
+    /// Mesh sidebar rows, shaped and ordered by the mesh service.
     #[cfg(feature = "mesh")]
     pub fn mesh_sidebar_rows(
         &self,
-    ) -> Result<Vec<MeshSidebarRow>, crate::services::mesh::MeshError> {
-        use crate::services::mesh::MeshConversation;
-
-        let peers = self.mesh_peers();
-        Ok(self
-            .mesh_conversations()?
-            .into_iter()
-            .filter_map(|row| {
-                let conversation = self.mesh_conversation_for(&row.id)?;
-                let (reachable, verified, binding_label) = match &conversation {
-                    MeshConversation::Dm(peer) => {
-                        let (reachable, verified) = peers
-                            .iter()
-                            .find(|known| known.peer == *peer)
-                            .map(|known| {
-                                (known.connected || known.reachable, known.account_verified)
-                            })
-                            .unwrap_or((false, false));
-                        let label = self
-                            .mesh_binding_state(peer.as_str())
-                            .map(|state| state.label())
-                            .unwrap_or("Mesh peer · self-asserted name");
-                        (reachable, verified, label)
-                    }
-                    _ => (false, false, ""),
-                };
-                let muted = matches!(&conversation, MeshConversation::Channel(name) if self.mesh_channel_muted(name));
-                let blocked = matches!(&conversation, MeshConversation::Dm(peer) if self.mesh_peer_blocked(peer.as_str()));
-                Some(MeshSidebarRow {
-                    conversation,
-                    id: row.id,
-                    title: row.name,
-                    last_message_at: row.last_message_at,
-                    unread_count: row.unread_count,
-                    reachable,
-                    verified,
-                    muted,
-                    blocked,
-                    binding_label,
-                })
-            })
-            .collect())
+    ) -> Result<Vec<crate::services::mesh::MeshSidebarRow>, crate::services::mesh::MeshError> {
+        self.mesh().sidebar_rows(self.session_current_user_id())
     }
 
     /// Which mesh scope a sidebar row refers to.
@@ -1014,6 +960,11 @@ impl ChatterClient {
     ) -> Result<(), crate::services::mesh::MeshError> {
         self.mesh()
             .remove_private_channel_member(id, &chatter_mesh::ids::PeerId::from_str(peer))
+    }
+
+    #[cfg(feature = "mesh")]
+    pub fn mesh_leave_private_channel(&self, id: &str) -> Result<(), crate::services::mesh::MeshError> {
+        self.mesh().leave_private_channel(id)
     }
 
     #[cfg(feature = "mesh")]

@@ -87,10 +87,12 @@ export global MeshGlobal {
     callback open-private-scanner();
     callback invite-private-channel(string, string);
     callback remove-private-member(string, string);
+    callback leave-private-channel(string);
     in-out property <image> private-invite-image;
     in-out property <bool> private-invite-visible: false;
     in-out property <[PrivateChannelMemberData]> private-removable-members: [];
     in-out property <string> private-remove-pending: "";
+    in-out property <bool> private-leave-pending: false;
     in-out property <bool> private-can-manage: false;
 
     // Set the switch. Persists the preference and starts or stops the radio.

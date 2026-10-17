@@ -82,31 +82,6 @@ pub struct MeshRow {
     pub binding_label: &'static str,
 }
 
-/// Which glyph and which wording a scope gets. Pure presentation over a core
-/// enum — no facts are decided here.
-#[must_use]
-pub fn kind_of(conversation: &MeshConversation) -> &'static str {
-    match conversation {
-        MeshConversation::Room => "room",
-        MeshConversation::Geohash(_) => "geohash",
-        MeshConversation::Channel(_) => "channel",
-        MeshConversation::PrivateChannel(_) => "private-channel",
-        MeshConversation::Dm(_) => "dm",
-    }
-}
-
-/// The scope string the user must be able to read at all times.
-#[must_use]
-pub fn scope_of(conversation: &MeshConversation) -> String {
-    match conversation {
-        MeshConversation::Room => String::new(),
-        MeshConversation::Geohash(cell) => cell.clone(),
-        MeshConversation::Channel(name) => name.clone(),
-        MeshConversation::PrivateChannel(id) => id.clone(),
-        MeshConversation::Dm(peer) => peer.as_str().to_string(),
-    }
-}
-
 /// What a message this device sent should say about its own fate.
 ///
 /// The three mesh-only strings ("waiting", "carried", "undelivered") render as
@@ -168,13 +143,10 @@ pub fn rows(ui_ctx: &Arc<ChatterClient>) -> Vec<MeshRow> {
     };
     rows.into_iter()
         .map(|row| MeshRow {
-            kind: kind_of(&row.conversation),
-            scope: scope_of(&row.conversation),
-            timestamp: row
-                .last_message_at
-                .map(chatter_core::ui::format_timestamp)
-                .unwrap_or_default(),
-            unread_count: i32::try_from(row.unread_count).unwrap_or(i32::MAX),
+            kind: row.kind,
+            scope: row.scope,
+            timestamp: row.timestamp,
+            unread_count: row.unread_count,
             conversation: row.conversation,
             id: row.id,
             title: row.title,
