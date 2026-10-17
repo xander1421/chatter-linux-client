@@ -1259,55 +1259,20 @@ impl MeshService {
                 "Waiting for the channel key update".into(),
             ));
         }
-        if state.creator != self.identity.peer_id().as_str()
-            && !self
-                .state
-                .with(|s| s.sessions.has_session(&PeerId::from_str(&state.creator)))
-        {
-            return Err(MeshError::Binding(
-                "Waiting for the channel key update".into(),
-            ));
-        }
-        let message_id = if state.creator == self.identity.peer_id().as_str() {
-            let content = private_channel::relayed_text(&self.identity.peer_id(), text)
-                .ok_or_else(|| MeshError::Binding("private channel message is too long".into()))?;
-            let bytes = state.encrypt(&self.identity.peer_id(), &content)?;
-            let message_id =
-                uuid::Uuid::from_bytes(bytes[32..48].try_into().expect("fixed frame")).to_string();
-            self.ble
-                .send(BleCommand::PrivateChannelMessage {
-                    channel_id: id.into(),
-                    bytes,
-                })
-                .map_err(|_| MeshError::NotRunning)?;
-            message_id
-        } else {
-            // Members never broadcast a group-key frame: the creator alone
-            // chooses the current epoch after authenticating this submission.
-            private_channel::relayed_text(&self.identity.peer_id(), text)
-                .ok_or_else(|| MeshError::Binding("private channel message is too long".into()))?;
-            let message_id = uuid::Uuid::new_v4().to_string();
-            let bytes = private_channel::PrivateSubmission {
+        let bytes = state.encrypt(&self.identity.peer_id(), text)?;
+        let message_id =
+            uuid::Uuid::from_bytes(bytes[32..48].try_into().expect("fixed frame")).to_string();
+        self.ble
+            .send(BleCommand::PrivateChannelMessage {
                 channel_id: id.into(),
-                message_id: message_id.clone(),
-                text: text.into(),
-            }
-            .encode()?;
-            self.ble
-                .send(BleCommand::PrivateJoinRequest {
-                    creator: PeerId::from_str(&state.creator),
-                    bytes,
-                })
-                .map_err(|_| MeshError::NotRunning)?;
-            message_id
-        };
+                bytes,
+            })
+            .map_err(|_| MeshError::NotRunning)?;
         // The encrypted packet is broadcast over the radio, with no
         // per-member acknowledgement. Keep the durable state in step with
         // the live row emitted by `broadcast_private_channel`.
-        if state.creator == self.identity.peer_id().as_str() {
-            self.timeline
-                .record_delivery(&message_id, MeshDelivery::Broadcast);
-        }
+        self.timeline
+            .record_delivery(&message_id, MeshDelivery::Broadcast);
         Ok(message_id)
     }
 

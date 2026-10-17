@@ -73,9 +73,7 @@ use super::file_stream::{
     TRANSFER_ABANDON_SECS, TransferId,
 };
 use super::mapping::{self, InboundMessage, MeshConversation, outbound_message};
-use super::private_channel::{
-    self, Invite, Member, PrivateChannel, PrivateChannelStore, PrivateSubmission,
-};
+use super::private_channel::{Invite, Member, PrivateChannel, PrivateChannelStore};
 use super::router::{RouterCommand, RouterHandle};
 use super::signal_mesh::{self, BundleFrame};
 use super::state::{
@@ -1649,7 +1647,7 @@ impl BleRuntime {
         else {
             // A signed frame at a newer epoch tells a continuing member its
             // local key is stale even though the new route tag is opaque.
-            if packet.payload.starts_with(b"CHTRPCM1") && packet.payload.len() >= 72 {
+            if packet.payload.starts_with(b"CHTRPCM2") && packet.payload.len() >= 72 {
                 let frame_epoch =
                     u64::from_be_bytes(packet.payload[24..32].try_into().expect("frame epoch"));
                 if let Ok(channels) = self.private_channels.list() {
@@ -1682,12 +1680,7 @@ impl BleRuntime {
         let Some((wire_id, content)) = state.decrypt(claimed, &packet.payload) else {
             return false;
         };
-        let (author, content) = private_channel::display_text(
-            &PeerId::from_str(&state.creator),
-            claimed,
-            &state.members,
-            content,
-        );
+        let author = claimed.clone();
         let conversation = MeshConversation::PrivateChannel(state.id);
         let nickname = self
             .state
@@ -1745,50 +1738,17 @@ impl BleRuntime {
         self.events.send(MeshEvent::PrivateChannelChanged);
     }
 
-    async fn on_private_submission(&mut self, claimed: &PeerId, submission: PrivateSubmission) {
-        let Ok(Some(state)) = self.private_channels.load(&submission.channel_id) else {
-            return;
-        };
-        if state.creator != self.identity.peer_id().as_str() || state.member_key(claimed).is_none()
-        {
-            return;
-        }
-        let Some(text) = private_channel::relayed_text(claimed, &submission.text) else {
-            return;
-        };
-        let Ok(message_id) = uuid::Uuid::parse_str(&submission.message_id) else {
-            return;
-        };
-        let Ok(bytes) = state.encrypt_with_id(&self.identity.peer_id(), &text, message_id) else {
-            return;
-        };
-        if state
-            .awaiting_rekey
-            .iter()
-            .any(|peer| peer == claimed.as_str())
-            && let Ok(update) = state.update_bytes()
-        {
-            self.send_private_control(claimed, &update).await;
-        }
-        self.broadcast_private_channel(&state.id, bytes).await;
-    }
-
     async fn on_private_epoch(&mut self, claimed: &PeerId, mut update: PrivateChannel) {
-        if claimed.as_str() != update.creator
-            || update.member_key(&self.identity.peer_id()).is_none()
-            || self.state.with(|s| s.sessions.remote_static(claimed))
-                != update.creator_static.as_slice().try_into().ok()
-            || !self.state.with(|s| {
-                s.peers
-                    .info(claimed)
-                    .and_then(|p| p.signing_public_key.as_ref())
-                    .is_some_and(|key| key.as_slice() == update.creator_key.as_slice())
-            })
-        {
+        if update.member_key(&self.identity.peer_id()).is_none() {
             return;
         }
         let valid = match self.private_channels.load(&update.id) {
             Ok(Some(old)) => {
+                // The pinned creator identity and signed roster chain authorize
+                // this update; its Noise sender may be any current member.
+                if update.member_key(claimed).is_none() || !update.verify() {
+                    return;
+                }
                 if update.epoch == old.epoch {
                     if update.signature != old.signature {
                         self.events.send(MeshEvent::Degraded(
@@ -1829,7 +1789,11 @@ impl BleRuntime {
                 .ok()
                 .flatten()
                 .is_some_and(|invite| {
-                    invite.creator == update.creator
+                    update.member_key(claimed).is_some()
+                        && (claimed.as_str() != update.creator
+                            || self.state.with(|s| s.sessions.remote_static(claimed))
+                                == update.creator_static.as_slice().try_into().ok())
+                        && invite.creator == update.creator
                         && invite.creator_key == update.creator_key
                         && invite.creator_static == update.creator_static
                         && invite.name == update.name
@@ -1837,13 +1801,48 @@ impl BleRuntime {
                 }),
             Err(_) => false,
         };
-        if !valid || self.private_channels.save(&update).is_err() {
+        if !valid {
+            return;
+        }
+        update.awaiting_rekey = update.members.iter()
+            .filter(|member| member.peer != self.identity.peer_id().as_str()
+                && member.peer != claimed.as_str())
+            .map(|member| member.peer.clone())
+            .collect();
+        if self.private_channels.save(&update).is_err() {
             return;
         }
         let _ = self.private_channels.clear_pending(&update.id);
         self.events.open_private_channel(&update.id, &update.name);
         self.events.send(MeshEvent::PrivateChannelChanged);
         self.send_private_epoch_ack(claimed, &update).await;
+        if let Ok(bytes) = update.update_bytes() {
+            for peer in &update.awaiting_rekey {
+                self.send_private_control(&PeerId::from_str(peer), &bytes).await;
+            }
+        }
+    }
+
+    async fn on_private_epoch_hint(&mut self, claimed: &PeerId, bytes: &[u8]) {
+        if bytes.len() != 32 || !bytes.starts_with(b"CHTRPCH1") {
+            return;
+        }
+        let Ok(id) = uuid::Uuid::from_slice(&bytes[8..24]) else { return; };
+        let Ok(Some(mut state)) = self.private_channels.load(&id.to_string()) else { return; };
+        if state.member_key(claimed).is_none() { return; }
+        let epoch = u64::from_be_bytes(bytes[24..32].try_into().expect("epoch hint"));
+        if epoch > state.epoch {
+            if !state.stale {
+                state.stale = true;
+                if self.private_channels.save(&state).is_ok() {
+                    self.events.send(MeshEvent::PrivateChannelChanged);
+                }
+            }
+        } else if !state.stale && epoch < state.epoch {
+            if let Ok(update) = state.update_bytes() {
+                self.send_private_control(claimed, &update).await;
+            }
+        }
     }
 
     async fn send_private_epoch_ack(&mut self, claimed: &PeerId, update: &PrivateChannel) {
@@ -1870,8 +1869,7 @@ impl BleRuntime {
         let Ok(Some(mut state)) = self.private_channels.load(&id.to_string()) else {
             return;
         };
-        if state.creator != self.identity.peer_id().as_str()
-            || state.member_key(claimed).is_none()
+        if state.member_key(claimed).is_none()
             || !state
                 .awaiting_rekey
                 .iter()
@@ -2486,11 +2484,17 @@ impl BleRuntime {
             self.flush_pending_dms(claimed).await;
             if let Ok(states) = self.private_channels.list() {
                 for state in states {
-                    if state.creator == self.identity.peer_id().as_str()
+                    if state.member_key(&self.identity.peer_id()).is_some()
                         && state.member_key(claimed).is_some()
-                        && let Ok(bytes) = state.update_bytes()
                     {
-                        self.send_private_control(claimed, &bytes).await;
+                        let mut hint = b"CHTRPCH1".to_vec();
+                        hint.extend_from_slice(uuid::Uuid::parse_str(&state.id)
+                            .expect("verified channel id").as_bytes());
+                        hint.extend_from_slice(&state.epoch.to_be_bytes());
+                        self.send_private_control(claimed, &hint).await;
+                        if !state.stale && let Ok(bytes) = state.update_bytes() {
+                            self.send_private_control(claimed, &bytes).await;
+                        }
                     }
                 }
             }
@@ -2668,12 +2672,12 @@ impl BleRuntime {
             self.on_private_join_request(claimed, invite).await;
             return;
         }
-        if let Some(submission) = PrivateSubmission::decode(&plaintext) {
-            self.on_private_submission(claimed, submission).await;
-            return;
-        }
         if let Some(update) = PrivateChannel::decode_update(&plaintext) {
             self.on_private_epoch(claimed, update).await;
+            return;
+        }
+        if plaintext.starts_with(b"CHTRPCH1") {
+            self.on_private_epoch_hint(claimed, &plaintext).await;
             return;
         }
         if plaintext.starts_with(b"CHTRPCA1") {
@@ -3602,7 +3606,7 @@ impl BleRuntime {
 
     async fn send_private_control(&mut self, peer: &PeerId, bytes: &[u8]) {
         let Ok(ciphertext) = self.state.with(|s| s.sessions.encrypt(peer, bytes)) else {
-            // The creator resends its current epoch after the next Noise handshake.
+            // A current member retries when this peer establishes Noise again.
             return;
         };
         let packet = self.build_packet(
@@ -3622,8 +3626,7 @@ impl BleRuntime {
         let Some((message_id, content)) = state.decrypt(&packet_sender, &bytes) else {
             return;
         };
-        let (sender, content) =
-            private_channel::display_text(&packet_sender, &packet_sender, &state.members, content);
+        let sender = packet_sender.clone();
         let packet = self.build_packet(
             MessageType::ChatterPrivateChannel,
             None,
@@ -4371,7 +4374,8 @@ impl BleRuntime {
             self.last_private_rekey_ms = now_ms;
             if let Ok(channels) = self.private_channels.list() {
                 for channel in channels {
-                    if channel.creator == self.identity.peer_id().as_str()
+                    if !channel.stale
+                        && channel.member_key(&self.identity.peer_id()).is_some()
                         && !channel.awaiting_rekey.is_empty()
                         && let Ok(bytes) = channel.update_bytes()
                     {

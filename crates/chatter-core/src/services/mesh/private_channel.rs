@@ -27,11 +27,9 @@ use zeroize::Zeroizing;
 use super::MeshError;
 use crate::storage::Database;
 
-const INVITE_PREFIX: &str = "chatter-mesh-private-v1:";
-const UPDATE_MAGIC: &[u8; 8] = b"CHTRPCU1";
-const FRAME_MAGIC: &[u8; 8] = b"CHTRPCM1";
-const SUBMISSION_MAGIC: &[u8; 8] = b"CHTRPCS1";
-const RELAYED_MAGIC: &[u8; 8] = b"CHTRPCR2";
+const INVITE_PREFIX: &str = "chatter-mesh-private-v2:";
+const UPDATE_MAGIC: &[u8; 8] = b"CHTRPCU2";
+const FRAME_MAGIC: &[u8; 8] = b"CHTRPCM2";
 const MAX_MEMBERS: usize = 16;
 const MAX_TEXT: usize = 1024;
 
@@ -58,7 +56,7 @@ pub struct PrivateChannel {
     pub prior_epochs: Vec<PriorEpoch>,
     #[serde(default)]
     pub pending_invites: Vec<Invite>,
-    /// Creator-local list of members still awaiting this epoch over Noise.
+    /// Local list of members still awaiting this epoch over Noise.
     #[serde(default)]
     pub awaiting_rekey: Vec<String>,
     /// A newer authenticated frame was seen before its key update arrived.
@@ -84,79 +82,6 @@ pub struct Invite {
     pub nonce: Vec<u8>,
     pub expires_at: u64,
     pub signature: Vec<u8>,
-}
-
-#[derive(Serialize, Deserialize)]
-pub struct PrivateSubmission {
-    pub channel_id: String,
-    pub message_id: String,
-    pub text: String,
-}
-
-impl PrivateSubmission {
-    pub fn encode(&self) -> Result<Vec<u8>, MeshError> {
-        if self.text.is_empty()
-            || self.text.len() > MAX_TEXT
-            || uuid::Uuid::parse_str(&self.channel_id).is_err()
-            || uuid::Uuid::parse_str(&self.message_id).is_err()
-        {
-            return Err(failure("private channel message is too long"));
-        }
-        let mut bytes = SUBMISSION_MAGIC.to_vec();
-        bytes.extend(serde_json::to_vec(self).map_err(|_| failure("invalid private submission"))?);
-        Ok(bytes)
-    }
-
-    pub fn decode(bytes: &[u8]) -> Option<Self> {
-        if !bytes.starts_with(SUBMISSION_MAGIC) || bytes.len() > 8192 {
-            return None;
-        }
-        let submission: Self = serde_json::from_slice(&bytes[8..]).ok()?;
-        (submission.text.len() <= MAX_TEXT
-            && !submission.text.is_empty()
-            && uuid::Uuid::parse_str(&submission.channel_id).is_ok()
-            && uuid::Uuid::parse_str(&submission.message_id).is_ok())
-        .then_some(submission)
-    }
-}
-
-#[derive(Serialize, Deserialize)]
-struct RelayedText<'a> {
-    author: &'a str,
-    text: &'a str,
-}
-
-pub fn relayed_text(author: &PeerId, text: &str) -> Option<String> {
-    if text.is_empty() {
-        return None;
-    }
-    let mut encoded = RELAYED_MAGIC.to_vec();
-    encoded.extend(
-        serde_json::to_vec(&RelayedText {
-            author: author.as_str(),
-            text,
-        })
-        .ok()?,
-    );
-    (encoded.len() <= MAX_TEXT).then(|| String::from_utf8(encoded).expect("JSON is UTF-8"))
-}
-
-pub fn display_text(
-    creator: &PeerId,
-    packet_sender: &PeerId,
-    members: &[Member],
-    text: String,
-) -> (PeerId, String) {
-    if packet_sender != creator || !text.as_bytes().starts_with(RELAYED_MAGIC) {
-        return (packet_sender.clone(), text);
-    }
-    let Ok(relayed) = serde_json::from_slice::<RelayedText<'_>>(&text.as_bytes()[8..]) else {
-        return (packet_sender.clone(), text);
-    };
-    if !members.iter().any(|m| m.peer == relayed.author) {
-        return (packet_sender.clone(), text);
-    }
-    (PeerId::from_str(relayed.author), relayed.text.to_owned())
 }
 
 #[derive(Serialize)]
@@ -643,12 +568,12 @@ impl Invite {
         verify_bytes(&sig, &invite.preimage().ok()?, &key).then_some(invite)
     }
     pub fn request_bytes(&self) -> Option<Vec<u8>> {
-        let mut bytes = b"CHTRPCR1".to_vec();
+        let mut bytes = b"CHTRPCR2".to_vec();
         bytes.extend(serde_json::to_vec(self).ok()?);
         Some(bytes)
     }
     pub fn decode_request(bytes: &[u8], now: u64) -> Option<Self> {
-        if !bytes.starts_with(b"CHTRPCR1") || bytes.len() > 1032 {
+        if !bytes.starts_with(b"CHTRPCR2") || bytes.len() > 1032 {
             return None;
         }
         let text = format!("{INVITE_PREFIX}{}", URL_SAFE_NO_PAD.encode(&bytes[8..]));
