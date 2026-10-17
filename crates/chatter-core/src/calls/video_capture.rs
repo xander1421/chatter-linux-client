@@ -2,7 +2,7 @@
 //!
 //! - Linux: V4L2 via `v4l` crate
 //! - Windows: GStreamer `ksvideosrc` (Windows Media Foundation)
-//! - Other: Fallback test pattern
+//! - Android: CameraX via the registered platform bridge
 //!
 //! Provides camera device enumeration and video frame capture for LiveKit publishing.
 
@@ -322,7 +322,7 @@ impl VideoCapture {
         device_path: Option<&str>,
         config: Option<VideoCaptureConfig>,
         local_preview: Option<LocalPreview>,
-    ) -> Result<NativeVideoSource, CallError> {
+    ) -> Result<(NativeVideoSource, tokio::sync::oneshot::Receiver<()>), CallError> {
         if self.running.load(Ordering::SeqCst) {
             return Err(CallError::TrackPublishFailed(
                 "Video capture already running".to_string(),
@@ -335,9 +335,7 @@ impl VideoCapture {
         let path = device_path
             .map(|s| s.to_string())
             .or_else(|| Self::default_device().ok().map(|d| d.path))
-            .ok_or_else(|| {
-                CallError::TrackPublishFailed("No video device specified".to_string())
-            })?;
+            .ok_or(CallError::CameraUnavailable)?;
 
         self.device_path = path.clone();
         tracing::info!(
@@ -364,7 +362,11 @@ impl VideoCapture {
 
         self.running.store(true, Ordering::SeqCst);
 
+        // A track must only be published after the camera produces a real frame.
+        // Dropping this sender on any setup failure reports a typed error.
+        let (ready_tx, ready_rx) = tokio::sync::oneshot::channel();
         let handle = std::thread::spawn(move || {
+            let stopped = running.clone();
             Self::capture_loop(
                 path,
                 source_clone,
@@ -373,14 +375,16 @@ impl VideoCapture {
                 height,
                 fps,
                 local_preview,
+                ready_tx,
             );
+            stopped.store(false, Ordering::SeqCst);
         });
 
         self.capture_handle = Some(handle);
         self.video_source = Some(video_source.clone());
 
-        tracing::info!("Video capture started successfully");
-        Ok(video_source)
+        tracing::info!("Video capture thread started; awaiting first camera frame");
+        Ok((video_source, ready_rx))
     }
 
     /// Video capture loop (runs in separate thread).
@@ -392,6 +396,7 @@ impl VideoCapture {
         height: u32,
         fps: u32,
         local_preview: Option<LocalPreview>,
+        ready_tx: tokio::sync::oneshot::Sender<()>,
     ) {
         #[cfg(target_os = "linux")]
         {
@@ -403,6 +408,7 @@ impl VideoCapture {
                 height,
                 fps,
                 local_preview,
+                ready_tx,
             );
         }
 
@@ -416,6 +422,7 @@ impl VideoCapture {
                 height,
                 fps,
                 local_preview,
+                ready_tx,
             );
         }
 
@@ -429,6 +436,7 @@ impl VideoCapture {
                 height,
                 fps,
                 local_preview,
+                ready_tx,
             );
         }
 
@@ -443,8 +451,7 @@ impl VideoCapture {
             #[cfg(not(target_os = "android"))]
             let _ = &device_path;
 
-            // Android: drive CameraX via the registered platform camera. Falls
-            // back to the test pattern only if no platform camera registered.
+            // Android: drive CameraX via the registered platform camera.
             #[cfg(target_os = "android")]
             {
                 if crate::calls::android_camera::run_capture(
@@ -455,13 +462,15 @@ impl VideoCapture {
                     fps,
                     &device_path,
                     local_preview,
+                    ready_tx,
                 ) {
                     tracing::info!("Video capture loop ended");
                     return;
                 }
             }
             tracing::error!("Video capture not implemented for this platform");
-            Self::fallback_capture_loop(video_source, running, width, height, fps);
+            #[cfg(not(target_os = "android"))]
+            let _ = (video_source, running, width, height, fps, ready_tx);
         }
 
         tracing::info!("Video capture loop ended");
@@ -477,6 +486,7 @@ impl VideoCapture {
         height: u32,
         fps: u32,
         local_preview: Option<LocalPreview>,
+        ready_tx: tokio::sync::oneshot::Sender<()>,
     ) {
         use std::time::{Duration, Instant};
         use v4l::FourCC;
@@ -491,7 +501,6 @@ impl VideoCapture {
             Ok(d) => d,
             Err(e) => {
                 tracing::error!("Failed to open video device {}: {}", device_path, e);
-                Self::fallback_capture_loop(video_source, running, width, height, fps);
                 return;
             }
         };
@@ -500,7 +509,6 @@ impl VideoCapture {
             Ok(f) => f,
             Err(e) => {
                 tracing::error!("Failed to get video format: {}", e);
-                Self::fallback_capture_loop(video_source, running, width, height, fps);
                 return;
             }
         };
@@ -519,7 +527,6 @@ impl VideoCapture {
                     Ok(f) => f,
                     Err(e) => {
                         tracing::error!("Failed to set video format: {}", e);
-                        Self::fallback_capture_loop(video_source, running, width, height, fps);
                         return;
                     }
                 }
@@ -553,7 +560,6 @@ impl VideoCapture {
             Ok(s) => s,
             Err(e) => {
                 tracing::error!("Failed to create video stream: {}", e);
-                Self::fallback_capture_loop(video_source, running, width, height, fps);
                 return;
             }
         };
@@ -568,16 +574,19 @@ impl VideoCapture {
 
         // Per-second timing aggregation (mirrors screen_capture's [SCREEN_FPS] log) so we
         // can see where the per-frame budget goes: camera wait vs decode/convert vs push.
+        let mut ready_tx = Some(ready_tx);
         let mut win_start = Instant::now();
         let mut win_frames = 0u64;
         let (mut sum_wait, mut sum_conv, mut sum_push) =
             (Duration::ZERO, Duration::ZERO, Duration::ZERO);
 
+        let mut consecutive_errors = 0;
         while running.load(Ordering::SeqCst) {
             let start = Instant::now();
 
             match stream.next() {
                 Ok((buf, _meta)) => {
+                    consecutive_errors = 0;
                     let t_wait = start.elapsed();
 
                     let t0 = Instant::now();
@@ -623,6 +632,7 @@ impl VideoCapture {
 
                     let t1 = Instant::now();
                     video_source.capture_frame(&frame);
+                    if let Some(tx) = ready_tx.take() { let _ = tx.send(()); }
                     let t_push = t1.elapsed();
 
                     // Tee to the self-preview tile. Every other frame (~12fps)
@@ -661,6 +671,11 @@ impl VideoCapture {
                 }
                 Err(e) => {
                     tracing::warn!("Video capture error: {}", e);
+                    consecutive_errors += 1;
+                    if consecutive_errors >= 3 {
+                        tracing::error!("Camera capture stopped after repeated frame errors");
+                        break;
+                    }
                 }
             }
 
@@ -681,6 +696,7 @@ impl VideoCapture {
         height: u32,
         fps: u32,
         local_preview: Option<LocalPreview>,
+        ready_tx: tokio::sync::oneshot::Sender<()>,
     ) {
         use gstreamer as gst;
         use gstreamer::prelude::*;
@@ -699,7 +715,6 @@ impl VideoCapture {
             Ok(s) => s,
             Err(e) => {
                 tracing::error!("Failed to create Windows video source: {}", e);
-                Self::fallback_capture_loop(video_source, running, width, height, fps);
                 return;
             }
         };
@@ -748,13 +763,14 @@ impl VideoCapture {
 
         if pipeline.set_state(gst::State::Playing).is_err() {
             tracing::error!("Failed to start Windows video capture pipeline");
-            Self::fallback_capture_loop(video_source, running, width, height, fps);
             return;
         }
 
         tracing::info!("Windows video capture pipeline started");
 
+        let mut ready_tx = Some(ready_tx);
         let mut frame_count = 0u64;
+        let mut last_frame = Instant::now();
 
         while running.load(Ordering::SeqCst) {
             let start = Instant::now();
@@ -790,6 +806,8 @@ impl VideoCapture {
                                     };
 
                                     video_source.capture_frame(&frame);
+                                    last_frame = Instant::now();
+                                    if let Some(tx) = ready_tx.take() { let _ = tx.send(()); }
                                     // Tee every other frame to the self-preview tile.
                                     if let Some(ref preview) = local_preview {
                                         if frame_count % 2 == 0 {
@@ -804,8 +822,14 @@ impl VideoCapture {
                 }
                 None => {
                     // No frame available, check pipeline state
-                    if pipeline.current_state() == gst::State::Null {
-                        tracing::error!("Video capture pipeline stopped unexpectedly");
+                    if pipeline.current_state() == gst::State::Null
+                        || last_frame.elapsed() > if frame_count == 0 {
+                            Duration::from_secs(60)
+                        } else {
+                            Duration::from_secs(5)
+                        }
+                    {
+                        tracing::error!("Video capture pipeline stopped delivering frames");
                         break;
                     }
                 }
@@ -835,6 +859,7 @@ impl VideoCapture {
         height: u32,
         fps: u32,
         local_preview: Option<LocalPreview>,
+        ready_tx: tokio::sync::oneshot::Sender<()>,
     ) {
         use gstreamer as gst;
         use gstreamer::prelude::*;
@@ -858,7 +883,6 @@ impl VideoCapture {
             Ok(s) => s,
             Err(e) => {
                 tracing::error!("Failed to create macOS video source (avfvideosrc): {}", e);
-                Self::fallback_capture_loop(video_source, running, width, height, fps);
                 return;
             }
         };
@@ -905,13 +929,14 @@ impl VideoCapture {
 
         if pipeline.set_state(gst::State::Playing).is_err() {
             tracing::error!("Failed to start macOS video capture pipeline");
-            Self::fallback_capture_loop(video_source, running, width, height, fps);
             return;
         }
 
         tracing::info!("macOS video capture pipeline started");
 
+        let mut ready_tx = Some(ready_tx);
         let mut frame_count = 0u64;
+        let mut last_frame = Instant::now();
 
         while running.load(Ordering::SeqCst) {
             let start = Instant::now();
@@ -947,6 +972,8 @@ impl VideoCapture {
                                     };
 
                                     video_source.capture_frame(&frame);
+                                    last_frame = Instant::now();
+                                    if let Some(tx) = ready_tx.take() { let _ = tx.send(()); }
                                     if let Some(ref preview) = local_preview {
                                         if frame_count % 2 == 0 {
                                             preview.tee_i420(&frame.buffer, actual_w, actual_h);
@@ -959,8 +986,14 @@ impl VideoCapture {
                     }
                 }
                 None => {
-                    if pipeline.current_state() == gst::State::Null {
-                        tracing::error!("Video capture pipeline stopped unexpectedly");
+                    if pipeline.current_state() == gst::State::Null
+                        || last_frame.elapsed() > if frame_count == 0 {
+                            Duration::from_secs(60)
+                        } else {
+                            Duration::from_secs(5)
+                        }
+                    {
+                        tracing::error!("Video capture pipeline stopped delivering frames");
                         break;
                     }
                 }
@@ -1064,63 +1097,6 @@ impl VideoCapture {
             }
         }
         true
-    }
-
-    /// Fallback capture loop using test pattern.
-    fn fallback_capture_loop(
-        video_source: NativeVideoSource,
-        running: Arc<AtomicBool>,
-        width: u32,
-        height: u32,
-        fps: u32,
-    ) {
-        use std::time::{Duration, Instant};
-
-        let frame_duration = Duration::from_secs_f64(1.0 / fps as f64);
-
-        tracing::warn!("Video capture: Using test pattern (camera not available)");
-
-        let mut frame_count = 0u64;
-
-        while running.load(Ordering::SeqCst) {
-            let start = Instant::now();
-
-            let mut buffer = I420Buffer::new(width, height);
-            {
-                let (y_data, u_data, v_data) = buffer.data_mut();
-
-                y_data.fill(128);
-
-                let bar_pos = ((frame_count * 5) % (width as u64)) as usize;
-                for row in 0..height as usize {
-                    let start_idx = row * width as usize + bar_pos;
-                    let end_idx = (start_idx + 20).min((row + 1) * width as usize);
-                    for i in start_idx..end_idx {
-                        if i < y_data.len() {
-                            y_data[i] = 255;
-                        }
-                    }
-                }
-
-                u_data.fill(128);
-                v_data.fill(128);
-            }
-
-            let frame = VideoFrame {
-                rotation: VideoRotation::VideoRotation0,
-                timestamp_us: (frame_count * 1_000_000 / fps as u64) as i64,
-                frame_metadata: None,
-                buffer,
-            };
-
-            video_source.capture_frame(&frame);
-            frame_count += 1;
-
-            let elapsed = start.elapsed();
-            if elapsed < frame_duration {
-                std::thread::sleep(frame_duration - elapsed);
-            }
-        }
     }
 
     /// Signal video capture to stop (non-blocking).

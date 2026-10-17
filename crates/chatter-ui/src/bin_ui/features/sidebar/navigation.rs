@@ -272,18 +272,6 @@ pub(crate) fn wire_profile_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClie
     });
 }
 
-pub(crate) fn wire_create_join_channel(window: &MainWindow) {
-    // Open create channel modal (just logs for now, modal is opened via active-modal in Slint)
-    window.on_open_create_channel(|| {
-        tracing::debug!("Opening create channel modal");
-    });
-
-    // Open join channel modal (just logs for now, modal is opened via active-modal in Slint)
-    window.on_open_join_channel(|| {
-        tracing::debug!("Opening join channel modal");
-    });
-}
-
 pub(crate) fn wire_toggle_sidebar(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
     let weak_window = window.as_weak();

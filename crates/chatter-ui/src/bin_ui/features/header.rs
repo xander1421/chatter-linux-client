@@ -78,7 +78,6 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     wire_invite_member(window, ui_ctx);
     wire_load_more(window, ui_ctx);
     wire_visible_media(window, ui_ctx);
-    wire_scroll_to_bottom(window);
 }
 
 fn wire_visible_media(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
@@ -212,13 +211,6 @@ pub(crate) fn refresh_visible_media(
             });
         });
     }
-}
-
-fn wire_scroll_to_bottom(window: &MainWindow) {
-    window.on_scroll_to_bottom_clicked(|| {
-        tracing::debug!("Scroll-to-bottom button clicked");
-        // Scrolling is handled in Slint
-    });
 }
 
 fn wire_pinned_navigation(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {

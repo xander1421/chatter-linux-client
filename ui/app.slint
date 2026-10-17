@@ -849,7 +849,6 @@ export component MainWindow inherits Window {
     function start-create-channel() {
         root.create-channel-initial-tab = 0;
         root.nav-push("create-channel");
-        root.open-create-channel();
     }
     function start-create-section() {
         root.create-section-rename-mode = false;
@@ -1227,8 +1226,6 @@ export component MainWindow inherits Window {
     callback profile-clicked();
     callback change-user-status(string /* status */);
     pure callback get-user-status() -> string;
-    callback open-create-channel();
-    callback open-join-channel();
     callback toggle-sidebar();
     callback section-toggle-expanded(/* section-id */ string);
     callback section-conversation-selected(/* conversation-id */ string, /* conversation-type */ ConversationKind);
@@ -1273,7 +1270,6 @@ export component MainWindow inherits Window {
     callback mention-triggered(string);
     callback remove-attachment(string);
     callback typing-changed(bool);  // true when started typing, false when stopped
-    callback scroll-to-bottom-clicked();  // Emitted when scroll-to-bottom button is clicked
     callback list-geometry(float, float, bool);
     callback start-voice-call();  // Start voice call in current channel
     callback start-video-call();  // Start video call in current channel
@@ -2100,7 +2096,6 @@ export component MainWindow inherits Window {
                     join-channel-clicked => {
                         root.create-channel-initial-tab = 1;
                         root.nav-push("create-channel");
-                        root.open-join-channel();
                     }
                     toggle-collapsed => {
                         // Track user's explicit collapse choice for smart auto-expand
@@ -2485,7 +2480,6 @@ export component MainWindow inherits Window {
                         mention-triggered(query) => { root.mention-triggered(query); }
                         remove-attachment(id) => { root.remove-attachment(id); }
                         typing-changed(is-typing) => { root.typing-changed(is-typing); }
-                        scroll-to-bottom-clicked => { root.scroll-to-bottom-clicked(); }
                         list-geometry(visible, content, seeking) => {
                             root.list-geometry(visible, content, seeking);
                         }

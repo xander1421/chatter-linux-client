@@ -68,7 +68,6 @@ export component ChatHeader inherits GlassSurface {
 
     // Callbacks
     callback settings-clicked();
-    callback pin-clicked();
     callback voice-call-clicked();
     callback invite-clicked();
     // The ⋯ button. The menu itself is on the window's modal stack (app.slint,
@@ -110,10 +109,6 @@ export component ChatHeader inherits GlassSurface {
     // otherwise hangs off the right edge with nothing to separate.
     property <bool> has-utility-actions:
         root.show-invite || root.show-more;
-    // The pin only brings back a dismissed pinned bar (`pinned-show-clicked`),
-    // so it exists only while that bar is hidden. Always-on, it duplicated the
-    // bar and its extra box cut a phone title to five characters.
-    property <bool> show-pin: false;
 
     // Mesh status wording. Kept here rather than in the strip below because this
     // is where it is now shown; the strip's remaining line is the one that has to

@@ -124,7 +124,6 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     navigation::wire_saved_messages(window, ui_ctx);
     navigation::wire_settings_clicked(window, ui_ctx);
     navigation::wire_profile_clicked(window, ui_ctx);
-    navigation::wire_create_join_channel(window);
     navigation::wire_toggle_sidebar(window, ui_ctx);
     navigation::load_sidebar_collapsed_state(window, ui_ctx);
     navigation::wire_message_requests_clicked(window, ui_ctx);

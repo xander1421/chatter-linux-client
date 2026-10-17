@@ -35,6 +35,9 @@ struct ActiveCapture {
     preview: Option<LocalPreview>,
     front: bool,
     last_preview: Option<Instant>,
+    ready_tx: Option<tokio::sync::oneshot::Sender<()>>,
+    last_frame: Instant,
+    received_frame: bool,
 }
 
 // Match desktop self-preview (~12fps) without slowing published camera video.
@@ -48,7 +51,7 @@ pub fn register_platform_camera(cam: Box<dyn PlatformCamera>) {
 }
 
 /// Drive camera capture for the lifetime of `running`. Returns `false` if no
-/// platform camera is registered (caller should fall back to a test pattern).
+/// platform camera is registered.
 pub fn run_capture(
     sink: NativeVideoSource,
     running: Arc<AtomicBool>,
@@ -57,6 +60,7 @@ pub fn run_capture(
     fps: u32,
     device_id: &str,
     local_preview: Option<LocalPreview>,
+    ready_tx: tokio::sync::oneshot::Sender<()>,
 ) -> bool {
     let Some(cam) = PLATFORM_CAMERA.get() else {
         return false;
@@ -68,12 +72,26 @@ pub fn run_capture(
         preview: local_preview,
         front,
         last_preview: None,
+        ready_tx: Some(ready_tx),
+        last_frame: Instant::now(),
+        received_frame: false,
     });
     tracing::info!("Android camera: starting CameraX {width}x{height}@{fps} front={front}");
     cam.start(width, height, fps, front);
 
     while running.load(Ordering::SeqCst) {
         std::thread::sleep(Duration::from_millis(100));
+        let stalled = ACTIVE_SINK.lock().unwrap().as_ref().is_some_and(|capture| {
+            capture.last_frame.elapsed() > if capture.received_frame {
+                Duration::from_secs(5)
+            } else {
+                Duration::from_secs(60)
+            }
+        });
+        if stalled {
+            tracing::error!("Android camera stopped delivering frames");
+            break;
+        }
     }
 
     cam.stop();
@@ -152,6 +170,11 @@ pub fn push_frame_i420(data: &[u8], width: u32, height: u32, rotation_degrees: i
         buffer,
     };
     capture.sink.capture_frame(&frame);
+    capture.last_frame = Instant::now();
+    capture.received_frame = true;
+    if let Some(ready_tx) = capture.ready_tx.take() {
+        let _ = ready_tx.send(());
+    }
     capture.publish_preview(&frame.buffer, width, height, rotation_degrees);
 }
 

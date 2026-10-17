@@ -138,10 +138,10 @@ pub fn wire_active_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     // Publishes a fresh camera track + starts capture.
                     if let Err(e) = ui_ctx.call_publish_camera(None).await {
                         tracing::error!("Failed to enable camera: {}", e);
-                        camera_error(
-                            &weak,
-                            "Could not enable the camera. Audio stays on; try again.",
-                        );
+                        if let Some(w) = weak.upgrade() {
+                            w.set_call_is_video_enabled(false);
+                        }
+                        camera_error(&weak, "Camera unavailable");
                         return;
                     }
                     tracing::info!("Camera enabled");

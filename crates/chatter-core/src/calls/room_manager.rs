@@ -450,10 +450,20 @@ impl RoomManager {
                 });
 
         // Start video capture
-        let video_source = {
+        let (video_source, ready_rx) = {
             let mut capture = self.video_capture.write();
             capture.start(device_path, config, local_preview)?
         };
+
+        // The capture thread reports readiness only after a real camera frame.
+        // Await without blocking the call worker's local executor.
+        if !matches!(
+            tokio::time::timeout(std::time::Duration::from_secs(60), ready_rx).await,
+            Ok(Ok(()))
+        ) {
+            self.video_capture.write().stop();
+            return Err(CallError::CameraUnavailable);
+        }
 
         // Create and publish track
         let video_track =
@@ -467,7 +477,10 @@ impl RoomManager {
         let publication = local_participant
             .publish_track(LocalTrack::Video(video_track), publish_options)
             .await
-            .map_err(|e| CallError::TrackPublishFailed(e.to_string()))?;
+            .map_err(|e| {
+                self.video_capture.write().stop();
+                CallError::TrackPublishFailed(e.to_string())
+            })?;
 
         *self.camera_track_sid.write() = Some(publication.sid());
         self.camera_published.store(true, Ordering::SeqCst);
@@ -741,6 +754,11 @@ impl RoomManager {
     pub fn is_camera_enabled(&self) -> bool {
         self.camera_published
             .load(std::sync::atomic::Ordering::SeqCst)
+    }
+
+    /// A published track whose camera thread exited must be unpublished.
+    pub fn camera_capture_failed(&self) -> bool {
+        self.is_camera_enabled() && !self.video_capture.read().is_running()
     }
 
     /// Check if screen sharing is active.

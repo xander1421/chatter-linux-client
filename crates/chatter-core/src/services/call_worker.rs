@@ -184,6 +184,9 @@ pub enum CallOrchestratorEvent {
         is_video: bool,
     },
 
+    /// The camera could not produce a frame; audio continues.
+    CameraUnavailable { call: CallHandle },
+
     /// The active call has ended.
     ActiveEnded {
         call: CallHandle,
@@ -2015,6 +2018,7 @@ fn run_call_worker(
         // Recovery parks ordinary commands, but gives an admitted owner hangup
         // priority so it can use the normal teardown/response arm immediately.
         let mut deferred_commands = VecDeque::new();
+        let mut camera_health = tokio::time::interval(std::time::Duration::from_millis(500));
         // Process commands
         loop {
             let deadline = orchestrator.incoming.values().map(|p| p.deadline).min();
@@ -2023,6 +2027,17 @@ fn run_call_worker(
             } else {
                 tokio::select! {
                     biased;
+                    _ = camera_health.tick() => {
+                        if room_manager.camera_capture_failed() {
+                            room_manager.stop_camera().await;
+                            if let Some(state) = active_call.borrow().as_ref() {
+                                let _ = call_events_tx.send(CallOrchestratorEvent::CameraUnavailable {
+                                    call: CallHandle::new(state.call.id.to_string()),
+                                });
+                            }
+                        }
+                        continue;
+                    }
                     _ = async {
                         match deadline {
                             Some(deadline) => tokio::time::sleep_until(deadline).await,
@@ -2123,7 +2138,13 @@ fn run_call_worker(
                         // waits behind the gate like any joiner's.
                         let gated = active_call.borrow().as_ref().is_some_and(|s| s.publish_gate.is_closed());
                         if encryption_root_key != [0u8; 32] && !gated {
-                            auto_publish_media(&room_manager, matches!(call_type, CallType::Video)).await;
+                            if auto_publish_media(&room_manager, matches!(call_type, CallType::Video)).await {
+                                if let Some(state) = active_call.borrow().as_ref() {
+                                    let _ = call_events_tx.send(CallOrchestratorEvent::CameraUnavailable {
+                                        call: CallHandle::new(state.call.id.to_string()),
+                                    });
+                                }
+                            }
                         }
                     }
 
@@ -2172,7 +2193,13 @@ fn run_call_worker(
                             .unwrap_or(false);
                         // A group joiner publishes once it holds the call's key.
                         if encryption_root_key.is_some() {
-                            auto_publish_media(&room_manager, is_video).await;
+                            if auto_publish_media(&room_manager, is_video).await {
+                                if let Some(state) = active_call.borrow().as_ref() {
+                                    let _ = call_events_tx.send(CallOrchestratorEvent::CameraUnavailable {
+                                        call: CallHandle::new(state.call.id.to_string()),
+                                    });
+                                }
+                            }
                         }
                     }
 
@@ -2494,12 +2521,12 @@ fn run_call_worker(
                 }
 
                 CallCommand::RotateKey { new_key, response } => {
-                    let result = rotate_group_media_key(&active_call, &room_manager, new_key);
+                    let result = rotate_group_media_key(&active_call, &room_manager, Some(&call_events_tx), new_key);
                     let _ = response.send(result);
                 }
 
                 CallCommand::InstallGroupKey { call_id, key, epoch, response } => {
-                    let result = install_group_media_key(&active_call, &room_manager, call_id, key, epoch);
+                    let result = install_group_media_key(&active_call, &room_manager, Some(&call_events_tx), call_id, key, epoch);
                     let _ = response.send(result);
                 }
 
@@ -3162,6 +3189,7 @@ fn gate_defers(
 fn open_publish_gate(
     active_call: &Rc<RefCell<Option<ActiveCallState>>>,
     room_manager: &Arc<RoomManager>,
+    call_events_tx: Option<&CallEventsTx>,
 ) {
     let Some(media) = active_call
         .borrow_mut()
@@ -3177,6 +3205,8 @@ fn open_publish_gate(
         "Call key held: publishing"
     );
     let rm = room_manager.clone();
+    let call = active_call.borrow().as_ref().map(|s| CallHandle::new(s.call.id.to_string()));
+    let events = call_events_tx.cloned();
     tokio::task::spawn_local(async move {
         if let Some(device) = media.mic {
             if let Err(e) = rm.publish_microphone(device.as_deref()).await {
@@ -3186,6 +3216,9 @@ fn open_publish_gate(
         if media.camera {
             if let Err(e) = rm.publish_camera(None, None).await {
                 tracing::warn!(error = %e, "deferred camera publish failed");
+                if let (Some(call), Some(events)) = (call, events) {
+                    let _ = events.send(CallOrchestratorEvent::CameraUnavailable { call });
+                }
             }
         }
     });
@@ -3222,6 +3255,7 @@ fn reset_dm_media_key(
 fn rotate_group_media_key(
     active_call: &Rc<RefCell<Option<ActiveCallState>>>,
     room_manager: &Arc<RoomManager>,
+    call_events_tx: Option<&CallEventsTx>,
     new_key: [u8; 32],
 ) -> Result<u32, CallError> {
     let mut guard = active_call.borrow_mut();
@@ -3239,13 +3273,14 @@ fn rotate_group_media_key(
     state.key_state = candidate;
     drop(guard);
     tracing::info!(epoch, "Call key rotated after a membership change");
-    open_publish_gate(active_call, room_manager);
+    open_publish_gate(active_call, room_manager, call_events_tx);
     Ok(epoch)
 }
 
 fn install_group_media_key(
     active_call: &Rc<RefCell<Option<ActiveCallState>>>,
     room_manager: &Arc<RoomManager>,
+    call_events_tx: Option<&CallEventsTx>,
     call_id: CallId,
     key: [u8; 32],
     epoch: u32,
@@ -3274,7 +3309,7 @@ fn install_group_media_key(
         epoch = selected_epoch,
         "Installed group call key from participant"
     );
-    open_publish_gate(active_call, room_manager);
+    open_publish_gate(active_call, room_manager, call_events_tx);
     Ok(true)
 }
 
@@ -4174,7 +4209,7 @@ fn start_key_ratchet_scheduler(
 ///
 /// Failures are logged but do not fail the connect — the call stays up
 /// even if mic/camera permissions are denied.
-async fn auto_publish_media(room_manager: &RoomManager, is_video: bool) {
+async fn auto_publish_media(room_manager: &RoomManager, is_video: bool) -> bool {
     if let Err(e) = room_manager.publish_microphone(None).await {
         tracing::warn!(error = %e, "auto-publish microphone failed");
     }
@@ -4182,8 +4217,10 @@ async fn auto_publish_media(room_manager: &RoomManager, is_video: bool) {
         // None lets the room manager pick a sensible default capture config.
         if let Err(e) = room_manager.publish_camera(None, None).await {
             tracing::warn!(error = %e, "auto-publish camera failed");
+            return true;
         }
     }
+    false
 }
 
 /// Stop the periodic key ratchet timer.
@@ -4980,7 +5017,7 @@ mod media_key_install_failure_tests {
             // Both attempts must return the real installation error. If the
             // first consumed epoch 2, the retry would incorrectly be Ok(false).
             assert!(matches!(
-                install_group_media_key(&active, &room, call_id, [9; 32], 2),
+                install_group_media_key(&active, &room, None, call_id, [9; 32], 2),
                 Err(CallError::CryptoError(_))
             ));
             let guard = active.borrow();
@@ -4992,7 +5029,7 @@ mod media_key_install_failure_tests {
             assert!(state.publish_gate.mic.is_some());
         }
         assert!(matches!(
-            install_group_media_key(&active, &room, CallId::new(), [9; 32], 2),
+            install_group_media_key(&active, &room, None, CallId::new(), [9; 32], 2),
             Err(CallError::NotInCall)
         ));
         assert!(!room.is_connected());
@@ -5030,7 +5067,7 @@ mod media_key_install_failure_tests {
         let room = Arc::new(room);
         for _ in 0..2 {
             assert!(matches!(
-                rotate_group_media_key(&active, &room, [7; 32]),
+                rotate_group_media_key(&active, &room, None, [7; 32]),
                 Err(CallError::CryptoError(_))
             ));
             let guard = active.borrow();
@@ -5453,7 +5490,7 @@ mod verification_snapshot_tests {
         let active = Rc::new(RefCell::new(Some(state)));
         let (room, _events) = RoomManager::new();
         let room = Arc::new(room);
-        assert!(install_group_media_key(&active, &room, id, [2; 32], 1).is_err());
+        assert!(install_group_media_key(&active, &room, None, id, [2; 32], 1).is_err());
         assert_eq!(
             call_verification_snapshot(
                 active.borrow().as_ref(),
