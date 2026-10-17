@@ -98,6 +98,27 @@ impl ContentHandoff {
             repo.finish_content_artifact(artifact)
                 .map_err(|e| e.to_string())?;
             tracing::info!(envelope_id = %artifact.key.envelope_id, kind = artifact.kind.as_str(), "secret receive artifact applied");
+            // A joiner's posts are held until the owner roster admits it;
+            // this journal is the live roster path, so release them here.
+            if let Some(list) = roster {
+                if let Some(id) =
+                    crate::domain::anon_group::AnonGroupId::try_from_slice(&list.group_id)
+                {
+                    let group = self.group.clone();
+                    let events = self.events.clone();
+                    let members = list.members.clone();
+                    tokio::spawn(async move {
+                        if let Err(error) = group.retry_held_posts_for_group(&id).await {
+                            tracing::warn!(%error, "Held group post retry after roster failed");
+                        }
+                        // Re-read bubble status after fan-out settles.
+                        events.emit_domain(DomainEvent::AnonGroupMemberListReceived {
+                            group_id: id,
+                            members,
+                        });
+                    });
+                }
+            }
             return Ok(());
         }
         if matches!(artifact.kind, ReceiveKind::JoinAck | ReceiveKind::Profile) {
