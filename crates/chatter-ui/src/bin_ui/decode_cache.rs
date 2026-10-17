@@ -101,6 +101,17 @@ impl<K: Eq + Hash + Clone, V: Clone> ByteLru<K, V> {
         self.used = 0;
     }
 
+    pub fn retain(&mut self, mut keep: impl FnMut(&K) -> bool) {
+        self.entries.retain(|key, (_, bytes, _)| {
+            if keep(key) {
+                true
+            } else {
+                self.used -= *bytes;
+                false
+            }
+        });
+    }
+
     pub fn len(&self) -> usize {
         self.entries.len()
     }
@@ -216,6 +227,13 @@ pub fn put_gif(id: &str, frames: Vec<Pixels>, delays: Vec<u64>) {
         },
         bytes,
     );
+}
+
+/// Drop decoded media whose attachment rows were removed by expiry.
+pub fn evict_attachments(ids: &std::collections::HashSet<String>) {
+    let mut cache = caches();
+    cache.thumbnails.retain(|(id, _)| !ids.contains(id));
+    cache.gifs.retain(|id| !ids.contains(id));
 }
 
 /// Drop every decoded image.

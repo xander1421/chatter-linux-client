@@ -2196,26 +2196,6 @@ impl InboxEventProcessor {
             return;
         }
 
-        // Send delivery receipt for DataMessages (not typing/reactions/etc.).
-        // Attachment records + message storage happen inside
-        // `AnonDmService::process_incoming_content` below via the shared
-        // dispatcher — no need to duplicate here.
-        if let Some(crate::proto::content_v1::content::Content::DataMessage(_)) =
-            &inner_content.content
-        {
-            let dm_service = self.anon_dm_service.clone();
-            let dm_id = anon_dm_id;
-            let timestamp = inner_content.timestamp;
-            tokio::spawn(async move {
-                if let Err(e) = dm_service
-                    .send_delivery_receipt(&dm_id, vec![timestamp])
-                    .await
-                {
-                    tracing::warn!(error = %e, "[ANON_DM] Failed to send delivery receipt");
-                }
-            });
-        }
-
         if let Some(crate::proto::content_v1::content::Content::AnonDmProfileUpdate(update)) =
             &inner_content.content
             && let Some(pointer) = update.avatar.clone()
@@ -2234,6 +2214,10 @@ impl InboxEventProcessor {
         let anon_dm_service = self.anon_dm_service.clone();
         let event_bus = self.event_bus.clone();
         let inner_content_ref = inner_content.clone();
+        let is_data_message = matches!(
+            inner_content.content.as_ref(),
+            Some(crate::proto::content_v1::content::Content::DataMessage(_))
+        );
 
         let _ = tokio::task::spawn_blocking(move || {
             match anon_dm_service.process_incoming_content(
@@ -2242,8 +2226,22 @@ impl InboxEventProcessor {
                 &inner_content_ref,
             ) {
                 Ok(events) => {
+                    let stored_message = events
+                        .iter()
+                        .any(|event| matches!(event, DomainEvent::MessageReceived { .. }));
                     for event in events {
                         event_bus.emit_domain(event);
+                    }
+                    if is_data_message && stored_message {
+                        let timestamp = inner_content_ref.timestamp;
+                        tokio::spawn(async move {
+                            if let Err(e) = anon_dm_service
+                                .send_delivery_receipt(&anon_dm_id, vec![timestamp])
+                                .await
+                            {
+                                tracing::warn!(error = %e, "[ANON_DM] Failed to send delivery receipt");
+                            }
+                        });
                     }
                 }
                 Err(e) => {
