@@ -205,8 +205,6 @@ export component ImageViewer inherits Rectangle {
             ? self.width : min(self.width, self.height * root.page-image.width / root.page-image.height);
         property <length> fit-height: root.page-image.width <= 0 || root.page-image.height <= 0
             ? self.height : min(self.height, self.width * root.page-image.height / root.page-image.width);
-        property <length> image-left: (self.width - self.fit-width) / 2;
-        property <length> image-top: (self.height - self.fit-height) / 2;
 
         if root.has-previous && root.previous-thumbnail.width > 0: Image {
             source: root.previous-thumbnail;
@@ -235,12 +233,12 @@ export component ImageViewer inherits Rectangle {
                 : self.final-height * (0.78 + 0.22 * root.arrival);
             x: (root.thumbnail-width > 0px
                 ? (root.thumbnail-x - viewer-area.absolute-position.x)
-                    + (viewer-area.image-left + root.pan-x
+                    + ((viewer-area.width - self.final-width) / 2 + root.pan-x
                         - (root.thumbnail-x - viewer-area.absolute-position.x)) * root.arrival
                 : (viewer-area.width - self.width) / 2 + root.pan-x) + root.page-offset;
             y: (root.thumbnail-height > 0px
                 ? (root.thumbnail-y - viewer-area.absolute-position.y)
-                    + (viewer-area.image-top + root.pan-y
+                    + ((viewer-area.height - self.final-height) / 2 + root.pan-y
                         - (root.thumbnail-y - viewer-area.absolute-position.y)) * root.arrival
                 : (viewer-area.height - self.height) / 2 + root.pan-y) + root.visual-dismiss-offset;
         }
