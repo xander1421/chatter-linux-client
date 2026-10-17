@@ -39,7 +39,9 @@ export component MeshContextBar inherits Rectangle {
                 ? "Best-effort: sent means handed on, not arrived."
                 : "No route right now. What you send is kept and offered to passing devices — it may arrive hours later.")
       : MeshGlobal.active-kind == "private-channel"
-            ? "Invited devices only. Membership changes need the creator; offline members may miss an epoch key."
+            ? (MeshGlobal.private-rekey-pending
+                ? "Rekey pending — sending paused. A removed or departed member can still read old-key traffic until the creator rotates and members receive it."
+                : "Invited devices only. Membership changes need the creator; offline members may miss an epoch key.")
             : (MeshGlobal.peer-count == 0
                 ? "Nobody is in range. What you send waits to be carried, and may be read hours from now."
                 : "Best-effort: reaches whoever is in range now, and travels further as devices move.");
@@ -159,7 +161,7 @@ export component MeshContextBar inherits Rectangle {
                     } }
                 }
                 if MeshGlobal.private-leave-pending: Text {
-                    text: "Other devices keep their existing roster and keys.";
+                    text: "Reachable members will pause sending until the creator rotates the key. Offline members may still have the old key.";
                     color: Colors.text-muted; font-size: Typography.xs; wrap: word-wrap;
                 }
             }

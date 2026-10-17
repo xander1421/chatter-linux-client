@@ -89,7 +89,7 @@ use crate::storage::mesh_binding_store::{BindingMethod, MeshBindingStore, PeerBi
 use crate::storage::mesh_identity_store::MeshIdentityStore;
 use crate::storage::repositories::MessageRepository;
 use account_binding::{BindingQr, BindingV1, PROOF_TTL_SECS};
-use private_channel::{PrivateChannel, PrivateChannelStore};
+use private_channel::{PendingLeave, PrivateChannel, PrivateChannelStore};
 
 /// A mesh conversation with its sidebar state resolved by the mesh service.
 pub struct MeshSidebarRow {
@@ -1249,12 +1249,36 @@ impl MeshService {
         Ok(())
     }
 
-    /// Leave this device's private channel, including the local epoch keys.
-    /// The existing protocol has no member-originated leave or creator-closure
-    /// message, so other devices keep their current roster until changed.
+    /// Announce departure through Noise and encrypted broadcast before deleting
+    /// the local key. Delivery remains best effort for offline members.
     pub fn leave_private_channel(&self, id: &str) -> Result<(), MeshError> {
-        self.private_channels.load(id)?
+        let state = self
+            .private_channels
+            .load(id)?
             .ok_or_else(|| MeshError::Binding("unknown private channel".into()))?;
+        let notice = state.leave_notice(&self.identity)?;
+        self.private_channels.save_pending_leave(&PendingLeave {
+            notice: notice.clone(), creator: state.creator.clone(),
+        })?;
+        let encoded = notice.encode()?;
+        let broadcast = state.encrypt(&self.identity.peer_id(), &encoded)?;
+        let peers = state
+            .members
+            .iter()
+            .filter(|member| member.peer != self.identity.peer_id().as_str())
+            .map(|member| PeerId::from_str(&member.peer))
+            .collect();
+        let notice = serde_json::to_vec(&notice)
+            .map_err(|_| MeshError::Binding("invalid leave notice".into()))?;
+        let mut control = b"CHTRPCL2".to_vec();
+        control.extend(notice);
+        self.ble
+            .send(BleCommand::PrivateLeave {
+                peers,
+                notice: control,
+                broadcast,
+            })
+            .map_err(|_| MeshError::NotRunning)?;
         self.private_channels.remove(id)?;
         self.private_channels.clear_pending(id)?;
         self.timeline.close_private_channel(id);
@@ -1312,14 +1336,22 @@ impl MeshService {
         Ok(state.creator == self.identity.peer_id().as_str())
     }
 
+    pub fn private_channel_rekey_pending(&self, id: &str) -> Result<bool, MeshError> {
+        let state = self
+            .private_channels
+            .load(id)?
+            .ok_or_else(|| MeshError::Binding("unknown private channel".into()))?;
+        Ok(state.stale || !state.departed.is_empty())
+    }
+
     pub fn send_private_channel(&self, id: &str, text: &str) -> Result<String, MeshError> {
         let state = self
             .private_channels
             .load(id)?
             .ok_or_else(|| MeshError::Binding("unknown private channel".into()))?;
-        if state.stale {
+        if state.stale || !state.departed.is_empty() {
             return Err(MeshError::Binding(
-                "Waiting for the channel key update".into(),
+                "Rekey pending — departed member can still read old-key traffic".into(),
             ));
         }
         let bytes = state.encrypt(&self.identity.peer_id(), text)?;

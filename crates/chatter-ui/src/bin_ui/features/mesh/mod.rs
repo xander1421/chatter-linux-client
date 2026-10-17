@@ -756,6 +756,11 @@ pub fn refresh_rows(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             global.set_active_verified(row.verified);
             global.set_active_binding_label(row.binding_label.into());
             if row.kind == "private-channel" {
+                global.set_private_rekey_pending(
+                    ui_ctx
+                        .mesh_private_channel_rekey_pending(row.scope.as_str())
+                        .unwrap_or(false),
+                );
                 global.set_private_can_manage(
                     ui_ctx
                         .mesh_private_channel_is_creator(row.scope.as_str())
@@ -780,6 +785,7 @@ pub fn refresh_rows(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     .collect();
                 global.set_private_removable_members(ModelRc::new(VecModel::from(members)));
             } else {
+                global.set_private_rekey_pending(false);
                 global.set_private_can_manage(false);
                 global.set_private_removable_members(ModelRc::new(VecModel::from(Vec::<
                     crate::PrivateChannelMemberData,
