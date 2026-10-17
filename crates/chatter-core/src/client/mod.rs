@@ -167,7 +167,7 @@ impl ClientBuilder {
     }
 
     /// Inject a platform-specific notification sink. If not set, core picks a
-    /// sensible default (desktop: `DesktopNotifications`; android: no-op).
+    /// sensible default (with `desktop-native`: `DesktopNotifications`; otherwise no-op).
     pub fn notification_sink(
         mut self,
         sink: Arc<dyn crate::system::notification_sink::NotificationSink>,

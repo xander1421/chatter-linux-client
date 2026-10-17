@@ -244,14 +244,13 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 # Desktop-only system deps (not available on Android or iOS)
 # ============================================================================
 [target.'cfg(not(any(target_os = "android", target_os = "ios")))'.dependencies]
-notify-rust = "4"
-arboard = { version = "3", features = ["wayland-data-control"] }
+notify-rust = { version = "4", optional = true }
 # gtk3 backend (in-process GtkFileChooserDialog) instead of the xdg-portal
 # default. Hyprland and other wlroots-derived compositors removed
 # `xdg_foreign`, which makes the portal FileChooser hang waiting for a
 # parent surface that can never be exported. gtk3 dialogs sidestep that.
-rfd = { version = "0.17.2", default-features = false, features = ["gtk3"] }
-open = "5.3.3"
+rfd = { version = "0.17.2", default-features = false, features = ["gtk3"], optional = true }
+open = { version = "5.3.3", optional = true }
 
 # ============================================================================
 # Platform-specific: Linux
@@ -268,7 +267,7 @@ zbus = { version = "5", default-features = false, features = ["async-io"] }
 chatter-mesh-ble = { path = "../chatter-mesh-ble", optional = true }
 # Preserve the shared zbus blocking backend inside Chatter's Tokio tasks.
 # KSNI's default Tokio feature makes keyring/notification calls nest runtimes.
-ksni = { version = "0.3.6", default-features = false, features = ["async-io", "blocking"] }
+ksni = { version = "0.3.6", default-features = false, features = ["async-io", "blocking"], optional = true }
 v4l = "0.14"
 
 # ============================================================================
@@ -283,8 +282,8 @@ windows = { version = "0.62.2", features = [
     "Win32_System_Threading",
     "Win32_System_Diagnostics_Debug",
 ] }
-tray-icon = "0.26.1"
-muda = "0.21.2"
+tray-icon = { version = "0.26.1", optional = true }
+muda = { version = "0.21.2", optional = true }
 
 # ============================================================================
 # Platform-specific: Android
@@ -343,6 +342,8 @@ onion = [
     "dep:tokio-tungstenite",
 ]
 desktop-system = ["dep:zbus-secret-service-keyring-store", "dep:windows-native-keyring-store", "dep:apple-native-keyring-store"]
+# Native UI capabilities are opt-in; credential stores keep their own contract.
+desktop-native = ["dep:notify-rust", "dep:rfd", "dep:open", "dep:ksni", "dep:tray-icon", "dep:muda"]
 # HTTP/3 (QUIC) gRPC transport. Off by default — pulls quinn/h3 via tonic-h3.
 # Without it, GrpcClientPool is TCP/HTTP2-only (today's behavior, unchanged).
 quic = ["dep:tonic-h3", "dep:quinn"]
