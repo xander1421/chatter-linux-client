@@ -4,7 +4,9 @@
 //! the roster. Packet signatures authenticate senders, but this is not Signal
 //! Sender Keys or MLS, and it has no post-compromise security within an epoch.
 //! Epoch keys move only inside established Noise sessions. The QR is an
-//! admission request bound to one mesh peer, never a bearer copy of the key.
+//! admission request bound to one mesh peer and the creator's full Noise key,
+//! never a bearer copy of the key. It is device-targeted within its validity
+//! window, not bound to one Noise handshake transcript.
 
 use std::sync::Arc;
 
@@ -20,6 +22,7 @@ use rand::rngs::OsRng;
 use rusqlite::params;
 use serde::{Deserialize, Serialize};
 use sha2_10::{Digest, Sha256};
+use zeroize::Zeroizing;
 
 use super::MeshError;
 use crate::storage::Database;
@@ -27,6 +30,8 @@ use crate::storage::Database;
 const INVITE_PREFIX: &str = "chatter-mesh-private-v1:";
 const UPDATE_MAGIC: &[u8; 8] = b"CHTRPCU1";
 const FRAME_MAGIC: &[u8; 8] = b"CHTRPCM1";
+const SUBMISSION_MAGIC: &[u8; 8] = b"CHTRPCS1";
+const RELAYED_MAGIC: &[u8; 8] = b"CHTRPCR2";
 const MAX_MEMBERS: usize = 16;
 const MAX_TEXT: usize = 1024;
 
@@ -42,9 +47,10 @@ pub struct PrivateChannel {
     pub name: String,
     pub creator: String,
     pub creator_key: Vec<u8>,
+    pub creator_static: Vec<u8>,
     pub epoch: u64,
     pub members: Vec<Member>,
-    pub key: Vec<u8>,
+    pub key: Zeroizing<Vec<u8>>,
     pub previous_hash: Vec<u8>,
     pub signature: Vec<u8>,
     /// Bounded local holdback for ciphertext delayed across rotations.
@@ -52,12 +58,18 @@ pub struct PrivateChannel {
     pub prior_epochs: Vec<PriorEpoch>,
     #[serde(default)]
     pub pending_invites: Vec<Invite>,
+    /// Creator-local list of members still awaiting this epoch over Noise.
+    #[serde(default)]
+    pub awaiting_rekey: Vec<String>,
+    /// A newer authenticated frame was seen before its key update arrived.
+    #[serde(default)]
+    pub stale: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct PriorEpoch {
     epoch: u64,
-    key: Vec<u8>,
+    key: Zeroizing<Vec<u8>>,
     members: Vec<Member>,
 }
 
@@ -67,10 +79,84 @@ pub struct Invite {
     pub name: String,
     pub creator: String,
     pub creator_key: Vec<u8>,
+    pub creator_static: Vec<u8>,
     pub target: String,
     pub nonce: Vec<u8>,
     pub expires_at: u64,
     pub signature: Vec<u8>,
+}
+
+#[derive(Serialize, Deserialize)]
+pub struct PrivateSubmission {
+    pub channel_id: String,
+    pub message_id: String,
+    pub text: String,
+}
+
+impl PrivateSubmission {
+    pub fn encode(&self) -> Result<Vec<u8>, MeshError> {
+        if self.text.is_empty()
+            || self.text.len() > MAX_TEXT
+            || uuid::Uuid::parse_str(&self.channel_id).is_err()
+            || uuid::Uuid::parse_str(&self.message_id).is_err()
+        {
+            return Err(failure("private channel message is too long"));
+        }
+        let mut bytes = SUBMISSION_MAGIC.to_vec();
+        bytes.extend(serde_json::to_vec(self).map_err(|_| failure("invalid private submission"))?);
+        Ok(bytes)
+    }
+
+    pub fn decode(bytes: &[u8]) -> Option<Self> {
+        if !bytes.starts_with(SUBMISSION_MAGIC) || bytes.len() > 8192 {
+            return None;
+        }
+        let submission: Self = serde_json::from_slice(&bytes[8..]).ok()?;
+        (submission.text.len() <= MAX_TEXT
+            && !submission.text.is_empty()
+            && uuid::Uuid::parse_str(&submission.channel_id).is_ok()
+            && uuid::Uuid::parse_str(&submission.message_id).is_ok())
+        .then_some(submission)
+    }
+}
+
+#[derive(Serialize, Deserialize)]
+struct RelayedText<'a> {
+    author: &'a str,
+    text: &'a str,
+}
+
+pub fn relayed_text(author: &PeerId, text: &str) -> Option<String> {
+    if text.is_empty() {
+        return None;
+    }
+    let mut encoded = RELAYED_MAGIC.to_vec();
+    encoded.extend(
+        serde_json::to_vec(&RelayedText {
+            author: author.as_str(),
+            text,
+        })
+        .ok()?,
+    );
+    (encoded.len() <= MAX_TEXT).then(|| String::from_utf8(encoded).expect("JSON is UTF-8"))
+}
+
+pub fn display_text(
+    creator: &PeerId,
+    packet_sender: &PeerId,
+    members: &[Member],
+    text: String,
+) -> (PeerId, String) {
+    if packet_sender != creator || !text.as_bytes().starts_with(RELAYED_MAGIC) {
+        return (packet_sender.clone(), text);
+    }
+    let Ok(relayed) = serde_json::from_slice::<RelayedText<'_>>(&text.as_bytes()[8..]) else {
+        return (packet_sender.clone(), text);
+    };
+    if !members.iter().any(|m| m.peer == relayed.author) {
+        return (packet_sender.clone(), text);
+    }
+    (PeerId::from_str(relayed.author), relayed.text.to_owned())
 }
 
 #[derive(Serialize)]
@@ -79,16 +165,31 @@ struct EpochPreimage<'a> {
     id: &'a str,
     name: &'a str,
     creator: &'a str,
+    creator_static: &'a [u8],
     epoch: u64,
     members: &'a [Member],
     key_hash: Vec<u8>,
     previous_hash: &'a [u8],
 }
 
+#[derive(Serialize)]
+struct CurrentEpoch<'a> {
+    id: &'a str,
+    name: &'a str,
+    creator: &'a str,
+    creator_key: &'a [u8],
+    creator_static: &'a [u8],
+    epoch: u64,
+    members: &'a [Member],
+    key: &'a Zeroizing<Vec<u8>>,
+    previous_hash: &'a [u8],
+    signature: &'a [u8],
+}
+
 impl PrivateChannel {
     pub fn create(name: &str, identity: &MeshIdentity) -> Result<Self, MeshError> {
         let name = valid_name(name)?;
-        let mut key = vec![0; 32];
+        let mut key = Zeroizing::new(vec![0; 32]);
         OsRng
             .try_fill_bytes(&mut key)
             .map_err(|_| failure("randomness unavailable"))?;
@@ -97,6 +198,7 @@ impl PrivateChannel {
             name,
             creator: identity.peer_id().to_string(),
             creator_key: identity.signing_public().to_vec(),
+            creator_static: identity.static_public().to_vec(),
             epoch: 1,
             members: vec![Member {
                 peer: identity.peer_id().to_string(),
@@ -107,6 +209,8 @@ impl PrivateChannel {
             signature: vec![],
             prior_epochs: vec![],
             pending_invites: vec![],
+            awaiting_rekey: vec![],
+            stale: false,
         };
         state.sign(identity)?;
         Ok(state)
@@ -118,6 +222,7 @@ impl PrivateChannel {
             id: &self.id,
             name: &self.name,
             creator: &self.creator,
+            creator_static: &self.creator_static,
             epoch: self.epoch,
             members: &self.members,
             key_hash: Sha256::digest(&self.key).to_vec(),
@@ -143,6 +248,7 @@ impl PrivateChannel {
             || self.epoch == 0
             || uuid::Uuid::parse_str(&self.id).is_err()
             || self.creator_key.len() != 32
+            || self.creator_static.len() != 32
             || self.previous_hash.len() != 32
             || self.signature.len() != 64
             || self.members.is_empty()
@@ -190,6 +296,9 @@ impl PrivateChannel {
         if bytes[8..24] == self.routing_tag() {
             return self.member_key(peer);
         }
+        if self.prior_epochs.is_empty() {
+            return None;
+        }
         // A removed sender cannot revive its old epoch after rotation.
         self.member_key(peer)?;
         self.prior_epochs
@@ -221,10 +330,14 @@ impl PrivateChannel {
         &mut self,
         identity: &MeshIdentity,
         target: &PeerId,
+        creator_static: [u8; 32],
         now: u64,
     ) -> Result<String, MeshError> {
         if self.creator != identity.peer_id().as_str() {
             return Err(failure("only the creator can invite"));
+        }
+        if self.creator_static.as_slice() != creator_static.as_slice() {
+            return Err(failure("creator Noise identity changed"));
         }
         if self.members.len() >= MAX_MEMBERS {
             return Err(failure("private channel is full (16 members)"));
@@ -244,6 +357,7 @@ impl PrivateChannel {
             name: self.name.clone(),
             creator: self.creator.clone(),
             creator_key: self.creator_key.clone(),
+            creator_static: creator_static.to_vec(),
             target: target.to_string(),
             nonce,
             expires_at: now.saturating_add(600),
@@ -286,13 +400,23 @@ impl PrivateChannel {
             }
         }
         self.previous_hash = Sha256::digest(self.preimage()?).to_vec();
-        self.remember_current();
+        if remove.is_some() {
+            self.prior_epochs.clear();
+        } else {
+            self.remember_current();
+        }
         if let Some(member) = member {
             self.members.push(member);
         }
         if let Some(remove) = remove {
             self.members.retain(|m| m.peer != remove.as_str());
         }
+        self.awaiting_rekey = self
+            .members
+            .iter()
+            .filter(|m| m.peer != self.creator)
+            .map(|m| m.peer.clone())
+            .collect();
         self.epoch = self
             .epoch
             .checked_add(1)
@@ -303,12 +427,22 @@ impl PrivateChannel {
         self.sign(identity)
     }
 
-    pub fn update_bytes(&self) -> Result<Vec<u8>, MeshError> {
-        let mut out = UPDATE_MAGIC.to_vec();
-        let mut copy = self.clone();
-        copy.pending_invites.clear();
-        copy.prior_epochs.clear();
-        out.extend(serde_json::to_vec(&copy).map_err(|_| failure("invalid roster"))?);
+    pub fn update_bytes(&self) -> Result<Zeroizing<Vec<u8>>, MeshError> {
+        let mut out = Zeroizing::new(UPDATE_MAGIC.to_vec());
+        // Serialize only the signed current roster; local state never crosses Noise.
+        let wire = CurrentEpoch {
+            id: &self.id,
+            name: &self.name,
+            creator: &self.creator,
+            creator_key: &self.creator_key,
+            creator_static: &self.creator_static,
+            epoch: self.epoch,
+            members: &self.members,
+            key: &self.key,
+            previous_hash: &self.previous_hash,
+            signature: &self.signature,
+        };
+        out.extend(serde_json::to_vec(&wire).map_err(|_| failure("invalid roster"))?);
         Ok(out)
     }
 
@@ -317,11 +451,24 @@ impl PrivateChannel {
             return None;
         }
         let state: Self = serde_json::from_slice(&bytes[8..]).ok()?;
-        (state.pending_invites.is_empty() && state.prior_epochs.is_empty() && state.verify())
-            .then_some(state)
+        (state.pending_invites.is_empty()
+            && state.prior_epochs.is_empty()
+            && state.awaiting_rekey.is_empty()
+            && !state.stale
+            && state.verify())
+        .then_some(state)
     }
 
     pub fn encrypt(&self, sender: &PeerId, text: &str) -> Result<Vec<u8>, MeshError> {
+        self.encrypt_with_id(sender, text, uuid::Uuid::new_v4())
+    }
+
+    pub fn encrypt_with_id(
+        &self,
+        sender: &PeerId,
+        text: &str,
+        message_id: uuid::Uuid,
+    ) -> Result<Vec<u8>, MeshError> {
         if self.member_key(sender).is_none() || text.is_empty() || text.len() > MAX_TEXT {
             return Err(failure("invalid private channel sender or text"));
         }
@@ -329,7 +476,6 @@ impl PrivateChannel {
         OsRng
             .try_fill_bytes(&mut nonce)
             .map_err(|_| failure("randomness unavailable"))?;
-        let message_id = uuid::Uuid::new_v4();
         let mut header = FRAME_MAGIC.to_vec();
         header.extend_from_slice(&self.routing_tag());
         header.extend_from_slice(&self.epoch.to_be_bytes());
@@ -460,6 +606,7 @@ impl Invite {
             &self.name,
             &self.creator,
             &self.creator_key,
+            &self.creator_static,
             &self.target,
             &self.nonce,
             self.expires_at,
@@ -475,6 +622,7 @@ impl Invite {
         }
         let invite: Self = serde_json::from_slice(&data).ok()?;
         if invite.creator_key.len() != 32
+            || invite.creator_static.len() != 32
             || invite.signature.len() != 64
             || invite.nonce.len() != 16
             || uuid::Uuid::parse_str(&invite.channel_id).is_err()
@@ -515,12 +663,65 @@ impl PrivateChannelStore {
     pub fn new(db: Arc<Database>) -> Self {
         Self { db }
     }
+    /// Redemption and nonce consumption share one SQL transaction.
+    pub fn redeem(
+        &self,
+        invite: &Invite,
+        identity: &MeshIdentity,
+        member: Member,
+    ) -> Result<Option<PrivateChannel>, MeshError> {
+        use rusqlite::OptionalExtension;
+        let mut conn = self.db.connection()?;
+        let tx = conn.transaction().map_err(db_error)?;
+        let bytes: Option<Vec<u8>> = tx
+            .query_row(
+                "SELECT state FROM mesh_private_channels WHERE channel_id=?1",
+                params![invite.channel_id],
+                |row| row.get(0),
+            )
+            .optional()
+            .map_err(db_error)?;
+        let Some(bytes) = bytes.map(Zeroizing::new) else {
+            return Ok(None);
+        };
+        let mut state: PrivateChannel =
+            serde_json::from_slice(&bytes).map_err(|_| failure("corrupt channel state"))?;
+        if !state.verify()
+            || state.creator != invite.creator
+            || state.creator_key != invite.creator_key
+            || state.creator_static != invite.creator_static
+            || invite.expires_at < super::now_secs()
+            || !state.pending_invites.iter().any(|issued| {
+                issued.nonce == invite.nonce
+                    && issued.target == invite.target
+                    && issued.signature == invite.signature
+            })
+        {
+            return Ok(None);
+        }
+        state.rotate(identity, Some(member), None)?;
+        state
+            .pending_invites
+            .retain(|issued| issued.nonce != invite.nonce);
+        let new_bytes = Zeroizing::new(
+            serde_json::to_vec(&state).map_err(|_| failure("invalid channel state"))?,
+        );
+        tx.execute(
+            "UPDATE mesh_private_channels SET state=?2 WHERE channel_id=?1",
+            params![invite.channel_id, new_bytes.as_slice()],
+        )
+        .map_err(db_error)?;
+        tx.commit().map_err(db_error)?;
+        Ok(Some(state))
+    }
     pub fn save(&self, state: &PrivateChannel) -> Result<(), MeshError> {
         use rusqlite::OptionalExtension;
         if !state.verify() {
             return Err(failure("invalid private channel state"));
         }
-        let bytes = serde_json::to_vec(state).map_err(|_| failure("invalid channel state"))?;
+        let bytes = Zeroizing::new(
+            serde_json::to_vec(state).map_err(|_| failure("invalid channel state"))?,
+        );
         let mut conn = self.db.connection()?;
         let tx = conn.transaction().map_err(db_error)?;
         let previous: Option<Vec<u8>> = tx
@@ -531,7 +732,7 @@ impl PrivateChannelStore {
             )
             .optional()
             .map_err(db_error)?;
-        if let Some(previous) = previous {
+        if let Some(previous) = previous.map(Zeroizing::new) {
             let old: PrivateChannel =
                 serde_json::from_slice(&previous).map_err(|_| failure("corrupt channel state"))?;
             if !old.verify()
@@ -544,7 +745,7 @@ impl PrivateChannelStore {
         tx.execute(
             "INSERT INTO mesh_private_channels(channel_id,state) VALUES(?1,?2)
             ON CONFLICT(channel_id) DO UPDATE SET state=excluded.state",
-            params![state.id, bytes],
+            params![state.id, bytes.as_slice()],
         )
         .map_err(db_error)?;
         tx.commit().map_err(db_error)?;
@@ -563,6 +764,7 @@ impl PrivateChannelStore {
             .map_err(db_error)?;
         bytes
             .map(|b| {
+                let b = Zeroizing::new(b);
                 serde_json::from_slice::<PrivateChannel>(&b)
                     .map_err(|_| failure("corrupt channel state"))
             })
@@ -585,8 +787,9 @@ impl PrivateChannelStore {
             .map_err(db_error)?;
         let mut out = Vec::new();
         for row in rows {
-            let state: PrivateChannel = serde_json::from_slice(&row.map_err(db_error)?)
-                .map_err(|_| failure("corrupt channel state"))?;
+            let bytes = Zeroizing::new(row.map_err(db_error)?);
+            let state: PrivateChannel =
+                serde_json::from_slice(&bytes).map_err(|_| failure("corrupt channel state"))?;
             if !state.verify() {
                 return Err(failure("invalid channel signature"));
             }

@@ -60,7 +60,9 @@ pub enum BleCommand {
         bytes: Vec<u8>,
     },
     /// Open a Noise session (and so a Chatter Hello) if none exists yet.
-    OpenSession { peer: PeerId },
+    OpenSession {
+        peer: PeerId,
+    },
     /// A PQXDH bundle exchanged only inside a live authenticated Noise link.
     SignalBundle {
         peer: PeerId,
@@ -119,7 +121,7 @@ pub enum BleCommand {
     },
     PrivateEpoch {
         peer: PeerId,
-        bytes: Vec<u8>,
+        bytes: zeroize::Zeroizing<Vec<u8>>,
     },
     PrivateChannelMessage {
         channel_id: String,

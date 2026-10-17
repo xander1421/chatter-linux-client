@@ -115,6 +115,7 @@ const EVENT_CAPACITY: usize = 512;
 pub struct PrivateChannelMember {
     pub peer_id: String,
     pub display_name: String,
+    pub awaiting_rekey: bool,
 }
 
 /// Everything [`MeshService`] needs from the rest of the client.
@@ -509,7 +510,9 @@ impl MeshService {
     /// Start a Noise handshake with `peer` if no session exists, so actions
     /// that need one (binding, invites) are ready by the time they are tapped.
     pub fn open_session(&self, peer: &PeerId) {
-        let _ = self.ble.send(BleCommand::OpenSession { peer: peer.clone() });
+        let _ = self
+            .ble
+            .send(BleCommand::OpenSession { peer: peer.clone() });
     }
 
     pub fn set_signal_opt_in(
@@ -938,7 +941,10 @@ impl MeshService {
             .find(|p| mapping::peer_user_id(&p.peer) == *sender)
             .map(|p| {
                 if p.nickname.trim().is_empty() {
-                    format!("Peer {}", p.peer.as_str().chars().take(8).collect::<String>())
+                    format!(
+                        "Peer {}",
+                        p.peer.as_str().chars().take(8).collect::<String>()
+                    )
                 } else {
                     p.nickname
                 }
@@ -1083,8 +1089,9 @@ impl MeshService {
         Ok(state.id)
     }
 
-    /// Produce a short-lived QR for the selected nearby peer. Only that peer
-    /// may redeem it over the current authenticated Noise session.
+    /// Produce a short-lived QR for the selected nearby peer. It pins the
+    /// creator device's full Noise key, and can be redeemed in any live Noise
+    /// session to that device during its validity window.
     pub fn private_channel_invite(&self, id: &str, peer: &PeerId) -> Result<String, MeshError> {
         if !self.state.with(|s| {
             s.sessions.has_session(peer)
@@ -1098,7 +1105,12 @@ impl MeshService {
             .private_channels
             .load(id)?
             .ok_or_else(|| MeshError::Binding("unknown private channel".into()))?;
-        let text = state.invite(&self.identity, peer, now_secs())?;
+        let text = state.invite(
+            &self.identity,
+            peer,
+            self.identity.static_public(),
+            now_secs(),
+        )?;
         self.private_channels.save(&state)?;
         Ok(text)
     }
@@ -1131,6 +1143,19 @@ impl MeshService {
             ));
         }
         let creator = PeerId::from_str(&invite.creator);
+        if self.state.with(|s| s.sessions.remote_static(&creator))
+            != Some(
+                invite
+                    .creator_static
+                    .as_slice()
+                    .try_into()
+                    .map_err(|_| MeshError::Binding("invalid creator key".into()))?,
+            )
+        {
+            return Err(MeshError::Binding(
+                "QR creator does not match the Noise session".into(),
+            ));
+        }
         if !self.state.with(|s| {
             s.sessions.has_session(&creator)
                 && s.chatter_hello
@@ -1202,6 +1227,7 @@ impl MeshService {
                 PrivateChannelMember {
                     peer_id: member.peer.clone(),
                     display_name,
+                    awaiting_rekey: state.awaiting_rekey.contains(&member.peer),
                 }
             })
             .collect())
@@ -1228,20 +1254,60 @@ impl MeshService {
             .private_channels
             .load(id)?
             .ok_or_else(|| MeshError::Binding("unknown private channel".into()))?;
-        let bytes = state.encrypt(&self.identity.peer_id(), text)?;
-        let message_id =
-            uuid::Uuid::from_bytes(bytes[32..48].try_into().expect("fixed frame")).to_string();
-        self.ble
-            .send(BleCommand::PrivateChannelMessage {
+        if state.stale {
+            return Err(MeshError::Binding(
+                "Waiting for the channel key update".into(),
+            ));
+        }
+        if state.creator != self.identity.peer_id().as_str()
+            && !self
+                .state
+                .with(|s| s.sessions.has_session(&PeerId::from_str(&state.creator)))
+        {
+            return Err(MeshError::Binding(
+                "Waiting for the channel key update".into(),
+            ));
+        }
+        let message_id = if state.creator == self.identity.peer_id().as_str() {
+            let content = private_channel::relayed_text(&self.identity.peer_id(), text)
+                .ok_or_else(|| MeshError::Binding("private channel message is too long".into()))?;
+            let bytes = state.encrypt(&self.identity.peer_id(), &content)?;
+            let message_id =
+                uuid::Uuid::from_bytes(bytes[32..48].try_into().expect("fixed frame")).to_string();
+            self.ble
+                .send(BleCommand::PrivateChannelMessage {
+                    channel_id: id.into(),
+                    bytes,
+                })
+                .map_err(|_| MeshError::NotRunning)?;
+            message_id
+        } else {
+            // Members never broadcast a group-key frame: the creator alone
+            // chooses the current epoch after authenticating this submission.
+            private_channel::relayed_text(&self.identity.peer_id(), text)
+                .ok_or_else(|| MeshError::Binding("private channel message is too long".into()))?;
+            let message_id = uuid::Uuid::new_v4().to_string();
+            let bytes = private_channel::PrivateSubmission {
                 channel_id: id.into(),
-                bytes,
-            })
-            .map_err(|_| MeshError::NotRunning)?;
+                message_id: message_id.clone(),
+                text: text.into(),
+            }
+            .encode()?;
+            self.ble
+                .send(BleCommand::PrivateJoinRequest {
+                    creator: PeerId::from_str(&state.creator),
+                    bytes,
+                })
+                .map_err(|_| MeshError::NotRunning)?;
+            message_id
+        };
         // The encrypted packet is broadcast over the radio, with no
         // per-member acknowledgement. Keep the durable state in step with
         // the live row emitted by `broadcast_private_channel`.
-        self.timeline
-            .record_delivery(&message_id, MeshDelivery::Broadcast);
+        if state.creator == self.identity.peer_id().as_str() {
+            self.timeline
+                .record_delivery(&message_id, MeshDelivery::Broadcast);
+        }
         Ok(message_id)
     }
 

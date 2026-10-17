@@ -169,7 +169,7 @@ gstreamer-pbutils = { version = "0.25", optional = true }
 # ============================================================================
 # once_cell removed — migrated to std::sync::LazyLock
 moka = { version = "0.12", features = ["sync"] }
-zeroize = { version = "1.8", features = ["derive"] }
+zeroize = { version = "1.8", features = ["derive", "serde"] }
 libc = "0.2"
 
 # ============================================================================
