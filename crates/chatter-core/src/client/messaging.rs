@@ -257,7 +257,7 @@ impl ChatterClient {
     }
 
     pub fn selection_actions(
-        &self,
+        self: &Arc<Self>,
         conversation: ActiveConversation,
         ids: &[String],
     ) -> SelectionActions {
