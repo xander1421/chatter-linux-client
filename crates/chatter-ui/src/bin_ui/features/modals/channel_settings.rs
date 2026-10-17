@@ -535,7 +535,7 @@ pub fn refresh_members_if_open(
         };
         let weak = weak.clone();
         std::thread::spawn(move || {
-            let Some(roster) = load_private_group_roster(&ui_ctx, group_id) else {
+            let Some(roster) = ui_ctx.private_group_settings_roster(group_id) else {
                 return;
             };
             let _ = slint::invoke_from_event_loop(move || {
@@ -555,73 +555,9 @@ pub fn refresh_members_if_open(
     });
 }
 
-/// A private group's settings roster, read from the local anon-group store.
-/// Only `Send` data: avatars stay bytes until `apply_private_group_roster`
-/// decodes them on the UI thread.
-pub struct PrivateGroupRoster {
-    pub name: String,
-    is_owner: bool,
-    can_manage_members: bool,
-    can_leave: bool,
-    blocked: bool,
-    /// (user id, display name, role, avatar bytes, is us, blocked in group, invited)
-    members: Vec<(
-        String,
-        String,
-        &'static str,
-        Option<Vec<u8>>,
-        bool,
-        bool,
-        bool,
-    )>,
-}
-
-/// Blocking DB reads — call off the UI thread. `None` when the group is not
-/// stored locally or no user is signed in.
-pub fn load_private_group_roster(
-    ui_ctx: &ChatterClient,
-    group_id: AnonGroupId,
-) -> Option<PrivateGroupRoster> {
-    let Some(group) = ui_ctx.get_anon_group(&group_id) else {
-        tracing::error!("Private group not found: {}", group_id);
-        return None;
-    };
-    let current_user_id = ui_ctx.session_current_user_id()?;
-    let channel_id: ChannelId = group_id.into();
-    let blocked_members = ui_ctx.anon_group_blocked_members(&group_id);
-    let members = ui_ctx
-        .get_anon_group_members(&group_id)
-        .into_iter()
-        .map(|member| {
-            let display_name = ui_ctx.display_name_in(
-                &chatter_core::domain::message::ConversationType::AnonGroup,
-                &channel_id,
-                &member.user_id,
-            );
-            (
-                member.user_id.to_string(),
-                display_name,
-                member.role.as_str(),
-                member.avatar,
-                member.user_id == current_user_id,
-                blocked_members.contains(&member.user_id),
-                member.mailbox_pk.is_none(),
-            )
-        })
-        .collect();
-    Some(PrivateGroupRoster {
-        is_owner: group.status.can_send() && group.is_current_user_owner(&current_user_id),
-        can_manage_members: group.status.can_send() && group.can_manage_members(),
-        can_leave: ui_ctx.can_leave_anon_group(&group_id),
-        blocked: group.is_blocked(),
-        name: group.name,
-        members,
-    })
-}
-
 /// UI thread only (decodes avatars into `slint::Image`s). Fills the members
 /// pane and the General pane's count; leaves the name field (a draft) alone.
-pub fn apply_private_group_roster(w: &MainWindow, roster: PrivateGroupRoster) {
+pub fn apply_private_group_roster(w: &MainWindow, roster: chatter_core::client::PrivateGroupRoster) {
     // A group has no server-side edit/archive/delete; Leave is core's call
     // (not the owner while others remain). Set every time: these properties
     // are shared with channel settings and would otherwise keep a channel's
@@ -632,39 +568,35 @@ pub fn apply_private_group_roster(w: &MainWindow, roster: PrivateGroupRoster) {
     w.set_channel_settings_can_leave(roster.can_leave);
     w.set_channel_settings_group_blocked(roster.blocked);
     w.set_channel_settings_member_count(
-        roster.members.iter().filter(|member| !member.6).count() as i32
+        roster.member_count
     );
     w.set_channel_settings_invited_count(
-        roster.members.iter().filter(|member| member.6).count() as i32
+        roster.invited_count
     );
     w.set_channel_settings_is_owner(roster.is_owner);
     w.set_channel_settings_can_manage_members(roster.can_manage_members);
-    let is_owner = roster.is_owner;
     let rows: Vec<ChannelMemberData> = roster
         .members
         .into_iter()
         .map(
-            |(user_id, display_name, role, avatar, is_me, blocked, invited)| ChannelMemberData {
-                user_id: user_id.into(),
-                display_name: display_name.into(),
+            |member| ChannelMemberData {
+                user_id: member.user_id.into(),
+                display_name: member.display_name.into(),
+                role: member.role.into(),
+                avatar_source: member.avatar.as_deref().and_then(crate::bin_ui::converters::avatar_bytes_to_image).unwrap_or_default(),
+                can_make_owner: member.can_make_owner,
+                invited: member.invited,
+                can_block: member.can_block,
+                blocked: member.blocked,
                 username: "".into(),
-                role: role.into(),
                 joined_at: "".into(),
-                avatar_source: avatar
-                    .as_deref()
-                    .and_then(crate::bin_ui::converters::avatar_bytes_to_image)
-                    .unwrap_or_default(),
                 // Anon groups have no mute/ban RPCs.
                 muted: false,
                 can_ban: false,
                 can_mute: false,
-                can_make_owner: is_owner && !is_me && !invited,
                 // Anon-group membership is owner-authoritative,
                 // not the signed channel log.
                 unverified: false,
-                invited,
-                can_block: !is_me,
-                blocked,
             },
         )
         .collect();
