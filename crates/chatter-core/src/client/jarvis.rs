@@ -18,6 +18,28 @@ pub fn is_jarvis_channel(id: &crate::domain::ids::ChannelId) -> bool {
     id.0.is_nil()
 }
 
+/// Resolve the typed conversation once for every inline Jarvis entry point.
+pub fn jarvis_context_for(
+    active: &crate::state::ActiveConversation,
+) -> Option<crate::domain::jarvis::JarvisContext> {
+    use crate::domain::jarvis::JarvisContext;
+    use crate::state::ActiveConversation as AC;
+    match active {
+        AC::Channel(id) => Some(JarvisContext::channel(*id)),
+        AC::ServerDm { .. } => Some(JarvisContext::dm(active.channel_id()?)),
+        AC::AnonDm(id) => Some(JarvisContext::anon_dm(*id)),
+        AC::AnonGroup(id) => Some(JarvisContext::anon_group(*id)),
+        AC::None => None,
+    }
+}
+
+/// Account identity captured before an asynchronous Jarvis command starts.
+#[derive(Clone, Copy)]
+pub struct JarvisSessionOwner {
+    pub user_id: crate::domain::ids::UserId,
+    pub revision: u64,
+}
+
 /// The query of an `@jarvis` mention, if `text` has one. The mention must be a
 /// whole word (start of text or after whitespace; end of text, whitespace or
 /// `,:;!?` after it) — `me@jarvis.io` is an address, not a mention. Leading
@@ -267,17 +289,8 @@ impl ChatterClient {
         active: &crate::state::ActiveConversation,
         text: &str,
     ) -> Option<(crate::domain::jarvis::JarvisContext, String)> {
-        use crate::domain::jarvis::JarvisContext;
-        use crate::state::ActiveConversation as AC;
-
         let query = parse_jarvis_mention(text)?;
-        let context = match active {
-            AC::Channel(id) => JarvisContext::channel(*id),
-            AC::ServerDm { .. } => JarvisContext::dm(active.channel_id()?),
-            AC::AnonDm(id) => JarvisContext::anon_dm(*id),
-            AC::AnonGroup(id) => JarvisContext::anon_group(*id),
-            AC::None => return None,
-        };
+        let context = jarvis_context_for(active)?;
         self.check_ai_allowed_in(&context).ok()?;
         Some((context, query.to_string()))
     }
@@ -583,6 +596,65 @@ impl ChatterClient {
         context: &crate::domain::jarvis::JarvisContext,
         author_id: Option<&crate::domain::ids::UserId>,
     ) -> (String, Result<String, crate::services::jarvis::JarvisError>) {
+        self.jarvis_execute_in_context(cmd, context, author_id, None)
+            .await
+    }
+
+    /// Execute an inline slash command for the captured account and conversation.
+    pub async fn jarvis_execute_for_conversation(
+        &self,
+        cmd: crate::services::jarvis::JarvisCommand,
+        conversation: crate::state::ActiveConversation,
+        owner: JarvisSessionOwner,
+    ) -> (String, Result<String, crate::services::jarvis::JarvisError>) {
+        use crate::services::jarvis::JarvisError;
+        let Some(context) = jarvis_context_for(&conversation) else {
+            return (
+                String::new(),
+                Err(JarvisError::ContextBuilding(
+                    "No conversation selected".into(),
+                )),
+            );
+        };
+        if !self.jarvis_session_is_current(owner) {
+            return (
+                String::new(),
+                Err(JarvisError::ContextBuilding("Session changed".into())),
+            );
+        }
+        let mut auth_changes = self.auth_state().subscribe();
+        if !self.jarvis_session_is_current(owner) {
+            return (
+                String::new(),
+                Err(JarvisError::ContextBuilding("Session changed".into())),
+            );
+        }
+        let command = self.jarvis_execute_in_context(cmd, &context, Some(&owner.user_id), Some(owner));
+        tokio::pin!(command);
+        loop {
+            tokio::select! {
+                result = &mut command => return result,
+                _ = auth_changes.recv() => {
+                    if !self.jarvis_session_is_current(owner) {
+                        return (String::new(), Err(JarvisError::ContextBuilding("Session changed".into())));
+                    }
+                }
+            }
+        }
+    }
+
+    fn jarvis_session_is_current(&self, owner: JarvisSessionOwner) -> bool {
+        let auth = self.auth_state().get();
+        auth.current_user_id == Some(owner.user_id) && auth.session_revision == owner.revision
+    }
+
+    async fn jarvis_execute_in_context(
+        &self,
+        cmd: crate::services::jarvis::JarvisCommand,
+        context: &crate::domain::jarvis::JarvisContext,
+        author_id: Option<&crate::domain::ids::UserId>,
+        owner: Option<JarvisSessionOwner>,
+    ) -> (String, Result<String, crate::services::jarvis::JarvisError>) {
         use crate::services::jarvis::JarvisCommand as JC;
 
         use crate::domain::jarvis::ContextType;
@@ -591,37 +663,39 @@ impl ChatterClient {
             _ => None,
         };
 
-        let (query_display, result) = match cmd {
+        let (query_display, state_message, result) = match cmd {
             JC::Ask(query) => {
-                self.jarvis_state()
-                    .add_user_message(&query, channel_label.as_deref());
                 let r = self.jarvis_ask(context, &query, author_id).await;
-                (format!("/ask {}", query), r)
+                (format!("/ask {}", query), query, r)
             }
             JC::Summarize => {
-                self.jarvis_state()
-                    .add_user_message("/summarize", channel_label.as_deref());
                 let r = self.jarvis_summarize_conversation(context).await;
-                ("/summarize".to_string(), r)
+                ("/summarize".to_string(), "/summarize".to_string(), r)
             }
             JC::Knowledge(entity) => {
                 let label = format!("/knowledge {}", entity);
-                self.jarvis_state()
-                    .add_user_message(&label, channel_label.as_deref());
                 let query = format!("What do you know about {}?", entity);
                 let r = self.jarvis_ask(context, &query, author_id).await;
-                (label, r)
+                (label.clone(), label, r)
             }
             JC::Remember(fact) => {
                 let label = format!("/remember {}", fact);
-                self.jarvis_state()
-                    .add_user_message(&label, channel_label.as_deref());
                 let query = format!("Please remember this fact: {}", fact);
                 let r = self.jarvis_ask(context, &query, author_id).await;
-                (label, r)
+                (label.clone(), label, r)
             }
         };
 
+        if owner.is_some_and(|owner| !self.jarvis_session_is_current(owner)) {
+            return (
+                query_display,
+                Err(crate::services::jarvis::JarvisError::ContextBuilding(
+                    "Session changed".into(),
+                )),
+            );
+        }
+        self.jarvis_state()
+            .add_user_message(&state_message, channel_label.as_deref());
         match &result {
             Ok(response) => {
                 self.jarvis_state().add_assistant_message(response);
@@ -639,6 +713,7 @@ impl ChatterClient {
         &self,
         context: &crate::domain::jarvis::JarvisContext,
     ) -> Result<String, crate::services::jarvis::JarvisError> {
+        self.check_ai_allowed_in(context)?;
         self.jarvis().summarize_conversation(context).await
     }
 }
