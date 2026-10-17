@@ -2,7 +2,7 @@
 
 use std::path::PathBuf;
 
-use slint::{ComponentHandle, ModelRc, SharedString, VecModel, Weak};
+use slint::{ComponentHandle, Image, Model, ModelRc, SharedString, VecModel, Weak};
 
 use chatter_core::domain::ids::AttachmentId;
 use chatter_core::state::chat_state::PendingAttachment;
@@ -10,6 +10,19 @@ use chatter_core::state::{ActiveConversation, ChatState};
 
 use crate::bin_ui::converters::pending_attachment_to_slint;
 use crate::{MainWindow, PendingAttachmentData};
+
+thread_local! {
+    /// The tray is rendered from several UI paths which hold only a client
+    /// reference. Keep a weak handle for background preview work.
+    static PREVIEW_CLIENT: std::cell::RefCell<std::sync::Weak<chatter_core::client::ChatterClient>> =
+        std::cell::RefCell::new(std::sync::Weak::new());
+}
+
+pub(crate) fn register_preview_client(
+    client: &std::sync::Arc<chatter_core::client::ChatterClient>,
+) {
+    PREVIEW_CLIENT.with(|slot| *slot.borrow_mut() = std::sync::Arc::downgrade(client));
+}
 
 /// Process a single file and add it to pending attachments.
 /// Used by both file picker and drag/drop.
@@ -87,6 +100,67 @@ pub(crate) fn render_attachments(
 
     let model = ModelRc::new(VecModel::from(slint_attachments));
     w.set_pending_attachments(model);
+
+    // Ciphertext cannot be handed to Slint's path loader. Authenticate,
+    // thumbnail and decode it off the UI thread, then update only the tray
+    // entry that still owns this path (navigation/removal may have intervened).
+    let client = PREVIEW_CLIENT.with(|slot| slot.borrow().upgrade());
+    if let Some(client) = client {
+        let session = crate::bin_ui::features::history_owner::SessionOwner::capture(&client);
+        let chat_state = client.chat_state().clone();
+        for attachment in attachments.iter().filter(|a| {
+            a.mime_type.starts_with("image/")
+                && a.path
+                    .components()
+                    .any(|part| part.as_os_str() == "composer-staging")
+        }) {
+            let path = attachment.path.clone();
+            let id = attachment.id;
+            let weak = w.as_weak();
+            let client = client.clone();
+            let chat_state = chat_state.clone();
+            let session = session.clone();
+            crate::rt_handle().spawn_blocking(move || {
+                let Some(bytes) = client.staged_image_preview(&path) else {
+                    return;
+                };
+                let pixels =
+                    crate::bin_ui::decode_cache::thumbnail(&id.to_string(), bytes.len(), || {
+                        image::load_from_memory(&bytes).ok()
+                    });
+                let Some(pixels) = pixels else { return };
+                let _ = slint::invoke_from_event_loop(move || {
+                    if !session.is_current()
+                        || !chat_state
+                            .get_pending_attachments()
+                            .iter()
+                            .any(|a| a.id == id && a.path == path)
+                    {
+                        return;
+                    }
+                    let Some(w) = weak.upgrade() else { return };
+                    let rows = w.get_pending_attachments();
+                    let Some(model) = rows
+                        .as_any()
+                        .downcast_ref::<VecModel<PendingAttachmentData>>()
+                    else {
+                        return;
+                    };
+                    for index in 0..model.row_count() {
+                        let Some(mut row) = model.row_data(index) else {
+                            continue;
+                        };
+                        if row.id == id.to_string() {
+                            row.thumbnail = Image::from_rgba8(pixels);
+                            row.has_thumbnail = true;
+                            model.set_row_data(index, row);
+                            break;
+                        }
+                    }
+                });
+            });
+        }
+    }
 
     // Update placeholder text
     let pending_count = attachments.len();
@@ -233,7 +307,11 @@ pub(crate) fn wire_attachment_clicked(
                     .await
                     {
                         ui_ctx_attach.release_staged_files(&[PendingAttachment::new(
-                            AttachmentId::new(), String::new(), file_path, 0, String::new(),
+                            AttachmentId::new(),
+                            String::new(),
+                            file_path,
+                            0,
+                            String::new(),
                         )]);
                         tracing::error!("{}", e);
                     }

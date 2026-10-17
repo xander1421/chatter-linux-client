@@ -821,14 +821,22 @@ impl ChatterClient {
     /// A clean break from the former plaintext layout: only files whose
     /// encryption metadata is readable in SQLCipher may survive startup.
     pub(super) fn discard_legacy_staging_all(&self) {
-        let Ok(accounts) = std::fs::read_dir(self.staging_root()) else { return };
+        let Ok(accounts) = std::fs::read_dir(self.staging_root()) else {
+            return;
+        };
         for account in accounts.flatten() {
-            let Ok(dirs) = std::fs::read_dir(account.path()) else { continue };
+            let Ok(dirs) = std::fs::read_dir(account.path()) else {
+                continue;
+            };
             for dir in dirs.flatten() {
-                let Ok(files) = std::fs::read_dir(dir.path()) else { continue };
+                let Ok(files) = std::fs::read_dir(dir.path()) else {
+                    continue;
+                };
                 for file in files.flatten() {
                     let path = file.path();
-                    let Some(key) = self.staging_crypto_key(&path) else { continue };
+                    let Some(key) = self.staging_crypto_key(&path) else {
+                        continue;
+                    };
                     if matches!(self.settings_repo().get::<StagingCrypto>(&key), Ok(None)) {
                         let _ = std::fs::remove_file(&path);
                         let _ = std::fs::remove_dir(dir.path());
@@ -869,8 +877,40 @@ impl ChatterClient {
         )
     }
 
+    /// Authenticate a small staged image and produce its tray preview entirely
+    /// in memory. Large inputs keep the generic icon instead of allocating a
+    /// full plaintext image; the media decoder applies its own pixel limits.
+    pub fn staged_image_preview(&self, path: &std::path::Path) -> Option<Vec<u8>> {
+        const MAX_PREVIEW_INPUT: u64 = 10 * 1024 * 1024;
+        let key_name = self.staging_crypto_key(path)?;
+        let crypto: StagingCrypto = self.settings_repo().get(&key_name).ok()??;
+        if crypto.plaintext_size > MAX_PREVIEW_INPUT {
+            return None;
+        }
+        let key: [u8; 64] = crypto.key.try_into().ok()?;
+        let digest: [u8; 32] = crypto.digest.try_into().ok()?;
+        let source = std::fs::File::open(path).ok()?;
+        let size = source.metadata().ok()?.len();
+        if size > MAX_PREVIEW_INPUT + 128 {
+            return None;
+        }
+        let mut decryptor = crate::crypto::streaming_decrypt::StreamingDecryptor::new(
+            std::io::BufReader::new(source),
+            &key,
+            &digest,
+            crypto.plaintext_size.try_into().ok()?,
+            size.try_into().ok()?,
+        );
+        let plaintext = zeroize::Zeroizing::new(decryptor.decrypt_all().ok()?);
+        let (thumbnail, _, _) =
+            crate::media::ImageProcessor::generate_thumbnail_from_memory(&plaintext).ok()?;
+        Some(thumbnail)
+    }
+
     fn restorable_staged_file(&self, path: &std::path::Path) -> bool {
-        let Some(key) = self.staging_crypto_key(path) else { return true };
+        let Some(key) = self.staging_crypto_key(path) else {
+            return true;
+        };
         !matches!(self.settings_repo().get::<StagingCrypto>(&key), Ok(None))
     }
 
@@ -1371,11 +1411,9 @@ mod tests {
             .auth_state()
             .set_logged_in(crate::domain::ids::UserId::new(), 1, "B".into());
         open(&client, channel);
-        assert!(
-            client
-                .swap_composer_draft("", ComposerDraft::default(), &channel.to_string())
-                .is_empty()
-        );
+        assert!(client
+            .swap_composer_draft("", ComposerDraft::default(), &channel.to_string())
+            .is_empty());
         assert!(client.take_parked_send(true).is_none());
     }
 
@@ -1461,15 +1499,13 @@ mod tests {
         let (a, b) = (ChannelId::new(), ChannelId::new());
         open(&client, b);
         client.chat_state().add_pending_attachment(staged("b.png"));
-        assert!(
-            client
-                .chat_state()
-                .take_pending_attachments_for(
-                    ActiveConversation::Channel(a),
-                    client.chat_state().get().attachment_revision,
-                )
-                .is_none()
-        );
+        assert!(client
+            .chat_state()
+            .take_pending_attachments_for(
+                ActiveConversation::Channel(a),
+                client.chat_state().get().attachment_revision,
+            )
+            .is_none());
         assert_eq!(
             client.chat_state().get_pending_attachments().len(),
             1,
@@ -1555,11 +1591,9 @@ mod tests {
         client
             .auth_state()
             .set_logged_in(crate::domain::ids::UserId::new(), 1, "B".into());
-        assert!(
-            client
-                .swap_composer_draft("", ComposerDraft::default(), &a.to_string())
-                .is_empty()
-        );
+        assert!(client
+            .swap_composer_draft("", ComposerDraft::default(), &a.to_string())
+            .is_empty());
 
         // Back as A, the drafts are still there; explicit sign-out removes them.
         client.auth_state().set_logged_out();
@@ -1625,11 +1659,9 @@ mod tests {
         client
             .auth_state()
             .set_logged_in(crate::domain::ids::UserId::new(), 1, "B".into());
-        assert!(
-            client
-                .swap_composer_draft("", ComposerDraft::default(), &a.to_string())
-                .is_empty()
-        );
+        assert!(client
+            .swap_composer_draft("", ComposerDraft::default(), &a.to_string())
+            .is_empty());
     }
 
     #[tokio::test]
@@ -1981,11 +2013,9 @@ mod tests {
         let client = client_in(&dir);
         client.auth_state().set_logged_in(user, 1, "A".into());
         assert_eq!(client.thread_draft(&root), "half a reply");
-        assert!(
-            client
-                .thread_draft(&crate::domain::ids::MessageId::new())
-                .is_empty()
-        );
+        assert!(client
+            .thread_draft(&crate::domain::ids::MessageId::new())
+            .is_empty());
         client.set_thread_draft(&root, "");
         drop(client);
 
