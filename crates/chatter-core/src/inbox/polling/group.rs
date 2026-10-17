@@ -82,7 +82,11 @@ pub async fn poll_group_mailboxes(
     message_repo: &Arc<MessageRepository>,
     domain_tx: Option<&broadcast::Sender<DomainEvent>>,
     retry_budget: &ack_policy::RetryBudget,
+    content_handoff: Option<&Arc<crate::inbox::content_handoff::ContentHandoff>>,
 ) {
+    if let Some(handoff) = content_handoff {
+        handoff.replay(message_repo).await;
+    }
     match group_fanout.poll_all_group_mailboxes().await {
         Ok(batch) => {
             let mut total_groups = 0u32;
@@ -159,6 +163,7 @@ pub async fn poll_group_mailboxes(
                         domain_tx,
                         msg.server_timestamp,
                         retry_budget,
+                        content_handoff,
                     )
                     .await;
 
@@ -173,6 +178,7 @@ pub async fn poll_group_mailboxes(
 
                 // Acknowledge processed messages using mailbox_id (works for both server-managed and anon groups)
                 if !message_ids.is_empty() {
+                    let ack_ids_for_log = message_ids.clone();
                     let ack_result = group_fanout
                         .acknowledge_by_mailbox_id(&poll_result.mailbox_id, message_ids)
                         .await;
@@ -185,6 +191,9 @@ pub async fn poll_group_mailboxes(
                         );
                     }
                     if ack_result.is_ok() {
+                        for id in &ack_ids_for_log {
+                            tracing::info!(envelope_id = %id, "secret mailbox ACK succeeded");
+                        }
                         for (key, digest) in ack_bindings {
                             if crate::inbox::reaction_handoff::acknowledge(
                                 message_repo,
@@ -233,6 +242,7 @@ async fn process_sealed_sender_group_message(
     domain_tx: Option<&broadcast::Sender<DomainEvent>>,
     envelope_ts_ns: u64,
     retry_budget: &ack_policy::RetryBudget,
+    content_handoff: Option<&Arc<crate::inbox::content_handoff::ContentHandoff>>,
 ) -> AckDecision {
     crate::inbox::reaction_handoff::replay(message_repo, domain_tx);
     let key =
@@ -262,6 +272,16 @@ async fn process_sealed_sender_group_message(
         .await
     {
         Ok((Some(artifact), _)) => {
+            if artifact.kind == crate::storage::receive_artifact::ReceiveKind::Content {
+                let Some(handoff) = content_handoff else {
+                    tracing::warn!("Group data handoff unavailable; envelope retained");
+                    return AckDecision::Retain;
+                };
+                if let Err(error) = handoff.apply(message_repo, &artifact).await {
+                    tracing::warn!(envelope_id = %artifact.key.envelope_id, %error, "Group post awaits replay");
+                }
+                return AckDecision::Ack;
+            }
             return match crate::inbox::reaction_handoff::apply(message_repo, &artifact, domain_tx) {
                 Ok(()) => AckDecision::Ack,
                 Err(_) => {

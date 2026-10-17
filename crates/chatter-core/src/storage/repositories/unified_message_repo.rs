@@ -1344,7 +1344,10 @@ impl UnifiedMessageRepository {
         &self,
         artifact: &crate::storage::receive_artifact::ReceiveArtifact,
     ) -> Result<Option<(ReactionScope, UserId, u64)>, StorageError> {
-        use crate::storage::receive_artifact;
+        use crate::storage::receive_artifact::{self, ReceiveKind};
+        if artifact.kind != ReceiveKind::Reaction {
+            return Err(StorageError::InvalidData("receive kind mismatch".into()));
+        }
         let mut conn = self.db.connection()?;
         let tx = conn.transaction()?;
         let (account, device) = reaction_receive_binding(&tx)?;
@@ -1468,6 +1471,37 @@ impl UnifiedMessageRepository {
         Ok(())
     }
 
+    pub(crate) fn acknowledge_receive_artifact(
+        &self,
+        key: &crate::storage::receive_artifact::ReceiveKey,
+        digest: &[u8],
+    ) -> Result<(), StorageError> {
+        use crate::storage::receive_artifact::{self, ReceiveKind};
+        let mut conn = self.db.connection()?;
+        let tx = conn.transaction()?;
+        receive_artifact::require_current_binding(&tx, key)?;
+        match receive_artifact::load(&tx, key, digest)? {
+            Some(artifact) if artifact.kind == ReceiveKind::Content => {
+                receive_artifact::mark_content_upstream_acked(&tx, key, digest)?;
+            }
+            Some(_) => receive_artifact::mark_acknowledged(&tx, key, digest)?,
+            None => {}
+        }
+        tx.commit()?;
+        Ok(())
+    }
+
+    pub(crate) fn finish_content_artifact(
+        &self,
+        artifact: &crate::storage::receive_artifact::ReceiveArtifact,
+    ) -> Result<(), StorageError> {
+        let mut conn = self.db.connection()?;
+        let tx = conn.transaction()?;
+        crate::storage::receive_artifact::mark_content_applied(&tx, artifact)?;
+        tx.commit()?;
+        Ok(())
+    }
+
     pub(crate) fn pending_reaction_artifacts_after(
         &self,
         cursor: Option<&(u64, String)>,
@@ -1475,7 +1509,36 @@ impl UnifiedMessageRepository {
         use crate::storage::receive_artifact;
         let conn = self.db.read_connection()?;
         let (account, device) = reaction_receive_binding(&conn)?;
-        let mut stmt=conn.prepare("SELECT id FROM reaction_receive_artifacts WHERE local_account=?1 AND local_device=?2 AND state='pending' AND (?3 IS NULL OR (server_timestamp_ns,id)>(?3,?4)) ORDER BY server_timestamp_ns,id LIMIT ?5")?;
+        let mut stmt=conn.prepare("SELECT id FROM reaction_receive_artifacts WHERE local_account=?1 AND local_device=?2 AND kind='reaction' AND state='pending' AND (?3 IS NULL OR (server_timestamp_ns,id)>(?3,?4)) ORDER BY server_timestamp_ns,id LIMIT ?5")?;
+        let ids = stmt
+            .query_map(
+                params![
+                    account,
+                    device,
+                    cursor.map(|v| v.0 as i64),
+                    cursor.map(|v| v.1.as_str()),
+                    receive_artifact::MAX_RECOVERY_BATCH as i64
+                ],
+                |r| r.get::<_, String>(0),
+            )?
+            .collect::<Result<Vec<_>, _>>()?;
+        let mut result = Vec::new();
+        for id in ids {
+            result.push(receive_artifact::load_by_id(&conn, &id)?.ok_or_else(|| {
+                StorageError::InvalidData("Receive artifact vanished during recovery read".into())
+            })?);
+        }
+        Ok(result)
+    }
+
+    pub(crate) fn pending_content_artifacts_after(
+        &self,
+        cursor: Option<&(u64, String)>,
+    ) -> Result<Vec<crate::storage::receive_artifact::ReceiveArtifact>, StorageError> {
+        use crate::storage::receive_artifact;
+        let conn = self.db.read_connection()?;
+        let (account, device) = reaction_receive_binding(&conn)?;
+        let mut stmt = conn.prepare("SELECT id FROM reaction_receive_artifacts WHERE local_account=?1 AND local_device=?2 AND kind='content' AND state='pending' AND (?3 IS NULL OR (server_timestamp_ns,id)>(?3,?4)) ORDER BY server_timestamp_ns,id LIMIT ?5")?;
         let ids = stmt
             .query_map(
                 params![

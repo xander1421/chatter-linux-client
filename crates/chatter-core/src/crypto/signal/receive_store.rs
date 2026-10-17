@@ -359,7 +359,7 @@ async fn decrypt_durable_inner(
     use crate::storage::receive_artifact::{self, MAX_RECEIVE_CONTENT, ReceiveArtifact};
     key.validate()?;
     // Matches internal/services/mailbox/handlers/handlers.go: MaxMailboxEnvelopeSize.
-    // The reaction journal has a smaller retention bound, not a transport bound.
+    // The receive journal has a smaller retention bound, not a transport bound.
     const MAX_MAILBOX_ENVELOPE: usize = 1024 * 1024;
     if ciphertext.is_empty() || ciphertext.len() > MAX_MAILBOX_ENVELOPE {
         return Err(ServiceError::Validation(
@@ -370,7 +370,7 @@ async fn decrypt_durable_inner(
     if let Some(a) = base.key_store.receive_artifact(&key, &digest)? {
         return from_artifact(a).map(Some);
     }
-    // Capture admission before staged crypto; full capacity never commits a reaction.
+    // Capture admission before staged crypto; full capacity never commits an artifact.
     let capacity = base.key_store.check_receive_capacity();
     let mut identities = ReceiveStore::new(base.clone());
     let mut sessions = identities.clone();
@@ -402,9 +402,7 @@ async fn decrypt_durable_inner(
             "decrypted receive content exceeds bound".into(),
         ));
     }
-    // Validated decode (content.proto rules, nested wrappers too): an invalid
-    // reaction is never journaled; it routes like any other content and is
-    // refused there by the same validation.
+    // Only reactions and data posts need a ratchet-atomic handoff in this phase.
     let decoded = crate::network::validation::protovalidate::decode_validated::<
         crate::proto::content_v1::Content,
     >(result.message.as_slice())
@@ -413,12 +411,21 @@ async fn decrypt_durable_inner(
         Some(c) => reaction_content(c, 0)?,
         None => false,
     };
-    let artifact = if is_reaction {
-        // Refuse oversized reaction evidence before committing any ratchet writes.
-        // Bootstrap/profile content is routed normally and is never journaled.
+    let is_data_post = decoded.as_ref().is_some_and(|content| {
+        use crate::proto::content_v1::content::Content as Body;
+        let inner = match content.content.as_ref() {
+            Some(Body::AnonDmMessage(message)) => message.inner_content.as_deref(),
+            Some(Body::AnonGroupMessage(message)) => message.inner_content.as_deref(),
+            _ => None,
+        };
+        matches!(inner.and_then(|inner| inner.content.as_ref()), Some(Body::DataMessage(data))
+            if data.delete.is_none() && !crate::services::disappearing::is_timer_update(data))
+    });
+    let artifact = if is_reaction || is_data_post {
+        // Refuse oversized plaintext before committing any ratchet writes.
         if result.message.len() > MAX_RECEIVE_CONTENT {
             return Err(ServiceError::Validation(
-                "decrypted reaction content exceeds journal bound".into(),
+                "decrypted secret content exceeds journal bound".into(),
             ));
         }
         capacity?;
@@ -427,11 +434,16 @@ async fn decrypt_durable_inner(
             CiphertextMessageType::Whisper => 3,
             _ => {
                 return Err(ServiceError::Crypto(CryptoError::Protocol(
-                    "unsupported durable reaction cipher type".into(),
+                    "unsupported durable secret cipher type".into(),
                 )));
             }
         };
-        Some(ReceiveArtifact::new(
+        let constructor = if is_reaction {
+            ReceiveArtifact::new
+        } else {
+            ReceiveArtifact::new_content
+        };
+        Some(constructor(
             key.clone(),
             digest,
             result.sender_uuid.clone(),
@@ -446,6 +458,7 @@ async fn decrypt_durable_inner(
         base.key_store
             .commit_receive(&key, &identities.changes(), artifact.as_ref())?;
     if let Some(a) = committed {
+        tracing::info!(envelope_id = %a.key.envelope_id, "secret receive artifact committed");
         return from_artifact(a).map(Some);
     }
     Ok(Some(crate::services::signal::actor::DurableReceive {

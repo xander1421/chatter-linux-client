@@ -21,6 +21,7 @@
 
 pub mod ack_policy;
 pub mod config;
+pub(crate) mod content_handoff;
 pub mod error;
 pub mod events;
 pub mod handlers;

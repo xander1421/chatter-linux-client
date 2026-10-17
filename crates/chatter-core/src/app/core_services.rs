@@ -693,7 +693,13 @@ impl CoreServices {
                     self.attachment_service.attachment_repo(),
                     Some(self.event_bus.clone()),
                 )
-                .with_anon_dm_polling(anon_dm_poller, self.anon_dm_service.pairwise_service()),
+                .with_anon_dm_polling(anon_dm_poller, self.anon_dm_service.pairwise_service())
+                .with_content_handoff(
+                    self.anon_dm_service.clone(),
+                    self.anon_group_service.clone(),
+                    self.event_bus.clone(),
+                    self.database.clone(),
+                ),
             )
         });
     }

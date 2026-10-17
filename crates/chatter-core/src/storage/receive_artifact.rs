@@ -1,4 +1,4 @@
-//! Account/device-bound authenticated reaction receive journal. Not history backup.
+//! Account/device-bound authenticated secret receive journal. Not history backup.
 use crate::error::StorageError;
 use rusqlite::{Connection, OptionalExtension, params};
 use sha2::{Digest, Sha256};
@@ -8,6 +8,19 @@ pub const MAX_RECOVERY_BATCH: usize = 100;
 /// Fail closed at capacity. Never prune unresolved receive evidence implicitly.
 pub const MAX_PENDING_ARTIFACTS: i64 = 1024;
 pub const MAX_RETAINED_ARTIFACTS: i64 = 4096;
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ReceiveKind {
+    Reaction,
+    Content,
+}
+impl ReceiveKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Reaction => "reaction",
+            Self::Content => "content",
+        }
+    }
+}
 pub fn check_capacity(conn: &Connection) -> Result<(), StorageError> {
     let (pending, unacknowledged): (i64, i64) = conn.query_row(
         "SELECT COALESCE(sum(state='pending'),0),COALESCE(sum(state!='acknowledged'),0) FROM reaction_receive_artifacts",
@@ -15,8 +28,13 @@ pub fn check_capacity(conn: &Connection) -> Result<(), StorageError> {
         |r| Ok((r.get(0)?, r.get(1)?)),
     )?;
     if pending >= MAX_PENDING_ARTIFACTS || unacknowledged >= MAX_RETAINED_ARTIFACTS {
+        tracing::warn!(
+            pending,
+            unacknowledged,
+            "Secret receive artifact capacity reached"
+        );
         return Err(StorageError::InvalidData(
-            "reaction receive journal capacity reached; evidence retained".into(),
+            "secret receive journal capacity reached; evidence retained".into(),
         ));
     }
     Ok(())
@@ -58,6 +76,7 @@ pub struct ReceiveArtifact {
     pub sender_device: u32,
     pub content: Vec<u8>,
     pub message_type: u8,
+    pub kind: ReceiveKind,
     pub applied: bool,
     pub acknowledged: bool,
 }
@@ -72,6 +91,43 @@ impl ReceiveArtifact {
         sender_device: u32,
         content: Vec<u8>,
         message_type: u8,
+    ) -> Result<Self, StorageError> {
+        Self::new_kind(
+            key,
+            digest,
+            sender,
+            sender_device,
+            content,
+            message_type,
+            ReceiveKind::Reaction,
+        )
+    }
+    pub(crate) fn new_content(
+        key: ReceiveKey,
+        digest: Vec<u8>,
+        sender: String,
+        sender_device: u32,
+        content: Vec<u8>,
+        message_type: u8,
+    ) -> Result<Self, StorageError> {
+        Self::new_kind(
+            key,
+            digest,
+            sender,
+            sender_device,
+            content,
+            message_type,
+            ReceiveKind::Content,
+        )
+    }
+    fn new_kind(
+        key: ReceiveKey,
+        digest: Vec<u8>,
+        sender: String,
+        sender_device: u32,
+        content: Vec<u8>,
+        message_type: u8,
+        kind: ReceiveKind,
     ) -> Result<Self, StorageError> {
         key.validate()?;
         if digest.len() != 32
@@ -96,12 +152,13 @@ impl ReceiveArtifact {
             sender_device,
             content,
             message_type,
+            kind,
             applied: false,
             acknowledged: false,
         })
     }
 }
-const SELECT: &str = "SELECT id,local_account,local_device,transport,scope,envelope_id,server_timestamp_ns,digest,sender,sender_device,content,state,message_type FROM reaction_receive_artifacts";
+const SELECT: &str = "SELECT id,local_account,local_device,transport,scope,envelope_id,server_timestamp_ns,digest,sender,sender_device,content,state,message_type,kind FROM reaction_receive_artifacts";
 fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ReceiveArtifact> {
     Ok(ReceiveArtifact {
         id: r.get(0)?,
@@ -120,6 +177,17 @@ fn row(r: &rusqlite::Row<'_>) -> rusqlite::Result<ReceiveArtifact> {
         applied: r.get::<_, String>(11)? != "pending",
         acknowledged: r.get::<_, String>(11)? == "acknowledged",
         message_type: r.get(12)?,
+        kind: match r.get::<_, String>(13)?.as_str() {
+            "reaction" => ReceiveKind::Reaction,
+            "content" => ReceiveKind::Content,
+            _ => {
+                return Err(rusqlite::Error::InvalidColumnType(
+                    13,
+                    "kind".into(),
+                    rusqlite::types::Type::Text,
+                ));
+            }
+        },
     })
 }
 /// Connection-aware: safe to call within the application's Transaction B.
@@ -222,6 +290,81 @@ pub fn mark_acknowledged(
     conn.execute("UPDATE reaction_receive_artifacts SET state='acknowledged',content=X'',acknowledged_at=COALESCE(acknowledged_at,?2) WHERE id=?1 AND state IN ('applied','acknowledged')",params![a.id,chrono::Utc::now().timestamp_millis()])?;
     Ok(())
 }
+/// A mailbox ACK may precede content application. Retain the plaintext until
+/// application succeeds; a later small transaction can then clear it.
+pub fn mark_content_upstream_acked(
+    conn: &Connection,
+    key: &ReceiveKey,
+    digest: &[u8],
+) -> Result<(), StorageError> {
+    if conn.is_autocommit() {
+        return Err(StorageError::InvalidData(
+            "receive ACK receipt requires a transaction".into(),
+        ));
+    }
+    require_current_binding(conn, key)?;
+    let Some(artifact) = load(conn, key, digest)? else {
+        return Ok(());
+    };
+    if artifact.kind != ReceiveKind::Content {
+        return Err(StorageError::InvalidData("receive kind mismatch".into()));
+    }
+    conn.execute(
+        "UPDATE reaction_receive_artifacts SET upstream_acked_at=COALESCE(upstream_acked_at,?2) WHERE id=?1",
+        params![artifact.id, chrono::Utc::now().timestamp_millis()],
+    )?;
+    conn.execute(
+        "DELETE FROM reaction_receive_artifacts WHERE id=?1 AND state='applied'",
+        [&artifact.id],
+    )?;
+    Ok(())
+}
+/// Called after awaited, idempotent content application, in its own small
+/// writer transaction. The application may have committed before this call.
+pub fn mark_content_applied(
+    conn: &Connection,
+    artifact: &ReceiveArtifact,
+) -> Result<(), StorageError> {
+    if conn.is_autocommit() || artifact.kind != ReceiveKind::Content {
+        return Err(StorageError::InvalidData(
+            "content applied marker requires a transaction".into(),
+        ));
+    }
+    require_current_binding(conn, &artifact.key)?;
+    let stored = load(conn, &artifact.key, &artifact.digest)?
+        .ok_or_else(|| StorageError::InvalidData("missing receive artifact".into()))?;
+    if stored.id != artifact.id
+        || stored.sender != artifact.sender
+        || stored.sender_device != artifact.sender_device
+        || stored.content != artifact.content
+        || stored.message_type != artifact.message_type
+        || stored.kind != artifact.kind
+    {
+        return Err(StorageError::InvalidData("receive artifact changed".into()));
+    }
+    if stored.acknowledged {
+        return Err(StorageError::InvalidData(
+            "content artifact already retired".into(),
+        ));
+    }
+    let upstream_acked: bool = conn.query_row(
+        "SELECT upstream_acked_at IS NOT NULL FROM reaction_receive_artifacts WHERE id=?1",
+        [&artifact.id],
+        |row| row.get(0),
+    )?;
+    if upstream_acked {
+        conn.execute(
+            "DELETE FROM reaction_receive_artifacts WHERE id=?1",
+            [&artifact.id],
+        )?;
+    } else {
+        conn.execute(
+            "UPDATE reaction_receive_artifacts SET state='applied' WHERE id=?1 AND state='pending'",
+            [&artifact.id],
+        )?;
+    }
+    Ok(())
+}
 pub(crate) fn require_current_binding(
     conn: &Connection,
     key: &ReceiveKey,
@@ -268,7 +411,7 @@ pub(crate) fn reclaim_acknowledged(conn: &Connection) -> Result<(), StorageError
     Ok(())
 }
 pub(crate) fn insert(conn: &Connection, a: &ReceiveArtifact) -> Result<(), StorageError> {
-    conn.execute("INSERT INTO reaction_receive_artifacts(id,local_account,local_device,transport,scope,envelope_id,server_timestamp_ns,digest,sender,sender_device,content,state,message_type) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,'pending',?12)",params![a.id,a.key.local_account,a.key.local_device,a.key.transport,a.key.scope,a.key.envelope_id,a.key.server_timestamp_ns as i64,a.digest,a.sender,a.sender_device,a.content,a.message_type])?;
+    conn.execute("INSERT INTO reaction_receive_artifacts(id,local_account,local_device,transport,scope,envelope_id,server_timestamp_ns,digest,sender,sender_device,content,state,message_type,kind) VALUES(?1,?2,?3,?4,?5,?6,?7,?8,?9,?10,?11,'pending',?12,?13)",params![a.id,a.key.local_account,a.key.local_device,a.key.transport,a.key.scope,a.key.envelope_id,a.key.server_timestamp_ns as i64,a.digest,a.sender,a.sender_device,a.content,a.message_type,a.kind.as_str()])?;
     Ok(())
 }
 #[derive(Clone, Debug)]

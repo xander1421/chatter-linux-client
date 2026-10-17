@@ -295,6 +295,7 @@ pub struct DeviceInboxProvider {
     anon_dm_poller: Option<Arc<AnonDmPoller>>,
     /// Pairwise service for anon DM decryption (optional).
     pairwise_service: Option<Arc<PairwiseService>>,
+    content_handoff: Option<Arc<crate::inbox::content_handoff::ContentHandoff>>,
 }
 
 impl DeviceInboxProvider {
@@ -390,6 +391,7 @@ impl DeviceInboxProvider {
             decoys: Arc::new(tokio::sync::RwLock::new(Vec::new())),
             anon_dm_poller: None,
             pairwise_service: None,
+            content_handoff: None,
         }
     }
 
@@ -407,6 +409,22 @@ impl DeviceInboxProvider {
     ) -> Self {
         self.anon_dm_poller = Some(poller);
         self.pairwise_service = Some(pairwise_service);
+        self
+    }
+
+    pub(crate) fn with_content_handoff(
+        mut self,
+        dm: Arc<crate::services::anon_dm::AnonDmService>,
+        group: Arc<crate::services::anon_group::AnonGroupService>,
+        events: EventBus,
+        database: Arc<Database>,
+    ) -> Self {
+        self.content_handoff = Some(Arc::new(crate::inbox::content_handoff::ContentHandoff {
+            dm,
+            group,
+            events,
+            database,
+        }));
         self
     }
 
@@ -462,6 +480,7 @@ impl DeviceInboxProvider {
         let decoys = self.decoys.clone();
         let anon_dm_poller = self.anon_dm_poller.clone();
         let pairwise_service = self.pairwise_service.clone();
+        let content_handoff = self.content_handoff.clone();
         let user_events_handle = self.user_events_handle.clone();
 
         tracing::info!("Spawning inbox provider task...");
@@ -486,6 +505,7 @@ impl DeviceInboxProvider {
                 decoys,
                 anon_dm_poller,
                 pairwise_service,
+                content_handoff,
                 user_events_handle,
             )
             .await;
@@ -567,6 +587,7 @@ impl DeviceInboxProvider {
         decoys: Arc<tokio::sync::RwLock<Vec<SigningKey>>>,
         anon_dm_poller: Option<Arc<AnonDmPoller>>,
         pairwise_service: Option<Arc<PairwiseService>>,
+        content_handoff: Option<Arc<crate::inbox::content_handoff::ContentHandoff>>,
         user_events_handle: Arc<parking_lot::Mutex<Option<tokio::task::JoinHandle<()>>>>,
     ) {
         tracing::info!("Inbox provider run_loop started");
@@ -578,6 +599,9 @@ impl DeviceInboxProvider {
         // Create repositories
         let settings_repo = Arc::new(SettingsRepository::new(database.clone()));
         let message_repo = Arc::new(MessageRepository::new(database.clone()));
+        if let Some(handoff) = &content_handoff {
+            handoff.replay(&message_repo).await;
+        }
         let channel_repo = Arc::new(ChannelRepository::new(database.clone()));
         let user_repo = Arc::new(UserRepository::new(database.clone()));
         let ephemeral_repo = Arc::new(
@@ -858,6 +882,7 @@ impl DeviceInboxProvider {
                 let message_repo = message_repo.clone();
                 let domain_tx = domain_tx.clone();
                 let retry_budget = retry_budget.clone();
+                let content_handoff = content_handoff.clone();
                 let timing = timing.clone();
                 group_polls.spawn(async move {
                     timing.delay_between_batch_items().await;
@@ -871,6 +896,7 @@ impl DeviceInboxProvider {
                         &message_repo,
                         domain_tx.as_ref(),
                         &retry_budget,
+                        content_handoff.as_ref(),
                     )
                     .await;
                 });
@@ -896,7 +922,11 @@ impl DeviceInboxProvider {
                     let event_tx = event_tx.clone();
                     let current_user_id = current_user_id.clone();
                     let domain_tx = domain_tx.clone();
+                    let content_handoff = content_handoff.clone();
                     anon_polls.spawn(async move {
+                        if let Some(handoff) = &content_handoff {
+                            handoff.replay(&message_repo).await;
+                        }
                         let should_dummy_poll = || {
                             use rand::Rng;
                             rand::rng().random::<f64>() < dummy_poll_probability
@@ -1009,6 +1039,7 @@ impl DeviceInboxProvider {
                                             &message_repo,
                                             &crate::storage::repositories::AnonGroupRepository::new(database.clone()),
                                             domain_tx.as_ref(),
+                                            content_handoff.as_ref(),
                                         )
                                         .await;
                                         drop(tx); // Close sender so receiver knows when done
@@ -1038,6 +1069,7 @@ impl DeviceInboxProvider {
                                                 }
                                                 if ack_result.is_ok() {
                                                     for id in ack_ids {
+                                                        tracing::info!(envelope_id = %id, "secret mailbox ACK succeeded");
                                                         if let Some((key, digest)) =
                                                             ack_bindings.get(&(conversation_id, id))
                                                         {

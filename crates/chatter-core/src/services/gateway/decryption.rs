@@ -130,8 +130,7 @@ impl MessageGateway {
         result
     }
 
-    /// Anonymous mailbox receive: journal reactions before any application.
-    /// Nonreaction plaintext uses the existing router once, with DEM gating retained.
+    /// Anonymous mailbox receive: journal validated plaintext before routing.
     pub(crate) async fn process_incoming_reaction_durable(
         &self,
         envelope: crate::proto::chat_v1::SealedSenderMessage,
@@ -189,6 +188,8 @@ impl MessageGateway {
             }
         };
         if let Some(artifact) = received.artifact {
+            // The matching handoff consumes journaled reactions and data posts.
+            // Running the normal router here would race its detached store task.
             received.content.zeroize();
             return Ok((Some(artifact), None));
         }
