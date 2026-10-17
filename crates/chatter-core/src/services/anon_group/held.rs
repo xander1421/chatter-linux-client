@@ -32,6 +32,33 @@ pub(crate) struct HeldPost {
 pub(crate) struct HeldPosts(Mutex<HashMap<AnonGroupId, VecDeque<HeldPost>>>);
 
 impl HeldPosts {
+    /// Earliest actual post from this sender waiting for an owner roster.
+    pub(crate) fn earliest_post_timestamp(
+        &self,
+        group: &AnonGroupId,
+        sender: &UserId,
+    ) -> Option<u64> {
+        use crate::proto::content_v1::content::Content;
+
+        let now = Instant::now();
+        self.0.lock().get(group).and_then(|queue| {
+            queue
+                .iter()
+                .filter(|post| {
+                    post.sender == *sender && now.saturating_duration_since(post.at) < HOLD_TTL
+                })
+                .filter_map(|post| match post.content.content.as_ref() {
+                    Some(Content::DataMessage(data))
+                        if !data.body.is_empty() || !data.attachments.is_empty() =>
+                    {
+                        Some(post.content.timestamp)
+                    }
+                    _ => None,
+                })
+                .min()
+        })
+    }
+
     /// Hold `post`, dropping expired posts and, at the cap, the oldest.
     pub(crate) fn hold(&self, group: AnonGroupId, post: HeldPost, now: Instant) {
         let mut map = self.0.lock();
