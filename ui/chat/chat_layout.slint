@@ -279,6 +279,7 @@ export component ChatLayout inherits Rectangle {
     callback load-more();
     callback scroll-to-bottom-clicked();  // Emitted when scroll-to-bottom button is clicked
     callback list-geometry(float, float, bool);
+    callback visible-media-rows(int, int);
 
     // Composer callbacks
     callback send(string) -> bool;
@@ -413,6 +414,9 @@ export component ChatLayout inherits Rectangle {
         }
         list-geometry(visible, content, seeking) => {
             root.list-geometry(visible, content, seeking);
+        }
+        visible-media-rows(first, last) => {
+            root.visible-media-rows(first, last);
         }
     }
 

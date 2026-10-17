@@ -38,7 +38,7 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     message_actions::wire_cancel_reply(window);
     message_actions::wire_react_clicked(window, ui_ctx);
     message_actions::wire_thread_clicked(window, ui_ctx);
-    message_actions::wire_close_image_viewer(window);
+    message_actions::wire_close_image_viewer(window, ui_ctx);
     attachment_view::wire_view_attachment(window, ui_ctx);
     audio_seek::wire_audio_seek(window);
     code_preview::wire_code_preview_callbacks(window);

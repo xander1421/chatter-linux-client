@@ -166,6 +166,7 @@ export component MessageList inherits Rectangle {
             root.last-visible-row = -1;
         } else {
             arrival-ready.running = true;
+            root.visible-media-rows(root.first-visible-row, root.last-visible-row);
         }
     }
 
@@ -326,6 +327,7 @@ export component MessageList inherits Rectangle {
     callback audio-seek(string, float);  // attachment ID, position 0.0-1.0
     callback scroll-to-bottom-clicked();  // Emitted when scroll-to-bottom button clicked
     callback list-geometry(float, float, bool); // visible height, content height, tail seek
+    callback visible-media-rows(int, int);
 
     changed bottom-inset => {
         if (root.is-at-bottom && !root.opening-on-unread
@@ -731,8 +733,13 @@ export component MessageList inherits Rectangle {
                 root.seen-height = self.viewport-height;
                 root.seen-y = self.viewport-y;
                 root.seen-top = self.top-row();
-                root.first-visible-row = root.seen-top;
-                root.last-visible-row = Math.min(self.bottom-row(), root.messages.length - 1);
+                let first = root.seen-top;
+                let last = Math.min(self.bottom-row(), root.messages.length - 1);
+                if (first != root.first-visible-row || last != root.last-visible-row) {
+                    root.first-visible-row = first;
+                    root.last-visible-row = last;
+                    root.visible-media-rows(first, last);
+                }
             }
 
             changed viewport-y => {

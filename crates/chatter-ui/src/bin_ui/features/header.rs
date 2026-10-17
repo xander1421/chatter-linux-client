@@ -14,6 +14,11 @@ use crate::MainWindow;
 use crate::bin_ui::converters::messages_to_display_batch;
 
 thread_local! {
+    static PENDING_VISIBLE_THUMBNAILS: std::cell::RefCell<std::collections::HashSet<String>> =
+        std::cell::RefCell::new(std::collections::HashSet::new());
+}
+
+thread_local! {
     static PENDING_JUMP: std::cell::RefCell<Option<(ActiveConversation, String)>> = const { std::cell::RefCell::new(None) };
 }
 
@@ -72,7 +77,141 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     wire_chat_settings_clicked(window, ui_ctx);
     wire_invite_member(window, ui_ctx);
     wire_load_more(window, ui_ctx);
+    wire_visible_media(window, ui_ctx);
     wire_scroll_to_bottom(window);
+}
+
+fn wire_visible_media(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
+    let weak = window.as_weak();
+    let client = ui_ctx.clone();
+    window.on_visible_media_rows(move |first, last| {
+        if let Some(w) = weak.upgrade() {
+            refresh_visible_media(&w, &client, first, last);
+        }
+    });
+}
+
+/// Resolve previews only for placeholder images in the viewport. Older pages
+/// can have a downloaded original but no sidecar thumbnail in their metadata.
+/// Opening the viewer derives and stores a thumbnail, so this also runs when
+/// the viewer closes to refresh the row without reopening the conversation.
+pub(crate) fn refresh_visible_media(
+    window: &MainWindow,
+    ui_ctx: &Arc<ChatterClient>,
+    first: i32,
+    last: i32,
+) {
+    if window.get_loading_messages() || last < first || last < 0 {
+        return;
+    }
+    let conversation = ui_ctx.chat_state().active_conversation();
+    if conversation.channel_id().is_none() {
+        return;
+    }
+    let owner = super::history_owner::HistoryOwner::capture(ui_ctx, conversation);
+    let model = window.get_messages();
+    let mut ids = Vec::new();
+    for index in first.max(0) as usize..=(last as usize).min(model.row_count().saturating_sub(1)) {
+        let Some(row) = model.row_data(index) else {
+            continue;
+        };
+        for attachment in row.attachments.iter() {
+            if attachment.is_image && !attachment.has_thumbnail {
+                let id = attachment.id.to_string();
+                let inserted = PENDING_VISIBLE_THUMBNAILS
+                    .with(|pending| pending.borrow_mut().insert(id.clone()));
+                if inserted {
+                    ids.push(id);
+                }
+            }
+        }
+    }
+
+    for id in ids {
+        let weak = window.as_weak();
+        let client = ui_ctx.clone();
+        let owner = owner.clone();
+        crate::rt_handle().spawn(async move {
+            let parsed = id.parse::<chatter_core::domain::ids::AttachmentId>();
+            let pixels = if let Ok(attachment_id) = parsed {
+                let metadata = client.get_attachment_metadata(&attachment_id);
+                let cached = metadata
+                    .as_ref()
+                    .and_then(|attachment| attachment.metadata.thumbnail.clone())
+                    .filter(|bytes| !bytes.is_empty());
+                let local = metadata.is_some_and(|attachment| {
+                    attachment.content_location
+                        == chatter_core::domain::attachment::ContentLocation::OnFilesystem
+                });
+                let bytes = if cached.is_some() {
+                    cached
+                } else if local {
+                    // This derives a durable thumbnail from the authenticated
+                    // downloaded original when an old sidecar is absent.
+                    let work_client = client.clone();
+                    tokio::task::spawn_blocking(move || {
+                        let _ = work_client.decrypt_and_get_image_info(&attachment_id);
+                        work_client
+                            .get_attachment_metadata(&attachment_id)
+                            .and_then(|attachment| attachment.metadata.thumbnail)
+                    })
+                    .await
+                    .ok()
+                    .flatten()
+                } else {
+                    client.ensure_attachment_thumbnail(&attachment_id).await
+                };
+                if let Some(bytes) = bytes {
+                    let decode_id = id.clone();
+                    tokio::task::spawn_blocking(move || {
+                        crate::bin_ui::decode_cache::thumbnail(&decode_id, bytes.len(), || {
+                            image::load_from_memory(&bytes).ok()
+                        })
+                    })
+                    .await
+                    .ok()
+                    .flatten()
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            let _ = slint::invoke_from_event_loop(move || {
+                PENDING_VISIBLE_THUMBNAILS.with(|pending| {
+                    pending.borrow_mut().remove(&id);
+                });
+                let Some(w) = weak.upgrade() else { return };
+                if !owner.is_current() {
+                    return;
+                }
+                let Some(pixels) = pixels else { return };
+                let model = w.get_messages();
+                for row_index in 0..model.row_count() {
+                    let Some(row) = model.row_data(row_index) else {
+                        continue;
+                    };
+                    for attachment_index in 0..row.attachments.row_count() {
+                        let Some(mut attachment) = row.attachments.row_data(attachment_index)
+                        else {
+                            continue;
+                        };
+                        if attachment.id.as_str() == id && !attachment.has_thumbnail {
+                            attachment.thumbnail = slint::Image::from_rgba8(pixels.clone());
+                            attachment.has_thumbnail = true;
+                            if let Some(attachments) = row
+                                .attachments
+                                .as_any()
+                                .downcast_ref::<slint::VecModel<crate::MessageAttachmentData>>()
+                            {
+                                attachments.set_row_data(attachment_index, attachment);
+                            }
+                        }
+                    }
+                }
+            });
+        });
+    }
 }
 
 fn wire_scroll_to_bottom(window: &MainWindow) {
@@ -695,7 +834,8 @@ fn load_older(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, until: Option<Message
             return;
         }
 
-        let older_messages = chatter_core::services::disappearing::visible_history_messages(older_messages);
+        let older_messages =
+            chatter_core::services::disappearing::visible_history_messages(older_messages);
         if !owner.is_current() {
             return;
         }

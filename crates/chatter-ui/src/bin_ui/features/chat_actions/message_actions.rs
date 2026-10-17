@@ -328,12 +328,19 @@ pub fn wire_thread_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 }
 
 /// Wire close image viewer callback.
-pub fn wire_close_image_viewer(window: &MainWindow) {
+pub fn wire_close_image_viewer(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak = window.as_weak();
+    let ui_ctx = ui_ctx.clone();
     window.on_close_image_viewer(move || {
         super::media_viewer::invalidate();
         if let Some(w) = weak.upgrade() {
             w.set_media_viewer_attachment_id("".into());
+            crate::bin_ui::features::header::refresh_visible_media(
+                &w,
+                &ui_ctx,
+                w.get_message_first_visible_row(),
+                w.get_message_last_visible_row(),
+            );
         }
 
         // Stop any GIF animation when closing the viewer

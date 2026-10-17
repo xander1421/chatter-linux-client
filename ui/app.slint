@@ -1261,6 +1261,7 @@ export component MainWindow inherits Window {
     callback view-attachment(string);  // attachment ID - for viewing/opening attachments
     callback audio-seek(string, float);  // attachment ID, position 0.0-1.0
     callback load-more();
+    callback visible-media-rows(int, int);
     callback send(string) -> bool;
     callback send-edit(string, string);  // (message_id, new_text)
     callback cancel-edit();
@@ -2471,6 +2472,7 @@ export component MainWindow inherits Window {
                         }
                         audio-seek(id, pos) => { root.audio-seek(id, pos); }
                         load-more => { root.load-more(); }
+                        visible-media-rows(first, last) => { root.visible-media-rows(first, last); }
                         send(text) => { return root.send(text); }
                         send-edit(msg-id, text) => { root.send-edit(msg-id, text); }
                         cancel-edit => { root.cancel-edit(); }
