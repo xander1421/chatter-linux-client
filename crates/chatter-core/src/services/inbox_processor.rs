@@ -494,6 +494,12 @@ impl InboxEventProcessor {
                     .await;
                     match applied {
                         Ok(Ok(true)) => {
+                            if let Err(error) = anon_service
+                                .drain_pending_after_roster(&anon_group_id)
+                                .await
+                            {
+                                tracing::warn!(%error, "Pending group post drain after roster failed");
+                            }
                             event_bus.emit_domain(DomainEvent::AnonGroupMemberListReceived {
                                 group_id: anon_group_id,
                                 members: members.clone(),
@@ -1928,6 +1934,12 @@ impl InboxEventProcessor {
                     }
                     if let Some(members) = applied_roster {
                         tokio::spawn(async move {
+                            if let Err(error) = anon_group_service
+                                .drain_pending_after_roster(&anon_group_id)
+                                .await
+                            {
+                                tracing::warn!(%error, "Pending group post drain after roster failed");
+                            }
                             if let Err(error) = anon_group_service
                                 .retry_held_posts_for_group(&anon_group_id).await
                             {

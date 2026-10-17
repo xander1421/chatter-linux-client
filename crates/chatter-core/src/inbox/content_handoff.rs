@@ -178,6 +178,9 @@ impl ContentHandoff {
                     let events = self.events.clone();
                     let members = list.members.clone();
                     tokio::spawn(async move {
+                        if let Err(error) = group.drain_pending_after_roster(&id).await {
+                            tracing::warn!(%error, "Pending group post drain after roster failed");
+                        }
                         if let Err(error) = group.retry_held_posts_for_group(&id).await {
                             tracing::warn!(%error, "Held group post retry after roster failed");
                         }
@@ -651,6 +654,48 @@ impl ContentHandoff {
                     );
                 }
                 let inner = wrapper.inner_content.ok_or("missing group post")?;
+                if matches!(inner.content.as_ref(), Some(Body::DataMessage(_))) {
+                    let me = self.group.current_user_id().map_err(|e| e.to_string())?;
+                    let group = self
+                        .group
+                        .anon_group_repo
+                        .get_group(&id)
+                        .map_err(|e| e.to_string())?
+                        .ok_or("group not yet available")?;
+                    if me != group.owner_id {
+                        if self
+                            .group
+                            .anon_group_repo
+                            .awaiting_join_roster(&id, &me)
+                            .map_err(|e| e.to_string())?
+                        {
+                            tracing::info!(group_id = %id, sender = %sender,
+                                sent_at = inner.timestamp,
+                                "Retaining group post until owner admission roster arrives");
+                            return Err("owner admission roster pending".into());
+                        }
+                        let admission = self
+                            .group
+                            .anon_group_repo
+                            .local_join_owner_admission(&id)
+                            .map_err(|e| e.to_string())?
+                            .ok_or("owner admission unavailable")?;
+                        if inner.timestamp < admission {
+                            tracing::info!(group_id = %id, sender = %sender,
+                                sent_at = inner.timestamp, admission,
+                                "Dropping group post sent before local invitation");
+                            return Self::retire_dropped(
+                                repo,
+                                artifact,
+                                "group post predates local invitation",
+                                finish,
+                            );
+                        }
+                        tracing::info!(group_id = %id, sender = %sender,
+                            sent_at = inner.timestamp, admission,
+                            "Admitting group post sent after invitation");
+                    }
+                }
                 if artifact.kind == ReceiveKind::Delete {
                     if let Some(Body::DataMessage(data)) = inner.content.as_ref()
                         && let Some(delete) = data.delete.as_ref()
