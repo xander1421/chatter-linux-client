@@ -32,7 +32,7 @@ use tower::Service;
 /// 90s hidden-service dial. The total cap also bounds OnceCell contention.
 pub(crate) const BOOTSTRAP_TIMEOUT: Duration = Duration::from_secs(120);
 pub(crate) const DIAL_TIMEOUT: Duration = Duration::from_secs(90);
-pub(crate) const HEDGE_DELAY: Duration = Duration::from_secs(18);
+pub(crate) const HEDGE_DELAY: Duration = Duration::from_secs(8);
 pub(crate) const CONNECT_TIMEOUT: Duration = Duration::from_secs(210);
 static ACTIVE_DIALS: AtomicUsize = AtomicUsize::new(0);
 
@@ -566,7 +566,7 @@ mod tests {
         let config = builder.build().expect("HS attempt limits are valid");
         assert_eq!(config.circuit_timing().hs_desc_fetch_attempts(), 8);
         assert_eq!(config.circuit_timing().hs_intro_rend_attempts(), 8);
-        assert_eq!(HEDGE_DELAY, Duration::from_secs(18));
+        assert_eq!(HEDGE_DELAY, Duration::from_secs(8));
         assert!(HEDGE_DELAY < DIAL_TIMEOUT);
     }
 
