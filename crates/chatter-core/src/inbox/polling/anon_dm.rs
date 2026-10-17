@@ -290,6 +290,7 @@ pub async fn process_anon_dm_results(
     message_repo: &Arc<MessageRepository>,
     anon_group_repo: &crate::storage::repositories::AnonGroupRepository,
     domain_tx: Option<&tokio::sync::broadcast::Sender<DomainEvent>>,
+    content_handoff: Option<&Arc<crate::inbox::content_handoff::ContentHandoff>>,
 ) -> ProcessedAnonDmMessages {
     let mut processed: ProcessedAnonDmMessages = HashMap::new();
     crate::inbox::reaction_handoff::replay(message_repo, domain_tx);
@@ -338,6 +339,23 @@ pub async fn process_anon_dm_results(
             {
                 Ok(received) => {
                     if let Some(artifact) = received.artifact {
+                        if artifact.kind == crate::storage::receive_artifact::ReceiveKind::Content {
+                            let Some(handoff) = content_handoff else {
+                                tracing::warn!(
+                                    "Anonymous DM data handoff unavailable; envelope retained"
+                                );
+                                continue;
+                            };
+                            if let Err(error) = handoff.apply(message_repo, &artifact).await {
+                                tracing::warn!(envelope_id = %artifact.key.envelope_id, %error, "Anonymous DM post awaits replay");
+                            }
+                            deduplicator.mark_processed(&message_id);
+                            processed
+                                .entry(conversation_id)
+                                .or_default()
+                                .push(message_id);
+                            continue;
+                        }
                         if crate::inbox::reaction_handoff::apply(message_repo, &artifact, domain_tx)
                             .is_ok()
                         {

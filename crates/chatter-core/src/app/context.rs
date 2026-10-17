@@ -154,7 +154,13 @@ impl AppContext {
                     self.infrastructure.attachment_repo.clone(),
                     Some(self.core_services.event_bus.clone()),
                 )
-                .with_anon_dm_polling(anon_dm_poller, self.services.pairwise_service.clone()),
+                .with_anon_dm_polling(anon_dm_poller, self.services.pairwise_service.clone())
+                .with_content_handoff(
+                    self.services.anon_dm_service.clone(),
+                    self.services.anon_group_service.clone(),
+                    self.core_services.event_bus.clone(),
+                    self.infrastructure.database.clone(),
+                ),
             )
         });
     }

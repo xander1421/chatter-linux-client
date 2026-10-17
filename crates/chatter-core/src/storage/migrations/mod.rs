@@ -117,6 +117,7 @@ mod v116_mesh_private_channels;
 mod v117_mesh_conversation_kinds;
 mod v118_read_horizons;
 mod v119_pending_anon_group_invites;
+mod v120_secret_receive_artifacts;
 
 use crate::error::StorageError;
 use chrono::Utc;
@@ -461,4 +462,5 @@ pub fn default_migrations() -> MigrationRunner {
         .register(v116_mesh_private_channels::V116MeshPrivateChannels)
         .register(v117_mesh_conversation_kinds::V117MeshConversationKinds)
         .register(v118_read_horizons::V118ReadHorizons)
+        .register(v120_secret_receive_artifacts::V120SecretReceiveArtifacts)
 }

@@ -71,7 +71,7 @@ pub(crate) fn acknowledge(
     upstream_succeeded: bool,
 ) -> Result<(), StorageError> {
     if upstream_succeeded {
-        repo.acknowledge_reaction_artifact(key, digest)?;
+        repo.acknowledge_receive_artifact(key, digest)?;
     }
     Ok(())
 }
@@ -92,6 +92,11 @@ pub(crate) fn apply(
     artifact: &ReceiveArtifact,
     domain: Option<&tokio::sync::broadcast::Sender<DomainEvent>>,
 ) -> Result<(), StorageError> {
+    if artifact.kind != crate::storage::receive_artifact::ReceiveKind::Reaction {
+        return Err(StorageError::InvalidData(
+            "content artifact passed to reaction projection".into(),
+        ));
+    }
     emit(repo.apply_reaction_artifact(artifact)?, domain);
     Ok(())
 }
