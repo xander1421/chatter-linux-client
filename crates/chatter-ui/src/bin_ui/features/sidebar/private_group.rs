@@ -51,9 +51,7 @@ pub fn load_private_group_messages(
         };
 
         // Get member count for header display
-        let members = ui_ctx.get_anon_group_members(&group_id);
-        let member_count = members.iter().filter(|m| m.mailbox_pk.is_some()).count() as i32;
-        let invited_count = members.iter().filter(|m| m.mailbox_pk.is_none()).count() as i32;
+        let (member_count, invited_count) = ui_ctx.anon_group_member_counts(&group_id);
 
         // Get current user ID for is_own calculation
         let current_user_id = auth_state.get().current_user_id;
@@ -254,9 +252,7 @@ async fn load_private_group_messages_internal(
         }
     };
 
-    let members = ui_ctx.get_anon_group_members(&group_id);
-    let member_count = members.iter().filter(|m| m.mailbox_pk.is_some()).count() as i32;
-    let invited_count = members.iter().filter(|m| m.mailbox_pk.is_none()).count() as i32;
+    let (member_count, invited_count) = ui_ctx.anon_group_member_counts(&group_id);
 
     let current_user_id_str = auth_state
         .get()

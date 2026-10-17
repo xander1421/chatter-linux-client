@@ -113,9 +113,9 @@ fn refresh_active_group_counts(
             if !ui_ctx.active_conversation().matches_anon_group(&group_id) {
                 return;
             }
-            let members = ui_ctx.get_anon_group_members(&group_id);
-            w.set_member_count(members.iter().filter(|m| m.mailbox_pk.is_some()).count() as i32);
-            w.set_invited_count(members.iter().filter(|m| m.mailbox_pk.is_none()).count() as i32);
+            let (member_count, invited_count) = ui_ctx.anon_group_member_counts(&group_id);
+            w.set_member_count(member_count);
+            w.set_invited_count(invited_count);
         }
     });
 }
