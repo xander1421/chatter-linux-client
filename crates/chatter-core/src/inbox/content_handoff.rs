@@ -17,7 +17,64 @@ pub struct ContentHandoff {
     pub database: Arc<Database>,
 }
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum FailureClass {
+    Permanent,
+    Transient,
+}
+
 impl ContentHandoff {
+    // Validation and binding failures cannot be fixed by another mailbox
+    // poll. Everything else, including storage and avatar I/O, is retried.
+    fn failure_class(error: &str) -> FailureClass {
+        if Self::permanent_error(error) {
+            FailureClass::Permanent
+        } else {
+            FailureClass::Transient
+        }
+    }
+
+    // Only byte/binding failures belong here. State, storage, roster admission,
+    // and avatar fetch failures can change on a later replay.
+    fn permanent_error(error: &str) -> bool {
+        matches!(
+            error,
+            "invalid sender"
+                | "invalid scope"
+                | "invalid DM destination"
+                | "invalid group destination"
+                | "invalid group"
+                | "invalid kicked user"
+                | "invalid roster group"
+                | "DM sender is not bound peer"
+                | "invalid JoinAck group"
+                | "invalid JoinAck mailbox key"
+                | "invalid profile group"
+                | "invalid DM profile destination"
+                | "JoinAck mailbox destination mismatch"
+                | "profile mailbox destination mismatch"
+                | "profile names another group"
+                | "group destination mismatch"
+                | "missing DM post"
+                | "missing group post"
+                | "secret artifact transport/content mismatch"
+        ) || error.starts_with("content does not decode:")
+            || error.starts_with("content violates ")
+    }
+
+    fn drop_permanent(
+        repo: &Arc<MessageRepository>,
+        artifact: &ReceiveArtifact,
+        reason: &str,
+    ) -> Result<(), String> {
+        repo.finish_content_artifact(artifact)
+            .map_err(|error| error.to_string())?;
+        tracing::warn!(envelope_id = %artifact.key.envelope_id,
+            transport = %artifact.key.transport, kind = artifact.kind.as_str(),
+            reason, "secret receive artifact dropped permanently");
+        Ok(())
+    }
+
     fn retire_dropped(
         repo: &Arc<MessageRepository>,
         artifact: &ReceiveArtifact,
@@ -34,6 +91,19 @@ impl ContentHandoff {
     }
 
     pub(crate) async fn apply(
+        &self,
+        repo: &Arc<MessageRepository>,
+        artifact: &ReceiveArtifact,
+    ) -> Result<(), String> {
+        match self.apply_inner(repo, artifact).await {
+            Err(error) if Self::failure_class(&error) == FailureClass::Permanent => {
+                Self::drop_permanent(repo, artifact, &error)
+            }
+            result => result,
+        }
+    }
+
+    async fn apply_inner(
         &self,
         repo: &Arc<MessageRepository>,
         artifact: &ReceiveArtifact,
@@ -329,6 +399,49 @@ impl ContentHandoff {
                         .await
                         .map_err(|e| e.to_string())?;
                 }
+                Some(Body::AnonDmProfileUpdate(update)) if artifact.key.transport == "anon_dm" => {
+                    // The sender puts this directly in Content, without an
+                    // AnonDmMessage wrapper. Give the ordinary DM handler the
+                    // same inner content that the mailbox router would make.
+                    let id =
+                        crate::domain::anon_dm::AnonDmId::try_from_slice(&update.conversation_id)
+                            .ok_or("invalid DM profile destination")?;
+                    if ChannelId::from(id).to_string() != artifact.key.scope {
+                        return Err("profile mailbox destination mismatch".into());
+                    }
+                    let inner = content.clone();
+                    let this = self.clone();
+                    let sender: UserId = artifact.sender.parse().map_err(|_| "invalid sender")?;
+                    let sender_device = artifact.sender_device;
+                    tokio::task::spawn_blocking(move || {
+                        this.apply_dm_profile_inner(&id, &sender, sender_device, &inner)
+                    })
+                    .await
+                    .map_err(|e| e.to_string())??;
+                    if let Some(pointer) = update.avatar.as_ref() {
+                        if let Some(avatar) = self
+                            .dm
+                            .refresh_peer_avatar(
+                                &id,
+                                &sender,
+                                pointer,
+                                &crate::services::secret_avatar::RETRY_DELAYS,
+                            )
+                            .await
+                            .map_err(|e| e.to_string())?
+                        {
+                            self.events.emit_domain(DomainEvent::AnonDmProfileUpdated {
+                                conversation_id: id,
+                                user_id: sender,
+                                display_name: None,
+                                avatar: Some(avatar),
+                                avatar_url: None,
+                                bio: None,
+                                timestamp: update.timestamp,
+                            });
+                        }
+                    }
+                }
                 _ => {
                     // Wrapped DM profile updates use the ordinary, synchronous handler.
                     let this = self.clone();
@@ -399,6 +512,47 @@ impl ContentHandoff {
                     tracing::warn!(%error, "Secret DM delivery receipt failed");
                 }
             });
+        }
+        Ok(())
+    }
+
+    fn apply_dm_profile_inner(
+        &self,
+        id: &crate::domain::anon_dm::AnonDmId,
+        sender: &UserId,
+        sender_device: u32,
+        inner: &crate::proto::content_v1::Content,
+    ) -> Result<(), String> {
+        let dm = self
+            .dm
+            .anon_dm_repo()
+            .get_conversation(id)
+            .map_err(|e| e.to_string())?
+            .ok_or("DM conversation unavailable")?;
+        if dm.peer_id != *sender || dm.peer_device_id != Some(sender_device) {
+            return Err("DM sender is not bound peer".into());
+        }
+        if !dm.is_ready() {
+            return Err("DM acceptance pending".into());
+        }
+        let users = UserRepository::new(self.database.clone());
+        let settings = SettingsRepository::new(self.database.clone());
+        if crate::services::gateway::block_filter::sender_is_blocked(&users, &settings, sender)
+            .map_err(|e| e.to_string())?
+            || self
+                .dm
+                .anon_dm_repo()
+                .is_user_blocked(sender)
+                .map_err(|e| e.to_string())?
+        {
+            return Ok(());
+        }
+        for event in self
+            .dm
+            .process_incoming_content(id, sender, inner)
+            .map_err(|e| e.to_string())?
+        {
+            self.events.emit_domain(event);
         }
         Ok(())
     }
