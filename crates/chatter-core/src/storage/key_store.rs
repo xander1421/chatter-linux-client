@@ -860,7 +860,7 @@ impl KeyStore {
     }
 
     /// Check if a sender key needs rotation based on age or message count.
-    /// Returns (needs_rotation, reason) where reason is "age", "messages", or empty.
+    /// Returns (needs_rotation, reason); missing or invalid metadata rotates.
     pub fn should_rotate_sender_key(
         &self,
         channel_id: &str,
@@ -880,19 +880,21 @@ impl KeyStore {
                     return Ok((true, "messages"));
                 }
 
-                // Check age
-                if let Ok(created_at) = chrono::DateTime::parse_from_rfc3339(&created_at_str) {
-                    let age = Utc::now().signed_duration_since(created_at.with_timezone(&Utc));
-                    if age.num_seconds() >= Self::SENDER_KEY_MAX_AGE_SECS {
-                        return Ok((true, "age"));
-                    }
+                // Unreadable age cannot prove the key is within its lifetime.
+                let Ok(created_at) = chrono::DateTime::parse_from_rfc3339(&created_at_str) else {
+                    return Ok((true, "invalid age"));
+                };
+                let age = Utc::now().signed_duration_since(created_at.with_timezone(&Utc));
+                if age.num_seconds() >= Self::SENDER_KEY_MAX_AGE_SECS {
+                    return Ok((true, "age"));
                 }
 
                 Ok((false, ""))
             }
             Err(rusqlite::Error::QueryReturnedNoRows) => {
-                // No metadata means no key exists, so no rotation needed
-                Ok((false, ""))
+                // The sender-key record can outlive a failed metadata insert.
+                // Rotation is safe even when no sender-key record exists yet.
+                Ok((true, "metadata missing"))
             }
             Err(e) => Err(StorageError::Database(e)),
         }

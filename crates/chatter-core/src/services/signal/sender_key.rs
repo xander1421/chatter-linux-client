@@ -127,23 +127,31 @@ impl SignalService {
         let channel_id_str = channel_id.to_string();
 
         // Check if rotation was manually requested
-        if self.check_and_clear_rotation_needed(channel_id)? {
+        if self.is_rotation_needed(channel_id)? {
             tracing::info!(channel_id = %channel_id, "Manual sender key rotation requested");
             self.drop_own_sender_key(channel_id)?;
+            // Keep the flag until the old record is gone. If deletion fails,
+            // the next attempt must still rotate before encrypting.
+            self.check_and_clear_rotation_needed(channel_id)?;
         }
 
-        // Check for automatic rotation based on age or message count
-        if let Ok((should_rotate, reason)) =
-            self.key_store.should_rotate_sender_key(&channel_id_str)
+        // A failed metadata read cannot establish that the current key is
+        // within its age/count limits. A fresh key is safe in that case.
+        let (should_rotate, reason) = match self.key_store.should_rotate_sender_key(&channel_id_str)
         {
-            if should_rotate {
-                tracing::info!(
-                    channel_id = %channel_id,
-                    reason = reason,
-                    "Automatic sender key rotation triggered"
-                );
-                self.drop_own_sender_key(channel_id)?;
+            Ok(result) => result,
+            Err(e) => {
+                tracing::warn!(channel_id = %channel_id, error = %e, "Sender key metadata unavailable; rotating key");
+                (true, "metadata unavailable")
             }
+        };
+        if should_rotate {
+            tracing::info!(
+                channel_id = %channel_id,
+                reason = reason,
+                "Automatic sender key rotation triggered"
+            );
+            self.drop_own_sender_key(channel_id)?;
         }
 
         // Check if we need to create a sender key
@@ -159,7 +167,9 @@ impl SignalService {
             .encrypt_for_group(*channel_id, our_address, plaintext.to_vec())
             .await?;
 
-        // Increment message count for rotation tracking
+        // Increment message count for rotation tracking. Encryption has already
+        // advanced the sender chain, so schedule a new key for the next send
+        // instead of retrying this plaintext under the old chain.
         if let Err(e) = self
             .key_store
             .increment_sender_key_message_count(&channel_id_str)
@@ -167,8 +177,14 @@ impl SignalService {
             tracing::warn!(
                 channel_id = %channel_id,
                 error = %e,
-                "Failed to increment sender key message count"
+                "Failed to increment sender key message count; rotating on next send"
             );
+            if let Err(mark_error) = self.mark_channel_for_rotation(channel_id) {
+                // If the flag cannot be persisted, remove the old key now.
+                // The caller must retry after this encrypted result is lost.
+                self.drop_own_sender_key(channel_id)?;
+                return Err(mark_error);
+            }
         }
 
         let group_encrypted = GroupEncrypted {
@@ -351,6 +367,18 @@ impl SignalService {
         &self,
         channel_id: &ChannelId,
     ) -> Result<bool, ServiceError> {
+        let needs_rotation = self.is_rotation_needed(channel_id)?;
+        if needs_rotation {
+            let key = format!("sender_key_rotation_needed:{}", channel_id);
+            self.settings_repo
+                .delete(&key)
+                .map_err(ServiceError::Storage)?;
+        }
+
+        Ok(needs_rotation)
+    }
+
+    fn is_rotation_needed(&self, channel_id: &ChannelId) -> Result<bool, ServiceError> {
         let key = format!("sender_key_rotation_needed:{}", channel_id);
         let needs_rotation = self
             .settings_repo
@@ -358,13 +386,6 @@ impl SignalService {
             .map_err(ServiceError::Storage)?
             .map(|v| v == "1")
             .unwrap_or(false);
-
-        if needs_rotation {
-            self.settings_repo
-                .delete(&key)
-                .map_err(ServiceError::Storage)?;
-        }
-
         Ok(needs_rotation)
     }
 
