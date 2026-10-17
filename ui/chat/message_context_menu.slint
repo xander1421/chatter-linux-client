@@ -197,6 +197,10 @@ export component MessageContextMenu inherits Rectangle {
     in property <length> preview-row-x: 0px;
     in property <length> preview-row-y: 0px;
     in property <length> preview-row-width: 0px;
+    // Match the source row's layout mode. Touch reaction chips change both
+    // the bubble's width and its height, shifting an outgoing copy inward.
+    in property <bool> preview-mobile: false;
+    in property <bool> preview-from-thread: false;
     in property <bool> preview-is-dm: false;
     in property <bool> preview-is-anonymous: false;
     in property <bool> preview-is-mesh: false;
@@ -297,10 +301,10 @@ export component MessageContextMenu inherits Rectangle {
             is-deleted: root.preview-message.is-deleted;
             is-system: root.preview-message.is-system;
             is-ai: root.preview-message.is-ai;
-            is-dm: root.preview-is-dm;
-            is-anonymous: root.preview-is-anonymous;
-            can-thread: root.can-thread;
-            is-mesh: root.preview-is-mesh;
+            is-dm: !root.preview-from-thread && root.preview-is-dm;
+            is-anonymous: !root.preview-from-thread && root.preview-is-anonymous;
+            can-thread: !root.preview-from-thread && root.can-thread;
+            is-mesh: !root.preview-from-thread && root.preview-is-mesh;
             is-call: root.preview-message.is-call;
             call-type: root.preview-message.call-type;
             call-duration: root.preview-message.call-duration;
@@ -314,9 +318,10 @@ export component MessageContextMenu inherits Rectangle {
             has-reactions: root.preview-message.has-reactions;
             reaction-summary: root.preview-message.reaction-summary;
             reactions: root.preview-message.reactions;
-            reply-count: root.preview-message.reply-count;
+            reply-count: root.preview-from-thread ? 0 : root.preview-message.reply-count;
             reply-count-text: root.preview-message.reply-count-text;
-            is-thread-reply: root.preview-message.is-thread-reply;
+            is-thread-reply: !root.preview-from-thread && root.preview-message.is-thread-reply;
+            is-continuation: root.preview-message.is-continuation;
             is-reply: root.preview-message.is-reply;
             reply-to-not-found: root.preview-message.reply-to-not-found;
             reply-to-message-id: root.preview-message.reply-to-message-id;
@@ -334,6 +339,7 @@ export component MessageContextMenu inherits Rectangle {
             show-sender: root.preview-message.show-sender;
             delivery-status: root.preview-message.delivery-status;
             failure-reason: root.preview-message.failure-reason;
+            mobile: root.preview-mobile;
             menu-open: true;
         }
     }

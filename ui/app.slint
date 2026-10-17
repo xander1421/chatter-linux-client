@@ -698,6 +698,8 @@ export component MainWindow inherits Window {
     private property <length> context-menu-preview-row-x: 0px;
     private property <length> context-menu-preview-row-y: 0px;
     private property <length> context-menu-preview-row-width: 0px;
+    private property <bool> context-menu-preview-mobile: false;
+    private property <bool> context-menu-preview-from-thread: false;
     // All callbacks use (sender_id, timestamp_ns) for Signal-style lookups
     callback reply-message(string, string);
     callback edit-message(string, string);
@@ -2450,6 +2452,8 @@ export component MainWindow inherits Window {
                             root.context-menu-preview-row-x = self.menu-preview-row-x;
                             root.context-menu-preview-row-y = self.menu-preview-row-y;
                             root.context-menu-preview-row-width = self.menu-preview-row-width;
+                            root.context-menu-preview-mobile = self.mobile;
+                            root.context-menu-preview-from-thread = false;
                             root.context-menu-content-top = self.content-top;
                             root.context-menu-anchor-top = self.menu-anchor-top;
                             root.context-menu-anchor-bottom = self.menu-anchor-bottom;
@@ -2553,6 +2557,8 @@ export component MainWindow inherits Window {
                             root.context-menu-preview-row-x = self.menu-preview-row-x;
                             root.context-menu-preview-row-y = self.menu-preview-row-y;
                             root.context-menu-preview-row-width = self.menu-preview-row-width;
+                            root.context-menu-preview-mobile = self.mobile;
+                            root.context-menu-preview-from-thread = true;
                             // The panel's own header is the menu's ceiling.
                             root.context-menu-content-top = self.absolute-position.y;
                             root.context-menu-anchor-top = self.menu-anchor-top;
@@ -4162,6 +4168,8 @@ export component MainWindow inherits Window {
             preview-row-x: root.context-menu-preview-row-x;
             preview-row-y: root.context-menu-preview-row-y - root.safe-area-top;
             preview-row-width: root.context-menu-preview-row-width;
+            preview-mobile: root.context-menu-preview-mobile;
+            preview-from-thread: root.context-menu-preview-from-thread;
             preview-is-dm: root.is-dm;
             preview-is-anonymous: root.conversation-kind == ConversationKind.anon-dm || root.conversation-kind == ConversationKind.anon-group;
             preview-is-mesh: MeshGlobal.active-id != "";
