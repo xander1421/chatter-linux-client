@@ -101,11 +101,12 @@ impl SharedVideoFrames {
                 }
                 last_emit = Instant::now();
 
-                let snapshot: Vec<(String, VideoFrameData)> = frames
+                let mut snapshot: Vec<(String, VideoFrameData)> = frames
                     .read()
                     .iter()
                     .map(|(id, frame)| (id.clone(), frame.clone()))
                     .collect();
+                snapshot.sort_by(|a, b| a.0.cmp(&b.0));
                 if snapshot.is_empty() {
                     continue;
                 }

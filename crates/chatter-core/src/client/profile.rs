@@ -631,6 +631,17 @@ impl ChatterClient {
         self.anon_dms().list_message_requests().unwrap_or_default()
     }
 
+    pub fn reconcile_anon_dm_request_rows<T>(
+        &self,
+        current: impl IntoIterator<Item = T>,
+        conversation_id: &crate::domain::anon_dm::AnonDmId,
+        row_id: impl Fn(&T) -> &str,
+        incoming: T,
+    ) -> Vec<T> {
+        self.anon_dms()
+            .reconcile_request_rows(current, conversation_id, row_id, incoming)
+    }
+
     pub fn list_anon_dm_outgoing_requests(&self) -> Vec<crate::domain::anon_dm::AnonDm> {
         self.anon_dms().list_outgoing_requests().unwrap_or_default()
     }
