@@ -582,8 +582,8 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                         let _ = tokio::fs::remove_file(&path).await;
                         let status = match result {
                             Ok(s) => format!(
-                                "Restored {} of {} rows (rest already present)",
-                                s.rows_inserted, s.rows_seen
+                                "Restored {} rows ({} skipped)",
+                                s.rows_inserted, s.rows_skipped
                             ),
                             Err(e) => format!("Restore failed: {e}"),
                         };
@@ -607,8 +607,8 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
                 };
                 let status = match ui_ctx.import_message_backup(&path, &passphrase).await {
                     Ok(s) => format!(
-                        "Restored {} of {} rows (rest already present)",
-                        s.rows_inserted, s.rows_seen
+                        "Restored {} rows ({} skipped)",
+                        s.rows_inserted, s.rows_skipped
                     ),
                     Err(e) => format!("Restore failed: {e}"),
                 };
@@ -643,8 +643,8 @@ pub fn wire_settings_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
         tokio::spawn(async move {
             let status = match ui_ctx.restore_server_message_backup(&pin).await {
                 Ok(s) => format!(
-                    "Restored {} of {} rows (rest already present)",
-                    s.rows_inserted, s.rows_seen
+                    "Restored {} rows ({} skipped)",
+                    s.rows_inserted, s.rows_skipped
                 ),
                 Err(e) => format!("Server restore failed: {e}"),
             };
