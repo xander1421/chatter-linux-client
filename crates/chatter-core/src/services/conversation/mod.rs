@@ -426,13 +426,12 @@ mod message_actions;
 mod messages;
 mod reactions;
 mod receipts;
-mod recovery;
+pub(crate) mod recovery;
 mod settings;
 mod transport;
 
 #[cfg(test)]
 pub(crate) use reactions::complete_reaction_dispatch;
-pub(crate) use recovery::{spawn_delete_batch_recovery, spawn_receipt_recovery};
 
 #[cfg(test)]
 mod tests;
