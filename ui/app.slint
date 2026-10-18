@@ -1,4 +1,3 @@
-import { GlassSurface } from "components/glass_surface.slint";
 import { MeshPeerSheet } from "mesh/mesh_peer_sheet.slint";
 import { MeshSetupSheet } from "mesh/mesh_setup_sheet.slint";
 import { Materials } from "theme/materials.slint";
@@ -63,11 +62,12 @@ import { JarvisMemoryModal, MemoryFactData, MemoryEntityData, MemoryGraphNodeDat
 
 // Import components
 import { ImageViewer, EmojiData } from "components/mod.slint";
-import { Toast } from "components/mod.slint";
 import { ConnectionBanner, MeshOnlyBar } from "components/mod.slint";
 import { CodePreviewOverlay, PdfPreviewOverlay } from "components/file_previews.slint";
 import { VideoPlayer } from "components/mod.slint";
-import { MobileBottomNav } from "components/mobile_bottom_nav.slint";
+import { ComposeFab } from "components/compose_fab.slint";
+import { ToastOverlay } from "components/toast_overlay.slint";
+import { AppBottomNavigation } from "components/app_bottom_navigation.slint";
 
 // Import call UI
 import { IncomingCallModal, ActiveCallView, ReturnToCallBar, DevicePicker, CallHistoryScreen, IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, CallHistoryRow } from "calls/mod.slint";
@@ -4163,46 +4163,15 @@ export component MainWindow inherits Window {
         }
 
         // ========== Toast notification overlay (top-right) ==========
-        Toast {
-            show-toast: root.toast-visible;
+        ToastOverlay {
+            width: parent.width;
+            height: parent.height;
+            show-toast <=> root.toast-visible;
             message: root.toast-message;
             variant: root.toast-variant;
-            max-toast-width: min(360px, root.width - 32px);
-
-            // Top-right is a desktop position. At 411dp the toast is 379px wide —
-            // effectively full-bleed — so "top-right" put it squarely over the
-            // conversation header, hiding the name of the place the user is in at
-            // the exact moment something went wrong there.
-            //
-            // Narrow screens get the bottom instead, above the composer, which is
-            // where Android puts transient messages and where the thumb already is.
-            // A width test rather than a platform test, matching the rest of the
-            // app's breakpoints (see ui/components/connection_banner.slint).
-            property <bool> bottom-anchored: root.width < 520px;
-
-            x: bottom-anchored
-                ? (root.width - self.width) / 2
-                : root.width - self.width - Spacing.md;
-            // Clear of the composer. `parent` is the inset content layer (like the
-            // return-to-call bar above), so the system insets are already excluded.
-            y: bottom-anchored
-                ? parent.height - self.height - 80px
-                : Spacing.lg;
-
-            dismissed => {
-                root.toast-visible = false;
-            }
+            secret-chat-starts-pending: root.secret-chat-starts-pending;
         }
 
-        // Auto-dismiss timer for toasts
-        toast-timer := Timer {
-            interval: 5s;
-            running: root.toast-visible && (root.secret-chat-starts-pending == 0
-                || root.toast-message != "Secret chat is getting ready — will start automatically");
-            triggered => {
-                root.toast-visible = false;
-            }
-        }
         // Mobile bottom navigation. Restored as the full multi-tab bar it was
         // designed to be — the previous removal was of a one-tab remnant,
         // which is a different thing: a single tab is decoration, four tabs
@@ -4226,81 +4195,28 @@ export component MainWindow inherits Window {
         // from the dock's edge and clear above it. Above the list (-2) and the
         // dock (-1), under every modal and overlay (0) — the incoming-call screen
         // and toasts are not covered by fab-visible, so they must stay on top.
-        if root.fab-visible: GlassSurface {
+        if root.fab-visible: ComposeFab {
             z: -0.5;
-            width: Spacing.fab-size;
-            height: Spacing.fab-size;
             x: parent.width - self.width - Spacing.xl;
             y: root.fab-y;
-            border-radius: self.width / 2;
-            clip: true;
-            material-level: 2;
-            material-tint: Appearance.glass-effects ? Materials.fab-base : Colors.action-fill;
-            background: transparent;
-            transform-scale-x: fab-touch.pressed ? 0.92 : 1;
-            transform-scale-y: fab-touch.pressed ? 0.88 : 1;
-            animate transform-scale-x { duration: Materials.motion-quick; easing: Materials.spring; }
-            animate transform-scale-y { duration: Materials.motion-quick; easing: Materials.spring; }
-            // Keep the teal tint inside the lit rim and the white glyph clear.
-            Rectangle {
-                x: 2px;
-                y: 2px;
-                width: parent.width - 4px;
-                height: parent.height - 4px;
-                border-radius: self.height / 2;
-                background: Appearance.glass-effects
-                    ? (fab-touch.pressed ? Colors.action-active.with-alpha(0.68)
-                        : fab-touch.has-hover ? Colors.action-hover.with-alpha(0.58)
-                        : Materials.fab-accent)
-                    : (fab-touch.pressed ? Colors.action-active
-                        : fab-touch.has-hover ? Colors.action-hover : transparent);
-            }
-            accessible-role: button;
-            accessible-label: "Create";
-            accessible-action-default => { root.nav-push("create-menu"); }
-            Image {
-                source: Icons.plus;
-                width: 24px;
-                height: 24px;
-                x: (parent.width - self.width) / 2;
-                y: (parent.height - self.height) / 2;
-                colorize: Colors.on-action;
-            }
-            fab-touch := TouchArea { mouse-cursor: pointer; clicked => { root.nav-push("create-menu"); } }
+            create-clicked => { root.nav-push("create-menu"); }
         }
 
-        if root.bottom-nav-visible: MobileBottomNav {
+        if root.bottom-nav-visible: AppBottomNavigation {
             z: -1;
             width: parent.width;
             y: parent.height - self.height;
-            active-tab: root.active-tab;
+            selected-tab <=> root.active-tab;
+            mobile-show-chat <=> root.mobile-show-chat;
+            sidebar-user-collapsed <=> root.sidebar-user-collapsed;
+            sidebar-collapsed <=> root.sidebar-collapsed;
+            friends-modal-tab <=> root.friends-modal-tab;
             user-avatar: root.user-avatar-source;
             chats-badge: root.total-unread-count;
             calls-badge: root.missed-call-count;
             contacts-badge: root.friends-received-requests.length;
             safe-area-bottom: root.safe-area-bottom;
-            tab-selected(tab) => {
-                if (tab == "chats") {
-                    // Back to the list from wherever you are — this tab is
-                    // what replaced the rail as always-available navigation.
-                    root.active-tab = "chats";
-                    root.mobile-show-chat = false;
-                    root.sidebar-user-collapsed = false;
-                    root.sidebar-collapsed = false;
-                } else if (tab == "calls") {
-                    root.active-tab = "calls";
-                    root.calls-tab-clicked();
-                } else if (tab == "contacts") {
-                    // Land on the contacts list. The default tab is the
-                    // add-by-code form, which is the right landing spot for
-                    // a "Friends" dialog opened deliberately, and the wrong
-                    // one for a Contacts tab you press to see your contacts.
-                    root.friends-modal-tab = "friends";
-                    root.active-tab = "contacts";
-                } else if (tab == "profile") {
-                    root.active-tab = "profile";
-                }
-            }
+            calls-tab-clicked => { root.calls-tab-clicked(); }
         }
         }
     }
