@@ -4938,6 +4938,7 @@ impl ChatterClient {
                     display_name: r.display_name,
                     username: r.username,
                     encrypted_intro: r.encrypted_message,
+                    created_at_ns: r.added_at,
                 })
                 .collect::<Vec<_>>(),
             Err(e) => {
@@ -4958,6 +4959,7 @@ impl ChatterClient {
                     username: r.username,
                     // Sent requests: we're the sender; note is for the recipient.
                     encrypted_intro: Vec::new(),
+                    created_at_ns: r.added_at,
                 })
                 .collect::<Vec<_>>(),
             Err(e) => {

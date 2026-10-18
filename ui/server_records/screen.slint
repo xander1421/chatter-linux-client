@@ -91,7 +91,7 @@ export component ServerRecordsScreen inherits Rectangle {
                     spacing: 1px;
                     for row in ServerRecordsGlobal.notifications: Rectangle {
                         width: inbox.visible-width;
-                        height: 78px;
+                        height: 112px;
                         background: row.read ? Colors.surface : Colors.surface-section;
                         TouchArea { clicked => { root.open-notification(row.id, row.kind, (row.kind == "message" || row.kind == "mention" || row.kind == "reply" || row.kind == "reaction" || row.kind == "channel-invite") ? row.channel-id : row.actor-id, row.status); } }
                         HorizontalLayout {
@@ -120,21 +120,21 @@ export component ServerRecordsScreen inherits Rectangle {
                                 alignment: center;
                                 spacing: 2px;
                                 Text { text: row.title; color: Colors.text-primary; font-size: Typography.base; font-weight: row.read ? 400 : Typography.semibold; overflow: elide; }
-                                Text { text: row.body; color: Colors.text-secondary; font-size: Typography.sm; overflow: elide; }
+                                Text { text: row.body; color: Colors.text-secondary; font-size: Typography.sm; wrap: word-wrap; }
                                 if row.status != "": Text { text: row.status; color: Colors.primary; font-size: Typography.sm; }
+                                Button {
+                                    text: "Details"; variant: "ghost"; size: "small";
+                                    disabled: ServerRecordsGlobal.loading;
+                                    clicked => {
+                                        ServerRecordsGlobal.details(row.id);
+                                        if !row.read { ServerRecordsGlobal.act(row.id, "Mark read"); }
+                                    }
+                                }
                             }
                             Text { min-width: 62px; max-width: 62px; text: row.when; color: Colors.text-muted; font-size: Typography.sm; horizontal-alignment: right; }
                             Rectangle {
                                 min-width: 8px; max-width: 8px; height: 8px;
                                 border-radius: 4px; background: row.read ? transparent : Colors.primary;
-                            }
-                            Button {
-                                text: "Details"; variant: "ghost"; size: "small";
-                                disabled: ServerRecordsGlobal.loading;
-                                clicked => {
-                                    ServerRecordsGlobal.details(row.id);
-                                    if !row.read { ServerRecordsGlobal.act(row.id, "Mark read"); }
-                                }
                             }
                             Button {
                                 text: "×"; label: "Delete notification"; variant: "icon"; size: "small";

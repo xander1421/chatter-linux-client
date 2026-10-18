@@ -11,12 +11,14 @@ pub struct RecordRow {
     pub body: String,
     pub primary: String,
     pub secondary: String,
+    pub created_at_ns: u64,
 }
 
 #[derive(Clone, Debug, Default)]
 pub struct RecordDetail {
     pub title: String,
     pub body: String,
+    pub created_at_ns: u64,
 }
 
 #[derive(Clone, Default)]
@@ -195,6 +197,7 @@ pub async fn page(
                         }
                         .into(),
                         primary: String::new(),
+                        created_at_ns: 0,
                     }
                 }));
             }
@@ -209,6 +212,7 @@ pub async fn page(
                         body: "Available from your integrations".into(),
                         primary: "Install".into(),
                         secondary: String::new(),
+                        created_at_ns: 0,
                     }),
             );
             Ok(RecordPage {
@@ -233,12 +237,6 @@ pub async fn page(
                 rows: calls
                     .into_iter()
                     .map(|c| {
-                        let when = chrono::DateTime::from_timestamp(
-                            (c.created_at / 1_000_000_000) as i64,
-                            (c.created_at % 1_000_000_000) as u32,
-                        )
-                        .map(|t| t.format("%Y-%m-%d %H:%M UTC").to_string())
-                        .unwrap_or_default();
                         let status = match crate::proto::chat_v1::CallStatus::try_from(c.status) {
                             Ok(crate::proto::chat_v1::CallStatus::Active) => "Active",
                             Ok(crate::proto::chat_v1::CallStatus::Ended) => "Ended",
@@ -247,7 +245,8 @@ pub async fn page(
                         RecordRow {
                             id: c.id,
                             title: c.title,
-                            body: format!("{status} · {when}"),
+                            body: status.into(),
+                            created_at_ns: c.created_at,
                             primary: "Details".into(),
                             ..Default::default()
                         }
@@ -280,19 +279,14 @@ pub async fn detail(
                 .await?
                 .notification
                 .ok_or_else(|| NetworkError::InvalidRequest("Notification is unavailable".into()))?;
-            let when = chrono::DateTime::from_timestamp(
-                (notification.created_at / 1_000_000_000) as i64,
-                (notification.created_at % 1_000_000_000) as u32,
-            )
-            .map(|t| t.format("%Y-%m-%d %H:%M UTC").to_string())
-            .unwrap_or_default();
             Ok(RecordDetail {
                 title: if notification.title.is_empty() {
                     "Notification".into()
                 } else {
                     notification.title
                 },
-                body: format!("{}\n{when}", notification.body),
+                body: notification.body,
+                created_at_ns: notification.created_at,
             })
         }
         "calls" => {
@@ -326,6 +320,7 @@ pub async fn detail(
                     call.title
                 },
                 body,
+                created_at_ns: call.created_at,
             })
         }
         _ => Err(NetworkError::InvalidRequest("Unknown record detail".into())),

@@ -156,10 +156,14 @@ impl IntegrationClient {
             config_history: vec![],
         };
 
+        let mut paths = Vec::new();
+        if name.is_some() { paths.push("name".to_string()); }
+        if integration.config.is_some() { paths.push("config".to_string()); }
+
         let request = UpdateIntegrationRequest {
             integration_id: integration_id.to_string(),
             integration: Some(integration),
-            update_mask: None,
+            update_mask: Some(prost_types::FieldMask { paths }),
         };
 
         self.inner
