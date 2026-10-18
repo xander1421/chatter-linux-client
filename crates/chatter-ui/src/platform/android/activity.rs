@@ -44,7 +44,9 @@ pub fn install_verified_update(path: &str) -> Result<(), String> {
             jni::jni_sig!("(Ljava/lang/String;)Z"),
             &[jni::objects::JValue::Object(&jpath)],
         );
-        if result.is_err() { clear_exception(env); }
+        if result.is_err() {
+            clear_exception(env);
+        }
         match result.and_then(|value| value.z()) {
             Ok(true) => Ok(()),
             Ok(false) => Err("Allow Chatter to install updates, then tap Update again".into()),
@@ -56,22 +58,36 @@ pub fn install_verified_update(path: &str) -> Result<(), String> {
 pub fn update_network_metered() -> Result<bool, String> {
     let act = activity()?;
     with_jni_env(|env| {
-        let result = env.call_method(act, jni::jni_str!("isUpdateNetworkMetered"),
-            jni::jni_sig!("()Z"), &[]);
-        if result.is_err() { clear_exception(env); }
-        result.and_then(|value| value.z()).map_err(|e| e.to_string())
+        let result = env.call_method(
+            act,
+            jni::jni_str!("isUpdateNetworkMetered"),
+            jni::jni_sig!("()Z"),
+            &[],
+        );
+        if result.is_err() {
+            clear_exception(env);
+        }
+        result
+            .and_then(|value| value.z())
+            .map_err(|e| e.to_string())
     })
 }
 
 pub fn open_play_store_update() -> Result<(), String> {
     let act = activity()?;
     with_jni_env(|env| {
-        let url = env.new_string("https://play.google.com/store/apps/details?id=com.chatter.client")
+        let url = env
+            .new_string("https://play.google.com/store/apps/details?id=com.chatter.client")
             .map_err(|e| e.to_string())?;
-        let result = env.call_method(act, jni::jni_str!("openWebLink"),
+        let result = env.call_method(
+            act,
+            jni::jni_str!("openWebLink"),
             jni::jni_sig!("(Ljava/lang/String;)V"),
-            &[jni::objects::JValue::Object(&url)]);
-        if result.is_err() { clear_exception(env); }
+            &[jni::objects::JValue::Object(&url)],
+        );
+        if result.is_err() {
+            clear_exception(env);
+        }
         result.map(|_| ()).map_err(|e| e.to_string())
     })
 }
@@ -141,8 +157,8 @@ pub fn set_secure(secure: bool) {
     // QA preview builds only: device testing drives the app over adb and needs
     // screenshots of recovery, secret-chat and invite screens. A release build
     // (no debug_assertions) always honours core's decision.
-    let secure = secure
-        && !(cfg!(debug_assertions) && option_env!("CHATTER_QA_ALLOW_CAPTURE") == Some("1"));
+    let secure =
+        secure && !(cfg!(debug_assertions) && option_env!("CHATTER_QA_ALLOW_CAPTURE") == Some("1"));
     let result = (|| -> Result<(), String> {
         let act = activity()?;
         with_jni_env(|env| {
@@ -400,7 +416,9 @@ fn set_messaging_signed_in(signed_in: bool) {
 /// other sessions see. Manufacturer, model and OS version only.
 pub fn device_label() -> Option<String> {
     with_jni_env(|env| {
-        let mut field = |class: &'static jni::strings::JNIStr, name: &'static jni::strings::JNIStr| -> Result<String, String> {
+        let mut field = |class: &'static jni::strings::JNIStr,
+                         name: &'static jni::strings::JNIStr|
+         -> Result<String, String> {
             let value = env
                 .get_static_field(class, name, jni::jni_sig!("Ljava/lang/String;"))
                 .and_then(|v| v.l())
@@ -413,9 +431,15 @@ pub fn device_label() -> Option<String> {
                 .into();
             Ok(s)
         };
-        let maker = field(jni::jni_str!("android/os/Build"), jni::jni_str!("MANUFACTURER"))?;
+        let maker = field(
+            jni::jni_str!("android/os/Build"),
+            jni::jni_str!("MANUFACTURER"),
+        )?;
         let model = field(jni::jni_str!("android/os/Build"), jni::jni_str!("MODEL"))?;
-        let release = field(jni::jni_str!("android/os/Build$VERSION"), jni::jni_str!("RELEASE"))?;
+        let release = field(
+            jni::jni_str!("android/os/Build$VERSION"),
+            jni::jni_str!("RELEASE"),
+        )?;
         let device = if model.to_lowercase().starts_with(&maker.to_lowercase()) {
             model
         } else {

@@ -4,6 +4,7 @@
 //! (`ChatterClient::jarvis_mention`); this renders the turn and routes the
 //! query to the JarvisService.
 
+use slint::ComponentHandle;
 use std::sync::Arc;
 
 use chatter_core::client::ChatterClient;
@@ -31,7 +32,7 @@ pub async fn handle_jarvis_mention(
         let (tx, rx) = std::sync::mpsc::channel();
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
-                w.set_jarvis_thinking(true);
+                w.global::<crate::JarvisPane>().set_jarvis_thinking(true);
                 let id = super::local_messages::add_jarvis_thinking_placeholder(&w);
                 let _ = tx.send(id);
             }
@@ -61,7 +62,7 @@ pub async fn handle_jarvis_mention(
             let _ = slint::invoke_from_event_loop(move || {
                 jarvis_state.set_thinking(false);
                 if let Some(w) = weak_window.upgrade() {
-                    w.set_jarvis_thinking(false);
+                    w.global::<crate::JarvisPane>().set_jarvis_thinking(false);
                     if let Some(tid) = thinking_id_clone {
                         super::local_messages::replace_thinking_with_response(
                             &w,
@@ -85,7 +86,7 @@ pub async fn handle_jarvis_mention(
             let _ = slint::invoke_from_event_loop(move || {
                 jarvis_state.set_thinking(false);
                 if let Some(w) = weak_window.upgrade() {
-                    w.set_jarvis_thinking(false);
+                    w.global::<crate::JarvisPane>().set_jarvis_thinking(false);
                     if let Some(tid) = thinking_id_clone {
                         super::local_messages::replace_thinking_with_response(
                             &w,

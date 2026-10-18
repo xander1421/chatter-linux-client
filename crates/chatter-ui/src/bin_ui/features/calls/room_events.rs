@@ -121,15 +121,15 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     });
                     let _ = slint::invoke_from_event_loop(move || {
                         let Some(w) = weak.upgrade() else { return };
-                        let mut data = w.get_active_call_data();
+                        let mut data = w.global::<crate::CallView>().get_active_call_data();
                         let matches = data.call_id.as_str() == snapshot.call.id.to_string()
                             && data.channel_id.as_str() == snapshot.call.channel_id.to_string();
-                        if !matches || !w.get_active_call_visible() {
+                        if !matches || !w.global::<crate::CallView>().get_active_call_visible() {
                             return;
                         }
                         if let Some(remotes) = snapshot.remotes {
                             reconcile_roster(&mut data, remotes);
-                            w.set_active_call_data(data);
+                            w.global::<crate::CallView>().set_active_call_data(data);
                         }
                         if let Some((message, variant)) = notice {
                             w.set_toast_message(message.into());
@@ -152,7 +152,7 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     let identity = participant_identity.clone();
                     let _ = slint::invoke_from_event_loop(move || {
                         let Some(w) = weak.upgrade() else { return };
-                        let mut data = w.get_active_call_data();
+                        let mut data = w.global::<crate::CallView>().get_active_call_data();
                         let all: Vec<CallParticipantData> = (0..data.participants.row_count())
                             .map(|i| data.participants.row_data(i).unwrap_or_default())
                             .collect();
@@ -174,7 +174,14 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                             let (name, initials) = remotes
                                 .iter()
                                 .find(|p| p.user_id.to_string() == identity)
-                                .map(|p| (p.display_name.to_string(), crate::bin_ui::converters::initials_from_name(&p.display_name)))
+                                .map(|p| {
+                                    (
+                                        p.display_name.to_string(),
+                                        crate::bin_ui::converters::initials_from_name(
+                                            &p.display_name,
+                                        ),
+                                    )
+                                })
                                 .unwrap_or_else(|| {
                                     (identity.clone(), initials_from_name(&identity))
                                 });
@@ -201,7 +208,7 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
                         let participants = order_participants(remotes, local);
                         data.participants = ModelRc::new(VecModel::from(participants));
-                        w.set_active_call_data(data);
+                        w.global::<crate::CallView>().set_active_call_data(data);
                     });
                 }
                 LiveKitRoomEvent::TrackUnsubscribed {
@@ -220,7 +227,7 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     let identity = participant_identity.clone();
                     let _ = slint::invoke_from_event_loop(move || {
                         let Some(w) = weak.upgrade() else { return };
-                        let mut data = w.get_active_call_data();
+                        let mut data = w.global::<crate::CallView>().get_active_call_data();
                         let all: Vec<CallParticipantData> = (0..data.participants.row_count())
                             .map(|i| data.participants.row_data(i).unwrap_or_default())
                             .collect();
@@ -242,7 +249,7 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
                         let participants = order_participants(remotes, local);
                         data.participants = ModelRc::new(VecModel::from(participants));
-                        w.set_active_call_data(data);
+                        w.global::<crate::CallView>().set_active_call_data(data);
                         tracing::debug!(is_screen_share, "Cleared video state");
                     });
                 }
@@ -253,16 +260,16 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     tracing::debug!(is_encrypted, "Encryption state changed");
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
-                            let mut data = w.get_active_call_data();
+                            let mut data = w.global::<crate::CallView>().get_active_call_data();
                             data.is_encrypted = is_encrypted;
-                            w.set_active_call_data(data);
+                            w.global::<crate::CallView>().set_active_call_data(data);
                         }
                     });
                 }
                 LiveKitRoomEvent::ActiveSpeakersChanged { speaker_identities } => {
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
-                            let mut data = w.get_active_call_data();
+                            let mut data = w.global::<crate::CallView>().get_active_call_data();
                             let updated: Vec<CallParticipantData> = (0..data
                                 .participants
                                 .row_count())
@@ -275,7 +282,7 @@ pub fn wire_room_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 })
                                 .collect();
                             data.participants = ModelRc::new(VecModel::from(updated));
-                            w.set_active_call_data(data);
+                            w.global::<crate::CallView>().set_active_call_data(data);
                         }
                     });
                 }

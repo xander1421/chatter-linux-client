@@ -1,5 +1,6 @@
 //! Friend request, presence, and profile update handlers.
 
+use slint::ComponentHandle;
 use std::sync::Arc;
 
 use slint::{Model, Weak};
@@ -44,11 +45,15 @@ pub(super) async fn handle_friend_requests_updated(
             .map(|u| ui_ctx.friend_request_peer_name(&u, &r.username))
             .unwrap_or_default()
     };
-    let sent_names: Vec<String> = sent.iter().map(|r| {
-        r.user_id.parse::<UserId>()
-            .map(|u| ui_ctx.outgoing_friend_request_peer_name(&u, &r.username))
-            .unwrap_or_else(|_| "Pending request".to_string())
-    }).collect();
+    let sent_names: Vec<String> = sent
+        .iter()
+        .map(|r| {
+            r.user_id
+                .parse::<UserId>()
+                .map(|u| ui_ctx.outgoing_friend_request_peer_name(&u, &r.username))
+                .unwrap_or_else(|_| "Pending request".to_string())
+        })
+        .collect();
     // Outgoing rows show the peer's avatar when a local profile already has it.
     let sent_avatars: Vec<Option<(u32, u32, Vec<u8>)>> = sent
         .iter()
@@ -132,7 +137,9 @@ pub(super) async fn handle_friend_requests_updated(
                         has_avatar,
                         sent_at: if r.created_at_ns > 0 {
                             crate::bin_ui::converters::server_record_time(r.created_at_ns).into()
-                        } else { "".into() },
+                        } else {
+                            "".into()
+                        },
                         note: "".into(),
                     }
                 })
@@ -220,15 +227,17 @@ pub(super) fn handle_presence_changed(
         // this one property. Nothing below matches self (we are not our own
         // DM row or contact), so this is the whole self case.
         if is_self {
-            w.set_user_presence_status(presence_slint.clone());
-            if w.get_profile_is_self() {
-                w.set_profile_presence(presence_slint.clone());
+            w.global::<crate::SidebarPane>()
+                .set_user_presence_status(presence_slint.clone());
+            if w.global::<crate::ModalHostState>().get_profile_is_self() {
+                w.global::<crate::ModalHostState>()
+                    .set_profile_presence(presence_slint.clone());
             }
             return;
         }
 
         // 1. Update sidebar DM presence dots
-        let dms = w.get_chat_rows();
+        let dms = w.global::<crate::SidebarPane>().get_chat_rows();
         for i in 0..dms.row_count() {
             if let Some(mut dm) = dms.row_data(i) {
                 if dm.user_id == user_id_str {
@@ -242,11 +251,12 @@ pub(super) fn handle_presence_changed(
         // 2. Update chat header presence indicator for active DM.
         // Read is_selected (Rust-maintained) from the DM model — avoids a
         // stringly-typed selected-id comparison.
-        if w.get_is_dm() {
+        if w.global::<crate::ChatPane>().get_is_dm() {
             for i in 0..dms.row_count() {
                 if let Some(dm) = dms.row_data(i) {
                     if dm.is_selected && dm.user_id == user_id_str {
-                        w.set_header_presence_status(presence_slint.clone());
+                        w.global::<crate::ChatPane>()
+                            .set_header_presence_status(presence_slint.clone());
                         break;
                     }
                 }
@@ -254,8 +264,13 @@ pub(super) fn handle_presence_changed(
         }
 
         // 3. Update profile modal presence if showing this user
-        if !w.get_profile_scoped_member() && w.get_profile_user_id() == user_id_str {
-            w.set_profile_presence(presence_slint.clone());
+        if !w
+            .global::<crate::ModalHostState>()
+            .get_profile_scoped_member()
+            && w.global::<crate::ModalHostState>().get_profile_user_id() == user_id_str
+        {
+            w.global::<crate::ModalHostState>()
+                .set_profile_presence(presence_slint.clone());
         }
 
         // 4. Contacts tab rows. Same in-place patch as the DM rows above —
@@ -263,7 +278,7 @@ pub(super) fn handle_presence_changed(
         // built with, so a contact coming online was visible in Chats and
         // stale in Contacts at the same time. Anon rows carry an anon_dm_id
         // in `user_id`, never a real one, so they never match.
-        let friends = w.get_friends_list();
+        let friends = w.global::<crate::ModalHostState>().get_friends_list();
         for i in 0..friends.row_count() {
             if let Some(mut f) = friends.row_data(i) {
                 if !f.is_anon && f.user_id == user_id_str {
@@ -312,7 +327,7 @@ pub(super) fn handle_anon_dm_profile_updated(
     let name_for_ui = display_name_clone.clone();
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak_for_name.upgrade() {
-            let dms = w.get_chat_rows();
+            let dms = w.global::<crate::SidebarPane>().get_chat_rows();
             for i in 0..dms.row_count() {
                 if let Some(mut dm) = dms.row_data(i) {
                     if dm.conversation_id == conv_id_for_name {
@@ -380,7 +395,7 @@ pub(super) fn handle_anon_dm_profile_updated(
 
 /// Update a DM's avatar in the sidebar. Must be called on the UI thread.
 fn update_dm_avatar(w: &MainWindow, channel_id: &str, bytes: &[u8]) {
-    let dms = w.get_chat_rows();
+    let dms = w.global::<crate::SidebarPane>().get_chat_rows();
     for i in 0..dms.row_count() {
         if let Some(mut dm) = dms.row_data(i) {
             if dm.conversation_id == channel_id {
@@ -397,7 +412,9 @@ fn update_dm_avatar(w: &MainWindow, channel_id: &str, bytes: &[u8]) {
 
 /// A fetched request avatar arrives after the request row was first shown.
 fn update_pending_anon_dm_avatar(w: &MainWindow, conversation_id: &str, bytes: &[u8]) {
-    let requests = w.get_friends_private_requests();
+    let requests = w
+        .global::<crate::ModalHostState>()
+        .get_friends_private_requests();
     for i in 0..requests.row_count() {
         if let Some(mut request) = requests.row_data(i) {
             if request.user_id == conversation_id {
@@ -467,7 +484,7 @@ pub(super) fn handle_user_profile_updated(
         });
 
         // 1. Sidebar DM rows — update display name + initials + avatar for matching peer.
-        let dms = w.get_chat_rows();
+        let dms = w.global::<crate::SidebarPane>().get_chat_rows();
         for i in 0..dms.row_count() {
             if let Some(mut dm) = dms.row_data(i) {
                 if dm.user_id == user_id_str {
@@ -486,7 +503,9 @@ pub(super) fn handle_user_profile_updated(
         // Message rows and a currently open channel roster are snapshots.
         // Resolve names from core, including after the app has been open for
         // hours, instead of keeping the name captured when each row loaded.
-        let members = w.get_channel_settings_members();
+        let members = w
+            .global::<crate::ModalHostState>()
+            .get_channel_settings_members();
         for i in 0..members.row_count() {
             if let Some(mut member) = members.row_data(i) {
                 if member.user_id == user_id_str {
@@ -499,7 +518,7 @@ pub(super) fn handle_user_profile_updated(
         // A join notice may have been rendered before this profile was known.
         // Ask core for the stored notice and its current sender name so the
         // visible row catches up without changing the message on disk.
-        let messages = w.get_messages();
+        let messages = w.global::<crate::ChatPane>().get_messages();
         for i in 0..messages.row_count() {
             let Some(mut row) = messages.row_data(i) else {
                 continue;
@@ -529,21 +548,29 @@ pub(super) fn handle_user_profile_updated(
         // of core, not the sidebar model: a DM filed into a folder has no row
         // there, and its header kept the name it opened with.
         if let Some(name) = header_name {
-            w.set_channel_name(name);
+            w.global::<crate::ChatPane>().set_channel_name(name);
             if let Some(img) = &avatar_img {
-                w.set_channel_avatar_source(img.clone());
-                w.set_channel_has_avatar(true);
+                w.global::<crate::ChatPane>()
+                    .set_channel_avatar_source(img.clone());
+                w.global::<crate::ChatPane>().set_channel_has_avatar(true);
             }
         }
 
         // 3. Profile modal if currently showing this user.
-        if !w.get_profile_scoped_member() && w.get_profile_user_id() == user_id_str {
-            w.set_profile_display_name(display_name_slint.clone());
+        if !w
+            .global::<crate::ModalHostState>()
+            .get_profile_scoped_member()
+            && w.global::<crate::ModalHostState>().get_profile_user_id() == user_id_str
+        {
+            w.global::<crate::ModalHostState>()
+                .set_profile_display_name(display_name_slint.clone());
             // `status_message` is the bio Edit Profile writes (profile.rs), so it
             // belongs in the About row, not the custom-status line.
-            w.set_profile_bio(status_message.unwrap_or_default().into());
+            w.global::<crate::ModalHostState>()
+                .set_profile_bio(status_message.unwrap_or_default().into());
             if let Some(img) = avatar_img {
-                w.set_profile_avatar_source(img);
+                w.global::<crate::ModalHostState>()
+                    .set_profile_avatar_source(img);
             }
         }
     });

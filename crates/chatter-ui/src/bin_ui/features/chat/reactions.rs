@@ -98,7 +98,7 @@ pub fn wire_reaction_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
         .await;
     });
 
-    window.on_reaction_selected(
+    window.global::<crate::ChatPane>().on_reaction_selected(
         move |sender_id: SharedString,
               timestamp_ns: SharedString,
               _message_id: SharedString,

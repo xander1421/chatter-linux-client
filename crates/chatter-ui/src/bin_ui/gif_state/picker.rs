@@ -2,6 +2,7 @@
 //!
 //! Manages animated GIF playback for the GIF picker panel.
 
+use slint::ComponentHandle;
 use std::cell::RefCell;
 use std::collections::HashMap;
 use std::time::Duration;
@@ -110,8 +111,12 @@ fn update_picker_thumbnails(window: &crate::MainWindow, updates: &[(String, Imag
     // A GIF can sit in both sections (sent before, trending now); each tile
     // showing it animates.
     for results in [
-        window.get_composer_gif_picker_recent(),
-        window.get_composer_gif_picker_results(),
+        window
+            .global::<crate::ChatPane>()
+            .get_composer_gif_picker_recent(),
+        window
+            .global::<crate::ChatPane>()
+            .get_composer_gif_picker_results(),
     ] {
         let Some(model) = results
             .as_any()

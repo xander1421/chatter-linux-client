@@ -34,12 +34,13 @@ pub fn wire_logout(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     return;
                 }
                 if let Some(w) = weak.upgrade() {
-                    w.set_is_signed_in(false);
+                    w.global::<crate::AuthFlow>().set_is_signed_in(false);
                     w.set_current_view("login".into());
                     crate::bin_ui::features::back::reset_to_chats(&w);
-                    w.set_login_password("".into());
-                    w.set_login_loading(false);
-                    w.set_login_error(state.login_error.unwrap_or_default().into());
+                    w.global::<crate::AuthFlow>().set_login_password("".into());
+                    w.global::<crate::AuthFlow>().set_login_loading(false);
+                    w.global::<crate::AuthFlow>()
+                        .set_login_error(state.login_error.unwrap_or_default().into());
                 }
             });
         }
@@ -48,33 +49,35 @@ pub fn wire_logout(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
     let weak_window = window.as_weak();
 
-    window.on_settings_logout(move || {
-        let ui_ctx = ui_ctx.clone();
-        let weak = weak_window.clone();
+    window
+        .global::<crate::SettingsPane>()
+        .on_settings_logout(move || {
+            let ui_ctx = ui_ctx.clone();
+            let weak = weak_window.clone();
 
-        if let Some(w) = weak.upgrade() {
-            crate::bin_ui::features::composer::reset_session(&w, &ui_ctx);
-        }
-
-        tokio::spawn(async move {
-            // Local sign-out and teardown happen even if the server call fails.
-            if let Err(e) = ui_ctx.logout().await {
-                tracing::warn!("logout: {e}");
+            if let Some(w) = weak.upgrade() {
+                crate::bin_ui::features::composer::reset_session(&w, &ui_ctx);
             }
-            // The next account must not be shown this one's avatars and media.
-            crate::bin_ui::decode_cache::on_logout();
 
-            // Switch to login view
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak.upgrade() {
-                    w.set_is_signed_in(false);
-                    w.set_current_view("login".into());
-                    crate::bin_ui::features::back::reset_to_chats(&w);
-                    w.set_login_username("".into());
-                    w.set_login_password("".into());
-                    w.set_login_error("".into());
+            tokio::spawn(async move {
+                // Local sign-out and teardown happen even if the server call fails.
+                if let Err(e) = ui_ctx.logout().await {
+                    tracing::warn!("logout: {e}");
                 }
+                // The next account must not be shown this one's avatars and media.
+                crate::bin_ui::decode_cache::on_logout();
+
+                // Switch to login view
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak.upgrade() {
+                        w.global::<crate::AuthFlow>().set_is_signed_in(false);
+                        w.set_current_view("login".into());
+                        crate::bin_ui::features::back::reset_to_chats(&w);
+                        w.global::<crate::AuthFlow>().set_login_username("".into());
+                        w.global::<crate::AuthFlow>().set_login_password("".into());
+                        w.global::<crate::AuthFlow>().set_login_error("".into());
+                    }
+                });
             });
         });
-    });
 }

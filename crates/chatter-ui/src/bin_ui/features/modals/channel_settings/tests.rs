@@ -5,6 +5,7 @@ use chatter_core::storage::repositories::{
     channel_repo::ChannelRepository,
     settings_repo::{SettingsRepository, keys},
 };
+use slint::ComponentHandle;
 
 const CHILD_MARKER: &str = "CHATTER_UI_CHANNEL_DELETE_TEST_CHILD";
 const FIXTURE_COMPLETED: &str = "channel deletion fixture completed";
@@ -86,9 +87,12 @@ fn icon_picker_stages_bytes_preserves_drafts_and_rejects_obsolete_completions() 
     let id = ChannelId::new();
     client.select_conversation(ActiveConversation::Channel(id));
     show_channel_settings_shell(&w, &id.to_string(), "private");
-    w.set_channel_settings_can_edit(true);
-    w.set_channel_settings_name_draft("Unsaved name".into());
-    w.set_channel_settings_description_draft("Unsaved description".into());
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_can_edit(true);
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_name_draft("Unsaved name".into());
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_description_draft("Unsaved description".into());
     let mut encoded = std::io::Cursor::new(Vec::new());
     image::DynamicImage::new_rgba8(2, 2)
         .write_to(&mut encoded, image::ImageFormat::Png)
@@ -103,46 +107,78 @@ fn icon_picker_stages_bytes_preserves_drafts_and_rejects_obsolete_completions() 
     let first = begin_icon_request(&w, &client).unwrap();
     let latest = begin_icon_request(&w, &client).unwrap();
     finish_icon_request(&w, &client, first, picked());
-    assert!(!w.get_channel_settings_has_icon_preview());
+    assert!(
+        !w.global::<crate::ModalHostState>()
+            .get_channel_settings_has_icon_preview()
+    );
     finish_icon_request(&w, &client, latest, picked());
-    assert!(w.get_channel_settings_has_icon_preview());
+    assert!(
+        w.global::<crate::ModalHostState>()
+            .get_channel_settings_has_icon_preview()
+    );
     ICON_STATE.with(|s| assert_eq!(s.borrow().staged.as_ref().unwrap().1, bytes));
-    assert_eq!(w.get_channel_settings_name_draft().as_str(), "Unsaved name");
     assert_eq!(
-        w.get_channel_settings_description_draft().as_str(),
+        w.global::<crate::ModalHostState>()
+            .get_channel_settings_name_draft()
+            .as_str(),
+        "Unsaved name"
+    );
+    assert_eq!(
+        w.global::<crate::ModalHostState>()
+            .get_channel_settings_description_draft()
+            .as_str(),
         "Unsaved description"
     );
 
     // The path intentionally does not exist: Save must use the frozen bytes,
     // then show core's offline failure and preserve the editable draft.
     wire_save_settings(&w, &client);
-    w.invoke_channel_settings_save("Unsaved name".into(), "Unsaved description".into());
+    w.global::<crate::ModalHostState>()
+        .invoke_channel_settings_save("Unsaved name".into(), "Unsaved description".into());
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
-    while w.get_channel_settings_error().is_empty() && std::time::Instant::now() < deadline {
+    while w
+        .global::<crate::ModalHostState>()
+        .get_channel_settings_error()
+        .is_empty()
+        && std::time::Instant::now() < deadline
+    {
         slint::Timer::single_shot(std::time::Duration::from_millis(25), || {
             slint::quit_event_loop().unwrap();
         });
         w.run().unwrap();
     }
     assert!(
-        !w.get_channel_settings_error().is_empty(),
+        !w.global::<crate::ModalHostState>()
+            .get_channel_settings_error()
+            .is_empty(),
         "offline Save must report a failure"
     );
     assert!(
-        !w.get_channel_settings_error()
+        !w.global::<crate::ModalHostState>()
+            .get_channel_settings_error()
             .contains("Couldn't read channel icon"),
         "Save must use staged bytes, not re-read the native cache file"
     );
     assert_eq!(w.get_active_modal().as_str(), "channel-settings");
-    assert_eq!(w.get_channel_settings_name_draft().as_str(), "Unsaved name");
     assert_eq!(
-        w.get_channel_settings_description_draft().as_str(),
+        w.global::<crate::ModalHostState>()
+            .get_channel_settings_name_draft()
+            .as_str(),
+        "Unsaved name"
+    );
+    assert_eq!(
+        w.global::<crate::ModalHostState>()
+            .get_channel_settings_description_draft()
+            .as_str(),
         "Unsaved description"
     );
 
     let cancelled = begin_icon_request(&w, &client).unwrap();
     finish_icon_request(&w, &client, cancelled, Ok(None));
-    assert!(w.get_channel_settings_has_icon_preview());
+    assert!(
+        w.global::<crate::ModalHostState>()
+            .get_channel_settings_has_icon_preview()
+    );
     let invalid = begin_icon_request(&w, &client).unwrap();
     finish_icon_request(
         &w,
@@ -151,41 +187,61 @@ fn icon_picker_stages_bytes_preserves_drafts_and_rejects_obsolete_completions() 
         Ok(Some(("bad.png".into(), vec![1, 2, 3]))),
     );
     assert!(
-        w.get_channel_settings_error()
+        w.global::<crate::ModalHostState>()
+            .get_channel_settings_error()
             .contains("Couldn't open channel icon")
     );
-    assert_eq!(w.get_channel_settings_name_draft().as_str(), "Unsaved name");
+    assert_eq!(
+        w.global::<crate::ModalHostState>()
+            .get_channel_settings_name_draft()
+            .as_str(),
+        "Unsaved name"
+    );
     ICON_STATE.with(|s| assert_eq!(s.borrow().staged.as_ref().unwrap().1, bytes));
 
     let dismissed = begin_icon_request(&w, &client).unwrap();
     crate::bin_ui::features::back::close(&w, "channel-settings");
     show_channel_settings_shell(&w, &id.to_string(), "private");
-    w.set_channel_settings_can_edit(true);
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_can_edit(true);
     finish_icon_request(&w, &client, dismissed, picked());
-    assert!(!w.get_channel_settings_has_icon_preview());
+    assert!(
+        !w.global::<crate::ModalHostState>()
+            .get_channel_settings_has_icon_preview()
+    );
 
     // Even direct navigation that bypasses the shell changes stack identity.
     let reopened = begin_icon_request(&w, &client).unwrap();
     crate::bin_ui::features::back::close(&w, "channel-settings");
     crate::bin_ui::features::back::push(&w, "channel-settings");
     finish_icon_request(&w, &client, reopened, picked());
-    assert!(!w.get_channel_settings_has_icon_preview());
+    assert!(
+        !w.global::<crate::ModalHostState>()
+            .get_channel_settings_has_icon_preview()
+    );
     let switched = begin_icon_request(&w, &client).unwrap();
     client.select_conversation(ActiveConversation::Channel(ChannelId::new()));
     finish_icon_request(&w, &client, switched, picked());
-    assert!(!w.get_channel_settings_has_icon_preview());
+    assert!(
+        !w.global::<crate::ModalHostState>()
+            .get_channel_settings_has_icon_preview()
+    );
     client.select_conversation(ActiveConversation::Channel(id));
     let read_error = begin_icon_request(&w, &client).unwrap();
     finish_icon_request(&w, &client, read_error, Err("fixture read failed".into()));
     assert!(
-        w.get_channel_settings_error()
+        w.global::<crate::ModalHostState>()
+            .get_channel_settings_error()
             .contains("fixture read failed")
     );
     let old_session = begin_icon_request(&w, &client).unwrap();
     client.clear_composer_session();
     client.select_conversation(ActiveConversation::Channel(id));
     finish_icon_request(&w, &client, old_session, picked());
-    assert!(!w.get_channel_settings_has_icon_preview());
+    assert!(
+        !w.global::<crate::ModalHostState>()
+            .get_channel_settings_has_icon_preview()
+    );
     eprintln!("{FIXTURE_COMPLETED}");
 }
 
@@ -234,9 +290,12 @@ fn save_success_reloads_metadata_and_sidebar_and_rejects_replacement_owners() {
     let w = MainWindow::new().unwrap();
     client.select_conversation(ActiveConversation::Channel(id));
     show_channel_settings_shell(&w, &id.to_string(), "private");
-    w.set_channel_settings_can_edit(true);
-    w.set_channel_name("Old name".into());
-    w.set_topic("Old description".into());
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_can_edit(true);
+    w.global::<crate::ChatPane>()
+        .set_channel_name("Old name".into());
+    w.global::<crate::ChatPane>()
+        .set_topic("Old description".into());
     let epoch = begin_settings_save(&w, &client).unwrap();
     let mut encoded = std::io::Cursor::new(Vec::new());
     image::DynamicImage::new_rgba8(3, 2)
@@ -259,17 +318,30 @@ fn save_success_reloads_metadata_and_sidebar_and_rejects_replacement_owners() {
         );
     };
     complete(epoch);
-    assert_eq!(w.get_channel_name().as_str(), "Saved name");
-    assert_eq!(w.get_topic().as_str(), "Saved description");
-    assert!(w.get_channel_has_avatar());
+    assert_eq!(
+        w.global::<crate::ChatPane>().get_channel_name().as_str(),
+        "Saved name"
+    );
+    assert_eq!(
+        w.global::<crate::ChatPane>().get_topic().as_str(),
+        "Saved description"
+    );
+    assert!(w.global::<crate::ChatPane>().get_channel_has_avatar());
     assert_eq!(
         (
-            w.get_channel_avatar_source().size().width,
-            w.get_channel_avatar_source().size().height
+            w.global::<crate::ChatPane>()
+                .get_channel_avatar_source()
+                .size()
+                .width,
+            w.global::<crate::ChatPane>()
+                .get_channel_avatar_source()
+                .size()
+                .height
         ),
         (3, 2)
     );
     let row = w
+        .global::<crate::SidebarPane>()
         .get_chat_rows()
         .iter()
         .find(|r| r.conversation_id.as_str() == id.to_string())
@@ -286,29 +358,50 @@ fn save_success_reloads_metadata_and_sidebar_and_rejects_replacement_owners() {
     assert_ne!(w.get_active_modal().as_str(), "channel-settings");
 
     show_channel_settings_shell(&w, &id.to_string(), "private");
-    w.set_channel_settings_can_edit(true);
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_can_edit(true);
     let stale = begin_settings_save(&w, &client).unwrap();
     crate::bin_ui::features::back::close(&w, "channel-settings");
     crate::bin_ui::features::back::push(&w, "channel-settings");
-    w.set_channel_name("Replacement modal".into());
-    w.set_chat_rows(ModelRc::default());
+    w.global::<crate::ChatPane>()
+        .set_channel_name("Replacement modal".into());
+    w.global::<crate::SidebarPane>()
+        .set_chat_rows(ModelRc::default());
     complete(stale);
-    assert_eq!(w.get_channel_name().as_str(), "Replacement modal");
-    assert_eq!(w.get_chat_rows().row_count(), 0);
+    assert_eq!(
+        w.global::<crate::ChatPane>().get_channel_name().as_str(),
+        "Replacement modal"
+    );
+    assert_eq!(
+        w.global::<crate::SidebarPane>().get_chat_rows().row_count(),
+        0
+    );
     assert_eq!(w.get_active_modal().as_str(), "channel-settings");
     let older = begin_settings_save(&w, &client).unwrap();
     let current = begin_settings_save(&w, &client).unwrap();
     complete(older);
-    assert_eq!(w.get_chat_rows().row_count(), 0);
+    assert_eq!(
+        w.global::<crate::SidebarPane>().get_chat_rows().row_count(),
+        0
+    );
     client.select_conversation(ActiveConversation::Channel(ChannelId::new()));
     complete(current);
-    assert_eq!(w.get_chat_rows().row_count(), 0);
+    assert_eq!(
+        w.global::<crate::SidebarPane>().get_chat_rows().row_count(),
+        0
+    );
     client.select_conversation(ActiveConversation::Channel(id));
     client.clear_composer_session();
     client.select_conversation(ActiveConversation::Channel(id));
     complete(current);
-    assert_eq!(w.get_chat_rows().row_count(), 0);
-    assert_eq!(w.get_channel_name().as_str(), "Replacement modal");
+    assert_eq!(
+        w.global::<crate::SidebarPane>().get_chat_rows().row_count(),
+        0
+    );
+    assert_eq!(
+        w.global::<crate::ChatPane>().get_channel_name().as_str(),
+        "Replacement modal"
+    );
     eprintln!("{FIXTURE_COMPLETED}");
 }
 
@@ -360,19 +453,25 @@ fn delete_result_refreshes_rows_reports_errors_and_preserves_a_new_selection() {
     let w = MainWindow::new().unwrap();
     w.set_current_view("main".into());
     w.set_is_mobile_platform(true);
-    w.set_mobile_show_chat(true);
-    w.set_channel_settings_id(deleted.to_string().into());
+    w.global::<crate::SidebarPane>().set_mobile_show_chat(true);
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_id(deleted.to_string().into());
     crate::bin_ui::features::back::push(&w, "channel-settings");
-    w.set_channel_name("Delete fixture".into());
+    w.global::<crate::ChatPane>()
+        .set_channel_name("Delete fixture".into());
     client.select_conversation(ActiveConversation::Channel(deleted));
-    w.set_chat_rows(ModelRc::new(VecModel::from(
-        client
-            .sidebar_rows()
-            .into_iter()
-            .map(|r| r.to_slint())
-            .collect::<Vec<_>>(),
-    )));
-    assert_eq!(w.get_chat_rows().row_count(), 2);
+    w.global::<crate::SidebarPane>()
+        .set_chat_rows(ModelRc::new(VecModel::from(
+            client
+                .sidebar_rows()
+                .into_iter()
+                .map(|r| r.to_slint())
+                .collect::<Vec<_>>(),
+        )));
+    assert_eq!(
+        w.global::<crate::SidebarPane>().get_chat_rows().row_count(),
+        2
+    );
     // Each round runs every UI closure queued so far and stops at its own
     // sentinel, queued behind them. Not `w.run()` with a quit timer: run's
     // hide queues a Quit (last window closed), and a timer firing after
@@ -395,18 +494,22 @@ fn delete_result_refreshes_rows_reports_errors_and_preserves_a_new_selection() {
         Err(ChannelError::NotAuthorized),
     );
     pump();
-    assert_eq!(w.get_chat_rows().row_count(), 2);
+    assert_eq!(
+        w.global::<crate::SidebarPane>().get_chat_rows().row_count(),
+        2
+    );
     assert_eq!(
         client.active_conversation(),
         ActiveConversation::Channel(deleted)
     );
     assert_eq!(w.get_active_modal().as_str(), "channel-settings");
     assert!(
-        w.get_channel_settings_error()
+        w.global::<crate::ModalHostState>()
+            .get_channel_settings_error()
             .contains("Couldn't delete channel")
     );
     assert!(w.get_toast_visible());
-    assert!(w.get_mobile_show_chat());
+    assert!(w.global::<crate::SidebarPane>().get_mobile_show_chat());
 
     // Simulate the successful awaited service's local row removal. This
     // exercises the production result handler, without a server or device.
@@ -420,9 +523,13 @@ fn delete_result_refreshes_rows_reports_errors_and_preserves_a_new_selection() {
         Ok(()),
     );
     pump();
-    assert_eq!(w.get_chat_rows().row_count(), 1);
     assert_eq!(
-        w.get_chat_rows()
+        w.global::<crate::SidebarPane>().get_chat_rows().row_count(),
+        1
+    );
+    assert_eq!(
+        w.global::<crate::SidebarPane>()
+            .get_chat_rows()
             .row_data(0)
             .unwrap()
             .conversation_id
@@ -430,19 +537,25 @@ fn delete_result_refreshes_rows_reports_errors_and_preserves_a_new_selection() {
         other.to_string()
     );
     assert_eq!(client.active_conversation(), ActiveConversation::None);
-    assert!(w.get_channel_name().is_empty());
-    assert_eq!(w.get_messages().row_count(), 0);
+    assert!(w.global::<crate::ChatPane>().get_channel_name().is_empty());
+    assert_eq!(w.global::<crate::ChatPane>().get_messages().row_count(), 0);
     assert_ne!(w.get_active_modal().as_str(), "channel-settings");
     assert!(repo.get(&other).unwrap().is_some());
-    assert!(!w.get_mobile_show_chat());
-    assert_eq!(w.get_active_tab().as_str(), "chats");
+    assert!(!w.global::<crate::SidebarPane>().get_mobile_show_chat());
+    assert_eq!(
+        w.global::<crate::SidebarPane>().get_active_tab().as_str(),
+        "chats"
+    );
 
     // A late result for the deleted channel must preserve a newly opened chat.
     client.select_conversation(ActiveConversation::Channel(other));
-    w.set_mobile_show_chat(true);
-    w.set_active_tab("contacts".into());
-    w.set_channel_name("Keep fixture".into());
-    w.set_channel_settings_id(other.to_string().into());
+    w.global::<crate::SidebarPane>().set_mobile_show_chat(true);
+    w.global::<crate::SidebarPane>()
+        .set_active_tab("contacts".into());
+    w.global::<crate::ChatPane>()
+        .set_channel_name("Keep fixture".into());
+    w.global::<crate::ModalHostState>()
+        .set_channel_settings_id(other.to_string().into());
     crate::bin_ui::features::back::push(&w, "channel-settings");
     finish_channel_delete(
         w.as_weak(),
@@ -457,10 +570,16 @@ fn delete_result_refreshes_rows_reports_errors_and_preserves_a_new_selection() {
         client.active_conversation(),
         ActiveConversation::Channel(other)
     );
-    assert_eq!(w.get_channel_name().as_str(), "Keep fixture");
+    assert_eq!(
+        w.global::<crate::ChatPane>().get_channel_name().as_str(),
+        "Keep fixture"
+    );
     assert_eq!(w.get_active_modal().as_str(), "channel-settings");
-    assert!(w.get_mobile_show_chat());
-    assert_eq!(w.get_active_tab().as_str(), "contacts");
+    assert!(w.global::<crate::SidebarPane>().get_mobile_show_chat());
+    assert_eq!(
+        w.global::<crate::SidebarPane>().get_active_tab().as_str(),
+        "contacts"
+    );
     // Equal UUIDs across kinds must not remove a replacement group.
     let group = AnonGroupId::from_uuid(*other.as_uuid());
     client.select_conversation(ActiveConversation::AnonGroup(group));
@@ -474,8 +593,11 @@ fn delete_result_refreshes_rows_reports_errors_and_preserves_a_new_selection() {
         client.active_conversation(),
         ActiveConversation::AnonGroup(group)
     );
-    assert!(w.get_mobile_show_chat());
-    assert_eq!(w.get_active_tab().as_str(), "contacts");
+    assert!(w.global::<crate::SidebarPane>().get_mobile_show_chat());
+    assert_eq!(
+        w.global::<crate::SidebarPane>().get_active_tab().as_str(),
+        "contacts"
+    );
 
     // The exact open group reveals Chats and leaves its modal owner intact.
     crate::bin_ui::features::sidebar::conversation_removed(
@@ -485,14 +607,18 @@ fn delete_result_refreshes_rows_reports_errors_and_preserves_a_new_selection() {
     );
     pump();
     assert_eq!(client.active_conversation(), ActiveConversation::None);
-    assert!(!w.get_mobile_show_chat());
-    assert_eq!(w.get_active_tab().as_str(), "chats");
+    assert!(!w.global::<crate::SidebarPane>().get_mobile_show_chat());
+    assert_eq!(
+        w.global::<crate::SidebarPane>().get_active_tab().as_str(),
+        "chats"
+    );
     assert_eq!(w.get_active_modal().as_str(), "channel-settings");
 
     // Desktop retains its current tab and empty detail pane.
     w.set_is_mobile_platform(false);
-    w.set_active_tab("contacts".into());
-    w.set_mobile_show_chat(true);
+    w.global::<crate::SidebarPane>()
+        .set_active_tab("contacts".into());
+    w.global::<crate::SidebarPane>().set_mobile_show_chat(true);
     client.select_conversation(ActiveConversation::Channel(other));
     crate::bin_ui::features::sidebar::conversation_removed(
         &w.as_weak(),
@@ -501,9 +627,12 @@ fn delete_result_refreshes_rows_reports_errors_and_preserves_a_new_selection() {
     );
     pump();
     assert_eq!(client.active_conversation(), ActiveConversation::None);
-    assert!(w.get_channel_name().is_empty());
-    assert_eq!(w.get_active_tab().as_str(), "contacts");
-    assert!(w.get_mobile_show_chat());
+    assert!(w.global::<crate::ChatPane>().get_channel_name().is_empty());
+    assert_eq!(
+        w.global::<crate::SidebarPane>().get_active_tab().as_str(),
+        "contacts"
+    );
+    assert!(w.global::<crate::SidebarPane>().get_mobile_show_chat());
 
     // The same settings ID reopened after dispatch is a new screen.
     client.select_conversation(ActiveConversation::Channel(other));
@@ -526,7 +655,8 @@ fn delete_result_refreshes_rows_reports_errors_and_preserves_a_new_selection() {
 
     // Session replacement retires an awaited delete and a queued removal.
     w.set_is_mobile_platform(true);
-    w.set_channel_name("Replacement session".into());
+    w.global::<crate::ChatPane>()
+        .set_channel_name("Replacement session".into());
     let old_session = client.auth_snapshot().session_revision;
     crate::bin_ui::features::sidebar::conversation_removed(
         &w.as_weak(),
@@ -548,9 +678,15 @@ fn delete_result_refreshes_rows_reports_errors_and_preserves_a_new_selection() {
         client.active_conversation(),
         ActiveConversation::Channel(other)
     );
-    assert_eq!(w.get_channel_name().as_str(), "Replacement session");
-    assert!(w.get_mobile_show_chat());
-    assert_eq!(w.get_active_tab().as_str(), "contacts");
+    assert_eq!(
+        w.global::<crate::ChatPane>().get_channel_name().as_str(),
+        "Replacement session"
+    );
+    assert!(w.global::<crate::SidebarPane>().get_mobile_show_chat());
+    assert_eq!(
+        w.global::<crate::SidebarPane>().get_active_tab().as_str(),
+        "contacts"
+    );
     assert_eq!(w.get_active_modal().as_str(), "channel-settings");
     eprintln!("{FIXTURE_COMPLETED}");
 }

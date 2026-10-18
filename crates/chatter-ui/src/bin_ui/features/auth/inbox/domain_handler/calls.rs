@@ -1,5 +1,6 @@
 //! Signal call event handlers (non-anonymous).
 
+use slint::ComponentHandle;
 use std::sync::Arc;
 
 use slint::Weak;
@@ -57,10 +58,13 @@ pub(super) fn handle_call_hangup(
         if let Some(w) = weak.upgrade() {
             // A hangup names its call: a late one for an older call must not
             // dismiss or tear down the call on screen now.
-            let ringing = w.get_incoming_call_visible()
-                && w.get_incoming_call_data().call_id == call_id.as_str();
-            let active =
-                w.get_active_call_visible() && w.get_active_call_data().call_id == call_id.as_str();
+            let ringing = w.global::<crate::CallView>().get_incoming_call_visible()
+                && w.global::<crate::CallView>()
+                    .get_incoming_call_data()
+                    .call_id
+                    == call_id.as_str();
+            let active = w.global::<crate::CallView>().get_active_call_visible()
+                && w.global::<crate::CallView>().get_active_call_data().call_id == call_id.as_str();
             if !ringing && !active {
                 tracing::info!(call_id = %call_id, "Hangup for a call not on screen; ignored");
                 return;

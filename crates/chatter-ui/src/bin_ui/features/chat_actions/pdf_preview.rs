@@ -16,7 +16,7 @@ use crate::bin_ui::preview_state;
 /// Wire PDF preview callbacks.
 pub fn wire_pdf_preview_callbacks(window: &MainWindow) {
     // Close PDF preview
-    window.on_close_pdf_preview(|| {
+    window.global::<crate::ChatPane>().on_close_pdf_preview(|| {
         super::media_viewer::invalidate();
         preview_state::clear_pdf_preview();
         #[cfg(feature = "desktop")]
@@ -26,7 +26,7 @@ pub fn wire_pdf_preview_callbacks(window: &MainWindow) {
 
     // Open PDF in external viewer - uses Save As for secure export
     let weak = window.as_weak();
-    window.on_open_pdf_external(move || {
+    window.global::<crate::ChatPane>().on_open_pdf_external(move || {
         #[cfg(target_os = "android")]
         if let Some(mut content) = preview_state::get_pdf_preview_content() {
             let weak = weak.clone();
@@ -36,18 +36,18 @@ pub fn wire_pdf_preview_callbacks(window: &MainWindow) {
                 zeroize::Zeroize::zeroize(&mut content.data);
                 let _ = weak.upgrade_in_event_loop(move |w| {
                     // Dropping a stale session removes its unpublished cache file.
-                    if !super::media_viewer::is_current(request) || !w.get_pdf_preview_visible() {
+                    if !super::media_viewer::is_current(request) || !w.global::<crate::ChatPane>().get_pdf_preview_visible() {
                         return;
                     }
                     let result = result.and_then(|session| session.finish());
                     if let Err(error) = result {
                         tracing::warn!(%error, "PDF external open failed");
-                        w.set_pdf_preview_error("Unable to open PDF. Install a PDF viewer and try Open externally again.".into());
+                        w.global::<crate::ChatPane>().set_pdf_preview_error("Unable to open PDF. Install a PDF viewer and try Open externally again.".into());
                     }
                 });
             });
         } else if let Some(w) = weak.upgrade() {
-            w.set_pdf_preview_error(
+            w.global::<crate::ChatPane>().set_pdf_preview_error(
                 "PDF content is no longer available. Reopen the attachment.".into(),
             );
         }
@@ -91,18 +91,22 @@ pub fn wire_pdf_preview_callbacks(window: &MainWindow) {
     #[cfg(feature = "desktop")]
     {
         let weak = window.as_weak();
-        window.on_pdf_page_prev(move || {
-            if let Some(w) = weak.upgrade() {
-                pdf_renderer::navigate(&w, -1);
-            }
-        });
+        window
+            .global::<crate::ChatPane>()
+            .on_pdf_page_prev(move || {
+                if let Some(w) = weak.upgrade() {
+                    pdf_renderer::navigate(&w, -1);
+                }
+            });
 
         let weak = window.as_weak();
-        window.on_pdf_page_next(move || {
-            if let Some(w) = weak.upgrade() {
-                pdf_renderer::navigate(&w, 1);
-            }
-        });
+        window
+            .global::<crate::ChatPane>()
+            .on_pdf_page_next(move || {
+                if let Some(w) = weak.upgrade() {
+                    pdf_renderer::navigate(&w, 1);
+                }
+            });
     }
 }
 
@@ -113,15 +117,23 @@ pub fn wire_pdf_preview_callbacks(window: &MainWindow) {
 /// rendering. Falls back to metadata-only display if PDFium is unavailable.
 #[cfg(feature = "desktop")]
 pub fn render_pdf_preview(window: &MainWindow, pdf_data: &[u8]) {
-    window.set_pdf_preview_external_only(false);
+    window
+        .global::<crate::ChatPane>()
+        .set_pdf_preview_external_only(false);
     pdf_renderer::load_and_render(window, pdf_data);
 }
 
 #[cfg(not(feature = "desktop"))]
 pub fn render_pdf_preview(window: &MainWindow, _pdf_data: &[u8]) {
-    window.set_pdf_preview_external_only(true);
-    window.set_pdf_preview_image(slint::Image::default());
-    window.set_pdf_preview_error("".into());
+    window
+        .global::<crate::ChatPane>()
+        .set_pdf_preview_external_only(true);
+    window
+        .global::<crate::ChatPane>()
+        .set_pdf_preview_image(slint::Image::default());
+    window
+        .global::<crate::ChatPane>()
+        .set_pdf_preview_error("".into());
 }
 
 // ==========================================================================
@@ -188,7 +200,7 @@ mod pdf_renderer {
     /// Load a PDF from bytes, render the first page, and update the UI.
     pub fn load_and_render(window: &MainWindow, pdf_data: &[u8]) {
         let Some(pdfium) = get_pdfium() else {
-            window.set_pdf_preview_error(
+            window.global::<crate::ChatPane>().set_pdf_preview_error(
                 "PDF rendering unavailable. Install libpdfium for in-app viewing.".into(),
             );
             return;
@@ -198,18 +210,26 @@ mod pdf_renderer {
             Ok(document) => {
                 let page_count = document.pages().len();
                 if page_count == 0 {
-                    window.set_pdf_preview_error("PDF has no pages".into());
+                    window
+                        .global::<crate::ChatPane>()
+                        .set_pdf_preview_error("PDF has no pages".into());
                     return;
                 }
 
                 // Render first page
                 let first_page_image = render_page(&document, 0);
 
-                window.set_pdf_preview_page_count(page_count as i32);
-                window.set_pdf_preview_current_page(1);
+                window
+                    .global::<crate::ChatPane>()
+                    .set_pdf_preview_page_count(page_count as i32);
+                window
+                    .global::<crate::ChatPane>()
+                    .set_pdf_preview_current_page(1);
 
                 if let Some(ref img) = first_page_image {
-                    window.set_pdf_preview_image(img.clone());
+                    window
+                        .global::<crate::ChatPane>()
+                        .set_pdf_preview_image(img.clone());
                 }
 
                 // Store state for page navigation
@@ -227,7 +247,9 @@ mod pdf_renderer {
             }
             Err(e) => {
                 tracing::error!("Failed to load PDF: {:?}", e);
-                window.set_pdf_preview_error(format!("Failed to load PDF: {}", e).into());
+                window
+                    .global::<crate::ChatPane>()
+                    .set_pdf_preview_error(format!("Failed to load PDF: {}", e).into());
             }
         }
     }
@@ -250,8 +272,12 @@ mod pdf_renderer {
 
             // Check cache first
             if let Some(Some(cached)) = state.page_cache.get(new_page as usize) {
-                window.set_pdf_preview_image(cached.clone());
-                window.set_pdf_preview_current_page(new_page as i32 + 1);
+                window
+                    .global::<crate::ChatPane>()
+                    .set_pdf_preview_image(cached.clone());
+                window
+                    .global::<crate::ChatPane>()
+                    .set_pdf_preview_current_page(new_page as i32 + 1);
                 return;
             }
 
@@ -267,10 +293,14 @@ mod pdf_renderer {
                 Ok(document) => {
                     let image = render_page(&document, new_page);
                     if let Some(ref img) = image {
-                        window.set_pdf_preview_image(img.clone());
+                        window
+                            .global::<crate::ChatPane>()
+                            .set_pdf_preview_image(img.clone());
                     }
                     state.page_cache[new_page as usize] = image;
-                    window.set_pdf_preview_current_page(new_page as i32 + 1);
+                    window
+                        .global::<crate::ChatPane>()
+                        .set_pdf_preview_current_page(new_page as i32 + 1);
                 }
                 Err(e) => {
                     tracing::error!("Failed to reload PDF for page {}: {:?}", new_page, e);

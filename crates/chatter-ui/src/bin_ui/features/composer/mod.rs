@@ -88,11 +88,14 @@ pub fn flush_drafts(w: &MainWindow, ctx: &ChatterClient) {
 /// the session is still the one the text was typed under. Edit mode borrows
 /// the composer for a message's text; that is never a draft.
 pub fn autosave_composer_draft(w: &MainWindow, ctx: &ChatterClient) {
-    if w.get_composer_is_editing() {
+    if w.global::<crate::ChatPane>().get_composer_is_editing() {
         return;
     }
     ctx.autosave_composer_draft(chatter_core::client::ComposerDraft {
-        text: w.get_composer_text().to_string(),
+        text: w
+            .global::<crate::ChatPane>()
+            .get_composer_text()
+            .to_string(),
         reply: crate::bin_ui::features::chat::send_message::composer_reply(w),
     });
 }
@@ -102,12 +105,16 @@ pub fn autosave_composer_draft(w: &MainWindow, ctx: &ChatterClient) {
 /// closes), so a late tick cannot wipe the draft the close just parked.
 pub fn autosave_thread_draft(w: &MainWindow, ctx: &ChatterClient) {
     let Ok(root) = w
+        .global::<crate::ChatPane>()
         .get_thread_root_message_id()
         .parse::<chatter_core::domain::ids::MessageId>()
     else {
         return;
     };
-    ctx.set_thread_draft(&root, &w.get_thread_composer_text());
+    ctx.set_thread_draft(
+        &root,
+        &w.global::<crate::ChatPane>().get_thread_composer_text(),
+    );
 }
 
 /// The thread panel's text, debounced like the composer's. The thread shown
@@ -117,27 +124,31 @@ fn wire_thread_draft_autosave(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
     let weak = slint::ComponentHandle::as_weak(window);
     let ctx = ui_ctx.clone();
     let timer = slint::Timer::default();
-    window.on_thread_draft_changed(move || {
-        let Some(w) = weak.upgrade() else { return };
-        let root = w.get_thread_root_message_id();
-        if root.is_empty() {
-            return;
-        }
-        let weak = weak.clone();
-        let ctx = ctx.clone();
-        let session = crate::bin_ui::features::history_owner::SessionOwner::capture(&ctx);
-        timer.start(
-            slint::TimerMode::SingleShot,
-            std::time::Duration::from_millis(400),
-            move || {
-                let Some(w) = weak.upgrade() else { return };
-                if !session.is_current() || w.get_thread_root_message_id() != root {
-                    return;
-                }
-                autosave_thread_draft(&w, &ctx);
-            },
-        );
-    });
+    window
+        .global::<crate::ChatPane>()
+        .on_thread_draft_changed(move || {
+            let Some(w) = weak.upgrade() else { return };
+            let root = w.global::<crate::ChatPane>().get_thread_root_message_id();
+            if root.is_empty() {
+                return;
+            }
+            let weak = weak.clone();
+            let ctx = ctx.clone();
+            let session = crate::bin_ui::features::history_owner::SessionOwner::capture(&ctx);
+            timer.start(
+                slint::TimerMode::SingleShot,
+                std::time::Duration::from_millis(400),
+                move || {
+                    let Some(w) = weak.upgrade() else { return };
+                    if !session.is_current()
+                        || w.global::<crate::ChatPane>().get_thread_root_message_id() != root
+                    {
+                        return;
+                    }
+                    autosave_thread_draft(&w, &ctx);
+                },
+            );
+        });
 }
 
 /// Every text or reply-bar change schedules one autosave shortly after the
@@ -154,25 +165,27 @@ fn wire_draft_autosave(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak = slint::ComponentHandle::as_weak(window);
     let ctx = ui_ctx.clone();
     let timer = slint::Timer::default();
-    window.on_composer_draft_changed(move || {
-        let _ = &retry_timer;
-        let weak = weak.clone();
-        let ctx = ctx.clone();
-        let session = crate::bin_ui::features::history_owner::SessionOwner::capture(&ctx);
-        let owner = ctx.composer_owner_key();
-        timer.start(
-            slint::TimerMode::SingleShot,
-            std::time::Duration::from_millis(400),
-            move || {
-                if !session.is_current() || ctx.composer_owner_key() != owner {
-                    return;
-                }
-                if let Some(w) = weak.upgrade() {
-                    autosave_composer_draft(&w, &ctx);
-                }
-            },
-        );
-    });
+    window
+        .global::<crate::ChatPane>()
+        .on_composer_draft_changed(move || {
+            let _ = &retry_timer;
+            let weak = weak.clone();
+            let ctx = ctx.clone();
+            let session = crate::bin_ui::features::history_owner::SessionOwner::capture(&ctx);
+            let owner = ctx.composer_owner_key();
+            timer.start(
+                slint::TimerMode::SingleShot,
+                std::time::Duration::from_millis(400),
+                move || {
+                    if !session.is_current() || ctx.composer_owner_key() != owner {
+                        return;
+                    }
+                    if let Some(w) = weak.upgrade() {
+                        autosave_composer_draft(&w, &ctx);
+                    }
+                },
+            );
+        });
 }
 
 /// Clear only composer presentation when its account is being signed out.
@@ -185,25 +198,39 @@ pub fn reset_session(window: &MainWindow, ui_ctx: &ChatterClient) {
     #[cfg(feature = "mesh")]
     crate::bin_ui::features::mesh::clear_active(window);
     window.global::<crate::VoiceRecording>().invoke_cancel();
-    window.set_composer_emoji_picker_visible(false);
-    window.set_composer_gif_picker_visible(false);
+    window
+        .global::<crate::ChatPane>()
+        .set_composer_emoji_picker_visible(false);
+    window
+        .global::<crate::ChatPane>()
+        .set_composer_gif_picker_visible(false);
     // The old account's GIF rows and their animation frames do not outlive it.
-    window.set_composer_gif_picker_results(slint::ModelRc::new(
-        slint::VecModel::<crate::GifData>::default(),
-    ));
-    window.set_composer_gif_picker_recent(slint::ModelRc::new(
-        slint::VecModel::<crate::GifData>::default(),
-    ));
+    window
+        .global::<crate::ChatPane>()
+        .set_composer_gif_picker_results(slint::ModelRc::new(
+            slint::VecModel::<crate::GifData>::default(),
+        ));
+    window
+        .global::<crate::ChatPane>()
+        .set_composer_gif_picker_recent(slint::ModelRc::new(
+            slint::VecModel::<crate::GifData>::default(),
+        ));
     crate::bin_ui::gif_state::clear_picker_gifs();
     window.invoke_release_text_focus();
     window.invoke_settle_composer();
     crate::bin_ui::features::chat::edit::end_edit(window);
-    window.set_composer_text("".into());
+    window
+        .global::<crate::ChatPane>()
+        .set_composer_text("".into());
     crate::bin_ui::features::chat::send_message::clear_reply(window);
     render_attachments(window, &[]);
     // Root first, so the text change's autosave finds no thread to write to.
-    window.set_thread_root_message_id("".into());
-    window.set_thread_composer_text("".into());
+    window
+        .global::<crate::ChatPane>()
+        .set_thread_root_message_id("".into());
+    window
+        .global::<crate::ChatPane>()
+        .set_thread_composer_text("".into());
 }
 
 /// Wire the pure text operations independently of network/client callbacks.
@@ -244,7 +271,9 @@ fn wire_per_conversation_drafts(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
     // The composer starts out holding `current`'s draft.
     let draft = ui_ctx.swap_composer_draft("", Default::default(), &current);
     if !draft.text.is_empty() {
-        window.set_composer_text(draft.text.into());
+        window
+            .global::<crate::ChatPane>()
+            .set_composer_text(draft.text.into());
     }
     if let Some(reply) = draft.reply {
         crate::bin_ui::features::chat::send_message::show_reply(window, reply);
@@ -319,8 +348,10 @@ fn mesh_draft_key(w: &MainWindow) -> String {
 
 /// Park the composer under `leaving` and load `entering`'s draft.
 pub fn switch_composer_draft(w: &MainWindow, ctx: &ChatterClient, leaving: &str, entering: &str) {
-    w.set_composer_emoji_picker_visible(false);
-    w.set_composer_gif_picker_visible(false);
+    w.global::<crate::ChatPane>()
+        .set_composer_emoji_picker_visible(false);
+    w.global::<crate::ChatPane>()
+        .set_composer_gif_picker_visible(false);
     // A word the input method is still composing belongs to the conversation
     // being left; fold it in and end the composition before the text moves.
     // The settle reads a mirror kept by `changed` handlers. Slint runs those
@@ -333,12 +364,16 @@ pub fn switch_composer_draft(w: &MainWindow, ctx: &ChatterClient, leaving: &str,
     crate::bin_ui::features::chat::edit::end_edit(w);
     // The reply bar's target stays with its conversation, like the text.
     let leaving_draft = chatter_core::client::ComposerDraft {
-        text: w.get_composer_text().to_string(),
+        text: w
+            .global::<crate::ChatPane>()
+            .get_composer_text()
+            .to_string(),
         reply: crate::bin_ui::features::chat::send_message::composer_reply(w),
     };
     crate::bin_ui::features::chat::send_message::clear_reply(w);
     let entering_draft = ctx.swap_composer_draft(leaving, leaving_draft, entering);
-    w.set_composer_text(entering_draft.text.into());
+    w.global::<crate::ChatPane>()
+        .set_composer_text(entering_draft.text.into());
     if let Some(reply) = entering_draft.reply {
         crate::bin_ui::features::chat::send_message::show_reply(w, reply);
     }

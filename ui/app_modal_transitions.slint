@@ -1,0 +1,88 @@
+import { Materials } from "theme/materials.slint";
+import { Appearance } from "theme/appearance.slint";
+import { CallView } from "app_call_view.slint";
+import { ModalHostState } from "app_modal_host_state.slint";
+
+// Keep outgoing sheets and call/device cards mounted through their fade-out.
+export component AppModalTransitions inherits Rectangle {
+    width: 0px;
+    height: 0px;
+    in property <string> active-modal;
+    // Presentation lags logic by one exit. The identity that just left the
+    // top of the stack (pop, close-at-top, replace) keeps its surface with
+    // `show-modal: false` — it fades, accepts no input and holds no focus —
+    // until the sheet duration has passed, then unmounts. The destination
+    // (the dialog under it, or nothing) is presented at once, so a pop never
+    // waits and a push never waits. One exit is retained at a time: a second
+    // close during the fade replaces it. Reduced motion unmounts at once.
+    // Each dialog's `if` reads `is-presented`.
+    out property <string> presented-modal: "none";
+    out property <string> exiting-modal: "none";
+    private property <int> presented-depth: 0;
+    function is-presented(name: string) -> bool {
+        return root.presented-modal == name || root.exiting-modal == name;
+    }
+    public function present-active-modal() {
+        // Grew: the old top is still on the stack under the new one, nothing
+        // left. Otherwise the old top is gone and gets its exit.
+        if root.presented-modal != "none" && root.presented-modal != root.active-modal
+            && ModalHostState.modal-stack.length <= root.presented-depth && !Appearance.reduce-motion {
+            root.exiting-modal = root.presented-modal;
+            modal-exit.running = true;
+            modal-exit.restart();
+        }
+        root.presented-modal = root.active-modal;
+        root.presented-depth = ModalHostState.modal-stack.length;
+    }
+    modal-exit := Timer {
+        interval: Materials.sheet-duration + 40ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            root.exiting-modal = "none";
+        }
+    }
+    // The same contract for the incoming-call card.
+    out property <bool> incoming-shown: CallView.incoming-call-visible && !CallView.incoming-call-minimized;
+    out property <bool> incoming-presented: false;
+    changed incoming-shown => {
+        if root.incoming-shown {
+            root.incoming-presented = true;
+            incoming-exit.running = false;
+        } else if Appearance.reduce-motion {
+            root.incoming-presented = false;
+        } else {
+            incoming-exit.running = true;
+        }
+    }
+    incoming-exit := Timer {
+        interval: Materials.motion-standard + 40ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            if !root.incoming-shown { root.incoming-presented = false; }
+        }
+    }
+    // And for the device picker, which is not on the modal stack.
+    out property <bool> device-picker-presented: false;
+    private property <bool> observed-device-picker-visible: CallView.device-picker-visible;
+    changed observed-device-picker-visible => {
+        if CallView.device-picker-visible {
+            root.device-picker-presented = true;
+            device-picker-exit.running = false;
+        } else if Appearance.reduce-motion {
+            root.device-picker-presented = false;
+        } else {
+            device-picker-exit.running = true;
+        }
+    }
+    device-picker-exit := Timer {
+        interval: Materials.motion-standard + 40ms;
+        running: false;
+        triggered => {
+            self.running = false;
+            if !CallView.device-picker-visible { root.device-picker-presented = false; }
+        }
+    }
+
+}

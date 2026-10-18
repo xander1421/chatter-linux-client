@@ -99,13 +99,16 @@ pub fn load_private_group_messages(
             );
 
             // Set chat header info for private group
-            w.set_channel_name(group_name.into());
-            w.set_conversation_read_only(removed);
-            w.set_composer_notice(if removed {
-                "You were removed from the group".into()
-            } else {
-                "".into()
-            });
+            w.global::<crate::ChatPane>()
+                .set_channel_name(group_name.into());
+            w.global::<crate::ChatPane>()
+                .set_conversation_read_only(removed);
+            w.global::<crate::ChatPane>()
+                .set_composer_notice(if removed {
+                    "You were removed from the group".into()
+                } else {
+                    "".into()
+                });
             crate::bin_ui::converters::set_conversation_kind(
                 &w,
                 &ui_ctx_for_ui,
@@ -113,25 +116,30 @@ pub fn load_private_group_messages(
                 false,
             );
             if removed {
-                w.set_header_can_call(false);
-                w.set_header_can_invite(false);
-                w.set_header_can_open_settings(false);
+                w.global::<crate::ChatPane>().set_header_can_call(false);
+                w.global::<crate::ChatPane>().set_header_can_invite(false);
+                w.global::<crate::ChatPane>()
+                    .set_header_can_open_settings(false);
             }
-            w.set_is_dm(false);
-            w.set_member_count(member_count);
-            w.set_invited_count(invited_count);
-            w.set_topic("".into());
-            w.set_header_presence_status("offline".into());
-            w.set_channel_has_avatar(false);
-            w.set_channel_avatar_source(slint::Image::default());
+            w.global::<crate::ChatPane>().set_is_dm(false);
+            w.global::<crate::ChatPane>().set_member_count(member_count);
+            w.global::<crate::ChatPane>()
+                .set_invited_count(invited_count);
+            w.global::<crate::ChatPane>().set_topic("".into());
+            w.global::<crate::ChatPane>()
+                .set_header_presence_status("offline".into());
+            w.global::<crate::ChatPane>().set_channel_has_avatar(false);
+            w.global::<crate::ChatPane>()
+                .set_channel_avatar_source(slint::Image::default());
 
             // Convert and set messages
             let slint_messages: Vec<_> = display_messages
                 .iter()
                 .map(|m| m.to_slint_with_user(&current_user_id_str))
                 .collect();
-            w.set_messages(ModelRc::new(VecModel::from(slint_messages)));
-            w.set_loading_messages(false);
+            w.global::<crate::ChatPane>()
+                .set_messages(ModelRc::new(VecModel::from(slint_messages)));
+            w.global::<crate::ChatPane>().set_loading_messages(false);
             super::super::header::finish_pending_jump(&w, &ui_ctx);
             super::super::header::refresh_pinned_ui(&w, &ui_ctx);
 
@@ -145,87 +153,91 @@ pub(crate) fn wire_private_group_selected(window: &MainWindow, ui_ctx: &Arc<Chat
     let ui_ctx = ui_ctx.clone();
     let weak_window = window.as_weak();
 
-    window.on_private_group_selected(move |group_id: SharedString| {
-        if let Ok(id) = group_id.parse::<AnonGroupId>() {
-            super::super::header::cancel_pending_jump_for(
-                chatter_core::state::ActiveConversation::AnonGroup(id),
-            );
-        }
-        let group_id_str = group_id.to_string();
-        let weak = weak_window.clone();
-        super::show_chat_pane(&weak);
-        let ui_ctx = ui_ctx.clone();
-
-        // Stop any playing audio when switching
-        stop_audio_playback();
-        crate::bin_ui::gif_state::clear_inline_gifs();
-
-        // Commit active-conversation state SYNCHRONOUSLY on the UI thread
-        // (same race fix as dm.rs — see comment there).
-        if let Ok(parsed) = group_id_str.parse::<AnonGroupId>() {
-            ui_ctx.select_conversation(chatter_core::state::ActiveConversation::AnonGroup(parsed));
-        }
-        if let Some(w) = weak.upgrade() {
-            w.invoke_refresh_screen_protection();
-        }
-
-        let owner = HistoryOwner::begin(&ui_ctx, ui_ctx.active_conversation());
-        tokio::spawn(async move {
-            if !owner.is_current() {
-                return;
+    window
+        .global::<crate::SidebarPane>()
+        .on_private_group_selected(move |group_id: SharedString| {
+            if let Ok(id) = group_id.parse::<AnonGroupId>() {
+                super::super::header::cancel_pending_jump_for(
+                    chatter_core::state::ActiveConversation::AnonGroup(id),
+                );
             }
-            // Parse group ID
-            let group_id: AnonGroupId = match group_id_str.parse() {
-                Ok(id) => id,
-                Err(e) => {
-                    tracing::error!("Invalid private group ID: {}", e);
+            let group_id_str = group_id.to_string();
+            let weak = weak_window.clone();
+            super::show_chat_pane(&weak);
+            let ui_ctx = ui_ctx.clone();
+
+            // Stop any playing audio when switching
+            stop_audio_playback();
+            crate::bin_ui::gif_state::clear_inline_gifs();
+
+            // Commit active-conversation state SYNCHRONOUSLY on the UI thread
+            // (same race fix as dm.rs — see comment there).
+            if let Ok(parsed) = group_id_str.parse::<AnonGroupId>() {
+                ui_ctx.select_conversation(chatter_core::state::ActiveConversation::AnonGroup(
+                    parsed,
+                ));
+            }
+            if let Some(w) = weak.upgrade() {
+                w.invoke_refresh_screen_protection();
+            }
+
+            let owner = HistoryOwner::begin(&ui_ctx, ui_ctx.active_conversation());
+            tokio::spawn(async move {
+                if !owner.is_current() {
                     return;
                 }
-            };
+                // Parse group ID
+                let group_id: AnonGroupId = match group_id_str.parse() {
+                    Ok(id) => id,
+                    Err(e) => {
+                        tracing::error!("Invalid private group ID: {}", e);
+                        return;
+                    }
+                };
 
-            // Active conversation already committed pre-spawn.
-            let ui_ctx_for_sel = ui_ctx.clone();
-            crate::run_history_ui!(weak, owner, |w| super::refresh_selection(
-                &w,
-                &ui_ctx_for_sel
-            ));
+                // Active conversation already committed pre-spawn.
+                let ui_ctx_for_sel = ui_ctx.clone();
+                crate::run_history_ui!(weak, owner, |w| super::refresh_selection(
+                    &w,
+                    &ui_ctx_for_sel
+                ));
 
-            // Load pinned messages
-            let pinned = ui_ctx.list_anon_group_pinned(&group_id);
-            let (msg_ids, preview) = if pinned.is_empty() {
-                (vec![], String::new())
-            } else {
-                let ids = pinned.iter().map(|m| m.id).collect();
-                let preview = pinned[0]
-                    .as_text()
-                    .filter(|t| !t.is_empty())
-                    .map(|t| ui_ctx.truncate_message_preview(&t))
-                    .unwrap_or_else(|| "[Pinned message]".to_string());
-                (ids, preview)
-            };
-            if !owner.is_current() {
-                return;
-            }
-            super::apply_pinned_ui_owned(&weak, &ui_ctx, msg_ids, preview, &owner);
+                // Load pinned messages
+                let pinned = ui_ctx.list_anon_group_pinned(&group_id);
+                let (msg_ids, preview) = if pinned.is_empty() {
+                    (vec![], String::new())
+                } else {
+                    let ids = pinned.iter().map(|m| m.id).collect();
+                    let preview = pinned[0]
+                        .as_text()
+                        .filter(|t| !t.is_empty())
+                        .map(|t| ui_ctx.truncate_message_preview(&t))
+                        .unwrap_or_else(|| "[Pinned message]".to_string());
+                    (ids, preview)
+                };
+                if !owner.is_current() {
+                    return;
+                }
+                super::apply_pinned_ui_owned(&weak, &ui_ctx, msg_ids, preview, &owner);
 
-            // Mark messages as read
-            let handle =
-                ui_ctx.conversation(chatter_core::state::ActiveConversation::AnonGroup(group_id));
-            // Where the user left off — the mark is what destroys it.
-            let anchor = handle.mark_as_read().await.unwrap_or_default();
-            // Reading a foldered group has to clear its folder badge too.
-            let ui_ctx_badges = ui_ctx.clone();
-            crate::run_history_ui!(weak, owner, |w| super::refresh_section_badges(
-                &w,
-                &ui_ctx_badges
-            ));
+                // Mark messages as read
+                let handle = ui_ctx
+                    .conversation(chatter_core::state::ActiveConversation::AnonGroup(group_id));
+                // Where the user left off — the mark is what destroys it.
+                let anchor = handle.mark_as_read().await.unwrap_or_default();
+                // Reading a foldered group has to clear its folder badge too.
+                let ui_ctx_badges = ui_ctx.clone();
+                crate::run_history_ui!(weak, owner, |w| super::refresh_section_badges(
+                    &w,
+                    &ui_ctx_badges
+                ));
 
-            if !owner.is_current() {
-                return;
-            }
-            load_private_group_messages_internal(weak, group_id, ui_ctx, anchor, owner).await;
+                if !owner.is_current() {
+                    return;
+                }
+                load_private_group_messages_internal(weak, group_id, ui_ctx, anchor, owner).await;
+            });
         });
-    });
 }
 
 /// Internal shared loading logic for private groups.
@@ -245,7 +257,9 @@ async fn load_private_group_messages_internal(
     let group = match ui_ctx.get_anon_group(&group_id) {
         Some(g) => g,
         None => {
-            crate::run_history_ui!(weak, owner, |w| w.set_loading_messages(false));
+            crate::run_history_ui!(weak, owner, |w| w
+                .global::<crate::ChatPane>()
+                .set_loading_messages(false));
             return;
         }
     };
@@ -288,27 +302,32 @@ async fn load_private_group_messages_internal(
             0,
         );
 
-        w.set_channel_name(group_name.into());
+        w.global::<crate::ChatPane>()
+            .set_channel_name(group_name.into());
         crate::bin_ui::converters::set_conversation_kind(
             &w,
             &ui_ctx_for_ui,
             &chatter_core::domain::message::ConversationType::AnonGroup,
             false,
         );
-        w.set_is_dm(false);
-        w.set_member_count(member_count);
-        w.set_invited_count(invited_count);
-        w.set_topic("".into());
-        w.set_header_presence_status("offline".into());
-        w.set_channel_has_avatar(false);
-        w.set_channel_avatar_source(slint::Image::default());
+        w.global::<crate::ChatPane>().set_is_dm(false);
+        w.global::<crate::ChatPane>().set_member_count(member_count);
+        w.global::<crate::ChatPane>()
+            .set_invited_count(invited_count);
+        w.global::<crate::ChatPane>().set_topic("".into());
+        w.global::<crate::ChatPane>()
+            .set_header_presence_status("offline".into());
+        w.global::<crate::ChatPane>().set_channel_has_avatar(false);
+        w.global::<crate::ChatPane>()
+            .set_channel_avatar_source(slint::Image::default());
 
         let slint_messages: Vec<_> = display_messages
             .iter()
             .map(|m| m.to_slint_with_user(&current_user_id_str))
             .collect();
-        w.set_messages(ModelRc::new(VecModel::from(slint_messages)));
-        w.set_loading_messages(false);
+        w.global::<crate::ChatPane>()
+            .set_messages(ModelRc::new(VecModel::from(slint_messages)));
+        w.global::<crate::ChatPane>().set_loading_messages(false);
         super::super::header::finish_pending_jump(&w, &ui_ctx);
         super::super::header::refresh_pinned_ui(&w, &ui_ctx);
 

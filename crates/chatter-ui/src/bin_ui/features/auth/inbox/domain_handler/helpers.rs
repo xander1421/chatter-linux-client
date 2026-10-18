@@ -1,5 +1,6 @@
 //! Helper functions for domain event UI updates.
 
+use slint::ComponentHandle;
 use std::sync::Arc;
 
 use slint::{Model, Weak};
@@ -33,7 +34,7 @@ pub(crate) fn update_unread_count(
     channel_id: &str,
     count: u32,
 ) {
-    let rows = window.get_chat_rows();
+    let rows = window.global::<crate::SidebarPane>().get_chat_rows();
     for i in 0..rows.row_count() {
         if let Some(mut row) = rows.row_data(i) {
             if row.conversation_id.as_str() == channel_id {
@@ -56,7 +57,9 @@ pub(crate) fn recompute_total_unread(window: &MainWindow, ui_ctx: &Arc<ChatterCl
     let ui_ctx = ui_ctx.clone();
     tokio::spawn(async move {
         let total = ui_ctx.unread_conversation_count();
-        crate::run_ui!(weak, |w| w.set_total_unread_count(total as i32));
+        crate::run_ui!(weak, |w| w
+            .global::<crate::SidebarPane>()
+            .set_total_unread_count(total as i32));
     });
 }
 
@@ -126,7 +129,7 @@ pub(super) fn handle_pin_ui_update(
             (!unpin, String::new())
         };
         let message_id_str = message_id.to_string();
-        let messages = w.get_messages();
+        let messages = w.global::<crate::ChatPane>().get_messages();
 
         // Find the bubble, update is_pinned, generate preview
         for i in 0..messages.row_count() {
@@ -177,20 +180,26 @@ pub(super) fn handle_pin_ui_update(
 
         let pinned_count = chat_state.pinned_total_count() as i32;
         if !new_pinned {
-            w.set_pinned_total_count(pinned_count);
-            w.set_has_pinned_messages(pinned_count > 0);
+            w.global::<crate::ChatPane>()
+                .set_pinned_total_count(pinned_count);
+            w.global::<crate::ChatPane>()
+                .set_has_pinned_messages(pinned_count > 0);
             if pinned_count == 0 {
-                w.set_pinned_message_preview("".into());
+                w.global::<crate::ChatPane>()
+                    .set_pinned_message_preview("".into());
             }
         } else {
             // Use fallback if message wasn't in the loaded UI messages
             if preview.is_empty() {
                 preview = "[Pinned message]".to_string();
             }
-            w.set_pinned_total_count(pinned_count);
-            w.set_has_pinned_messages(true);
-            w.set_pinned_message_preview(preview.into());
-            w.set_pinned_current_index(pinned_count);
+            w.global::<crate::ChatPane>()
+                .set_pinned_total_count(pinned_count);
+            w.global::<crate::ChatPane>().set_has_pinned_messages(true);
+            w.global::<crate::ChatPane>()
+                .set_pinned_message_preview(preview.into());
+            w.global::<crate::ChatPane>()
+                .set_pinned_current_index(pinned_count);
         }
 
         crate::bin_ui::features::header::refresh_pinned_ui(&w, &refresh_ctx);

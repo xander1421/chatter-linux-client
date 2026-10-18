@@ -94,14 +94,14 @@ fn apply_dm_completion(
     // Update UI with verification emojis from core result
     let shared_frames = ui_ctx.call_video_frames();
     if let Some(w) = weak_window.upgrade() {
-        if !w.get_active_call_visible()
+        if !w.global::<crate::CallView>().get_active_call_visible()
             || !ui_ctx.call_session_is_current(revision)
             || attempt.is_some_and(|a| a.is_cancelled())
             || ui_ctx.call_start_was_cancelled(call_id)
         {
             return;
         }
-        let mut call_data = w.get_active_call_data();
+        let mut call_data = w.global::<crate::CallView>().get_active_call_data();
         if call_data.call_id.as_str() != call_id || setup.call_id.to_string() != call_id {
             return;
         }
@@ -109,7 +109,8 @@ fn apply_dm_completion(
         call_data.verification_emoji_2 = setup.verification_emojis[1].clone().into();
         call_data.verification_emoji_3 = setup.verification_emojis[2].clone().into();
         call_data.verification_emoji_4 = setup.verification_emojis[3].clone().into();
-        w.set_active_call_data(call_data);
+        w.global::<crate::CallView>()
+            .set_active_call_data(call_data);
 
         start_call_timer(&w, ui_ctx.clone());
         if let Some(frames) = shared_frames {
@@ -193,26 +194,44 @@ mod tests {
             duration_seconds: 17,
             ..Default::default()
         };
-        w.set_active_call_visible(true);
-        w.set_active_call_data(original.clone());
+        w.global::<crate::CallView>().set_active_call_visible(true);
+        w.global::<crate::CallView>()
+            .set_active_call_data(original.clone());
         apply_dm_completion(&w.as_weak(), &client, revision, &expected, None, setup());
         assert_eq!(
-            w.get_active_call_data().verification_emoji_1.as_str(),
+            w.global::<crate::CallView>()
+                .get_active_call_data()
+                .verification_emoji_1
+                .as_str(),
             "keep"
         );
-        assert_eq!(w.get_active_call_data().duration_seconds, 17);
+        assert_eq!(
+            w.global::<crate::CallView>()
+                .get_active_call_data()
+                .duration_seconds,
+            17
+        );
         let mut same = original.clone();
         same.call_id = expected.clone().into();
-        w.set_active_call_data(same.clone());
-        w.set_active_call_visible(false);
+        w.global::<crate::CallView>()
+            .set_active_call_data(same.clone());
+        w.global::<crate::CallView>().set_active_call_visible(false);
         apply_dm_completion(&w.as_weak(), &client, revision, &expected, None, setup());
         assert_eq!(
-            w.get_active_call_data().verification_emoji_1.as_str(),
+            w.global::<crate::CallView>()
+                .get_active_call_data()
+                .verification_emoji_1
+                .as_str(),
             "keep"
         );
-        assert_eq!(w.get_active_call_data().duration_seconds, 17);
-        assert!(!w.get_active_call_visible());
-        w.set_active_call_visible(true);
+        assert_eq!(
+            w.global::<crate::CallView>()
+                .get_active_call_data()
+                .duration_seconds,
+            17
+        );
+        assert!(!w.global::<crate::CallView>().get_active_call_visible());
+        w.global::<crate::CallView>().set_active_call_visible(true);
         let attempt = chatter_core::client::calls::CallStartAttempt::default();
         attempt.cancel();
         apply_dm_completion(
@@ -224,23 +243,51 @@ mod tests {
             setup(),
         );
         assert_eq!(
-            w.get_active_call_data().verification_emoji_1.as_str(),
+            w.global::<crate::CallView>()
+                .get_active_call_data()
+                .verification_emoji_1
+                .as_str(),
             "keep"
         );
-        assert_eq!(w.get_active_call_data().duration_seconds, 17);
+        assert_eq!(
+            w.global::<crate::CallView>()
+                .get_active_call_data()
+                .duration_seconds,
+            17
+        );
         client.testing_invalidate_session();
         client.testing_set_logged_in(UserId::new(), 1, "Replacement session".into());
         apply_dm_completion(&w.as_weak(), &client, revision, &expected, None, setup());
         assert_eq!(
-            w.get_active_call_data().verification_emoji_1.as_str(),
+            w.global::<crate::CallView>()
+                .get_active_call_data()
+                .verification_emoji_1
+                .as_str(),
             "keep"
         );
-        assert_eq!(w.get_active_call_data().duration_seconds, 17);
+        assert_eq!(
+            w.global::<crate::CallView>()
+                .get_active_call_data()
+                .duration_seconds,
+            17
+        );
         let current = client.auth_snapshot().session_revision;
-        assert!(w.get_active_call_visible());
+        assert!(w.global::<crate::CallView>().get_active_call_visible());
         apply_dm_completion(&w.as_weak(), &client, current, &expected, None, setup());
-        assert_eq!(w.get_active_call_data().verification_emoji_1.as_str(), "A");
-        assert_eq!(w.get_active_call_data().verification_emoji_4.as_str(), "D");
+        assert_eq!(
+            w.global::<crate::CallView>()
+                .get_active_call_data()
+                .verification_emoji_1
+                .as_str(),
+            "A"
+        );
+        assert_eq!(
+            w.global::<crate::CallView>()
+                .get_active_call_data()
+                .verification_emoji_4
+                .as_str(),
+            "D"
+        );
         std::fs::write(std::env::var_os(CHILD).unwrap(), b"passed").unwrap();
     }
 }

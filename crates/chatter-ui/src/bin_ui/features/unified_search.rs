@@ -33,58 +33,68 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
 fn wire_more(window: &MainWindow) {
     let weak = window.as_weak();
-    window.on_unified_search_show_more(move |section| {
-        let Some(w) = weak.upgrade() else { return };
-        let slot = match section.as_str() {
-            "messages" => 2,
-            "media" => 3,
-            "files" => 4,
-            "links" => 5,
-            "voice" => 6,
-            _ => return,
-        };
-        let mut limits = w
-            .get_unified_search_page_limits()
-            .iter()
-            .collect::<Vec<_>>();
-        if limits.len() != 7 {
-            return;
-        }
-        limits[slot] = (limits[slot] + 50).min(500);
-        w.set_unified_search_page_limits(ModelRc::new(VecModel::from(limits)));
-        w.invoke_unified_search_changed(w.get_unified_search_query());
-    });
+    window
+        .global::<crate::SearchPane>()
+        .on_unified_search_show_more(move |section| {
+            let Some(w) = weak.upgrade() else { return };
+            let slot = match section.as_str() {
+                "messages" => 2,
+                "media" => 3,
+                "files" => 4,
+                "links" => 5,
+                "voice" => 6,
+                _ => return,
+            };
+            let mut limits = w
+                .global::<crate::SearchPane>()
+                .get_unified_search_page_limits()
+                .iter()
+                .collect::<Vec<_>>();
+            if limits.len() != 7 {
+                return;
+            }
+            limits[slot] = (limits[slot] + 50).min(500);
+            w.global::<crate::SearchPane>()
+                .set_unified_search_page_limits(ModelRc::new(VecModel::from(limits)));
+            w.global::<crate::SearchPane>()
+                .invoke_unified_search_changed(
+                    w.global::<crate::SearchPane>().get_unified_search_query(),
+                );
+        });
 }
 
 fn wire_picker(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak = window.as_weak();
     let ui_ctx = ui_ctx.clone();
-    window.on_unified_search_picker_request(move |kind, query| {
-        let Some(w) = weak.upgrade() else { return };
-        if !w.get_unified_search_open() {
-            return;
-        }
-        let rows = ui_ctx
-            .search_filter_options(kind.as_str(), query.as_str())
-            .into_iter()
-            .map(|option| {
-                let avatar = option
-                    .avatar
-                    .as_deref()
-                    .and_then(crate::bin_ui::converters::avatar_bytes_to_image);
-                QuickSwitcherItem {
-                    id: option.id.into(),
-                    name: option.name.into(),
-                    conv_type: option.kind.into(),
-                    presence_status: "".into(),
-                    unread_count: 0,
-                    has_avatar: avatar.is_some(),
-                    avatar: avatar.unwrap_or_default(),
-                }
-            })
-            .collect::<Vec<_>>();
-        w.set_unified_search_picker_options(ModelRc::new(VecModel::from(rows)));
-    });
+    window
+        .global::<crate::SearchPane>()
+        .on_unified_search_picker_request(move |kind, query| {
+            let Some(w) = weak.upgrade() else { return };
+            if !w.global::<crate::SearchPane>().get_unified_search_open() {
+                return;
+            }
+            let rows = ui_ctx
+                .search_filter_options(kind.as_str(), query.as_str())
+                .into_iter()
+                .map(|option| {
+                    let avatar = option
+                        .avatar
+                        .as_deref()
+                        .and_then(crate::bin_ui::converters::avatar_bytes_to_image);
+                    QuickSwitcherItem {
+                        id: option.id.into(),
+                        name: option.name.into(),
+                        conv_type: option.kind.into(),
+                        presence_status: "".into(),
+                        unread_count: 0,
+                        has_avatar: avatar.is_some(),
+                        avatar: avatar.unwrap_or_default(),
+                    }
+                })
+                .collect::<Vec<_>>();
+            w.global::<crate::SearchPane>()
+                .set_unified_search_picker_options(ModelRc::new(VecModel::from(rows)));
+        });
 }
 
 fn wire_calendar(window: &MainWindow) {
@@ -94,73 +104,93 @@ fn wire_calendar(window: &MainWindow) {
         chrono::NaiveDate::from_ymd_opt(today.year(), today.month(), 1).unwrap(),
     ));
     let weak = window.as_weak();
-    window.on_unified_search_calendar_shift(move |delta| {
-        let Some(w) = weak.upgrade() else { return };
-        let mut current = month.lock().unwrap();
-        if delta != 0 {
-            let index = current.year() * 12 + current.month0() as i32 + delta;
-            let year = index.div_euclid(12);
-            let month = index.rem_euclid(12) as u32 + 1;
-            let Some(next) = chrono::NaiveDate::from_ymd_opt(year, month, 1) else {
-                return;
-            };
-            *current = next;
-        }
-        w.set_unified_search_calendar_month(current.format("%B %Y").to_string().into());
-        let offset = current.weekday().num_days_from_monday() as i64;
-        let first = *current - chrono::Duration::days(offset);
-        let days = (0..42)
-            .map(|i| {
-                let date = first + chrono::Duration::days(i);
-                CalendarDay {
-                    date: date.format("%Y-%m-%d").to_string().into(),
-                    label: date.day().to_string().into(),
-                    in_month: date.month() == current.month(),
-                }
-            })
-            .collect::<Vec<_>>();
-        w.set_unified_search_calendar_days(ModelRc::new(VecModel::from(days)));
-    });
+    window
+        .global::<crate::SearchPane>()
+        .on_unified_search_calendar_shift(move |delta| {
+            let Some(w) = weak.upgrade() else { return };
+            let mut current = month.lock().unwrap();
+            if delta != 0 {
+                let index = current.year() * 12 + current.month0() as i32 + delta;
+                let year = index.div_euclid(12);
+                let month = index.rem_euclid(12) as u32 + 1;
+                let Some(next) = chrono::NaiveDate::from_ymd_opt(year, month, 1) else {
+                    return;
+                };
+                *current = next;
+            }
+            w.global::<crate::SearchPane>()
+                .set_unified_search_calendar_month(current.format("%B %Y").to_string().into());
+            let offset = current.weekday().num_days_from_monday() as i64;
+            let first = *current - chrono::Duration::days(offset);
+            let days = (0..42)
+                .map(|i| {
+                    let date = first + chrono::Duration::days(i);
+                    CalendarDay {
+                        date: date.format("%Y-%m-%d").to_string().into(),
+                        label: date.day().to_string().into(),
+                        in_month: date.month() == current.month(),
+                    }
+                })
+                .collect::<Vec<_>>();
+            w.global::<crate::SearchPane>()
+                .set_unified_search_calendar_days(ModelRc::new(VecModel::from(days)));
+        });
 }
 
 fn wire_filters(window: &MainWindow) {
     let weak = window.as_weak();
-    window.on_unified_search_filters_changed(move |_, _, _, _, _| {
-        if let Some(w) = weak.upgrade() {
-            w.set_unified_search_page_limits(ModelRc::new(VecModel::from(vec![50; 7])));
-            w.invoke_unified_search_changed(w.get_unified_search_query());
-        }
-    });
+    window
+        .global::<crate::SearchPane>()
+        .on_unified_search_filters_changed(move |_, _, _, _, _| {
+            if let Some(w) = weak.upgrade() {
+                w.global::<crate::SearchPane>()
+                    .set_unified_search_page_limits(ModelRc::new(VecModel::from(vec![50; 7])));
+                w.global::<crate::SearchPane>()
+                    .invoke_unified_search_changed(
+                        w.global::<crate::SearchPane>().get_unified_search_query(),
+                    );
+            }
+        });
 }
 
 fn set_recents(window: &MainWindow, rows: Vec<String>) {
-    window.set_unified_search_recents(ModelRc::new(VecModel::from(
-        rows.into_iter().map(SharedString::from).collect::<Vec<_>>(),
-    )));
+    window
+        .global::<crate::SearchPane>()
+        .set_unified_search_recents(ModelRc::new(VecModel::from(
+            rows.into_iter().map(SharedString::from).collect::<Vec<_>>(),
+        )));
 }
 
 fn wire_recents(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak = window.as_weak();
-    window.on_unified_search_recent_selected(move |query| {
-        if let Some(w) = weak.upgrade() {
-            w.set_unified_search_query(query.clone());
-            w.invoke_unified_search_changed(query);
-        }
-    });
+    window
+        .global::<crate::SearchPane>()
+        .on_unified_search_recent_selected(move |query| {
+            if let Some(w) = weak.upgrade() {
+                w.global::<crate::SearchPane>()
+                    .set_unified_search_query(query.clone());
+                w.global::<crate::SearchPane>()
+                    .invoke_unified_search_changed(query);
+            }
+        });
     let weak = window.as_weak();
     let clear_ctx = ui_ctx.clone();
-    window.on_unified_search_recent_clear(move || {
-        if let Some(w) = weak.upgrade() {
-            set_recents(&w, clear_ctx.clear_recent_searches());
-        }
-    });
+    window
+        .global::<crate::SearchPane>()
+        .on_unified_search_recent_clear(move || {
+            if let Some(w) = weak.upgrade() {
+                set_recents(&w, clear_ctx.clear_recent_searches());
+            }
+        });
     let weak = window.as_weak();
     let ui_ctx = ui_ctx.clone();
-    window.on_unified_search_recent_remove(move |query| {
-        if let Some(w) = weak.upgrade() {
-            set_recents(&w, ui_ctx.remove_recent_search(query.as_str()));
-        }
-    });
+    window
+        .global::<crate::SearchPane>()
+        .on_unified_search_recent_remove(move |query| {
+            if let Some(w) = weak.upgrade() {
+                set_recents(&w, ui_ctx.remove_recent_search(query.as_str()));
+            }
+        });
 }
 
 /// The person-lookup form of a query: trimmed, one leading `@` dropped.
@@ -187,41 +217,67 @@ fn wire_opened(
 ) {
     let weak = window.as_weak();
     let ui_ctx = ui_ctx.clone();
-    window.on_unified_search_opened(move || {
-        if let Some(w) = weak.upgrade() {
-            let mode = ui_ctx.anon_mode_enabled();
-            w.set_unified_search_page_limits(ModelRc::new(VecModel::from(vec![50; 7])));
-            let mut previous_mode = recent_mode.lock().unwrap();
-            if previous_mode.is_some_and(|previous| previous != mode) {
-                w.set_unified_search_recents(ModelRc::new(VecModel::default()));
-                w.set_unified_search_from("".into());
-                w.set_unified_search_in("".into());
-                w.set_unified_search_from_label("".into());
-                w.set_unified_search_in_label("".into());
+    window
+        .global::<crate::SearchPane>()
+        .on_unified_search_opened(move || {
+            if let Some(w) = weak.upgrade() {
+                let mode = ui_ctx.anon_mode_enabled();
+                w.global::<crate::SearchPane>()
+                    .set_unified_search_page_limits(ModelRc::new(VecModel::from(vec![50; 7])));
+                let mut previous_mode = recent_mode.lock().unwrap();
+                if previous_mode.is_some_and(|previous| previous != mode) {
+                    w.global::<crate::SearchPane>()
+                        .set_unified_search_recents(ModelRc::new(VecModel::default()));
+                    w.global::<crate::SearchPane>()
+                        .set_unified_search_from("".into());
+                    w.global::<crate::SearchPane>()
+                        .set_unified_search_in("".into());
+                    w.global::<crate::SearchPane>()
+                        .set_unified_search_from_label("".into());
+                    w.global::<crate::SearchPane>()
+                        .set_unified_search_in_label("".into());
+                }
+                *previous_mode = Some(mode);
+                set_recents(&w, ui_ctx.recent_searches());
+                requests
+                    .lock()
+                    .unwrap()
+                    .invalidate(ui_ctx.auth_snapshot().session_revision, "");
+                clear_search_rows(&w);
+                let convs = conversation_items(
+                    &ui_ctx,
+                    w.global::<crate::SearchPane>()
+                        .get_unified_search_query()
+                        .as_str(),
+                );
+                set_conversations(&w, convs);
+                let count = w
+                    .global::<crate::SearchPane>()
+                    .get_unified_search_conversations()
+                    .row_count() as i32;
+                w.global::<crate::SearchPane>()
+                    .set_unified_search_counts(ModelRc::new(VecModel::from(vec![
+                        count, count, 0, 0, 0, 0, 0,
+                    ])));
+                if !w
+                    .global::<crate::SearchPane>()
+                    .get_unified_search_query()
+                    .trim()
+                    .is_empty()
+                    || !matches!(
+                        w.global::<crate::SearchPane>()
+                            .get_unified_search_category()
+                            .as_str(),
+                        "all" | "chats" | "messages"
+                    )
+                {
+                    w.global::<crate::SearchPane>()
+                        .invoke_unified_search_changed(
+                            w.global::<crate::SearchPane>().get_unified_search_query(),
+                        );
+                }
             }
-            *previous_mode = Some(mode);
-            set_recents(&w, ui_ctx.recent_searches());
-            requests
-                .lock()
-                .unwrap()
-                .invalidate(ui_ctx.auth_snapshot().session_revision, "");
-            clear_search_rows(&w);
-            let convs = conversation_items(&ui_ctx, w.get_unified_search_query().as_str());
-            set_conversations(&w, convs);
-            let count = w.get_unified_search_conversations().row_count() as i32;
-            w.set_unified_search_counts(ModelRc::new(VecModel::from(vec![
-                count, count, 0, 0, 0, 0, 0,
-            ])));
-            if !w.get_unified_search_query().trim().is_empty()
-                || !matches!(
-                    w.get_unified_search_category().as_str(),
-                    "all" | "chats" | "messages"
-                )
-            {
-                w.invoke_unified_search_changed(w.get_unified_search_query());
-            }
-        }
-    });
+        });
 }
 
 /// Account transitions retire both pending requests and already painted rows.
@@ -260,14 +316,22 @@ fn wire_session(
                 if let Some(w) = weak.upgrade() {
                     requests.lock().unwrap().invalidate(next, "");
                     clear_search_rows(&w);
-                    w.set_unified_search_conversations(ModelRc::new(VecModel::default()));
-                    w.set_unified_search_recents(ModelRc::new(VecModel::default()));
-                    w.set_unified_search_query("".into());
-                    w.set_unified_search_from("".into());
-                    w.set_unified_search_in("".into());
-                    w.set_unified_search_from_label("".into());
-                    w.set_unified_search_in_label("".into());
-                    w.set_unified_search_open(false);
+                    w.global::<crate::SearchPane>()
+                        .set_unified_search_conversations(ModelRc::new(VecModel::default()));
+                    w.global::<crate::SearchPane>()
+                        .set_unified_search_recents(ModelRc::new(VecModel::default()));
+                    w.global::<crate::SearchPane>()
+                        .set_unified_search_query("".into());
+                    w.global::<crate::SearchPane>()
+                        .set_unified_search_from("".into());
+                    w.global::<crate::SearchPane>()
+                        .set_unified_search_in("".into());
+                    w.global::<crate::SearchPane>()
+                        .set_unified_search_from_label("".into());
+                    w.global::<crate::SearchPane>()
+                        .set_unified_search_in_label("".into());
+                    w.global::<crate::SearchPane>()
+                        .set_unified_search_open(false);
                 }
             });
         }
@@ -282,35 +346,54 @@ fn wire_closed(
 ) {
     let weak = window.as_weak();
     let ui_ctx = ui_ctx.clone();
-    window.on_unified_search_closed(move || {
-        requests
-            .lock()
-            .unwrap()
-            .invalidate(ui_ctx.auth_snapshot().session_revision, "");
-        if let Some(w) = weak.upgrade() {
-            let query = w.get_unified_search_query().trim().to_string();
-            if !query.is_empty() {
-                set_recents(&w, ui_ctx.remember_search(&query));
+    window
+        .global::<crate::SearchPane>()
+        .on_unified_search_closed(move || {
+            requests
+                .lock()
+                .unwrap()
+                .invalidate(ui_ctx.auth_snapshot().session_revision, "");
+            if let Some(w) = weak.upgrade() {
+                let query = w
+                    .global::<crate::SearchPane>()
+                    .get_unified_search_query()
+                    .trim()
+                    .to_string();
+                if !query.is_empty() {
+                    set_recents(&w, ui_ctx.remember_search(&query));
+                }
+                clear_search_rows(&w);
             }
-            clear_search_rows(&w);
-        }
-    });
+        });
 }
 
 fn clear_search_rows(w: &MainWindow) {
-    w.set_unified_search_messages(ModelRc::new(VecModel::default()));
-    w.set_unified_search_counts(ModelRc::new(VecModel::from(vec![0; 7])));
-    w.set_unified_search_thumbnails(ModelRc::new(VecModel::default()));
-    w.set_unified_search_has_thumbnails(ModelRc::new(VecModel::default()));
-    w.set_unified_search_message_kinds(ModelRc::new(VecModel::default()));
-    w.set_unified_search_searching(false);
-    w.set_unified_search_selected_index(0);
-    w.set_unified_search_person_status("".into());
-    w.set_unified_search_person_id("".into());
-    w.set_unified_search_person_name("".into());
-    w.set_unified_search_person_handle("".into());
-    w.set_unified_search_person_error("".into());
-    w.set_unified_search_query_is_handle(false);
+    w.global::<crate::SearchPane>()
+        .set_unified_search_messages(ModelRc::new(VecModel::default()));
+    w.global::<crate::SearchPane>()
+        .set_unified_search_counts(ModelRc::new(VecModel::from(vec![0; 7])));
+    w.global::<crate::SearchPane>()
+        .set_unified_search_thumbnails(ModelRc::new(VecModel::default()));
+    w.global::<crate::SearchPane>()
+        .set_unified_search_has_thumbnails(ModelRc::new(VecModel::default()));
+    w.global::<crate::SearchPane>()
+        .set_unified_search_message_kinds(ModelRc::new(VecModel::default()));
+    w.global::<crate::SearchPane>()
+        .set_unified_search_searching(false);
+    w.global::<crate::SearchPane>()
+        .set_unified_search_selected_index(0);
+    w.global::<crate::SearchPane>()
+        .set_unified_search_person_status("".into());
+    w.global::<crate::SearchPane>()
+        .set_unified_search_person_id("".into());
+    w.global::<crate::SearchPane>()
+        .set_unified_search_person_name("".into());
+    w.global::<crate::SearchPane>()
+        .set_unified_search_person_handle("".into());
+    w.global::<crate::SearchPane>()
+        .set_unified_search_person_error("".into());
+    w.global::<crate::SearchPane>()
+        .set_unified_search_query_is_handle(false);
 }
 
 /// On query change: filter conversations (sync, core) + search messages (bg).
@@ -321,157 +404,203 @@ fn wire_changed(
 ) {
     let weak = window.as_weak();
     let ui_ctx = ui_ctx.clone();
-    window.on_unified_search_changed(move |query: SharedString| {
-        let query_str = query.to_string();
-        if let Some(w) = weak.upgrade() {
-            if !requests.lock().unwrap().same_query(&query_str) {
-                w.set_unified_search_page_limits(ModelRc::new(VecModel::from(vec![50; 7])));
-            }
-        }
-        let ticket = requests
-            .lock()
-            .unwrap()
-            .invalidate(ui_ctx.auth_snapshot().session_revision, &query_str);
-
-        // People: flag handle-shaped queries (enables the resolve-on-Enter
-        // prompt) and invalidate any prior resolution for the new query.
-        if let Some(w) = weak.upgrade() {
-            clear_search_rows(&w);
-            let person = person_query(&query_str);
-            w.set_unified_search_query_is_handle(resolvable_person_query(person));
-            w.set_unified_search_person_handle(person.into());
-            w.set_unified_search_person_status("".into());
-        }
-
-        // Conversations: synchronous, core-built and core-ranked.
-        let chat_count = if let Some(w) = weak.upgrade() {
-            let all_convs = conversation_items(&ui_ctx, &query_str);
-            let count = all_convs.len() as i32;
-            let convs = if w.get_unified_search_category().as_str() == "all"
-                || w.get_unified_search_category().as_str() == "chats"
-            {
-                all_convs
-            } else {
-                Vec::new()
-            };
-            set_conversations(&w, convs);
-            w.set_unified_search_counts(ModelRc::new(VecModel::from(vec![
-                count, count, 0, 0, 0, 0, 0,
-            ])));
-            count
-        } else {
-            return;
-        };
-
-        // Messages: empty query clears; otherwise search in background.
-        if weak
-            .upgrade()
-            .is_some_and(|w| w.get_unified_search_category().as_str() == "chats")
-            || (query_str.trim().is_empty()
-                && weak.upgrade().is_some_and(|w| {
-                    matches!(w.get_unified_search_category().as_str(), "all" | "messages")
-                }))
-        {
+    window
+        .global::<crate::SearchPane>()
+        .on_unified_search_changed(move |query: SharedString| {
+            let query_str = query.to_string();
             if let Some(w) = weak.upgrade() {
-                w.set_unified_search_messages(ModelRc::new(VecModel::default()));
-                w.set_unified_search_searching(false);
+                if !requests.lock().unwrap().same_query(&query_str) {
+                    w.global::<crate::SearchPane>()
+                        .set_unified_search_page_limits(ModelRc::new(VecModel::from(vec![50; 7])));
+                }
             }
-            return;
-        }
-
-        if let Some(w) = weak.upgrade() {
-            w.set_unified_search_searching(true);
-        }
-        let weak_bg = weak.clone();
-        let ui_ctx = ui_ctx.clone();
-        let requests = requests.clone();
-        let (category, sort, date, from, in_chat, page_limits) = if let Some(w) = weak.upgrade() {
-            (
-                w.get_unified_search_category().to_string(),
-                w.get_unified_search_sort().to_string(),
-                w.get_unified_search_date().to_string(),
-                w.get_unified_search_from().to_string(),
-                w.get_unified_search_in().to_string(),
-                w.get_unified_search_page_limits()
-                    .iter()
-                    .collect::<Vec<_>>(),
-            )
-        } else {
-            return;
-        };
-        std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(160));
-            if !requests
+            let ticket = requests
                 .lock()
                 .unwrap()
-                .pending(ticket, ui_ctx.auth_snapshot().session_revision)
+                .invalidate(ui_ctx.auth_snapshot().session_revision, &query_str);
+
+            // People: flag handle-shaped queries (enables the resolve-on-Enter
+            // prompt) and invalidate any prior resolution for the new query.
+            if let Some(w) = weak.upgrade() {
+                clear_search_rows(&w);
+                let person = person_query(&query_str);
+                w.global::<crate::SearchPane>()
+                    .set_unified_search_query_is_handle(resolvable_person_query(person));
+                w.global::<crate::SearchPane>()
+                    .set_unified_search_person_handle(person.into());
+                w.global::<crate::SearchPane>()
+                    .set_unified_search_person_status("".into());
+            }
+
+            // Conversations: synchronous, core-built and core-ranked.
+            let chat_count = if let Some(w) = weak.upgrade() {
+                let all_convs = conversation_items(&ui_ctx, &query_str);
+                let count = all_convs.len() as i32;
+                let convs = if w
+                    .global::<crate::SearchPane>()
+                    .get_unified_search_category()
+                    .as_str()
+                    == "all"
+                    || w.global::<crate::SearchPane>()
+                        .get_unified_search_category()
+                        .as_str()
+                        == "chats"
+                {
+                    all_convs
+                } else {
+                    Vec::new()
+                };
+                set_conversations(&w, convs);
+                w.global::<crate::SearchPane>()
+                    .set_unified_search_counts(ModelRc::new(VecModel::from(vec![
+                        count, count, 0, 0, 0, 0, 0,
+                    ])));
+                count
+            } else {
+                return;
+            };
+
+            // Messages: empty query clears; otherwise search in background.
+            if weak.upgrade().is_some_and(|w| {
+                w.global::<crate::SearchPane>()
+                    .get_unified_search_category()
+                    .as_str()
+                    == "chats"
+            }) || (query_str.trim().is_empty()
+                && weak.upgrade().is_some_and(|w| {
+                    matches!(
+                        w.global::<crate::SearchPane>()
+                            .get_unified_search_category()
+                            .as_str(),
+                        "all" | "messages"
+                    )
+                }))
             {
+                if let Some(w) = weak.upgrade() {
+                    w.global::<crate::SearchPane>()
+                        .set_unified_search_messages(ModelRc::new(VecModel::default()));
+                    w.global::<crate::SearchPane>()
+                        .set_unified_search_searching(false);
+                }
                 return;
             }
-            let (results, mut counts, thumbnails, kinds) = search_messages(
-                &ui_ctx,
-                &query_str,
-                &category,
-                &sort,
-                &date,
-                &from,
-                &in_chat,
-                &page_limits,
-            );
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak_bg.upgrade() {
-                    let ids = results
+
+            if let Some(w) = weak.upgrade() {
+                w.global::<crate::SearchPane>()
+                    .set_unified_search_searching(true);
+            }
+            let weak_bg = weak.clone();
+            let ui_ctx = ui_ctx.clone();
+            let requests = requests.clone();
+            let (category, sort, date, from, in_chat, page_limits) = if let Some(w) = weak.upgrade()
+            {
+                (
+                    w.global::<crate::SearchPane>()
+                        .get_unified_search_category()
+                        .to_string(),
+                    w.global::<crate::SearchPane>()
+                        .get_unified_search_sort()
+                        .to_string(),
+                    w.global::<crate::SearchPane>()
+                        .get_unified_search_date()
+                        .to_string(),
+                    w.global::<crate::SearchPane>()
+                        .get_unified_search_from()
+                        .to_string(),
+                    w.global::<crate::SearchPane>()
+                        .get_unified_search_in()
+                        .to_string(),
+                    w.global::<crate::SearchPane>()
+                        .get_unified_search_page_limits()
                         .iter()
-                        .map(|row| row.message_id.to_string())
-                        .collect();
-                    requests.lock().unwrap().complete_messages(
-                        ticket,
-                        ui_ctx.auth_snapshot().session_revision,
-                        w.get_unified_search_open(),
-                        ids,
-                        || {
-                            counts[0] += chat_count;
-                            counts[1] = chat_count;
-                            w.set_unified_search_counts(ModelRc::new(VecModel::from(
-                                counts.to_vec(),
-                            )));
-                            let mut images = Vec::with_capacity(thumbnails.len());
-                            let mut has_images = Vec::with_capacity(thumbnails.len());
-                            for thumb in thumbnails {
-                                if let Some(thumb) = thumb {
-                                    images.push(
-                                        slint::Image::from_rgba8(slint::SharedPixelBuffer::<
-                                            slint::Rgba8Pixel,
-                                        >::clone_from_slice(
-                                            &thumb.pixels,
-                                            thumb.width,
-                                            thumb.height,
-                                        )),
-                                    );
-                                    has_images.push(true);
-                                } else {
-                                    images.push(slint::Image::default());
-                                    has_images.push(false);
-                                }
-                            }
-                            w.set_unified_search_thumbnails(ModelRc::new(VecModel::from(images)));
-                            w.set_unified_search_has_thumbnails(ModelRc::new(VecModel::from(
-                                has_images,
-                            )));
-                            w.set_unified_search_message_kinds(ModelRc::new(VecModel::from(
-                                kinds
-                                    .into_iter()
-                                    .map(SharedString::from)
-                                    .collect::<Vec<_>>(),
-                            )));
-                            w.set_unified_search_messages(ModelRc::new(VecModel::from(results)));
-                            w.set_unified_search_searching(false);
-                        },
-                    );
+                        .collect::<Vec<_>>(),
+                )
+            } else {
+                return;
+            };
+            std::thread::spawn(move || {
+                std::thread::sleep(std::time::Duration::from_millis(160));
+                if !requests
+                    .lock()
+                    .unwrap()
+                    .pending(ticket, ui_ctx.auth_snapshot().session_revision)
+                {
+                    return;
                 }
+                let (results, mut counts, thumbnails, kinds) = search_messages(
+                    &ui_ctx,
+                    &query_str,
+                    &category,
+                    &sort,
+                    &date,
+                    &from,
+                    &in_chat,
+                    &page_limits,
+                );
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak_bg.upgrade() {
+                        let ids = results
+                            .iter()
+                            .map(|row| row.message_id.to_string())
+                            .collect();
+                        requests.lock().unwrap().complete_messages(
+                            ticket,
+                            ui_ctx.auth_snapshot().session_revision,
+                            w.global::<crate::SearchPane>().get_unified_search_open(),
+                            ids,
+                            || {
+                                counts[0] += chat_count;
+                                counts[1] = chat_count;
+                                w.global::<crate::SearchPane>().set_unified_search_counts(
+                                    ModelRc::new(VecModel::from(counts.to_vec())),
+                                );
+                                let mut images = Vec::with_capacity(thumbnails.len());
+                                let mut has_images = Vec::with_capacity(thumbnails.len());
+                                for thumb in thumbnails {
+                                    if let Some(thumb) = thumb {
+                                        images.push(
+                                            slint::Image::from_rgba8(slint::SharedPixelBuffer::<
+                                                slint::Rgba8Pixel,
+                                            >::clone_from_slice(
+                                                &thumb.pixels,
+                                                thumb.width,
+                                                thumb.height,
+                                            )),
+                                        );
+                                        has_images.push(true);
+                                    } else {
+                                        images.push(slint::Image::default());
+                                        has_images.push(false);
+                                    }
+                                }
+                                w.global::<crate::SearchPane>()
+                                    .set_unified_search_thumbnails(ModelRc::new(VecModel::from(
+                                        images,
+                                    )));
+                                w.global::<crate::SearchPane>()
+                                    .set_unified_search_has_thumbnails(ModelRc::new(
+                                        VecModel::from(has_images),
+                                    ));
+                                w.global::<crate::SearchPane>()
+                                    .set_unified_search_message_kinds(ModelRc::new(
+                                        VecModel::from(
+                                            kinds
+                                                .into_iter()
+                                                .map(SharedString::from)
+                                                .collect::<Vec<_>>(),
+                                        ),
+                                    ));
+                                w.global::<crate::SearchPane>().set_unified_search_messages(
+                                    ModelRc::new(VecModel::from(results)),
+                                );
+                                w.global::<crate::SearchPane>()
+                                    .set_unified_search_searching(false);
+                            },
+                        );
+                    }
+                });
             });
         });
-    });
 }
 
 /// On Enter over a `nickname.discriminator` query or a pasted
@@ -485,94 +614,111 @@ fn wire_resolve(
 ) {
     let weak = window.as_weak();
     let ui_ctx = ui_ctx.clone();
-    window.on_unified_search_resolve(move |query: SharedString| {
-        let handle = person_query(&query).to_string();
-        if !resolvable_person_query(&handle) {
-            return;
-        }
-        let Some(w) = weak.upgrade() else { return };
-        if !w.get_unified_search_open() || person_query(&w.get_unified_search_query()) != handle {
-            return;
-        }
-        let ticket = requests
-            .lock()
-            .unwrap()
-            .begin_person(ui_ctx.auth_snapshot().session_revision, &query);
-        {
-            w.set_unified_search_person_status("".into());
-            w.set_unified_search_person_id("".into());
-            w.set_unified_search_person_name("".into());
-            w.set_unified_search_person_error("".into());
-            w.set_unified_search_person_handle(handle.clone().into());
-            w.set_unified_search_person_status("searching".into());
-        }
-        let weak_bg = weak.clone();
-        let ui_ctx = ui_ctx.clone();
-        let requests = requests.clone();
-        tokio::spawn(async move {
-            // Username link → (decrypted handle, owner account); plain handle
-            // → hashed lookup, which a Nobody account answers as "no match".
-            let is_link = chatter_core::domain::UsernameLink::is_username_link(&handle);
-            let (shown_handle, looked_up) = if is_link {
-                match ui_ctx.resolve_username_link(&handle).await {
-                    Ok((username, uid)) => (username, Ok(Some(uid))),
-                    Err(e) => (handle.clone(), Err(e)),
-                }
-            } else {
-                (handle.clone(), ui_ctx.lookup_by_username(&handle).await)
-            };
-            let mut error = String::new();
-            let (status, id, name) = match looked_up {
-                Ok(Some(uid)) => {
-                    let display = ui_ctx
-                        .get_user_profile(&uid)
-                        .await
-                        .map(|p| p.display_name)
-                        .unwrap_or_default();
-                    let name = if display.is_empty() {
-                        shown_handle.clone()
-                    } else {
-                        display
-                    };
-                    ("found".to_string(), uid.to_string(), name)
-                }
-                Ok(None) => ("notfound".to_string(), String::new(), String::new()),
-                // Not "No user": a refusal (Shield) or a failure is not an
-                // answer about the handle. Core words it.
-                Err(e) => {
-                    error = e.user_message();
-                    ("error".to_string(), String::new(), String::new())
-                }
-            };
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak_bg.upgrade() {
-                    let row = PersonRow {
-                        id,
-                        handle: shown_handle,
-                        name,
-                        status,
-                        error,
-                    };
-                    requests.lock().unwrap().complete_person(
-                        ticket,
-                        ui_ctx.auth_snapshot().session_revision,
-                        w.get_unified_search_open(),
-                        row,
-                        |row| {
-                            // Status publishes the row last; all identity fields
-                            // belong to this one lookup and this one UI turn.
-                            w.set_unified_search_person_status("".into());
-                            w.set_unified_search_person_id(row.id.clone().into());
-                            w.set_unified_search_person_handle(row.handle.clone().into());
-                            w.set_unified_search_person_name(row.name.clone().into());
-                            w.set_unified_search_person_error(row.error.clone().into());
-                            w.set_unified_search_person_status(row.status.clone().into());
-                        },
-                    );
-                }
+    window
+        .global::<crate::SearchPane>()
+        .on_unified_search_resolve(move |query: SharedString| {
+            let handle = person_query(&query).to_string();
+            if !resolvable_person_query(&handle) {
+                return;
+            }
+            let Some(w) = weak.upgrade() else { return };
+            if !w.global::<crate::SearchPane>().get_unified_search_open()
+                || person_query(&w.global::<crate::SearchPane>().get_unified_search_query())
+                    != handle
+            {
+                return;
+            }
+            let ticket = requests
+                .lock()
+                .unwrap()
+                .begin_person(ui_ctx.auth_snapshot().session_revision, &query);
+            {
+                w.global::<crate::SearchPane>()
+                    .set_unified_search_person_status("".into());
+                w.global::<crate::SearchPane>()
+                    .set_unified_search_person_id("".into());
+                w.global::<crate::SearchPane>()
+                    .set_unified_search_person_name("".into());
+                w.global::<crate::SearchPane>()
+                    .set_unified_search_person_error("".into());
+                w.global::<crate::SearchPane>()
+                    .set_unified_search_person_handle(handle.clone().into());
+                w.global::<crate::SearchPane>()
+                    .set_unified_search_person_status("searching".into());
+            }
+            let weak_bg = weak.clone();
+            let ui_ctx = ui_ctx.clone();
+            let requests = requests.clone();
+            tokio::spawn(async move {
+                // Username link → (decrypted handle, owner account); plain handle
+                // → hashed lookup, which a Nobody account answers as "no match".
+                let is_link = chatter_core::domain::UsernameLink::is_username_link(&handle);
+                let (shown_handle, looked_up) = if is_link {
+                    match ui_ctx.resolve_username_link(&handle).await {
+                        Ok((username, uid)) => (username, Ok(Some(uid))),
+                        Err(e) => (handle.clone(), Err(e)),
+                    }
+                } else {
+                    (handle.clone(), ui_ctx.lookup_by_username(&handle).await)
+                };
+                let mut error = String::new();
+                let (status, id, name) = match looked_up {
+                    Ok(Some(uid)) => {
+                        let display = ui_ctx
+                            .get_user_profile(&uid)
+                            .await
+                            .map(|p| p.display_name)
+                            .unwrap_or_default();
+                        let name = if display.is_empty() {
+                            shown_handle.clone()
+                        } else {
+                            display
+                        };
+                        ("found".to_string(), uid.to_string(), name)
+                    }
+                    Ok(None) => ("notfound".to_string(), String::new(), String::new()),
+                    // Not "No user": a refusal (Shield) or a failure is not an
+                    // answer about the handle. Core words it.
+                    Err(e) => {
+                        error = e.user_message();
+                        ("error".to_string(), String::new(), String::new())
+                    }
+                };
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak_bg.upgrade() {
+                        let row = PersonRow {
+                            id,
+                            handle: shown_handle,
+                            name,
+                            status,
+                            error,
+                        };
+                        requests.lock().unwrap().complete_person(
+                            ticket,
+                            ui_ctx.auth_snapshot().session_revision,
+                            w.global::<crate::SearchPane>().get_unified_search_open(),
+                            row,
+                            |row| {
+                                // Status publishes the row last; all identity fields
+                                // belong to this one lookup and this one UI turn.
+                                w.global::<crate::SearchPane>()
+                                    .set_unified_search_person_status("".into());
+                                w.global::<crate::SearchPane>()
+                                    .set_unified_search_person_id(row.id.clone().into());
+                                w.global::<crate::SearchPane>()
+                                    .set_unified_search_person_handle(row.handle.clone().into());
+                                w.global::<crate::SearchPane>()
+                                    .set_unified_search_person_name(row.name.clone().into());
+                                w.global::<crate::SearchPane>()
+                                    .set_unified_search_person_error(row.error.clone().into());
+                                w.global::<crate::SearchPane>()
+                                    .set_unified_search_person_status(row.status.clone().into());
+                            },
+                        );
+                    }
+                });
             });
         });
-    });
 }
 
 /// On selecting a resolved person: open their profile modal (where the
@@ -584,24 +730,26 @@ fn wire_person_selected(
 ) {
     let weak = window.as_weak();
     let ui_ctx = ui_ctx.clone();
-    window.on_unified_search_person_selected(move |uid: SharedString| {
-        let Some(w) = weak.upgrade() else { return };
-        if !requests.lock().unwrap().person_selectable(
-            uid.as_str(),
-            ui_ctx.auth_snapshot().session_revision,
-            w.get_unified_search_open(),
-        ) {
-            return;
-        }
-        let user_id = match uid.to_string().parse::<chatter_core::domain::ids::UserId>() {
-            Ok(id) => id,
-            Err(_) => return,
-        };
-        if let Some(w) = weak.upgrade() {
-            crate::bin_ui::features::modals::open_user_profile(&w, &user_id, Some(&ui_ctx));
-            crate::bin_ui::features::back::push(&w, "user-profile");
-        }
-    });
+    window
+        .global::<crate::SearchPane>()
+        .on_unified_search_person_selected(move |uid: SharedString| {
+            let Some(w) = weak.upgrade() else { return };
+            if !requests.lock().unwrap().person_selectable(
+                uid.as_str(),
+                ui_ctx.auth_snapshot().session_revision,
+                w.global::<crate::SearchPane>().get_unified_search_open(),
+            ) {
+                return;
+            }
+            let user_id = match uid.to_string().parse::<chatter_core::domain::ids::UserId>() {
+                Ok(id) => id,
+                Err(_) => return,
+            };
+            if let Some(w) = weak.upgrade() {
+                crate::bin_ui::features::modals::open_user_profile(&w, &user_id, Some(&ui_ctx));
+                crate::bin_ui::features::back::push(&w, "user-profile");
+            }
+        });
 }
 
 /// On conversation pick: navigate (channel/dm/private group).
@@ -612,33 +760,40 @@ fn wire_conversation_selected(
 ) {
     let weak = window.as_weak();
     let ui_ctx = ui_ctx.clone();
-    window.on_unified_search_conversation_selected(
-        move |id: SharedString, conv_type: SharedString| {
-            if let Some(w) = weak.upgrade() {
-                if !requests.lock().unwrap().session_current(
-                    ui_ctx.auth_snapshot().session_revision,
-                    w.get_unified_search_open(),
-                ) || !w
-                    .get_unified_search_conversations()
-                    .iter()
-                    .any(|row| row.id == id && row.conv_type == conv_type)
-                {
-                    return;
+    window
+        .global::<crate::SearchPane>()
+        .on_unified_search_conversation_selected(
+            move |id: SharedString, conv_type: SharedString| {
+                if let Some(w) = weak.upgrade() {
+                    if !requests.lock().unwrap().session_current(
+                        ui_ctx.auth_snapshot().session_revision,
+                        w.global::<crate::SearchPane>().get_unified_search_open(),
+                    ) || !w
+                        .global::<crate::SearchPane>()
+                        .get_unified_search_conversations()
+                        .iter()
+                        .any(|row| row.id == id && row.conv_type == conv_type)
+                    {
+                        return;
+                    }
+                    open_conversation(&w, id, conv_type.as_str());
                 }
-                open_conversation(&w, id, conv_type.as_str());
-            }
-        },
-    );
+            },
+        );
 }
 
 /// Open a conversation by its palette `(id, conv_type)` — the one way a
 /// jump-to row and a message hit (core `search_hit_target`) navigate.
 fn open_conversation(w: &MainWindow, id: SharedString, conv_type: &str) {
     match conv_type {
-        "channel" => w.invoke_channel_selected(id),
-        "dm" | "anon_dm" => w.invoke_dm_selected(id),
-        "private_group" => w.invoke_private_group_selected(id),
-        "saved_messages" => w.invoke_saved_messages_clicked(),
+        "channel" => w.global::<crate::SidebarPane>().invoke_channel_selected(id),
+        "dm" | "anon_dm" => w.global::<crate::SidebarPane>().invoke_dm_selected(id),
+        "private_group" => w
+            .global::<crate::SidebarPane>()
+            .invoke_private_group_selected(id),
+        "saved_messages" => w
+            .global::<crate::SidebarPane>()
+            .invoke_saved_messages_clicked(),
         // Mesh rows open through the same global callback the sidebar
         // uses, so there is one way into a mesh conversation.
         #[cfg(feature = "mesh")]
@@ -648,7 +803,7 @@ fn open_conversation(w: &MainWindow, id: SharedString, conv_type: &str) {
         // No mesh in this build: the row cannot exist, but a stored message
         // from a mesh-enabled run can. Clearing the spinner is the honest
         // outcome — any view left open would be the wrong conversation.
-        _ => w.set_loading_messages(false),
+        _ => w.global::<crate::ChatPane>().set_loading_messages(false),
     }
 }
 
@@ -660,38 +815,40 @@ fn wire_message_selected(
 ) {
     let weak = window.as_weak();
     let ui_ctx = ui_ctx.clone();
-    window.on_unified_search_message_selected(move |message_id: SharedString| {
-        let Some(w) = weak.upgrade() else { return };
-        let session = ui_ctx.auth_snapshot().session_revision;
-        if !requests.lock().unwrap().message_selectable(
-            message_id.as_str(),
-            session,
-            w.get_unified_search_open(),
-        ) {
-            return;
-        }
-        // Local lookup and target selection are synchronous: an edit/clear
-        // cannot overtake a queued navigation task after the row was clicked.
-        let Ok(msg_id) = message_id
-            .as_str()
-            .parse::<chatter_core::domain::ids::MessageId>()
-        else {
-            return;
-        };
-        let Some(message) = ui_ctx.get_message_local(&msg_id) else {
-            return;
-        };
-        let (conv_type, conv_id) = ui_ctx.search_hit_target(&message);
-        w.set_loading_messages(true);
-        open_conversation(&w, conv_id.into(), conv_type);
-        jump_once_open(
-            w.as_weak(),
-            ui_ctx.clone(),
-            message_id.to_string(),
-            session,
-            50,
-        );
-    });
+    window
+        .global::<crate::SearchPane>()
+        .on_unified_search_message_selected(move |message_id: SharedString| {
+            let Some(w) = weak.upgrade() else { return };
+            let session = ui_ctx.auth_snapshot().session_revision;
+            if !requests.lock().unwrap().message_selectable(
+                message_id.as_str(),
+                session,
+                w.global::<crate::SearchPane>().get_unified_search_open(),
+            ) {
+                return;
+            }
+            // Local lookup and target selection are synchronous: an edit/clear
+            // cannot overtake a queued navigation task after the row was clicked.
+            let Ok(msg_id) = message_id
+                .as_str()
+                .parse::<chatter_core::domain::ids::MessageId>()
+            else {
+                return;
+            };
+            let Some(message) = ui_ctx.get_message_local(&msg_id) else {
+                return;
+            };
+            let (conv_type, conv_id) = ui_ctx.search_hit_target(&message);
+            w.global::<crate::ChatPane>().set_loading_messages(true);
+            open_conversation(&w, conv_id.into(), conv_type);
+            jump_once_open(
+                w.as_weak(),
+                ui_ctx.clone(),
+                message_id.to_string(),
+                session,
+                50,
+            );
+        });
 }
 
 /// Jump to `message_id` once the conversation that holds it has finished
@@ -709,7 +866,7 @@ fn jump_once_open(
         if ui_ctx.auth_snapshot().session_revision != session {
             return;
         }
-        if !w.get_loading_messages() {
+        if !w.global::<crate::ChatPane>().get_loading_messages() {
             crate::bin_ui::features::header::jump_to_message(&w, &ui_ctx, &message_id);
         } else if tries > 0 {
             jump_once_open(weak, ui_ctx, message_id, session, tries - 1);
@@ -742,7 +899,9 @@ fn conversation_items(ui_ctx: &ChatterClient, query: &str) -> Vec<QuickSwitcherI
 }
 
 fn set_conversations(window: &MainWindow, items: Vec<QuickSwitcherItem>) {
-    window.set_unified_search_conversations(ModelRc::new(VecModel::from(items)));
+    window
+        .global::<crate::SearchPane>()
+        .set_unified_search_conversations(ModelRc::new(VecModel::from(items)));
 }
 
 /// Port of header.rs message-search shaping. Searches every conversation the

@@ -69,40 +69,55 @@ pub fn wire(window: &MainWindow) {
         }
     });
     let weak = window.as_weak();
-    window.on_nav_push(move |screen| {
-        if let Some(w) = weak.upgrade() {
-            push(&w, &screen);
-        }
-    });
+    window
+        .global::<crate::ModalHostState>()
+        .on_nav_push(move |screen| {
+            if let Some(w) = weak.upgrade() {
+                push(&w, &screen);
+            }
+        });
     let weak = window.as_weak();
-    window.on_nav_close(move |screen| {
-        if let Some(w) = weak.upgrade() {
-            close(&w, &screen);
-        }
-    });
+    window
+        .global::<crate::ModalHostState>()
+        .on_nav_close(move |screen| {
+            if let Some(w) = weak.upgrade() {
+                close(&w, &screen);
+            }
+        });
     let weak = window.as_weak();
-    window.on_nav_pop(move || {
-        if let Some(w) = weak.upgrade() {
-            pop(&w);
-        }
-    });
+    window
+        .global::<crate::ModalHostState>()
+        .on_nav_pop(move || {
+            if let Some(w) = weak.upgrade() {
+                pop(&w);
+            }
+        });
 }
 
 fn stack(w: &MainWindow) -> Vec<SharedString> {
-    w.get_modal_stack().iter().collect()
+    w.global::<crate::ModalHostState>()
+        .get_modal_stack()
+        .iter()
+        .collect()
 }
 
 fn set_stack(w: &MainWindow, stack: Vec<SharedString>) {
-    if w.get_modal_stack().iter().any(|s| s == "edit-profile")
+    if w.global::<crate::ModalHostState>()
+        .get_modal_stack()
+        .iter()
+        .any(|s| s == "edit-profile")
         && !stack.iter().any(|s| s == "edit-profile")
     {
         crate::bin_ui::features::modals::profile::retire_avatar_edit();
-        w.set_edit_profile_loading(false);
+        w.global::<crate::ModalHostState>()
+            .set_edit_profile_loading(false);
     }
     // Settings stays mounted under what it opens, so Slint needs "anywhere on
     // the stack", which it cannot compute from an array itself.
-    w.set_settings_open(stack.iter().any(|x| x.as_str() == "settings"));
-    w.set_modal_stack(ModelRc::new(VecModel::from(stack)));
+    w.global::<crate::ModalHostState>()
+        .set_settings_open(stack.iter().any(|x| x.as_str() == "settings"));
+    w.global::<crate::ModalHostState>()
+        .set_modal_stack(ModelRc::new(VecModel::from(stack)));
 }
 
 /// Push `screen` over whatever is showing. A screen already on the stack is
@@ -140,7 +155,8 @@ pub fn pop(w: &MainWindow) -> bool {
 /// "open this conversation" from anywhere, answering a call, and logout.
 pub fn reset_to_chats(w: &MainWindow) {
     set_stack(w, Vec::new());
-    w.set_active_tab("chats".into());
+    w.global::<crate::SidebarPane>()
+        .set_active_tab("chats".into());
 }
 
 /// Apply one Back press. Returns `true` if it was consumed by in-app state
@@ -150,86 +166,157 @@ pub fn reset_to_chats(w: &MainWindow) {
 pub fn handle_back(window: &MainWindow) -> bool {
     // The ring covers everything, so Back belonged to it — and fell through
     // it, popping the chat underneath while the call rang on (FX3).
-    if window.get_incoming_call_visible() && !window.get_incoming_call_minimized() {
-        window.set_incoming_call_minimized(true);
+    if window
+        .global::<crate::CallView>()
+        .get_incoming_call_visible()
+        && !window
+            .global::<crate::CallView>()
+            .get_incoming_call_minimized()
+    {
+        window
+            .global::<crate::CallView>()
+            .set_incoming_call_minimized(true);
         return true;
     }
 
-    if window.get_delete_confirm_count() > 0 {
-        window.set_delete_confirm_count(0);
+    if window
+        .global::<crate::ChatPane>()
+        .get_delete_confirm_count()
+        > 0
+    {
+        window
+            .global::<crate::ChatPane>()
+            .set_delete_confirm_count(0);
         return true;
     }
 
-    if window.get_selection_mode() {
+    if window.global::<crate::ChatPane>().get_selection_mode() {
         // Both halves are required, and this is the same pair the selection
         // bar's own close button fires (ui/app.slint:2579-2580). The flag drives
         // the bar's visibility; the selected SET lives in
         // `features::chat::selection`, so without `selection-cleared` the set
         // would stay populated and the bubbles would stay visually marked.
-        window.set_selection_mode(false);
-        window.invoke_selection_cleared();
+        window.global::<crate::ChatPane>().set_selection_mode(false);
+        window
+            .global::<crate::ChatPane>()
+            .invoke_selection_cleared();
         return true;
     }
 
     // Direct media overlays are not on the modal stack. Dismiss the topmost
     // one with its normal cleanup callback before navigating the chat.
-    if window.get_pdf_preview_visible() {
-        window.set_pdf_preview_visible(false);
-        window.invoke_close_pdf_preview();
+    if window.global::<crate::ChatPane>().get_pdf_preview_visible() {
+        window
+            .global::<crate::ChatPane>()
+            .set_pdf_preview_visible(false);
+        window
+            .global::<crate::ChatPane>()
+            .invoke_close_pdf_preview();
         return true;
     }
-    if window.get_code_preview_visible() {
-        window.set_code_preview_visible(false);
-        window.invoke_close_code_preview();
+    if window
+        .global::<crate::ChatPane>()
+        .get_code_preview_visible()
+    {
+        window
+            .global::<crate::ChatPane>()
+            .set_code_preview_visible(false);
+        window
+            .global::<crate::ChatPane>()
+            .invoke_close_code_preview();
         return true;
     }
-    if window.get_video_player_visible() {
-        window.set_video_player_visible(false);
-        window.invoke_close_video_player();
+    if window
+        .global::<crate::ChatPane>()
+        .get_video_player_visible()
+    {
+        window
+            .global::<crate::ChatPane>()
+            .set_video_player_visible(false);
+        window
+            .global::<crate::ChatPane>()
+            .invoke_close_video_player();
         return true;
     }
-    if window.get_image_viewer_visible() {
-        window.set_image_viewer_visible(false);
-        window.invoke_close_image_viewer();
+    if window
+        .global::<crate::ChatPane>()
+        .get_image_viewer_visible()
+    {
+        window
+            .global::<crate::ChatPane>()
+            .set_image_viewer_visible(false);
+        window
+            .global::<crate::ChatPane>()
+            .invoke_close_image_viewer();
         return true;
     }
 
     // Calls row selection: leave it before the overflow or the tab. The
     // marks live in `features::calls::history`, which this callback clears.
-    if window.get_call_history_selecting() {
-        window.invoke_call_history_end_selection();
+    if window
+        .global::<crate::CallView>()
+        .get_call_history_selecting()
+    {
+        window
+            .global::<crate::CallView>()
+            .invoke_call_history_end_selection();
         return true;
     }
 
     // Calls overflow is owned by the window and bound to the screen. Consume
     // it before popping a modal or returning the Calls tab to Chats.
-    if window.get_calls_more_menu_visible() {
-        window.set_calls_more_menu_visible(false);
+    if window
+        .global::<crate::CallView>()
+        .get_calls_more_menu_visible()
+    {
+        window
+            .global::<crate::CallView>()
+            .set_calls_more_menu_visible(false);
         return true;
     }
 
     // The message context menu and the reaction picker are overlays opened
     // from a bubble. Back fell through them to the conversation pane, which
     // left the menu floating over the conversation list.
-    if window.get_reaction_picker_visible() {
-        window.set_reaction_picker_visible(false);
+    if window
+        .global::<crate::ChatPane>()
+        .get_reaction_picker_visible()
+    {
+        window
+            .global::<crate::ChatPane>()
+            .set_reaction_picker_visible(false);
         return true;
     }
-    if window.get_context_menu_visible() {
-        window.set_context_menu_visible(false);
+    if window
+        .global::<crate::ChatPane>()
+        .get_context_menu_visible()
+    {
+        window
+            .global::<crate::ChatPane>()
+            .set_context_menu_visible(false);
         return true;
     }
 
     // The composer's emoji and GIF pickers are overlays too, and since the
     // emoji picker now stays open across insertions (§112u) Back is the
     // natural way to dismiss it.
-    if window.get_composer_emoji_picker_visible() {
-        window.set_composer_emoji_picker_visible(false);
+    if window
+        .global::<crate::ChatPane>()
+        .get_composer_emoji_picker_visible()
+    {
+        window
+            .global::<crate::ChatPane>()
+            .set_composer_emoji_picker_visible(false);
         window.invoke_release_text_focus();
         return true;
     }
-    if window.get_composer_gif_picker_visible() {
-        window.set_composer_gif_picker_visible(false);
+    if window
+        .global::<crate::ChatPane>()
+        .get_composer_gif_picker_visible()
+    {
+        window
+            .global::<crate::ChatPane>()
+            .set_composer_gif_picker_visible(false);
         window.invoke_release_text_focus();
         return true;
     }
@@ -237,8 +324,13 @@ pub fn handle_back(window: &MainWindow) -> bool {
     // The unified search palette is its own overlay, not a stacked screen,
     // so Back fell straight through it and backgrounded the app with the
     // palette still on screen (§112u).
-    if window.get_unified_search_open() {
-        window.set_unified_search_open(false);
+    if window
+        .global::<crate::SearchPane>()
+        .get_unified_search_open()
+    {
+        window
+            .global::<crate::SearchPane>()
+            .set_unified_search_open(false);
         return true;
     }
 
@@ -252,8 +344,15 @@ pub fn handle_back(window: &MainWindow) -> bool {
         return true;
     }
 
-    if window.get_active_tab().as_str() != "chats" {
-        window.set_active_tab("chats".into());
+    if window
+        .global::<crate::SidebarPane>()
+        .get_active_tab()
+        .as_str()
+        != "chats"
+    {
+        window
+            .global::<crate::SidebarPane>()
+            .set_active_tab("chats".into());
         return true;
     }
 
@@ -263,8 +362,13 @@ pub fn handle_back(window: &MainWindow) -> bool {
     // did: opening a thread and pressing Back landed on the chat list, two
     // levels up (§112s). Fire the same callback the panel's own close button
     // does, so the thread state is cleared in core as well.
-    if window.get_thread_panel_visible() {
-        window.invoke_close_thread_clicked();
+    if window
+        .global::<crate::ChatPane>()
+        .get_thread_panel_visible()
+    {
+        window
+            .global::<crate::ChatPane>()
+            .invoke_close_thread_clicked();
         return true;
     }
 
@@ -272,8 +376,10 @@ pub fn handle_back(window: &MainWindow) -> bool {
     // so gate on the layout rather than the flag: a two-pane tablet popping it
     // changes nothing on screen and ate a Back press. Left set there, it is
     // what keeps the chat open if the window later narrows to compact.
-    if window.get_compact_layout() && window.get_mobile_show_chat() {
-        window.set_mobile_show_chat(false);
+    if window.get_compact_layout() && window.global::<crate::SidebarPane>().get_mobile_show_chat() {
+        window
+            .global::<crate::SidebarPane>()
+            .set_mobile_show_chat(false);
         return true;
     }
 

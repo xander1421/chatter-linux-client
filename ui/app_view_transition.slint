@@ -1,0 +1,36 @@
+import { Materials } from "theme/materials.slint";
+import { Appearance } from "theme/appearance.slint";
+
+// Hold outgoing entry pages until their transition finishes.
+export component AppViewTransition inherits Rectangle {
+    width: 0px;
+    height: 0px;
+    in property <string> current-view;
+    private property <string> previous-view: "loading";
+    out property <string> exiting-view: "";
+    private property <bool> view-appearing: true;
+    out property <float> view-progress: 1;
+    changed current-view => {
+        root.exiting-view = Appearance.reduce-motion ? "" : root.previous-view;
+        root.previous-view = root.current-view;
+        root.view-appearing = false;
+        root.view-progress = 0;
+        view-arrive.start();
+        view-leave.start();
+    }
+    animate view-progress {
+        duration: root.view-appearing ? Materials.motion-standard : 0ms;
+        easing: Materials.glide;
+    }
+    view-arrive := Timer {
+        interval: 1ms;
+        running: false;
+        triggered => { self.running = false; root.view-appearing = true; root.view-progress = 1; }
+    }
+    view-leave := Timer {
+        interval: Materials.motion-standard + 40ms;
+        running: false;
+        triggered => { self.running = false; root.exiting-view = ""; }
+    }
+
+}

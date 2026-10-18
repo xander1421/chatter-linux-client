@@ -54,80 +54,82 @@ pub fn wire_delete_message(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
     let weak_window = window.as_weak();
 
-    window.on_delete_message(move |sender_id: SharedString, timestamp_ns: SharedString| {
-        let sender_id_str = sender_id.to_string();
-        let timestamp_ns_str = timestamp_ns.to_string();
-        tracing::info!(
-            sender_id = %sender_id_str,
-            timestamp_ns = %timestamp_ns_str,
-            "UI callback: delete-for-me triggered (Signal-style lookup)"
-        );
-
-        let conversation = ui_ctx.active_conversation();
-        let auth = ui_ctx.auth_snapshot();
-        let Some(owner) = auth.current_user_id else {
-            return;
-        };
-        let session_revision = auth.session_revision;
-        let ui_ctx_spawn = ui_ctx.clone();
-        let weak = weak_window.clone();
-        let sender_for_ui = sender_id_str.clone();
-        let timestamp_for_ui = timestamp_ns_str.clone();
-
-        tokio::spawn(async move {
-            let target_sender_id: UserId = match sender_id_str.parse() {
-                Ok(id) => id,
-                Err(e) => {
-                    tracing::error!(error = %e, "Invalid sender ID for delete");
-                    return;
-                }
-            };
-            let target_sent_timestamp: u64 = match timestamp_ns_str.parse() {
-                Ok(ts) => ts,
-                Err(e) => {
-                    tracing::error!(error = %e, "Invalid timestamp for delete");
-                    return;
-                }
-            };
-
-            let handle = ui_ctx_spawn.conversation(conversation);
-            if let Err(e) = handle
-                .delete_for_me(&target_sender_id, target_sent_timestamp)
-                .await
-            {
-                tracing::error!(error = %e, "Failed to delete-for-me");
-                notify_action_failed(
-                    &weak,
-                    &ui_ctx_spawn,
-                    owner,
-                    session_revision,
-                    format!("Could not delete the message: {e}"),
-                );
-                return;
-            }
-
+    window.global::<crate::ChatPane>().on_delete_message(
+        move |sender_id: SharedString, timestamp_ns: SharedString| {
+            let sender_id_str = sender_id.to_string();
+            let timestamp_ns_str = timestamp_ns.to_string();
             tracing::info!(
-                sender_id = %sender_for_ui,
-                timestamp = %timestamp_for_ui,
-                "Delete-for-me completed"
+                sender_id = %sender_id_str,
+                timestamp_ns = %timestamp_ns_str,
+                "UI callback: delete-for-me triggered (Signal-style lookup)"
             );
 
-            // Our own delete raises no domain event; the row's preview has
-            // to follow it here.
-            crate::bin_ui::features::sidebar::history_changed(&weak, &ui_ctx_spawn);
-            run_ui!(weak, |w| {
-                if ui_ctx_spawn.active_conversation() != conversation {
+            let conversation = ui_ctx.active_conversation();
+            let auth = ui_ctx.auth_snapshot();
+            let Some(owner) = auth.current_user_id else {
+                return;
+            };
+            let session_revision = auth.session_revision;
+            let ui_ctx_spawn = ui_ctx.clone();
+            let weak = weak_window.clone();
+            let sender_for_ui = sender_id_str.clone();
+            let timestamp_for_ui = timestamp_ns_str.clone();
+
+            tokio::spawn(async move {
+                let target_sender_id: UserId = match sender_id_str.parse() {
+                    Ok(id) => id,
+                    Err(e) => {
+                        tracing::error!(error = %e, "Invalid sender ID for delete");
+                        return;
+                    }
+                };
+                let target_sent_timestamp: u64 = match timestamp_ns_str.parse() {
+                    Ok(ts) => ts,
+                    Err(e) => {
+                        tracing::error!(error = %e, "Invalid timestamp for delete");
+                        return;
+                    }
+                };
+
+                let handle = ui_ctx_spawn.conversation(conversation);
+                if let Err(e) = handle
+                    .delete_for_me(&target_sender_id, target_sent_timestamp)
+                    .await
+                {
+                    tracing::error!(error = %e, "Failed to delete-for-me");
+                    notify_action_failed(
+                        &weak,
+                        &ui_ctx_spawn,
+                        owner,
+                        session_revision,
+                        format!("Could not delete the message: {e}"),
+                    );
                     return;
                 }
-                super::helpers::remove_message_from_ui(
-                    &w,
-                    &sender_for_ui,
-                    &timestamp_for_ui,
-                    unregister_message_gifs,
+
+                tracing::info!(
+                    sender_id = %sender_for_ui,
+                    timestamp = %timestamp_for_ui,
+                    "Delete-for-me completed"
                 );
+
+                // Our own delete raises no domain event; the row's preview has
+                // to follow it here.
+                crate::bin_ui::features::sidebar::history_changed(&weak, &ui_ctx_spawn);
+                run_ui!(weak, |w| {
+                    if ui_ctx_spawn.active_conversation() != conversation {
+                        return;
+                    }
+                    super::helpers::remove_message_from_ui(
+                        &w,
+                        &sender_for_ui,
+                        &timestamp_for_ui,
+                        unregister_message_gifs,
+                    );
+                });
             });
-        });
-    });
+        },
+    );
 }
 
 /// Wire delete-everyone-message callback for DM and channel conversations.
@@ -137,7 +139,7 @@ pub fn wire_delete_everyone_message(window: &MainWindow, ui_ctx: &Arc<ChatterCli
     let ui_ctx = ui_ctx.clone();
     let weak_window = window.as_weak();
 
-    window.on_delete_everyone_message(move |sender_id: SharedString, timestamp_ns: SharedString| {
+    window.global::<crate::ChatPane>().on_delete_everyone_message(move |sender_id: SharedString, timestamp_ns: SharedString| {
         let sender_id_str = sender_id.to_string();
         let timestamp_ns_str = timestamp_ns.to_string();
         tracing::info!(

@@ -48,7 +48,7 @@ pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ctx_chat_state = ui_ctx.clone();
     let ctx_ui = ui_ctx.clone();
 
-    window.on_start_voice_call({
+    window.global::<crate::ChatPane>().on_start_voice_call({
         let weak = weak.clone();
         let chat_state = ctx_chat_state.clone();
         let ui_ctx = ctx_ui.clone();
@@ -62,7 +62,7 @@ pub fn wire_start_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         }
     });
 
-    window.on_start_video_call({
+    window.global::<crate::ChatPane>().on_start_video_call({
         let weak = weak.clone();
         let chat_state = ctx_chat_state.clone();
         let ui_ctx = ctx_ui.clone();
@@ -101,7 +101,7 @@ fn show_dialling(weak: &slint::Weak<MainWindow>, call_type: CallType, ui_ctx: &A
         user_id: "".into(),
         display_name: display_name.into(),
         initials: initials.into(),
-        avatar_source: w.get_user_avatar_source(),
+        avatar_source: w.global::<crate::SidebarPane>().get_user_avatar_source(),
         is_muted: false,
         is_video_enabled: is_video,
         is_screen_sharing: false,
@@ -110,32 +110,35 @@ fn show_dialling(weak: &slint::Weak<MainWindow>, call_type: CallType, ui_ctx: &A
         is_video_paused_locally: false,
     };
 
-    w.set_active_call_data(ActiveCallData {
-        call_id: "".into(),
-        channel_id: "".into(),
-        // Where the call is going. The conversation header already says this, and
-        // it is the only fact about the call we actually know yet.
-        title: w.get_channel_name(),
-        is_video_call: is_video,
-        is_encrypted: true,
-        // Nothing has been verified yet and nothing may claim otherwise. No
-        // emoji until keyed: the view shows its plain lock in their place.
-        is_identity_verified: false,
-        identity_warning: "".into(),
-        participant_count: 1,
-        duration_seconds: 0,
-        is_connected: false,
-        participants: ModelRc::new(VecModel::from(vec![local_participant])),
-        verification_key_version: "".into(),
-        verification_emoji_1: "".into(),
-        verification_emoji_2: "".into(),
-        verification_emoji_3: "".into(),
-        verification_emoji_4: "".into(),
-    });
-    w.set_call_is_muted(false);
-    w.set_call_is_video_enabled(is_video);
-    w.set_call_is_screen_sharing(false);
-    w.set_active_call_visible(true);
+    w.global::<crate::CallView>()
+        .set_active_call_data(ActiveCallData {
+            call_id: "".into(),
+            channel_id: "".into(),
+            // Where the call is going. The conversation header already says this, and
+            // it is the only fact about the call we actually know yet.
+            title: w.global::<crate::ChatPane>().get_channel_name(),
+            is_video_call: is_video,
+            is_encrypted: true,
+            // Nothing has been verified yet and nothing may claim otherwise. No
+            // emoji until keyed: the view shows its plain lock in their place.
+            is_identity_verified: false,
+            identity_warning: "".into(),
+            participant_count: 1,
+            duration_seconds: 0,
+            is_connected: false,
+            participants: ModelRc::new(VecModel::from(vec![local_participant])),
+            verification_key_version: "".into(),
+            verification_emoji_1: "".into(),
+            verification_emoji_2: "".into(),
+            verification_emoji_3: "".into(),
+            verification_emoji_4: "".into(),
+        });
+    w.global::<crate::CallView>().set_call_is_muted(false);
+    w.global::<crate::CallView>()
+        .set_call_is_video_enabled(is_video);
+    w.global::<crate::CallView>()
+        .set_call_is_screen_sharing(false);
+    w.global::<crate::CallView>().set_active_call_visible(true);
 }
 
 pub(super) const CALL_FAILED: &str = "Call failed — couldn't connect";
@@ -151,7 +154,7 @@ pub(super) const MIC_DENIED: &str = "Calls need microphone access — allow it t
 /// with the reason.
 pub(super) fn fail_call(weak: &slint::Weak<MainWindow>, reason: &str) {
     let Some(w) = weak.upgrade() else { return };
-    w.set_active_call_visible(false);
+    w.global::<crate::CallView>().set_active_call_visible(false);
     w.set_toast_message(reason.into());
     w.set_toast_variant("error".into());
     w.set_toast_visible(true);
@@ -246,7 +249,7 @@ async fn start_call_impl(
         .unwrap_or_else(|| "Anonymous".to_string());
     let channel_name = weak
         .upgrade()
-        .map(|w| w.get_channel_name().to_string())
+        .map(|w| w.global::<crate::ChatPane>().get_channel_name().to_string())
         .unwrap_or_default();
 
     // Delegate all orchestration to core — it resolves peer / kind / transport.
@@ -316,7 +319,7 @@ fn render_calling_placeholder(
         user_id: user_id.to_string().into(),
         display_name: display_name.into(),
         initials: local_initials.into(),
-        avatar_source: w.get_user_avatar_source(),
+        avatar_source: w.global::<crate::SidebarPane>().get_user_avatar_source(),
         is_muted: false,
         is_video_enabled: setup.is_video,
         is_screen_sharing: false,
@@ -381,11 +384,14 @@ fn render_calling_placeholder(
         verification_emoji_3: e3.into(),
         verification_emoji_4: e4.into(),
     };
-    w.set_active_call_data(call_data);
-    w.set_call_is_muted(false);
-    w.set_call_is_video_enabled(setup.is_video);
-    w.set_call_is_screen_sharing(false);
-    w.set_active_call_visible(true);
+    w.global::<crate::CallView>()
+        .set_active_call_data(call_data);
+    w.global::<crate::CallView>().set_call_is_muted(false);
+    w.global::<crate::CallView>()
+        .set_call_is_video_enabled(setup.is_video);
+    w.global::<crate::CallView>()
+        .set_call_is_screen_sharing(false);
+    w.global::<crate::CallView>().set_active_call_visible(true);
 
     // SAS emojis are absent for channel group calls too. Start presentation
     // polling for every call; fresh core snapshots decide when it is connected.
@@ -442,7 +448,7 @@ mod tests {
             "Me".into(),
             "Group".into(),
         );
-        assert!(window.get_active_call_visible());
+        assert!(window.global::<crate::CallView>().get_active_call_visible());
         assert!(
             super::super::timers::tests::timer_started(),
             "group calls have no SAS emojis but must still start their timer"

@@ -6,6 +6,7 @@
 //! (author, sent timestamp) in the conversation on screen. Each handler checks if the event is for the currently
 //! active conversation using `ChatState::active_conversation()`.
 
+use slint::ComponentHandle;
 use slint::{Model, VecModel};
 
 use chatter_core::client::ChatterClient;
@@ -111,7 +112,7 @@ pub fn handle_receipt(
             "delivered"
         };
 
-        let messages = window.get_messages();
+        let messages = window.global::<crate::ChatPane>().get_messages();
         let timestamp_strs: Vec<String> =
             message_timestamps.iter().map(|ts| ts.to_string()).collect();
 
@@ -158,7 +159,7 @@ pub fn handle_pin(
             return;
         }
 
-        let messages = window.get_messages();
+        let messages = window.global::<crate::ChatPane>().get_messages();
         let target_ts_ns = target_sent_timestamp.to_string();
         let mut preview = String::new();
 
@@ -201,13 +202,23 @@ pub fn handle_pin(
         }
 
         let pinned_count = chat_state.pinned_total_count() as i32;
-        window.set_has_pinned_messages(pinned_count > 0);
-        window.set_pinned_total_count(pinned_count);
+        window
+            .global::<crate::ChatPane>()
+            .set_has_pinned_messages(pinned_count > 0);
+        window
+            .global::<crate::ChatPane>()
+            .set_pinned_total_count(pinned_count);
         if is_pinned && !preview.is_empty() {
-            window.set_pinned_message_preview(preview.into());
-            window.set_pinned_current_index(pinned_count);
+            window
+                .global::<crate::ChatPane>()
+                .set_pinned_message_preview(preview.into());
+            window
+                .global::<crate::ChatPane>()
+                .set_pinned_current_index(pinned_count);
         } else if pinned_count == 0 {
-            window.set_pinned_message_preview("".into());
+            window
+                .global::<crate::ChatPane>()
+                .set_pinned_message_preview("".into());
         }
     });
 }

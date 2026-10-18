@@ -3,6 +3,7 @@
 //! Lifecycle events (requests, invites, membership) remain here.
 //! Message-related events are now unified in messaging.rs.
 
+use slint::ComponentHandle;
 use std::sync::Arc;
 
 use slint::Weak;
@@ -24,7 +25,8 @@ pub(super) fn handle_dm_request_received(window: &Weak<MainWindow>, ui_ctx: &Arc
         if let Some(w) = weak.upgrade() {
             crate::bin_ui::features::sidebar::refresh_chat_list(&w, &ui_ctx);
             let requests = ui_ctx.list_anon_dm_message_requests();
-            w.set_pending_message_requests(requests.len() as i32);
+            w.global::<crate::ModalHostState>()
+                .set_pending_message_requests(requests.len() as i32);
         }
     });
 }
@@ -114,8 +116,9 @@ fn refresh_active_group_counts(
                 return;
             }
             let (member_count, invited_count) = ui_ctx.anon_group_member_counts(&group_id);
-            w.set_member_count(member_count);
-            w.set_invited_count(invited_count);
+            w.global::<crate::ChatPane>().set_member_count(member_count);
+            w.global::<crate::ChatPane>()
+                .set_invited_count(invited_count);
         }
     });
 }
@@ -147,10 +150,13 @@ pub(super) fn handle_group_member_list_received(
             if is_active {
                 // Older group sends used the DM bootstrap placeholder. A
                 // roster refresh restores the group composer as well.
-                if w.get_composer_placeholder().as_str()
+                if w.global::<crate::ChatPane>()
+                    .get_composer_placeholder()
+                    .as_str()
                     == crate::bin_ui::features::chat::send_message::BOOTSTRAP_PLACEHOLDER
                 {
-                    w.set_composer_placeholder("Type a message...".into());
+                    w.global::<crate::ChatPane>()
+                        .set_composer_placeholder("Type a message...".into());
                 }
                 tracing::debug!(
                     "Refreshing message list for group {} after member list update",

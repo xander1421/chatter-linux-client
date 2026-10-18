@@ -1,0 +1,292 @@
+import { Colors } from "theme/colors.slint";
+import { AvatarOption } from "components/avatar_picker.slint";
+import { ChatRowData, CustomSectionData } from "sidebar/sidebar.slint";
+import { MessageItemData, MessageAttachmentData, PendingAttachmentData, ReactionEntry } from "chat/chat_layout.slint";
+import { ConversationKind } from "chat/conversation_kind.slint";
+import { EmojiData } from "components/emoji_picker.slint";
+import { GifData } from "components/gif_picker.slint";
+import { MentionSuggestion } from "components/mention_autocomplete.slint";
+import { AIProviderOption, AIModelOption, CreateChannelConfig, PrivateGroupFriend } from "modals/create_channel.slint";
+import { SharedContentItem, SharedTab } from "modals/mod.slint";
+import { FriendData, FriendRequestData, BlockedUserData } from "modals/friends.slint";
+import { ForwardTarget } from "modals/forward_message.slint";
+import { SessionInfo, PendingLinkInfo } from "modals/sessions.slint";
+import { SearchResultChannel } from "modals/join_channel.slint";
+import { ChannelMemberData, BannedMemberData } from "modals/channel_member_types.slint";
+import { InviteUser } from "modals/invite_member.slint";
+import { QuickSwitcherItem, SearchResult, CalendarDay } from "components/unified_search.slint";
+import { PinnedItem } from "modals/pinned_messages.slint";
+import { MemoryFactData, MemoryEntityData, MemoryGraphNodeData, MemoryGraphEdgeData } from "modals/jarvis_memory.slint";
+import { IncomingCallData, ActiveCallData, CallParticipantData, AudioDeviceData, ScreenSourceData, CallHistoryRow } from "calls/mod.slint";
+
+export global ChatPane {
+    // ========== Chat properties ==========
+    in property <string> channel-id: "";
+    in property <string> channel-name: "";
+    in property <ConversationKind> conversation-kind;
+    in property <bool> chat-can-forward: false;
+    in property <bool> private-channel: false;
+    in property <string> privacy-line-override: "";
+    in property <bool> privacy-line-exposed: false;
+    in-out property <bool> is-dm: false;  // True for DM conversations (hides avatars/names in messages)
+    in property <int> member-count: 0;
+    in property <int> invited-count: 0;
+    in property <string> topic: "";
+    in property <string> typing-indicator: "";
+    in property <string> header-presence-status: "offline";
+    in property <image> channel-avatar-source;
+    in property <bool> channel-has-avatar: false;
+    in property <[MessageItemData]> messages: [];
+    in property <bool> loading-messages: false;
+    in property <int> scroll-to-message-index: -1;  // Set to scroll to a specific message
+    in property <string> highlighted-message-id: "";  // Message id to briefly flash (quote jump)
+    in-out property <length> message-scroll-position: 0px;  // Scroll position for message list
+    in-out property <int> message-first-visible-row: 0;  // See MessageList.first-visible-row
+    in-out property <int> message-last-visible-row: -1;
+    // ChatLayout.list-scrolling, mirrored here for the SelectionBar, which sits
+    // over the message list but is not inside ChatLayout.
+    in-out property <bool> chat-list-scrolling: false;
+    // Which rows the chat header's ⋯ menu offers, set by the header as it opens it.
+    in-out property <bool> chat-menu-video: false;
+    in-out property <bool> chat-menu-settings: false;
+    in-out property <bool> chat-menu-secret-chat: false;
+    in-out property <bool> is-at-bottom: true;  // True when message list is scrolled to bottom
+    // The last older-history page failed to read (header.rs `load_older`);
+    // the list shows a Retry chip until a page loads or the conversation changes.
+    in-out property <bool> history-load-failed: false;
+    // Unread boundary from core — see MessageList.
+    in-out property <int> unread-index: -1;
+    in-out property <int> unread-count: 0;
+    in property <bool> should-auto-scroll: true;  // Enable/disable auto-scroll on new messages
+    in-out property <string> composer-text: "";
+    // The unsent draft, held while the composer is borrowed to edit a message.
+    in-out property <string> composer-stash: "";
+    in-out property <bool> composer-stash-held: false;
+    in property <string> composer-placeholder: "Type a message...";
+    in property <string> composer-notice: "";
+    // A channel we are no longer in (core's `is_former_channel`): read-only.
+    in property <bool> conversation-read-only: false;
+    in-out property <bool> header-can-call: false;
+    in-out property <bool> header-can-invite: false;
+    in-out property <bool> header-can-open-settings: false;
+    in-out property <bool> header-can-open-pinned-list: false;
+    in property <bool> secret-request-actions: false;
+    in-out property <string> private-request-decision: "";
+    callback secret-request-accept-clicked();
+    callback secret-request-decline-clicked();
+    in property <[PendingAttachmentData]> pending-attachments: [];
+    in-out property <bool> composer-is-editing: false;
+    in-out property <string> composer-edit-message-id: "";
+    // ========== Reply-to state (Signal-style: sender_id + timestamp) ==========
+    in-out property <bool> composer-is-replying: false;
+    in-out property <string> composer-reply-to-sender: "";       // Sender UUID (for protocol)
+    in-out property <string> composer-reply-to-sender-name: ""; // Sender display name (for UI)
+    in-out property <string> composer-reply-to-timestamp: "";
+    in-out property <string> composer-reply-preview: "";
+    in-out property <bool> composer-reply-has-thumbnail: false;
+    in-out property <image> composer-reply-thumbnail;
+    // ========== Audio playback state ==========
+    in-out property <string> current-playing-attachment-id: "";
+    in-out property <bool> is-media-playing: false;  // True when audio is actively playing (not paused)
+    in-out property <float> audio-progress: 0.0;  // Playback progress 0.0-1.0
+    in-out property <string> audio-elapsed: "0:00";  // Elapsed time display
+    // ========== Image viewer state ==========
+    in-out property <bool> image-viewer-visible: false;
+    in property <image> image-viewer-source;
+    in property <string> image-viewer-filename: "";
+    in property <string> image-viewer-size: "";
+    callback close-image-viewer();
+    in-out property <string> media-viewer-attachment-id: "";
+    in-out property <string> media-viewer-position: "";
+    in-out property <bool> media-viewer-has-previous: false;
+    in-out property <bool> media-viewer-has-next: false;
+    in-out property <image> media-viewer-previous-thumbnail;
+    in-out property <image> media-viewer-next-thumbnail;
+    callback media-viewer-navigate(int);
+    callback media-viewer-export(bool); // true = copy image, false = download
+    callback media-viewer-open-downloads();
+    // ========== Code preview state ==========
+    in-out property <bool> code-preview-visible: false;
+    in property <string> code-preview-filename: "";
+    in property <string> code-preview-language: "";
+    in property <int> code-preview-line-count: 0;
+    in property <string> code-preview-plain-text: "";
+    callback close-code-preview();
+    callback copy-code();
+    callback open-code-external();
+    // ========== PDF preview state ==========
+    in-out property <bool> pdf-preview-visible: false;
+    in property <string> pdf-preview-filename: "";
+    in property <int> pdf-preview-page-count: 0;
+    in property <int> pdf-preview-current-page: 1;
+    in property <string> pdf-preview-error: "";
+    in property <bool> pdf-preview-external-only: false;
+    in property <image> pdf-preview-image;
+    callback close-pdf-preview();
+    callback open-pdf-external();
+    callback pdf-page-prev();
+    callback pdf-page-next();
+    // ========== Video player state ==========
+    in-out property <bool> video-player-visible: false;
+    in property <image> video-player-frame;
+    in property <string> video-player-filename: "";
+    in property <float> video-player-progress: 0.0;
+    in property <string> video-player-elapsed: "0:00";
+    in property <string> video-player-duration: "0:00";
+    in property <bool> video-player-is-playing: false;
+    in-out property <float> video-player-volume: 1.0;
+    callback close-video-player();
+    callback video-player-toggle-play-pause();
+    callback video-player-seek(float);
+    callback video-player-set-volume(float);
+    // ========== Reaction picker state ==========
+    in-out property <bool> reaction-picker-visible: false;
+    in-out property <string> reaction-picker-message-id: "";
+    in-out property <string> reaction-picker-sender-id: "";
+    in-out property <string> reaction-picker-timestamp-ns: "";
+    in-out property <length> reaction-picker-anchor-x: 0px;
+    in-out property <length> reaction-picker-anchor-y: 0px;
+    in property <[EmojiData]> reaction-picker-emojis: [];
+    in-out property <int> reaction-picker-selected-category: 0;
+    in-out property <string> reaction-picker-search-query: "";
+    callback reaction-selected(string, string, string, string);  // (sender_id, timestamp_ns, message_id, emoji)
+    callback reaction-picker-category-changed(int);
+    callback reaction-picker-search-changed(string);
+    // ========== Composer emoji picker state ==========
+    in-out property <bool> composer-emoji-picker-visible: false;
+    in property <[EmojiData]> composer-emoji-list: [];
+    in-out property <int> composer-emoji-category: 0;
+    in-out property <string> composer-emoji-search: "";
+    in-out property <int> composer-emoji-skin-tone: 0;  // 0=default, 1-5=Fitzpatrick
+    // The composer's text or reply target changed: the app autosaves the draft.
+    callback composer-draft-changed();
+    // The thread panel's text changed: autosaved under its thread the same way.
+    callback thread-draft-changed();
+    callback composer-emoji-selected(string);      // emoji to insert
+    callback composer-emoji-category-changed(int); // category index
+    callback composer-emoji-search-changed(string); // search query
+    callback composer-emoji-skin-tone-changed(int); // skin tone index
+    // ========== Composer GIF picker state ==========
+    in-out property <bool> composer-gif-picker-visible: false;
+    // Set with the conversation kind from core (`gif_picker_available`).
+    in property <bool> composer-gifs-available: true;
+    in property <bool> composer-gif-picker-loading: false;
+    in property <bool> composer-gif-picker-failed: false;
+    in property <[GifData]> composer-gif-picker-results: [];
+    // The signed-in account's sent GIFs, shown above Trending.
+    in property <[GifData]> composer-gif-picker-recent: [];
+    in-out property <string> composer-gif-picker-search: "";
+    callback composer-gif-selected(string, string);
+    callback composer-gif-search-changed(string);
+    // ========== Mention autocomplete state ==========
+    in-out property <bool> mention-autocomplete-visible: false;
+    in property <[MentionSuggestion]> mention-suggestions: [];
+    in-out property <int> mention-selected-index: 0;
+    callback mention-suggestion-selected(string, string);  // (id, display_text)
+    // ========== Message multi-select ==========
+    // Entered by the long hold on a bubble (tier 2) or by "Select" in the
+    // message menu. While active, a plain tap toggles selection instead of
+    // doing whatever a tap normally does, and Android Back exits the mode
+    // before it closes any modal — see the back-press handler in Rust.
+    //
+    // The set of selected ids lives in Rust (the per-row `selected` flag on
+    // MessageItemData is what the UI renders); Slint holds only the mode flag
+    // and the count, so there is one owner of the set.
+    in-out property <bool> selection-mode: false;
+    in property <int> selected-message-count: 0;
+    callback message-selection-toggled(string);   // (message_id)
+    callback selection-cleared();
+    callback selection-delete-clicked();
+    callback selection-copy-clicked();
+    callback selection-forward-clicked();
+    // ========== Message context menu state ==========
+    in-out property <bool> context-menu-visible: false;
+    in-out property <string> context-menu-sender-id: "";
+    in-out property <string> context-menu-timestamp-ns: "";
+    // Thread and selection are keyed by message id, not (sender, timestamp).
+    in-out property <string> context-menu-message-id: "";
+    in-out property <length> context-menu-x: 0px;
+    in-out property <length> context-menu-y: 0px;
+    // Where the open conversation's content starts; the menu stays below it.
+    in-out property <length> context-menu-content-top: 0px;
+    // All callbacks use (sender_id, timestamp_ns) for Signal-style lookups
+    callback reply-message(string, string);
+    callback edit-message(string, string);
+    callback delete-message(string, string);         // (delete for me)
+    // A delete waiting on its confirm: how many messages (0 = none), for a
+    // single one which (sender, timestamp-ns), and whether it is a delete for
+    // both ("Delete for both?") or for me ("Delete message?").
+    in-out property <int> delete-confirm-count: 0;
+    in-out property <string> delete-confirm-sender;
+    in-out property <string> delete-confirm-timestamp;
+    in-out property <bool> delete-confirm-everyone: false;
+    in-out property <bool> delete-choosing: false;
+    in-out property <bool> delete-choice-everyone: false;
+    in-out property <bool> delete-choice-me: true;
+    callback delete-everyone-message(string, string); // (delete for everyone)
+    callback pin-message(string, string);
+    callback forward-message-action(string, string);
+    callback copy-message(string, string);
+    callback download-message(string, string);       // Download attachments
+    // ========== Peer identity change (conversation wedged) ==========
+    in property <bool> identity-change-visible: false;
+    in property <string> identity-change-title: "";
+    in property <string> identity-change-detail: "";
+    in property <bool> identity-change-attributed: false;
+    callback identity-change-accept-clicked();
+    // ========== Pinned bar state ==========
+    in property <bool> has-pinned-messages: false;
+    in property <string> pinned-message-preview: "";
+    in property <int> pinned-current-index: 1;
+    in property <int> pinned-total-count: 1;
+    callback pinned-prev-clicked();
+    callback pinned-next-clicked();
+    callback pinned-dismiss-clicked();
+    callback pinned-show-clicked();
+    callback pinned-item-selected(string);
+    callback sender-profile-requested(string);
+    in property <[PinnedItem]> pinned-items;
+    in property <image> pinned-thumbnail;
+    callback pinned-go-to-message();
+    // ========== Thread panel state ==========
+    in property <bool> thread-panel-visible: false;
+    in property <string> thread-root-message-id: "";
+    in property <string> thread-root-sender-name: "";
+    in property <string> thread-root-content-preview: "";
+    in property <int> thread-reply-count: 0;
+    in property <[MessageItemData]> thread-replies: [];
+    in property <bool> thread-loading: false;
+    in-out property <string> thread-composer-text: "";
+    callback close-thread-clicked();
+    callback send-thread-reply(string);
+    callback load-more-thread-replies();
+    // ========== Chat callbacks ==========
+    callback chat-settings-clicked();
+    // Invite member to channel modal properties
+    callback invite-member();
+    callback open-message-link(string);
+    callback message-clicked(string);
+    callback reply-clicked(string, string);  // (sender_id, timestamp_ns)
+    callback react-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
+    callback thread-clicked(string);
+    callback more-clicked(string, string, length, length);  // (sender_id, timestamp_ns, x, y)
+    callback quote-clicked(string);  // (reply-to-message-id) — jump to quoted original
+    callback view-attachment(string);  // attachment ID - for viewing/opening attachments
+    callback audio-seek(string, float);  // attachment ID, position 0.0-1.0
+    callback load-more();
+    callback visible-media-rows(int, int);
+    callback send(string) -> bool;
+    callback send-edit(string, string);  // (message_id, new_text)
+    callback cancel-edit();
+    callback cancel-reply();
+    callback attachment-clicked();
+    callback paste-image();
+    callback emoji-clicked();
+    callback gif-clicked();
+    callback mention-triggered(string);
+    callback remove-attachment(string);
+    callback typing-changed(bool);  // true when started typing, false when stopped
+    callback list-geometry(float, float, bool);
+    callback start-voice-call();  // Start voice call in current channel
+    callback start-video-call();  // Start video call in current channel
+}

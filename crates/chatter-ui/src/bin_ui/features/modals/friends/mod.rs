@@ -52,38 +52,44 @@ pub fn wire_friends_modal(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 fn wire_switch_tab(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak = window.as_weak();
     let ui_ctx = ui_ctx.clone();
-    window.on_friends_modal_switch_tab(move |tab| {
-        match tab.as_str() {
-            "friends" => {
-                crate::bin_ui::features::auth::initial_data::refresh_friends_list(
-                    weak.clone(),
-                    ui_ctx.clone(),
-                );
-            }
-            "requests" => {
-                let ui_ctx = ui_ctx.clone();
-                tokio::spawn(async move {
-                    // Emits FriendRequestsUpdated; the domain handler rebuilds
-                    // the Received/Sent rows.
-                    ui_ctx.refresh_friend_requests().await;
-                });
-            }
-            "blocked" => {
-                private_requests::refresh_blocked_users(weak.clone(), &ui_ctx);
-            }
-            "find" => {
-                let Some(w) = weak.upgrade() else { return };
-                let private_mode = ui_ctx.anon_mode_enabled();
-                match ui_ctx.current_friend_code(private_mode) {
-                    Ok(code) => w.set_friends_my_code(code.into()),
-                    Err(error) => {
-                        w.set_friends_my_code("".into());
-                        tracing::warn!("Could not load current friend code: {}", error);
-                    }
+    window
+        .global::<crate::ModalHostState>()
+        .on_friends_modal_switch_tab(move |tab| {
+            match tab.as_str() {
+                "friends" => {
+                    crate::bin_ui::features::auth::initial_data::refresh_friends_list(
+                        weak.clone(),
+                        ui_ctx.clone(),
+                    );
                 }
-                w.set_friends_show_qr(false);
+                "requests" => {
+                    let ui_ctx = ui_ctx.clone();
+                    tokio::spawn(async move {
+                        // Emits FriendRequestsUpdated; the domain handler rebuilds
+                        // the Received/Sent rows.
+                        ui_ctx.refresh_friend_requests().await;
+                    });
+                }
+                "blocked" => {
+                    private_requests::refresh_blocked_users(weak.clone(), &ui_ctx);
+                }
+                "find" => {
+                    let Some(w) = weak.upgrade() else { return };
+                    let private_mode = ui_ctx.anon_mode_enabled();
+                    match ui_ctx.current_friend_code(private_mode) {
+                        Ok(code) => w
+                            .global::<crate::ModalHostState>()
+                            .set_friends_my_code(code.into()),
+                        Err(error) => {
+                            w.global::<crate::ModalHostState>()
+                                .set_friends_my_code("".into());
+                            tracing::warn!("Could not load current friend code: {}", error);
+                        }
+                    }
+                    w.global::<crate::ModalHostState>()
+                        .set_friends_show_qr(false);
+                }
+                _ => {}
             }
-            _ => {}
-        }
-    });
+        });
 }

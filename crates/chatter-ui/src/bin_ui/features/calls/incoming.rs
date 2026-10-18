@@ -48,7 +48,7 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ctx_for_accept = ui_ctx.clone();
     let ctx_for_decline = ui_ctx.clone();
 
-    window.on_accept_incoming_call({
+    window.global::<crate::CallView>().on_accept_incoming_call({
         let weak = weak.clone();
         move |call_id| {
             let call_id_str = call_id.to_string();
@@ -59,20 +59,29 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 
             let replaces_active = weak
                 .upgrade()
-                .map(|w| w.get_incoming_call_replaces_active())
+                .map(|w| {
+                    w.global::<crate::CallView>()
+                        .get_incoming_call_replaces_active()
+                })
                 .unwrap_or(false);
             #[cfg(target_os = "android")]
             let is_video = weak
                 .upgrade()
-                .map(|w| w.get_incoming_call_data().is_video_call)
+                .map(|w| {
+                    w.global::<crate::CallView>()
+                        .get_incoming_call_data()
+                        .is_video_call
+                })
                 .unwrap_or(false);
 
             // Swap the modal for the call view now; the accept flow repaints
             // it with the real call on success.
             if let Some(w) = weak.upgrade() {
                 show_answering(&w);
-                w.set_incoming_call_visible(false);
-                w.set_incoming_call_replaces_active(false);
+                w.global::<crate::CallView>()
+                    .set_incoming_call_visible(false);
+                w.global::<crate::CallView>()
+                    .set_incoming_call_replaces_active(false);
             }
 
             slint::spawn_local(async move {
@@ -107,29 +116,33 @@ pub fn wire_incoming_call(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         }
     });
 
-    window.on_decline_incoming_call({
-        let weak = weak.clone();
-        move |call_id| {
-            let call_id_str = call_id.to_string();
-            let ui_ctx = ctx_for_decline.clone();
-            let revision = ui_ctx.auth_snapshot().session_revision;
-            dismiss_incoming(revision, &call_id_str);
+    window
+        .global::<crate::CallView>()
+        .on_decline_incoming_call({
+            let weak = weak.clone();
+            move |call_id| {
+                let call_id_str = call_id.to_string();
+                let ui_ctx = ctx_for_decline.clone();
+                let revision = ui_ctx.auth_snapshot().session_revision;
+                dismiss_incoming(revision, &call_id_str);
 
-            if let Some(w) = weak.upgrade() {
-                w.set_incoming_call_visible(false);
-                w.set_incoming_call_replaces_active(false);
-            }
-
-            tokio::spawn(async move {
-                if let Err(e) = ui_ctx
-                    .decline_presented_incoming_call_in_session(&call_id_str, revision)
-                    .await
-                {
-                    tracing::debug!(error = %e, "Decline call notification failed");
+                if let Some(w) = weak.upgrade() {
+                    w.global::<crate::CallView>()
+                        .set_incoming_call_visible(false);
+                    w.global::<crate::CallView>()
+                        .set_incoming_call_replaces_active(false);
                 }
-            });
-        }
-    });
+
+                tokio::spawn(async move {
+                    if let Err(e) = ui_ctx
+                        .decline_presented_incoming_call_in_session(&call_id_str, revision)
+                        .await
+                    {
+                        tracing::debug!(error = %e, "Decline call notification failed");
+                    }
+                });
+            }
+        });
 }
 
 async fn accept(
@@ -192,7 +205,12 @@ fn fail_incoming_call(
             return;
         }
         let Some(w) = weak.upgrade() else { return };
-        if w.get_active_call_data().call_id.as_str() != expected {
+        if w.global::<crate::CallView>()
+            .get_active_call_data()
+            .call_id
+            .as_str()
+            != expected
+        {
             return;
         }
         super::outgoing::fail_call(&weak, message);
@@ -246,7 +264,12 @@ fn render_accepted_call(
                 if !ui_ctx.call_session_is_current(revision) {
                     return;
                 }
-                if w.get_active_call_data().call_id.as_str() != setup.call_id.to_string() {
+                if w.global::<crate::CallView>()
+                    .get_active_call_data()
+                    .call_id
+                    .as_str()
+                    != setup.call_id.to_string()
+                {
                     return;
                 }
                 let Some(worker) = ui_ctx.call_service().get() else {
@@ -264,7 +287,7 @@ fn render_accepted_call(
                         user_id: current_user_id.clone().into(),
                         display_name: my_display_name.clone().into(),
                         initials: local_initials.into(),
-                        avatar_source: w.get_user_avatar_source(),
+                        avatar_source: w.global::<crate::SidebarPane>().get_user_avatar_source(),
                         is_muted: false,
                         is_video_enabled: is_video,
                         is_screen_sharing: false,
@@ -306,11 +329,14 @@ fn render_accepted_call(
                         verification_emoji_3: setup.verification_emojis[2].clone().into(),
                         verification_emoji_4: setup.verification_emojis[3].clone().into(),
                     };
-                    w.set_active_call_data(call_data);
-                    w.set_call_is_muted(false);
-                    w.set_call_is_video_enabled(is_video);
-                    w.set_call_is_screen_sharing(false);
-                    w.set_active_call_visible(true);
+                    w.global::<crate::CallView>()
+                        .set_active_call_data(call_data);
+                    w.global::<crate::CallView>().set_call_is_muted(false);
+                    w.global::<crate::CallView>()
+                        .set_call_is_video_enabled(is_video);
+                    w.global::<crate::CallView>()
+                        .set_call_is_screen_sharing(false);
+                    w.global::<crate::CallView>().set_active_call_visible(true);
                     start_call_timer(&w, ui_ctx.clone());
                     start_video_frame_timer(&w, frames);
                     open_call_screen(&w);
@@ -328,7 +354,12 @@ fn render_accepted_call(
                 if !ui_ctx.call_session_is_current(revision) {
                     return;
                 }
-                if w.get_active_call_data().call_id.as_str() != setup.call_id.to_string() {
+                if w.global::<crate::CallView>()
+                    .get_active_call_data()
+                    .call_id
+                    .as_str()
+                    != setup.call_id.to_string()
+                {
                     return;
                 }
                 let Some(worker) = ui_ctx.call_service().get() else {
@@ -340,14 +371,17 @@ fn render_accepted_call(
                     // caller tile, and any `ParticipantJoined` for the people
                     // already in the room that landed before this repaint. Each
                     // later joiner adds its own tile (room_events.rs).
-                    let existing = w.get_active_call_data().participants;
+                    let existing = w
+                        .global::<crate::CallView>()
+                        .get_active_call_data()
+                        .participants;
                     let mut participants: Vec<CallParticipantData> = existing.iter().collect();
                     participants.pop(); // the local tile, pinned last; rebuilt below
                     participants.push(CallParticipantData {
                         user_id: current_user_id.clone().into(),
                         display_name: my_display_name.clone().into(),
                         initials: initials_from_name(&my_display_name).into(),
-                        avatar_source: w.get_user_avatar_source(),
+                        avatar_source: w.global::<crate::SidebarPane>().get_user_avatar_source(),
                         is_muted: false,
                         is_video_enabled: setup.is_video,
                         is_screen_sharing: false,
@@ -373,11 +407,14 @@ fn render_accepted_call(
                         verification_emoji_3: setup.verification_emojis[2].clone().into(),
                         verification_emoji_4: setup.verification_emojis[3].clone().into(),
                     };
-                    w.set_active_call_data(call_data);
-                    w.set_call_is_muted(false);
-                    w.set_call_is_video_enabled(setup.is_video);
-                    w.set_call_is_screen_sharing(false);
-                    w.set_active_call_visible(true);
+                    w.global::<crate::CallView>()
+                        .set_active_call_data(call_data);
+                    w.global::<crate::CallView>().set_call_is_muted(false);
+                    w.global::<crate::CallView>()
+                        .set_call_is_video_enabled(setup.is_video);
+                    w.global::<crate::CallView>()
+                        .set_call_is_screen_sharing(false);
+                    w.global::<crate::CallView>().set_active_call_visible(true);
                     start_call_timer(&w, ui_ctx.clone());
                     start_video_frame_timer(&w, frames);
                     open_call_screen(&w);
@@ -394,9 +431,9 @@ fn render_accepted_call(
 /// having been dropped. `render_accepted_call` overwrites this with the real
 /// call; a failure takes it down (`fail_call`).
 fn show_answering(w: &MainWindow) {
-    let incoming = w.get_incoming_call_data();
+    let incoming = w.global::<crate::CallView>().get_incoming_call_data();
     let is_video = incoming.is_video_call;
-    let my_display_name = w.get_user_display_name();
+    let my_display_name = w.global::<crate::SidebarPane>().get_user_display_name();
     let participant = |user_id: slint::SharedString,
                        display_name: slint::SharedString,
                        initials: slint::SharedString,
@@ -422,32 +459,35 @@ fn show_answering(w: &MainWindow) {
         "You".into(),
         my_display_name.clone(),
         initials_from_name(&my_display_name).into(),
-        w.get_user_avatar_source(),
+        w.global::<crate::SidebarPane>().get_user_avatar_source(),
     );
-    w.set_active_call_data(ActiveCallData {
-        call_id: incoming.call_id.clone(),
-        channel_id: "".into(),
-        title: incoming.caller_name.clone(),
-        is_video_call: is_video,
-        is_encrypted: true,
-        is_identity_verified: false,
-        identity_warning: "".into(),
-        participant_count: 2,
-        duration_seconds: 0,
-        is_connected: false,
-        participants: ModelRc::new(VecModel::from(vec![remote, local])),
-        // No key agreed yet: show nothing (the plain lock) until the SAS
-        // emoji arrive, as the dialling view does.
-        verification_key_version: "".into(),
-        verification_emoji_1: "".into(),
-        verification_emoji_2: "".into(),
-        verification_emoji_3: "".into(),
-        verification_emoji_4: "".into(),
-    });
-    w.set_call_is_muted(false);
-    w.set_call_is_video_enabled(is_video);
-    w.set_call_is_screen_sharing(false);
-    w.set_active_call_visible(true);
+    w.global::<crate::CallView>()
+        .set_active_call_data(ActiveCallData {
+            call_id: incoming.call_id.clone(),
+            channel_id: "".into(),
+            title: incoming.caller_name.clone(),
+            is_video_call: is_video,
+            is_encrypted: true,
+            is_identity_verified: false,
+            identity_warning: "".into(),
+            participant_count: 2,
+            duration_seconds: 0,
+            is_connected: false,
+            participants: ModelRc::new(VecModel::from(vec![remote, local])),
+            // No key agreed yet: show nothing (the plain lock) until the SAS
+            // emoji arrive, as the dialling view does.
+            verification_key_version: "".into(),
+            verification_emoji_1: "".into(),
+            verification_emoji_2: "".into(),
+            verification_emoji_3: "".into(),
+            verification_emoji_4: "".into(),
+        });
+    w.global::<crate::CallView>().set_call_is_muted(false);
+    w.global::<crate::CallView>()
+        .set_call_is_video_enabled(is_video);
+    w.global::<crate::CallView>()
+        .set_call_is_screen_sharing(false);
+    w.global::<crate::CallView>().set_active_call_visible(true);
     open_call_screen(w);
 }
 
@@ -462,11 +502,12 @@ fn open_call_screen(w: &MainWindow) {
         // Answered from the list: the call's end drops back to it (app.slint
         // `changed active-call-visible`). Only ever set here — this runs twice
         // per answer, and the second time the pane is already up.
-        if !w.get_mobile_show_chat() {
-            w.set_call_raised_pane(true);
+        if !w.global::<crate::SidebarPane>().get_mobile_show_chat() {
+            w.global::<crate::CallView>().set_call_raised_pane(true);
         }
-        w.set_mobile_show_chat(true);
-        w.set_active_call_fullscreen(true);
+        w.global::<crate::SidebarPane>().set_mobile_show_chat(true);
+        w.global::<crate::CallView>()
+            .set_active_call_fullscreen(true);
     }
 }
 
@@ -505,8 +546,8 @@ pub fn wire_orchestrator_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
                             if reset_ctx.auth_snapshot().session_revision != next { return; }
                             if let Some(w) = reset_weak.upgrade() {
                                 super::super::auth::initial_data::hide_incoming_call(&w);
-                                w.set_incoming_call_replaces_active(false);
-                                w.set_active_call_visible(false);
+                                w.global::<crate::CallView>().set_incoming_call_replaces_active(false);
+                                w.global::<crate::CallView>().set_active_call_visible(false);
                             }
                         });
                     }
@@ -540,8 +581,8 @@ pub fn wire_orchestrator_events(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
                                 let _ = slint::invoke_from_event_loop(move || {
                                     if !ui_ctx.call_session_is_current(revision) { return; }
                                     let Some(w) = weak.upgrade() else { return };
-                                    if w.get_active_call_data().call_id.as_str() == id {
-                                        w.set_active_call_visible(false);
+                                    if w.global::<crate::CallView>().get_active_call_data().call_id.as_str() == id {
+                                        w.global::<crate::CallView>().set_active_call_visible(false);
                                     }
                                     w.set_toast_message(if was_answering { "Call ended" } else { "Missed call" }.into());
                                     w.set_toast_variant("info".into());
@@ -599,7 +640,8 @@ fn reconcile_incoming_modal(
             }) = snapshot.presentations.last()
             else {
                 super::super::auth::initial_data::hide_incoming_call(&w);
-                w.set_incoming_call_replaces_active(false);
+                w.global::<crate::CallView>()
+                    .set_incoming_call_replaces_active(false);
                 return;
             };
             if DISMISSED_INCOMING.with(|dismissed| {
@@ -609,10 +651,15 @@ fn reconcile_incoming_modal(
             }) {
                 return;
             }
-            if w.get_incoming_call_visible()
-                && w.get_incoming_call_data().call_id.as_str() == call.as_str()
+            if w.global::<crate::CallView>().get_incoming_call_visible()
+                && w.global::<crate::CallView>()
+                    .get_incoming_call_data()
+                    .call_id
+                    .as_str()
+                    == call.as_str()
             {
-                w.set_incoming_call_replaces_active(*replaces_active);
+                w.global::<crate::CallView>()
+                    .set_incoming_call_replaces_active(*replaces_active);
                 return;
             }
             let peer_id_str = peer_id.to_string();
@@ -628,11 +675,12 @@ fn reconcile_incoming_modal(
                 avatar_bytes.as_deref(),
             );
             if *kind == OrchestratedCallKind::GroupChannel {
-                let mut data = w.get_incoming_call_data();
+                let mut data = w.global::<crate::CallView>().get_incoming_call_data();
                 data.channel_name = channel_context.clone().unwrap_or_default().into();
-                w.set_incoming_call_data(data);
+                w.global::<crate::CallView>().set_incoming_call_data(data);
             }
-            w.set_incoming_call_replaces_active(*replaces_active);
+            w.global::<crate::CallView>()
+                .set_incoming_call_replaces_active(*replaces_active);
             #[cfg(target_os = "android")]
             prompt_incoming_permissions(&w, &ui_ctx, revision, call.as_str(), *is_video);
         });
@@ -673,7 +721,13 @@ fn prompt_incoming_permissions(
         let Some(w) = weak.upgrade() else { return };
         // Accept owns the same permission result when the user tapped while
         // the dialog was open. It will decline and explain that decision.
-        if w.get_active_call_visible() && w.get_active_call_data().call_id.as_str() == call_id {
+        if w.global::<crate::CallView>().get_active_call_visible()
+            && w.global::<crate::CallView>()
+                .get_active_call_data()
+                .call_id
+                .as_str()
+                == call_id
+        {
             return;
         }
         let still_ringing = ui_ctx.incoming_call_presentation_state().is_some_and(|state| {
@@ -685,8 +739,10 @@ fn prompt_incoming_permissions(
             return;
         }
         dismiss_incoming(revision, &call_id);
-        w.set_incoming_call_visible(false);
-        w.set_incoming_call_replaces_active(false);
+        w.global::<crate::CallView>()
+            .set_incoming_call_visible(false);
+        w.global::<crate::CallView>()
+            .set_incoming_call_replaces_active(false);
         w.set_toast_message(message.into());
         w.set_toast_variant("error".into());
         w.set_toast_visible(true);
@@ -719,10 +775,10 @@ fn handle_orchestrator_event(
                 for _ in 0..30 {
                     let Some(w) = weak.upgrade() else { return };
                     if !ui_ctx.call_session_is_current(revision) { return; }
-                    if w.get_active_call_data().call_id.as_str() == call.as_str() {
-                        w.set_call_is_video_enabled(false);
+                    if w.global::<crate::CallView>().get_active_call_data().call_id.as_str() == call.as_str() {
+                        w.global::<crate::CallView>().set_call_is_video_enabled(false);
                         if let Some(local_id) = ui_ctx.session_current_user_id() {
-                            let data = w.get_active_call_data();
+                            let data = w.global::<crate::CallView>().get_active_call_data();
                             for index in 0..data.participants.row_count() {
                                 if let Some(mut participant) = data.participants.row_data(index) {
                                     if participant.user_id.as_str() == local_id.to_string() {
@@ -777,8 +833,8 @@ fn handle_orchestrator_event(
             let _ = slint::invoke_from_event_loop(move || {
                 let Some(w) = weak.upgrade() else { return };
                 if !ui_ctx.call_session_is_current(revision) { return; }
-                if w.get_active_call_data().call_id.as_str() != call.as_str() { return; }
-                w.set_active_call_visible(false);
+                if w.global::<crate::CallView>().get_active_call_data().call_id.as_str() != call.as_str() { return; }
+                w.global::<crate::CallView>().set_active_call_visible(false);
                 if let Some((message, variant)) = notice {
                     stop_call_timer();
                     stop_video_frame_timer();
@@ -800,18 +856,18 @@ fn handle_orchestrator_event(
             let ui_ctx = ui_ctx.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 let Some(w) = weak.upgrade() else { return };
-                if !w.get_active_call_visible()
+                if !w.global::<crate::CallView>().get_active_call_visible()
                     || !ui_ctx.call_session_is_current(revision)
                     || ui_ctx.call_start_was_cancelled(call.as_str())
                 { return; }
                 let Some(worker) = ui_ctx.call_service().get() else { return };
                 worker.with_current_active_presentation(revision, call.as_str(), || {
-                let mut data = w.get_active_call_data();
+                let mut data = w.global::<crate::CallView>().get_active_call_data();
                 if data.call_id.as_str() != call.as_str() {
                     return;
                 }
                 data.is_connected = true;
-                w.set_active_call_data(data);
+                w.global::<crate::CallView>().set_active_call_data(data);
                 start_call_timer(&w, ui_ctx.clone());
                 });
             });
@@ -954,13 +1010,26 @@ mod session_tests {
             .unwrap();
         pump(&window);
         assert!(
-            !window.get_incoming_call_visible(),
+            !window
+                .global::<crate::CallView>()
+                .get_incoming_call_visible(),
             "old queued owner cannot render the new ring"
         );
         reconcile_incoming_modal(&window.as_weak(), &client, &state, revision);
         pump(&window);
-        assert!(window.get_incoming_call_visible());
-        assert_eq!(window.get_incoming_call_data().call_id.as_str(), "B");
+        assert!(
+            window
+                .global::<crate::CallView>()
+                .get_incoming_call_visible()
+        );
+        assert_eq!(
+            window
+                .global::<crate::CallView>()
+                .get_incoming_call_data()
+                .call_id
+                .as_str(),
+            "B"
+        );
         // Both accept branches must consult actor lifecycle,
         // even when the hidden UI retains the accepted call's exact identity.
         for group in [false, true] {
@@ -997,29 +1066,49 @@ mod session_tests {
             // The query is a FIFO actor barrier; production completion still requires media match.
             current.orch_mark_connected(CallHandle::from(id.to_string()), kind, alice, false);
             runtime.block_on(current.orch_active_kind());
-            let mut data = window.get_active_call_data();
+            let mut data = window.global::<crate::CallView>().get_active_call_data();
             data.call_id = id.to_string().into();
             data.is_connected = false;
-            window.set_active_call_data(data);
+            window
+                .global::<crate::CallView>()
+                .set_active_call_data(data);
             render_accepted_call(&window.as_weak(), &client, accepted(), revision);
             pump(&window);
             assert!(
-                window.get_active_call_visible(),
+                window.global::<crate::CallView>().get_active_call_visible(),
                 "current accepted identity must render"
             );
-            assert!(window.get_active_call_data().is_connected);
             assert!(
-                window.get_incoming_call_visible(),
+                window
+                    .global::<crate::CallView>()
+                    .get_active_call_data()
+                    .is_connected
+            );
+            assert!(
+                window
+                    .global::<crate::CallView>()
+                    .get_incoming_call_visible(),
                 "newer B ring must survive accepted render"
             );
-            assert_eq!(window.get_incoming_call_data().call_id.as_str(), "B");
+            assert_eq!(
+                window
+                    .global::<crate::CallView>()
+                    .get_incoming_call_data()
+                    .call_id
+                    .as_str(),
+                "B"
+            );
 
             // Hidden End retains this exact identity and session. Actor authority
             // alone must not restart its timer or mark the retained view connected.
-            let mut hidden = window.get_active_call_data();
+            let mut hidden = window.global::<crate::CallView>().get_active_call_data();
             hidden.is_connected = false;
-            window.set_active_call_data(hidden);
-            window.set_active_call_visible(false);
+            window
+                .global::<crate::CallView>()
+                .set_active_call_data(hidden);
+            window
+                .global::<crate::CallView>()
+                .set_active_call_visible(false);
             handle_orchestrator_event(
                 &window.as_weak(),
                 &client,
@@ -1032,9 +1121,16 @@ mod session_tests {
                 revision,
             );
             pump(&window);
-            assert!(!window.get_active_call_visible());
-            assert!(!window.get_active_call_data().is_connected);
-            window.set_active_call_visible(true);
+            assert!(!window.global::<crate::CallView>().get_active_call_visible());
+            assert!(
+                !window
+                    .global::<crate::CallView>()
+                    .get_active_call_data()
+                    .is_connected
+            );
+            window
+                .global::<crate::CallView>()
+                .set_active_call_visible(true);
             handle_orchestrator_event(
                 &window.as_weak(),
                 &client,
@@ -1047,20 +1143,33 @@ mod session_tests {
                 revision,
             );
             pump(&window);
-            assert!(window.get_active_call_data().is_connected);
+            assert!(
+                window
+                    .global::<crate::CallView>()
+                    .get_active_call_data()
+                    .is_connected
+            );
 
             for replaced in [false, true] {
                 // Restore authority for A, then queue its paint before the
                 // terminal/replacement actor transition and before UI dispatch.
                 current.orch_mark_connected(CallHandle::from(id.to_string()), kind, alice, false);
                 runtime.block_on(current.orch_active_kind());
-                let mut retained = window.get_active_call_data();
+                let mut retained = window.global::<crate::CallView>().get_active_call_data();
                 retained.call_id = id.to_string().into();
                 retained.is_connected = false;
-                window.set_active_call_data(retained);
-                window.set_active_call_visible(false);
-                window.set_mobile_show_chat(false);
-                window.set_active_call_fullscreen(false);
+                window
+                    .global::<crate::CallView>()
+                    .set_active_call_data(retained);
+                window
+                    .global::<crate::CallView>()
+                    .set_active_call_visible(false);
+                window
+                    .global::<crate::SidebarPane>()
+                    .set_mobile_show_chat(false);
+                window
+                    .global::<crate::CallView>()
+                    .set_active_call_fullscreen(false);
                 stop_call_timer();
                 stop_video_frame_timer();
                 render_accepted_call(&window.as_weak(), &client, accepted(), revision);
@@ -1092,21 +1201,39 @@ mod session_tests {
                 }
                 pump(&window);
                 assert!(
-                    !window.get_active_call_visible(),
+                    !window.global::<crate::CallView>().get_active_call_visible(),
                     "stale accepted paint cannot resurrect ended/replaced A"
                 );
                 assert!(
-                    !window.get_active_call_data().is_connected,
+                    !window
+                        .global::<crate::CallView>()
+                        .get_active_call_data()
+                        .is_connected,
                     "stale connected callback cannot mutate retained A"
                 );
                 assert!(
                     !super::super::timers::tests::timer_started(),
                     "stale connected callback cannot restart the timer"
                 );
-                assert!(!window.get_mobile_show_chat());
-                assert!(!window.get_active_call_fullscreen());
-                assert!(window.get_incoming_call_visible());
-                assert_eq!(window.get_incoming_call_data().call_id.as_str(), "B");
+                assert!(!window.global::<crate::SidebarPane>().get_mobile_show_chat());
+                assert!(
+                    !window
+                        .global::<crate::CallView>()
+                        .get_active_call_fullscreen()
+                );
+                assert!(
+                    window
+                        .global::<crate::CallView>()
+                        .get_incoming_call_visible()
+                );
+                assert_eq!(
+                    window
+                        .global::<crate::CallView>()
+                        .get_incoming_call_data()
+                        .call_id
+                        .as_str(),
+                    "B"
+                );
             }
         }
         worker.shutdown();

@@ -80,7 +80,7 @@ where
 {
     stop_call_timer();
     let weak = window.as_weak();
-    let presentation = window.get_active_call_data();
+    let presentation = window.global::<crate::CallView>().get_active_call_data();
     let expected_call_id = presentation.call_id;
     let expected_channel_id = presentation.channel_id;
     let stop = Arc::new(AtomicBool::new(false));
@@ -116,7 +116,7 @@ where
                     return;
                 }
                 let Some(w) = weak.upgrade() else { return };
-                let mut data = w.get_active_call_data();
+                let mut data = w.global::<crate::CallView>().get_active_call_data();
                 if data.call_id != expected_call_id || data.channel_id != expected_channel_id {
                     return;
                 }
@@ -147,7 +147,7 @@ where
                 }
                 data.is_connected = call.connected_at.is_some();
                 data.duration_seconds = call.duration_seconds().min(i32::MAX as i64) as i32;
-                w.set_active_call_data(data);
+                w.global::<crate::CallView>().set_active_call_data(data);
             })
             .is_err()
             {
@@ -294,7 +294,7 @@ pub fn start_video_frame_timer(window: &MainWindow, shared_frames: SharedVideoFr
                         // user_id, blank where a peer has no frame) — as the GL
                         // path does — so a video-off peer can't shift everyone
                         // else's frame onto the wrong tile.
-                        let participants = w.get_active_call_data().participants;
+                        let participants = w.global::<crate::CallView>().get_active_call_data().participants;
                         let tile_ids: Vec<String> = participants.iter()
                             .map(|p| p.user_id.to_string())
                             .collect();
@@ -309,7 +309,7 @@ pub fn start_video_frame_timer(window: &MainWindow, shared_frames: SharedVideoFr
                             .iter()
                             .map(|id| frames.remove(id).map(slint::Image::from_rgba8).unwrap_or_default())
                             .collect();
-                        w.set_call_local_video_frame(local_img);
+                        w.global::<crate::CallView>().set_call_local_video_frame(local_img);
                         apply_remote_video_frames(&w, remote_images);
                     }
                     ui_busy_for_invoke.store(false, Ordering::Relaxed);
@@ -348,7 +348,8 @@ fn apply_remote_video_frames(w: &MainWindow, images: Vec<slint::Image>) {
                 // First batch of this call: create the stable model and bind
                 // it to the property exactly once.
                 let m = Rc::new(VecModel::<slint::Image>::default());
-                w.set_call_remote_video_frames(ModelRc::from(m.clone()));
+                w.global::<crate::CallView>()
+                    .set_call_remote_video_frames(ModelRc::from(m.clone()));
                 *slot = Some(m.clone());
                 m
             }
@@ -457,7 +458,7 @@ pub(super) mod tests {
         };
         // Room joins already happened; mounting the outgoing view overwrites
         // them with its local-only placeholder. No more join events arrive.
-        let mut data = window.get_active_call_data();
+        let mut data = window.global::<crate::CallView>().get_active_call_data();
         data.call_id = call.id.to_string().into();
         data.channel_id = call.channel_id.to_string().into();
         data.participants = ModelRc::new(VecModel::from(vec![crate::CallParticipantData {
@@ -465,7 +466,9 @@ pub(super) mod tests {
             is_muted: true,
             ..Default::default()
         }]));
-        window.set_active_call_data(data.clone());
+        window
+            .global::<crate::CallView>()
+            .set_active_call_data(data.clone());
         let source = Arc::new(Mutex::new(Some(CallRoomSnapshot {
             call: call.clone(),
             verification:
@@ -478,7 +481,7 @@ pub(super) mod tests {
             async move { snapshot }
         });
         pump(&window, 100);
-        let mounted = window.get_active_call_data();
+        let mounted = window.global::<crate::CallView>().get_active_call_data();
         assert_eq!(mounted.participant_count, 3);
         assert_eq!(mounted.participants.row_data(0).unwrap().user_id, "a");
         assert_eq!(mounted.participants.row_data(2).unwrap().user_id, "me");
@@ -502,10 +505,12 @@ pub(super) mod tests {
             },
             with_media.participants.row_data(2).unwrap(),
         ]));
-        window.set_active_call_data(with_media);
+        window
+            .global::<crate::CallView>()
+            .set_active_call_data(with_media);
         source.lock().unwrap().as_mut().unwrap().remotes = Some(roster(&["a"]));
         pump(&window, 1100);
-        let departed = window.get_active_call_data();
+        let departed = window.global::<crate::CallView>().get_active_call_data();
         assert_eq!(departed.participant_count, 2);
         assert_eq!(departed.participants.row_count(), 2);
         assert!(departed.participants.row_data(0).unwrap().is_video_enabled);
@@ -517,14 +522,22 @@ pub(super) mod tests {
                 .is_audio_muted_locally
         );
         // Re-mount/rejoin repeats the overwrite; the immediate read repairs it.
-        window.set_active_call_data(data);
+        window
+            .global::<crate::CallView>()
+            .set_active_call_data(data);
         let read = source.clone();
         start_call_presentation_with(&window, move || {
             let snapshot = read.lock().unwrap().clone();
             async move { snapshot }
         });
         pump(&window, 100);
-        assert_eq!(window.get_active_call_data().participant_count, 2);
+        assert_eq!(
+            window
+                .global::<crate::CallView>()
+                .get_active_call_data()
+                .participant_count,
+            2
+        );
         let mut other = call.clone();
         other.id = chatter_core::domain::ids::CallId::new();
         *source.lock().unwrap() = Some(CallRoomSnapshot {
@@ -536,6 +549,7 @@ pub(super) mod tests {
         pump(&window, 1100);
         assert_eq!(
             window
+                .global::<crate::CallView>()
                 .get_active_call_data()
                 .participants
                 .row_data(0)
@@ -551,10 +565,12 @@ pub(super) mod tests {
         use chatter_core::services::call_worker::CallEncryptionVerification as Verification;
         let window = MainWindow::new().unwrap();
         let call = Call::new(ChannelId::new(), UserId::new(), CallType::Group);
-        let mut data = window.get_active_call_data();
+        let mut data = window.global::<crate::CallView>().get_active_call_data();
         data.call_id = call.id.to_string().into();
         data.channel_id = call.channel_id.to_string().into();
-        window.set_active_call_data(data);
+        window
+            .global::<crate::CallView>()
+            .set_active_call_data(data);
         let code = |epoch| Verification::MediaKey {
             epoch,
             emojis: if epoch == u32::MAX {
@@ -574,7 +590,7 @@ pub(super) mod tests {
             async move { snapshot }
         });
         let assert_code = |version: &str, expected: [&str; 4]| {
-            let data = window.get_active_call_data();
+            let data = window.global::<crate::CallView>().get_active_call_data();
             assert_eq!(data.verification_key_version.as_str(), version);
             assert_eq!(
                 [
@@ -626,10 +642,12 @@ pub(super) mod tests {
             }
         });
         pump(&window, 100);
-        let mut replacement = window.get_active_call_data();
+        let mut replacement = window.global::<crate::CallView>().get_active_call_data();
         replacement.call_id = "replacement".into();
         replacement.verification_key_version = "123".into();
-        window.set_active_call_data(replacement);
+        window
+            .global::<crate::CallView>()
+            .set_active_call_data(replacement);
         send.send(Some(CallRoomSnapshot {
             call,
             remotes: None,
@@ -651,9 +669,11 @@ pub(super) mod tests {
         let window = MainWindow::new().unwrap();
         let mut call = Call::new(ChannelId::new(), UserId::new(), CallType::Group);
         call.ring();
-        let mut data = window.get_active_call_data();
+        let mut data = window.global::<crate::CallView>().get_active_call_data();
         data.call_id = call.id.to_string().into();
-        window.set_active_call_data(data);
+        window
+            .global::<crate::CallView>()
+            .set_active_call_data(data);
         let snapshot = Arc::new(Mutex::new(None::<Call>));
         let source = snapshot.clone();
         start_call_timer_with(&window, move || {
@@ -661,16 +681,32 @@ pub(super) mod tests {
             async move { call }
         });
         pump(&window, 100);
-        assert!(!window.get_active_call_data().is_connected);
+        assert!(
+            !window
+                .global::<crate::CallView>()
+                .get_active_call_data()
+                .is_connected
+        );
         *snapshot.lock().unwrap() = Some(call.clone());
         pump(&window, 1100);
-        assert_eq!(window.get_active_call_data().duration_seconds, 0);
-        assert!(!window.get_active_call_data().is_connected);
+        assert_eq!(
+            window
+                .global::<crate::CallView>()
+                .get_active_call_data()
+                .duration_seconds,
+            0
+        );
+        assert!(
+            !window
+                .global::<crate::CallView>()
+                .get_active_call_data()
+                .is_connected
+        );
         call.start();
         call.connected_at = Some(chrono::Utc::now() - chrono::Duration::seconds(40));
         *snapshot.lock().unwrap() = Some(call.clone());
         pump(&window, 1100);
-        let data = window.get_active_call_data();
+        let data = window.global::<crate::CallView>().get_active_call_data();
         assert!(data.is_connected);
         assert!(
             data.duration_seconds >= 40,
@@ -678,47 +714,90 @@ pub(super) mod tests {
         );
         let before = data.duration_seconds;
         pump(&window, 1100);
-        assert!(window.get_active_call_data().duration_seconds > before);
+        assert!(
+            window
+                .global::<crate::CallView>()
+                .get_active_call_data()
+                .duration_seconds
+                > before
+        );
 
         // Core may replace its call before the corresponding UI mount.
         let mut other = Call::new(ChannelId::new(), UserId::new(), CallType::Group);
         other.start();
         other.connected_at = Some(chrono::Utc::now() - chrono::Duration::seconds(500));
         *snapshot.lock().unwrap() = Some(other);
-        let before = window.get_active_call_data().duration_seconds;
+        let before = window
+            .global::<crate::CallView>()
+            .get_active_call_data()
+            .duration_seconds;
         pump(&window, 1100);
-        assert_eq!(window.get_active_call_data().duration_seconds, before);
+        assert_eq!(
+            window
+                .global::<crate::CallView>()
+                .get_active_call_data()
+                .duration_seconds,
+            before
+        );
         *snapshot.lock().unwrap() = Some(call.clone());
 
         // A queued result for this call cannot paint a replacement UI.
-        let mut replacement = window.get_active_call_data();
+        let mut replacement = window.global::<crate::CallView>().get_active_call_data();
         replacement.call_id = "replacement".into();
         replacement.duration_seconds = 0;
         replacement.is_connected = false;
-        window.set_active_call_data(replacement);
+        window
+            .global::<crate::CallView>()
+            .set_active_call_data(replacement);
         pump(&window, 1100);
-        assert_eq!(window.get_active_call_data().duration_seconds, 0);
-        assert!(!window.get_active_call_data().is_connected);
+        assert_eq!(
+            window
+                .global::<crate::CallView>()
+                .get_active_call_data()
+                .duration_seconds,
+            0
+        );
+        assert!(
+            !window
+                .global::<crate::CallView>()
+                .get_active_call_data()
+                .is_connected
+        );
         stop_call_timer();
 
         // The UI back on this call adopts its snapshot.
-        let mut restored = window.get_active_call_data();
+        let mut restored = window.global::<crate::CallView>().get_active_call_data();
         restored.call_id = call.id.to_string().into();
         restored.channel_id = call.channel_id.to_string().into();
-        window.set_active_call_data(restored);
+        window
+            .global::<crate::CallView>()
+            .set_active_call_data(restored);
         let source = snapshot.clone();
         start_call_timer_with(&window, move || {
             let call = source.lock().unwrap().clone();
             async move { call }
         });
         pump(&window, 100);
-        assert!(window.get_active_call_data().is_connected);
-        assert!(window.get_active_call_data().duration_seconds >= 40);
+        assert!(
+            window
+                .global::<crate::CallView>()
+                .get_active_call_data()
+                .is_connected
+        );
+        assert!(
+            window
+                .global::<crate::CallView>()
+                .get_active_call_data()
+                .duration_seconds
+                >= 40
+        );
         stop_call_timer();
-        let mut data = window.get_active_call_data();
+        let mut data = window.global::<crate::CallView>().get_active_call_data();
         data.duration_seconds = 0;
         data.is_connected = false;
-        window.set_active_call_data(data);
+        window
+            .global::<crate::CallView>()
+            .set_active_call_data(data);
 
         // Cancel while the core read is in flight, then let that read finish.
         let (send, receive) = tokio::sync::oneshot::channel();
@@ -731,7 +810,18 @@ pub(super) mod tests {
         stop_call_timer();
         send.send(Some(call)).unwrap();
         pump(&window, 100);
-        assert_eq!(window.get_active_call_data().duration_seconds, 0);
-        assert!(!window.get_active_call_data().is_connected);
+        assert_eq!(
+            window
+                .global::<crate::CallView>()
+                .get_active_call_data()
+                .duration_seconds,
+            0
+        );
+        assert!(
+            !window
+                .global::<crate::CallView>()
+                .get_active_call_data()
+                .is_connected
+        );
     }
 }

@@ -720,7 +720,9 @@ pub async fn app_init() -> Result<AppState, String> {
     let connected = client.startup_connect(BOOT_CONNECT_BUDGET).await;
 
     let window = MainWindow::new().expect("Failed to create window");
-    window.on_list_geometry(trace_chat_list_geometry);
+    window
+        .global::<crate::ChatPane>()
+        .on_list_geometry(trace_chat_list_geometry);
     // Native winit window is created later, on show. The id has to be set
     // before that, and the Slint platform exists only after `MainWindow::new`.
     #[cfg(target_os = "linux")]
@@ -730,12 +732,18 @@ pub async fn app_init() -> Result<AppState, String> {
     // it was only ever filled in dev mode. On a phone there is no shell to set
     // CHATTER_SERVER_URL in, so an empty field meant a dead Create Account
     // button. Seed it with the endpoint the client is already connected to.
-    window.set_register_server_url(ui_ctx.endpoint().into());
+    window
+        .global::<crate::AuthFlow>()
+        .set_register_server_url(ui_ctx.endpoint().into());
     // Same for Sign In, which had no binding at all: the field started empty and
     // the only way to fill it was the LAN preset, which was a hardcoded
     // 192.168.0.7 that resolved to nothing on any other network.
-    window.set_login_server_url(ui_ctx.endpoint().into());
-    window.set_configured_server_url(ui_ctx.endpoint().into());
+    window
+        .global::<crate::AuthFlow>()
+        .set_login_server_url(ui_ctx.endpoint().into());
+    window
+        .global::<crate::AuthFlow>()
+        .set_configured_server_url(ui_ctx.endpoint().into());
 
     // Touch platform: touch-sized targets and gestures. The phone layout
     // (single pane, bottom nav) is NOT implied — app.slint's `compact-layout`
@@ -758,13 +766,17 @@ pub async fn app_init() -> Result<AppState, String> {
         window.on_refresh_screen_protection(move || {
             if let Some(w) = weak.upgrade() {
                 let chat_visible = w.get_current_view() == "main"
-                    && w.get_active_tab() == "chats"
+                    && w.global::<crate::SidebarPane>().get_active_tab() == "chats"
                     && w.get_chat_content_visible();
                 let recovery_visible = w.get_active_modal() == "recovery-codes";
                 let exiting_kind = (w.get_compact_layout()
-                    && !w.get_mobile_show_chat()
+                    && !w.global::<crate::SidebarPane>().get_mobile_show_chat()
                     && w.get_chat_content_visible())
-                .then(|| crate::bin_ui::converters::conversation_type(w.get_conversation_kind()));
+                .then(|| {
+                    crate::bin_ui::converters::conversation_type(
+                        w.global::<crate::ChatPane>().get_conversation_kind(),
+                    )
+                });
                 crate::platform::android::activity::set_secure(
                     protection_client.requires_screen_protection(
                         chat_visible,
@@ -885,7 +897,9 @@ pub async fn app_init() -> Result<AppState, String> {
         });
     }
 
-    window.set_is_signed_in(ui_ctx.is_logged_in());
+    window
+        .global::<crate::AuthFlow>()
+        .set_is_signed_in(ui_ctx.is_logged_in());
 
     if ui_ctx.is_logged_in() {
         if ui_ctx.current_user().is_some() {
@@ -1004,7 +1018,8 @@ pub async fn app_init() -> Result<AppState, String> {
                         let last = last_count.clone();
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(w) = weak.upgrade() {
-                                let count = w.get_total_unread_count();
+                                let count =
+                                    w.global::<crate::SidebarPane>().get_total_unread_count();
                                 let prev = last.load(std::sync::atomic::Ordering::Relaxed);
                                 if count != prev {
                                     last.store(count, std::sync::atomic::Ordering::Relaxed);
@@ -1113,12 +1128,24 @@ fn dev_auto_register(
     // Build-time Android overrides are resolved by core, including production.
     let server_url = ui_ctx.endpoint();
 
-    window.set_register_username(username.clone().into());
-    window.set_register_display_name(display_name.clone().into());
-    window.set_register_password(password.into());
-    window.set_register_confirm_password(password.into());
-    window.set_register_pin(pin.into());
-    window.set_register_server_url(server_url.clone().into());
+    window
+        .global::<crate::AuthFlow>()
+        .set_register_username(username.clone().into());
+    window
+        .global::<crate::AuthFlow>()
+        .set_register_display_name(display_name.clone().into());
+    window
+        .global::<crate::AuthFlow>()
+        .set_register_password(password.into());
+    window
+        .global::<crate::AuthFlow>()
+        .set_register_confirm_password(password.into());
+    window
+        .global::<crate::AuthFlow>()
+        .set_register_pin(pin.into());
+    window
+        .global::<crate::AuthFlow>()
+        .set_register_server_url(server_url.clone().into());
 
     tracing::info!(
         "DEV MODE: Auto-registering as {} ({}) against {}",
@@ -1126,7 +1153,7 @@ fn dev_auto_register(
         display_name,
         server_url
     );
-    window.invoke_register(
+    window.global::<crate::AuthFlow>().invoke_register(
         username.into(),
         password.into(),
         display_name.into(),

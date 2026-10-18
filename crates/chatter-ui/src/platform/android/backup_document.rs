@@ -62,7 +62,11 @@ pub fn write_document(path: &std::path::Path) -> Result<(), String> {
         );
         let success = result.and_then(|v| v.z()).unwrap_or(false);
         activity::clear_exception(env);
-        if success { Ok(()) } else { Err("Could not write selected document".into()) }
+        if success {
+            Ok(())
+        } else {
+            Err("Could not write selected document".into())
+        }
     })
 }
 

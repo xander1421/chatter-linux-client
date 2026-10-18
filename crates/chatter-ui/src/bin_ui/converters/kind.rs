@@ -3,6 +3,7 @@
 //! variant fails to compile here instead of rendering as some other kind.
 
 use chatter_core::domain::message::ConversationType;
+use slint::ComponentHandle;
 
 use crate::{ConversationKind, MainWindow};
 
@@ -41,17 +42,27 @@ pub fn set_conversation_kind(
     ct: &ConversationType,
     private_channel: bool,
 ) {
-    w.set_conversation_kind(conversation_kind(ct));
-    w.set_chat_can_forward(ct.can_forward_from());
-    w.set_private_channel(private_channel);
-    w.set_composer_gifs_available(ui_ctx.gif_picker_available_for(ct));
+    w.global::<crate::ChatPane>()
+        .set_conversation_kind(conversation_kind(ct));
+    w.global::<crate::ChatPane>()
+        .set_chat_can_forward(ct.can_forward_from());
+    w.global::<crate::ChatPane>()
+        .set_private_channel(private_channel);
+    w.global::<crate::ChatPane>()
+        .set_composer_gifs_available(ui_ctx.gif_picker_available_for(ct));
     let actions = ui_ctx.conversation_actions(ui_ctx.active_conversation());
-    w.set_header_can_call(actions.can_call);
-    w.set_header_can_invite(actions.can_invite);
-    w.set_header_can_open_settings(actions.can_open_settings);
-    w.set_header_can_open_pinned_list(actions.can_open_pinned_list);
-    w.set_privacy_line_override(Default::default());
-    w.set_privacy_line_exposed(false);
+    w.global::<crate::ChatPane>()
+        .set_header_can_call(actions.can_call);
+    w.global::<crate::ChatPane>()
+        .set_header_can_invite(actions.can_invite);
+    w.global::<crate::ChatPane>()
+        .set_header_can_open_settings(actions.can_open_settings);
+    w.global::<crate::ChatPane>()
+        .set_header_can_open_pinned_list(actions.can_open_pinned_list);
+    w.global::<crate::ChatPane>()
+        .set_privacy_line_override(Default::default());
+    w.global::<crate::ChatPane>()
+        .set_privacy_line_exposed(false);
 }
 
 #[cfg(test)]

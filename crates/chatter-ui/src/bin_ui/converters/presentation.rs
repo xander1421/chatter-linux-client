@@ -72,7 +72,10 @@ pub fn shared_content_lines(row: &SharedContentItemData) -> (String, String, boo
 }
 
 pub fn shared_content_is_video(row: &SharedContentItemData) -> bool {
-    matches!(FileCategory::from_filename(&row.source_title), FileCategory::Video)
+    matches!(
+        FileCategory::from_filename(&row.source_title),
+        FileCategory::Video
+    )
 }
 
 pub fn shared_tab_label(id: &str) -> &'static str {

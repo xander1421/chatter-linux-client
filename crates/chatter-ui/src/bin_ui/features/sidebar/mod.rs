@@ -2,6 +2,7 @@
 //!
 //! Handles channel/DM selection, settings, and profile.
 
+use slint::ComponentHandle;
 mod anon_mode;
 pub mod channel;
 pub mod dm;
@@ -86,7 +87,7 @@ pub(crate) fn fill_open_media(
         );
         crate::run_history_ui!(weak, owner, |w| {
             use slint::Model;
-            let model = w.get_messages();
+            let model = w.global::<crate::ChatPane>().get_messages();
             for display in &rows {
                 if !display
                     .attachments
@@ -165,9 +166,15 @@ pub(crate) fn apply_unread_anchor(
     page: &[chatter_core::domain::message::Message],
 ) {
     let index = anchor.divider_index(page);
-    window.set_unread_index(index.map_or(-1, |i| i as i32));
-    window.set_unread_count(anchor.unread_count as i32);
-    window.set_is_at_bottom(index.is_none());
+    window
+        .global::<crate::ChatPane>()
+        .set_unread_index(index.map_or(-1, |i| i as i32));
+    window
+        .global::<crate::ChatPane>()
+        .set_unread_count(anchor.unread_count as i32);
+    window
+        .global::<crate::ChatPane>()
+        .set_is_at_bottom(index.is_none());
 }
 
 /// Fire the sidebar-open callback for `conv` — the same entry point a row tap
@@ -180,14 +187,18 @@ pub(crate) fn select_conversation(
     use chatter_core::state::ActiveConversation;
     super::header::cancel_pending_jump_for(conv);
     match conv {
-        ActiveConversation::Channel(id) => window.invoke_channel_selected(id.to_string().into()),
-        ActiveConversation::ServerDm { peer_id } => {
-            window.invoke_dm_selected(peer_id.to_string().into())
-        }
-        ActiveConversation::AnonDm(id) => window.invoke_dm_selected(id.to_string().into()),
-        ActiveConversation::AnonGroup(id) => {
-            window.invoke_private_group_selected(id.to_string().into())
-        }
+        ActiveConversation::Channel(id) => window
+            .global::<crate::SidebarPane>()
+            .invoke_channel_selected(id.to_string().into()),
+        ActiveConversation::ServerDm { peer_id } => window
+            .global::<crate::SidebarPane>()
+            .invoke_dm_selected(peer_id.to_string().into()),
+        ActiveConversation::AnonDm(id) => window
+            .global::<crate::SidebarPane>()
+            .invoke_dm_selected(id.to_string().into()),
+        ActiveConversation::AnonGroup(id) => window
+            .global::<crate::SidebarPane>()
+            .invoke_private_group_selected(id.to_string().into()),
         ActiveConversation::None => return false,
     }
     true
@@ -217,7 +228,7 @@ pub(crate) fn refresh_selection(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
     // The chat list: one model, every kind. Rows are edited in place, so no
     // model swap and no scroll reset.
     {
-        let model = window.get_chat_rows();
+        let model = window.global::<crate::SidebarPane>().get_chat_rows();
         for i in 0..model.row_count() {
             if let Some(mut item) = model.row_data(i) {
                 let selected = row_is_active(
@@ -247,7 +258,7 @@ pub(crate) fn refresh_section_selection(window: &MainWindow, ui_ctx: &Arc<Chatte
     use slint::Model;
 
     let active = ui_ctx.active_conversation();
-    let sections = window.get_custom_sections();
+    let sections = window.global::<crate::SidebarPane>().get_custom_sections();
     for section in sections.iter() {
         let rows = section.conversations;
         for j in 0..rows.row_count() {
@@ -319,7 +330,12 @@ fn row_is_active(
 /// burst used to stall the UI on one rebuild per message.
 pub(crate) fn refresh_section_badges(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     use slint::Model;
-    if window.get_custom_sections().row_count() == 0 {
+    if window
+        .global::<crate::SidebarPane>()
+        .get_custom_sections()
+        .row_count()
+        == 0
+    {
         return;
     }
     let weak = slint::ComponentHandle::as_weak(window);
@@ -343,16 +359,19 @@ pub(crate) fn apply_pinned_ui_owned(
     crate::run_history_ui!(weak, owner, |w| {
         if ids.is_empty() {
             client.clear_pinned();
-            w.set_has_pinned_messages(false);
-            w.set_pinned_message_preview("".into());
-            w.set_pinned_total_count(0);
+            w.global::<crate::ChatPane>().set_has_pinned_messages(false);
+            w.global::<crate::ChatPane>()
+                .set_pinned_message_preview("".into());
+            w.global::<crate::ChatPane>().set_pinned_total_count(0);
         } else {
             let count = ids.len() as i32;
             client.set_pinned_messages(ids);
-            w.set_has_pinned_messages(client.pinned_should_show());
-            w.set_pinned_message_preview(preview.into());
-            w.set_pinned_current_index(1);
-            w.set_pinned_total_count(count);
+            w.global::<crate::ChatPane>()
+                .set_has_pinned_messages(client.pinned_should_show());
+            w.global::<crate::ChatPane>()
+                .set_pinned_message_preview(preview.into());
+            w.global::<crate::ChatPane>().set_pinned_current_index(1);
+            w.global::<crate::ChatPane>().set_pinned_total_count(count);
         }
     });
 }
@@ -399,7 +418,9 @@ pub fn apply_received_to_sidebar(
         let (weak, ui_ctx) = (slint::ComponentHandle::as_weak(window), ui_ctx.clone());
         tokio::spawn(async move { rebuild_chat_list(&weak, &ui_ctx) });
     }
-    window.set_total_unread_count(badges.total as i32);
+    window
+        .global::<crate::SidebarPane>()
+        .set_total_unread_count(badges.total as i32);
 }
 
 /// Move the row for `conversation` to the top with a new preview line, and
@@ -428,7 +449,7 @@ fn update_sidebar_row(
         ActiveConversation::AnonDm(id) => id.to_string(),
         ActiveConversation::None => return true,
     };
-    let model = window.get_chat_rows();
+    let model = window.global::<crate::SidebarPane>().get_chat_rows();
     let Some(vec) = model
         .as_any()
         .downcast_ref::<slint::VecModel<crate::ChatRowData>>()
@@ -489,7 +510,7 @@ pub(crate) fn apply_chat_list(
     use slint::Model;
     let rows: Vec<_> = rows.into_iter().map(|r| r.to_slint()).collect();
     let target_len = rows.len();
-    let model = window.get_chat_rows();
+    let model = window.global::<crate::SidebarPane>().get_chat_rows();
     let mut arrivals = Vec::new();
     if let Some(vec) = model
         .as_any()
@@ -529,9 +550,14 @@ pub(crate) fn apply_chat_list(
             vec.remove(vec.row_count() - 1);
         }
     } else {
-        window.set_chat_rows(slint::ModelRc::new(slint::VecModel::from(rows)));
+        window
+            .global::<crate::SidebarPane>()
+            .set_chat_rows(slint::ModelRc::new(slint::VecModel::from(rows)));
     }
-    settle_arrivals(window.get_chat_rows(), arrivals);
+    settle_arrivals(
+        window.global::<crate::SidebarPane>().get_chat_rows(),
+        arrivals,
+    );
     refresh_selection(window, ui_ctx);
     crate::bin_ui::features::auth::inbox::domain_handler::recompute_total_unread(window, ui_ctx);
     #[cfg(target_os = "android")]
@@ -564,21 +590,25 @@ pub(crate) fn conversation_removed(
         {
             ui_ctx_ui.select_conversation(chatter_core::state::ActiveConversation::None);
             w.invoke_refresh_screen_protection();
-            w.set_messages(slint::ModelRc::new(
-                slint::VecModel::<crate::MessageItemData>::default(),
-            ));
+            w.global::<crate::ChatPane>()
+                .set_messages(slint::ModelRc::new(
+                    slint::VecModel::<crate::MessageItemData>::default(),
+                ));
             // No name = nothing open: the pane shows "Select a conversation".
-            w.set_channel_name("".into());
-            w.set_header_can_call(false);
-            w.set_header_can_invite(false);
-            w.set_header_can_open_settings(false);
-            w.set_header_can_open_pinned_list(false);
+            w.global::<crate::ChatPane>().set_channel_name("".into());
+            w.global::<crate::ChatPane>().set_header_can_call(false);
+            w.global::<crate::ChatPane>().set_header_can_invite(false);
+            w.global::<crate::ChatPane>()
+                .set_header_can_open_settings(false);
+            w.global::<crate::ChatPane>()
+                .set_header_can_open_pinned_list(false);
             // The empty detail pane is useful on desktop; on a phone the
             // removed conversation must reveal the list without another Back.
             // Keep pushed screens intact: their owners close them separately.
             if w.get_is_mobile_platform() {
-                w.set_mobile_show_chat(false);
-                w.set_active_tab("chats".into());
+                w.global::<crate::SidebarPane>().set_mobile_show_chat(false);
+                w.global::<crate::SidebarPane>()
+                    .set_active_tab("chats".into());
             }
         }
     });
@@ -615,25 +645,32 @@ pub(crate) fn show_chat_pane(weak: &slint::Weak<MainWindow>) {
         // Picker visibility belongs to the composer being left. Reset at the
         // synchronous entry point as well as on phone Back: a two-pane switch
         // does not change mobile-show-chat, and the chat child is recreated.
-        w.set_composer_emoji_picker_visible(false);
-        w.set_composer_gif_picker_visible(false);
+        w.global::<crate::ChatPane>()
+            .set_composer_emoji_picker_visible(false);
+        w.global::<crate::ChatPane>()
+            .set_composer_gif_picker_visible(false);
         // Clear the old header synchronously, before revealing the pane or
         // waiting for the next conversation's asynchronous load.
-        w.set_loading_messages(true);
-        w.set_channel_name("".into());
-        w.set_header_can_call(false);
-        w.set_header_can_invite(false);
-        w.set_header_can_open_settings(false);
-        w.set_header_can_open_pinned_list(false);
-        w.set_topic("".into());
-        w.set_member_count(0);
-        w.set_header_presence_status("offline".into());
-        w.set_channel_avatar_source(slint::Image::default());
-        w.set_channel_has_avatar(false);
+        w.global::<crate::ChatPane>().set_loading_messages(true);
+        w.global::<crate::ChatPane>().set_channel_name("".into());
+        w.global::<crate::ChatPane>().set_header_can_call(false);
+        w.global::<crate::ChatPane>().set_header_can_invite(false);
+        w.global::<crate::ChatPane>()
+            .set_header_can_open_settings(false);
+        w.global::<crate::ChatPane>()
+            .set_header_can_open_pinned_list(false);
+        w.global::<crate::ChatPane>().set_topic("".into());
+        w.global::<crate::ChatPane>().set_member_count(0);
+        w.global::<crate::ChatPane>()
+            .set_header_presence_status("offline".into());
+        w.global::<crate::ChatPane>()
+            .set_channel_avatar_source(slint::Image::default());
+        w.global::<crate::ChatPane>().set_channel_has_avatar(false);
         // The header's typing line belongs to the conversation being left.
-        w.set_typing_indicator("".into());
+        w.global::<crate::ChatPane>()
+            .set_typing_indicator("".into());
         if w.get_is_mobile_platform() {
-            w.set_mobile_show_chat(true);
+            w.global::<crate::SidebarPane>().set_mobile_show_chat(true);
         }
     }
 }

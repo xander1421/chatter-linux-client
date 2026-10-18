@@ -34,7 +34,7 @@ enum Action {
 }
 
 fn sessions_visible(w: &MainWindow) -> bool {
-    w.get_active_modal() == "sessions" || w.get_settings_open()
+    w.get_active_modal() == "sessions" || w.global::<crate::ModalHostState>().get_settings_open()
 }
 
 /// One request owns all publications. Leaving/reopening the modal or starting
@@ -51,19 +51,29 @@ fn request(weak: slint::Weak<MainWindow>, client: Arc<ChatterClient>, action: Ac
         return;
     }
     let revision = client.auth_snapshot().session_revision;
-    let generation = w.get_sessions_generation().wrapping_add(1);
-    w.set_sessions_generation(generation);
+    let generation = w
+        .global::<crate::ModalHostState>()
+        .get_sessions_generation()
+        .wrapping_add(1);
+    w.global::<crate::ModalHostState>()
+        .set_sessions_generation(generation);
     let listing = matches!(&action, Action::List);
-    w.set_sessions_loading(true);
-    w.set_sessions_revoking(!listing);
-    w.set_sessions_error("".into());
+    w.global::<crate::ModalHostState>()
+        .set_sessions_loading(true);
+    w.global::<crate::ModalHostState>()
+        .set_sessions_revoking(!listing);
+    w.global::<crate::ModalHostState>()
+        .set_sessions_error("".into());
     if listing {
         // Never retain another owner's rows while opening a new view.
-        w.set_sessions(ModelRc::new(VecModel::from(Vec::<SessionInfo>::new())));
-        w.set_sessions_pending_links(ModelRc::new(VecModel::from(
-            Vec::<crate::PendingLinkInfo>::new(),
-        )));
-        w.set_sessions_loaded(false);
+        w.global::<crate::ModalHostState>()
+            .set_sessions(ModelRc::new(VecModel::from(Vec::<SessionInfo>::new())));
+        w.global::<crate::ModalHostState>()
+            .set_sessions_pending_links(ModelRc::new(VecModel::from(
+                Vec::<crate::PendingLinkInfo>::new(),
+            )));
+        w.global::<crate::ModalHostState>()
+            .set_sessions_loaded(false);
     }
     tokio::spawn(async move {
         let current = || {
@@ -148,23 +158,32 @@ fn request(weak: slint::Weak<MainWindow>, client: Arc<ChatterClient>, action: Ac
             if client.session_current_user_id() != owner
                 || client.auth_snapshot().session_revision != revision
                 || !sessions_visible(&w)
-                || w.get_sessions_generation() != generation
+                || w.global::<crate::ModalHostState>()
+                    .get_sessions_generation()
+                    != generation
             {
                 return;
             }
             if let Some(rows) = sessions {
-                w.set_settings_session_count(rows.len() as i32);
-                w.set_sessions(ModelRc::new(VecModel::from(
-                    rows.into_iter().map(session_to_slint).collect::<Vec<_>>(),
-                )));
-                w.set_sessions_loaded(true);
+                w.global::<crate::SettingsPane>()
+                    .set_settings_session_count(rows.len() as i32);
+                w.global::<crate::ModalHostState>()
+                    .set_sessions(ModelRc::new(VecModel::from(
+                        rows.into_iter().map(session_to_slint).collect::<Vec<_>>(),
+                    )));
+                w.global::<crate::ModalHostState>()
+                    .set_sessions_loaded(true);
             }
             if let Some(rows) = pending {
-                w.set_sessions_pending_links(ModelRc::new(VecModel::from(rows)));
+                w.global::<crate::ModalHostState>()
+                    .set_sessions_pending_links(ModelRc::new(VecModel::from(rows)));
             }
-            w.set_sessions_error(errors.join("\n").into());
-            w.set_sessions_loading(false);
-            w.set_sessions_revoking(false);
+            w.global::<crate::ModalHostState>()
+                .set_sessions_error(errors.join("\n").into());
+            w.global::<crate::ModalHostState>()
+                .set_sessions_loading(false);
+            w.global::<crate::ModalHostState>()
+                .set_sessions_revoking(false);
         });
     });
 }
@@ -172,27 +191,35 @@ fn request(weak: slint::Weak<MainWindow>, client: Arc<ChatterClient>, action: Ac
 pub fn wire_session_callbacks(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak = window.as_weak();
     let client = ui_ctx.clone();
-    window.on_settings_view_sessions(move || request(weak.clone(), client.clone(), Action::List));
+    window
+        .global::<crate::SettingsPane>()
+        .on_settings_view_sessions(move || request(weak.clone(), client.clone(), Action::List));
 
     let weak = window.as_weak();
     let client = ui_ctx.clone();
-    window.on_cancel_pending_link(move |uuid| {
-        request(
-            weak.clone(),
-            client.clone(),
-            Action::Cancel(uuid.to_string()),
-        )
-    });
+    window
+        .global::<crate::ModalHostState>()
+        .on_cancel_pending_link(move |uuid| {
+            request(
+                weak.clone(),
+                client.clone(),
+                Action::Cancel(uuid.to_string()),
+            )
+        });
 
     let weak = window.as_weak();
     let client = ui_ctx.clone();
-    window.on_revoke_session(move |id| {
-        if id > 0 {
-            request(weak.clone(), client.clone(), Action::Revoke(id as u32));
-        }
-    });
+    window
+        .global::<crate::ModalHostState>()
+        .on_revoke_session(move |id| {
+            if id > 0 {
+                request(weak.clone(), client.clone(), Action::Revoke(id as u32));
+            }
+        });
 
     let weak = window.as_weak();
     let client = ui_ctx.clone();
-    window.on_revoke_all_sessions(move || request(weak.clone(), client.clone(), Action::RevokeAll));
+    window
+        .global::<crate::ModalHostState>()
+        .on_revoke_all_sessions(move || request(weak.clone(), client.clone(), Action::RevokeAll));
 }

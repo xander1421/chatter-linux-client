@@ -27,10 +27,18 @@ static WINDOW: OnceLock<slint::Weak<MainWindow>> = OnceLock::new();
 /// Wire the call screen's audio callbacks. Call once on the UI thread.
 pub fn install(window: &MainWindow) {
     let _ = WINDOW.set(window.as_weak());
-    window.set_call_speaker_toggle(true);
-    window.on_call_audio_session(|active, video| if active { start(video) } else { stop() });
-    window.on_call_audio_video(|video| update(|r| r.set_video(video)));
-    window.on_call_toggle_speaker(|| update(|r| r.toggle_speaker()));
+    window
+        .global::<crate::CallView>()
+        .set_call_speaker_toggle(true);
+    window
+        .global::<crate::CallView>()
+        .on_call_audio_session(|active, video| if active { start(video) } else { stop() });
+    window
+        .global::<crate::CallView>()
+        .on_call_audio_video(|video| update(|r| r.set_video(video)));
+    window
+        .global::<crate::CallView>()
+        .on_call_toggle_speaker(|| update(|r| r.toggle_speaker()));
 }
 
 fn start(video: bool) {
@@ -74,7 +82,8 @@ fn publish(speaker_on: bool) {
     };
     let _ = slint::invoke_from_event_loop(move || {
         if let Some(w) = weak.upgrade() {
-            w.set_call_speaker_on(speaker_on);
+            w.global::<crate::CallView>()
+                .set_call_speaker_on(speaker_on);
         }
     });
 }

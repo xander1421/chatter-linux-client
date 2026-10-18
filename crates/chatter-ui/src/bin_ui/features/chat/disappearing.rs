@@ -29,30 +29,32 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 fn wire_secret_timer(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak = window.as_weak();
     let ctx = ui_ctx.clone();
-    window.on_secret_timer_set(move |seconds| {
-        let Ok(seconds) = u32::try_from(seconds) else {
-            return;
-        };
-        let ActiveConversation::AnonDm(id) = ctx.active_conversation() else {
-            return;
-        };
-        let (ctx, weak) = (ctx.clone(), weak.clone());
-        tokio::spawn(async move {
-            let result = ctx
-                .set_disappearing_timer(ActiveConversation::AnonDm(id), seconds)
-                .await;
-            let _ = slint::invoke_from_event_loop(move || {
-                let Some(w) = weak.upgrade() else { return };
-                refresh_header(&w, &ctx);
-                if let Err(e) = result {
-                    tracing::warn!(error = %e, "secret-chat timer change failed");
-                    w.set_toast_message("Could not announce timer change".into());
-                    w.set_toast_variant("error".into());
-                    w.set_toast_visible(true);
-                }
+    window
+        .global::<crate::ModalHostState>()
+        .on_secret_timer_set(move |seconds| {
+            let Ok(seconds) = u32::try_from(seconds) else {
+                return;
+            };
+            let ActiveConversation::AnonDm(id) = ctx.active_conversation() else {
+                return;
+            };
+            let (ctx, weak) = (ctx.clone(), weak.clone());
+            tokio::spawn(async move {
+                let result = ctx
+                    .set_disappearing_timer(ActiveConversation::AnonDm(id), seconds)
+                    .await;
+                let _ = slint::invoke_from_event_loop(move || {
+                    let Some(w) = weak.upgrade() else { return };
+                    refresh_header(&w, &ctx);
+                    if let Err(e) = result {
+                        tracing::warn!(error = %e, "secret-chat timer change failed");
+                        w.set_toast_message("Could not announce timer change".into());
+                        w.set_toast_variant("error".into());
+                        w.set_toast_visible(true);
+                    }
+                });
             });
         });
-    });
 }
 
 /// Drop expired bubbles and quote snapshots, then redraw rows from core's
@@ -110,6 +112,7 @@ fn wire_expired(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 let Some(w) = weak.upgrade() else { return };
                 super::remove_messages_where(&w, |m| gone.contains(m.message_id.as_str()));
                 if let Some(results) = w
+                    .global::<crate::SearchPane>()
                     .get_unified_search_messages()
                     .as_any()
                     .downcast_ref::<VecModel<crate::SearchResult>>()
@@ -124,12 +127,16 @@ fn wire_expired(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     }
                 }
                 if reply_targets.contains(&(
-                    w.get_composer_reply_to_sender().to_string(),
-                    w.get_composer_reply_to_timestamp().to_string(),
+                    w.global::<crate::ChatPane>()
+                        .get_composer_reply_to_sender()
+                        .to_string(),
+                    w.global::<crate::ChatPane>()
+                        .get_composer_reply_to_timestamp()
+                        .to_string(),
                 )) {
                     super::send_message::clear_reply(&w);
                 }
-                let model = w.get_messages();
+                let model = w.global::<crate::ChatPane>().get_messages();
                 for index in 0..model.row_count() {
                     let Some(mut row) = model.row_data(index) else {
                         continue;
@@ -213,7 +220,11 @@ fn refresh_header(w: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 /// open).
 fn refresh_all(w: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     refresh_header(w, ui_ctx);
-    if let Ok(peer) = w.get_profile_user_id().parse::<UserId>() {
+    if let Ok(peer) = w
+        .global::<crate::ModalHostState>()
+        .get_profile_user_id()
+        .parse::<UserId>()
+    {
         if w.global::<DisappearingGlobal>().get_dm_can_set() {
             show_for_profile(w, ui_ctx, &peer, true);
         }

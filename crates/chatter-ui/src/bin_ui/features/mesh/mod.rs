@@ -108,7 +108,9 @@ pub fn clear_active(window: &MainWindow) {
     >::new())));
     // The mesh set its own placeholder; leaving it would label a DM "everyone
     // in radio range".
-    window.set_composer_placeholder("Type a message...".into());
+    window
+        .global::<crate::ChatPane>()
+        .set_composer_placeholder("Type a message...".into());
     deselect_rows(window);
 }
 
@@ -236,7 +238,8 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         let weak = window.as_weak();
         global.on_open_setup(move || {
             if let Some(w) = weak.upgrade() {
-                w.invoke_nav_push("mesh-setup".into());
+                w.global::<crate::ModalHostState>()
+                    .invoke_nav_push("mesh-setup".into());
             }
         });
     }
@@ -771,7 +774,7 @@ pub fn refresh_rows(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         .mesh_private_channel_is_creator(row.scope.as_str())
                         .unwrap_or(false),
                 );
-                window.set_member_count(
+                window.global::<crate::ChatPane>().set_member_count(
                     ui_ctx
                         .mesh_private_channel_member_count(row.scope.as_str())
                         .unwrap_or(0) as i32,
@@ -970,10 +973,8 @@ fn handle_event(event: MeshEvent, weak: &slint::Weak<MainWindow>, ui_ctx: &Arc<C
         MeshEvent::Message(message) => {
             let message = *message;
             let mesh_owner = active_session();
-            let owner = super::history_owner::HistoryOwner::capture(
-                ui_ctx,
-                ui_ctx.active_conversation(),
-            );
+            let owner =
+                super::history_owner::HistoryOwner::capture(ui_ctx, ui_ctx.active_conversation());
             let session = super::history_owner::SessionOwner::capture(ui_ctx);
             let is_open = mesh_owner
                 .as_ref()

@@ -101,7 +101,7 @@ pub(crate) fn render_attachments(
         .collect();
 
     let model = ModelRc::new(VecModel::from(slint_attachments));
-    w.set_pending_attachments(model);
+    w.global::<crate::ChatPane>().set_pending_attachments(model);
 
     // Ciphertext cannot be handed to Slint's path loader. Authenticate,
     // thumbnail and decode it off the UI thread, then update only the tray
@@ -141,7 +141,7 @@ pub(crate) fn render_attachments(
                         return;
                     }
                     let Some(w) = weak.upgrade() else { return };
-                    let rows = w.get_pending_attachments();
+                    let rows = w.global::<crate::ChatPane>().get_pending_attachments();
                     let Some(model) = rows
                         .as_any()
                         .downcast_ref::<VecModel<PendingAttachmentData>>()
@@ -173,7 +173,8 @@ pub(crate) fn render_attachments(
     } else {
         format!("{} files attached - type a message...", pending_count)
     };
-    w.set_composer_placeholder(placeholder.into());
+    w.global::<crate::ChatPane>()
+        .set_composer_placeholder(placeholder.into());
 }
 
 pub(crate) fn wire_attachment_clicked(
@@ -184,152 +185,156 @@ pub(crate) fn wire_attachment_clicked(
     let ui_ctx_attach = ui_ctx.clone();
     let chat_state = ui_ctx.clone();
 
-    window.on_attachment_clicked(move || {
-        let weak = weak_window.clone();
-        let chat_state = chat_state.clone();
-        let ui_ctx_attach = ui_ctx_attach.clone();
-        tracing::debug!("Attachment clicked");
-        let Some(w) = weak.upgrade() else { return };
-        if w.get_composer_attachment_picker_open() {
-            return;
-        }
-        // Settle IME and retain native selection BEFORE the picker can pause
-        // Android or take desktop focus. This is the real callback boundary,
-        // covering both Attach and the attachment tray's Add action.
-        w.invoke_prepare_attachment_picker();
-        i_slint_core::properties::ChangeTracker::run_change_handlers();
+    window
+        .global::<crate::ChatPane>()
+        .on_attachment_clicked(move || {
+            let weak = weak_window.clone();
+            let chat_state = chat_state.clone();
+            let ui_ctx_attach = ui_ctx_attach.clone();
+            tracing::debug!("Attachment clicked");
+            let Some(w) = weak.upgrade() else { return };
+            if w.get_composer_attachment_picker_open() {
+                return;
+            }
+            // Settle IME and retain native selection BEFORE the picker can pause
+            // Android or take desktop focus. This is the real callback boundary,
+            // covering both Attach and the attachment tray's Add action.
+            w.invoke_prepare_attachment_picker();
+            i_slint_core::properties::ChangeTracker::run_change_handlers();
 
-        // Before the active-conversation check below, not after: a mesh room or
-        // cell is not an `ActiveConversation` at all — that enum is the
-        // server-side conversation — so the `None` early return would swallow
-        // the tap and the picker would never open. `intercept_send` sits in the
-        // same position in the send path, for the same reason.
-        //
-        // A mesh file is fragmented onto the radio, never uploaded, and never
-        // staged: staging exists for a later send with text attached.
-        #[cfg(feature = "mesh")]
-        if crate::bin_ui::features::mesh::intercept_attachment(&ui_ctx_attach, weak.clone()) {
-            return;
-        }
+            // Before the active-conversation check below, not after: a mesh room or
+            // cell is not an `ActiveConversation` at all — that enum is the
+            // server-side conversation — so the `None` early return would swallow
+            // the tap and the picker would never open. `intercept_send` sits in the
+            // same position in the send path, for the same reason.
+            //
+            // A mesh file is fragmented onto the radio, never uploaded, and never
+            // staged: staging exists for a later send with text attached.
+            #[cfg(feature = "mesh")]
+            if crate::bin_ui::features::mesh::intercept_attachment(&ui_ctx_attach, weak.clone()) {
+                return;
+            }
 
-        // Check if we have an active conversation BEFORE opening file picker
-        let snapshot = chat_state.chat_snapshot();
-        let conversation = snapshot.active_conversation;
-        let revision = snapshot.attachment_revision;
+            // Check if we have an active conversation BEFORE opening file picker
+            let snapshot = chat_state.chat_snapshot();
+            let conversation = snapshot.active_conversation;
+            let revision = snapshot.attachment_revision;
 
-        tracing::info!(
-            conversation = ?conversation,
-            "Attachment clicked - checking context"
-        );
+            tracing::info!(
+                conversation = ?conversation,
+                "Attachment clicked - checking context"
+            );
 
-        if matches!(conversation, ActiveConversation::None) {
-            tracing::warn!("Cannot upload: no active conversation selected");
-            w.invoke_finish_attachment_picker(true);
-            return;
-        }
+            if matches!(conversation, ActiveConversation::None) {
+                tracing::warn!("Cannot upload: no active conversation selected");
+                w.invoke_finish_attachment_picker(true);
+                return;
+            }
 
-        #[cfg(not(any(target_os = "android", target_os = "ios")))]
-        {
-            // Desktop picks the user's own files by path; nothing to shelter.
-            let _ = &ui_ctx_attach;
-            tokio::spawn(async move {
-                use chatter_core::media::file_picker::{FileFilter, FilePicker, FilePickerConfig};
+            #[cfg(not(any(target_os = "android", target_os = "ios")))]
+            {
+                // Desktop picks the user's own files by path; nothing to shelter.
+                let _ = &ui_ctx_attach;
+                tokio::spawn(async move {
+                    use chatter_core::media::file_picker::{
+                        FileFilter, FilePicker, FilePickerConfig,
+                    };
 
-                let config = FilePickerConfig::new()
-                    .with_title("Select Attachment")
-                    .with_filter(FileFilter::all()) // Default to all files
-                    .with_filter(FileFilter::images())
-                    .with_filter(FileFilter::videos())
-                    .with_filter(FileFilter::audio())
-                    .with_filter(FileFilter::documents())
-                    .with_multiple(true);
+                    let config = FilePickerConfig::new()
+                        .with_title("Select Attachment")
+                        .with_filter(FileFilter::all()) // Default to all files
+                        .with_filter(FileFilter::images())
+                        .with_filter(FileFilter::videos())
+                        .with_filter(FileFilter::audio())
+                        .with_filter(FileFilter::documents())
+                        .with_multiple(true);
 
-                let selected_files = FilePicker::pick_files(config).await;
-                finish_picker(&weak, &chat_state, conversation, revision);
+                    let selected_files = FilePicker::pick_files(config).await;
+                    finish_picker(&weak, &chat_state, conversation, revision);
 
-                if selected_files.is_empty() {
-                    tracing::debug!("File picker cancelled or no files selected");
-                    return;
-                }
-
-                tracing::info!("Selected {} file(s) for attachment", selected_files.len());
-
-                for file_path in selected_files {
-                    if let Err(e) = process_and_add_file(
-                        file_path,
-                        None,
-                        &chat_state,
-                        conversation,
-                        revision,
-                        &weak,
-                    )
-                    .await
-                    {
-                        tracing::error!("{}", e);
+                    if selected_files.is_empty() {
+                        tracing::debug!("File picker cancelled or no files selected");
+                        return;
                     }
-                }
 
-                tracing::info!("Added file(s) to pending attachments");
-            });
-        }
-        #[cfg(target_os = "android")]
-        {
-            tokio::spawn(async move {
-                // Storage Access Framework (no permission needed). "*/*" lets the
-                // user pick any file; images/videos/audio/docs all qualify.
-                let selected_files =
-                    crate::platform::android::file_picker::pick_files(&["*/*"]).await;
-                finish_picker(&weak, &chat_state, conversation, revision);
+                    tracing::info!("Selected {} file(s) for attachment", selected_files.len());
 
-                if selected_files.is_empty() {
-                    tracing::debug!("File picker cancelled or no files selected");
-                    return;
-                }
-
-                tracing::info!("Selected {} file(s) for attachment", selected_files.len());
-
-                for file_path in selected_files {
-                    // The SAF copy sits in the purgeable cache dir and is ours:
-                    // move it where a restart finds it (core owns the dir).
-                    let source = file_path;
-                    let file_path = ui_ctx_attach.stage_owned_file(source.clone());
-                    if file_path == source {
-                        let _ = tokio::fs::remove_file(&source).await;
-                        tracing::warn!("Could not encrypt selected attachment");
-                        continue;
-                    }
-                    if let Err(e) = process_and_add_file(
-                        file_path.clone(),
-                        ui_ctx_attach.staged_file_size(&file_path),
-                        &chat_state,
-                        conversation,
-                        revision,
-                        &weak,
-                    )
-                    .await
-                    {
-                        ui_ctx_attach.release_staged_files(&[PendingAttachment::new(
-                            AttachmentId::new(),
-                            String::new(),
+                    for file_path in selected_files {
+                        if let Err(e) = process_and_add_file(
                             file_path,
-                            0,
-                            String::new(),
-                        )]);
-                        tracing::error!("{}", e);
+                            None,
+                            &chat_state,
+                            conversation,
+                            revision,
+                            &weak,
+                        )
+                        .await
+                        {
+                            tracing::error!("{}", e);
+                        }
                     }
-                }
-            });
-        }
-        // iOS has no picker yet: chatter-core's file_picker is desktop-only
-        // (rfd) and there's no UIDocumentPickerViewController bridge. Warn
-        // rather than no-op silently.
-        #[cfg(target_os = "ios")]
-        {
-            let _ = (&chat_state, &weak, &ui_ctx_attach);
-            tracing::warn!("File picker not yet implemented on iOS");
-            w.invoke_finish_attachment_picker(true);
-        }
-    });
+
+                    tracing::info!("Added file(s) to pending attachments");
+                });
+            }
+            #[cfg(target_os = "android")]
+            {
+                tokio::spawn(async move {
+                    // Storage Access Framework (no permission needed). "*/*" lets the
+                    // user pick any file; images/videos/audio/docs all qualify.
+                    let selected_files =
+                        crate::platform::android::file_picker::pick_files(&["*/*"]).await;
+                    finish_picker(&weak, &chat_state, conversation, revision);
+
+                    if selected_files.is_empty() {
+                        tracing::debug!("File picker cancelled or no files selected");
+                        return;
+                    }
+
+                    tracing::info!("Selected {} file(s) for attachment", selected_files.len());
+
+                    for file_path in selected_files {
+                        // The SAF copy sits in the purgeable cache dir and is ours:
+                        // move it where a restart finds it (core owns the dir).
+                        let source = file_path;
+                        let file_path = ui_ctx_attach.stage_owned_file(source.clone());
+                        if file_path == source {
+                            let _ = tokio::fs::remove_file(&source).await;
+                            tracing::warn!("Could not encrypt selected attachment");
+                            continue;
+                        }
+                        if let Err(e) = process_and_add_file(
+                            file_path.clone(),
+                            ui_ctx_attach.staged_file_size(&file_path),
+                            &chat_state,
+                            conversation,
+                            revision,
+                            &weak,
+                        )
+                        .await
+                        {
+                            ui_ctx_attach.release_staged_files(&[PendingAttachment::new(
+                                AttachmentId::new(),
+                                String::new(),
+                                file_path,
+                                0,
+                                String::new(),
+                            )]);
+                            tracing::error!("{}", e);
+                        }
+                    }
+                });
+            }
+            // iOS has no picker yet: chatter-core's file_picker is desktop-only
+            // (rfd) and there's no UIDocumentPickerViewController bridge. Warn
+            // rather than no-op silently.
+            #[cfg(target_os = "ios")]
+            {
+                let _ = (&chat_state, &weak, &ui_ctx_attach);
+                tracing::warn!("File picker not yet implemented on iOS");
+                w.invoke_finish_attachment_picker(true);
+            }
+        });
 }
 
 /// A cancelled or failed chooser still completes the input handover. A picker
@@ -363,7 +368,7 @@ pub(crate) fn wire_paste_image(
     let chat_state = ui_ctx.clone();
     let ui_ctx = ui_ctx.clone();
 
-    window.on_paste_image(move || {
+    window.global::<crate::ChatPane>().on_paste_image(move || {
         let weak = weak_window.clone();
         let chat_state = chat_state.clone();
         let ui_ctx = ui_ctx.clone();
@@ -461,32 +466,34 @@ pub(crate) fn wire_remove_attachment(
     let weak_window = window.as_weak();
     let ui_ctx = ui_ctx.clone();
 
-    window.on_remove_attachment(move |attachment_id: SharedString| {
-        let chat_state = &ui_ctx;
-        let id_str = attachment_id.to_string();
-        tracing::debug!("Remove attachment clicked: {}", id_str);
+    window
+        .global::<crate::ChatPane>()
+        .on_remove_attachment(move |attachment_id: SharedString| {
+            let chat_state = &ui_ctx;
+            let id_str = attachment_id.to_string();
+            tracing::debug!("Remove attachment clicked: {}", id_str);
 
-        // Parse the attachment ID
-        let parsed_id: Result<AttachmentId, _> = id_str.parse();
-        match parsed_id {
-            Ok(id) => {
-                let removed: Vec<PendingAttachment> = chat_state
-                    .pending_attachments()
-                    .into_iter()
-                    .filter(|a| a.id == id)
-                    .collect();
-                chat_state.remove_pending_attachment(id);
-                // A sheltered copy leaves with its tray entry; a user's
-                // original is only a reference and stays.
-                ui_ctx.release_staged_files(&removed);
-                tracing::info!("Removed pending attachment: {}", id_str);
+            // Parse the attachment ID
+            let parsed_id: Result<AttachmentId, _> = id_str.parse();
+            match parsed_id {
+                Ok(id) => {
+                    let removed: Vec<PendingAttachment> = chat_state
+                        .pending_attachments()
+                        .into_iter()
+                        .filter(|a| a.id == id)
+                        .collect();
+                    chat_state.remove_pending_attachment(id);
+                    // A sheltered copy leaves with its tray entry; a user's
+                    // original is only a reference and stays.
+                    ui_ctx.release_staged_files(&removed);
+                    tracing::info!("Removed pending attachment: {}", id_str);
 
-                // Refresh the UI
-                update_attachments_ui(chat_state, &weak_window);
+                    // Refresh the UI
+                    update_attachments_ui(chat_state, &weak_window);
+                }
+                Err(e) => {
+                    tracing::error!("Failed to parse attachment ID '{}': {}", id_str, e);
+                }
             }
-            Err(e) => {
-                tracing::error!("Failed to parse attachment ID '{}': {}", id_str, e);
-            }
-        }
-    });
+        });
 }

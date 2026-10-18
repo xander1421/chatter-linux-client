@@ -26,15 +26,20 @@ pub(crate) fn wire_gif_clicked(window: &MainWindow, ui_ctx: &Arc<ChatterClient>)
     // The drawer's GIFs tab. The query it kept is re-run, not cleared: a
     // tab switch must not throw away what was typed (an empty query shows
     // Recent and Trending).
-    window.on_gif_clicked(move || {
+    window.global::<crate::ChatPane>().on_gif_clicked(move || {
         let weak = weak_window.clone();
         let ui_ctx = ui_ctx.clone();
         tracing::debug!("GIF picker clicked");
 
         let _ = slint::invoke_from_event_loop(move || {
             if let Some(w) = weak.upgrade() {
-                if w.get_composer_gif_picker_visible() {
-                    let query = w.get_composer_gif_picker_search().to_string();
+                if w.global::<crate::ChatPane>()
+                    .get_composer_gif_picker_visible()
+                {
+                    let query = w
+                        .global::<crate::ChatPane>()
+                        .get_composer_gif_picker_search()
+                        .to_string();
                     request_gifs(&w, &ui_ctx, query);
                 } else {
                     // Stop animations when picker is hidden
@@ -49,11 +54,15 @@ pub(crate) fn wire_gif_search(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) 
     let weak_window = window.as_weak();
     let ui_ctx = ui_ctx.clone();
 
-    window.on_composer_gif_search_changed(move |query: SharedString| {
-        tracing::debug!("GIF search requested");
-        let Some(w) = weak_window.upgrade() else { return };
-        request_gifs(&w, &ui_ctx, query.to_string());
-    });
+    window
+        .global::<crate::ChatPane>()
+        .on_composer_gif_search_changed(move |query: SharedString| {
+            tracing::debug!("GIF search requested");
+            let Some(w) = weak_window.upgrade() else {
+                return;
+            };
+            request_gifs(&w, &ui_ctx, query.to_string());
+        });
 }
 
 /// One request for `query`: an empty query shows the account's recent GIFs
@@ -65,8 +74,10 @@ fn request_gifs(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, query: String) {
     w.set_composer_gif_generation(w.get_composer_gif_generation() + 1);
     let generation = w.get_composer_gif_generation();
     let session = ui_ctx.auth_snapshot().session_revision;
-    w.set_composer_gif_picker_loading(true);
-    w.set_composer_gif_picker_failed(false);
+    w.global::<crate::ChatPane>()
+        .set_composer_gif_picker_loading(true);
+    w.global::<crate::ChatPane>()
+        .set_composer_gif_picker_failed(false);
     crate::bin_ui::gif_state::clear_picker_gifs();
 
     // Recents are local and never depend on the provider answering. They are
@@ -85,7 +96,8 @@ fn request_gifs(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, query: String) {
     if !scope.is_some_and(|scope| ui_ctx.picker_scope_is_current(scope)) {
         recent.clear();
     }
-    w.set_composer_gif_picker_recent(rows_model(&recent));
+    w.global::<crate::ChatPane>()
+        .set_composer_gif_picker_recent(rows_model(&recent));
     spawn_previews(&recent, w.as_weak(), ui_ctx.clone(), generation, session);
 
     let weak = w.as_weak();
@@ -104,63 +116,67 @@ pub(crate) fn wire_gif_selected(window: &MainWindow, ui_ctx: &Arc<ChatterClient>
     let weak_window = window.as_weak();
     let ui_ctx = ui_ctx.clone();
 
-    window.on_composer_gif_selected(move |gif_id: SharedString, gif_url: SharedString| {
-        let Some(w) = weak_window.upgrade() else {
-            return;
-        };
-        let id = gif_id.to_string();
-        let url = gif_url.to_string();
-        tracing::debug!("GIF selected");
-        // What the picker knew about the tile, read while the models are up.
-        let picked = find_gif_row(&w, &id);
-        // Who is picking, before anything is consumed.
-        let scope = ui_ctx.picker_history_scope();
+    window.global::<crate::ChatPane>().on_composer_gif_selected(
+        move |gif_id: SharedString, gif_url: SharedString| {
+            let Some(w) = weak_window.upgrade() else {
+                return;
+            };
+            let id = gif_id.to_string();
+            let url = gif_url.to_string();
+            tracing::debug!("GIF selected");
+            // What the picker knew about the tile, read while the models are up.
+            let picked = find_gif_row(&w, &id);
+            // Who is picking, before anything is consumed.
+            let scope = ui_ctx.picker_history_scope();
 
-        // Validate FIRST. An editing session, a read-only channel or a
-        // changed conversation refuses the send with a toast, and the picker
-        // stays open with the tile still there — nothing was consumed and
-        // nothing is remembered.
-        let Some(send) = begin_gif_send(&w, &ui_ctx) else {
-            return;
-        };
+            // Validate FIRST. An editing session, a read-only channel or a
+            // changed conversation refuses the send with a toast, and the picker
+            // stays open with the tile still there — nothing was consumed and
+            // nothing is remembered.
+            let Some(send) = begin_gif_send(&w, &ui_ctx) else {
+                return;
+            };
 
-        // Accepted: the drawer gives way, and the pick is remembered for the
-        // account it was made under, so a failed upload can be repicked.
-        w.set_composer_gif_picker_visible(false);
-        w.invoke_release_text_focus();
-        crate::bin_ui::gif_state::clear_picker_gifs();
-        if let Some(scope) = scope {
-            ui_ctx.record_recent_gif(
-                scope,
-                RecentGif {
-                    id: id.clone(),
-                    url: url.clone(),
-                    preview_url: picked
-                        .as_ref()
-                        .map(|g| g.preview_url.to_string())
-                        .unwrap_or_default(),
-                    width: picked.as_ref().map_or(0, |g| g.width.max(0) as u32),
-                    height: picked.as_ref().map_or(0, |g| g.height.max(0) as u32),
-                },
-            );
-        }
-        // The pending row goes in now, not when `deliver` starts: the first
-        // and slowest part of a GIF send (fetch, encrypt, upload) left the
-        // composer empty and the drawer closed with nothing on screen saying
-        // a send was under way.
-        show_gif_pending(&w, &ui_ctx, &send);
-        let (weak, ctx) = (w.as_weak(), ui_ctx.clone());
-        tokio::spawn(async move {
-            let upload = upload_gif(ctx.clone(), url, id);
-            if let Some(failed) = finish_gif_send(weak.clone(), ctx.clone(), send, upload).await {
-                let _ = slint::invoke_from_event_loop(move || {
-                    if let Some(w) = weak.upgrade() {
-                        recover_gif_send(&w, &ctx, failed);
-                    }
-                });
+            // Accepted: the drawer gives way, and the pick is remembered for the
+            // account it was made under, so a failed upload can be repicked.
+            w.global::<crate::ChatPane>()
+                .set_composer_gif_picker_visible(false);
+            w.invoke_release_text_focus();
+            crate::bin_ui::gif_state::clear_picker_gifs();
+            if let Some(scope) = scope {
+                ui_ctx.record_recent_gif(
+                    scope,
+                    RecentGif {
+                        id: id.clone(),
+                        url: url.clone(),
+                        preview_url: picked
+                            .as_ref()
+                            .map(|g| g.preview_url.to_string())
+                            .unwrap_or_default(),
+                        width: picked.as_ref().map_or(0, |g| g.width.max(0) as u32),
+                        height: picked.as_ref().map_or(0, |g| g.height.max(0) as u32),
+                    },
+                );
             }
-        });
-    });
+            // The pending row goes in now, not when `deliver` starts: the first
+            // and slowest part of a GIF send (fetch, encrypt, upload) left the
+            // composer empty and the drawer closed with nothing on screen saying
+            // a send was under way.
+            show_gif_pending(&w, &ui_ctx, &send);
+            let (weak, ctx) = (w.as_weak(), ui_ctx.clone());
+            tokio::spawn(async move {
+                let upload = upload_gif(ctx.clone(), url, id);
+                if let Some(failed) = finish_gif_send(weak.clone(), ctx.clone(), send, upload).await
+                {
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if let Some(w) = weak.upgrade() {
+                            recover_gif_send(&w, &ctx, failed);
+                        }
+                    });
+                }
+            });
+        },
+    );
 }
 
 /// Freeze the composer for a GIF send, at the moment the GIF is picked: the
@@ -321,8 +337,10 @@ fn rows_model(rows: &[RawGifData]) -> ModelRc<GifData> {
 /// The tile the picker shows for `id`, from either section.
 fn find_gif_row(w: &MainWindow, id: &str) -> Option<GifData> {
     [
-        w.get_composer_gif_picker_recent(),
-        w.get_composer_gif_picker_results(),
+        w.global::<crate::ChatPane>()
+            .get_composer_gif_picker_recent(),
+        w.global::<crate::ChatPane>()
+            .get_composer_gif_picker_results(),
     ]
     .iter()
     .find_map(|model| model.iter().find(|gif| gif.id.as_str() == id))
@@ -331,8 +349,10 @@ fn find_gif_row(w: &MainWindow, id: &str) -> Option<GifData> {
 /// Apply `change` to every tile with `id`, in both sections.
 fn update_gif_rows(w: &MainWindow, id: &str, change: impl Fn(&mut GifData)) {
     for model in [
-        w.get_composer_gif_picker_recent(),
-        w.get_composer_gif_picker_results(),
+        w.global::<crate::ChatPane>()
+            .get_composer_gif_picker_recent(),
+        w.global::<crate::ChatPane>()
+            .get_composer_gif_picker_results(),
     ] {
         for i in 0..model.row_count() {
             if let Some(mut gif) = model.row_data(i) {
@@ -347,8 +367,14 @@ fn update_gif_rows(w: &MainWindow, id: &str, change: impl Fn(&mut GifData)) {
 
 /// Still the request these rows belong to: the drawer is open on the GIF
 /// tab, nothing newer was asked for, and the account has not changed.
-fn request_is_current(w: &MainWindow, ui_ctx: &ChatterClient, generation: i32, session: u64) -> bool {
-    w.get_composer_gif_picker_visible()
+fn request_is_current(
+    w: &MainWindow,
+    ui_ctx: &ChatterClient,
+    generation: i32,
+    session: u64,
+) -> bool {
+    w.global::<crate::ChatPane>()
+        .get_composer_gif_picker_visible()
         && w.get_composer_gif_generation() == generation
         && ui_ctx.composer_session_is_current(session)
 }
@@ -441,9 +467,14 @@ fn load_gif_previews(
                     if !request_is_current(&w, &ui_ctx, generation, session) {
                         return;
                     }
-                    w.set_composer_gif_picker_results(ModelRc::new(VecModel::<GifData>::default()));
-                    w.set_composer_gif_picker_failed(true);
-                    w.set_composer_gif_picker_loading(false);
+                    w.global::<crate::ChatPane>()
+                        .set_composer_gif_picker_results(ModelRc::new(
+                            VecModel::<GifData>::default(),
+                        ));
+                    w.global::<crate::ChatPane>()
+                        .set_composer_gif_picker_failed(true);
+                    w.global::<crate::ChatPane>()
+                        .set_composer_gif_picker_loading(false);
                 }
             });
             return;
@@ -455,9 +486,12 @@ fn load_gif_previews(
             if !request_is_current(&w, &ui_ctx, generation, session) {
                 return;
             }
-            w.set_composer_gif_picker_results(rows_model(&raw_gifs));
-            w.set_composer_gif_picker_failed(false);
-            w.set_composer_gif_picker_loading(false);
+            w.global::<crate::ChatPane>()
+                .set_composer_gif_picker_results(rows_model(&raw_gifs));
+            w.global::<crate::ChatPane>()
+                .set_composer_gif_picker_failed(false);
+            w.global::<crate::ChatPane>()
+                .set_composer_gif_picker_loading(false);
             spawn_previews(&raw_gifs, w.as_weak(), ui_ctx.clone(), generation, session);
         }
     });

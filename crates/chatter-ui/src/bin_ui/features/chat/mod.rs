@@ -47,24 +47,26 @@ pub use send_message::{refresh_send_notice, show_send_notice};
 pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak = window.as_weak();
     let client = ui_ctx.clone();
-    window.on_sender_profile_requested(move |value| {
-        let Some(w) = weak.upgrade() else { return };
-        let Ok(user_id) = value.parse::<chatter_core::domain::ids::UserId>() else {
-            return;
-        };
-        #[cfg(feature = "mesh")]
-        if crate::bin_ui::features::mesh::active().is_some() {
-            crate::bin_ui::features::mesh::open_sender_sheet(&w, &client, &user_id);
-            return;
-        }
-        super::modals::open_user_profile_in_conversation(
-            &w,
-            &user_id,
-            Some(&client),
-            client.active_conversation(),
-        );
-        super::back::push(&w, "user-profile");
-    });
+    window
+        .global::<crate::ChatPane>()
+        .on_sender_profile_requested(move |value| {
+            let Some(w) = weak.upgrade() else { return };
+            let Ok(user_id) = value.parse::<chatter_core::domain::ids::UserId>() else {
+                return;
+            };
+            #[cfg(feature = "mesh")]
+            if crate::bin_ui::features::mesh::active().is_some() {
+                crate::bin_ui::features::mesh::open_sender_sheet(&w, &client, &user_id);
+                return;
+            }
+            super::modals::open_user_profile_in_conversation(
+                &w,
+                &user_id,
+                Some(&client),
+                client.active_conversation(),
+            );
+            super::back::push(&w, "user-profile");
+        });
     send_message::wire_send(window, ui_ctx);
     typing::wire_typing_changed(window, ui_ctx);
     reactions::wire_reaction_selected(window, ui_ctx);

@@ -188,8 +188,11 @@ impl MessageDisplayData {
     }
 
     fn to_slint_with_media(&self, current_user_id: &str, media_ready: bool) -> MessageItemData {
-        let slint_attachments: Vec<crate::MessageAttachmentData> =
-            self.attachments.iter().map(|a| a.to_slint_with_media(media_ready)).collect();
+        let slint_attachments: Vec<crate::MessageAttachmentData> = self
+            .attachments
+            .iter()
+            .map(|a| a.to_slint_with_media(media_ready))
+            .collect();
 
         // Preserve channel event phases; DM records display direction/result.
         let call_type = if self.is_call {
@@ -388,17 +391,26 @@ pub fn message_to_display_data_with_replies(
     // Extract content and system flag
     let (content, is_system) = match &msg.content {
         MessageContent::System(sys) => {
-            let description = if msg.conversation_type == chatter_core::domain::message::ConversationType::AnonDm {
+            let description = if msg.conversation_type
+                == chatter_core::domain::message::ConversationType::AnonDm
+            {
                 match sys {
-                    chatter_core::domain::message::SystemMessage::DisappearingTimerChanged { seconds: 0 } =>
-                        "turned off disappearing messages".to_string(),
-                    chatter_core::domain::message::SystemMessage::DisappearingTimerChanged { seconds } =>
-                        format!("set disappearing messages to {} after read", chatter_core::services::disappearing::timer_label(*seconds)),
+                    chatter_core::domain::message::SystemMessage::DisappearingTimerChanged {
+                        seconds: 0,
+                    } => "turned off disappearing messages".to_string(),
+                    chatter_core::domain::message::SystemMessage::DisappearingTimerChanged {
+                        seconds,
+                    } => format!(
+                        "set disappearing messages to {} after read",
+                        chatter_core::services::disappearing::timer_label(*seconds)
+                    ),
                     _ => sys.description_for(&msg.conversation_type),
                 }
-            } else { sys.description_for(&msg.conversation_type) };
+            } else {
+                sys.description_for(&msg.conversation_type)
+            };
             (format!("{} {}", sender_name, description), true)
-        },
+        }
         _ => (msg.as_text().unwrap_or("").to_string(), false),
     };
 
@@ -564,8 +576,16 @@ pub fn messages_to_display_batch(
     reply_not_found: impl Fn(&Message) -> bool,
     reply_parent_media: impl Fn(&Message) -> chatter_core::client::ReplyParentMedia,
 ) -> Vec<MessageDisplayData> {
-    messages_to_display_batch_impl(messages, sender_names, sender_avatar, resolve_attachment,
-        reply_author_name, reply_not_found, reply_parent_media, true)
+    messages_to_display_batch_impl(
+        messages,
+        sender_names,
+        sender_avatar,
+        resolve_attachment,
+        reply_author_name,
+        reply_not_found,
+        reply_parent_media,
+        true,
+    )
 }
 
 pub fn messages_to_display_batch_deferred(
@@ -577,8 +597,16 @@ pub fn messages_to_display_batch_deferred(
     reply_not_found: impl Fn(&Message) -> bool,
     reply_parent_media: impl Fn(&Message) -> chatter_core::client::ReplyParentMedia,
 ) -> Vec<MessageDisplayData> {
-    messages_to_display_batch_impl(messages, sender_names, sender_avatar, resolve_attachment,
-        reply_author_name, reply_not_found, reply_parent_media, false)
+    messages_to_display_batch_impl(
+        messages,
+        sender_names,
+        sender_avatar,
+        resolve_attachment,
+        reply_author_name,
+        reply_not_found,
+        reply_parent_media,
+        false,
+    )
 }
 
 fn messages_to_display_batch_impl(

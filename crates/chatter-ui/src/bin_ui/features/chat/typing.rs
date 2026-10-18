@@ -4,6 +4,7 @@
 //! which owns the Signal-style refresh (10s) + pause (3s) timers. UI does
 //! not track typing state — see `chatter_core::services::outgoing_typing`.
 
+use slint::ComponentHandle;
 use std::sync::Arc;
 
 use chatter_core::client::ChatterClient;
@@ -18,16 +19,18 @@ pub fn clear_outgoing_typing(ui_ctx: &Arc<ChatterClient>) {
 pub fn wire_typing_changed(window: &crate::MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
 
-    window.on_typing_changed(move |is_typing: bool| {
-        if is_typing {
-            let ui_ctx_activity = ui_ctx.clone();
-            tokio::spawn(async move {
-                ui_ctx_activity.record_presence_activity().await;
-            });
+    window
+        .global::<crate::ChatPane>()
+        .on_typing_changed(move |is_typing: bool| {
+            if is_typing {
+                let ui_ctx_activity = ui_ctx.clone();
+                tokio::spawn(async move {
+                    ui_ctx_activity.record_presence_activity().await;
+                });
 
-            ui_ctx.typing_bump(ui_ctx.active_conversation());
-        } else {
-            ui_ctx.typing_clear();
-        }
-    });
+                ui_ctx.typing_bump(ui_ctx.active_conversation());
+            } else {
+                ui_ctx.typing_clear();
+            }
+        });
 }

@@ -7,6 +7,7 @@
 //! `domain_handler` (read-receipt dispatch on active anon DMs, plus anon-DM
 //! action events that use `unified_actions` helpers).
 
+use slint::ComponentHandle;
 use std::sync::Arc;
 
 use slint::{Model, ModelRc, VecModel, Weak};
@@ -136,7 +137,9 @@ fn spawn_request_stream(
                             };
 
                             // Add to private requests list
-                            let current_requests = w.get_friends_private_requests();
+                            let current_requests = w
+                                .global::<crate::ModalHostState>()
+                                .get_friends_private_requests();
                             // A resent request carries the same conversation
                             // id: replace its row, never add a second.
                             let incoming = FriendRequestData {
@@ -159,12 +162,14 @@ fn spawn_request_stream(
                                 incoming,
                             );
 
-                            w.set_friends_private_requests(ModelRc::new(VecModel::from(
-                                requests.clone(),
-                            )));
+                            w.global::<crate::ModalHostState>()
+                                .set_friends_private_requests(ModelRc::new(VecModel::from(
+                                    requests.clone(),
+                                )));
 
                             // Update sidebar badge count
-                            w.set_pending_message_requests(requests.len() as i32);
+                            w.global::<crate::ModalHostState>()
+                                .set_pending_message_requests(requests.len() as i32);
 
                             tracing::debug!(
                                 conversation_id = %conv_id_str,
@@ -280,7 +285,9 @@ fn spawn_request_stream(
                             };
 
                             // Add to private requests list
-                            let current_requests = w.get_friends_private_requests();
+                            let current_requests = w
+                                .global::<crate::ModalHostState>()
+                                .get_friends_private_requests();
                             // A resent request carries the same conversation
                             // id: replace its row, never add a second.
                             let incoming = FriendRequestData {
@@ -299,12 +306,14 @@ fn spawn_request_stream(
                                 incoming,
                             );
 
-                            w.set_friends_private_requests(ModelRc::new(VecModel::from(
-                                requests.clone(),
-                            )));
+                            w.global::<crate::ModalHostState>()
+                                .set_friends_private_requests(ModelRc::new(VecModel::from(
+                                    requests.clone(),
+                                )));
 
                             // Update sidebar badge count
-                            w.set_pending_message_requests(requests.len() as i32);
+                            w.global::<crate::ModalHostState>()
+                                .set_pending_message_requests(requests.len() as i32);
 
                             tracing::info!(
                                 conversation_id = %conv_id_str,

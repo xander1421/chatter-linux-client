@@ -1,3 +1,10 @@
+import { SidebarPane } from "app_sidebar_pane.slint";
+import { SearchPane } from "app_search_pane.slint";
+import { ModalHostState } from "app_modal_host_state.slint";
+import { JarvisPane } from "app_jarvis_pane.slint";
+import { ChatPane } from "app_chat_pane.slint";
+import { AuthFlow } from "app_auth_flow.slint";
+import { SettingsPane } from "app_settings_pane.slint";
 import { Spacing } from "theme/spacing.slint";
 import { SessionInfo, PendingLinkInfo } from "modals/sessions.slint";
 import { SettingsScreen, LocalAIProviderData, CatalogModelData } from "settings/settings_screen.slint";
@@ -6,110 +13,6 @@ export component AppSettingsHost inherits Rectangle {
     in property <bool> compact-layout;
     in property <bool> is-mobile-platform;
     in property <length> safe-area-bottom;
-    in-out property <string> search-shortcut-pref;
-    in property <[SessionInfo]> sessions;
-    in property <string> sessions-error;
-    in property <bool> sessions-loaded;
-    in property <bool> sessions-loading;
-    in property <[PendingLinkInfo]> sessions-pending-links;
-    in property <bool> sessions-revoking;
-    in-out property <bool> settings-ai-prefer-cloud;
-    in property <string> settings-backup-retry-error;
-    in property <bool> settings-backup-retry-loading;
-    in-out property <string> settings-backup-retry-pin;
-    in property <string> settings-backup-status;
-    in-out property <string> settings-change-pin-confirm;
-    in-out property <string> settings-change-pin-current;
-    in property <string> settings-change-pin-error;
-    in property <bool> settings-change-pin-loading;
-    in-out property <string> settings-change-pin-new;
-    in property <string> settings-change-pin-success;
-    in-out property <string> settings-cloud-ai-api-key;
-    in property <string> settings-cloud-ai-balance;
-    in property <bool> settings-cloud-ai-configured;
-    in-out property <string> settings-cloud-ai-mode;
-    in property <string> settings-cloud-ai-status;
-    in-out property <string> settings-confirm-password;
-    in-out property <string> settings-current-password;
-    in property <string> settings-delete-error;
-    in property <bool> settings-delete-loading;
-    in-out property <string> settings-delete-password;
-    in property <string> settings-display-name;
-    in property <string> settings-identity-fingerprint;
-    in property <string> settings-local-ai-active-model;
-    in property <string> settings-local-ai-active-provider;
-    in property <[CatalogModelData]> settings-local-ai-catalog;
-    in property <bool> settings-local-ai-detecting;
-    in-out property <bool> settings-local-ai-enabled;
-    in property <string> settings-local-ai-error;
-    in property <string> settings-local-ai-hardware-summary;
-    in property <bool> settings-local-ai-loading;
-    in-out property <string> settings-local-ai-model-id;
-    in property <[string]> settings-local-ai-models;
-    in property <[LocalAIProviderData]> settings-local-ai-providers;
-    in property <string> settings-local-ai-status;
-    in property <string> settings-message-backup-status;
-    in-out property <string> settings-new-password;
-    in-out property <string> settings-notification-detail;
-    in property <bool> settings-open;
-    in property <bool> settings-password-changing;
-    in property <string> settings-password-error;
-    in property <string> settings-profile-visibility;
-    in property <bool> settings-profile-visibility-busy;
-    in property <string> settings-profile-visibility-error;
-    in property <string> settings-profile-visibility-pending;
-    in-out property <string> settings-profile-visibility-pin;
-    in-out property <bool> settings-read-receipts;
-    in property <string> settings-recovery-regen-error;
-    in property <bool> settings-recovery-regen-loading;
-    in-out property <string> settings-recovery-regen-password;
-    in-out property <bool> settings-sealed-sender-unrestricted;
-    in property <int> settings-session-count;
-    in-out property <bool> settings-typing-indicators;
-    in property <string> settings-username;
-    in-out property <bool> settings-username-discoverable;
-    in property <image> user-avatar-source;
-    callback cancel-pending-link(string);
-    callback jarvis-memory-refresh();
-    callback link-approve-open();
-    callback nav-close(string);
-    callback nav-push(string);
-    callback open-message-link(string);
-    callback revoke-session(int);
-    callback settings-ai-prefer-cloud-changed(bool);
-    callback settings-change-password(string, string);
-    callback settings-change-pin(string, string);
-    callback settings-cloud-ai-api-key-changed(string);
-    callback settings-cloud-ai-mode-changed(string);
-    callback settings-cloud-ai-refresh-quota();
-    callback settings-copy-fingerprint();
-    callback settings-delete-account();
-    callback settings-delete-account-confirmed(string);
-    callback settings-edit-profile();
-    callback settings-export-message-backup(string);
-    callback settings-import-message-backup(string);
-    callback settings-local-ai-download(string);
-    callback settings-local-ai-enabled-changed(bool);
-    callback settings-local-ai-load-model(string);
-    callback settings-local-ai-refresh();
-    callback settings-local-ai-select-model(string);
-    callback settings-local-ai-select-provider(string);
-    callback settings-local-ai-unload-model();
-    callback settings-logout();
-    callback settings-notification-detail-changed(string);
-    callback settings-profile-visibility-cancelled();
-    callback settings-profile-visibility-confirmed(string, string);
-    callback settings-profile-visibility-selected(string);
-    callback settings-read-receipts-changed(bool);
-    callback settings-regenerate-recovery-codes(string);
-    callback settings-restore-message-backup(string);
-    callback settings-retry-backup(string);
-    callback settings-sealed-sender-changed(bool);
-    callback settings-search-shortcut-changed(string);
-    callback settings-server-message-backup(string);
-    callback settings-typing-indicators-changed(bool);
-    callback settings-username-discoverable-changed(bool);
-    callback settings-view-sessions();
     callback toggle-anon-mode();
 
     background: transparent;
@@ -118,195 +21,195 @@ export component AppSettingsHost inherits Rectangle {
     // tab bar hidden under it). z -1 rather than 0 because what Settings
     // opens (Sessions, Link device, Recovery codes, ...) is declared above
     // and has to draw over it.
-    if root.settings-open: SettingsScreen {
+    if ModalHostState.settings-open: SettingsScreen {
         z: -1;
         width: parent.width;
         height: parent.height;
         bottom-inset: root.compact-layout ? Spacing.bottom-nav-height + Spacing.sm + root.safe-area-bottom : 0px;
         mobile-platform: root.is-mobile-platform;
         shield-toggled => { root.toggle-anon-mode(); }
-        display-name: root.settings-display-name;
-        username: root.settings-username;
-        session-count: root.settings-session-count;
-        sessions: root.sessions;
-        pending-links: root.sessions-pending-links;
-        sessions-loaded: root.sessions-loaded;
-        sessions-loading: root.sessions-loading;
-        sessions-revoking: root.sessions-revoking;
-        sessions-error: root.sessions-error;
-        avatar: root.user-avatar-source;
-        current-password <=> root.settings-current-password;
-        new-password <=> root.settings-new-password;
-        confirm-password <=> root.settings-confirm-password;
-        password-changing: root.settings-password-changing;
-        password-error: root.settings-password-error;
-        read-receipts-enabled <=> root.settings-read-receipts;
-        typing-indicators-enabled <=> root.settings-typing-indicators;
-        notification-detail <=> root.settings-notification-detail;
-        profile-visibility: root.settings-profile-visibility;
-        profile-visibility-pending: root.settings-profile-visibility-pending;
-        profile-visibility-busy: root.settings-profile-visibility-busy;
-        profile-visibility-error: root.settings-profile-visibility-error;
-        profile-visibility-pin <=> root.settings-profile-visibility-pin;
-        search-shortcut <=> root.search-shortcut-pref;
-        identity-fingerprint: root.settings-identity-fingerprint;
-        sealed-sender-unrestricted <=> root.settings-sealed-sender-unrestricted;
-        username-discoverable <=> root.settings-username-discoverable;
+        display-name: SettingsPane.settings-display-name;
+        username: SettingsPane.settings-username;
+        session-count: SettingsPane.settings-session-count;
+        sessions: ModalHostState.sessions;
+        pending-links: ModalHostState.sessions-pending-links;
+        sessions-loaded: ModalHostState.sessions-loaded;
+        sessions-loading: ModalHostState.sessions-loading;
+        sessions-revoking: ModalHostState.sessions-revoking;
+        sessions-error: ModalHostState.sessions-error;
+        avatar: SidebarPane.user-avatar-source;
+        current-password <=> SettingsPane.settings-current-password;
+        new-password <=> SettingsPane.settings-new-password;
+        confirm-password <=> SettingsPane.settings-confirm-password;
+        password-changing: SettingsPane.settings-password-changing;
+        password-error: SettingsPane.settings-password-error;
+        read-receipts-enabled <=> SettingsPane.settings-read-receipts;
+        typing-indicators-enabled <=> SettingsPane.settings-typing-indicators;
+        notification-detail <=> SettingsPane.settings-notification-detail;
+        profile-visibility: SettingsPane.settings-profile-visibility;
+        profile-visibility-pending: SettingsPane.settings-profile-visibility-pending;
+        profile-visibility-busy: SettingsPane.settings-profile-visibility-busy;
+        profile-visibility-error: SettingsPane.settings-profile-visibility-error;
+        profile-visibility-pin <=> SettingsPane.settings-profile-visibility-pin;
+        search-shortcut <=> SearchPane.search-shortcut-pref;
+        identity-fingerprint: SettingsPane.settings-identity-fingerprint;
+        sealed-sender-unrestricted <=> SettingsPane.settings-sealed-sender-unrestricted;
+        username-discoverable <=> SettingsPane.settings-username-discoverable;
         // Security (PIN / Backup)
-        change-pin-current <=> root.settings-change-pin-current;
-        change-pin-new <=> root.settings-change-pin-new;
-        change-pin-confirm <=> root.settings-change-pin-confirm;
-        change-pin-loading: root.settings-change-pin-loading;
-        change-pin-error: root.settings-change-pin-error;
-        change-pin-success: root.settings-change-pin-success;
-        backup-status: root.settings-backup-status;
-        backup-retry-pin <=> root.settings-backup-retry-pin;
-        backup-retry-loading: root.settings-backup-retry-loading;
-        backup-retry-error: root.settings-backup-retry-error;
+        change-pin-current <=> SettingsPane.settings-change-pin-current;
+        change-pin-new <=> SettingsPane.settings-change-pin-new;
+        change-pin-confirm <=> SettingsPane.settings-change-pin-confirm;
+        change-pin-loading: SettingsPane.settings-change-pin-loading;
+        change-pin-error: SettingsPane.settings-change-pin-error;
+        change-pin-success: SettingsPane.settings-change-pin-success;
+        backup-status: SettingsPane.settings-backup-status;
+        backup-retry-pin <=> SettingsPane.settings-backup-retry-pin;
+        backup-retry-loading: SettingsPane.settings-backup-retry-loading;
+        backup-retry-error: SettingsPane.settings-backup-retry-error;
         // AI settings
-        local-ai-enabled <=> root.settings-local-ai-enabled;
-        ai-prefer-cloud <=> root.settings-ai-prefer-cloud;
-        cloud-ai-mode <=> root.settings-cloud-ai-mode;
-        cloud-ai-api-key <=> root.settings-cloud-ai-api-key;
-        cloud-ai-configured: root.settings-cloud-ai-configured;
-        cloud-ai-status: root.settings-cloud-ai-status;
-        cloud-ai-balance: root.settings-cloud-ai-balance;
-        local-ai-model-id <=> root.settings-local-ai-model-id;
-        local-ai-loading: root.settings-local-ai-loading;
-        local-ai-status: root.settings-local-ai-status;
-        local-ai-error: root.settings-local-ai-error;
-        local-ai-hardware-summary: root.settings-local-ai-hardware-summary;
-        local-ai-detecting: root.settings-local-ai-detecting;
-        local-ai-providers: root.settings-local-ai-providers;
-        local-ai-active-provider: root.settings-local-ai-active-provider;
-        local-ai-models: root.settings-local-ai-models;
-        local-ai-active-model: root.settings-local-ai-active-model;
-        local-ai-catalog: root.settings-local-ai-catalog;
+        local-ai-enabled <=> SettingsPane.settings-local-ai-enabled;
+        ai-prefer-cloud <=> SettingsPane.settings-ai-prefer-cloud;
+        cloud-ai-mode <=> SettingsPane.settings-cloud-ai-mode;
+        cloud-ai-api-key <=> SettingsPane.settings-cloud-ai-api-key;
+        cloud-ai-configured: SettingsPane.settings-cloud-ai-configured;
+        cloud-ai-status: SettingsPane.settings-cloud-ai-status;
+        cloud-ai-balance: SettingsPane.settings-cloud-ai-balance;
+        local-ai-model-id <=> SettingsPane.settings-local-ai-model-id;
+        local-ai-loading: SettingsPane.settings-local-ai-loading;
+        local-ai-status: SettingsPane.settings-local-ai-status;
+        local-ai-error: SettingsPane.settings-local-ai-error;
+        local-ai-hardware-summary: SettingsPane.settings-local-ai-hardware-summary;
+        local-ai-detecting: SettingsPane.settings-local-ai-detecting;
+        local-ai-providers: SettingsPane.settings-local-ai-providers;
+        local-ai-active-provider: SettingsPane.settings-local-ai-active-provider;
+        local-ai-models: SettingsPane.settings-local-ai-models;
+        local-ai-active-model: SettingsPane.settings-local-ai-active-model;
+        local-ai-catalog: SettingsPane.settings-local-ai-catalog;
         // Delete-account confirmation
-        delete-password <=> root.settings-delete-password;
-        delete-loading: root.settings-delete-loading;
-        delete-error: root.settings-delete-error;
-        recovery-regen-password <=> root.settings-recovery-regen-password;
-        recovery-regen-loading: root.settings-recovery-regen-loading;
-        recovery-regen-error: root.settings-recovery-regen-error;
+        delete-password <=> SettingsPane.settings-delete-password;
+        delete-loading: SettingsPane.settings-delete-loading;
+        delete-error: SettingsPane.settings-delete-error;
+        recovery-regen-password <=> SettingsPane.settings-recovery-regen-password;
+        recovery-regen-loading: SettingsPane.settings-recovery-regen-loading;
+        recovery-regen-error: SettingsPane.settings-recovery-regen-error;
         regenerate-recovery-codes(password) => {
-            root.settings-regenerate-recovery-codes(password);
+            SettingsPane.settings-regenerate-recovery-codes(password);
         }
 
         edit-profile-clicked => {
-            root.settings-edit-profile();
+            SettingsPane.settings-edit-profile();
         }
         change-password(current, new) => {
-            root.settings-change-password(current, new);
+            SettingsPane.settings-change-password(current, new);
         }
         view-sessions-clicked => {
-            root.nav-push("sessions");
+            ModalHostState.nav-push("sessions");
         }
-        refresh-sessions => { root.settings-view-sessions(); }
-        revoke-session(device-id) => { root.revoke-session(device-id); }
-        cancel-pending-link(uuid) => { root.cancel-pending-link(uuid); }
-        link-new-device => { root.link-approve-open(); }
+        refresh-sessions => { SettingsPane.settings-view-sessions(); }
+        revoke-session(device-id) => { ModalHostState.revoke-session(device-id); }
+        cancel-pending-link(uuid) => { ModalHostState.cancel-pending-link(uuid); }
+        link-new-device => { AuthFlow.link-approve-open(); }
         logout-clicked => {
-            root.settings-logout();
+            SettingsPane.settings-logout();
         }
         delete-account-clicked => {
-            root.settings-delete-account();
+            SettingsPane.settings-delete-account();
         }
         delete-account-confirmed(password) => {
-            root.settings-delete-account-confirmed(password);
+            SettingsPane.settings-delete-account-confirmed(password);
         }
         close-settings => {
-            root.nav-close("settings");
+            ModalHostState.nav-close("settings");
         }
         open-licenses => {
-            root.open-message-link("https://github.com/xander1421/chatter-linux-client/tree/master/vendor");
+            ChatPane.open-message-link("https://github.com/xander1421/chatter-linux-client/tree/master/vendor");
         }
         read-receipts-changed(value) => {
-            root.settings-read-receipts-changed(value);
+            SettingsPane.settings-read-receipts-changed(value);
         }
         typing-indicators-changed(value) => {
-            root.settings-typing-indicators-changed(value);
+            SettingsPane.settings-typing-indicators-changed(value);
         }
         notification-detail-changed(value) => {
-            root.settings-notification-detail-changed(value);
+            SettingsPane.settings-notification-detail-changed(value);
         }
         profile-visibility-selected(key) => {
-            root.settings-profile-visibility-selected(key);
+            SettingsPane.settings-profile-visibility-selected(key);
         }
         profile-visibility-confirmed(key, pin) => {
-            root.settings-profile-visibility-confirmed(key, pin);
+            SettingsPane.settings-profile-visibility-confirmed(key, pin);
         }
         profile-visibility-cancelled => {
-            root.settings-profile-visibility-cancelled();
+            SettingsPane.settings-profile-visibility-cancelled();
         }
         search-shortcut-changed(value) => {
-            root.settings-search-shortcut-changed(value);
+            SettingsPane.settings-search-shortcut-changed(value);
         }
         copy-fingerprint-clicked => {
-            root.settings-copy-fingerprint();
+            SettingsPane.settings-copy-fingerprint();
         }
         sealed-sender-changed(value) => {
-            root.settings-sealed-sender-changed(value);
+            SettingsPane.settings-sealed-sender-changed(value);
         }
         username-discoverable-changed(value) => {
-            root.settings-username-discoverable-changed(value);
+            SettingsPane.settings-username-discoverable-changed(value);
         }
         change-pin(current, new) => {
-            root.settings-change-pin(current, new);
+            SettingsPane.settings-change-pin(current, new);
         }
         retry-backup(pin) => {
-            root.settings-retry-backup(pin);
+            SettingsPane.settings-retry-backup(pin);
         }
-        message-backup-status: root.settings-message-backup-status;
+        message-backup-status: SettingsPane.settings-message-backup-status;
         export-message-backup(passphrase) => {
-            root.settings-export-message-backup(passphrase);
+            SettingsPane.settings-export-message-backup(passphrase);
         }
         import-message-backup(passphrase) => {
-            root.settings-import-message-backup(passphrase);
+            SettingsPane.settings-import-message-backup(passphrase);
         }
         server-message-backup(pin) => {
-            root.settings-server-message-backup(pin);
+            SettingsPane.settings-server-message-backup(pin);
         }
         restore-message-backup(pin) => {
-            root.settings-restore-message-backup(pin);
+            SettingsPane.settings-restore-message-backup(pin);
         }
         // AI callbacks
         local-ai-enabled-changed(value) => {
-            root.settings-local-ai-enabled-changed(value);
+            SettingsPane.settings-local-ai-enabled-changed(value);
         }
         ai-prefer-cloud-changed(value) => {
-            root.settings-ai-prefer-cloud-changed(value);
+            SettingsPane.settings-ai-prefer-cloud-changed(value);
         }
         cloud-ai-mode-changed(mode) => {
-            root.settings-cloud-ai-mode-changed(mode);
+            SettingsPane.settings-cloud-ai-mode-changed(mode);
         }
         cloud-ai-api-key-changed(key) => {
-            root.settings-cloud-ai-api-key-changed(key);
+            SettingsPane.settings-cloud-ai-api-key-changed(key);
         }
         cloud-ai-refresh-quota => {
-            root.settings-cloud-ai-refresh-quota();
+            SettingsPane.settings-cloud-ai-refresh-quota();
         }
         local-ai-load-model(model-id) => {
-            root.settings-local-ai-load-model(model-id);
+            SettingsPane.settings-local-ai-load-model(model-id);
         }
         local-ai-unload-model => {
-            root.settings-local-ai-unload-model();
+            SettingsPane.settings-local-ai-unload-model();
         }
         local-ai-refresh => {
-            root.settings-local-ai-refresh();
+            SettingsPane.settings-local-ai-refresh();
         }
         local-ai-open-memory => {
-            root.nav-push("jarvis-memory");
-            root.jarvis-memory-refresh();
+            ModalHostState.nav-push("jarvis-memory");
+            JarvisPane.jarvis-memory-refresh();
         }
         local-ai-select-provider(kind) => {
-            root.settings-local-ai-select-provider(kind);
+            SettingsPane.settings-local-ai-select-provider(kind);
         }
         local-ai-select-model(model) => {
-            root.settings-local-ai-select-model(model);
+            SettingsPane.settings-local-ai-select-model(model);
         }
         local-ai-download(tag) => {
-            root.settings-local-ai-download(tag);
+            SettingsPane.settings-local-ai-download(tag);
         }
     }
 }

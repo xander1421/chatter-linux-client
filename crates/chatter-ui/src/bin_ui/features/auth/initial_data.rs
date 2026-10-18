@@ -2,6 +2,7 @@
 //!
 //! Uses ChatterClient services for all operations - no direct repository access.
 
+use slint::ComponentHandle;
 use std::sync::Arc;
 
 use slint::{Model, ModelRc, VecModel, Weak};
@@ -60,7 +61,12 @@ async fn friends_list_empty(window_weak: &Weak<MainWindow>) -> bool {
     if slint::invoke_from_event_loop(move || {
         let empty = weak
             .upgrade()
-            .map(|w| w.get_friends_list().row_count() == 0)
+            .map(|w| {
+                w.global::<crate::ModalHostState>()
+                    .get_friends_list()
+                    .row_count()
+                    == 0
+            })
             .unwrap_or(true);
         let _ = tx.send(empty);
     })
@@ -81,7 +87,8 @@ fn publish_friends(
     }
     crate::run_history_ui!(window_weak, owner, |w| {
         let slint_list: Vec<FriendData> = friends_data.into_iter().map(|f| f.to_slint()).collect();
-        w.set_friends_list(ModelRc::new(VecModel::from(slint_list)));
+        w.global::<crate::ModalHostState>()
+            .set_friends_list(ModelRc::new(VecModel::from(slint_list)));
     });
 }
 
@@ -93,7 +100,9 @@ pub fn show_cached_chat_rows(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         return;
     }
     crate::bin_ui::features::sidebar::apply_chat_list(window, ui_ctx, rows);
-    window.set_chat_rows_loading(false);
+    window
+        .global::<crate::SidebarPane>()
+        .set_chat_rows_loading(false);
 }
 
 /// Load initial data after login or on startup.
@@ -112,7 +121,8 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
         let cached_client = ui_ctx.clone();
         crate::run_history_ui!(window_weak, session_owner, |w| {
             crate::bin_ui::features::sidebar::apply_chat_list(&w, &cached_client, cached_rows);
-            w.set_chat_rows_loading(false);
+            w.global::<crate::SidebarPane>()
+                .set_chat_rows_loading(false);
         });
     }
 
@@ -274,29 +284,35 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
         // Reconcile rows by identity; replacing the model resets scroll and
         // flashes cached conversations a second time after server sync.
         crate::bin_ui::features::sidebar::apply_chat_list(&w, &ui_ctx_for_refresh, chat_rows);
-        w.set_chat_rows_loading(false);
+        w.global::<crate::SidebarPane>()
+            .set_chat_rows_loading(false);
 
         #[cfg(target_os = "android")]
         crate::platform::android::notification_route::open_pending(&w);
 
-        w.set_user_display_name(user_display_name.into());
-        w.set_user_initials(user_initials.into());
+        w.global::<crate::SidebarPane>()
+            .set_user_display_name(user_display_name.into());
+        w.global::<crate::SidebarPane>()
+            .set_user_initials(user_initials.into());
         // The account menu's @username line (Profile tab) reads this.
-        w.set_settings_username(own_username.into());
+        w.global::<crate::SettingsPane>()
+            .set_settings_username(own_username.into());
 
         // Hydrate the persisted search-shortcut preference so the
         // FocusScope picks the right combo (Ctrl+K / Ctrl+F / Both) at startup.
-        w.set_search_shortcut_pref(search_shortcut_pref.into());
+        w.global::<crate::SearchPane>()
+            .set_search_shortcut_pref(search_shortcut_pref.into());
         // Same for the notification detail level, so Settings shows the
         // persisted level even when opened without the sidebar hydration
         // (Ctrl+, opens the Settings tab directly).
-        w.set_settings_notification_detail(notification_detail.into());
+        w.global::<crate::SettingsPane>()
+            .set_settings_notification_detail(notification_detail.into());
 
         // Set user's own avatar if available
         if let Some((pixels, width, height)) = user_avatar_decoded {
-            w.set_user_avatar_source(crate::bin_ui::slint_conversions::rgba_to_slint_image(
-                &pixels, width, height,
-            ));
+            w.global::<crate::SidebarPane>().set_user_avatar_source(
+                crate::bin_ui::slint_conversions::rgba_to_slint_image(&pixels, width, height),
+            );
         }
 
         // Set friend requests (including private/anonymous DM requests)
@@ -309,9 +325,12 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
             .into_iter()
             .map(|r| r.to_slint())
             .collect();
-        w.set_friends_received_requests(ModelRc::new(VecModel::from(received_ui_slint)));
-        w.set_friends_sent_requests(ModelRc::new(VecModel::from(sent_ui_slint)));
-        w.set_friends_private_requests(ModelRc::new(VecModel::from(private_requests_ui_slint)));
+        w.global::<crate::ModalHostState>()
+            .set_friends_received_requests(ModelRc::new(VecModel::from(received_ui_slint)));
+        w.global::<crate::ModalHostState>()
+            .set_friends_sent_requests(ModelRc::new(VecModel::from(sent_ui_slint)));
+        w.global::<crate::ModalHostState>()
+            .set_friends_private_requests(ModelRc::new(VecModel::from(private_requests_ui_slint)));
 
         // Friends-tab list is published by `refresh_friends_list` (local
         // rows first, server rows when ListFriends returns). Setting it
@@ -323,10 +342,12 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
             .into_iter()
             .map(crate::bin_ui::features::modals::friends::BlockedUserRow::to_slint)
             .collect();
-        w.set_friends_blocked_users(ModelRc::new(VecModel::from(blocked_users_slint)));
+        w.global::<crate::ModalHostState>()
+            .set_friends_blocked_users(ModelRc::new(VecModel::from(blocked_users_slint)));
 
         // Set sidebar badge count for message requests
-        w.set_pending_message_requests(pending_message_requests_count);
+        w.global::<crate::ModalHostState>()
+            .set_pending_message_requests(pending_message_requests_count);
     });
 
     // If there's a channel, select it and load messages — desktop only. On a
@@ -349,7 +370,8 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
                 return;
             }
             if let Some(w) = window_weak_select.upgrade() {
-                w.invoke_channel_selected(channel_id_str.into());
+                w.global::<crate::SidebarPane>()
+                    .invoke_channel_selected(channel_id_str.into());
             }
         });
 
@@ -369,7 +391,7 @@ pub async fn load_initial_data(window_weak: Weak<MainWindow>, ui_ctx: &Arc<Chatt
 }
 
 pub fn update_sidebar_typing(window: &MainWindow, id: &str, is_typing: bool) {
-    let model = window.get_chat_rows();
+    let model = window.global::<crate::SidebarPane>().get_chat_rows();
     for i in 0..model.row_count() {
         if let Some(mut row) = model.row_data(i) {
             let named = row.conversation_id.as_str() == id || row.user_id.as_str() == id;
@@ -418,15 +440,23 @@ pub fn show_incoming_call(
     };
 
     // Set call data and show modal
-    window.set_incoming_call_data(call_data);
-    window.set_incoming_call_minimized(false);
-    window.set_incoming_call_visible(true);
+    window
+        .global::<crate::CallView>()
+        .set_incoming_call_data(call_data);
+    window
+        .global::<crate::CallView>()
+        .set_incoming_call_minimized(false);
+    window
+        .global::<crate::CallView>()
+        .set_incoming_call_visible(true);
 }
 
 /// Hide incoming call modal.
 #[cfg(feature = "call-ui")]
 pub fn hide_incoming_call(window: &MainWindow) {
-    window.set_incoming_call_visible(false);
+    window
+        .global::<crate::CallView>()
+        .set_incoming_call_visible(false);
 }
 
 /// Update friend requests lists in the UI.
@@ -439,9 +469,13 @@ pub fn update_friend_requests(
 
     // Update received requests
     let received_model = VecModel::from(received);
-    window.set_friends_received_requests(ModelRc::new(received_model));
+    window
+        .global::<crate::ModalHostState>()
+        .set_friends_received_requests(ModelRc::new(received_model));
 
     // Update sent requests
     let sent_model = VecModel::from(sent);
-    window.set_friends_sent_requests(ModelRc::new(sent_model));
+    window
+        .global::<crate::ModalHostState>()
+        .set_friends_sent_requests(ModelRc::new(sent_model));
 }

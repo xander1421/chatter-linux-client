@@ -2,6 +2,7 @@
 //!
 //! Manages animated GIF playback for message thumbnails in the chat view.
 
+use slint::ComponentHandle;
 use std::cell::{Cell, RefCell};
 use std::collections::{HashMap, VecDeque};
 use std::time::Duration;
@@ -261,7 +262,7 @@ fn tick_inline_gifs(elapsed_ms: u64) {
     // Replacing a GIF's attachment row schedules another full render while
     // the message list is already re-laying out under the finger. Hold the
     // current frame whenever its offset moves; playback resumes at rest.
-    let position = w.get_message_scroll_position() as f32;
+    let position = w.global::<crate::ChatPane>().get_message_scroll_position() as f32;
     let moved = INLINE_LAST_SCROLL_POSITION.with(|last| {
         let moved = last.get().is_some_and(|previous| previous != position);
         last.set(Some(position));
@@ -270,10 +271,11 @@ fn tick_inline_gifs(elapsed_ms: u64) {
     if moved {
         return;
     }
-    let messages = w.get_messages();
+    let messages = w.global::<crate::ChatPane>().get_messages();
     let Some(rows) = rows_to_animate(
-        w.get_message_first_visible_row(),
-        w.get_message_last_visible_row(),
+        w.global::<crate::ChatPane>()
+            .get_message_first_visible_row(),
+        w.global::<crate::ChatPane>().get_message_last_visible_row(),
         messages.row_count(),
     ) else {
         return;
@@ -350,7 +352,7 @@ fn rows_to_animate(
 /// animation itself goes through `tick_inline_gifs`, which looks only at the
 /// visible rows.
 fn set_attachment_thumbnail(window: &MainWindow, attachment_id: &str, image: Image) {
-    let messages = window.get_messages();
+    let messages = window.global::<crate::ChatPane>().get_messages();
     for msg_idx in 0..messages.row_count() {
         let Some(msg) = messages.row_data(msg_idx) else {
             continue;
@@ -401,7 +403,7 @@ pub fn auto_register_gifs_from_messages(
         return;
     };
 
-    let messages = w.get_messages();
+    let messages = w.global::<crate::ChatPane>().get_messages();
     let mut gif_ids = Vec::new();
 
     for msg_idx in 0..messages.row_count() {

@@ -45,34 +45,41 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         crate::bin_ui::converters::random_preset_avatar_index(),
     );
 
-    window.on_register_select_default_avatar({
-        let weak = weak_window.clone();
-        move |idx| {
-            if (0..crate::bin_ui::converters::DEFAULT_AVATARS.len() as i32).contains(&idx) {
+    window
+        .global::<crate::AuthFlow>()
+        .on_register_select_default_avatar({
+            let weak = weak_window.clone();
+            move |idx| {
+                if (0..crate::bin_ui::converters::DEFAULT_AVATARS.len() as i32).contains(&idx) {
+                    if let Ok(mut g) = selected_avatar().lock() {
+                        *g = None;
+                    }
+                    if let Some(w) = weak.upgrade() {
+                        super::super::avatar_defaults::show_register_default(&w, idx as usize);
+                    }
+                }
+            }
+        });
+
+    window
+        .global::<crate::AuthFlow>()
+        .on_register_remove_avatar({
+            let weak = weak_window.clone();
+            move || {
                 if let Ok(mut g) = selected_avatar().lock() {
                     *g = None;
                 }
                 if let Some(w) = weak.upgrade() {
-                    super::super::avatar_defaults::show_register_default(&w, idx as usize);
+                    let idx = w
+                        .global::<crate::AuthFlow>()
+                        .get_register_selected_default_idx()
+                        .max(0) as usize;
+                    super::super::avatar_defaults::show_register_default(&w, idx);
                 }
             }
-        }
-    });
+        });
 
-    window.on_register_remove_avatar({
-        let weak = weak_window.clone();
-        move || {
-            if let Ok(mut g) = selected_avatar().lock() {
-                *g = None;
-            }
-            if let Some(w) = weak.upgrade() {
-                let idx = w.get_register_selected_default_idx().max(0) as usize;
-                super::super::avatar_defaults::show_register_default(&w, idx);
-            }
-        }
-    });
-
-    window.on_register_select_avatar({
+    window.global::<crate::AuthFlow>().on_register_select_avatar({
         let weak = weak_window.clone();
         move || {
             {
@@ -118,8 +125,8 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                         // Create slint::Image from pre-decoded pixels
                                         if let Some((pixels, width, height)) = decoded {
                                             if let Ok(mut g) = selected_avatar().lock() { *g = Some(bytes); }
-                                            w.set_register_avatar_source(crate::bin_ui::slint_conversions::rgba_to_slint_image(&pixels, width, height,));
-                                            w.set_register_has_avatar(true);
+                                            w.global::<crate::AuthFlow>().set_register_avatar_source(crate::bin_ui::slint_conversions::rgba_to_slint_image(&pixels, width, height,));
+                                            w.global::<crate::AuthFlow>().set_register_has_avatar(true);
                                         } else {
                                             tracing::error!("Failed to decode selected avatar for preview");
                                         }
@@ -136,46 +143,54 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         }
     });
 
-    window.on_register_username_validation(|username| {
-        chatter_core::services::validation::validate_registration_username(username.as_str())
-            .err()
-            .unwrap_or_default()
-            .into()
-    });
+    window
+        .global::<crate::AuthFlow>()
+        .on_register_username_validation(|username| {
+            chatter_core::services::validation::validate_registration_username(username.as_str())
+                .err()
+                .unwrap_or_default()
+                .into()
+        });
 
-    window.on_register_pin_validation(|pin| pin_validation_message(pin.as_str()).into());
-    window.on_register_clear_error({
+    window
+        .global::<crate::AuthFlow>()
+        .on_register_pin_validation(|pin| pin_validation_message(pin.as_str()).into());
+    window.global::<crate::AuthFlow>().on_register_clear_error({
         let weak = weak_window.clone();
         move || {
             if let Some(w) = weak.upgrade() {
-                w.set_register_error("".into());
+                w.global::<crate::AuthFlow>().set_register_error("".into());
             }
         }
     });
 
-    window.on_register_password_changed({
-        let weak = weak_window.clone();
-        let ui_ctx = ui_ctx.clone();
-        move |password: slint::SharedString| {
-            let strength = ui_ctx.password_strength(password.as_str());
-            if let Some(w) = weak.upgrade() {
-                w.set_register_password_strength(strength);
+    window
+        .global::<crate::AuthFlow>()
+        .on_register_password_changed({
+            let weak = weak_window.clone();
+            let ui_ctx = ui_ctx.clone();
+            move |password: slint::SharedString| {
+                let strength = ui_ctx.password_strength(password.as_str());
+                if let Some(w) = weak.upgrade() {
+                    w.global::<crate::AuthFlow>()
+                        .set_register_password_strength(strength);
+                }
             }
-        }
-    });
+        });
 
-    window.on_register_pin_changed({
+    window.global::<crate::AuthFlow>().on_register_pin_changed({
         let weak = weak_window.clone();
         let ui_ctx = ui_ctx.clone();
         move |pin: slint::SharedString| {
             let strength = ui_ctx.pin_strength(pin.as_str());
             if let Some(w) = weak.upgrade() {
-                w.set_register_pin_strength(strength);
+                w.global::<crate::AuthFlow>()
+                    .set_register_pin_strength(strength);
             }
         }
     });
 
-    window.on_register(
+    window.global::<crate::AuthFlow>().on_register(
         move |username: slint::SharedString, password: slint::SharedString, display_name: slint::SharedString, pin: slint::SharedString, server_url: slint::SharedString| {
             tracing::info!("REGISTER BUTTON TAPPED: user={}, server={}", username, server_url);
             let ui_ctx = ui_ctx.clone();
@@ -189,8 +204,8 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             // Set loading state synchronously (we're on UI thread)
             let shield = ui_ctx.anon_mode_enabled();
             if let Some(w) = weak.upgrade() {
-                w.set_register_loading(true);
-                w.set_register_error("".into());
+                w.global::<crate::AuthFlow>().set_register_loading(true);
+                w.global::<crate::AuthFlow>().set_register_error("".into());
                 if shield {
                     w.global::<crate::AnonMode>()
                         .set_onboarding_progress(super::shield::CONNECTING_OVER_TOR.into());
@@ -201,8 +216,8 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             if ui_ctx.endpoint() != server_url {
                 if let Err(e) = ui_ctx.set_server_url(&server_url) {
                     if let Some(w) = weak.upgrade() {
-                        w.set_register_loading(false);
-                        w.set_register_error(format!("Invalid Server URL: {}", registration_error_message(&e.to_string())).into());
+                        w.global::<crate::AuthFlow>().set_register_loading(false);
+                        w.global::<crate::AuthFlow>().set_register_error(format!("Invalid Server URL: {}", registration_error_message(&e.to_string())).into());
                         w.global::<crate::AnonMode>().set_onboarding_progress("".into());
                     }
                     return;
@@ -216,7 +231,7 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     bytes
                 } else {
                     let index = weak_window.upgrade()
-                        .map(|w| w.get_register_selected_default_idx().max(0) as usize)
+                        .map(|w| w.global::<crate::AuthFlow>().get_register_selected_default_idx().max(0) as usize)
                         .unwrap_or(0);
                     crate::bin_ui::converters::default_avatar_bytes(index, &display_name).unwrap_or_default()
                 }
@@ -235,8 +250,8 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         let error_msg = super::shield::connect_error(shield, &e);
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(w) = weak.upgrade() {
-                                w.set_register_loading(false);
-                                w.set_register_error(error_msg.into());
+                                w.global::<crate::AuthFlow>().set_register_loading(false);
+                                w.global::<crate::AuthFlow>().set_register_error(error_msg.into());
                                 w.global::<crate::AnonMode>().set_onboarding_progress("".into());
                             }
                         });
@@ -299,8 +314,8 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                         .map(|c| slint::SharedString::from(c.as_str()))
                                         .collect();
                                     let model_rc = std::rc::Rc::new(slint::VecModel::from(model));
-                                    w.set_recovery_codes(slint::ModelRc::from(model_rc));
-                                    w.set_register_loading(false);
+                                    w.global::<crate::AuthFlow>().set_recovery_codes(slint::ModelRc::from(model_rc));
+                                    w.global::<crate::AuthFlow>().set_register_loading(false);
                                     w.global::<crate::AnonMode>().set_onboarding_progress("".into());
                                     // Signed-in state is what app.slint gates the
                                     // shell on; the welcome page is a *view*, not a
@@ -308,8 +323,8 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                     // feat/wire-gaps did) would render the welcome
                                     // page to a shell that still thinks nobody is
                                     // logged in.
-                                    w.set_is_signed_in(true);
-                                    w.set_user_display_name(welcome_name.into());
+                                    w.global::<crate::AuthFlow>().set_is_signed_in(true);
+                                    w.global::<crate::SidebarPane>().set_user_display_name(welcome_name.into());
                                     w.set_current_view("welcome".into());
                                     crate::bin_ui::features::back::push(&w, "recovery-codes");
                                 }
@@ -322,7 +337,7 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                 crate::bin_ui::features::modals::load_channel_invites(weak_for_ui.clone(), &ui_ctx_for_handlers);
 
                                 if let Some(w) = weak_for_ui.upgrade() {
-                                    w.set_register_loading(false);
+                                    w.global::<crate::AuthFlow>().set_register_loading(false);
                                     w.global::<crate::AnonMode>().set_onboarding_progress("".into());
                                     // Signed-in state is what app.slint gates the
                                     // shell on; the welcome page is a *view*, not a
@@ -330,8 +345,8 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                                     // feat/wire-gaps did) would render the welcome
                                     // page to a shell that still thinks nobody is
                                     // logged in.
-                                    w.set_is_signed_in(true);
-                                    w.set_user_display_name(welcome_name.into());
+                                    w.global::<crate::AuthFlow>().set_is_signed_in(true);
+                                    w.global::<crate::SidebarPane>().set_user_display_name(welcome_name.into());
                                     w.set_current_view("welcome".into());
                                 }
                             });
@@ -345,8 +360,8 @@ pub fn wire_register(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         let error_msg = e.user_message();
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(w) = weak.upgrade() {
-                                w.set_register_loading(false);
-                                w.set_register_error(registration_error_message(&error_msg).into());
+                                w.global::<crate::AuthFlow>().set_register_loading(false);
+                                w.global::<crate::AuthFlow>().set_register_error(registration_error_message(&error_msg).into());
                                 w.global::<crate::AnonMode>().set_onboarding_progress("".into());
                             }
                         });

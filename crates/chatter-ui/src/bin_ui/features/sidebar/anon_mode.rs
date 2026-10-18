@@ -43,7 +43,8 @@ fn wire_toggle(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                 ui_ctx.set_anon_mode_enabled(false);
                 w.invoke_refresh_screen_protection();
                 w.global::<AnonMode>().set_enabled(false);
-                w.set_composer_gifs_available(ui_ctx.gif_picker_available());
+                w.global::<crate::ChatPane>()
+                    .set_composer_gifs_available(ui_ctx.gif_picker_available());
                 refresh_sidebar(&w, &ui_ctx);
                 tracing::info!("Anon Mode disabled");
             } else {
@@ -97,7 +98,8 @@ fn wire_submit_pin(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         crate::platform::android::activity::request_shield_background_network();
                         w.invoke_refresh_screen_protection();
                         w.global::<AnonMode>().set_enabled(true);
-                        w.set_composer_gifs_available(ui_ctx.gif_picker_available());
+                        w.global::<crate::ChatPane>()
+                            .set_composer_gifs_available(ui_ctx.gif_picker_available());
                         crate::bin_ui::features::back::close(&w, "anon-mode-pin");
                         w.set_anon_mode_pin("".into());
                         refresh_sidebar(&w, &ui_ctx);

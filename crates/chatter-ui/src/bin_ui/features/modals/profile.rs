@@ -67,22 +67,30 @@ pub fn open_user_profile_in_conversation(
         conversation,
         chatter_core::state::ActiveConversation::AnonGroup(_)
     );
-    w.set_profile_scoped_member(scoped_member);
+    w.global::<crate::ModalHostState>()
+        .set_profile_scoped_member(scoped_member);
     let auth = ui_ctx.map(|ctx| ctx.auth_snapshot()).unwrap_or_default();
     let user_data = ui_ctx.map(|ctx| ctx.user_snapshot()).unwrap_or_default();
     let is_self = !scoped_member && auth.current_user_id.as_ref() == Some(user_id);
 
-    w.set_profile_user_id(user_id.to_string().into());
-    w.set_profile_is_anonymous(conversation.is_anon());
+    w.global::<crate::ModalHostState>()
+        .set_profile_user_id(user_id.to_string().into());
+    w.global::<crate::ModalHostState>()
+        .set_profile_is_anonymous(conversation.is_anon());
     // Offered for another user only (set again on that path below).
-    w.set_profile_can_start_secret_chat(false);
+    w.global::<crate::ModalHostState>()
+        .set_profile_can_start_secret_chat(false);
     // Reset safety number state for fresh modal
-    w.set_profile_safety_number("".into());
-    w.set_profile_show_safety_number(false);
+    w.global::<crate::ModalHostState>()
+        .set_profile_safety_number("".into());
+    w.global::<crate::ModalHostState>()
+        .set_profile_show_safety_number(false);
 
     // Reset username-link share state; re-populated below for self.
-    w.set_profile_share_link("".into());
-    w.set_profile_share_status("".into());
+    w.global::<crate::ModalHostState>()
+        .set_profile_share_link("".into());
+    w.global::<crate::ModalHostState>()
+        .set_profile_share_status("".into());
 
     if let chatter_core::state::ActiveConversation::AnonGroup(group_id) = conversation {
         let member = ui_ctx.and_then(|ctx| ctx.get_anon_group_member(&group_id, user_id));
@@ -90,23 +98,34 @@ pub fn open_user_profile_in_conversation(
             .and_then(|ctx| ctx.get_anon_group_member_display_name(&group_id, user_id))
             .filter(|name| !name.is_empty())
             .unwrap_or_else(|| "Anonymous member".into());
-        w.set_profile_initials(initials_from_name(&name).into());
-        w.set_profile_display_name(name.into());
-        w.set_profile_avatar_source(
-            member
-                .and_then(|member| member.avatar)
-                .as_deref()
-                .and_then(crate::bin_ui::converters::avatar_bytes_to_image)
-                .unwrap_or_default(),
-        );
-        w.set_profile_username("".into());
-        w.set_profile_bio("".into());
-        w.set_profile_status_text("".into());
-        w.set_profile_presence("offline".into());
-        w.set_profile_is_self(false);
-        w.set_profile_is_friend(false);
-        w.set_profile_is_blocked(false);
-        w.set_profile_is_verified(false);
+        w.global::<crate::ModalHostState>()
+            .set_profile_initials(initials_from_name(&name).into());
+        w.global::<crate::ModalHostState>()
+            .set_profile_display_name(name.into());
+        w.global::<crate::ModalHostState>()
+            .set_profile_avatar_source(
+                member
+                    .and_then(|member| member.avatar)
+                    .as_deref()
+                    .and_then(crate::bin_ui::converters::avatar_bytes_to_image)
+                    .unwrap_or_default(),
+            );
+        w.global::<crate::ModalHostState>()
+            .set_profile_username("".into());
+        w.global::<crate::ModalHostState>()
+            .set_profile_bio("".into());
+        w.global::<crate::ModalHostState>()
+            .set_profile_status_text("".into());
+        w.global::<crate::ModalHostState>()
+            .set_profile_presence("offline".into());
+        w.global::<crate::ModalHostState>()
+            .set_profile_is_self(false);
+        w.global::<crate::ModalHostState>()
+            .set_profile_is_friend(false);
+        w.global::<crate::ModalHostState>()
+            .set_profile_is_blocked(false);
+        w.global::<crate::ModalHostState>()
+            .set_profile_is_verified(false);
         crate::bin_ui::features::chat::disappearing::hide_for_profile(w);
     } else if is_self {
         let display_name = auth.display_name.clone().unwrap_or_default();
@@ -118,11 +137,16 @@ pub fn open_user_profile_in_conversation(
             .unwrap_or_default();
         let initials = initials_from_name(&display_name);
 
-        w.set_profile_display_name(display_name.into());
-        w.set_profile_username(username.into());
-        w.set_profile_initials(initials.into());
-        w.set_profile_avatar_source(w.get_user_avatar_source());
-        w.set_profile_presence(w.get_user_presence_status());
+        w.global::<crate::ModalHostState>()
+            .set_profile_display_name(display_name.into());
+        w.global::<crate::ModalHostState>()
+            .set_profile_username(username.into());
+        w.global::<crate::ModalHostState>()
+            .set_profile_initials(initials.into());
+        w.global::<crate::ModalHostState>()
+            .set_profile_avatar_source(w.global::<crate::SidebarPane>().get_user_avatar_source());
+        w.global::<crate::ModalHostState>()
+            .set_profile_presence(w.global::<crate::SidebarPane>().get_user_presence_status());
 
         // Fall back to local storage. UserState is populated by profile SYNC,
         // which covers friends — nobody broadcasts your own profile back to
@@ -137,15 +161,23 @@ pub fn open_user_profile_in_conversation(
             .cloned()
             .or_else(|| ui_ctx.and_then(|c| c.get_profile_local(user_id)));
         match own_profile.and_then(|p| p.status_message) {
-            Some(msg) => w.set_profile_bio(msg.text.into()),
-            None => w.set_profile_bio("".into()),
+            Some(msg) => w
+                .global::<crate::ModalHostState>()
+                .set_profile_bio(msg.text.into()),
+            None => w
+                .global::<crate::ModalHostState>()
+                .set_profile_bio("".into()),
         }
 
         crate::bin_ui::features::chat::disappearing::hide_for_profile(w);
-        w.set_profile_is_self(true);
-        w.set_profile_is_friend(false);
-        w.set_profile_is_blocked(false);
-        w.set_profile_is_verified(false);
+        w.global::<crate::ModalHostState>()
+            .set_profile_is_self(true);
+        w.global::<crate::ModalHostState>()
+            .set_profile_is_friend(false);
+        w.global::<crate::ModalHostState>()
+            .set_profile_is_blocked(false);
+        w.global::<crate::ModalHostState>()
+            .set_profile_is_verified(false);
 
         // Show the existing username link (local copy) without a network
         // round-trip; creating/rotating goes through the wired callbacks.
@@ -196,9 +228,12 @@ pub fn open_user_profile_in_conversation(
             .map(|ctx| ctx.is_profile_user_blocked(user_id))
             .unwrap_or(false);
 
-        w.set_profile_display_name(display_name.into());
-        w.set_profile_username(username.into());
-        w.set_profile_initials(initials.into());
+        w.global::<crate::ModalHostState>()
+            .set_profile_display_name(display_name.into());
+        w.global::<crate::ModalHostState>()
+            .set_profile_username(username.into());
+        w.global::<crate::ModalHostState>()
+            .set_profile_initials(initials.into());
         // Render the peer's avatar from their decrypted server-profile bytes
         // (no URL); falls back to initials when we have none.
         let avatar_source = ui_ctx
@@ -206,25 +241,32 @@ pub fn open_user_profile_in_conversation(
             .as_deref()
             .and_then(crate::bin_ui::converters::avatar_bytes_to_image)
             .unwrap_or_default();
-        w.set_profile_avatar_source(avatar_source);
-        w.set_profile_presence(presence.into());
-        w.set_profile_bio(bio.into());
+        w.global::<crate::ModalHostState>()
+            .set_profile_avatar_source(avatar_source);
+        w.global::<crate::ModalHostState>()
+            .set_profile_presence(presence.into());
+        w.global::<crate::ModalHostState>()
+            .set_profile_bio(bio.into());
         // A secret DM shows only what the chat itself carried: the peer's
         // in-chat name and avatar, no account-profile bio.
         if let (chatter_core::state::ActiveConversation::AnonDm(id), Some(ctx)) =
             (conversation, ui_ctx)
         {
             if let Some((name, avatar)) = ctx.anon_dm_peer_card(&id) {
-                w.set_profile_initials(initials_from_name(&name).into());
-                w.set_profile_display_name(name.into());
-                w.set_profile_avatar_source(
-                    avatar
-                        .as_deref()
-                        .and_then(crate::bin_ui::converters::avatar_bytes_to_image)
-                        .unwrap_or_default(),
-                );
+                w.global::<crate::ModalHostState>()
+                    .set_profile_initials(initials_from_name(&name).into());
+                w.global::<crate::ModalHostState>()
+                    .set_profile_display_name(name.into());
+                w.global::<crate::ModalHostState>()
+                    .set_profile_avatar_source(
+                        avatar
+                            .as_deref()
+                            .and_then(crate::bin_ui::converters::avatar_bytes_to_image)
+                            .unwrap_or_default(),
+                    );
             }
-            w.set_profile_bio("".into());
+            w.global::<crate::ModalHostState>()
+                .set_profile_bio("".into());
         }
         // Check verification state
         let is_verified = ui_ctx
@@ -239,22 +281,32 @@ pub fn open_user_profile_in_conversation(
             ),
             None => crate::bin_ui::features::chat::disappearing::hide_for_profile(w),
         }
-        w.set_profile_is_self(false);
-        w.set_profile_is_friend(is_friend);
-        w.set_profile_is_blocked(is_blocked);
-        w.set_profile_can_start_secret_chat(
-            ui_ctx.is_some_and(|ctx| ctx.can_start_secret_chat(user_id)),
-        );
-        w.set_profile_is_verified(is_verified);
+        w.global::<crate::ModalHostState>()
+            .set_profile_is_self(false);
+        w.global::<crate::ModalHostState>()
+            .set_profile_is_friend(is_friend);
+        w.global::<crate::ModalHostState>()
+            .set_profile_is_blocked(is_blocked);
+        w.global::<crate::ModalHostState>()
+            .set_profile_can_start_secret_chat(
+                ui_ctx.is_some_and(|ctx| ctx.can_start_secret_chat(user_id)),
+            );
+        w.global::<crate::ModalHostState>()
+            .set_profile_is_verified(is_verified);
     }
 
     // Shared-content drawer. Reset first so the previous profile's media never
     // flashes under the new name, then load this conversation's tabs.
-    w.set_profile_shared_tabs(ModelRc::new(VecModel::<SharedTab>::from(vec![])));
-    w.set_profile_shared_items(ModelRc::new(VecModel::<SharedContentItem>::from(vec![])));
-    w.set_profile_shared_tab("".into());
-    w.set_profile_last_seen("".into());
-    w.set_profile_is_muted(false);
+    w.global::<crate::ModalHostState>()
+        .set_profile_shared_tabs(ModelRc::new(VecModel::<SharedTab>::from(vec![])));
+    w.global::<crate::ModalHostState>()
+        .set_profile_shared_items(ModelRc::new(VecModel::<SharedContentItem>::from(vec![])));
+    w.global::<crate::ModalHostState>()
+        .set_profile_shared_tab("".into());
+    w.global::<crate::ModalHostState>()
+        .set_profile_last_seen("".into());
+    w.global::<crate::ModalHostState>()
+        .set_profile_is_muted(false);
     SHARED_PAGE.with(|p| {
         let generation = p.borrow().generation.wrapping_add(1);
         *p.borrow_mut() = SharedPage {
@@ -281,9 +333,10 @@ pub fn open_user_profile_in_conversation(
             // Loading from the first frame: an empty strip is also what "no
             // tabs" looks like, and flashing "Nothing shared yet" for the
             // length of one query reads as a bug.
-            w.set_profile_shared_loading(true);
+            w.global::<crate::ModalHostState>()
+                .set_profile_shared_loading(true);
             if !scoped_member {
-                w.set_profile_last_seen(
+                w.global::<crate::ModalHostState>().set_profile_last_seen(
                     ctx.peer_last_seen(user_id)
                         .map(|(presence, at)| {
                             crate::bin_ui::converters::last_seen_label(presence, at)
@@ -292,7 +345,7 @@ pub fn open_user_profile_in_conversation(
                         .into(),
                 );
             }
-            w.set_profile_is_muted(
+            w.global::<crate::ModalHostState>().set_profile_is_muted(
                 ctx.is_conversation_muted(if scoped_member {
                     conversation
                 } else {
@@ -366,16 +419,20 @@ fn load_shared_tabs(
             {
                 return;
             }
-            w.set_profile_shared_tabs(ModelRc::new(VecModel::from(rows)));
+            w.global::<crate::ModalHostState>()
+                .set_profile_shared_tabs(ModelRc::new(VecModel::from(rows)));
             match first {
                 Some(tab) => {
-                    w.set_profile_shared_tab(tab.clone().into());
+                    w.global::<crate::ModalHostState>()
+                        .set_profile_shared_tab(tab.clone().into());
                     // `request_shared_page` owns the loading flag from here.
                     request_shared_page(&w, &ui_ctx, peer_id, tab, false);
                 }
                 // Nothing shared at all — clear the flag ourselves, or the
                 // spinner outlives the query that would have cleared it.
-                None => w.set_profile_shared_loading(false),
+                None => w
+                    .global::<crate::ModalHostState>()
+                    .set_profile_shared_loading(false),
             }
         });
     });
@@ -413,7 +470,8 @@ fn request_shared_page(
         return;
     };
 
-    w.set_profile_shared_loading(true);
+    w.global::<crate::ModalHostState>()
+        .set_profile_shared_loading(true);
     let weak = w.as_weak();
     let ui_ctx = ui_ctx.clone();
     let revision = ui_ctx.auth_snapshot().session_revision;
@@ -486,12 +544,15 @@ fn request_shared_page(
             {
                 return;
             }
-            w.set_profile_shared_loading(false);
+            w.global::<crate::ModalHostState>()
+                .set_profile_shared_loading(false);
 
             // Thumbnails decode here, on the UI thread, because a
             // `slint::Image` cannot cross threads.
             let mut rows: Vec<SharedContentItem> = if append {
-                let cur = w.get_profile_shared_items();
+                let cur = w
+                    .global::<crate::ModalHostState>()
+                    .get_profile_shared_items();
                 cur.iter().collect()
             } else {
                 Vec::new()
@@ -513,7 +574,8 @@ fn request_shared_page(
                     is_video,
                 }
             }));
-            w.set_profile_shared_items(ModelRc::new(VecModel::from(rows)));
+            w.global::<crate::ModalHostState>()
+                .set_profile_shared_items(ModelRc::new(VecModel::from(rows)));
         });
     });
 }
@@ -539,32 +601,42 @@ fn shared_content_display_title<'a>(category: &str, title: &'a str) -> &'a str {
 fn wire_shared_content(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let ui_ctx_tab = ui_ctx.clone();
-    window.on_profile_shared_tab_selected(move |tab| {
-        let Some(w) = weak_window.upgrade() else {
-            return;
-        };
-        let Some(peer) = SHARED_PAGE.with(|p| p.borrow().peer) else {
-            return;
-        };
-        w.set_profile_shared_items(ModelRc::new(VecModel::<SharedContentItem>::from(vec![])));
-        request_shared_page(&w, &ui_ctx_tab, peer, tab.to_string(), false);
-    });
+    window
+        .global::<crate::ModalHostState>()
+        .on_profile_shared_tab_selected(move |tab| {
+            let Some(w) = weak_window.upgrade() else {
+                return;
+            };
+            let Some(peer) = SHARED_PAGE.with(|p| p.borrow().peer) else {
+                return;
+            };
+            w.global::<crate::ModalHostState>()
+                .set_profile_shared_items(ModelRc::new(VecModel::<SharedContentItem>::from(
+                    vec![],
+                )));
+            request_shared_page(&w, &ui_ctx_tab, peer, tab.to_string(), false);
+        });
 
     let weak_window = window.as_weak();
     let ui_ctx_more = ui_ctx.clone();
-    window.on_profile_shared_load_more(move || {
-        let Some(w) = weak_window.upgrade() else {
-            return;
-        };
-        let Some(peer) = SHARED_PAGE.with(|p| p.borrow().peer) else {
-            return;
-        };
-        let tab = w.get_profile_shared_tab().to_string();
-        if tab.is_empty() {
-            return;
-        }
-        request_shared_page(&w, &ui_ctx_more, peer, tab, true);
-    });
+    window
+        .global::<crate::ModalHostState>()
+        .on_profile_shared_load_more(move || {
+            let Some(w) = weak_window.upgrade() else {
+                return;
+            };
+            let Some(peer) = SHARED_PAGE.with(|p| p.borrow().peer) else {
+                return;
+            };
+            let tab = w
+                .global::<crate::ModalHostState>()
+                .get_profile_shared_tab()
+                .to_string();
+            if tab.is_empty() {
+                return;
+            }
+            request_shared_page(&w, &ui_ctx_more, peer, tab, true);
+        });
 
     // Opening an item: a link goes to the browser, everything else jumps the
     // conversation to the message it arrived in — which is the existing
@@ -572,47 +644,57 @@ fn wire_shared_content(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     // retry.
     let weak_window = window.as_weak();
     let ui_ctx_jump = ui_ctx.clone();
-    window.on_profile_open_shared_item(move |message_id, attachment_id, category, selected_url| {
-        let Some(w) = weak_window.upgrade() else {
-            return;
-        };
-        if category.as_str() == "link" {
-            // Preserve the clicked row identity, including two URLs in one
-            // message. The message-link callback owns validation and the
-            // platform opener (Android intent or desktop browser).
-            open_shared_link(
-                w.get_profile_shared_items().iter(),
-                message_id.as_str(),
-                attachment_id.as_str(),
-                selected_url.as_str(),
-                |url| w.invoke_open_message_link(url.into()),
+    window
+        .global::<crate::ModalHostState>()
+        .on_profile_open_shared_item(move |message_id, attachment_id, category, selected_url| {
+            let Some(w) = weak_window.upgrade() else {
+                return;
+            };
+            if category.as_str() == "link" {
+                // Preserve the clicked row identity, including two URLs in one
+                // message. The message-link callback owns validation and the
+                // platform opener (Android intent or desktop browser).
+                open_shared_link(
+                    w.global::<crate::ModalHostState>()
+                        .get_profile_shared_items()
+                        .iter(),
+                    message_id.as_str(),
+                    attachment_id.as_str(),
+                    selected_url.as_str(),
+                    |url| {
+                        w.global::<crate::ChatPane>()
+                            .invoke_open_message_link(url.into())
+                    },
+                );
+                return;
+            }
+            let Some(conversation) = SHARED_PAGE.with(|p| p.borrow().conversation) else {
+                return;
+            };
+            crate::bin_ui::features::back::reset_to_chats(&w);
+            crate::bin_ui::features::header::jump_to_conversation_message(
+                &w,
+                &ui_ctx_jump,
+                conversation,
+                &message_id,
             );
-            return;
-        }
-        let Some(conversation) = SHARED_PAGE.with(|p| p.borrow().conversation) else {
-            return;
-        };
-        crate::bin_ui::features::back::reset_to_chats(&w);
-        crate::bin_ui::features::header::jump_to_conversation_message(
-            &w,
-            &ui_ctx_jump,
-            conversation,
-            &message_id,
-        );
-    });
+        });
 }
 
 /// Push a username-link URL + its QR image into the profile-modal properties.
 /// Must be called on the UI thread (creates a `slint::Image`).
 fn set_share_link_props(w: &MainWindow, ui_ctx: &Arc<ChatterClient>, url: &str) {
-    w.set_profile_share_link(url.into());
+    w.global::<crate::ModalHostState>()
+        .set_profile_share_link(url.into());
     match ui_ctx
         .username_link_qr(url, 150)
         .map_err(|e| e.to_string())
         .and_then(|png| {
             crate::bin_ui::slint_conversions::memory_to_slint_image(&png).map_err(|e| e.to_string())
         }) {
-        Ok(img) => w.set_profile_share_qr(img),
+        Ok(img) => w
+            .global::<crate::ModalHostState>()
+            .set_profile_share_qr(img),
         Err(e) => tracing::error!("Failed to render username-link QR: {}", e),
     }
 }
@@ -623,50 +705,60 @@ fn wire_share_link(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     // re-show the stored one. Rotation is the explicit Reset button.
     let weak_window = window.as_weak();
     let ui_ctx_gen = ui_ctx.clone();
-    window.on_profile_generate_share_link(move || {
-        spawn_create_link(weak_window.clone(), ui_ctx_gen.clone(), false);
-    });
+    window
+        .global::<crate::ModalHostState>()
+        .on_profile_generate_share_link(move || {
+            spawn_create_link(weak_window.clone(), ui_ctx_gen.clone(), false);
+        });
 
     // Reset: always create a fresh link (server-side rotation — previously
     // shared URLs stop resolving).
     let weak_window = window.as_weak();
     let ui_ctx_reset = ui_ctx.clone();
-    window.on_profile_reset_share_link(move || {
-        spawn_create_link(weak_window.clone(), ui_ctx_reset.clone(), true);
-    });
+    window
+        .global::<crate::ModalHostState>()
+        .on_profile_reset_share_link(move || {
+            spawn_create_link(weak_window.clone(), ui_ctx_reset.clone(), true);
+        });
 
     // Copy: same clipboard strategy as the friend-code copy (wl-copy → xclip).
     let weak_window = window.as_weak();
-    window.on_profile_copy_share_link(move || {
-        if let Some(w) = weak_window.upgrade() {
-            let url = w.get_profile_share_link().to_string();
-            if url.is_empty() {
-                return;
-            }
-            std::thread::spawn(move || {
-                let result = std::process::Command::new("wl-copy")
-                    .arg(&url)
-                    .status()
-                    .or_else(|_| {
-                        std::process::Command::new("xclip")
-                            .args(["-selection", "clipboard"])
-                            .stdin(std::process::Stdio::piped())
-                            .spawn()
-                            .and_then(|mut child| {
-                                use std::io::Write;
-                                if let Some(stdin) = child.stdin.as_mut() {
-                                    stdin.write_all(url.as_bytes())?;
-                                }
-                                child.wait()
-                            })
-                    });
-                if let Err(e) = result {
-                    tracing::error!("Failed to copy username link: {}", e);
+    window
+        .global::<crate::ModalHostState>()
+        .on_profile_copy_share_link(move || {
+            if let Some(w) = weak_window.upgrade() {
+                let url = w
+                    .global::<crate::ModalHostState>()
+                    .get_profile_share_link()
+                    .to_string();
+                if url.is_empty() {
+                    return;
                 }
-            });
-            w.set_profile_share_status("Link copied to clipboard".into());
-        }
-    });
+                std::thread::spawn(move || {
+                    let result = std::process::Command::new("wl-copy")
+                        .arg(&url)
+                        .status()
+                        .or_else(|_| {
+                            std::process::Command::new("xclip")
+                                .args(["-selection", "clipboard"])
+                                .stdin(std::process::Stdio::piped())
+                                .spawn()
+                                .and_then(|mut child| {
+                                    use std::io::Write;
+                                    if let Some(stdin) = child.stdin.as_mut() {
+                                        stdin.write_all(url.as_bytes())?;
+                                    }
+                                    child.wait()
+                                })
+                        });
+                    if let Err(e) = result {
+                        tracing::error!("Failed to copy username link: {}", e);
+                    }
+                });
+                w.global::<crate::ModalHostState>()
+                    .set_profile_share_status("Link copied to clipboard".into());
+            }
+        });
 }
 
 /// Create (or rotate) the username link in the background and push URL + QR
@@ -690,7 +782,8 @@ fn spawn_create_link(weak: slint::Weak<MainWindow>, ui_ctx: Arc<ChatterClient>, 
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
                         set_share_link_props(&w, &ui_ctx2, &url);
-                        w.set_profile_share_status("".into());
+                        w.global::<crate::ModalHostState>()
+                            .set_profile_share_status("".into());
                     }
                 });
                 return;
@@ -708,7 +801,8 @@ fn spawn_create_link(weak: slint::Weak<MainWindow>, ui_ctx: Arc<ChatterClient>, 
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
                         set_share_link_props(&w, &ui_ctx2, &url);
-                        w.set_profile_share_status(status.into());
+                        w.global::<crate::ModalHostState>()
+                            .set_profile_share_status(status.into());
                     }
                 });
             }
@@ -718,7 +812,8 @@ fn spawn_create_link(weak: slint::Weak<MainWindow>, ui_ctx: Arc<ChatterClient>, 
                 let msg = e.user_message();
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
-                        w.set_profile_share_status(msg.into());
+                        w.global::<crate::ModalHostState>()
+                            .set_profile_share_status(msg.into());
                     }
                 });
             }
@@ -737,294 +832,347 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     // settings uses, keyed on the DM with this peer.
     let weak_window = window.as_weak();
     let ui_ctx_mute = ui_ctx.clone();
-    window.on_profile_toggle_mute(move || {
-        let Some(w) = weak_window.upgrade() else {
-            return;
-        };
-        let Ok(peer_id) = w.get_profile_user_id().parse::<UserId>() else {
-            return;
-        };
-        let muted = !w.get_profile_is_muted();
-        // Reflect immediately, then persist — snapping back on failure.
-        w.set_profile_is_muted(muted);
-        if let Err(e) = ui_ctx_mute.mute_conversation(
-            if w.get_profile_scoped_member() {
-                SHARED_PAGE
-                    .with(|p| p.borrow().conversation)
-                    .unwrap_or(chatter_core::state::ActiveConversation::None)
-            } else {
-                dm_conversation(&peer_id)
-            },
-            muted,
-        ) {
-            tracing::error!(error = %e, "Failed to persist profile mute");
-            w.set_profile_is_muted(!muted);
-        }
-    });
+    window
+        .global::<crate::ModalHostState>()
+        .on_profile_toggle_mute(move || {
+            let Some(w) = weak_window.upgrade() else {
+                return;
+            };
+            let Ok(peer_id) = w
+                .global::<crate::ModalHostState>()
+                .get_profile_user_id()
+                .parse::<UserId>()
+            else {
+                return;
+            };
+            let muted = !w.global::<crate::ModalHostState>().get_profile_is_muted();
+            // Reflect immediately, then persist — snapping back on failure.
+            w.global::<crate::ModalHostState>()
+                .set_profile_is_muted(muted);
+            if let Err(e) = ui_ctx_mute.mute_conversation(
+                if w.global::<crate::ModalHostState>()
+                    .get_profile_scoped_member()
+                {
+                    SHARED_PAGE
+                        .with(|p| p.borrow().conversation)
+                        .unwrap_or(chatter_core::state::ActiveConversation::None)
+                } else {
+                    dm_conversation(&peer_id)
+                },
+                muted,
+            ) {
+                tracing::error!(error = %e, "Failed to persist profile mute");
+                w.global::<crate::ModalHostState>()
+                    .set_profile_is_muted(!muted);
+            }
+        });
 
     // Call / Video. `start-voice-call` deliberately takes no target — it reads
     // the ACTIVE conversation. So the profile's buttons open the DM first,
     // exactly the way the Calls screen's redial does, and only then place the
     // call.
     let weak_window = window.as_weak();
-    window.on_profile_start_call(move |is_video| {
-        let Some(w) = weak_window.upgrade() else {
-            return;
-        };
-        // No calls from a secret chat (the tiles are hidden there too).
-        if w.get_profile_scoped_member() || w.get_profile_is_anonymous() {
-            return;
-        }
-        let peer_id = w.get_profile_user_id().to_string();
-        if peer_id.is_empty() {
-            return;
-        }
-        crate::bin_ui::features::back::reset_to_chats(&w);
-        // Opening first commits `ActiveConversation`, which is what
-        // `start_*_call` dispatches on — same ordering the Calls screen's
-        // redial uses.
-        w.invoke_dm_selected(peer_id.into());
-        if is_video {
-            w.invoke_start_video_call();
-        } else {
-            w.invoke_start_voice_call();
-        }
-    });
+    window
+        .global::<crate::ModalHostState>()
+        .on_profile_start_call(move |is_video| {
+            let Some(w) = weak_window.upgrade() else {
+                return;
+            };
+            // No calls from a secret chat (the tiles are hidden there too).
+            if w.global::<crate::ModalHostState>()
+                .get_profile_scoped_member()
+                || w.global::<crate::ModalHostState>()
+                    .get_profile_is_anonymous()
+            {
+                return;
+            }
+            let peer_id = w
+                .global::<crate::ModalHostState>()
+                .get_profile_user_id()
+                .to_string();
+            if peer_id.is_empty() {
+                return;
+            }
+            crate::bin_ui::features::back::reset_to_chats(&w);
+            // Opening first commits `ActiveConversation`, which is what
+            // `start_*_call` dispatches on — same ordering the Calls screen's
+            // redial uses.
+            w.global::<crate::SidebarPane>()
+                .invoke_dm_selected(peer_id.into());
+            if is_video {
+                w.global::<crate::ChatPane>().invoke_start_video_call();
+            } else {
+                w.global::<crate::ChatPane>().invoke_start_voice_call();
+            }
+        });
 
     // Add friend
     let weak_window = window.as_weak();
     let ui_ctx_add = ui_ctx.clone();
 
-    window.on_profile_add_friend(move || {
-        let weak = weak_window.clone();
-        if weak
-            .upgrade()
-            .is_some_and(|w| w.get_profile_scoped_member())
-        {
-            return;
-        }
-        let ui_ctx = ui_ctx_add.clone();
-
-        let profile_user_id = weak.upgrade().map(|w| w.get_profile_user_id().to_string());
-        let profile_user_id = match profile_user_id {
-            Some(id) if !id.is_empty() => id,
-            _ => {
-                tracing::error!("Could not get profile user ID");
+    window
+        .global::<crate::ModalHostState>()
+        .on_profile_add_friend(move || {
+            let weak = weak_window.clone();
+            if weak.upgrade().is_some_and(|w| {
+                w.global::<crate::ModalHostState>()
+                    .get_profile_scoped_member()
+            }) {
                 return;
             }
-        };
+            let ui_ctx = ui_ctx_add.clone();
 
-        tokio::spawn(async move {
-            let weak_loading = weak.clone();
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak_loading.upgrade() {
-                    w.set_profile_loading(true);
-                }
+            let profile_user_id = weak.upgrade().map(|w| {
+                w.global::<crate::ModalHostState>()
+                    .get_profile_user_id()
+                    .to_string()
             });
-
-            let friend_id: UserId = match profile_user_id.parse() {
-                Ok(id) => id,
-                Err(e) => {
-                    tracing::error!("Invalid user ID: {}", e);
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_profile_loading(false);
-                        }
-                    });
+            let profile_user_id = match profile_user_id {
+                Some(id) if !id.is_empty() => id,
+                _ => {
+                    tracing::error!("Could not get profile user ID");
                     return;
                 }
             };
 
-            let notice = match tokio::time::timeout(
-                crate::bin_ui::ui_helpers::UI_SERVICE_TIMEOUT,
-                ui_ctx.send_friend_request(&friend_id, None),
-            )
-            .await
-            {
-                Ok(Ok(_)) => {
-                    tracing::info!("Friend request sent to {}", friend_id);
-                    // Core emits `FriendRequestsUpdated` after send — the
-                    // domain-handler dispatcher refreshes the list. No
-                    // manual list_friend_requests + reshape here.
-                    ("Friend request sent", "success")
-                }
-                Ok(Err(e)) => {
-                    tracing::error!("Failed to send friend request: {}", e);
-                    ("The friend request was not sent. Try again.", "error")
-                }
-                Err(_) => {
-                    tracing::error!("Friend request timed out");
-                    ("The friend request was not sent. Try again.", "error")
-                }
-            };
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak.upgrade() {
-                    w.set_profile_loading(false);
-                    show_toast(&w, notice);
-                }
+            tokio::spawn(async move {
+                let weak_loading = weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak_loading.upgrade() {
+                        w.global::<crate::ModalHostState>()
+                            .set_profile_loading(true);
+                    }
+                });
+
+                let friend_id: UserId = match profile_user_id.parse() {
+                    Ok(id) => id,
+                    Err(e) => {
+                        tracing::error!("Invalid user ID: {}", e);
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(w) = weak.upgrade() {
+                                w.global::<crate::ModalHostState>()
+                                    .set_profile_loading(false);
+                            }
+                        });
+                        return;
+                    }
+                };
+
+                let notice = match tokio::time::timeout(
+                    crate::bin_ui::ui_helpers::UI_SERVICE_TIMEOUT,
+                    ui_ctx.send_friend_request(&friend_id, None),
+                )
+                .await
+                {
+                    Ok(Ok(_)) => {
+                        tracing::info!("Friend request sent to {}", friend_id);
+                        // Core emits `FriendRequestsUpdated` after send — the
+                        // domain-handler dispatcher refreshes the list. No
+                        // manual list_friend_requests + reshape here.
+                        ("Friend request sent", "success")
+                    }
+                    Ok(Err(e)) => {
+                        tracing::error!("Failed to send friend request: {}", e);
+                        ("The friend request was not sent. Try again.", "error")
+                    }
+                    Err(_) => {
+                        tracing::error!("Friend request timed out");
+                        ("The friend request was not sent. Try again.", "error")
+                    }
+                };
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak.upgrade() {
+                        w.global::<crate::ModalHostState>()
+                            .set_profile_loading(false);
+                        show_toast(&w, notice);
+                    }
+                });
             });
         });
-    });
 
     // Remove friend
     let weak_window = window.as_weak();
     let ui_ctx_remove = ui_ctx.clone();
 
-    window.on_profile_remove_friend(move || {
-        let weak = weak_window.clone();
-        if weak
-            .upgrade()
-            .is_some_and(|w| w.get_profile_scoped_member())
-        {
-            return;
-        }
-        let ui_ctx = ui_ctx_remove.clone();
-
-        let profile_user_id = weak.upgrade().map(|w| w.get_profile_user_id().to_string());
-        let profile_user_id = match profile_user_id {
-            Some(id) if !id.is_empty() => id,
-            _ => {
-                tracing::error!("Could not get profile user ID");
+    window
+        .global::<crate::ModalHostState>()
+        .on_profile_remove_friend(move || {
+            let weak = weak_window.clone();
+            if weak.upgrade().is_some_and(|w| {
+                w.global::<crate::ModalHostState>()
+                    .get_profile_scoped_member()
+            }) {
                 return;
             }
-        };
+            let ui_ctx = ui_ctx_remove.clone();
 
-        tokio::spawn(async move {
-            let weak_loading = weak.clone();
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak_loading.upgrade() {
-                    w.set_profile_loading(true);
-                }
+            let profile_user_id = weak.upgrade().map(|w| {
+                w.global::<crate::ModalHostState>()
+                    .get_profile_user_id()
+                    .to_string()
             });
-
-            let friend_id: UserId = match profile_user_id.parse() {
-                Ok(id) => id,
-                Err(e) => {
-                    tracing::error!("Invalid user ID: {}", e);
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_profile_loading(false);
-                        }
-                    });
+            let profile_user_id = match profile_user_id {
+                Some(id) if !id.is_empty() => id,
+                _ => {
+                    tracing::error!("Could not get profile user ID");
                     return;
                 }
             };
 
-            match tokio::time::timeout(
-                crate::bin_ui::ui_helpers::UI_SERVICE_TIMEOUT,
-                ui_ctx.remove_friend(&friend_id),
-            )
-            .await
-            {
-                Ok(Ok(())) => {
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_profile_loading(false);
-                            w.set_profile_is_friend(false);
-                            show_toast(&w, ("Removed from friends", "success"));
-                            tracing::info!("Removed friend: {}", friend_id);
-                        }
-                    });
+            tokio::spawn(async move {
+                let weak_loading = weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak_loading.upgrade() {
+                        w.global::<crate::ModalHostState>()
+                            .set_profile_loading(true);
+                    }
+                });
+
+                let friend_id: UserId = match profile_user_id.parse() {
+                    Ok(id) => id,
+                    Err(e) => {
+                        tracing::error!("Invalid user ID: {}", e);
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(w) = weak.upgrade() {
+                                w.global::<crate::ModalHostState>()
+                                    .set_profile_loading(false);
+                            }
+                        });
+                        return;
+                    }
+                };
+
+                match tokio::time::timeout(
+                    crate::bin_ui::ui_helpers::UI_SERVICE_TIMEOUT,
+                    ui_ctx.remove_friend(&friend_id),
+                )
+                .await
+                {
+                    Ok(Ok(())) => {
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(w) = weak.upgrade() {
+                                w.global::<crate::ModalHostState>()
+                                    .set_profile_loading(false);
+                                w.global::<crate::ModalHostState>()
+                                    .set_profile_is_friend(false);
+                                show_toast(&w, ("Removed from friends", "success"));
+                                tracing::info!("Removed friend: {}", friend_id);
+                            }
+                        });
+                    }
+                    Ok(Err(e)) => {
+                        tracing::error!("Failed to remove friend: {}", e);
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(w) = weak.upgrade() {
+                                w.global::<crate::ModalHostState>()
+                                    .set_profile_loading(false);
+                                show_toast(&w, (REMOVE_FAILED, "error"));
+                            }
+                        });
+                    }
+                    Err(_) => {
+                        tracing::error!("Remove friend timed out");
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(w) = weak.upgrade() {
+                                w.global::<crate::ModalHostState>()
+                                    .set_profile_loading(false);
+                                show_toast(&w, (REMOVE_FAILED, "error"));
+                            }
+                        });
+                    }
                 }
-                Ok(Err(e)) => {
-                    tracing::error!("Failed to remove friend: {}", e);
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_profile_loading(false);
-                            show_toast(&w, (REMOVE_FAILED, "error"));
-                        }
-                    });
-                }
-                Err(_) => {
-                    tracing::error!("Remove friend timed out");
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_profile_loading(false);
-                            show_toast(&w, (REMOVE_FAILED, "error"));
-                        }
-                    });
-                }
-            }
+            });
         });
-    });
 
     // Block user
     let weak_window = window.as_weak();
     let ui_ctx_block = ui_ctx.clone();
 
-    window.on_profile_block_user(move || {
-        let weak = weak_window.clone();
-        if weak
-            .upgrade()
-            .is_some_and(|w| w.get_profile_scoped_member())
-        {
-            return;
-        }
-        let ui_ctx = ui_ctx_block.clone();
-
-        let profile_user_id = weak.upgrade().map(|w| w.get_profile_user_id().to_string());
-        let profile_user_id = match profile_user_id {
-            Some(id) if !id.is_empty() => id,
-            _ => {
-                tracing::error!("Could not get profile user ID");
+    window
+        .global::<crate::ModalHostState>()
+        .on_profile_block_user(move || {
+            let weak = weak_window.clone();
+            if weak.upgrade().is_some_and(|w| {
+                w.global::<crate::ModalHostState>()
+                    .get_profile_scoped_member()
+            }) {
                 return;
             }
-        };
+            let ui_ctx = ui_ctx_block.clone();
 
-        tokio::spawn(async move {
-            let weak_loading = weak.clone();
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak_loading.upgrade() {
-                    w.set_profile_loading(true);
-                }
+            let profile_user_id = weak.upgrade().map(|w| {
+                w.global::<crate::ModalHostState>()
+                    .get_profile_user_id()
+                    .to_string()
             });
-
-            let user_id: UserId = match profile_user_id.parse() {
-                Ok(id) => id,
-                Err(e) => {
-                    tracing::error!("Invalid user ID: {}", e);
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_profile_loading(false);
-                        }
-                    });
+            let profile_user_id = match profile_user_id {
+                Some(id) if !id.is_empty() => id,
+                _ => {
+                    tracing::error!("Could not get profile user ID");
                     return;
                 }
             };
 
-            match ui_ctx.block_profile_user(&user_id).await {
-                Ok(()) => {
-                    crate::bin_ui::features::auth::initial_data::refresh_friends_list(
-                        weak.clone(),
-                        ui_ctx.clone(),
-                    );
-                    crate::bin_ui::features::modals::friends::refresh_blocked_users(
-                        weak.clone(),
-                        &ui_ctx,
-                    );
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_profile_loading(false);
-                            w.set_profile_is_blocked(true);
-                            w.set_profile_is_friend(false);
-                            // Their DM leaves the sidebar (core hides blocked
-                            // contacts); history stays for an unblock.
-                            crate::bin_ui::features::sidebar::refresh_chat_list(&w, &ui_ctx);
-                            tracing::info!("Blocked user: {}", user_id);
-                        }
-                    });
+            tokio::spawn(async move {
+                let weak_loading = weak.clone();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak_loading.upgrade() {
+                        w.global::<crate::ModalHostState>()
+                            .set_profile_loading(true);
+                    }
+                });
+
+                let user_id: UserId = match profile_user_id.parse() {
+                    Ok(id) => id,
+                    Err(e) => {
+                        tracing::error!("Invalid user ID: {}", e);
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(w) = weak.upgrade() {
+                                w.global::<crate::ModalHostState>()
+                                    .set_profile_loading(false);
+                            }
+                        });
+                        return;
+                    }
+                };
+
+                match ui_ctx.block_profile_user(&user_id).await {
+                    Ok(()) => {
+                        crate::bin_ui::features::auth::initial_data::refresh_friends_list(
+                            weak.clone(),
+                            ui_ctx.clone(),
+                        );
+                        crate::bin_ui::features::modals::friends::refresh_blocked_users(
+                            weak.clone(),
+                            &ui_ctx,
+                        );
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(w) = weak.upgrade() {
+                                w.global::<crate::ModalHostState>()
+                                    .set_profile_loading(false);
+                                w.global::<crate::ModalHostState>()
+                                    .set_profile_is_blocked(true);
+                                w.global::<crate::ModalHostState>()
+                                    .set_profile_is_friend(false);
+                                // Their DM leaves the sidebar (core hides blocked
+                                // contacts); history stays for an unblock.
+                                crate::bin_ui::features::sidebar::refresh_chat_list(&w, &ui_ctx);
+                                tracing::info!("Blocked user: {}", user_id);
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to block user: {}", e);
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(w) = weak.upgrade() {
+                                w.global::<crate::ModalHostState>()
+                                    .set_profile_loading(false);
+                            }
+                        });
+                    }
                 }
-                Err(e) => {
-                    tracing::error!("Failed to block user: {}", e);
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_profile_loading(false);
-                        }
-                    });
-                }
-            }
+            });
         });
-    });
 
     // Send message (open DM). Core picks the conversation: a friend's DM in
     // either mode (Shield sends it over the mailbox); for anyone else in
@@ -1032,143 +1180,166 @@ pub fn wire_profile_actions(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     // the same `dm-selected` path as every other DM entry point.
     let weak_window = window.as_weak();
     let ui_ctx_dm = ui_ctx.clone();
-    window.on_profile_send_message(move || {
-        let Some(w) = weak_window.upgrade() else {
-            return;
-        };
-        if w.get_profile_scoped_member() {
-            return;
-        }
-        let peer = w.get_profile_user_id().to_string();
-        let Some(dm_id) = ui_ctx_dm
-            .resolve_dm_conversation(&peer)
-            .and_then(|conversation| conversation.sidebar_key())
-        else {
-            tracing::warn!(
-                "profile: no conversation with this peer is available in the current mode"
-            );
-            return;
-        };
-        crate::bin_ui::features::back::reset_to_chats(&w);
-        w.invoke_dm_selected(dm_id.into());
-    });
+    window
+        .global::<crate::ModalHostState>()
+        .on_profile_send_message(move || {
+            let Some(w) = weak_window.upgrade() else {
+                return;
+            };
+            if w.global::<crate::ModalHostState>()
+                .get_profile_scoped_member()
+            {
+                return;
+            }
+            let peer = w
+                .global::<crate::ModalHostState>()
+                .get_profile_user_id()
+                .to_string();
+            let Some(dm_id) = ui_ctx_dm
+                .resolve_dm_conversation(&peer)
+                .and_then(|conversation| conversation.sidebar_key())
+            else {
+                tracing::warn!(
+                    "profile: no conversation with this peer is available in the current mode"
+                );
+                return;
+            };
+            crate::bin_ui::features::back::reset_to_chats(&w);
+            w.global::<crate::SidebarPane>()
+                .invoke_dm_selected(dm_id.into());
+        });
 
     avatar_edit::wire(window, ui_ctx);
 
     // View safety number — generates and displays the 60-digit fingerprint
     let weak_window = window.as_weak();
     let ui_ctx_safety = ui_ctx.clone();
-    window.on_profile_view_safety_number(move || {
-        let weak = weak_window.clone();
-        let ui_ctx = ui_ctx_safety.clone();
+    window
+        .global::<crate::ModalHostState>()
+        .on_profile_view_safety_number(move || {
+            let weak = weak_window.clone();
+            let ui_ctx = ui_ctx_safety.clone();
 
-        let profile_user_id = weak.upgrade().map(|w| w.get_profile_user_id().to_string());
-        let profile_user_id = match profile_user_id {
-            Some(id) if !id.is_empty() => id,
-            _ => {
-                tracing::error!("No profile user ID for safety number");
-                return;
-            }
-        };
-
-        tokio::spawn(async move {
-            let peer_id: UserId = match profile_user_id.parse() {
-                Ok(id) => id,
-                Err(e) => {
-                    tracing::error!("Invalid user ID for safety number: {}", e);
+            let profile_user_id = weak.upgrade().map(|w| {
+                w.global::<crate::ModalHostState>()
+                    .get_profile_user_id()
+                    .to_string()
+            });
+            let profile_user_id = match profile_user_id {
+                Some(id) if !id.is_empty() => id,
+                _ => {
+                    tracing::error!("No profile user ID for safety number");
                     return;
                 }
             };
 
-            match ui_ctx.get_safety_number(&peer_id).await {
-                Ok(safety_number) => {
-                    // 12 groups of 5 digits as Signal lays them out: three
-                    // rows of four, so the number never wraps 7 + 5.
-                    let groups: Vec<String> = safety_number
-                        .chars()
-                        .collect::<Vec<_>>()
-                        .chunks(5)
-                        .map(|chunk| chunk.iter().collect::<String>())
-                        .collect();
-                    let formatted = groups
-                        .chunks(4)
-                        .map(|row| row.join(" "))
-                        .collect::<Vec<_>>()
-                        .join("\n");
+            tokio::spawn(async move {
+                let peer_id: UserId = match profile_user_id.parse() {
+                    Ok(id) => id,
+                    Err(e) => {
+                        tracing::error!("Invalid user ID for safety number: {}", e);
+                        return;
+                    }
+                };
 
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_profile_safety_number(formatted.into());
-                            w.set_profile_show_safety_number(true);
-                        }
-                    });
+                match ui_ctx.get_safety_number(&peer_id).await {
+                    Ok(safety_number) => {
+                        // 12 groups of 5 digits as Signal lays them out: three
+                        // rows of four, so the number never wraps 7 + 5.
+                        let groups: Vec<String> = safety_number
+                            .chars()
+                            .collect::<Vec<_>>()
+                            .chunks(5)
+                            .map(|chunk| chunk.iter().collect::<String>())
+                            .collect();
+                        let formatted = groups
+                            .chunks(4)
+                            .map(|row| row.join(" "))
+                            .collect::<Vec<_>>()
+                            .join("\n");
+
+                        let _ = slint::invoke_from_event_loop(move || {
+                            if let Some(w) = weak.upgrade() {
+                                w.global::<crate::ModalHostState>()
+                                    .set_profile_safety_number(formatted.into());
+                                w.global::<crate::ModalHostState>()
+                                    .set_profile_show_safety_number(true);
+                            }
+                        });
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to generate safety number: {}", e);
+                    }
                 }
-                Err(e) => {
-                    tracing::error!("Failed to generate safety number: {}", e);
-                }
-            }
+            });
         });
-    });
 
     // Toggle verified state
     let weak_window = window.as_weak();
     let ui_ctx_verify = ui_ctx.clone();
-    window.on_profile_toggle_verified(move || {
-        let weak = weak_window.clone();
-        let ui_ctx = ui_ctx_verify.clone();
+    window
+        .global::<crate::ModalHostState>()
+        .on_profile_toggle_verified(move || {
+            let weak = weak_window.clone();
+            let ui_ctx = ui_ctx_verify.clone();
 
-        let (profile_user_id, currently_verified) = match weak.upgrade() {
-            Some(w) => (
-                w.get_profile_user_id().to_string(),
-                w.get_profile_is_verified(),
-            ),
-            None => {
-                tracing::debug!("Profile verification tap ignored: window closed");
-                return;
-            }
-        };
-
-        if profile_user_id.is_empty() {
-            tracing::debug!("Profile verification tap ignored: no profile user");
-            return;
-        }
-
-        let peer_id: UserId = match profile_user_id.parse() {
-            Ok(id) => id,
-            Err(e) => {
-                tracing::error!("Invalid user ID for verification toggle: {}", e);
-                return;
-            }
-        };
-
-        if currently_verified {
-            // Unverify — sync operation
-            match ui_ctx.mark_peer_unverified(&peer_id) {
-                Ok(()) => {
-                    let _ = slint::invoke_from_event_loop(move || {
-                        if let Some(w) = weak.upgrade() {
-                            w.set_profile_is_verified(false);
-                        }
-                    });
+            let (profile_user_id, currently_verified) = match weak.upgrade() {
+                Some(w) => (
+                    w.global::<crate::ModalHostState>()
+                        .get_profile_user_id()
+                        .to_string(),
+                    w.global::<crate::ModalHostState>()
+                        .get_profile_is_verified(),
+                ),
+                None => {
+                    tracing::debug!("Profile verification tap ignored: window closed");
+                    return;
                 }
-                Err(e) => tracing::error!("Failed to unverify peer: {}", e),
+            };
+
+            if profile_user_id.is_empty() {
+                tracing::debug!("Profile verification tap ignored: no profile user");
+                return;
             }
-        } else {
-            // Verify — async (needs to generate safety number first)
-            tokio::spawn(async move {
-                match ui_ctx.mark_peer_verified(&peer_id).await {
+
+            let peer_id: UserId = match profile_user_id.parse() {
+                Ok(id) => id,
+                Err(e) => {
+                    tracing::error!("Invalid user ID for verification toggle: {}", e);
+                    return;
+                }
+            };
+
+            if currently_verified {
+                // Unverify — sync operation
+                match ui_ctx.mark_peer_unverified(&peer_id) {
                     Ok(()) => {
                         let _ = slint::invoke_from_event_loop(move || {
                             if let Some(w) = weak.upgrade() {
-                                w.set_profile_is_verified(true);
+                                w.global::<crate::ModalHostState>()
+                                    .set_profile_is_verified(false);
                             }
                         });
                     }
-                    Err(e) => tracing::error!("Failed to verify peer: {}", e),
+                    Err(e) => tracing::error!("Failed to unverify peer: {}", e),
                 }
-            });
-        }
-    });
+            } else {
+                // Verify — async (needs to generate safety number first)
+                tokio::spawn(async move {
+                    match ui_ctx.mark_peer_verified(&peer_id).await {
+                        Ok(()) => {
+                            let _ = slint::invoke_from_event_loop(move || {
+                                if let Some(w) = weak.upgrade() {
+                                    w.global::<crate::ModalHostState>()
+                                        .set_profile_is_verified(true);
+                                }
+                            });
+                        }
+                        Err(e) => tracing::error!("Failed to verify peer: {}", e),
+                    }
+                });
+            }
+        });
 }
 
 #[cfg(test)]

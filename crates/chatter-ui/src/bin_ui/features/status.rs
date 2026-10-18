@@ -22,7 +22,9 @@ fn init_mode(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
         .ok()
         .flatten()
         .unwrap_or_else(|| "auto".to_string());
-    window.set_user_presence_mode(mode.into());
+    window
+        .global::<crate::SidebarPane>()
+        .set_user_presence_mode(mode.into());
 }
 
 /// Wire the status change callback.
@@ -35,14 +37,16 @@ fn init_mode(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 fn wire_status_change(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
 
-    window.on_change_user_status(move |status: slint::SharedString| {
-        let status = status.to_string();
-        let ui_ctx = ui_ctx.clone();
+    window.global::<crate::SidebarPane>().on_change_user_status(
+        move |status: slint::SharedString| {
+            let status = status.to_string();
+            let ui_ctx = ui_ctx.clone();
 
-        crate::rt_handle().spawn(async move {
-            ui_ctx.set_presence_mode_choice(&status).await;
-        });
-    });
+            crate::rt_handle().spawn(async move {
+                ui_ctx.set_presence_mode_choice(&status).await;
+            });
+        },
+    );
 }
 
 /// Answer the `get-user-status` callback from the live presence property.
@@ -53,10 +57,12 @@ fn wire_status_change(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 fn wire_status_getter(window: &MainWindow) {
     let weak_window = window.as_weak();
 
-    window.on_get_user_status(move || -> slint::SharedString {
-        weak_window
-            .upgrade()
-            .map(|w| w.get_user_presence_status())
-            .unwrap_or_else(|| "offline".into())
-    });
+    window
+        .global::<crate::SidebarPane>()
+        .on_get_user_status(move || -> slint::SharedString {
+            weak_window
+                .upgrade()
+                .map(|w| w.global::<crate::SidebarPane>().get_user_presence_status())
+                .unwrap_or_else(|| "offline".into())
+        });
 }

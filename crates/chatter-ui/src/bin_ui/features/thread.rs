@@ -21,147 +21,173 @@ pub fn wire(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
 fn wire_close_thread(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let client = ui_ctx.clone();
-    window.on_close_thread_clicked(move || {
-        let owner = HistoryOwner::capture(&client, client.active_conversation());
-        let chat = client.clone();
-        let weak = weak_window.clone();
-        if let Some(w) = weak_window.upgrade() {
-            // The text stays with its thread; root first, so the text
-            // change's autosave has no thread to overwrite it under.
-            crate::bin_ui::features::composer::autosave_thread_draft(&w, &client);
-            w.set_thread_root_message_id(SharedString::default());
-            w.set_thread_composer_text(SharedString::default());
-        }
-        if let Some(thread) = client.active_thread() {
-            client.close_thread(thread.root_message_id);
-        }
-        let _ = slint::invoke_from_event_loop(move || {
-            if !owner.is_current() || chat.active_thread().is_some() {
-                return;
+    window
+        .global::<crate::ChatPane>()
+        .on_close_thread_clicked(move || {
+            let owner = HistoryOwner::capture(&client, client.active_conversation());
+            let chat = client.clone();
+            let weak = weak_window.clone();
+            if let Some(w) = weak_window.upgrade() {
+                // The text stays with its thread; root first, so the text
+                // change's autosave has no thread to overwrite it under.
+                crate::bin_ui::features::composer::autosave_thread_draft(&w, &client);
+                w.global::<crate::ChatPane>()
+                    .set_thread_root_message_id(SharedString::default());
+                w.global::<crate::ChatPane>()
+                    .set_thread_composer_text(SharedString::default());
             }
-            if let Some(w) = weak.upgrade() {
-                w.set_thread_panel_visible(false);
-                w.set_thread_replies(ModelRc::new(VecModel::default()));
+            if let Some(thread) = client.active_thread() {
+                client.close_thread(thread.root_message_id);
             }
+            let _ = slint::invoke_from_event_loop(move || {
+                if !owner.is_current() || chat.active_thread().is_some() {
+                    return;
+                }
+                if let Some(w) = weak.upgrade() {
+                    w.global::<crate::ChatPane>()
+                        .set_thread_panel_visible(false);
+                    w.global::<crate::ChatPane>()
+                        .set_thread_replies(ModelRc::new(VecModel::default()));
+                }
+            });
         });
-    });
 }
 
 fn wire_send_thread_reply(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let ui_ctx = ui_ctx.clone();
-    window.on_send_thread_reply(move |text: SharedString| {
-        let text = text.to_string();
-        if text.trim().is_empty() {
-            return;
-        }
-        let weak = weak_window.clone();
-        let ui_ctx = ui_ctx.clone();
-        let Some(thread) = ui_ctx.active_thread() else {
-            return;
-        };
-        // The panel cleared its composer on tap: the persisted draft goes
-        // now, not after the autosave delay, so a restart cannot resend it.
-        // A reply that then fails is given back below.
-        ui_ctx.set_thread_draft(&thread.root_message_id, "");
-        let session_revision = ui_ctx.auth_snapshot().session_revision;
-        let owner = HistoryOwner::thread(&ui_ctx, thread.root_message_id, false);
-        tokio::spawn(async move {
-            if !owner.is_current() {
-                // Not sent, but the draft is already cleared: give it back.
-                ui_ctx.park_failed_thread_reply(&thread.root_message_id, &text, session_revision);
+    window
+        .global::<crate::ChatPane>()
+        .on_send_thread_reply(move |text: SharedString| {
+            let text = text.to_string();
+            if text.trim().is_empty() {
                 return;
             }
-            let sent = ui_ctx
-                .send_channel_message(
-                    None,
-                    &thread.channel_id,
-                    &text,
-                    vec![],
-                    vec![],
-                    Some(&thread.root_message_id),
-                    vec![],
-                    false,
-                )
-                .await;
-            if let Err(e) = &sent {
-                // The panel cleared its composer on tap. A reply that did not
-                // leave must say so and give the text back — it used to vanish.
-                tracing::error!(error = %e, "thread reply send failed");
-                let root = thread.root_message_id;
-                let _ = slint::invoke_from_event_loop(move || {
-                    if !ui_ctx.composer_session_is_current(session_revision) {
-                        return;
-                    }
-                    let Some(w) = weak.upgrade() else { return };
-                    // Still this thread's panel with nothing typed since:
-                    // straight back into the box, and its autosave follows.
-                    // Any other panel, or newer text in this one: back to the
-                    // thread's own draft, where opening it finds the text —
-                    // never over what was typed since (core keeps the newer).
-                    let shown = owner.is_current()
-                        && w.get_thread_root_message_id().as_str() == root.to_string();
-                    let message = if shown && w.get_thread_composer_text().is_empty() {
-                        ui_ctx.park_failed_thread_reply(&root, &text, session_revision);
-                        if let Some(restored) = ui_ctx.take_failed_thread_reply(&root) {
-                            w.set_thread_composer_text(restored.into());
+            let weak = weak_window.clone();
+            let ui_ctx = ui_ctx.clone();
+            let Some(thread) = ui_ctx.active_thread() else {
+                return;
+            };
+            // The panel cleared its composer on tap: the persisted draft goes
+            // now, not after the autosave delay, so a restart cannot resend it.
+            // A reply that then fails is given back below.
+            ui_ctx.set_thread_draft(&thread.root_message_id, "");
+            let session_revision = ui_ctx.auth_snapshot().session_revision;
+            let owner = HistoryOwner::thread(&ui_ctx, thread.root_message_id, false);
+            tokio::spawn(async move {
+                if !owner.is_current() {
+                    // Not sent, but the draft is already cleared: give it back.
+                    ui_ctx.park_failed_thread_reply(
+                        &thread.root_message_id,
+                        &text,
+                        session_revision,
+                    );
+                    return;
+                }
+                let sent = ui_ctx
+                    .send_channel_message(
+                        None,
+                        &thread.channel_id,
+                        &text,
+                        vec![],
+                        vec![],
+                        Some(&thread.root_message_id),
+                        vec![],
+                        false,
+                    )
+                    .await;
+                if let Err(e) = &sent {
+                    // The panel cleared its composer on tap. A reply that did not
+                    // leave must say so and give the text back — it used to vanish.
+                    tracing::error!(error = %e, "thread reply send failed");
+                    let root = thread.root_message_id;
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if !ui_ctx.composer_session_is_current(session_revision) {
+                            return;
                         }
-                        "Couldn't send your reply. Try again."
-                    } else {
-                        ui_ctx.park_failed_thread_reply(&root, &text, session_revision);
-                        if ui_ctx.has_failed_thread_reply(&root) {
-                            // Parked behind newer text; it comes back once
-                            // the box and the draft are empty.
-                            "Couldn't send your reply. It's kept with this thread."
-                        } else {
-                            "Couldn't send your reply. It's saved as this thread's draft."
-                        }
-                    };
-                    w.set_toast_message(message.into());
-                    w.set_toast_variant("error".into());
-                    w.set_toast_visible(true);
-                });
-                return;
-            }
-            if !owner.is_current() {
-                return;
-            }
-            if let Ok(msg) = sent {
-                ui_ctx.update_thread_reply_count(thread.root_message_id, thread.reply_count + 1);
-                // Show our own reply in the panel immediately — the send path
-                // stores it locally but emits no MessageReceived event, so
-                // without this it only appeared after re-opening the thread.
-                let reply = thread_reply_display(&ui_ctx, &msg);
-                let current_user_id = ui_ctx
-                    .session_current_user_id()
-                    .map(|id| id.to_string())
-                    .unwrap_or_default();
-                let root_id = thread.root_message_id;
-                let _ = slint::invoke_from_event_loop(move || {
-                    if !owner.is_current() {
-                        return;
-                    }
-                    if let Some(w) = weak.upgrade() {
-                        // The panel cleared its box on tap; clearing it again
-                        // here would wipe a reply typed since.
-                        apply_live_thread_reply(
-                            &w,
-                            &root_id,
-                            reply.to_slint_with_user(&current_user_id),
-                            true,
-                        );
-                        // The box is free again: an earlier reply that did
-                        // not leave comes back into it, never sent on its own.
-                        if w.get_thread_root_message_id().as_str() == root_id.to_string()
-                            && w.get_thread_composer_text().is_empty()
+                        let Some(w) = weak.upgrade() else { return };
+                        // Still this thread's panel with nothing typed since:
+                        // straight back into the box, and its autosave follows.
+                        // Any other panel, or newer text in this one: back to the
+                        // thread's own draft, where opening it finds the text —
+                        // never over what was typed since (core keeps the newer).
+                        let shown = owner.is_current()
+                            && w.global::<crate::ChatPane>()
+                                .get_thread_root_message_id()
+                                .as_str()
+                                == root.to_string();
+                        let message = if shown
+                            && w.global::<crate::ChatPane>()
+                                .get_thread_composer_text()
+                                .is_empty()
                         {
-                            offer_failed_thread_reply(&w, &ui_ctx, &root_id);
+                            ui_ctx.park_failed_thread_reply(&root, &text, session_revision);
+                            if let Some(restored) = ui_ctx.take_failed_thread_reply(&root) {
+                                w.global::<crate::ChatPane>()
+                                    .set_thread_composer_text(restored.into());
+                            }
+                            "Couldn't send your reply. Try again."
+                        } else {
+                            ui_ctx.park_failed_thread_reply(&root, &text, session_revision);
+                            if ui_ctx.has_failed_thread_reply(&root) {
+                                // Parked behind newer text; it comes back once
+                                // the box and the draft are empty.
+                                "Couldn't send your reply. It's kept with this thread."
+                            } else {
+                                "Couldn't send your reply. It's saved as this thread's draft."
+                            }
+                        };
+                        w.set_toast_message(message.into());
+                        w.set_toast_variant("error".into());
+                        w.set_toast_visible(true);
+                    });
+                    return;
+                }
+                if !owner.is_current() {
+                    return;
+                }
+                if let Ok(msg) = sent {
+                    ui_ctx
+                        .update_thread_reply_count(thread.root_message_id, thread.reply_count + 1);
+                    // Show our own reply in the panel immediately — the send path
+                    // stores it locally but emits no MessageReceived event, so
+                    // without this it only appeared after re-opening the thread.
+                    let reply = thread_reply_display(&ui_ctx, &msg);
+                    let current_user_id = ui_ctx
+                        .session_current_user_id()
+                        .map(|id| id.to_string())
+                        .unwrap_or_default();
+                    let root_id = thread.root_message_id;
+                    let _ = slint::invoke_from_event_loop(move || {
+                        if !owner.is_current() {
+                            return;
                         }
-                    }
-                });
-            }
+                        if let Some(w) = weak.upgrade() {
+                            // The panel cleared its box on tap; clearing it again
+                            // here would wipe a reply typed since.
+                            apply_live_thread_reply(
+                                &w,
+                                &root_id,
+                                reply.to_slint_with_user(&current_user_id),
+                                true,
+                            );
+                            // The box is free again: an earlier reply that did
+                            // not leave comes back into it, never sent on its own.
+                            if w.global::<crate::ChatPane>()
+                                .get_thread_root_message_id()
+                                .as_str()
+                                == root_id.to_string()
+                                && w.global::<crate::ChatPane>()
+                                    .get_thread_composer_text()
+                                    .is_empty()
+                            {
+                                offer_failed_thread_reply(&w, &ui_ctx, &root_id);
+                            }
+                        }
+                    });
+                }
+            });
         });
-    });
 }
 
 /// Put the failed reply parked for `root` into the empty thread box and say
@@ -171,7 +197,8 @@ fn offer_failed_thread_reply(w: &MainWindow, ui_ctx: &ChatterClient, root: &Mess
     let Some(text) = ui_ctx.take_failed_thread_reply(root) else {
         return;
     };
-    w.set_thread_composer_text(text.into());
+    w.global::<crate::ChatPane>()
+        .set_thread_composer_text(text.into());
     w.set_toast_message("Your earlier reply that didn't send is back in the box.".into());
     w.set_toast_variant("info".into());
     w.set_toast_visible(true);
@@ -180,66 +207,72 @@ fn offer_failed_thread_reply(w: &MainWindow, ui_ctx: &ChatterClient, root: &Mess
 fn wire_load_more_thread_replies(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let weak_window = window.as_weak();
     let ui_ctx = ui_ctx.clone();
-    window.on_load_more_thread_replies(move || {
-        let weak = weak_window.clone();
-        let ui_ctx = ui_ctx.clone();
-        // Cursor = the oldest reply on screen. Read on the UI thread: a Slint
-        // Weak never upgrades inside tokio::spawn.
-        let Some(w) = weak.upgrade() else { return };
-        let Some(oldest) = w
-            .get_thread_replies()
-            .row_data(0)
-            .and_then(|row| row.message_id.parse::<MessageId>().ok())
-        else {
-            return;
-        };
-        let Some(thread) = ui_ctx.active_thread() else {
-            return;
-        };
-        let root = thread.root_message_id;
-        let owner = HistoryOwner::thread(&ui_ctx, root, false);
-        tokio::spawn(async move {
-            if !owner.is_current() {
-                return;
-            }
-            let Ok(page) = ui_ctx.list_thread_replies(&root, Some(&oldest), 50) else {
+    window
+        .global::<crate::ChatPane>()
+        .on_load_more_thread_replies(move || {
+            let weak = weak_window.clone();
+            let ui_ctx = ui_ctx.clone();
+            // Cursor = the oldest reply on screen. Read on the UI thread: a Slint
+            // Weak never upgrades inside tokio::spawn.
+            let Some(w) = weak.upgrade() else { return };
+            let Some(oldest) = w
+                .global::<crate::ChatPane>()
+                .get_thread_replies()
+                .row_data(0)
+                .and_then(|row| row.message_id.parse::<MessageId>().ok())
+            else {
                 return;
             };
-            if page.is_empty() {
+            let Some(thread) = ui_ctx.active_thread() else {
                 return;
-            }
-            let display = messages_to_display_batch(
-                &page,
-                |ms| ui_ctx.message_sender_display_names(ms),
-                |m| ui_ctx.message_sender_avatar(m),
-                crate::bin_ui::converters::attachment_display_resolver(&ui_ctx),
-                |m| ui_ctx.reply_author_display_name(m),
-                |m| ui_ctx.reply_parent_missing_for(m),
-                |m| ui_ctx.reply_parent_media(m),
-            );
-            let current_user_id = ui_ctx
-                .session_current_user_id()
-                .map(|id| id.to_string())
-                .unwrap_or_default();
-            let _ = slint::invoke_from_event_loop(move || {
+            };
+            let root = thread.root_message_id;
+            let owner = HistoryOwner::thread(&ui_ctx, root, false);
+            tokio::spawn(async move {
                 if !owner.is_current() {
                     return;
                 }
-                let Some(w) = weak.upgrade() else { return };
-                // The user may have switched threads while this page loaded.
-                if w.get_thread_root_message_id() != root.to_string().as_str() {
+                let Ok(page) = ui_ctx.list_thread_replies(&root, Some(&oldest), 50) else {
+                    return;
+                };
+                if page.is_empty() {
                     return;
                 }
-                let current = w.get_thread_replies();
-                let mut rows: Vec<MessageItemData> = display
-                    .iter()
-                    .map(|d| d.to_slint_with_user(&current_user_id))
-                    .collect();
-                rows.extend(current.iter());
-                w.set_thread_replies(ModelRc::new(VecModel::from(rows)));
+                let display = messages_to_display_batch(
+                    &page,
+                    |ms| ui_ctx.message_sender_display_names(ms),
+                    |m| ui_ctx.message_sender_avatar(m),
+                    crate::bin_ui::converters::attachment_display_resolver(&ui_ctx),
+                    |m| ui_ctx.reply_author_display_name(m),
+                    |m| ui_ctx.reply_parent_missing_for(m),
+                    |m| ui_ctx.reply_parent_media(m),
+                );
+                let current_user_id = ui_ctx
+                    .session_current_user_id()
+                    .map(|id| id.to_string())
+                    .unwrap_or_default();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if !owner.is_current() {
+                        return;
+                    }
+                    let Some(w) = weak.upgrade() else { return };
+                    // The user may have switched threads while this page loaded.
+                    if w.global::<crate::ChatPane>().get_thread_root_message_id()
+                        != root.to_string().as_str()
+                    {
+                        return;
+                    }
+                    let current = w.global::<crate::ChatPane>().get_thread_replies();
+                    let mut rows: Vec<MessageItemData> = display
+                        .iter()
+                        .map(|d| d.to_slint_with_user(&current_user_id))
+                        .collect();
+                    rows.extend(current.iter());
+                    w.global::<crate::ChatPane>()
+                        .set_thread_replies(ModelRc::new(VecModel::from(rows)));
+                });
             });
         });
-    });
 }
 
 /// Route a thread reply into the live UI (must run on the UI thread).
@@ -255,7 +288,7 @@ pub fn apply_live_thread_reply(
     panel_shows_this_thread: bool,
 ) {
     if panel_shows_this_thread {
-        let replies = w.get_thread_replies();
+        let replies = w.global::<crate::ChatPane>().get_thread_replies();
         let already_present = replies.iter().any(|m| m.message_id == reply.message_id);
         if !already_present {
             match replies.as_any().downcast_ref::<VecModel<MessageItemData>>() {
@@ -263,10 +296,12 @@ pub fn apply_live_thread_reply(
                 None => {
                     let mut all: Vec<MessageItemData> = replies.iter().collect();
                     all.push(reply);
-                    w.set_thread_replies(ModelRc::new(VecModel::from(all)));
+                    w.global::<crate::ChatPane>()
+                        .set_thread_replies(ModelRc::new(VecModel::from(all)));
                 }
             }
-            w.set_thread_reply_count(w.get_thread_reply_count() + 1);
+            w.global::<crate::ChatPane>()
+                .set_thread_reply_count(w.global::<crate::ChatPane>().get_thread_reply_count() + 1);
         }
     }
 
@@ -286,16 +321,22 @@ pub fn apply_thread_edit(
     new_text: &str,
 ) {
     patch_edited_row(
-        &w.get_thread_replies(),
+        &w.global::<crate::ChatPane>().get_thread_replies(),
         message_id,
         author,
         target_sent_timestamp,
         new_text,
     );
-    if !message_id.is_empty() && w.get_thread_root_message_id().as_str() == message_id {
-        w.set_thread_root_content_preview(
-            chatter_core::domain::message::truncate_preview_text(new_text, 100).into(),
-        );
+    if !message_id.is_empty()
+        && w.global::<crate::ChatPane>()
+            .get_thread_root_message_id()
+            .as_str()
+            == message_id
+    {
+        w.global::<crate::ChatPane>()
+            .set_thread_root_content_preview(
+                chatter_core::domain::message::truncate_preview_text(new_text, 100).into(),
+            );
     }
 }
 
@@ -339,7 +380,7 @@ fn patch_edited_row(
 /// Increment the "N replies" indicator on a thread root bubble in the main list.
 fn bump_root_reply_count(w: &MainWindow, root_message_id: &MessageId) {
     let root_id = root_message_id.to_string();
-    let messages = w.get_messages();
+    let messages = w.global::<crate::ChatPane>().get_messages();
     let Some(model) = messages
         .as_any()
         .downcast_ref::<VecModel<MessageItemData>>()
@@ -432,27 +473,40 @@ pub fn load_thread_data(
                     // until now stays its draft; this thread's comes back.
                     // Reloading the same thread keeps what is being typed.
                     let root_id = root_message_id.to_string();
-                    let switching = w.get_thread_root_message_id().as_str() != root_id;
+                    let switching = w
+                        .global::<crate::ChatPane>()
+                        .get_thread_root_message_id()
+                        .as_str()
+                        != root_id;
                     crate::bin_ui::features::composer::autosave_thread_draft(&w, &ctx);
-                    w.set_thread_panel_visible(true);
-                    w.set_thread_root_message_id(root_id.into());
+                    w.global::<crate::ChatPane>().set_thread_panel_visible(true);
+                    w.global::<crate::ChatPane>()
+                        .set_thread_root_message_id(root_id.into());
                     if switching {
-                        w.set_thread_composer_text(draft.into());
+                        w.global::<crate::ChatPane>()
+                            .set_thread_composer_text(draft.into());
                         // Nothing typed for this thread: a reply that failed
                         // behind newer text, if any, comes back into the box.
-                        if w.get_thread_composer_text().is_empty() {
+                        if w.global::<crate::ChatPane>()
+                            .get_thread_composer_text()
+                            .is_empty()
+                        {
                             offer_failed_thread_reply(&w, &ctx, &root_message_id);
                         }
                     }
-                    w.set_thread_root_sender_name(sender_name.into());
-                    w.set_thread_root_content_preview(content_preview.into());
-                    w.set_thread_reply_count(total_replies as i32);
-                    w.set_thread_loading(false);
+                    w.global::<crate::ChatPane>()
+                        .set_thread_root_sender_name(sender_name.into());
+                    w.global::<crate::ChatPane>()
+                        .set_thread_root_content_preview(content_preview.into());
+                    w.global::<crate::ChatPane>()
+                        .set_thread_reply_count(total_replies as i32);
+                    w.global::<crate::ChatPane>().set_thread_loading(false);
                     let slint_replies: Vec<_> = display
                         .iter()
                         .map(|d| d.to_slint_with_user(&current_user_id))
                         .collect();
-                    w.set_thread_replies(ModelRc::new(VecModel::from(slint_replies)));
+                    w.global::<crate::ChatPane>()
+                        .set_thread_replies(ModelRc::new(VecModel::from(slint_replies)));
                 }
             });
         }

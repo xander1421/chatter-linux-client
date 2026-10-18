@@ -148,42 +148,64 @@ mod tests {
         client.set_pinned_messages(vec![
             "00000000-0000-0000-0000-000000000002".parse().unwrap(),
         ]);
-        w.set_channel_name("newer view".into());
-        w.set_pending_attachments(ModelRc::new(VecModel::from(vec![
-            crate::PendingAttachmentData {
-                id: "newer-pending".into(),
+        w.global::<crate::ChatPane>()
+            .set_channel_name("newer view".into());
+        w.global::<crate::ChatPane>()
+            .set_pending_attachments(ModelRc::new(VecModel::from(vec![
+                crate::PendingAttachmentData {
+                    id: "newer-pending".into(),
+                    ..Default::default()
+                },
+            ])));
+        w.global::<crate::ChatPane>()
+            .set_composer_text("newer draft".into());
+        w.global::<crate::ChatPane>().set_composer_is_replying(true);
+        w.global::<crate::ChatPane>()
+            .set_pinned_message_preview("newer pin".into());
+        w.global::<crate::ChatPane>().set_pinned_total_count(7);
+        w.global::<crate::ChatPane>().set_loading_messages(false);
+        w.global::<crate::ChatPane>()
+            .set_messages(ModelRc::new(VecModel::from(vec![MessageItemData {
+                message_id: "newer-row".into(),
+                content: "newer message".into(),
                 ..Default::default()
-            },
-        ])));
-        w.set_composer_text("newer draft".into());
-        w.set_composer_is_replying(true);
-        w.set_pinned_message_preview("newer pin".into());
-        w.set_pinned_total_count(7);
-        w.set_loading_messages(false);
-        w.set_messages(ModelRc::new(VecModel::from(vec![MessageItemData {
-            message_id: "newer-row".into(),
-            content: "newer message".into(),
-            ..Default::default()
-        }])));
+            }])));
     }
     fn assert_preserved(w: &MainWindow, client: &ChatterClient) {
         assert_eq!(
-            w.get_pending_attachments().row_data(0).unwrap().id,
+            w.global::<crate::ChatPane>()
+                .get_pending_attachments()
+                .row_data(0)
+                .unwrap()
+                .id,
             "newer-pending"
         );
         assert_eq!(
             client.pinned_current_message_id(),
             Some("00000000-0000-0000-0000-000000000002".parse().unwrap())
         );
-        assert_eq!(w.get_channel_name(), "newer view");
-        assert_eq!(w.get_composer_text(), "newer draft");
-        assert!(w.get_composer_is_replying());
-        assert_eq!(w.get_pinned_message_preview(), "newer pin");
-        assert_eq!(w.get_pinned_total_count(), 7);
-        assert!(!w.get_loading_messages());
-        assert_eq!(w.get_messages().row_count(), 1);
         assert_eq!(
-            w.get_messages().row_data(0).unwrap().message_id,
+            w.global::<crate::ChatPane>().get_channel_name(),
+            "newer view"
+        );
+        assert_eq!(
+            w.global::<crate::ChatPane>().get_composer_text(),
+            "newer draft"
+        );
+        assert!(w.global::<crate::ChatPane>().get_composer_is_replying());
+        assert_eq!(
+            w.global::<crate::ChatPane>().get_pinned_message_preview(),
+            "newer pin"
+        );
+        assert_eq!(w.global::<crate::ChatPane>().get_pinned_total_count(), 7);
+        assert!(!w.global::<crate::ChatPane>().get_loading_messages());
+        assert_eq!(w.global::<crate::ChatPane>().get_messages().row_count(), 1);
+        assert_eq!(
+            w.global::<crate::ChatPane>()
+                .get_messages()
+                .row_data(0)
+                .unwrap()
+                .message_id,
             "newer-row"
         );
     }
@@ -201,22 +223,27 @@ mod tests {
             owner,
         );
         crate::run_history_ui!(w.as_weak(), owner, |w| {
-            w.set_channel_name("old video view".into());
-            w.set_pending_attachments(ModelRc::new(VecModel::from(Vec::<
-                crate::PendingAttachmentData,
-            >::new())));
-            w.set_composer_text("".into());
-            w.set_composer_is_replying(false);
-            w.set_pinned_message_preview("old pin".into());
-            w.set_pinned_total_count(1);
-            w.set_loading_messages(true);
-            w.set_messages(ModelRc::new(VecModel::from(vec![MessageItemData {
-                message_id: "old-row".into(),
-                attachments: ModelRc::new(VecModel::<MessageAttachmentData>::from(vec![
-                    display.to_slint(),
-                ])),
-                ..Default::default()
-            }])));
+            w.global::<crate::ChatPane>()
+                .set_channel_name("old video view".into());
+            w.global::<crate::ChatPane>()
+                .set_pending_attachments(ModelRc::new(VecModel::from(Vec::<
+                    crate::PendingAttachmentData,
+                >::new())));
+            w.global::<crate::ChatPane>().set_composer_text("".into());
+            w.global::<crate::ChatPane>()
+                .set_composer_is_replying(false);
+            w.global::<crate::ChatPane>()
+                .set_pinned_message_preview("old pin".into());
+            w.global::<crate::ChatPane>().set_pinned_total_count(1);
+            w.global::<crate::ChatPane>().set_loading_messages(true);
+            w.global::<crate::ChatPane>()
+                .set_messages(ModelRc::new(VecModel::from(vec![MessageItemData {
+                    message_id: "old-row".into(),
+                    attachments: ModelRc::new(VecModel::<MessageAttachmentData>::from(vec![
+                        display.to_slint(),
+                    ])),
+                    ..Default::default()
+                }])));
         });
     }
     /// Pause the production attachment conversion/decode boundary with an owned frame.
@@ -411,9 +438,13 @@ mod tests {
         queue(&w, &owner, derive(started_tx, resume_rx), &client);
         pump(&w);
         assert!(owner.is_current(), "current control after queue");
-        assert_eq!(w.get_channel_name(), "old video view");
+        assert_eq!(
+            w.global::<crate::ChatPane>().get_channel_name(),
+            "old video view"
+        );
         assert!(
-            w.get_messages()
+            w.global::<crate::ChatPane>()
+                .get_messages()
                 .row_data(0)
                 .unwrap()
                 .attachments
@@ -426,17 +457,19 @@ mod tests {
         for stale in [false, true] {
             let session = SessionOwner::capture(&client);
             crate::run_history_ui!(w.as_weak(), session, |w| {
-                w.set_user_display_name("captured account".into());
+                w.global::<crate::SidebarPane>()
+                    .set_user_display_name("captured account".into());
             });
             client.select_conversation(b);
             HistoryOwner::begin(&client, b);
             if stale {
                 client.testing_invalidate_session();
             }
-            w.set_user_display_name("newer account".into());
+            w.global::<crate::SidebarPane>()
+                .set_user_display_name("newer account".into());
             pump(&w);
             assert_eq!(
-                w.get_user_display_name(),
+                w.global::<crate::SidebarPane>().get_user_display_name(),
                 if stale {
                     "newer account"
                 } else {

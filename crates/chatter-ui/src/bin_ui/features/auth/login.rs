@@ -25,44 +25,48 @@ fn wire_accept_new_identity(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
     let weak_window = window.as_weak();
 
-    window.on_accept_new_identity(move || {
-        let ui_ctx = ui_ctx.clone();
-        let weak = weak_window.clone();
+    window
+        .global::<crate::AuthFlow>()
+        .on_accept_new_identity(move || {
+            let ui_ctx = ui_ctx.clone();
+            let weak = weak_window.clone();
 
-        let Some(need) = weak
-            .upgrade()
-            .and_then(|_| PENDING_RECOVERY.lock().ok().and_then(|g| *g))
-        else {
-            return;
-        };
-
-        tokio::spawn(async move {
-            let outcome = ui_ctx.accept_new_identity(need).await;
-            let message = match &outcome {
-                Ok(()) => String::new(),
-                Err(e) => e.user_message(),
+            let Some(need) = weak
+                .upgrade()
+                .and_then(|_| PENDING_RECOVERY.lock().ok().and_then(|g| *g))
+            else {
+                return;
             };
-            let ok = outcome.is_ok();
-            let _ = slint::invoke_from_event_loop(move || {
-                if let Some(w) = weak.upgrade() {
-                    w.set_login_loading(false);
-                    if ok {
-                        w.set_login_identity_reset_available(false);
-                        w.set_login_error(
-                            "New encryption keys published. Sign in again to continue.".into(),
-                        );
-                    } else {
-                        w.set_login_error(message.into());
+
+            tokio::spawn(async move {
+                let outcome = ui_ctx.accept_new_identity(need).await;
+                let message = match &outcome {
+                    Ok(()) => String::new(),
+                    Err(e) => e.user_message(),
+                };
+                let ok = outcome.is_ok();
+                let _ = slint::invoke_from_event_loop(move || {
+                    if let Some(w) = weak.upgrade() {
+                        w.global::<crate::AuthFlow>().set_login_loading(false);
+                        if ok {
+                            w.global::<crate::AuthFlow>()
+                                .set_login_identity_reset_available(false);
+                            w.global::<crate::AuthFlow>().set_login_error(
+                                "New encryption keys published. Sign in again to continue.".into(),
+                            );
+                        } else {
+                            w.global::<crate::AuthFlow>()
+                                .set_login_error(message.into());
+                        }
+                    }
+                });
+                if ok {
+                    if let Ok(mut g) = PENDING_RECOVERY.lock() {
+                        *g = None;
                     }
                 }
             });
-            if ok {
-                if let Ok(mut g) = PENDING_RECOVERY.lock() {
-                    *g = None;
-                }
-            }
         });
-    });
 }
 
 /// The recovery reason from the last failed login.
@@ -90,7 +94,7 @@ fn forward_login_verifying(
                 let weak = weak.clone();
                 let _ = slint::invoke_from_event_loop(move || {
                     if let Some(w) = weak.upgrade() {
-                        w.set_login_verifying(v);
+                        w.global::<crate::AuthFlow>().set_login_verifying(v);
                     }
                 });
             }
@@ -112,7 +116,7 @@ fn wire_password_login(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
     let ui_ctx = ui_ctx.clone();
     let weak_window = window.as_weak();
 
-    window.on_login(move |username: slint::SharedString, password: slint::SharedString, server_url: slint::SharedString, pin: slint::SharedString| {
+    window.global::<crate::AuthFlow>().on_login(move |username: slint::SharedString, password: slint::SharedString, server_url: slint::SharedString, pin: slint::SharedString| {
         let ui_ctx = ui_ctx.clone();
         let weak = weak_window.clone();
         let username = username.to_string();
@@ -126,8 +130,8 @@ fn wire_password_login(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
             let weak_for_loading = weak.clone();
             let _ = slint::invoke_from_event_loop(move || {
                 if let Some(w) = weak_for_loading.upgrade() {
-                    w.set_login_loading(true);
-                    w.set_login_error("".into());
+                    w.global::<crate::AuthFlow>().set_login_loading(true);
+                    w.global::<crate::AuthFlow>().set_login_error("".into());
                     w.global::<crate::AnonMode>().set_onboarding_progress(
                         if shield { super::shield::CONNECTING_OVER_TOR } else { "" }.into(),
                     );
@@ -141,8 +145,8 @@ fn wire_password_login(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             w.global::<crate::AnonMode>().set_onboarding_progress("".into());
-                            w.set_login_loading(false);
-                            w.set_login_error(error_msg.into());
+                            w.global::<crate::AuthFlow>().set_login_loading(false);
+                            w.global::<crate::AuthFlow>().set_login_error(error_msg.into());
                         }
                     });
                     return;
@@ -156,8 +160,8 @@ fn wire_password_login(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             w.global::<crate::AnonMode>().set_onboarding_progress("".into());
-                            w.set_login_loading(false);
-                            w.set_login_error(error_msg.into());
+                            w.global::<crate::AuthFlow>().set_login_loading(false);
+                            w.global::<crate::AuthFlow>().set_login_error(error_msg.into());
                         }
                     });
                     return;
@@ -216,8 +220,8 @@ fn wire_password_login(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                         }
                         if let Some(w) = weak_for_view.upgrade() {
                             w.global::<crate::AnonMode>().set_onboarding_progress("".into());
-                            w.set_login_loading(false);
-                            w.set_is_signed_in(true);
+                            w.global::<crate::AuthFlow>().set_login_loading(false);
+                            w.global::<crate::AuthFlow>().set_is_signed_in(true);
                             w.set_current_view("main".into());
                         }
                     });
@@ -245,9 +249,9 @@ fn wire_password_login(window: &MainWindow, ui_ctx: &Arc<ChatterClient>) {
                     let _ = slint::invoke_from_event_loop(move || {
                         if let Some(w) = weak.upgrade() {
                             w.global::<crate::AnonMode>().set_onboarding_progress("".into());
-                            w.set_login_loading(false);
-                            w.set_login_error(error_msg.into());
-                            w.set_login_identity_reset_available(reset_available);
+                            w.global::<crate::AuthFlow>().set_login_loading(false);
+                            w.global::<crate::AuthFlow>().set_login_error(error_msg.into());
+                            w.global::<crate::AuthFlow>().set_login_identity_reset_available(reset_available);
                         }
                     });
                 }

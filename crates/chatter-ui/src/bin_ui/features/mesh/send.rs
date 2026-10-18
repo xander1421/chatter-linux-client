@@ -11,7 +11,7 @@ use slint::ComponentHandle;
 
 use chatter_core::client::ChatterClient;
 
-use crate::{run_ui, MainWindow, MeshGlobal};
+use crate::{MainWindow, MeshGlobal, run_ui};
 
 use super::core_api;
 
@@ -65,8 +65,9 @@ pub fn intercept_send(
                 let notice = format!("Not sent: {error}");
                 run_ui!(weak, |w| {
                     w.global::<MeshGlobal>().set_notice(notice.clone().into());
-                    if w.get_composer_text().is_empty() {
-                        w.set_composer_text(text.clone().into());
+                    if w.global::<crate::ChatPane>().get_composer_text().is_empty() {
+                        w.global::<crate::ChatPane>()
+                            .set_composer_text(text.clone().into());
                     }
                 });
             }
