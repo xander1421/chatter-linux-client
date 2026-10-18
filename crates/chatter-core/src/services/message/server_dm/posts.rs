@@ -166,7 +166,7 @@ impl MessageService {
     /// the first send and by `retry_server_dm`, so a retry carries exactly what
     /// the first attempt would have.
     #[allow(clippy::type_complexity)]
-    pub(super) fn server_dm_content<'q>(
+    pub(in crate::services::message) fn server_dm_content<'q>(
         &self,
         peer_id: &UserId,
         text: &str,

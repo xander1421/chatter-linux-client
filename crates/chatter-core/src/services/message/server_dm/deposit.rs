@@ -26,7 +26,7 @@ impl MessageService {
     /// cannot open a session with fails the send to this recipient, as in
     /// Signal-Desktop (`registerError` for the service id) — a typed error,
     /// never a silent partial delivery.
-    pub(super) async fn deposit_sealed_to_all_devices(
+    pub(in crate::services::message) async fn deposit_sealed_to_all_devices(
         &self,
         auth_client: &mut AuthClient,
         message_client: &mut MessageClient,
@@ -266,7 +266,7 @@ impl MessageService {
     /// anyone, random bytes the server does not check; else `None` (deliver
     /// identified). The server never serves a UAK — holding the profile key is
     /// what authorizes a sealed sender.
-    pub(super) fn sealed_access_key(
+    pub(in crate::services::message) fn sealed_access_key(
         &self,
         recipient_id: &str,
         unrestricted: bool,
@@ -290,7 +290,7 @@ impl MessageService {
     /// stale: they rotated it). The server checks only that each named device
     /// is registered; one that is not (retired by Log Out / unlink) gets its
     /// session archived and the rest are sent again, once.
-    pub(super) async fn deposit_sealed_ciphertexts(
+    pub(in crate::services::message) async fn deposit_sealed_ciphertexts(
         &self,
         message_client: &mut MessageClient,
         recipient_id: &str,
@@ -399,7 +399,7 @@ impl MessageService {
     /// server; knowing "A sent B a message at 14:03, then three more by
     /// 14:05" is a timing-and-frequency record neither of them agreed to.
     /// Signal seals to known contacts for exactly this reason, and so do we.
-    pub(super) async fn send_sealed_batch(
+    pub(in crate::services::message) async fn send_sealed_batch(
         &self,
         message_client: &mut MessageClient,
         recipient_id: &str,
@@ -460,7 +460,10 @@ impl MessageService {
 }
 
 // If any destination failed transiently, a retry can still make progress.
-pub(super) fn record_deposit_error(current: &mut Option<MessageError>, error: MessageError) {
+pub(in crate::services::message) fn record_deposit_error(
+    current: &mut Option<MessageError>,
+    error: MessageError,
+) {
     if current.is_none() || error.permanent_send_failure_reason().is_none() {
         *current = Some(error);
     }
@@ -488,21 +491,21 @@ pub(super) fn pick_sealed_access_key(
 /// "it worked" without also being able to see that the sender was exposed to the
 /// server on some of those deliveries.
 #[derive(Debug, Default)]
-pub(super) struct DepositOutcome {
+pub(in crate::services::message) struct DepositOutcome {
     /// Devices the message actually reached.
-    pub(super) delivered: usize,
+    pub(in crate::services::message) delivered: usize,
     /// Preserve the typed failure when no device received the message.
-    pub(super) error: Option<MessageError>,
+    pub(in crate::services::message) error: Option<MessageError>,
     /// Of those, how many were sent identified (Basic auth) because no UAK was
     /// available — i.e. sealed sender did NOT engage and the server recorded us.
-    pub(super) degraded: usize,
+    pub(in crate::services::message) degraded: usize,
     /// `(device, server timestamp in epoch nanos)` of each deposit: the
     /// timestamp that device's inbox hands it the envelope under.
-    pub(super) deposits: Vec<(u32, u64)>,
+    pub(in crate::services::message) deposits: Vec<(u32, u64)>,
     /// Registration id of the session each device was encrypted with, for
     /// a deposit that named its device set
     /// ([`MessageService::deposit_sealed_to_all_devices`]); empty otherwise.
-    pub(super) registration_ids: std::collections::HashMap<u32, u32>,
+    pub(in crate::services::message) registration_ids: std::collections::HashMap<u32, u32>,
 }
 
 impl DepositOutcome {

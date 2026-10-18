@@ -63,7 +63,7 @@ impl MessageService {
     ///
     /// Callers that need local storage (e.g. `send_server_dm`) do it
     /// themselves after this returns — this method only handles delivery.
-    pub(super) async fn send_sealed_dm_content(
+    async fn send_sealed_dm_content(
         &self,
         peer_id: &UserId,
         content: crate::proto::content_v1::Content,
