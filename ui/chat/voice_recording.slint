@@ -8,6 +8,9 @@ import { Spacing } from "../theme/spacing.slint";
 export global VoiceRecording {
     in-out property <bool> active: false;
     in-out property <bool> busy: false;
+    // Kept for API compatibility with older layout harnesses. The recording
+    // bar no longer has a lock control or a slide-to-lock interaction.
+    in-out property <bool> locked: false;
     in-out property <string> elapsed: "00:00";
     in-out property <string> status: "";
     in-out property <[int]> live-levels: [];
